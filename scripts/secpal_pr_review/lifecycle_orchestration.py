@@ -15,7 +15,7 @@ import copy
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
-from secpal_work_graph import replanning
+from scripts.secpal_work_graph import replanning
 
 from . import follow_up
 from . import lifecycle_authority as authority
@@ -36,13 +36,30 @@ REQUEST_FIELDS = frozenset(
 )
 AUTHORIZATION_FIELDS = frozenset(
     {
+        "schema_version",
+        "kind",
+        "domain",
         "authorization_id",
+        "repository",
+        "delivery_issue",
+        "lifecycle_id",
+        "publication_oid",
+        "publication_digest",
+        "authority_digest",
+        "pull_request",
+        "head_sha",
         "operation",
         "reason",
         "scope",
         "bounded_uses",
+        "signer_identity",
+        "signature",
+        "authorization_digest",
     }
 )
+AUTHORIZATION_SCHEMA_VERSION = "1.0"
+AUTHORIZATION_KIND = "SECPAL_LIFECYCLE_ORCHESTRATION_USER_AUTHORIZATION"
+AUTHORIZATION_DOMAIN = "secpal.lifecycle-orchestration-user-authorization/v1"
 OBSERVATION_EVENTS = frozenset(
     {
         "REVIEW_EVENT_OBSERVED",
@@ -66,6 +83,9 @@ EVENTS = OBSERVATION_EVENTS | frozenset(
 
 CurrentReader = Callable[[str, int], Any]
 FollowUpVerifier = Callable[[follow_up.FollowUpIdentity], Any]
+AuthorizationVerifier = Callable[
+    [Any, Any, authority.VerifiedLifecycleAuthority], dict[str, Any]
+]
 
 
 class LifecycleOrchestrationError(ValueError):
@@ -105,6 +125,8 @@ class LifecycleDecision:
     guarded_resolution_candidate: bool = False
     authenticated_resolution_required: bool = False
     resolution_meaning_if_applied: str | None = None
+    authorization_digest: str | None = None
+    requires_authorization_publication: bool = False
     stop_after_bounded_pass: bool = True
 
 
@@ -134,13 +156,142 @@ def _oid(value: Any, label: str) -> str:
         raise LifecycleOrchestrationError(str(exc)) from exc
 
 
+def create_user_authorization(
+    *,
+    authorization_id: str,
+    repository: str,
+    delivery_issue: int,
+    lifecycle: authority.VerifiedLifecycleAuthority,
+    publication_oid: str,
+    publication_digest: str,
+    operation: str,
+    reason: str,
+    scope: Mapping[str, Any],
+    signer_identity: str,
+    signer: authority.Signer,
+) -> bytes:
+    """Create signed authority for one exact CURRENT orchestration decision."""
+
+    if not isinstance(reason, str) or not reason.strip() or len(reason) > 512:
+        raise LifecycleOrchestrationError("user authorization reason is invalid")
+    try:
+        fields = {
+            "schema_version": AUTHORIZATION_SCHEMA_VERSION,
+            "kind": AUTHORIZATION_KIND,
+            "domain": AUTHORIZATION_DOMAIN,
+            "authorization_id": _identity(
+                authorization_id, "authorization identity"
+            ),
+            "repository": authority._require_repository(repository),
+            "delivery_issue": _positive_int(delivery_issue, "delivery issue"),
+            "lifecycle_id": _identity(lifecycle.lifecycle_id, "lifecycle identity"),
+            "publication_oid": _oid(publication_oid, "publication object"),
+            "publication_digest": authority._require_digest(
+                publication_digest, "publication digest"
+            ),
+            "authority_digest": authority._require_digest(
+                lifecycle.authority_digest, "authority digest"
+            ),
+            "pull_request": _positive_int(lifecycle.pull_request, "pull request"),
+            "head_sha": _oid(lifecycle.head_sha, "head"),
+            "operation": _identity(operation, "authorized operation"),
+            "reason": reason,
+            "scope": copy.deepcopy(dict(scope)),
+            "bounded_uses": 1,
+            "signer_identity": _identity(
+                signer_identity, "authorization signer"
+            ),
+        }
+        signature = authority._normalize_signature(
+            signer(authority.canonical_json_bytes(fields), AUTHORIZATION_DOMAIN),
+            fields["signer_identity"],
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecycleOrchestrationError(str(exc)) from exc
+    signed = {**fields, "signature": signature}
+    artifact = {**signed, "authorization_digest": authority.digest_json(signed)}
+    return authority.canonical_json_bytes(artifact)
+
+
+def _verify_user_authorization(
+    value: Any,
+    observed: Any,
+    lifecycle: authority.VerifiedLifecycleAuthority,
+) -> dict[str, Any]:
+    if not isinstance(value, (bytes, str)):
+        raise LifecycleOrchestrationError(
+            "user authorization requires canonical signed evidence"
+        )
+    raw = value if isinstance(value, bytes) else value.encode("utf-8")
+    try:
+        parsed = authority.loads_closed_json(raw)
+        item = _closed_mapping(parsed, AUTHORIZATION_FIELDS, "user authorization")
+        if authority.canonical_json_bytes(item) != raw:
+            raise LifecycleOrchestrationError("user authorization is not canonical")
+        if (
+            item["schema_version"] != AUTHORIZATION_SCHEMA_VERSION
+            or item["kind"] != AUTHORIZATION_KIND
+            or item["domain"] != AUTHORIZATION_DOMAIN
+        ):
+            raise LifecycleOrchestrationError("user authorization semantics are unknown")
+        signer_identity = _identity(item["signer_identity"], "authorization signer")
+        policy = authority._load_lifecycle_trust_policy(lifecycle.repository)
+        signed = {
+            key: copy.deepcopy(entry)
+            for key, entry in item.items()
+            if key != "authorization_digest"
+        }
+        if authority._require_digest(
+            item["authorization_digest"], "authorization digest"
+        ) != authority.digest_json(signed):
+            raise LifecycleOrchestrationError("user authorization digest mismatch")
+        unsigned = {
+            key: copy.deepcopy(entry)
+            for key, entry in signed.items()
+            if key != "signature"
+        }
+        authority._verify_signature(
+            authority.canonical_json_bytes(unsigned),
+            item["signature"],
+            signer_identity,
+            AUTHORIZATION_DOMAIN,
+            policy.transition_signer_identities,
+            authority._policy_signature_verifier(policy),
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecycleOrchestrationError("user authorization is invalid") from exc
+    if (
+        item["repository"] != lifecycle.repository
+        or item["delivery_issue"] != lifecycle.delivery_issue
+        or item["lifecycle_id"] != lifecycle.lifecycle_id
+        or item["publication_oid"] != observed.publication_oid
+        or item["publication_digest"] != observed.publication_digest
+        or item["authority_digest"] != lifecycle.authority_digest
+        or item["pull_request"] != lifecycle.pull_request
+        or item["head_sha"] != lifecycle.head_sha
+    ):
+        raise LifecycleOrchestrationError(
+            "user authorization differs from CURRENT lifecycle publication"
+        )
+    return item
+
+
 def _authorization(
     value: Any,
     *,
+    event_id: str,
     operation: str,
     expected_scope: Mapping[str, Any],
+    observed: Any,
+    lifecycle: authority.VerifiedLifecycleAuthority,
+    verifier: AuthorizationVerifier,
+    verified_item: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    item = _closed_mapping(value, AUTHORIZATION_FIELDS, "user authorization")
+    item = (
+        verifier(value, observed, lifecycle)
+        if verified_item is None
+        else copy.deepcopy(dict(verified_item))
+    )
     reason = item.get("reason")
     if (
         item.get("operation") != operation
@@ -155,6 +306,16 @@ def _authorization(
             f"{operation} requires one exact, reasoned, bounded user authorization"
         )
     _identity(item.get("authorization_id"), "authorization identity")
+    try:
+        digest = authority._require_digest(
+            item.get("authorization_digest"), "authorization digest"
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecycleOrchestrationError(str(exc)) from exc
+    if event_id != f"authorization:{digest}":
+        raise LifecycleOrchestrationError(
+            "event identity is not bound to the signed user authorization"
+        )
     return item
 
 
@@ -254,6 +415,7 @@ def _orchestrate_event(
     *,
     current_reader: CurrentReader = publication.verify_current_lifecycle_authority,
     follow_up_verifier: FollowUpVerifier = follow_up.verify_live_follow_up,
+    authorization_verifier: AuthorizationVerifier = _verify_user_authorization,
 ) -> LifecycleDecision:
     """Authenticate CURRENT state and select one bounded, non-recursive action."""
 
@@ -301,14 +463,18 @@ def _orchestrate_event(
             raise LifecycleOrchestrationError("replacement PR binding is invalid")
         if classification_value is not None or follow_up_value is not None:
             raise LifecycleOrchestrationError("replacement cannot carry feedback facts")
-        _authorization(
+        authorization = _authorization(
             authorization_value,
+            event_id=event_id,
             operation="PR_REBOUND",
             expected_scope={
                 "predecessor_pull_request": lifecycle.pull_request,
                 "replacement_pull_request": replacement_pr,
                 "head_sha": lifecycle.head_sha,
             },
+            observed=observed,
+            lifecycle=lifecycle,
+            verifier=authorization_verifier,
         )
         _prove_transition_is_finite(state, "PR_REBOUND", event_id)
         return _base_decision(
@@ -317,6 +483,8 @@ def _orchestrate_event(
             state,
             lifecycle_transition="PR_REBOUND",
             resulting_pull_request=replacement_pr,
+            authorization_digest=authorization["authorization_digest"],
+            requires_authorization_publication=True,
         )
 
     if replacement is not None:
@@ -331,9 +499,13 @@ def _orchestrate_event(
             raise LifecycleOrchestrationError(
                 "Ready remediation requires an authenticated new head"
             )
-        finding_ids = _authorized_finding_ids(authorization_value)
-        _authorization(
+        verified_authorization = authorization_verifier(
+            authorization_value, observed, lifecycle
+        )
+        finding_ids = _authorized_finding_ids(verified_authorization)
+        authorization = _authorization(
             authorization_value,
+            event_id=event_id,
             operation="REMEDIATION_COMPLETED",
             expected_scope={
                 "pull_request": lifecycle.pull_request,
@@ -341,6 +513,10 @@ def _orchestrate_event(
                 "resulting_head_sha": request_head,
                 "finding_ids": finding_ids,
             },
+            observed=observed,
+            lifecycle=lifecycle,
+            verifier=authorization_verifier,
+            verified_item=verified_authorization,
         )
         _prove_transition_is_finite(state, "REMEDIATION_COMPLETED", event_id)
         return _base_decision(
@@ -352,6 +528,8 @@ def _orchestrate_event(
             resulting_head_sha=request_head,
             requires_fresh_head_evidence=True,
             merge_ready=False,
+            authorization_digest=authorization["authorization_digest"],
+            requires_authorization_publication=True,
         )
 
     if event_kind == "RECOVERY_COMMIT_PUSHED":
@@ -367,9 +545,13 @@ def _orchestrate_event(
             raise LifecycleOrchestrationError(
                 "exceptional recovery requires an exhausted Ready lifecycle and a new head"
             )
-        finding_ids = _authorized_finding_ids(authorization_value)
-        _authorization(
+        verified_authorization = authorization_verifier(
+            authorization_value, observed, lifecycle
+        )
+        finding_ids = _authorized_finding_ids(verified_authorization)
+        authorization = _authorization(
             authorization_value,
+            event_id=event_id,
             operation="EXCEPTIONAL_RECOVERY",
             expected_scope={
                 "pull_request": lifecycle.pull_request,
@@ -377,6 +559,10 @@ def _orchestrate_event(
                 "resulting_head_sha": request_head,
                 "finding_ids": finding_ids,
             },
+            observed=observed,
+            lifecycle=lifecycle,
+            verifier=authorization_verifier,
+            verified_item=verified_authorization,
         )
         _prove_transition_is_finite(state, "EXCEPTIONAL_RECOVERY", event_id)
         return _base_decision(
@@ -388,6 +574,8 @@ def _orchestrate_event(
             resulting_head_sha=request_head,
             requires_fresh_head_evidence=True,
             merge_ready=False,
+            authorization_digest=authorization["authorization_digest"],
+            requires_authorization_publication=True,
         )
 
     if request_head != lifecycle.head_sha:
@@ -398,13 +586,17 @@ def _orchestrate_event(
     if event_kind in {"DRAFT_TO_READY", "READY_TO_DRAFT"}:
         if classification_value is not None or follow_up_value is not None:
             raise LifecycleOrchestrationError("Ready/Draft transition cannot carry feedback facts")
-        _authorization(
+        authorization = _authorization(
             authorization_value,
+            event_id=event_id,
             operation=event_kind,
             expected_scope={
                 "pull_request": lifecycle.pull_request,
                 "head_sha": lifecycle.head_sha,
             },
+            observed=observed,
+            lifecycle=lifecycle,
+            verifier=authorization_verifier,
         )
         _prove_transition_is_finite(state, event_kind, event_id)
         return _base_decision(
@@ -415,25 +607,36 @@ def _orchestrate_event(
             preserve_ready=False,
             transition_to_draft=event_kind == "READY_TO_DRAFT",
             transition_to_ready=event_kind == "DRAFT_TO_READY",
+            authorization_digest=authorization["authorization_digest"],
+            requires_authorization_publication=True,
         )
 
     if event_kind == "ADDITIONAL_REVIEW_AUTHORIZED":
         if classification_value is not None or follow_up_value is not None:
             raise LifecycleOrchestrationError("additional review cannot carry feedback facts")
-        _authorization(
+        authorization = _authorization(
             authorization_value,
+            event_id=event_id,
             operation="ADDITIONAL_REVIEW",
             expected_scope={
                 "pull_request": lifecycle.pull_request,
                 "head_sha": lifecycle.head_sha,
-                "observation_id": event_id,
             },
+            observed=observed,
+            lifecycle=lifecycle,
+            verifier=authorization_verifier,
+        )
+        _prove_transition_is_finite(
+            state, "ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED", event_id
         )
         return _base_decision(
             observed,
             lifecycle,
             state,
+            lifecycle_transition="ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED",
             additional_review_authorized=True,
+            authorization_digest=authorization["authorization_digest"],
+            requires_authorization_publication=True,
         )
 
     if event_kind != "LATE_FEEDBACK_CLASSIFIED":

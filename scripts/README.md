@@ -205,13 +205,18 @@ replacement selects `PR_REBOUND`; an explicitly authorized exhausted Ready
 recovery selects `EXCEPTIONAL_RECOVERY`, while bounded normal remediation
 selects `REMEDIATION_COMPLETED`; both preserve Ready. Explicit
 Ready/Draft changes require their exact separately reasoned authorization.
+Every user-controlled orchestration decision consumes canonical signed evidence
+bound to the exact CURRENT publication, authority, PR, head, operation, reason,
+and scope. Caller-constructed mappings have no authority.
 
 Review objects, CI observations, reopen events, validated Ready integrations,
 and completed feedback assessments are evidence-only observations. They never
 increment/reset counters, request another review, transition Draft/Ready, or
 create a recursive processing pass. A separately authorized additional review
-permits one bounded assessment and stops without consuming the single normal
-unrestricted-review counter.
+first appends `ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED`, then permits one
+bounded assessment and stops without consuming the single normal unrestricted-
+review counter. Publishing that same-head transition makes replay stale while
+preserving Ready and every finite counter.
 
 For `NON_BLOCKING_FOLLOWUP`, the orchestrator consumes the canonical #673
 classification and the #689 exact live follow-up verifier. The guarded resolver

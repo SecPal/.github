@@ -47,6 +47,9 @@ Immediately before resolving `OUTSIDE_PR_SCOPE + TRACKED_AS_FOLLOW_UP`, require
 the canonical work-graph reader to prove that the authenticated exact follow-up
 is accessible, open, and structurally complete. It may be blocked; resolution
 means tracked disposition, not implementation or completion.
+Apply the same live follow-up verification before an already-resolved tracked
+conversation is reported as safely dispositioned/tracked; external resolution
+alone is not authenticated tracking evidence.
 
 Invoke the resolver in write mode; omitting `--apply` is only a dry run:
 
@@ -180,8 +183,12 @@ lifecycle and counters.
 Treat every review object and configured automated review as feedback evidence,
 not authority for another review, remediation cycle, or Draft/Ready transition.
 One explicitly authorized additional review permits one bounded current-head
-assessment and stops. A material post-Ready blocker requires a user decision
-for any remaining bounded recovery authority. A tracked-follow-up resolution
+assessment and stops. Its canonical signed authorization must be bound to
+CURRENT and consumed through append-only lifecycle publication before the
+assessment; a caller-created mapping is not authority and a published
+authorization cannot be replayed. A material post-Ready blocker requires a
+user decision for any remaining bounded recovery authority. A tracked-follow-up
+resolution
 must be reported as safely dispositioned/tracked, never fixed, implemented, or
 completed, with technical and mechanical blocking stated separately.
 

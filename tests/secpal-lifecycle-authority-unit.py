@@ -1031,6 +1031,18 @@ class LifecycleAuthorityTests(TestCase):
                 before, "HEAD_ADVANCED", "0" * 64, resulting_state={"ready": False}
             )
 
+    def test_additional_review_authorization_is_persistent_without_new_cycle(self) -> None:
+        chain = ready_chain()
+        before = chain.verify()
+        chain.append("ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED")
+        after = chain.verify()
+
+        self.assertNotEqual(after.authority_digest, before.authority_digest)
+        self.assertEqual(after.state, before.state)
+        self.assertEqual(after.state["unrestricted_review_count"], 1)
+        self.assertEqual(after.state["remediation_cycle_count"], 1)
+        self.assertTrue(after.state["cycle_3_absent"])
+
     def test_finite_budgets_and_event_replay_fail_closed(self) -> None:
         chain = reviewed_chain()
         with self.assertRaises(authority.LifecycleAuthorityError):

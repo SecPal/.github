@@ -2604,6 +2604,7 @@ def resolve_threads(
         if not initial_targets[thread_id].thread.is_resolved
     ]
     applied: list[str] = []
+    verified_tracked: set[str] = set()
 
     if apply:
         minimum_recheck_pages = sum(
@@ -2632,11 +2633,9 @@ def resolve_threads(
         for index, thread_id in enumerate(thread_ids):
             phase = "follow-up" if thread_id in tracked else "recheck"
             try:
-                if (
-                    not initial_targets[thread_id].thread.is_resolved
-                    and thread_id in tracked
-                ):
+                if thread_id in tracked:
                     follow_up_verifier(tracked[thread_id], budget)
+                    verified_tracked.add(thread_id)
                 phase = "recheck"
                 remaining_thread_ids = thread_ids[index:]
                 required_recheck_pages = sum(
@@ -2653,7 +2652,6 @@ def resolve_threads(
                 )
                 required_follow_up_reads = sum(
                     remaining_thread_id != thread_id
-                    and not initial_targets[remaining_thread_id].thread.is_resolved
                     and remaining_thread_id in tracked
                     for remaining_thread_id in remaining_thread_ids
                 )
@@ -2743,7 +2741,7 @@ def resolve_threads(
                         _tracked_follow_up_disposition_report(
                             thread_ids,
                             tracked,
-                            set(already_resolved) | set(applied)
+                            (set(already_resolved) | set(applied)) & verified_tracked
                         )
                     ),
                     "failed": [
@@ -2783,7 +2781,7 @@ def resolve_threads(
         "tracked_follow_up_dispositions": _tracked_follow_up_disposition_report(
             thread_ids,
             tracked,
-            set(already_resolved) | set(applied)
+            (set(already_resolved) | set(applied)) & verified_tracked
         ),
         "failed": [],
         "unattempted": [],

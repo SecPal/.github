@@ -7,10 +7,13 @@ from __future__ import annotations
 
 import copy
 import inspect
+import json
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import TestCase, main
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
@@ -108,7 +111,141 @@ def current_reader(lifecycle: authority.VerifiedLifecycleAuthority):
     return read
 
 
+def fixture_authorization_digest(authorization_id: str) -> str:
+    return authority.digest_json({"authorization_id": authorization_id})
+
+
+def fixture_event_id(authorization_id: str) -> str:
+    return "authorization:" + fixture_authorization_digest(authorization_id)
+
+
+def fixture_authorization_verifier(value, _observed, _lifecycle):
+    if not isinstance(value, dict):
+        raise orchestration.LifecycleOrchestrationError(
+            "user authorization requires canonical signed evidence"
+        )
+    item = copy.deepcopy(value)
+    item["authorization_digest"] = fixture_authorization_digest(
+        item["authorization_id"]
+    )
+    return item
+
+
 class LifecycleOrchestrationTests(TestCase):
+    def test_signed_user_authorization_binds_exact_current_publication(self) -> None:
+        lifecycle = current_lifecycle()
+        observed = current_reader(lifecycle)(REPOSITORY, ISSUE)
+        raw = orchestration.create_user_authorization(
+            authorization_id="user-ready-exact",
+            repository=REPOSITORY,
+            delivery_issue=ISSUE,
+            lifecycle=lifecycle,
+            publication_oid=observed.publication_oid,
+            publication_digest=observed.publication_digest,
+            operation="READY_TO_DRAFT",
+            reason="Pause this exact PR for a separately stated reason",
+            scope={"pull_request": PR, "head_sha": HEAD},
+            signer_identity="aroviqen@secpal.app",
+            signer=lambda _payload, _domain: {
+                "format": "ssh",
+                "signer_identity": "aroviqen@secpal.app",
+                "value": "fixture-signature",
+            },
+        )
+        with mock.patch.object(orchestration.authority, "_verify_signature"):
+            verified = orchestration._verify_user_authorization(
+                raw, observed, lifecycle
+            )
+            stale = copy.deepcopy(lifecycle)
+            object.__setattr__(stale, "authority_digest", "9" * 64)
+            with self.assertRaises(orchestration.LifecycleOrchestrationError):
+                orchestration._verify_user_authorization(raw, observed, stale)
+
+        self.assertEqual(verified["operation"], "READY_TO_DRAFT")
+        self.assertEqual(verified["scope"], {"pull_request": PR, "head_sha": HEAD})
+
+    def test_documented_repository_package_import_works_without_path_injection(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from scripts.secpal_pr_review import lifecycle_orchestration",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_public_orchestrator_rejects_caller_constructed_user_authorization(self) -> None:
+        forged = {
+            "authorization_id": "forged-ready",
+            "operation": "READY_TO_DRAFT",
+            "reason": "Caller-created values are not authenticated authority",
+            "scope": {"pull_request": PR, "head_sha": HEAD},
+            "bounded_uses": 1,
+        }
+        request = {
+            "event_kind": "READY_TO_DRAFT",
+            "event_id": "draft-regression-forged",
+            "pull_request": PR,
+            "head_sha": HEAD,
+            "replacement_pull_request": None,
+            "classification": None,
+            "follow_up": None,
+            "authorization": forged,
+        }
+        with (
+            mock.patch.object(
+                orchestration.publication,
+                "verify_current_lifecycle_authority",
+                current_reader(current_lifecycle()),
+            ),
+            self.assertRaises(orchestration.LifecycleOrchestrationError),
+        ):
+            orchestration.orchestrate_event(REPOSITORY, ISSUE, request)
+
+    def test_additional_review_requires_persistent_signed_consumption(self) -> None:
+        self.assertIn(
+            "ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED",
+            authority.TRANSITIONS,
+        )
+        before = current_lifecycle()
+        decision = orchestration._orchestrate_event(
+            REPOSITORY,
+            ISSUE,
+            {
+                "event_kind": "ADDITIONAL_REVIEW_AUTHORIZED",
+                "event_id": "authorization:" + "6" * 64,
+                "pull_request": PR,
+                "head_sha": HEAD,
+                "replacement_pull_request": None,
+                "classification": None,
+                "follow_up": None,
+                "authorization": json.dumps({"signed": "fixture"}),
+            },
+            current_reader=current_reader(before),
+            authorization_verifier=lambda *_args, **_kwargs: {
+                "authorization_id": "user-review-persistent",
+                "operation": "ADDITIONAL_REVIEW",
+                "reason": "Assess this exact current head once",
+                "scope": {
+                    "pull_request": PR,
+                    "head_sha": HEAD,
+                },
+                "bounded_uses": 1,
+                "authorization_digest": "6" * 64,
+            },
+        )
+
+        self.assertEqual(
+            decision.lifecycle_transition,
+            "ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED",
+        )
+        self.assertTrue(decision.requires_authorization_publication)
+        self.assertEqual(decision.authorization_digest, "6" * 64)
+
     def test_public_orchestrator_accepts_no_consumer_authority_sources(self) -> None:
         self.assertEqual(
             list(inspect.signature(orchestration.orchestrate_event).parameters),
@@ -146,7 +283,7 @@ class LifecycleOrchestrationTests(TestCase):
         lifecycle = current_lifecycle()
         request = {
             "event_kind": "RECOVERY_COMMIT_PUSHED",
-            "event_id": "recovery-1",
+            "event_id": fixture_event_id("user-recovery-1"),
             "pull_request": PR,
             "head_sha": NEXT_HEAD,
             "replacement_pull_request": None,
@@ -160,6 +297,7 @@ class LifecycleOrchestrationTests(TestCase):
                 ISSUE,
                 request,
                 current_reader=current_reader(lifecycle),
+                authorization_verifier=fixture_authorization_verifier,
             )
 
         request["authorization"] = {
@@ -179,6 +317,7 @@ class LifecycleOrchestrationTests(TestCase):
             ISSUE,
             request,
             current_reader=current_reader(lifecycle),
+            authorization_verifier=fixture_authorization_verifier,
         )
 
         self.assertEqual(decision.lifecycle_transition, "EXCEPTIONAL_RECOVERY")
@@ -197,7 +336,7 @@ class LifecycleOrchestrationTests(TestCase):
             ISSUE,
             {
                 "event_kind": "REMEDIATION_COMMIT_PUSHED",
-                "event_id": "remediation-2",
+                "event_id": fixture_event_id("bounded-remediation-2"),
                 "pull_request": PR,
                 "head_sha": NEXT_HEAD,
                 "replacement_pull_request": None,
@@ -217,6 +356,7 @@ class LifecycleOrchestrationTests(TestCase):
                 },
             },
             current_reader=current_reader(lifecycle),
+            authorization_verifier=fixture_authorization_verifier,
         )
 
         self.assertEqual(decision.lifecycle_transition, "REMEDIATION_COMPLETED")
@@ -233,7 +373,7 @@ class LifecycleOrchestrationTests(TestCase):
             ISSUE,
             {
                 "event_kind": "PR_REPLACED",
-                "event_id": "replacement-1",
+                "event_id": fixture_event_id("user-replacement-1"),
                 "pull_request": PR,
                 "head_sha": HEAD,
                 "replacement_pull_request": REPLACEMENT_PR,
@@ -252,6 +392,7 @@ class LifecycleOrchestrationTests(TestCase):
                 },
             },
             current_reader=current_reader(lifecycle),
+            authorization_verifier=fixture_authorization_verifier,
         )
 
         self.assertEqual(decision.lifecycle_transition, "PR_REBOUND")
@@ -402,7 +543,7 @@ class LifecycleOrchestrationTests(TestCase):
     def test_ready_to_draft_requires_exact_user_reason_and_authorization(self) -> None:
         base = {
             "event_kind": "READY_TO_DRAFT",
-            "event_id": "draft-regression-1",
+            "event_id": fixture_event_id("user-draft-1"),
             "pull_request": PR,
             "head_sha": HEAD,
             "replacement_pull_request": None,
@@ -416,6 +557,7 @@ class LifecycleOrchestrationTests(TestCase):
                 ISSUE,
                 base,
                 current_reader=current_reader(current_lifecycle()),
+                authorization_verifier=fixture_authorization_verifier,
             )
         base["authorization"] = {
             "authorization_id": "user-draft-1",
@@ -429,6 +571,7 @@ class LifecycleOrchestrationTests(TestCase):
             ISSUE,
             base,
             current_reader=current_reader(current_lifecycle()),
+            authorization_verifier=fixture_authorization_verifier,
         )
         self.assertEqual(decision.lifecycle_transition, "READY_TO_DRAFT")
         self.assertTrue(decision.transition_to_draft)
@@ -438,7 +581,7 @@ class LifecycleOrchestrationTests(TestCase):
         regressed = current_lifecycle(ready=False, ready_regressed=True)
         request = {
             "event_kind": "DRAFT_TO_READY",
-            "event_id": "ready-again-1",
+            "event_id": fixture_event_id("user-ready-again-1"),
             "pull_request": PR,
             "head_sha": HEAD,
             "replacement_pull_request": None,
@@ -457,6 +600,7 @@ class LifecycleOrchestrationTests(TestCase):
             ISSUE,
             request,
             current_reader=current_reader(regressed),
+            authorization_verifier=fixture_authorization_verifier,
         )
         self.assertEqual(decision.lifecycle_transition, "DRAFT_TO_READY")
         self.assertEqual(decision.lifecycle_identity, LIFECYCLE)
@@ -470,7 +614,7 @@ class LifecycleOrchestrationTests(TestCase):
             ISSUE,
             {
                 "event_kind": "ADDITIONAL_REVIEW_AUTHORIZED",
-                "event_id": "bounded-review-1",
+                "event_id": fixture_event_id("user-review-1"),
                 "pull_request": PR,
                 "head_sha": HEAD,
                 "replacement_pull_request": None,
@@ -483,18 +627,22 @@ class LifecycleOrchestrationTests(TestCase):
                     "scope": {
                         "pull_request": PR,
                         "head_sha": HEAD,
-                        "observation_id": "bounded-review-1",
                     },
                     "bounded_uses": 1,
                 },
             },
             current_reader=current_reader(current_lifecycle()),
+            authorization_verifier=fixture_authorization_verifier,
         )
         self.assertTrue(decision.additional_review_authorized)
         self.assertTrue(decision.stop_after_bounded_pass)
         self.assertEqual(decision.unrestricted_reviews, 1)
         self.assertEqual(decision.remediation_cycles, 2)
-        self.assertIsNone(decision.lifecycle_transition)
+        self.assertEqual(
+            decision.lifecycle_transition,
+            "ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED",
+        )
+        self.assertTrue(decision.requires_authorization_publication)
         self.assertFalse(decision.request_review)
 
     def test_exhausted_exceptional_recovery_is_not_a_generic_escape_hatch(self) -> None:
@@ -504,7 +652,7 @@ class LifecycleOrchestrationTests(TestCase):
                 ISSUE,
                 {
                     "event_kind": "RECOVERY_COMMIT_PUSHED",
-                    "event_id": "recovery-2",
+                    "event_id": fixture_event_id("user-recovery-2"),
                     "pull_request": PR,
                     "head_sha": NEXT_HEAD,
                     "replacement_pull_request": None,
@@ -526,6 +674,7 @@ class LifecycleOrchestrationTests(TestCase):
                 current_reader=current_reader(
                     current_lifecycle(exceptional_recoveries=1)
                 ),
+                authorization_verifier=fixture_authorization_verifier,
             )
 
     def test_automated_review_on_recovery_head_is_one_non_recursive_pass(self) -> None:

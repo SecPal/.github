@@ -189,13 +189,20 @@ exact new head, exact finding IDs, and one separately reasoned bounded user
 authorization. It preserves `Draft=false`, requires fresh head-bound evidence,
 and never selects another Ready transition. `Ready -> Draft` and any later
 `Draft -> Ready` each require their own exact user authorization and preserve
-the same lifecycle and consumed counters.
+the same lifecycle and consumed counters. User-controlled orchestration accepts
+only canonical signed authorization evidence bound to the exact CURRENT
+publication, lifecycle authority, PR, head, operation, reason, and scope;
+caller-constructed request fields are not authority.
 
 GitHub review submissions, review comments/threads, CI observations, reopen
 events, and validated Ready integrations are bounded evidence observations, not
 lifecycle events. They select no review request, counter change, recovery,
 Ready/Draft transition, or recursive processing. One explicitly authorized
 additional review permits one bounded current-head assessment and stops.
+Its signed authorization is consumed through an append-only
+`ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED` transition before assessment. That
+transition preserves Ready and all review/remediation counters while making the
+same authorization stale after publication.
 
 Late feedback consumes #673's canonical classification, including independent
 `technically_blocking` and `mechanically_blocking` facts. A high-risk or material

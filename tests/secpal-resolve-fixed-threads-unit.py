@@ -4396,6 +4396,55 @@ class ResolveFixedThreadsTests(TestCase):
         self.assertEqual(result["resolved"], [])
         self.assertEqual(len(fake.calls), 3)
 
+    def test_already_resolved_tracked_follow_up_is_reverified_before_safe_report(self) -> None:
+        thread_id = "PRRT_exampleTrackedResolved"
+        identity = MODULE.FollowUpIdentity(
+            repository="SecPal/api",
+            issue_number=123,
+            issue_url="https://github.com/SecPal/api/issues/123",
+        )
+        expected = expected_thread_state(thread_id, resolved=True)
+        manifest = eligibility_payload(
+            reviewed_state_payload(thread_id, [], resolved=True),
+            (thread_id,),
+        )
+        manifest["eligible_threads"][0].update(
+            classification="OUTSIDE_PR_SCOPE",
+            disposition="TRACKED_AS_FOLLOW_UP",
+            follow_up=identity.to_dict(),
+        )
+        verifier = mock.Mock(
+            side_effect=MODULE.ResolutionError("follow-up issue is closed")
+        )
+        fake = FakeGh([target_response(thread_id, resolved=True)])
+
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            (thread_id,),
+            apply=True,
+            expected_targets={thread_id: expected},
+            eligibility_manifest=manifest,
+            follow_up_verifier=verifier,
+            runner=fake,
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["failed"][0]["phase"], "follow-up")
+        self.assertEqual(
+            result["tracked_follow_up_dispositions"],
+            [
+                {
+                    "thread_id": thread_id,
+                    "technically_blocking": False,
+                    "mechanically_blocking": True,
+                    "resolution_meaning": "SAFELY_DISPOSITIONED_TRACKED",
+                }
+            ],
+        )
+        verifier.assert_called_once_with(identity, mock.ANY)
+
     def test_follow_up_budget_loss_reserves_the_entire_unattempted_suffix(
         self,
     ) -> None:

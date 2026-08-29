@@ -24,6 +24,10 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 - make Ready monotonic across source recovery unless the user separately
   authorizes the exact `Ready -> Draft` transition and reason
+- require signed, CURRENT-bound authorization for user-controlled orchestration
+  and persist additional-review consumption without changing finite counters
+- reauthenticate tracked follow-up ownership and live state before reporting an
+  already-resolved conversation as safely dispositioned and tracked
 
 ## 2026-08-29 - Authenticate Thread Eligibility on Ready Integration
 
