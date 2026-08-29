@@ -124,6 +124,63 @@ only. It is also the default post-push resolution step after
 feedback remediation. It is not selected for a separately requested readiness
 audit, forensic evidence capture, or merge evaluation.
 
+### Authenticated post-final-push late disposition
+
+Commit-bound eligibility above remains unchanged and is the normal remediation
+path. One additional resolution-only path exists for an exact thread outside
+the authenticated final feedback boundary and observed on the unchanged final
+delivery head. It accepts only
+`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` with
+`technically_blocking=false`; classification is explicit independent review
+judgment and is never inferred from text.
+
+This path first independently verifies the existing complete final reviewed
+state, the canonical final eligibility artifact authenticated by the receipt
+and attestation, signed receipt trailer, final tree, exact head and origin, and
+accepted local commit signature. Every final-eligibility thread must exist in
+the final reviewed state. The proposed late target must be absent from both
+authenticated sets before classification authority is created, and the same
+origin predicate is independently re-established by disposition creation and
+resolution. The verified signature's
+actual format and fingerprint establish the only signer trust anchor. A strict
+canonical `late-classification.schema.json` document first authenticates the
+exact independently established decision, stable finding ID, finding-evidence
+digest, risk facts, and live finding under that signer.
+The disposition creator verifies it and internally computes its digest before
+creating `late-disposition.schema.json`. Both documents are detached-signed by
+that same OS-account identity without a Git commit. SSH and OpenPGP signatures
+use trusted absolute executables, bounded timeouts, the OS account home and
+configuration roots, and neutralized Git environment overrides.
+Artifact and signature inputs are verified from owned immutable byte snapshots.
+Outputs use descriptor-relative replacement in opened private directories and
+are required to remain outside the delivery repository.
+
+The signed document binds repository, delivery issue, PR, unchanged final head
+and tree, receipt/attestation/final-eligibility digests, derived signer, exact
+authorized action, and exactly one thread authorization. That authorization
+binds the GraphQL thread ID, top-level comment node and database
+IDs, finding body digest, reply-state digest and count, resolved/outdated state,
+independently established classification evidence digest, classification,
+disposition, `technically_blocking=false`, and `RESOLVE_REVIEW_THREAD`.
+Unknown fields, versions, duplicate keys, non-canonical bytes, unsigned or
+corrupt evidence, an alternate valid signer, self-declared trust substitution,
+or any binding drift fail closed.
+
+The maintained fixed-thread resolver is still the sole GitHub mutation
+boundary. It re-verifies the final-delivery, classification, and disposition
+evidence layers, reads only the named thread,
+checks every exact live binding before the first write and immediately before
+the target write, and resolves only the authenticated source conversation. The
+path consumes zero unrestricted reviews, remediation cycles, commits, pushes,
+and Ready transitions. It has no CI, review-request, label, issue, source,
+readiness, merge, or generic conversation authority.
+
+“Post-final-push” is lifecycle shorthand for feedback outside this
+authenticated final-feedback boundary. This evidence proves canonical snapshot
+and eligibility absence under the unchanged final head; it does not claim that
+GitHub wall-clock creation time is cryptographically ordered after a branch
+push.
+
 ## Normal fast-path state machine
 
 ```text
@@ -224,9 +281,12 @@ target projections, and exact mutation response. It does not read or depend on
 hosted CI, Required Checks, CodeQL, mergeability, branch protection, PR
 reactions, unrelated feedback, or worktree cleanliness.
 
-Only the final attestation for a new signed fix commit is accepted as validation
-evidence. A raw validation receipt for an unchanged head has no receipt trailer
-in that pre-existing commit and fails closed before any GitHub read.
+Only the final attestation for a signed delivery commit is accepted as the
+delivery anchor. A raw validation receipt for an unchanged head has no receipt
+trailer in that pre-existing commit and fails closed before any GitHub read.
+Post-final-push late resolution additionally requires the independently signed
+artifact above; neither the prior attestation alone nor a user-created file can
+authorize it.
 
 `STOP` reports the commit, branch, remote synchronization, local validation,
 worktree state, PR identity, and resolution results. The workflow never merges;
@@ -465,8 +525,10 @@ identity. It is read at most once only under the explicit CI and readiness path.
 
 A validation receipt is produced by the single complete run and binds its staged
 tree, canonical eligibility-manifest digest, and normalized satisfied evidence
-for every registered manual gate. After
-the signed commit, that receipt may be bound once only when the commit's parent,
+for every registered manual gate. The manifest is an explicit empty set when
+the reviewed state has no unresolved
+thread eligible for a guarded action; its canonical digest is still bound.
+After the signed commit, that receipt may be bound once only when the commit's parent,
 tree, and single `SecPal-Validation-Receipt` trailer match exactly. The final
 validation attestation contains at least `repository`, `head_sha`,
 `registry_digest`, `command_set_digest`, `successful_result`, validated tree,

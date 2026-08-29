@@ -108,6 +108,33 @@ Log of notable changes to SecPal organization defaults (newest first).
 - made detector mutation authority, provider-product evidence, and the
   overriding Never-in-Git boundary explicit
 
+## 2026-08-26 - Authenticate Post-Push Late-Feedback Disposition
+
+**Added:**
+
+- a detached SSH/OpenPGP-signed evidence path that lets the maintained guarded
+  resolver disposition an exact independently classified, technically
+  non-blocking review thread outside the authenticated final feedback boundary,
+  without changing the delivery tree or consuming another review or remediation
+  cycle; this boundary proves absence from the final reviewed-state and
+  commit-bound eligibility artifacts, not GitHub wall-clock push ordering
+- separately authenticated canonical classification evidence whose digest is
+  derived only after exact finding, risk-fact, and delivery-signer verification
+
+**Changed:**
+
+- the fixed-thread resolver now accepts either its existing commit-bound
+  eligibility evidence or the new exact post-final-push evidence, while failing
+  closed on delivery-anchor, signer, repository, issue, PR, head, thread,
+  comment, reply, state, classification, disposition, or action drift
+- late classification, disposition, and resolution now independently verify the
+  canonical final eligibility artifact, its attested digest, coherence with the
+  complete final reviewed-state membership, and exact target absence from both
+  authenticated final sets
+- detached verification now uses owned byte snapshots, and evidence output is
+  anchored to validated private directory descriptors so concurrent pathname
+  substitution cannot change the authenticated input or output destination
+
 ## 2026-08-26 - Stop Requiring Up-To-Date Pull Request Branches
 
 **Changed:**

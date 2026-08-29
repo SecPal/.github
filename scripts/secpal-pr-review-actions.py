@@ -4452,6 +4452,7 @@ def _integration_tree_delta(
         [
             "diff-tree",
             "--raw",
+            "-r",
             "--no-abbrev",
             "-z",
             "--no-renames",
@@ -5204,7 +5205,6 @@ def _resolution_eligibility_digest(
         or payload.get("reviewed_head_sha") != reviewed.head_sha
         or payload.get("reviewed_state_digest") != reviewed.state_digest
         or not isinstance(threads, list)
-        or not threads
     ):
         raise fast_path.SecurityBlocker(
             "resolution eligibility evidence is invalid or stale"

@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SecPal/.github/blob/main/.agents/skills/secpal-pr-review/references/late-disposition.schema.json",
+  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0",
+  "title": "SecPal authenticated post-push late-feedback disposition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "repository",
+    "delivery_issue_number",
+    "pull_request_number",
+    "head_sha",
+    "validated_tree_sha",
+    "validation_receipt_digest",
+    "validation_attestation_digest",
+    "final_eligibility_evidence_digest",
+    "delivery_signer",
+    "authorized_action",
+    "threads"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "kind": { "const": "LATE_FEEDBACK_DISPOSITION" },
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "delivery_issue_number": { "type": "integer", "minimum": 1 },
+    "pull_request_number": { "type": "integer", "minimum": 1 },
+    "head_sha": { "$ref": "#/$defs/oid" },
+    "validated_tree_sha": { "$ref": "#/$defs/oid" },
+    "validation_receipt_digest": { "$ref": "#/$defs/digest" },
+    "validation_attestation_digest": { "$ref": "#/$defs/digest" },
+    "final_eligibility_evidence_digest": { "$ref": "#/$defs/digest" },
+    "delivery_signer": { "$ref": "#/$defs/signer" },
+    "authorized_action": { "const": "RESOLVE_EXACT_REVIEW_THREADS" },
+    "threads": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/thread" }
+    }
+  },
+  "$defs": {
+    "oid": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "identity": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u0020\\u007f]+$"
+    },
+    "signer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "fingerprint"],
+      "properties": {
+        "format": { "enum": ["ssh", "openpgp"] },
+        "fingerprint": {
+          "type": "string",
+          "pattern": "^(?:SHA256:[A-Za-z0-9+/]+={0,2}|[0-9A-F]{40,64})$"
+        }
+      }
+    },
+    "thread": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "thread_id",
+        "top_level_comment_node_id",
+        "top_level_comment_database_id",
+        "finding_body_digest",
+        "reply_state_digest",
+        "reply_count",
+        "is_resolved",
+        "is_outdated",
+        "classification",
+        "disposition",
+        "technically_blocking",
+        "classification_evidence_digest",
+        "authorized_action"
+      ],
+      "properties": {
+        "thread_id": {
+          "type": "string",
+          "pattern": "^PRRT_[A-Za-z0-9_-]+$"
+        },
+        "top_level_comment_node_id": { "$ref": "#/$defs/identity" },
+        "top_level_comment_database_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "finding_body_digest": { "$ref": "#/$defs/digest" },
+        "reply_state_digest": { "$ref": "#/$defs/digest" },
+        "reply_count": { "type": "integer", "minimum": 0 },
+        "is_resolved": { "const": false },
+        "is_outdated": { "type": "boolean" },
+        "classification": { "const": "INVALID_FALSE_OR_MISLEADING" },
+        "disposition": { "const": "DISPROVEN_WITH_EVIDENCE" },
+        "technically_blocking": { "const": false },
+        "classification_evidence_digest": { "$ref": "#/$defs/digest" },
+        "authorized_action": { "const": "RESOLVE_REVIEW_THREAD" }
+      }
+    }
+  }
+}

@@ -53,7 +53,7 @@ instead of guessed commands.
 
 ## Architecture
 
-The workflow has six narrow parts:
+The workflow has eight narrow parts:
 
 1. [the central skill](../.agents/skills/secpal-pr-review/SKILL.md), which performs
    reasoned technical classification;
@@ -64,12 +64,16 @@ The workflow has six narrow parts:
    batch-resolution contracts;
 4. `scripts/secpal-pr-review-actions.py`, the compatible command entry point for
    stable capture, validation attestation, batch resolution, and legacy actions;
-5. `scripts/secpal-pr-review.py`, the unchanged Package-2.1 read-only evidence
+5. `scripts/secpal-create-late-classification.py`,
+   `scripts/secpal-create-late-disposition.py`, and
+   `scripts/secpal_pr_review/late_disposition.py`, which create and verify the
+   narrowly scoped detached post-final-push disposition artifact;
+6. `scripts/secpal-pr-review.py`, the unchanged Package-2.1 read-only evidence
    verifier used only by explicitly selected forensic/audit snapshot mode; and
-6. the workflow-only repository registry, current mutation-plan schema, exact
+7. the workflow-only repository registry, current mutation-plan schema, exact
    legacy mutation-plan v1.0 schema, and fast-path batch schema under the
    skill's `references/` directory; and
-7. `scripts/secpal_pr_review/lifecycle_authority.py`, the separately adoptable
+8. `scripts/secpal_pr_review/lifecycle_authority.py`, the separately adoptable
    persistent lifecycle-authority primitive and independent verifier.
 
 The action helper validates persisted mutation plans against their original
@@ -359,7 +363,10 @@ disposed, verify unchanged local, remote, and PR heads and skip the commit and
 push; never create an artificial empty commit. Because a receipt produced after
 that existing commit is not authenticated by it, the raw receipt cannot
 authorize thread resolution. Stop without resolution unless a final attestation
-is bound to a new signed fix commit.
+is bound to a new signed fix commit. The sole exception is an exact
+post-final-push, technically non-blocking thread authorized through the
+separately signed late-disposition path documented below; that path reuses the
+already verified final delivery attestation and does not create a new receipt.
 
 ### Explicit Ready-head integration evidence
 
@@ -531,6 +538,31 @@ bounded PR-wide feedback and exact target-thread reads before resolving.
 
 The normal path performs no post-push PR-wide feedback or hosted-CI read. The
 simple resolver compares only each named target's exact state before its write.
+
+An explicitly requested post-final-push resolution-only action first creates
+one canonical detached-signed `late-classification.schema.json` artifact for
+exactly one named thread, then creates one canonical
+`late-disposition.schema.json` artifact for that same thread.
+Creation first verifies the unchanged final delivery head, tree,
+receipt trailer, attestation, canonical final eligibility artifact, origin, and
+accepted commit signature. It proves the named thread absent from both the
+complete authenticated final reviewed state and eligibility set, verifies that
+every eligible thread belongs to the reviewed state, derives the actual
+delivery signer fingerprint, reads that named thread twice, and signs the
+classification with that same OS-account identity. The disposition creator
+verifies the classification signature and exact live binding and computes its
+digest internally. SSH and OpenPGP are supported.
+The resolver independently repeats the final-delivery verification, verifies
+both canonical artifacts and detached signatures against the derived signer,
+and compares exact live head, thread, top-level comment node/database identity,
+body digest, reply state, resolved/outdated state, classification, disposition,
+technical-blocking flag, and guarded action before resolving. This path is only
+`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` with
+`technically_blocking=false`; it consumes no review/remediation counter and has
+no commit, push, Ready, CI, issue, label, review, or merge capability.
+The same origin predicate is independently re-established by disposition
+creation and resolution. “Post-final-push” names this lifecycle boundary; it
+does not claim cryptographic proof of GitHub wall-clock push ordering.
 
 An explicitly requested readiness path may compare one current stable-feedback
 projection and the requested volatile readiness state. It reports that

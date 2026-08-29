@@ -164,12 +164,57 @@ RESOLVER_CALLS = (
     ),
 )
 
+LATE_DISPOSITION_CALLS = (
+    ProcessCall(
+        None,
+        "_read_global_git_value",
+        "executable",
+        "arguments",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("env", "environment"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("timeout", "30"),
+        ),
+    ),
+    ProcessCall(
+        None,
+        "_run_signature_command_without_input",
+        "executable",
+        "arguments",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("env", "environment"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("timeout", "30"),
+        ),
+    ),
+    ProcessCall(
+        None,
+        "_run_signature_command_with_input",
+        "executable",
+        "arguments",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("env", "environment"),
+            ("input", "stdin"),
+            ("timeout", "30"),
+        ),
+    ),
+)
+
 EXPECTED_CALLS = {
     "secpal-pr-review.py": EVIDENCE_CALLS,
     "secpal-pr-review-actions.py": ACTION_CALLS,
     "fast_path.py": (),
     "follow_up.py": (),
     "secpal-resolve-fixed-threads.py": RESOLVER_CALLS,
+    "late_disposition.py": LATE_DISPOSITION_CALLS,
+    "secpal-create-late-classification.py": (),
+    "secpal-create-late-disposition.py": (),
 }
 
 SAFE_SUBPROCESS_ATTRIBUTES = {
@@ -191,6 +236,18 @@ SAFE_OS_ATTRIBUTES = {
     "path",
     "pathsep",
     "replace",
+    "open",
+    "fstat",
+    "read",
+    "write",
+    "stat",
+    "O_RDONLY",
+    "O_WRONLY",
+    "O_CREAT",
+    "O_EXCL",
+    "O_CLOEXEC",
+    "O_NOFOLLOW",
+    "O_DIRECTORY",
     "unlink",
 }
 ALLOWED_IMPORT_ROOTS = {
@@ -199,6 +256,7 @@ ALLOWED_IMPORT_ROOTS = {
     "copy",
     "dataclasses",
     "datetime",
+    "errno",
     "functools",
     "hashlib",
     "importlib",
@@ -208,6 +266,7 @@ ALLOWED_IMPORT_ROOTS = {
     "pathlib",
     "pwd",
     "re",
+    "secrets",
     "secpal_work_graph",
     "site",
     "stat",
@@ -289,11 +348,46 @@ ALLOWED_IMPORTS = {
         "import operator",
         "import os",
         "import re",
+        "import stat",
         "import subprocess",
         "import sys",
         "from dataclasses import dataclass",
         "from pathlib import Path",
         "from typing import Any, Callable, Sequence",
+    },
+    "late_disposition.py": {
+        "from __future__ import annotations",
+        "import errno",
+        "import hashlib",
+        "import json",
+        "import os",
+        "import pwd",
+        "import re",
+        "import secrets",
+        "import stat",
+        "import subprocess",
+        "import tempfile",
+        "from dataclasses import dataclass",
+        "from pathlib import Path",
+        "from typing import Any, Sequence",
+    },
+    "secpal-create-late-disposition.py": {
+        "from __future__ import annotations",
+        "import argparse",
+        "import importlib.util",
+        "import json",
+        "import sys",
+        "from pathlib import Path",
+        "from typing import Any, Sequence",
+    },
+    "secpal-create-late-classification.py": {
+        "from __future__ import annotations",
+        "import argparse",
+        "import importlib.util",
+        "import json",
+        "import sys",
+        "from pathlib import Path",
+        "from typing import Any, Sequence",
     },
 }
 PROHIBITED_IMPORT_ROOTS = {
@@ -379,6 +473,20 @@ DIRECT_MODULE_ATTRIBUTES = {
     "secpal-resolve-fixed-threads.py": {
         "importlib": {"util"},
         "operator": {"attrgetter"},
+        "sys": {"argv", "modules", "stderr"},
+    },
+    "late_disposition.py": {
+        "errno": {"EINVAL", "ENOTSUP"},
+        "pwd": {"getpwuid"},
+        "stat": {"S_ISREG"},
+        "tempfile": {"TemporaryDirectory"},
+    },
+    "secpal-create-late-disposition.py": {
+        "importlib": {"util"},
+        "sys": {"argv", "modules", "stderr"},
+    },
+    "secpal-create-late-classification.py": {
+        "importlib": {"util"},
         "sys": {"argv", "modules", "stderr"},
     },
 }
@@ -467,6 +575,37 @@ LOADED_MODULE_ATTRIBUTES = {
             "read_live_follow_up",
             "verify_live_follow_up",
         },
+        "late_disposition": {
+            "CLASSIFICATION_KIND",
+            "CLASSIFICATION_PURPOSE",
+            "CLASSIFICATION_SIGNATURE_NAMESPACE",
+            "KIND",
+            "IDENTITY",
+            "MAXIMUM_ARTIFACT_BYTES",
+            "SCHEMA_VERSION",
+            "TECHNICAL_BLOCKERS",
+            "LateDispositionError",
+            "_load_canonical_json",
+            "canonical_json_bytes",
+            "os_account_home",
+            "parse_artifact",
+            "parse_classification_artifact",
+            "read_signing_configuration",
+            "sign_artifact",
+            "signer_from_git_verification",
+        },
+    },
+    "secpal-create-late-disposition.py": {
+        "resolver": {
+            "ResolutionError",
+            "create_late_disposition_artifact",
+        },
+    },
+    "secpal-create-late-classification.py": {
+        "resolver": {
+            "ResolutionError",
+            "create_late_classification_artifact",
+        },
     },
 }
 DYNAMIC_IMPORT_CALLS = {
@@ -537,6 +676,19 @@ DYNAMIC_IMPORT_CALLS = {
             ("_load_follow_up_helper",),
             "spec.loader.exec_module(module)",
         ),
+        DynamicImportCall(
+            ("_load_late_disposition_helper",),
+            "importlib.util.spec_from_file_location("
+            "'secpal_pr_review.late_disposition', LATE_DISPOSITION_HELPER)",
+        ),
+        DynamicImportCall(
+            ("_load_late_disposition_helper",),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_late_disposition_helper",),
+            "spec.loader.exec_module(module)",
+        ),
     },
     "fast_path.py": {
         DynamicImportCall(
@@ -551,6 +703,44 @@ DYNAMIC_IMPORT_CALLS = {
         DynamicImportCall(
             ("_load_follow_up_helper",),
             "spec.loader.exec_module(module)",
+        ),
+    },
+    "secpal-create-late-disposition.py": {
+        DynamicImportCall(
+            ("_load_resolver",),
+            "importlib.util.spec_from_file_location("
+            "'secpal_resolve_fixed_threads_for_late_evidence', RESOLVER)",
+        ),
+        DynamicImportCall(
+            ("_load_resolver",),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_resolver",),
+            "spec.loader.exec_module(module)",
+        ),
+    },
+    "secpal-create-late-classification.py": {
+        DynamicImportCall(
+            ("_load_resolver",),
+            "importlib.util.spec_from_file_location("
+            "'secpal_resolve_fixed_threads_for_late_classification', RESOLVER)",
+        ),
+        DynamicImportCall(
+            ("_load_resolver",),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_resolver",),
+            "spec.loader.exec_module(module)",
+        ),
+        DynamicImportCall(
+            ("_load_resolver",),
+            "sys.modules.pop(spec.name, None)",
+        ),
+        DynamicImportCall(
+            ("_load_resolver",),
+            "sys.modules[spec.name]",
         ),
     },
 }
@@ -674,6 +864,10 @@ SAFE_GETATTR_CALLS = {
             ("_load_follow_up_helper",),
             "getattr(loaded, '__file__', None)",
         ),
+        DynamicImportCall(
+            ("_load_late_disposition_helper",),
+            "getattr(loaded, '__file__', None)",
+        ),
     },
     "fast_path.py": {
         DynamicImportCall(
@@ -722,6 +916,14 @@ SAFE_SYS_MODULES_CALLS = {
             ("_load_follow_up_helper",),
             "sys.modules.pop(spec.name, None)",
         ),
+        DynamicImportCall(
+            ("_load_late_disposition_helper",),
+            "sys.modules.get('secpal_pr_review.late_disposition')",
+        ),
+        DynamicImportCall(
+            ("_load_late_disposition_helper",),
+            "sys.modules.pop(spec.name, None)",
+        ),
     },
     "fast_path.py": {
         DynamicImportCall(
@@ -730,6 +932,18 @@ SAFE_SYS_MODULES_CALLS = {
         ),
         DynamicImportCall(
             ("_load_follow_up_helper",),
+            "sys.modules.pop(spec.name, None)",
+        ),
+    },
+    "secpal-create-late-disposition.py": {
+        DynamicImportCall(
+            ("_load_resolver",),
+            "sys.modules.pop(spec.name, None)",
+        ),
+    },
+    "secpal-create-late-classification.py": {
+        DynamicImportCall(
+            ("_load_resolver",),
             "sys.modules.pop(spec.name, None)",
         ),
     },
@@ -766,10 +980,26 @@ SAFE_SYS_MODULES_STORES = {
             ("_load_follow_up_helper",),
             "sys.modules[spec.name]",
         ),
+        DynamicImportCall(
+            ("_load_late_disposition_helper",),
+            "sys.modules[spec.name]",
+        ),
     },
     "fast_path.py": {
         DynamicImportCall(
             ("_load_follow_up_helper",),
+            "sys.modules[spec.name]",
+        ),
+    },
+    "secpal-create-late-disposition.py": {
+        DynamicImportCall(
+            ("_load_resolver",),
+            "sys.modules[spec.name]",
+        ),
+    },
+    "secpal-create-late-classification.py": {
+        DynamicImportCall(
+            ("_load_resolver",),
             "sys.modules[spec.name]",
         ),
     },
@@ -784,7 +1014,11 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_graphql",
     "_load_evidence_helper",
     "_load_follow_up_helper",
+    "_load_late_disposition_helper",
+    "_late_signing_key",
     "_markdown_parser_environment",
+    "_matches_late_authorization",
+    "_matches_reviewed_target",
     "_read_authenticated_follow_up",
     "_resolve_trusted_markdown_node",
     "_load_repository_entry",
@@ -793,21 +1027,28 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_reject_nonfinite_json_constant",
     "_reject_duplicate_json_object",
     "_remote_repository",
+    "_reply_state_digest",
     "_run_gh",
     "_run_git",
+    "_parse_eligibility_payload",
     "_tracked_follow_ups_from_payload",
     "_validate_manual_gate_evidence",
     "_validation_registry_binding",
     "load_repository_limits",
     "load_eligibility_evidence",
+    "load_final_feedback_boundary",
     "load_reviewed_state",
     "load_validation_evidence",
+    "create_late_disposition_artifact",
+    "create_late_classification_artifact",
     "main",
     "parse_args",
     "read_stable_target_thread",
     "read_target_thread",
     "require_expected_target",
+    "require_late_target_origin",
     "resolve_threads",
+    "resolve_late_disposition_threads",
     "validate_expected_targets",
     "validate_request",
     "verify_local_fix_commit",
@@ -816,7 +1057,9 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
 RESOLVER_CLASS_SHAPES = {
     "ExpectedThreadState": ClassShape((), (), ("dataclass(frozen=True)",)),
     "EligibilityEvidence": ClassShape((), (), ("dataclass(frozen=True)",)),
+    "FinalFeedbackBoundary": ClassShape((), (), ("dataclass(frozen=True)",)),
     "InvocationBudget": ClassShape((), (), ("dataclass",)),
+    "ParsedEligibility": ClassShape((), (), ("dataclass(frozen=True)",)),
     "RepositoryLimits": ClassShape((), (), ("dataclass(frozen=True)",)),
     "ReviewedState": ClassShape((), (), ("dataclass(frozen=True)",)),
     "ResolutionError": ClassShape(("RuntimeError",), (), ()),
@@ -831,6 +1074,10 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
         "_reject_nonfinite_json_constant",
     ),
     DynamicImportCall(
+        ("load_reviewed_state",),
+        "_reject_duplicate_json_object",
+    ),
+    DynamicImportCall(
         ("load_validation_evidence",),
         "_reject_nonfinite_json_constant",
     ),
@@ -843,11 +1090,11 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
         "_reject_duplicate_json_object",
     ),
     DynamicImportCall(
-        ("_tracked_follow_ups_from_payload",),
+        ("_parse_eligibility_payload",),
         "_reject_nonfinite_json_constant",
     ),
     DynamicImportCall(
-        ("_tracked_follow_ups_from_payload",),
+        ("_parse_eligibility_payload",),
         "_reject_duplicate_json_object",
     ),
     DynamicImportCall(
@@ -856,6 +1103,18 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
     ),
     DynamicImportCall(
         ("resolve_threads",),
+        "_run_gh",
+    ),
+    DynamicImportCall(
+        ("create_late_disposition_artifact",),
+        "_run_gh",
+    ),
+    DynamicImportCall(
+        ("create_late_classification_artifact",),
+        "_run_gh",
+    ),
+    DynamicImportCall(
+        ("resolve_late_disposition_threads",),
         "_run_gh",
     ),
     DynamicImportCall(
@@ -881,6 +1140,16 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
 }
 RESOLVER_LOOP_SITES = {
     LoopSite(
+        "comprehension",
+        ("create_late_classification_artifact",),
+        "supplied_blockers",
+    ),
+    LoopSite(
+        "comprehension",
+        ("create_late_classification_artifact",),
+        "target.thread.comments",
+    ),
+    LoopSite(
         "for",
         ("_resolve_trusted_markdown_node",),
         "evidence.TRUSTED_COMMAND_DIRECTORIES",
@@ -894,7 +1163,7 @@ RESOLVER_LOOP_SITES = {
         ("_validate_manual_gate_evidence",),
         "enumerate(registered_gates)",
     ),
-    LoopSite("for", ("_tracked_follow_ups_from_payload",), "threads"),
+    LoopSite("for", ("_parse_eligibility_payload",), "threads"),
     LoopSite("for", ("_reject_duplicate_json_object",), "pairs"),
     LoopSite(
         "for",
@@ -910,8 +1179,15 @@ RESOLVER_LOOP_SITES = {
     LoopSite("for", ("validate_expected_targets",), "target.comments"),
     LoopSite("for", ("resolve_threads",), "thread_ids"),
     LoopSite("for", ("resolve_threads",), "enumerate(thread_ids)"),
+    LoopSite("for", ("resolve_late_disposition_threads",), "thread_ids"),
+    LoopSite(
+        "for",
+        ("resolve_late_disposition_threads",),
+        "enumerate(thread_ids)",
+    ),
     LoopSite("comprehension", ("_load_repository_entry",), "repositories"),
     LoopSite("comprehension", ("load_reviewed_state",), "feedback.values()"),
+    LoopSite("comprehension", ("load_reviewed_state",), "comments.values()"),
     LoopSite(
         "comprehension",
         ("_validate_manual_gate_evidence",),
@@ -944,8 +1220,13 @@ RESOLVER_LOOP_SITES = {
     ),
     LoopSite(
         "comprehension",
-        ("_tracked_follow_ups_from_payload",),
+        ("_parse_eligibility_payload",),
         "finding_ids",
+    ),
+    LoopSite(
+        "comprehension",
+        ("load_final_feedback_boundary",),
+        "eligibility.thread_ids",
     ),
     LoopSite("comprehension", ("resolve_threads",), "thread_ids"),
     LoopSite("comprehension", ("validate_request",), "thread_ids"),
@@ -953,6 +1234,36 @@ RESOLVER_LOOP_SITES = {
     LoopSite("comprehension", ("resolve_threads",), "tracked"),
     LoopSite("comprehension", ("resolve_threads",), "tracked.values()"),
     LoopSite("comprehension", ("resolve_threads",), "remaining_thread_ids"),
+    LoopSite("comprehension", ("_matches_reviewed_target",), "current.comments"),
+    LoopSite("comprehension", ("_matches_reviewed_target",), "reviewed.comments"),
+    LoopSite("comprehension", ("_reply_state_digest",), "thread.comments"),
+    LoopSite("comprehension", ("_matches_late_authorization",), "thread.comments"),
+    LoopSite(
+        "comprehension",
+        ("create_late_disposition_artifact",),
+        "target.thread.comments",
+    ),
+    LoopSite(
+        "comprehension",
+        ("resolve_late_disposition_threads",),
+        "authorization.threads",
+    ),
+    LoopSite(
+        "comprehension",
+        ("resolve_late_disposition_threads",),
+        "initial_targets.values()",
+    ),
+    LoopSite(
+        "comprehension",
+        ("resolve_late_disposition_threads",),
+        "initial_targets.values()",
+    ),
+    LoopSite(
+        "comprehension",
+        ("resolve_late_disposition_threads",),
+        "thread_ids[index + 1:]",
+    ),
+    LoopSite("comprehension", ("parse_args",), "late_values"),
 }
 
 
@@ -1812,10 +2123,11 @@ def self_test() -> None:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 6:
+    if len(argv) != 9:
         raise SystemExit(
             "usage: secpal-pr-review-static-policy.py "
-            "EVIDENCE ACTIONS FAST_PATH SIMPLE_RESOLVER FOLLOW_UP"
+            "EVIDENCE ACTIONS FAST_PATH SIMPLE_RESOLVER FOLLOW_UP "
+            "LATE_DISPOSITION LATE_CLASSIFICATION_CREATOR LATE_CREATOR"
         )
     self_test()
     findings: list[str] = []

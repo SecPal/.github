@@ -120,6 +120,27 @@ validation and push hooks remain required. Hosted checks may be read only for a
 current explicit CI/readiness request, using one bounded current-state read with
 no polling, waiting, sleeping, or automatic repetition.
 
+For an exact technically non-blocking thread outside the authenticated final
+feedback boundary and observed on the unchanged delivery head,
+`secpal-create-late-classification.py` verifies the existing final delivery
+evidence and canonical final eligibility artifact, proves the thread absent
+from both final sets, captures only the named live thread, and
+authenticates the explicit classification decision. Then
+`secpal-create-late-disposition.py` verifies that decision, computes its digest
+internally, and creates a canonical detached SSH/OpenPGP-signed artifact without
+a delivery commit. The resolver consumes both signed artifacts through a
+separate explicit eligibility path,
+requires the actual detached signer to match the verified final delivery
+signer, and binds the delivery issue, PR, unchanged head/tree, receipt and
+attestation, exact thread and top-level comment identities, body and reply
+state, classification, disposition, technical-blocking flag, and guarded
+resolution action. It cannot select arbitrary threads or authorize any other
+GitHub mutation.
+
+This authenticated absence boundary is what “post-push” denotes in the
+resolution lifecycle. It does not use or claim a cryptographic GitHub
+wall-clock push-order proof.
+
 See [Simple PR Thread Resolution](../docs/simple-pr-thread-resolution.md) for
 the bounded safety contract and usage.
 
