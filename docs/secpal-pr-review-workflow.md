@@ -53,7 +53,7 @@ instead of guessed commands.
 
 ## Architecture
 
-The workflow has six narrow parts:
+The workflow has eight narrow parts:
 
 1. [the central skill](../.agents/skills/secpal-pr-review/SKILL.md), which performs
    reasoned technical classification;
@@ -64,16 +64,112 @@ The workflow has six narrow parts:
    batch-resolution contracts;
 4. `scripts/secpal-pr-review-actions.py`, the compatible command entry point for
    stable capture, validation attestation, batch resolution, and legacy actions;
-5. `scripts/secpal-pr-review.py`, the unchanged Package-2.1 read-only evidence
+5. `scripts/secpal-create-late-classification.py`,
+   `scripts/secpal-create-late-disposition.py`, and
+   `scripts/secpal_pr_review/late_disposition.py`, which create and verify the
+   narrowly scoped detached post-final-push disposition artifact;
+6. `scripts/secpal-pr-review.py`, the unchanged Package-2.1 read-only evidence
    verifier used only by explicitly selected forensic/audit snapshot mode; and
-6. the workflow-only repository registry, current mutation-plan schema, exact
+7. the workflow-only repository registry, current mutation-plan schema, exact
    legacy mutation-plan v1.0 schema, and fast-path batch schema under the
-   skill's `references/` directory.
+   skill's `references/` directory; and
+8. `scripts/secpal_pr_review/lifecycle_authority.py`, the separately adoptable
+   persistent lifecycle-authority primitive and independent verifier.
 
 The action helper validates persisted mutation plans against their original
 versioned shape. Version 1.0 retains legacy findings without `follow_up` and
 cannot authorize `TRACKED_AS_FOLLOW_UP`; version 1.1 is required for tracked
 follow-up identity. Mixed and unknown versions fail closed.
+
+## Persistent lifecycle authority
+
+Lifecycle-authority schema 1.0 is an append-only chain rooted in exactly one
+authenticated delivery initialization and its canonical `INITIALIZED_DRAFT`
+event. The initialization binds the ordinary validation receipt and final
+attestation to the repository, issue, initial PR, and exact initial head. Its
+maintained anchor digest derives both the persistent lifecycle identity and
+canonical genesis event identity. Each non-genesis snapshot binds the
+exact predecessor authority digest and head, one independently signed typed
+event, the persistent repository/issue/lifecycle/PR identity, and the derived
+next state. The closed state records finite review and remediation counters,
+explicit Cycle-3 absence, Draft/Ready state and transition history, and bounded
+exceptional recovery and continuation history. Head advancement and authorized
+PR rebinding preserve every lifecycle fact.
+
+The installed repository registry is the lifecycle trust-policy source. It
+separately assigns transition and authority signer roles, accepted signature
+formats, SSH public keys, OpenPGP fingerprints, and unique initialization
+anchors, with at most one initialization root per delivery issue. For every
+enrolled issue the policy also selects the exact current terminal authority
+digest, current PR, and current head. The public verifier does not accept
+consumer signer sets, verification callbacks, or current-tip selectors: it
+loads this maintained policy and invokes concrete `ssh-keygen` or GnuPG
+detached-signature verification. Signer assertions inside evidence are never
+sufficient.
+
+The public verifier accepts only a canonical serialized evidence bundle. It
+rejects duplicate and unknown fields, non-finite JSON, noncanonical encodings,
+and caller-preparsed mappings before recomputing every state from genesis. Git
+object identities are exactly 40-hex SHA-1 or 64-hex SHA-256 values. A verified
+binding exposes the authority and initialization digests, persistent lifecycle
+identity, exact head, and normalized history digests for later consumers.
+The empty anchor list is the intentional fail-closed pre-adoption state. Once
+enrolled, same-head transitions advance the maintained terminal digest, stale
+prefixes fail, and replacement PRs retain the original root through
+`PR_REBOUND` rather than creating another genesis.
+
+This primitive does not observe GitHub, mutate Ready/Draft state, process review
+events, replace pull requests, or orchestrate recovery. Existing ordinary
+one-parent delivery evidence remains valid and no consumer is automatically
+migrated. Adoption by #745 and full lifecycle orchestration under #692 are
+separate work.
+
+The complete registered validation graph explicitly runs the lifecycle-
+authority unit suite; its security regressions are not left to a manual focused
+invocation.
+
+## Lifecycle enrollment and current publication
+
+The publication boundary distinguishes native and legacy adoption. A
+`NATIVE_LIFECYCLE` has a maintained #750 root and complete authenticated history
+from inception. A genuinely older delivery may use one explicitly authorized,
+dedicated-role-signed `LEGACY_ADOPTION_CHECKPOINT`. The checkpoint openly makes
+the migration authority the trust root for the imported finite baseline; it
+does not relabel unavailable old evidence as cryptographically reconstructed.
+Every post-checkpoint change is an ordinary #750 successor, and another legacy
+checkpoint or baseline reset is forbidden.
+
+The maintained migration role uses public credential material distinct from
+ordinary, lifecycle-transition, and publication signers; policy loading rejects
+credential overlap even when the duplicate key is assigned another principal.
+Legacy enrollment ends exactly at the checkpoint terminal, so post-checkpoint
+continuations and PR rebinding cannot be folded into the migration root.
+
+The maintained registry contains only static trust: publication and migration
+signer roles, the exact GitHub endpoint, publication branch, and live ruleset
+identity and required protections. It never contains a candidate head,
+terminal digest, or current publication object. Dynamic events form one signed
+linear journal on `refs/heads/secpal-lifecycle-publications` outside delivery
+trees. The live ruleset prohibits deletion and non-fast-forward updates without
+bypass; lease-based CAS separately rejects stale cooperative writers.
+
+The verifier authenticates that protection, observes the branch tip once, and
+checks immutable ancestry. The newest valid event for each lifecycle is
+CURRENT. Consumer expectations are post-verification constraints; callers
+cannot supply the remote, branch, trust, migration checkpoint, or terminal
+selector. Publication Git operations use a controlled bare repository and
+closed environment, preventing ambient URL rewrites and transport overrides.
+For native adoption, the first journal entry must satisfy the ordinary
+maintained #750 current-tip boundary. Later journal successors use a private
+publication-only verification path for the same initialization root and full
+signed transition chain; authenticated journal ancestry then selects CURRENT.
+The ordinary #750 verifier keeps its static current-tip requirement, and no
+consumer-controlled bypass is exposed.
+
+Publication does not derive lifecycle state, orchestrate lifecycle events, or
+implement two-parent integration. Those remain owned by #750, #692, and #745
+respectively. Repositories with no enrolled publication remain valid, while a
+consumer explicitly requesting published authority fails closed.
 
 At session start, select the repository entry and materialize only the accepted
 Package-2.1 fields into a private session configuration: repository, default
@@ -267,7 +363,90 @@ disposed, verify unchanged local, remote, and PR heads and skip the commit and
 push; never create an artificial empty commit. Because a receipt produced after
 that existing commit is not authenticated by it, the raw receipt cannot
 authorize thread resolution. Stop without resolution unless a final attestation
-is bound to a new signed fix commit.
+is bound to a new signed fix commit. The sole exception is an exact
+post-final-push, technically non-blocking thread authorized through the
+separately signed late-disposition path documented below; that path reuses the
+already verified final delivery attestation and does not create a new receipt.
+
+### Explicit Ready-head integration evidence
+
+Ordinary remediation and recovery continue to require one parent. A separately
+user-authorized mechanical integration into an already-Ready delivery PR uses
+`attest-validation --integration-evidence` and the closed version-1.1
+`TWO_PARENT_READY_INTEGRATION` topology. The invocation also supplies the exact
+delivery issue, authorization ID, and expected signer. Its evidence fixes parent
+1 to the previously authenticated Ready head and parent 2 to the explicitly
+authenticated current registered `main` snapshot, in that order, and requires
+exactly two parents.
+
+The prior Ready state is supplied as a separate closed
+`READY_INTEGRATION_PRIOR_AUTHORITY` manifest. Its digest is authenticated by a
+signed annotated tag on the prior delivery head, and the binder independently
+verifies that head's ordinary receipt, final attestation, tree, signature, and
+accepted signer. It also verifies the maintained #750/#752 protected-journal
+CURRENT publication and binds its lifecycle authority digest, proof mode,
+publication identity, exceptional recovery, and unused exceptional
+continuation. Its claimed receipt must equal the prior commit trailer,
+ordinary receipt reconstructed with the registry committed at that prior head,
+and final-attestation receipt. The mutable tag
+ref is resolved once; target, signature, signer, trailer, and diagnostics all
+use the resulting immutable annotated-tag OID. OpenPGP signing-subkey output is
+accepted only when its authenticated primary fingerprint is the configured
+authority. The manifest binds the lifecycle identity and unchanged
+review/remediation counters, so inline integration booleans cannot establish
+Ready or lifecycle authority. Receipt creation performs one trusted GitHub
+observation of the open Ready PR and the repository's live default-branch tip;
+the live PR head must equal parent 1 and that live tip must equal both the
+explicitly authorized SHA and parent 2. The creation-time PR base OID is not a
+current-tip selector. The read is not caller-provided evidence and any
+missing, malformed, or drifted result fails closed without retry.
+
+Before the candidate is bound, the same complete registered validation produces
+a fresh receipt for the combined staged tree. The signed integration candidate
+carries one `SecPal-Validation-Receipt` trailer and one
+`SecPal-Integration-Evidence` trailer. Binding reconstructs the receipt, verifies
+the ordered parents, combined tree, both trailers, configured signature policy,
+expected signer identity, stable-feedback and validation-execution digests,
+explicit eligibility, and the exact raw delta between the authenticated
+mechanical merge tree and the validated tree. Every permitted manual conflict-
+resolution path, mode, status, old object, and new object must appear exactly in
+that canonical delta; unlisted file drift fails closed. Exit-zero merge-tree
+output must have no conflict paths or manual delta. Exit-one output must name a
+canonical non-empty conflict set; every path must be changed or deleted, no
+other path may change, and retained text conflict markers are rejected. The
+synthetic conflict tree itself is never accepted as a resolved candidate.
+
+When the integration must authorize exact reviewed-thread resolution,
+`--eligibility-evidence` may accompany `--integration-evidence`. The receipt
+binds both digests and binding emits the distinct version-1.2
+`ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION`. The guarded
+resolver accepts that kind only with the canonical integration artifact and
+only after the integration-specific verifier authenticates the ordered parents,
+tree, both trailers, reviewed state, expected signer, and eligibility. The
+historical version-1.1 integration attestation remains valid for integration
+authentication but cannot authorize resolution. Other evidence-mode
+combinations remain closed.
+
+The integration evidence proves unchanged unrestricted-review and remediation
+counters, no Cycle 3, no review request, no Ready transition, and preserved
+`Draft=false` / `Ready=true`. It is not remediation and cannot be replayed through
+the remediation path. Conversely, ordinary remediation evidence cannot select
+the integration path. The helper does not create the integration commit, push a
+branch, observe post-push checks, transition the PR, or authorize merging. After
+push, fresh head-bound checks, stable feedback, eligibility, and readiness must
+be assessed in a separately authorized evidence phase; platform-triggered
+reviews are evidence only.
+
+An exceptional recovery after `BLOCKED_CYCLE_LIMIT_REACHED` is available only
+when a new, explicit user instruction selects
+`attest-validation --exceptional-recovery-evidence`. The closed
+`READY_EXCEPTIONAL_RECOVERY` artifact and eligibility manifest bind the exact
+reviewed findings/threads, prior Ready head/tree, recovery tree, issue/PR,
+stable feedback, `review=1/1`, `remediation=2/2`, `Cycle 3=false`, preserved
+Ready state, and exceptional-recovery count one. The ordinary single-parent
+receipt and final attestation carry its digest. This path cannot reset the
+finite lifecycle, manufacture Cycle 3, transition Ready state, or authorize a
+recursive recovery.
 
 The simple resolver first verifies the caller-captured reviewed-state digest,
 successful validation attestation, actual local signed commit, and exact
@@ -370,6 +549,31 @@ bounded PR-wide feedback and exact target-thread reads before resolving.
 
 The normal path performs no post-push PR-wide feedback or hosted-CI read. The
 simple resolver compares only each named target's exact state before its write.
+
+An explicitly requested post-final-push resolution-only action first creates
+one canonical detached-signed `late-classification.schema.json` artifact for
+exactly one named thread, then creates one canonical
+`late-disposition.schema.json` artifact for that same thread.
+Creation first verifies the unchanged final delivery head, tree,
+receipt trailer, attestation, canonical final eligibility artifact, origin, and
+accepted commit signature. It proves the named thread absent from both the
+complete authenticated final reviewed state and eligibility set, verifies that
+every eligible thread belongs to the reviewed state, derives the actual
+delivery signer fingerprint, reads that named thread twice, and signs the
+classification with that same OS-account identity. The disposition creator
+verifies the classification signature and exact live binding and computes its
+digest internally. SSH and OpenPGP are supported.
+The resolver independently repeats the final-delivery verification, verifies
+both canonical artifacts and detached signatures against the derived signer,
+and compares exact live head, thread, top-level comment node/database identity,
+body digest, reply state, resolved/outdated state, classification, disposition,
+technical-blocking flag, and guarded action before resolving. This path is only
+`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` with
+`technically_blocking=false`; it consumes no review/remediation counter and has
+no commit, push, Ready, CI, issue, label, review, or merge capability.
+The same origin predicate is independently re-established by disposition
+creation and resolution. “Post-final-push” names this lifecycle boundary; it
+does not claim cryptographic proof of GitHub wall-clock push ordering.
 
 An explicitly requested readiness path may compare one current stable-feedback
 projection and the requested volatile readiness state. It reports that

@@ -62,7 +62,7 @@ body:
       description: High-level technical decisions, architecture, patterns to use
       placeholder: |
         - Use libsodium for encryption
-        - PostgreSQL for database
+        - PostgreSQL 18 for database
         - TDD approach with PEST
     validations:
       required: false

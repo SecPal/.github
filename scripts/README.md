@@ -51,6 +51,51 @@ operations whose evidence does not match their logical finding. Their initial
 and final heads must also encode exactly one new linear commit per recorded
 signed push, or no commit movement for a no-push session.
 
+`attest-validation` also exposes a separately selected version-1.1
+`TWO_PARENT_READY_INTEGRATION` evidence path. It authenticates exactly one
+signed two-parent candidate whose first parent is the prior Ready delivery head
+and whose second parent is the explicitly authorized live current registered
+`main` tip. The versioned manifest consumes the maintained protected-journal
+lifecycle publication for parent 1, including its persistent identity, current
+authority digest, finite exceptional history, and unused continuation budget.
+The fresh tree receipt, integration-evidence
+trailer, final attestation, expected signer, stable-feedback and eligibility
+digests, unchanged lifecycle counters, and exact bounded manual tree delta all
+fail closed together. Clean merge-tree output admits no delta. Conflict-bearing
+output binds the exact conflict paths and requires each to be explicitly
+changed or deleted, with no extra paths or retained text conflict markers. This
+does not relax the ordinary sole-parent path, create or push an integration,
+change Ready state, read post-push checks, or authorize merge automation.
+Historical receipt reconstruction reads the registry blob from the immutable
+prior delivery commit rather than applying a later registry to older evidence.
+When exact thread resolution is required on the integration head,
+`attest-validation` may additionally consume the canonical eligibility
+artifact. That closed combination emits the version-1.2
+`ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION`; its receipt and
+attestation bind the same eligibility digest. Historical version-1.1
+integration attestations remain valid for their original integration purpose
+but are not thread-resolution authority.
+
+Parent 1 additionally requires a closed prior-authority manifest authenticated
+by a signed annotated tag and independently verified ordinary receipt, final
+attestation, tree, and signer. The receipt identities must agree end to end.
+The mutable tag ref is resolved once, and every tag target, signature, signer,
+trailer, and diagnostic check uses the resulting immutable annotated-tag OID.
+OpenPGP signing subkeys are accepted only through their authenticated configured
+primary fingerprint. Its lifecycle identity, Ready state, and counters
+must match the integration evidence. When creating the integration receipt, the
+command performs one trusted GitHub read and requires the live open Ready PR
+head and registered target-base SHA to equal the two authorized parents; caller-
+supplied `observed_sha` cannot substitute for that read.
+
+After an explicitly authenticated cycle-limit blocker, a separate user
+authorization may select `--exceptional-recovery-evidence` with exact recovery
+issue/authorization selectors and eligibility evidence. The closed artifact
+binds the prior Ready head/tree, new tree, exact reviewed findings/threads,
+`review=1/1`, `remediation=2/2`, no Cycle 3, and unchanged Ready state. Its
+digest is carried by the ordinary single-parent receipt and attestation; it is
+not a third remediation cycle or a reusable recovery loop.
+
 ### `secpal-resolve-fixed-threads.py`
 
 Resolves only explicitly named review threads after their findings have already
@@ -61,6 +106,11 @@ validation receipt for an unchanged head cannot authorize a resolution
 mutation because the pre-existing commit does not authenticate that receipt.
 The resolver verifies that evidence against the actual local commit tree,
 signature, origin, and, for a new fix commit, its parent and receipt trailer. A
+version-1.2 eligibility-bound Ready-integration attestation is instead routed
+through the integration-specific verifier with `--integration-evidence`; the
+resolver authenticates its exact ordered parents, tree, both evidence trailers,
+expected signer, and eligibility digest before normalizing the resolution
+anchor. It never routes an integration artifact through the sole-parent path. A
 separate eligibility manifest must cover every requested thread exactly and
 bind its allowed classification/disposition and finding evidence to the
 reviewed state. Its canonical digest must be authenticated by the signed
@@ -82,6 +132,27 @@ validation and push hooks remain required. Hosted checks may be read only for a
 current explicit CI/readiness request, using one bounded current-state read with
 no polling, waiting, sleeping, or automatic repetition.
 
+For an exact technically non-blocking thread outside the authenticated final
+feedback boundary and observed on the unchanged delivery head,
+`secpal-create-late-classification.py` verifies the existing final delivery
+evidence and canonical final eligibility artifact, proves the thread absent
+from both final sets, captures only the named live thread, and
+authenticates the explicit classification decision. Then
+`secpal-create-late-disposition.py` verifies that decision, computes its digest
+internally, and creates a canonical detached SSH/OpenPGP-signed artifact without
+a delivery commit. The resolver consumes both signed artifacts through a
+separate explicit eligibility path,
+requires the actual detached signer to match the verified final delivery
+signer, and binds the delivery issue, PR, unchanged head/tree, receipt and
+attestation, exact thread and top-level comment identities, body and reply
+state, classification, disposition, technical-blocking flag, and guarded
+resolution action. It cannot select arbitrary threads or authorize any other
+GitHub mutation.
+
+This authenticated absence boundary is what “post-push” denotes in the
+resolution lifecycle. It does not use or claim a cryptographic GitHub
+wall-clock push-order proof.
+
 See [Simple PR Thread Resolution](../docs/simple-pr-thread-resolution.md) for
 the bounded safety contract and usage.
 
@@ -96,6 +167,70 @@ GNU-specific `readlink` options and never modifies unrelated user configuration.
 See [Finite SecPal PR review workflow](../docs/secpal-pr-review-workflow.md) for
 explicit invocation, state limits, classification, guarded action ordering,
 registry decisions, recovery, and post-merge rollout prerequisites.
+
+### `secpal_pr_review/lifecycle_authority.py`
+
+Defines the reusable, orchestration-independent delivery-lifecycle authority.
+Version 1.0 uses the maintained canonical JSON/digest functions and closed,
+domain-separated initialization, transition authorization, authority snapshot,
+and evidence-bundle schemas. A registry-anchored initialization binds ordinary
+delivery receipt/attestation identity and deterministically derives the
+persistent lifecycle and canonical Draft genesis. Every later snapshot is
+derived by independently verifying the complete predecessor and event chains;
+callers cannot provide counters, Ready history, exceptional history, or a new
+lifecycle identity as resulting authority.
+
+`verify_lifecycle_authority` accepts only canonical serialized lifecycle
+evidence. It loads signer roles, SSH keys, OpenPGP fingerprints, formats, and
+one initialization root per enrolled delivery issue from the installed
+maintained repository registry. The same policy independently selects the exact
+current terminal authority digest, PR, and head, so same-head stale prefixes
+cannot nominate themselves as current. Empty anchors remain valid before
+explicit adoption; replacement PRs continue the original root through
+`PR_REBOUND`. The verifier invokes concrete `ssh-keygen`/GnuPG verification.
+Duplicate fields, noncanonical JSON, consumer-preparsed mappings, and Git OIDs
+other than exactly 40 or 64 lowercase hexadecimal characters fail closed.
+`lifecycle_authority_binding` derives a stable digest and exact verified facts
+for explicit adoption by later receipts or attestations. Existing delivery
+validation does not call this module and continues to use the ordinary
+one-parent evidence path.
+The lifecycle-authority suite is an unconditional registered validation command.
+
+### `secpal_pr_review/lifecycle_publication.py`
+
+Publishes lifecycle authority on one protected, append-only global journal
+branch outside delivery trees. Native enrollment requires the maintained #750
+root and full authenticated history. A genuinely pre-#750 lifecycle instead
+uses exactly one dedicated-role-signed `LEGACY_ADOPTION_CHECKPOINT`, explicitly
+marking its imported baseline as a migration trust decision rather than
+retroactively invented proof. Every successor after either root uses normal
+issue #750 transition derivation.
+
+The legacy-adoption credential is cryptographically distinct from ordinary,
+lifecycle-transition, and publication credentials, with overlap rejected while
+loading maintained policy. Enrollment stops exactly at the checkpoint terminal;
+post-checkpoint state is accepted only as a later journal advancement.
+
+Static policy fixes the GitHub remote, exact
+`refs/heads/secpal-lifecycle-publications` branch, live ruleset ID, deletion and
+non-fast-forward prohibitions, publication signer role, and migration signer
+role. The verifier authenticates that protection, resolves the branch once, and
+uses immutable ancestry to select the newest event for each lifecycle. Lease
+CAS prevents concurrent writer races; live branch protection independently
+prevents rollback and deletion.
+
+All transport uses a controlled temporary bare repository and closed Git
+environment. The public reader accepts repository/issue expectations but no
+repository path, remote, branch, signer set, key, verifier callback, migration
+checkpoint, or caller-selected terminal digest. Empty journals remain valid
+before adoption. The publication suite is an unconditional registered
+validation command.
+
+Native enrollment initially satisfies #750's maintained current-tip boundary.
+Once enrolled, a private publication-only verifier authenticates later complete
+successor chains from #750 while protected journal ancestry selects CURRENT. The
+ordinary #750 public verifier remains strict, and callers receive no flag or
+alternate trust input that can bypass its current-tip check.
 
 ## Work Graph
 
@@ -139,12 +274,21 @@ Enforces the SecPal `secpal.*` namespace by classification. The script greps tex
 in the working tree (via `grep -r --include=...`, so untracked files matching
 the include patterns are inspected too), extracts each matching hostname-like
 token independently, and flags tokens that fall outside the approved set
-of public/external hosts (`secpal.app`, `apk.secpal.app`), development/preview
-hosts (`secpal.dev`, `api.secpal.dev`, `app.secpal.dev`, the
-`preview.secpal.dev` base, plus arbitrary `*.preview.secpal.dev` previews), and the exact private internal logical
-database service identity `db.secpal.internal`. It also surfaces
+of public/external hosts (`secpal.app`, `apk.secpal.app`, `secpal.io`),
+development/preview hosts (`secpal.dev`, `api.secpal.dev`, `app.secpal.dev`, the
+`preview.secpal.dev` base, plus arbitrary `*.preview.secpal.dev` previews), the
+identifier-only `io.secpal.*` reverse-DNS namespace,
+and the exact private internal logical database service identity
+`db.secpal.internal`. It also surfaces
 `api.secpal.app`, the deprecated `.app` web host, so callers cannot reintroduce
 it as an active host.
+
+The `io.secpal.*` allowance applies only in explicit reverse-DNS identifier
+contexts such as an application ID, package, namespace, or bundle identifier.
+It does not approve those values as URLs or public hosts. The Android ID
+`app.secpal` remains a valid architecture value, but it is outside this
+scanner's intentionally `secpal.*`-seeded matcher and is not claimed as an
+enforced value here.
 
 `db.secpal.internal` is an approved logical PostgreSQL connection/TLS service
 identity, not a public web host or DNS-routing commitment. This exact allowance
@@ -331,7 +475,6 @@ and focused instruction overlays across all repositories.
    - Requires non-empty `name` and `applyTo` values
 
 6. **Discovery Size**
-
    - Ensures `AGENTS.md` stays below the 32 KiB runtime discovery ceiling
 
 The validator does not require textual equality, mirror declarations, copied

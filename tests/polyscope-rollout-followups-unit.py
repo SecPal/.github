@@ -38,6 +38,62 @@ rollout = load_rollout_module()
 
 
 class PolyscopeRolloutFollowupTests(TestCase):
+    def test_metadata_sync_preserves_links_outside_automation_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            db_path = Path(temporary_directory) / "polyscope.db"
+            with sqlite3.connect(db_path) as connection:
+                connection.executescript(
+                    """
+                    create table repositories (
+                        id text primary key,
+                        review_prompt text,
+                        pr_prompt text,
+                        draft_pr_prompt text,
+                        merge_prompt text,
+                        merge_and_push_prompt text
+                    );
+                    create table repository_links (
+                        repo_id text not null,
+                        linked_repo_id text not null,
+                        primary key (repo_id, linked_repo_id)
+                    );
+                    insert into repositories (id) values ('api');
+                    insert into repositories (id) values ('frontend');
+                    insert into repositories (id) values ('operations');
+                    insert into repository_links values ('api', 'frontend');
+                    insert into repository_links values ('operations', 'api');
+                    """
+                )
+
+            repo_state = {
+                "api": {"id": "api"},
+                "frontend": {"id": "frontend"},
+                "operations": {"id": "operations"},
+            }
+            repo_specs = {
+                "api": {"link_names": []},
+                "frontend": {"link_names": []},
+                "operations": {
+                    rollout.REGISTRATION_ONLY_SPEC_KEY: True,
+                    "link_names": [],
+                },
+            }
+            empty_prompts = ("", "", "", "", "")
+            with mock.patch.object(
+                rollout,
+                "build_desired_repository_metadata",
+                return_value=(set(), {"api": empty_prompts, "frontend": empty_prompts}),
+            ):
+                rollout.sync_repository_metadata(db_path, repo_state, repo_specs)
+
+            with sqlite3.connect(db_path) as connection:
+                links = set(
+                    connection.execute(
+                        "select repo_id, linked_repo_id from repository_links"
+                    ).fetchall()
+                )
+            self.assertEqual(links, {("operations", "api")})
+
     def test_cached_validation_uses_installed_workspace_root(self) -> None:
         configured_root = Path("/srv/secpal-workspace")
         with (
@@ -521,6 +577,28 @@ class PolyscopeRolloutFollowupTests(TestCase):
                 commands,
             )
             self.assertIn(["systemctl", "--user", "daemon-reload"], commands)
+            self.assertIn(
+                [
+                    "systemctl",
+                    "--user",
+                    "reset-failed",
+                    *sorted((stale_unit.name, stale_link.name)),
+                ],
+                commands,
+            )
+            self.assertLess(
+                commands.index(
+                    [
+                        "systemctl",
+                        "--user",
+                        "reset-failed",
+                        *sorted((stale_unit.name, stale_link.name)),
+                    ]
+                ),
+                commands.index(
+                    ["systemctl", "--user", "disable", "--now", stale_unit.name]
+                ),
+            )
             self.assertIn(
                 [
                     "systemctl",

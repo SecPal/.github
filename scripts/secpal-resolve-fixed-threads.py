@@ -21,6 +21,7 @@ import json
 import operator
 import os
 import re
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -38,6 +39,10 @@ REGISTRY_SCHEMA_PATH = (
     / ".agents/skills/secpal-pr-review/references/repositories.schema.json"
 )
 FOLLOW_UP_HELPER = REPOSITORY_ROOT / "scripts/secpal_pr_review/follow_up.py"
+LATE_DISPOSITION_HELPER = (
+    REPOSITORY_ROOT / "scripts/secpal_pr_review/late_disposition.py"
+)
+FAST_PATH_HELPER = REPOSITORY_ROOT / "scripts/secpal_pr_review/fast_path.py"
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 OID = re.compile(r"^[0-9a-fA-F]{40}$")
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -66,6 +71,7 @@ query($threadId: ID!, $commentsAfter: String) {
       comments(first: 100, after: $commentsAfter) {
         nodes {
           id
+          databaseId
           body
           replyTo { id }
         }
@@ -204,6 +210,64 @@ FollowUpIdentity = follow_up.FollowUpIdentity
 LiveFollowUpState = follow_up.LiveFollowUpState
 
 
+def _load_late_disposition_helper() -> Any:
+    loaded = sys.modules.get("secpal_pr_review.late_disposition")
+    if loaded is not None:
+        loaded_path = getattr(loaded, "__file__", None)
+        if (
+            not isinstance(loaded_path, str)
+            or Path(loaded_path).resolve() != LATE_DISPOSITION_HELPER.resolve()
+        ):
+            raise RuntimeError("Late-disposition module has an unexpected path")
+        return loaded
+    spec = importlib.util.spec_from_file_location(
+        "secpal_pr_review.late_disposition", LATE_DISPOSITION_HELPER
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(
+            f"Cannot load late-disposition helper: {LATE_DISPOSITION_HELPER}"
+        )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
+    return module
+
+
+late_disposition = _load_late_disposition_helper()
+
+
+def _load_fast_path_helper() -> Any:
+    loaded = sys.modules.get("secpal_pr_review.fast_path")
+    if loaded is not None:
+        loaded_path = getattr(loaded, "__file__", None)
+        if (
+            not isinstance(loaded_path, str)
+            or Path(loaded_path).resolve() != FAST_PATH_HELPER.resolve()
+        ):
+            raise RuntimeError("Ready-integration module has an unexpected path")
+        return loaded
+    spec = importlib.util.spec_from_file_location(
+        "secpal_pr_review.fast_path", FAST_PATH_HELPER
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Cannot load Ready-integration helper")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
+    return module
+
+
+fast_path = _load_fast_path_helper()
+
+
 def _resolve_trusted_markdown_node() -> str:
     """Resolve Node only for the maintained Markdown parser bridge."""
 
@@ -251,6 +315,7 @@ def _read_authenticated_follow_up(
 @dataclass(frozen=True)
 class ThreadCommentState:
     comment_id: str
+    database_id: int | None
     body_digest: str
     reply_to_id: str | None
 
@@ -277,6 +342,8 @@ class ReviewedState:
     state_digest: str
     feedback_digest: str
     targets: dict[str, ExpectedThreadState]
+    thread_ids: frozenset[str]
+    payload: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -286,12 +353,29 @@ class ValidationEvidence:
     validated_tree_sha: str
     validation_receipt_digest: str
     eligibility_evidence_digest: str
+    attestation: dict[str, Any] | None = None
+    validation_receipt: dict[str, Any] | None = None
+    integration_evidence: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
 class EligibilityEvidence:
     evidence_digest: str
     canonical_payload: bytes
+    thread_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ParsedEligibility:
+    tracked_follow_ups: dict[str, FollowUpIdentity]
+    thread_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FinalFeedbackBoundary:
+    reviewed: ReviewedState
+    validation: ValidationEvidence
+    eligibility: EligibilityEvidence
 
 
 @dataclass(frozen=True)
@@ -669,6 +753,7 @@ def load_reviewed_state(
         payload = json.loads(
             path.read_text(encoding="utf-8"),
             parse_constant=_reject_nonfinite_json_constant,
+            object_pairs_hook=_reject_duplicate_json_object,
         )
     except (OSError, ValueError) as exc:
         raise ResolutionError(
@@ -746,7 +831,7 @@ def load_reviewed_state(
         )
 
     threads = payload["threads"]
-    indexed_threads: dict[str, dict[str, Any]] = {}
+    indexed_threads: dict[str, ExpectedThreadState] = {}
     for thread in threads:
         if (
             not isinstance(thread, dict)
@@ -764,15 +849,6 @@ def load_reviewed_state(
             or thread["node_id"] in indexed_threads
         ):
             raise ResolutionError("reviewed feedback thread state is malformed")
-        indexed_threads[thread["node_id"]] = thread
-
-    expected_targets: dict[str, ExpectedThreadState] = {}
-    for thread_id in thread_ids:
-        thread = indexed_threads.get(thread_id)
-        if thread is None:
-            raise ResolutionError(
-                f"target thread is absent from reviewed feedback: {thread_id}"
-            )
         comments: dict[str, ThreadCommentState] = {}
         for comment in thread["comments"]:
             if not isinstance(comment, dict):
@@ -794,22 +870,42 @@ def load_reviewed_state(
                 raise ResolutionError("reviewed target comment state is malformed")
             comments[comment_id] = ThreadCommentState(
                 comment_id=comment_id,
+                database_id=None,
                 body_digest=body_digest,
                 reply_to_id=reply_to_id,
             )
-        expected_targets[thread_id] = ExpectedThreadState(
-            thread_id=thread_id,
+        if any(
+            comment.reply_to_id is not None
+            and (
+                comment.reply_to_id not in comments
+                or comments[comment.reply_to_id].reply_to_id is not None
+            )
+            for comment in comments.values()
+        ):
+            raise ResolutionError("reviewed target comment state is malformed")
+        indexed_threads[thread["node_id"]] = ExpectedThreadState(
+            thread_id=thread["node_id"],
             is_resolved=thread["is_resolved"],
             is_outdated=thread["is_outdated"],
             comments=tuple(
                 sorted(comments.values(), key=operator.attrgetter("comment_id"))
             ),
         )
+    expected_targets: dict[str, ExpectedThreadState] = {}
+    for thread_id in thread_ids:
+        thread = indexed_threads.get(thread_id)
+        if thread is None:
+            raise ResolutionError(
+                f"target thread is absent from reviewed feedback: {thread_id}"
+            )
+        expected_targets[thread_id] = thread
     return ReviewedState(
         head_sha=payload["head_sha"].lower(),
         state_digest=state_digest,
         feedback_digest=feedback_digest,
         targets=expected_targets,
+        thread_ids=frozenset(indexed_threads),
+        payload=payload,
     )
 
 
@@ -818,6 +914,7 @@ def load_validation_evidence(
     repository: str,
     expected_head: str,
     reviewed: ReviewedState,
+    integration_evidence_path: Path | None = None,
 ) -> ValidationEvidence:
     try:
         payload = json.loads(
@@ -838,6 +935,75 @@ def load_validation_evidence(
         )
     if not isinstance(payload, dict):
         raise ResolutionError("validation evidence is unavailable or malformed")
+    if payload.get("kind") in {
+        "READY_INTEGRATION_VALIDATION_ATTESTATION",
+        "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION",
+    }:
+        if payload.get("kind") != (
+            "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"
+        ) or payload.get("schema_version") != "1.2":
+            raise ResolutionError(
+                "historical Ready integration attestation is not resolution authority"
+            )
+        if integration_evidence_path is None:
+            raise ResolutionError(
+                "integration resolution requires canonical integration evidence"
+            )
+        try:
+            integration_payload = json.loads(
+                integration_evidence_path.read_text(encoding="utf-8"),
+                parse_constant=_reject_nonfinite_json_constant,
+            )
+            stable_reviewed = fast_path.StableFeedbackState.from_payload(
+                reviewed.payload
+            )
+            integration_evidence = (
+                fast_path.normalize_ready_integration_evidence(
+                    integration_payload,
+                    repository=repository,
+                    reviewed_state=stable_reviewed,
+                    registry=registry_binding,
+                    validated_tree_sha=payload.get("validated_tree_sha"),
+                )
+            )
+            receipt = fast_path.create_validation_receipt(
+                repository=repository,
+                head_sha=reviewed.head_sha,
+                validated_tree_sha=payload.get("validated_tree_sha"),
+                registry=registry_binding,
+                command_set=registry_binding["validation"],
+                successful_result=True,
+                reviewed_state=stable_reviewed,
+                manual_gate_evidence=payload.get("manual_gate_evidence"),
+                eligibility_evidence_digest=payload.get(
+                    "eligibility_evidence_digest"
+                ),
+                integration_evidence_digest=fast_path.digest_json(
+                    integration_evidence
+                ),
+            )
+        except (OSError, ValueError, fast_path.SecurityBlocker) as exc:
+            raise ResolutionError(
+                "integration validation evidence is invalid or stale"
+            ) from exc
+        return ValidationEvidence(
+            kind="eligibility-bound-ready-integration",
+            evidence_digest=payload.get("attestation_digest", ""),
+            validated_tree_sha=payload.get("validated_tree_sha", ""),
+            validation_receipt_digest=payload.get(
+                "validation_receipt_digest", ""
+            ),
+            eligibility_evidence_digest=payload.get(
+                "eligibility_evidence_digest", ""
+            ),
+            attestation=payload,
+            validation_receipt=receipt,
+            integration_evidence=integration_evidence,
+        )
+    if integration_evidence_path is not None:
+        raise ResolutionError(
+            "ordinary validation attestation rejects integration-only evidence"
+        )
     expected_attestation = _expected_validation_attestation(
         repository,
         expected_head,
@@ -859,6 +1025,7 @@ def load_validation_evidence(
         eligibility_evidence_digest=payload[
             "eligibility_evidence_digest"
         ],
+        attestation=payload,
     )
 
 
@@ -870,11 +1037,13 @@ def verify_local_fix_commit(
     validation: ValidationEvidence,
     *,
     runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
-) -> None:
+    require_signer_identity: bool = False,
+) -> Any:
     effective_runner = _run_git if runner is None else runner
     if (
         not isinstance(validation, ValidationEvidence)
-        or validation.kind != "attestation"
+        or validation.kind
+        not in {"attestation", "eligibility-bound-ready-integration"}
         or not isinstance(validation.evidence_digest, str)
         or not DIGEST.fullmatch(validation.evidence_digest)
         or not isinstance(validation.validated_tree_sha, str)
@@ -913,10 +1082,21 @@ def verify_local_fix_commit(
         root,
         ("rev-list", "--parents", "-n", "1", expected_head.lower()),
     ).stdout.split()
-    if ancestry != [expected_head.lower(), reviewed.head_sha]:
-        raise ResolutionError(
-            "validated fix commit parent does not match reviewed head"
-        )
+    if validation.kind == "attestation":
+        if ancestry != [expected_head.lower(), reviewed.head_sha]:
+            raise ResolutionError(
+                "validated fix commit parent does not match reviewed head"
+            )
+    else:
+        integration = validation.integration_evidence
+        if (
+            not isinstance(integration, dict)
+            or ancestry
+            != [expected_head.lower(), *integration.get("ordered_parent_shas", [])]
+        ):
+            raise ResolutionError(
+                "validated Ready integration parents do not match evidence"
+            )
     trailer_output = effective_runner(
         root,
         (
@@ -936,6 +1116,28 @@ def verify_local_fix_commit(
         raise ResolutionError(
             "fix commit validation-receipt trailer does not match evidence"
         )
+    integration_trailer: str | None = None
+    if validation.kind == "eligibility-bound-ready-integration":
+        integration_output = effective_runner(
+            root,
+            (
+                "show",
+                "-s",
+                "--format=%(trailers:key=SecPal-Integration-Evidence,"
+                "valueonly,separator=%x00)",
+                expected_head.lower(),
+            ),
+        ).stdout
+        integration_trailers = [
+            value.strip()
+            for value in integration_output.rstrip("\n").split("\x00")
+            if value.strip()
+        ]
+        if len(integration_trailers) != 1:
+            raise ResolutionError(
+                "integration commit evidence trailer is invalid or stale"
+            )
+        integration_trailer = integration_trailers[0]
     commit_object = effective_runner(
         root,
         ("cat-file", "commit", expected_head.lower()),
@@ -965,6 +1167,68 @@ def verify_local_fix_commit(
         or local_signature.get("format") not in accepted_formats
     ):
         raise ResolutionError("fix commit local signature is not verified")
+    if validation.kind == "eligibility-bound-ready-integration":
+        if (
+            reviewed.payload is None
+            or validation.attestation is None
+            or validation.validation_receipt is None
+            or validation.integration_evidence is None
+        ):
+            raise ResolutionError(
+                "integration resolution evidence binding is incomplete"
+            )
+        try:
+            stable_reviewed = fast_path.StableFeedbackState.from_payload(
+                reviewed.payload
+            )
+            registry_binding = _validation_registry_binding(
+                _load_repository_entry(repository)
+            )
+            fast_path.verify_eligibility_bound_ready_integration_attestation(
+                validation.attestation,
+                repository=repository,
+                head_sha=expected_head.lower(),
+                registry=registry_binding,
+                command_set=registry_binding["validation"],
+                reviewed_state=stable_reviewed,
+                validation_receipt=validation.validation_receipt,
+                integration_evidence=validation.integration_evidence,
+                commit_parent_shas=ancestry[1:],
+                commit_tree_sha=commit_tree,
+                commit_validation_receipt_digest=trailers[0],
+                commit_integration_evidence_digest=integration_trailer,
+            )
+            expected_signer = validation.integration_evidence["expected_signer"]
+            verified_output = f"{verified.stdout}\n{verified.stderr}"
+            if expected_signer["kind"] == "SSH_PRINCIPAL":
+                signers = re.findall(
+                    r'(?m)^Good "git" signature for ([^\s]+) with ',
+                    verified_output,
+                )
+                expected_identity = expected_signer["identity"]
+            else:
+                status = re.findall(
+                    r"(?m)^\[GNUPG:\] VALIDSIG ([^\r\n]+)$",
+                    verified_output.upper(),
+                )
+                fields = status[0].split() if len(status) == 1 else []
+                signers = [fields[9] if len(fields) == 10 else fields[0]] if len(fields) in {9, 10} else []
+                expected_identity = expected_signer["identity"].upper()
+            if signers != [expected_identity]:
+                raise fast_path.SecurityBlocker(
+                    "integration commit signer does not match evidence"
+                )
+        except (KeyError, fast_path.SecurityBlocker) as exc:
+            raise ResolutionError(str(exc)) from exc
+    try:
+        return late_disposition.signer_from_git_verification(
+            local_signature["format"],
+            f"{verified.stdout}\n{verified.stderr}",
+        )
+    except late_disposition.LateDispositionError as exc:
+        if require_signer_identity:
+            raise ResolutionError(str(exc)) from exc
+        return None
 
 
 def verify_live_follow_up(
@@ -994,15 +1258,15 @@ def _reject_duplicate_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any
     return value
 
 
-def _tracked_follow_ups_from_payload(
+def _parse_eligibility_payload(
     canonical_payload: bytes,
     *,
     repository: str,
     number: int,
     reviewed_state_digest: str,
-    thread_ids: tuple[str, ...],
+    expected_thread_ids: tuple[str, ...] | None,
     reviewed_head_sha: str | None = None,
-) -> dict[str, FollowUpIdentity]:
+) -> ParsedEligibility:
     try:
         payload = json.loads(
             canonical_payload,
@@ -1092,11 +1356,35 @@ def _tracked_follow_ups_from_payload(
                 "only tracked out-of-scope eligibility may carry follow-up identity"
             )
         observed_thread_ids.append(thread_id)
-    if tuple(observed_thread_ids) != thread_ids:
+    if len(observed_thread_ids) != len(set(observed_thread_ids)):
+        raise ResolutionError("eligibility evidence contains duplicate threads")
+    if (
+        expected_thread_ids is not None
+        and tuple(observed_thread_ids) != expected_thread_ids
+    ):
         raise ResolutionError(
             "eligibility evidence must cover requested threads exactly"
         )
-    return tracked
+    return ParsedEligibility(tracked, tuple(observed_thread_ids))
+
+
+def _tracked_follow_ups_from_payload(
+    canonical_payload: bytes,
+    *,
+    repository: str,
+    number: int,
+    reviewed_state_digest: str,
+    thread_ids: tuple[str, ...],
+    reviewed_head_sha: str | None = None,
+) -> dict[str, FollowUpIdentity]:
+    return _parse_eligibility_payload(
+        canonical_payload,
+        repository=repository,
+        number=number,
+        reviewed_state_digest=reviewed_state_digest,
+        expected_thread_ids=thread_ids,
+        reviewed_head_sha=reviewed_head_sha,
+    ).tracked_follow_ups
 
 
 def load_eligibility_evidence(
@@ -1105,7 +1393,7 @@ def load_eligibility_evidence(
     number: int,
     reviewed_head_sha: str,
     reviewed_state_digest: str,
-    thread_ids: tuple[str, ...],
+    thread_ids: tuple[str, ...] | None,
     *,
     authenticated_evidence_digest: str,
 ) -> EligibilityEvidence:
@@ -1127,18 +1415,78 @@ def load_eligibility_evidence(
     ):
         raise ResolutionError("eligibility evidence is not authenticated")
     canonical_payload = _canonical_json_bytes(payload)
-    _tracked_follow_ups_from_payload(
+    parsed = _parse_eligibility_payload(
         canonical_payload,
         repository=repository,
         number=number,
         reviewed_head_sha=reviewed_head_sha,
         reviewed_state_digest=reviewed_state_digest,
-        thread_ids=thread_ids,
+        expected_thread_ids=thread_ids,
     )
     return EligibilityEvidence(
         observed_evidence_digest,
         canonical_payload,
+        parsed.thread_ids,
     )
+
+
+def load_final_feedback_boundary(
+    *,
+    repository: str,
+    number: int,
+    expected_head: str,
+    final_reviewed_state_path: Path,
+    expected_final_reviewed_state_digest: str,
+    final_validation_evidence_path: Path,
+    final_eligibility_evidence_path: Path,
+) -> FinalFeedbackBoundary:
+    reviewed = load_reviewed_state(
+        final_reviewed_state_path,
+        repository,
+        number,
+        expected_final_reviewed_state_digest,
+        (),
+    )
+    validation = load_validation_evidence(
+        final_validation_evidence_path,
+        repository,
+        expected_head,
+        reviewed,
+    )
+    eligibility = load_eligibility_evidence(
+        final_eligibility_evidence_path,
+        repository,
+        number,
+        reviewed.head_sha,
+        reviewed.state_digest,
+        None,
+        authenticated_evidence_digest=validation.eligibility_evidence_digest,
+    )
+    missing = tuple(
+        thread_id
+        for thread_id in eligibility.thread_ids
+        if thread_id not in reviewed.thread_ids
+    )
+    if missing:
+        raise ResolutionError(
+            "final eligibility references a thread absent from final reviewed state: "
+            f"{missing[0]}"
+        )
+    return FinalFeedbackBoundary(reviewed, validation, eligibility)
+
+
+def require_late_target_origin(
+    boundary: FinalFeedbackBoundary,
+    thread_id: str,
+) -> None:
+    if thread_id in boundary.eligibility.thread_ids:
+        raise ResolutionError(
+            f"late target already has commit-bound eligibility: {thread_id}"
+        )
+    if thread_id in boundary.reviewed.thread_ids:
+        raise ResolutionError(
+            f"late target is present in authenticated final reviewed state: {thread_id}"
+        )
 
 
 def read_target_thread(
@@ -1233,6 +1581,7 @@ def read_target_thread(
             if not isinstance(comment, dict):
                 raise ResolutionError("target thread comment entry is malformed")
             comment_id = comment.get("id")
+            database_id = comment.get("databaseId")
             body = comment.get("body")
             reply_to = comment.get("replyTo")
             reply_to_id = (
@@ -1241,6 +1590,14 @@ def read_target_thread(
             if (
                 not isinstance(comment_id, str)
                 or not comment_id
+                or (
+                    database_id is not None
+                    and (
+                        not isinstance(database_id, int)
+                        or isinstance(database_id, bool)
+                        or database_id < 1
+                    )
+                )
                 or not isinstance(body, str)
                 or (
                     reply_to is not None
@@ -1259,6 +1616,7 @@ def read_target_thread(
             _consume_comment(budget)
             comments[comment_id] = ThreadCommentState(
                 comment_id=comment_id,
+                database_id=database_id,
                 body_digest=_body_digest(body),
                 reply_to_id=reply_to_id,
             )
@@ -1398,6 +1756,7 @@ def validate_expected_targets(
                 not isinstance(comment, ThreadCommentState)
                 or not isinstance(comment.comment_id, str)
                 or not comment.comment_id
+                or comment.database_id is not None
                 or not isinstance(comment.body_digest, str)
                 or not DIGEST.fullmatch(comment.body_digest)
                 or (
@@ -1412,6 +1771,681 @@ def validate_expected_targets(
     return expected_targets
 
 
+def _matches_reviewed_target(
+    current: ThreadState,
+    reviewed: ExpectedThreadState,
+) -> bool:
+    return (
+        current.thread_id == reviewed.thread_id
+        and current.is_resolved == reviewed.is_resolved
+        and tuple(
+            (item.comment_id, item.body_digest, item.reply_to_id)
+            for item in current.comments
+        )
+        == tuple(
+            (item.comment_id, item.body_digest, item.reply_to_id)
+            for item in reviewed.comments
+        )
+    )
+
+
+def _reply_state_digest(thread: ThreadState) -> tuple[str, int]:
+    replies = [
+        {
+            "node_id": item.comment_id,
+            "database_id": item.database_id,
+            "body_digest": item.body_digest,
+            "reply_to_id": item.reply_to_id,
+        }
+        for item in thread.comments
+        if item.reply_to_id is not None
+    ]
+    return _digest_json(replies), len(replies)
+
+
+def _matches_late_authorization(
+    thread: ThreadState,
+    authorization: Any,
+) -> bool:
+    top_level = [item for item in thread.comments if item.reply_to_id is None]
+    reply_digest, reply_count = _reply_state_digest(thread)
+    return (
+        len(top_level) == 1
+        and thread.thread_id == authorization.thread_id
+        and thread.is_resolved == authorization.is_resolved
+        and thread.is_outdated == authorization.is_outdated
+        and top_level[0].comment_id
+        == authorization.top_level_comment_node_id
+        and top_level[0].database_id
+        == authorization.top_level_comment_database_id
+        and top_level[0].body_digest == authorization.finding_body_digest
+        and reply_digest == authorization.reply_state_digest
+        and reply_count == authorization.reply_count
+    )
+
+
+def _late_signing_key(signer: Any, resolved_root: Path) -> str:
+    try:
+        configured_format, signing_key = late_disposition.read_signing_configuration()
+    except late_disposition.LateDispositionError as exc:
+        raise ResolutionError(str(exc)) from exc
+    if configured_format != signer.signature_format or not signing_key:
+        raise ResolutionError(
+            "OS-account signing configuration does not match final delivery signer"
+        )
+    if signer.signature_format == "ssh":
+        key_path = Path(signing_key)
+        if not key_path.is_absolute():
+            raise ResolutionError("SSH signing key must use an absolute path")
+        try:
+            resolved_key = key_path.resolve(strict=True)
+            account_home = late_disposition.os_account_home()
+            key_stat = resolved_key.stat()
+        except (OSError, RuntimeError) as exc:
+            raise ResolutionError("SSH signing key is unavailable") from exc
+        if not stat.S_ISREG(key_stat.st_mode):
+            raise ResolutionError(
+                "SSH signing key must resolve to a regular file"
+            )
+        if (
+            resolved_key == resolved_root
+            or resolved_root in resolved_key.parents
+            or not (
+                resolved_key == account_home or account_home in resolved_key.parents
+            )
+            or key_stat.st_uid != os.getuid()
+            or key_stat.st_mode & 0o022
+        ):
+            raise ResolutionError("SSH signing key is not OS-account controlled")
+    return signing_key
+
+
+def create_late_classification_artifact(
+    repository: str,
+    delivery_issue_number: int,
+    number: int,
+    expected_head: str,
+    *,
+    repository_root: Path | str,
+    final_reviewed_state_path: Path | str,
+    expected_final_reviewed_state_digest: str,
+    final_validation_evidence_path: Path | str,
+    final_eligibility_evidence_path: Path | str,
+    thread_id: str,
+    finding_id: str,
+    finding_evidence_digest: str,
+    classification: str,
+    disposition: str,
+    technically_blocking: bool,
+    technical_blockers: Sequence[str],
+    output_path: Path | str,
+    signature_output_path: Path | str,
+) -> dict[str, Any]:
+    if (
+        not REPOSITORY.fullmatch(repository)
+        or not isinstance(delivery_issue_number, int)
+        or isinstance(delivery_issue_number, bool)
+        or delivery_issue_number < 1
+        or not isinstance(number, int)
+        or isinstance(number, bool)
+        or number < 1
+        or not OID.fullmatch(expected_head)
+        or not DIGEST.fullmatch(expected_final_reviewed_state_digest)
+        or not THREAD_ID.fullmatch(thread_id)
+        or not isinstance(finding_id, str)
+        or not late_disposition.IDENTITY.fullmatch(finding_id)
+        or not isinstance(finding_evidence_digest, str)
+        or not DIGEST.fullmatch(finding_evidence_digest)
+    ):
+        raise ResolutionError("late classification delivery identity is malformed")
+    supplied_blockers = tuple(technical_blockers)
+    if (
+        any(not isinstance(value, str) for value in supplied_blockers)
+        or len(supplied_blockers) != len(set(supplied_blockers))
+        or any(
+            value not in late_disposition.TECHNICAL_BLOCKERS
+            for value in supplied_blockers
+        )
+        or not isinstance(technically_blocking, bool)
+        or technically_blocking is not bool(supplied_blockers)
+    ):
+        raise ResolutionError("late classification risk facts are malformed")
+    blockers = tuple(sorted(supplied_blockers))
+    if classification != "INVALID_FALSE_OR_MISLEADING" or disposition != (
+        "DISPROVEN_WITH_EVIDENCE"
+    ):
+        raise ResolutionError("late classification decision is unsupported")
+    boundary = load_final_feedback_boundary(
+        repository=repository,
+        number=number,
+        expected_head=expected_head,
+        final_reviewed_state_path=Path(final_reviewed_state_path),
+        expected_final_reviewed_state_digest=expected_final_reviewed_state_digest,
+        final_validation_evidence_path=Path(final_validation_evidence_path),
+        final_eligibility_evidence_path=Path(final_eligibility_evidence_path),
+    )
+    require_late_target_origin(boundary, thread_id)
+    root = Path(repository_root)
+    try:
+        resolved_root = root.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ResolutionError("delivery repository is unavailable") from exc
+    signer = verify_local_fix_commit(
+        root,
+        repository,
+        expected_head,
+        boundary.reviewed,
+        boundary.validation,
+        require_signer_identity=True,
+    )
+    limits = load_repository_limits(repository)
+    budget = InvocationBudget(
+        limits.maximum_api_calls,
+        limits.maximum_threads,
+        limits.maximum_comments,
+    )
+    target = read_stable_target_thread(
+        repository, number, thread_id, budget, _run_gh
+    )
+    require_expected_target(target, repository, number, expected_head)
+    top_level = [item for item in target.thread.comments if item.reply_to_id is None]
+    if len(top_level) != 1 or target.thread.is_resolved:
+        raise ResolutionError(
+            f"late target must be one unresolved source conversation: {thread_id}"
+        )
+    if (
+        not isinstance(top_level[0].database_id, int)
+        or isinstance(top_level[0].database_id, bool)
+        or top_level[0].database_id < 1
+    ):
+        raise ResolutionError(
+            "late target top-level comment database ID is unavailable"
+        )
+    reply_digest, reply_count = _reply_state_digest(target.thread)
+    artifact = {
+        "schema_version": late_disposition.SCHEMA_VERSION,
+        "kind": late_disposition.CLASSIFICATION_KIND,
+        "repository": repository,
+        "delivery_issue_number": delivery_issue_number,
+        "pull_request_number": number,
+        "head_sha": expected_head.lower(),
+        "delivery_signer": {
+            "format": signer.signature_format,
+            "fingerprint": signer.fingerprint,
+        },
+        "authorized_purpose": late_disposition.CLASSIFICATION_PURPOSE,
+        "finding_id": finding_id,
+        "finding_evidence_digest": finding_evidence_digest,
+        "thread": {
+            "thread_id": thread_id,
+            "top_level_comment_node_id": top_level[0].comment_id,
+            "top_level_comment_database_id": top_level[0].database_id,
+            "finding_body_digest": top_level[0].body_digest,
+            "reply_state_digest": reply_digest,
+            "reply_count": reply_count,
+            "is_resolved": False,
+            "is_outdated": target.thread.is_outdated,
+            "classification": classification,
+            "disposition": disposition,
+            "technically_blocking": technically_blocking,
+            "technical_blockers": list(blockers),
+        },
+    }
+    signing_key = _late_signing_key(signer, resolved_root)
+    try:
+        late_disposition.sign_artifact(
+            artifact,
+            Path(output_path),
+            Path(signature_output_path),
+            signer=signer,
+            signing_key=signing_key,
+            signature_namespace=(
+                late_disposition.CLASSIFICATION_SIGNATURE_NAMESPACE
+            ),
+            repository_root=resolved_root,
+        )
+    except late_disposition.LateDispositionError as exc:
+        raise ResolutionError(str(exc)) from exc
+    return {
+        "status": "LATE_CLASSIFICATION_AUTHENTICATED",
+        "repository": repository,
+        "delivery_issue_number": delivery_issue_number,
+        "pull_request_number": number,
+        "head_sha": expected_head.lower(),
+        "artifact_digest": hashlib.sha256(
+            late_disposition.canonical_json_bytes(artifact)
+        ).hexdigest(),
+        "signature_format": signer.signature_format,
+        "signer_fingerprint": signer.fingerprint,
+        "thread_id": thread_id,
+        "finding_id": finding_id,
+        "finding_evidence_digest": finding_evidence_digest,
+        "classification": classification,
+        "disposition": disposition,
+        "technically_blocking": technically_blocking,
+        "technical_blockers": list(blockers),
+    }
+
+
+def create_late_disposition_artifact(
+    repository: str,
+    delivery_issue_number: int,
+    number: int,
+    expected_head: str,
+    *,
+    repository_root: Path | str,
+    final_reviewed_state_path: Path | str,
+    expected_final_reviewed_state_digest: str,
+    final_validation_evidence_path: Path | str,
+    final_eligibility_evidence_path: Path | str,
+    classification_evidence_path: Path | str,
+    classification_signature_path: Path | str,
+    output_path: Path | str,
+    signature_output_path: Path | str,
+) -> dict[str, Any]:
+    if not REPOSITORY.fullmatch(repository):
+        raise ResolutionError("repository must use owner/name format")
+    if (
+        not isinstance(delivery_issue_number, int)
+        or isinstance(delivery_issue_number, bool)
+        or delivery_issue_number < 1
+        or not isinstance(number, int)
+        or isinstance(number, bool)
+        or number < 1
+        or not isinstance(expected_head, str)
+        or not OID.fullmatch(expected_head)
+        or not isinstance(expected_final_reviewed_state_digest, str)
+        or not DIGEST.fullmatch(expected_final_reviewed_state_digest)
+    ):
+        raise ResolutionError("late-disposition delivery identity is malformed")
+    boundary = load_final_feedback_boundary(
+        repository=repository,
+        number=number,
+        expected_head=expected_head,
+        final_reviewed_state_path=Path(final_reviewed_state_path),
+        expected_final_reviewed_state_digest=expected_final_reviewed_state_digest,
+        final_validation_evidence_path=Path(final_validation_evidence_path),
+        final_eligibility_evidence_path=Path(final_eligibility_evidence_path),
+    )
+    root = Path(repository_root)
+    try:
+        resolved_root = root.resolve(strict=True)
+        resolved_output = Path(output_path).resolve()
+        resolved_signature_output = Path(signature_output_path).resolve()
+    except (OSError, RuntimeError) as exc:
+        raise ResolutionError("late-disposition output location is unavailable") from exc
+    if (
+        resolved_output == resolved_root
+        or resolved_root in resolved_output.parents
+        or resolved_signature_output == resolved_root
+        or resolved_root in resolved_signature_output.parents
+    ):
+        raise ResolutionError(
+            "late-disposition evidence must be stored outside the delivery repository"
+        )
+    signer = verify_local_fix_commit(
+        root,
+        repository,
+        expected_head,
+        boundary.reviewed,
+        boundary.validation,
+        require_signer_identity=True,
+    )
+    try:
+        classification_payload, _classification_canonical = (
+            late_disposition._load_canonical_json(
+                Path(classification_evidence_path),
+                "late classification artifact",
+                late_disposition.MAXIMUM_ARTIFACT_BYTES,
+            )
+        )
+    except late_disposition.LateDispositionError as exc:
+        raise ResolutionError(str(exc)) from exc
+    classification_thread = (
+        classification_payload.get("thread")
+        if isinstance(classification_payload, dict)
+        else None
+    )
+    thread_id = (
+        classification_thread.get("thread_id")
+        if isinstance(classification_thread, dict)
+        else None
+    )
+    if not isinstance(thread_id, str) or not THREAD_ID.fullmatch(thread_id):
+        raise ResolutionError("late classification thread binding is malformed")
+    require_late_target_origin(boundary, thread_id)
+    try:
+        classification = late_disposition.parse_classification_artifact(
+            Path(classification_evidence_path),
+            Path(classification_signature_path),
+            expected_signer=signer,
+            repository=repository,
+            delivery_issue_number=delivery_issue_number,
+            pull_request_number=number,
+            head_sha=expected_head,
+            thread_id=thread_id,
+        )
+    except late_disposition.LateDispositionError as exc:
+        raise ResolutionError(str(exc)) from exc
+    thread_ids = (thread_id,)
+    limits = load_repository_limits(repository)
+    budget = InvocationBudget(
+        limits.maximum_api_calls,
+        limits.maximum_threads,
+        limits.maximum_comments,
+    )
+    target = read_stable_target_thread(
+        repository, number, thread_id, budget, _run_gh
+    )
+    require_expected_target(target, repository, number, expected_head)
+    if not _matches_late_authorization(target.thread, classification.thread):
+        raise ResolutionError("late classification does not match current thread state")
+    authorization = classification.thread
+    authorizations = [
+        {
+            "thread_id": authorization.thread_id,
+            "top_level_comment_node_id": authorization.top_level_comment_node_id,
+            "top_level_comment_database_id": (
+                authorization.top_level_comment_database_id
+            ),
+            "finding_body_digest": authorization.finding_body_digest,
+            "reply_state_digest": authorization.reply_state_digest,
+            "reply_count": authorization.reply_count,
+            "is_resolved": False,
+            "is_outdated": authorization.is_outdated,
+            "classification": authorization.classification,
+            "disposition": authorization.disposition,
+            "technically_blocking": False,
+            "classification_evidence_digest": classification.evidence_digest,
+            "authorized_action": "RESOLVE_REVIEW_THREAD",
+        }
+    ]
+    artifact = {
+        "schema_version": late_disposition.SCHEMA_VERSION,
+        "kind": late_disposition.KIND,
+        "repository": repository,
+        "delivery_issue_number": delivery_issue_number,
+        "pull_request_number": number,
+        "head_sha": expected_head.lower(),
+        "validated_tree_sha": boundary.validation.validated_tree_sha,
+        "validation_receipt_digest": boundary.validation.validation_receipt_digest,
+        "validation_attestation_digest": boundary.validation.evidence_digest,
+        "final_eligibility_evidence_digest": (
+            boundary.validation.eligibility_evidence_digest
+        ),
+        "delivery_signer": {
+            "format": signer.signature_format,
+            "fingerprint": signer.fingerprint,
+        },
+        "authorized_action": "RESOLVE_EXACT_REVIEW_THREADS",
+        "threads": authorizations,
+    }
+    signing_key = _late_signing_key(signer, resolved_root)
+    try:
+        late_disposition.sign_artifact(
+            artifact,
+            Path(output_path),
+            Path(signature_output_path),
+            signer=signer,
+            signing_key=signing_key,
+            repository_root=resolved_root,
+        )
+    except late_disposition.LateDispositionError as exc:
+        raise ResolutionError(str(exc)) from exc
+    artifact_digest = hashlib.sha256(
+        late_disposition.canonical_json_bytes(artifact)
+    ).hexdigest()
+    return {
+        "status": "LATE_DISPOSITION_AUTHENTICATED",
+        "repository": repository,
+        "delivery_issue_number": delivery_issue_number,
+        "pull_request_number": number,
+        "head_sha": expected_head.lower(),
+        "artifact_digest": artifact_digest,
+        "signature_format": signer.signature_format,
+        "signer_fingerprint": signer.fingerprint,
+        "thread_ids": list(thread_ids),
+        "authorized_action": "RESOLVE_EXACT_REVIEW_THREADS",
+        "delivery_tree_changed": False,
+        "lifecycle_consumption": {
+            "unrestricted_reviews": 0,
+            "remediation_cycles": 0,
+            "delivery_commits": 0,
+            "pushes": 0,
+            "ready_transitions": 0,
+        },
+    }
+
+
+def resolve_late_disposition_threads(
+    repository: str,
+    delivery_issue_number: int,
+    number: int,
+    expected_head: str,
+    thread_ids: tuple[str, ...],
+    *,
+    apply: bool,
+    repository_root: Path | str,
+    final_reviewed_state_path: Path | str,
+    expected_final_reviewed_state_digest: str,
+    final_validation_evidence_path: Path | str,
+    final_eligibility_evidence_path: Path | str,
+    late_classification_evidence_path: Path | str,
+    late_classification_signature_path: Path | str,
+    late_disposition_evidence_path: Path | str,
+    late_disposition_signature_path: Path | str,
+) -> dict[str, Any]:
+    """Resolve only exact late threads authenticated independently of Git history."""
+
+    validate_request(repository, number, expected_head, thread_ids, apply)
+    if len(thread_ids) != 1:
+        raise ResolutionError(
+            "late disposition authorizes exactly one review thread"
+        )
+    if (
+        not isinstance(delivery_issue_number, int)
+        or isinstance(delivery_issue_number, bool)
+        or delivery_issue_number < 1
+    ):
+        raise ResolutionError("delivery issue number must be positive")
+    if (
+        not isinstance(expected_final_reviewed_state_digest, str)
+        or not DIGEST.fullmatch(expected_final_reviewed_state_digest)
+    ):
+        raise ResolutionError("final reviewed-state digest is required")
+    boundary = load_final_feedback_boundary(
+        repository=repository,
+        number=number,
+        expected_head=expected_head,
+        final_reviewed_state_path=Path(final_reviewed_state_path),
+        expected_final_reviewed_state_digest=expected_final_reviewed_state_digest,
+        final_validation_evidence_path=Path(final_validation_evidence_path),
+        final_eligibility_evidence_path=Path(final_eligibility_evidence_path),
+    )
+    require_late_target_origin(boundary, thread_ids[0])
+    signer = verify_local_fix_commit(
+        Path(repository_root),
+        repository,
+        expected_head,
+        boundary.reviewed,
+        boundary.validation,
+        require_signer_identity=True,
+    )
+    try:
+        authorization = late_disposition.parse_artifact(
+            Path(late_disposition_evidence_path),
+            Path(late_disposition_signature_path),
+            expected_signer=signer,
+            repository=repository,
+            delivery_issue_number=delivery_issue_number,
+            pull_request_number=number,
+            head_sha=expected_head,
+            validated_tree_sha=boundary.validation.validated_tree_sha,
+            validation_receipt_digest=boundary.validation.validation_receipt_digest,
+            validation_attestation_digest=boundary.validation.evidence_digest,
+            final_eligibility_evidence_digest=(
+                boundary.validation.eligibility_evidence_digest
+            ),
+            thread_ids=thread_ids,
+            allowed_dispositions=ELIGIBLE_DISPOSITIONS,
+        )
+    except late_disposition.LateDispositionError as exc:
+        raise ResolutionError(str(exc)) from exc
+    try:
+        classification = late_disposition.parse_classification_artifact(
+            Path(late_classification_evidence_path),
+            Path(late_classification_signature_path),
+            expected_signer=signer,
+            repository=repository,
+            delivery_issue_number=delivery_issue_number,
+            pull_request_number=number,
+            head_sha=expected_head,
+            thread_id=thread_ids[0],
+        )
+    except late_disposition.LateDispositionError as exc:
+        raise ResolutionError(str(exc)) from exc
+    if authorization.threads != (classification.thread,):
+        raise ResolutionError(
+            "late disposition does not match authenticated classification evidence"
+        )
+
+    limits = load_repository_limits(repository)
+    budget = InvocationBudget(
+        limits.maximum_api_calls,
+        limits.maximum_threads,
+        limits.maximum_comments,
+    )
+    expected = {item.thread_id: item for item in authorization.threads}
+    initial_targets: dict[str, TargetRead] = {}
+    for thread_id in thread_ids:
+        target = read_target_thread(repository, number, thread_id, budget, _run_gh)
+        require_expected_target(target, repository, number, expected_head)
+        if not _matches_late_authorization(target.thread, expected[thread_id]):
+            raise ResolutionError(
+                f"target thread differs from authenticated late disposition: {thread_id}"
+            )
+        initial_targets[thread_id] = target
+
+    pending = list(thread_ids)
+    applied: list[str] = []
+    already_resolved: list[str] = []
+    if apply:
+        minimum_pages = sum(item.api_pages * 4 for item in initial_targets.values())
+        minimum_comments = sum(
+            len(item.thread.comments) * 4 for item in initial_targets.values()
+        )
+        if budget.maximum_api_calls - budget.api_calls < minimum_pages + len(thread_ids):
+            raise ResolutionError(
+                "registered API call limit cannot cover all target rechecks and writes"
+            )
+        if budget.maximum_threads - budget.threads < minimum_pages:
+            raise ResolutionError(
+                "registered review thread limit cannot cover all target rechecks"
+            )
+        if budget.maximum_comments - budget.comments < minimum_comments:
+            raise ResolutionError(
+                "registered review comment limit cannot cover all target rechecks"
+            )
+        for thread_id in thread_ids:
+            preflight = read_stable_target_thread(
+                repository, number, thread_id, budget, _run_gh
+            )
+            require_expected_target(preflight, repository, number, expected_head)
+            if (
+                preflight.thread != initial_targets[thread_id].thread
+                or not _matches_late_authorization(
+                    preflight.thread, expected[thread_id]
+                )
+            ):
+                raise ResolutionError(
+                    f"target thread changed during late-disposition preflight: {thread_id}"
+                )
+        for index, thread_id in enumerate(thread_ids):
+            phase = "recheck"
+            try:
+                current = read_stable_target_thread(
+                    repository, number, thread_id, budget, _run_gh
+                )
+                require_expected_target(current, repository, number, expected_head)
+                if (
+                    current.thread != initial_targets[thread_id].thread
+                    or not _matches_late_authorization(
+                        current.thread, expected[thread_id]
+                    )
+                ):
+                    raise ResolutionError(
+                        f"target thread changed before resolution: {thread_id}"
+                    )
+                phase = "mutation"
+                data = _graphql(
+                    RESOLVE_MUTATION,
+                    {"threadId": thread_id},
+                    _run_gh,
+                    budget,
+                )
+                mutation = data.get("resolveReviewThread")
+                result = mutation.get("thread") if isinstance(mutation, dict) else None
+                if (
+                    not isinstance(result, dict)
+                    or result.get("id") != thread_id
+                    or result.get("isResolved") is not True
+                ):
+                    raise ResolutionError(
+                        f"GitHub did not confirm resolution for {thread_id}"
+                    )
+            except ResolutionError as exc:
+                return {
+                    "repository": repository,
+                    "delivery_issue_number": delivery_issue_number,
+                    "pull_request_number": number,
+                    "head_sha": expected_head.lower(),
+                    "validation_evidence_digest": boundary.validation.evidence_digest,
+                    "late_disposition_evidence_digest": authorization.artifact_digest,
+                    "eligibility_path": "authenticated_late_disposition",
+                    "mode": "apply",
+                    "status": "failed",
+                    "already_resolved": already_resolved,
+                    "pending": [],
+                    "resolved": applied,
+                    "failed": [
+                        {
+                            "thread_id": thread_id,
+                            "phase": phase,
+                            "write_result": (
+                                "unknown" if phase == "mutation" else "not_attempted"
+                            ),
+                            "error": str(exc),
+                        }
+                    ],
+                    "unattempted": list(thread_ids[index + 1 :]),
+                }
+            applied.append(thread_id)
+
+    return {
+        "repository": repository,
+        "delivery_issue_number": delivery_issue_number,
+        "pull_request_number": number,
+        "head_sha": expected_head.lower(),
+        "validation_evidence_digest": boundary.validation.evidence_digest,
+        "late_disposition_evidence_digest": authorization.artifact_digest,
+        "eligibility_path": "authenticated_late_disposition",
+        "mode": "apply" if apply else "dry-run",
+        "status": "success",
+        "already_resolved": already_resolved,
+        "pending": pending if not apply else [],
+        "resolved": applied,
+        "failed": [],
+        "unattempted": [],
+        "lifecycle_consumption": {
+            "unrestricted_reviews": 0,
+            "remediation_cycles": 0,
+            "delivery_commits": 0,
+            "pushes": 0,
+            "ready_transitions": 0,
+        },
+    }
+
+
 def resolve_threads(
     repository: str,
     number: int,
@@ -1424,6 +2458,7 @@ def resolve_threads(
     expected_reviewed_state_digest: str | None = None,
     validation_evidence_path: Path | str | None = None,
     eligibility_evidence_path: Path | str | None = None,
+    integration_evidence_path: Path | str | None = None,
     **caller_constructed_authorization: Any,
 ) -> dict[str, Any]:
     """Resolve threads only after proving the complete local evidence chain."""
@@ -1455,6 +2490,7 @@ def resolve_threads(
         repository,
         expected_head,
         reviewed,
+        Path(integration_evidence_path) if integration_evidence_path else None,
     )
     verify_local_fix_commit(
         Path(repository_root),
@@ -1533,10 +2569,7 @@ def resolve_threads(
         )
         require_expected_target(target, repository, number, expected_head)
         reviewed_target = reviewed_targets[thread_id]
-        if (
-            target.thread.is_resolved != reviewed_target.is_resolved
-            or target.thread.comments != reviewed_target.comments
-        ):
+        if not _matches_reviewed_target(target.thread, reviewed_target):
             raise ResolutionError(
                 f"target thread differs from reviewed feedback: {thread_id}"
             )
@@ -1732,7 +2765,14 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--reviewed-state", required=True)
     parser.add_argument("--expected-reviewed-state-digest", required=True)
     parser.add_argument("--validation-evidence", required=True)
-    parser.add_argument("--eligibility-evidence", required=True)
+    parser.add_argument("--eligibility-evidence")
+    parser.add_argument("--integration-evidence")
+    parser.add_argument("--delivery-issue", type=int)
+    parser.add_argument("--late-disposition-evidence")
+    parser.add_argument("--late-disposition-signature")
+    parser.add_argument("--late-classification-evidence")
+    parser.add_argument("--late-classification-signature")
+    parser.add_argument("--final-eligibility-evidence")
     parser.add_argument("--thread-id", action="append", required=True)
     parser.add_argument("--apply", action="store_true")
     arguments = parser.parse_args(argv)
@@ -1749,6 +2789,33 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             raise ResolutionError(
                 "expected reviewed state digest must be a SHA-256 digest"
             )
+        late_values = (
+            arguments.delivery_issue,
+            arguments.late_disposition_evidence,
+            arguments.late_disposition_signature,
+            arguments.late_classification_evidence,
+            arguments.late_classification_signature,
+            arguments.final_eligibility_evidence,
+        )
+        if any(value is not None for value in late_values):
+            if arguments.integration_evidence is not None:
+                raise ResolutionError(
+                    "late disposition rejects integration-only evidence"
+                )
+            if not all(value is not None for value in late_values):
+                raise ResolutionError(
+                    "late disposition requires delivery issue, final eligibility "
+                    "evidence, classification evidence/signature, and disposition "
+                    "evidence/signature"
+                )
+            if arguments.eligibility_evidence is not None:
+                raise ResolutionError(
+                    "commit-bound and late-disposition eligibility are mutually exclusive"
+                )
+        elif arguments.eligibility_evidence is None:
+            raise ResolutionError(
+                "commit-bound resolution requires eligibility evidence"
+            )
     except ResolutionError as exc:
         parser.error(str(exc))
     return arguments
@@ -1757,20 +2824,56 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        result = resolve_threads(
-            arguments.repo,
-            arguments.pr,
-            arguments.expected_head,
-            arguments.thread_id,
-            apply=arguments.apply,
-            repository_root=arguments.repo_root,
-            reviewed_state_path=arguments.reviewed_state,
-            expected_reviewed_state_digest=(
-                arguments.expected_reviewed_state_digest
-            ),
-            validation_evidence_path=arguments.validation_evidence,
-            eligibility_evidence_path=arguments.eligibility_evidence,
-        )
+        if arguments.late_disposition_evidence is not None:
+            result = resolve_late_disposition_threads(
+                arguments.repo,
+                arguments.delivery_issue,
+                arguments.pr,
+                arguments.expected_head,
+                arguments.thread_id,
+                apply=arguments.apply,
+                repository_root=arguments.repo_root,
+                final_reviewed_state_path=arguments.reviewed_state,
+                expected_final_reviewed_state_digest=(
+                    arguments.expected_reviewed_state_digest
+                ),
+                final_validation_evidence_path=arguments.validation_evidence,
+                final_eligibility_evidence_path=(
+                    arguments.final_eligibility_evidence
+                ),
+                late_classification_evidence_path=(
+                    arguments.late_classification_evidence
+                ),
+                late_classification_signature_path=(
+                    arguments.late_classification_signature
+                ),
+                late_disposition_evidence_path=(
+                    arguments.late_disposition_evidence
+                ),
+                late_disposition_signature_path=(
+                    arguments.late_disposition_signature
+                ),
+            )
+        else:
+            result = resolve_threads(
+                arguments.repo,
+                arguments.pr,
+                arguments.expected_head,
+                arguments.thread_id,
+                apply=arguments.apply,
+                repository_root=arguments.repo_root,
+                reviewed_state_path=arguments.reviewed_state,
+                expected_reviewed_state_digest=(
+                    arguments.expected_reviewed_state_digest
+                ),
+                validation_evidence_path=arguments.validation_evidence,
+                eligibility_evidence_path=arguments.eligibility_evidence,
+                **(
+                    {"integration_evidence_path": arguments.integration_evidence}
+                    if arguments.integration_evidence is not None
+                    else {}
+                ),
+            )
     except ResolutionError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

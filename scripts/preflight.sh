@@ -26,8 +26,21 @@ run_reuse_tracked() (
   reuse lint
 )
 
+run_postgresql_18_baseline_governance() {
+  python3 tests/postgresql-18-baseline-governance.py || {
+    echo "" >&2
+    echo "❌ PostgreSQL 18 baseline governance regression test failed!" >&2
+    echo "Keep PostgreSQL 18 as the active SecPal baseline without a legacy compatibility matrix." >&2
+    return 1
+  }
+}
+
 if [ "${1:-}" = "--reuse-tracked-only" ] && [ "$#" -eq 1 ]; then
   run_reuse_tracked
+  exit $?
+fi
+if [ "${1:-}" = "--postgresql-baseline-only" ] && [ "$#" -eq 1 ]; then
+  run_postgresql_18_baseline_governance
   exit $?
 fi
 if [ "$#" -ne 0 ] && [ "$#" -ne 2 ]; then
@@ -366,6 +379,15 @@ if [ -f tests/validate-copilot-instructions.sh ]; then
   }
 fi
 
+python3 tests/evidence-architecture-governance.py || {
+  echo "" >&2
+  echo "❌ Evidence architecture governance regression test failed!" >&2
+  echo "Keep the canonical work-graph, evidence companion, and runtime baseline delegation connected." >&2
+  exit 1
+}
+
+run_postgresql_18_baseline_governance
+
 if [ -f tests/sync-required-checks.sh ]; then
   bash tests/sync-required-checks.sh || {
     echo "" >&2
@@ -387,6 +409,23 @@ fi
 python3 -m unittest tests/polyscope-work-graph-advisory.py
 python3 -m unittest tests/secpal-work-graph-replan-unit.py
 python3 -m unittest tests/polyscope-work-graph-replanning.py
+
+for preview_test in \
+  tests/polyscope-postgresql-socket-proxy.py \
+  tests/cleanup-polyscope-container-preview.py \
+  tests/render-polyscope-container-caddy.py \
+  tests/refresh-polyscope-container-preview.py \
+  tests/run-polyscope-container-preview.py \
+  tests/install-polyscope-container-preview.py; do
+  if [ -f "$preview_test" ]; then
+    python3 "$preview_test" || {
+      echo "" >&2
+      echo "❌ Polyscope container-preview regression test failed: $preview_test" >&2
+      echo "Keep the preview router, database bridge, and installer fail-closed." >&2
+      exit 1
+    }
+  fi
+done
 
 if [ -f tests/polyscope-clone-reaper.sh ]; then
   bash tests/polyscope-clone-reaper.sh || {

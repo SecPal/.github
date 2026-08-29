@@ -85,7 +85,7 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 
 ### Accepted
 
-- [ADR-023: Public Self-Hosting vs Private Managed Operations Boundary](20260824-public-self-hosting-private-managed-operations-adr023.md) - 2026-08-24
+- [ADR-023: Public Self-Hosting vs Private Managed Operations Boundary](20260824-public-self-hosting-private-managed-operations-adr023.md) - 2026-08-24; ownership boundary clarified under [#748](https://github.com/SecPal/.github/issues/748)
 - [ADR-022: Deployment Topology Evolution and High Availability](20260824-deployment-topology-high-availability-adr022.md) - 2026-08-24
 - [ADR-021: OCI Supply-Chain and Vulnerability Evidence Architecture](20260824-oci-supply-chain-vulnerability-evidence-adr021.md) - 2026-08-24
 - [ADR-020: Production State, Recovery, and Cryptographic Authority Separation](20260824-production-state-recovery-authority-separation-adr020.md) - 2026-08-24

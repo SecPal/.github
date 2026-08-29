@@ -7,6 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SYNC_SCRIPT="$REPO_ROOT/scripts/sync-required-checks.sh"
+CODECOV_SCRIPT="$REPO_ROOT/scripts/configure-codecov-optional.sh"
 SHELL_BIN="${BASH:-$(command -v bash)}"
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -27,7 +28,7 @@ assert_payload_has_context() {
   local payload="$1"
   local expected="$2"
 
-  if ! jq -e --arg expected "$expected" '.strict == true and (.checks | any(.context == $expected))' >/dev/null <<<"$payload"; then
+  if ! jq -e --arg expected "$expected" '.strict == false and (.checks | any(.context == $expected))' >/dev/null <<<"$payload"; then
     echo "Expected payload to require '$expected'" >&2
     echo "$payload" >&2
     exit 1
@@ -39,7 +40,7 @@ assert_payload_contexts_equal() {
   local expected="$2"
 
   if ! jq -e --argjson expected "$expected" '
-    .strict == true and
+    .strict == false and
     (.checks | length) == ($expected | length) and
     ([.checks[].context] | length) == ([.checks[].context] | unique | length) and
     ($expected | length) == ($expected | unique | length) and
@@ -63,7 +64,7 @@ assert_review_payload_exact() {
 }
 
 duplicate_payload='{
-  "strict": true,
+  "strict": false,
   "checks": [
     {"context": "duplicate", "app_id": -1},
     {"context": "duplicate", "app_id": -1}
@@ -91,53 +92,141 @@ if ! grep -Fq 'sync-required-checks.${repo//[^A-Za-z0-9]/_}.json.XXXXXX' "$SYNC_
   exit 1
 fi
 
-api_payload="$(bash "$SYNC_SCRIPT" --repo api --print-payload)"
-assert_payload_has_context "$api_payload" "AI Instructions / Validate AI Instructions"
-assert_payload_has_context "$api_payload" "PEST Tests"
+EXPECTED_CONTEXTS_JSON='{
+  ".github": [
+    "Check REUSE Compliance",
+    "Check License Compatibility",
+    "Check Code Formatting",
+    "Lint Markdown Files",
+    "Check PR Size / Check PR Size",
+    "conflict-markers / Detect Git Conflict Markers",
+    "Lint GitHub Actions Workflows",
+    "CodeQL",
+    "Validate PR Evidence",
+    "Validate PR Title And Body Language",
+    "Validate Signed PR Commits"
+  ],
+  "GuardGuide": [
+    "check-conflicts / Detect Git Conflict Markers",
+    "Check PR Size / Check PR Size",
+    "Detect repository manifests",
+    "AI Instructions / Validate AI Instructions",
+    "Check REUSE Compliance / Check REUSE Compliance",
+    "Detect JavaScript manifest",
+    "Detect PHP manifest",
+    "Check License Compatibility / Check License Compatibility",
+    "Formatting Check / Check Code Formatting",
+    "Markdown Lint / Lint Markdown Files",
+    "ESLint / Run Linter",
+    "TypeScript Check / Build Project",
+    "Vitest Tests / Build Project",
+    "Laravel Pint / Check Code Style",
+    "PHPStan / Static Analysis",
+    "Pest Tests (PostgreSQL)",
+    "Pest Tests (MariaDB)",
+    "Analyze with CodeQL (javascript-typescript)"
+  ],
+  "android": [
+    "Check REUSE Compliance / Check REUSE Compliance",
+    "Check License Compatibility / Check License Compatibility",
+    "Formatting Check / Check Code Formatting",
+    "check-conflicts / Detect Git Conflict Markers",
+    "ESLint / Run Linter",
+    "TypeScript Check / Build Project",
+    "Vitest Tests",
+    "Analyze with CodeQL (javascript-typescript)",
+    "Check PR Size / Check PR Size",
+    "AI Instructions / Validate AI Instructions",
+    "Markdown Lint / Lint Markdown Files",
+    "Certificate transparency"
+  ],
+  "api": [
+    "Check REUSE Compliance / Check REUSE Compliance",
+    "Check License Compatibility",
+    "Laravel Pint / Check Code Style",
+    "PHPStan / Static Analysis",
+    "Formatting Check / Check Code Formatting",
+    "Markdown Lint / Lint Markdown Files",
+    "Check PR Size / Check PR Size",
+    "PEST Tests",
+    "check-conflicts / Detect Git Conflict Markers",
+    "AI Instructions / Validate AI Instructions"
+  ],
+  "guardguide.de": [
+    "Check REUSE Compliance / Check REUSE Compliance",
+    "Check License Compatibility / Check License Compatibility",
+    "Formatting Check / Check Code Formatting",
+    "Markdown Lint / Lint Markdown Files",
+    "ESLint / Run Linter",
+    "Astro TypeScript Check / Build Project",
+    "Astro Build / Build Project",
+    "Check PR Size / Check PR Size",
+    "check-conflicts / Detect Git Conflict Markers",
+    "Analyze Code (javascript-typescript)",
+    "AI Instructions / Validate AI Instructions",
+    "Node Tests / Run Tests"
+  ],
+  "contracts": [
+    "REUSE Compliance / Check REUSE Compliance",
+    "Prettier Formatting / Check Code Formatting",
+    "OpenAPI Lint / Validate OpenAPI Specification",
+    "Actionlint / Lint GitHub Actions Workflows",
+    "pr-size / Check PR Size",
+    "License Compatibility / Check License Compatibility",
+    "Markdown Lint / Lint Markdown Files",
+    "check-conflicts / Detect Git Conflict Markers",
+    "AI Instructions / Validate AI Instructions"
+  ],
+  "frontend": [
+    "Check REUSE Compliance / Check REUSE Compliance",
+    "Check License Compatibility",
+    "Formatting Check / Check Code Formatting",
+    "ESLint / Run Linter",
+    "TypeScript Check / Build Project",
+    "Analyze with CodeQL (javascript-typescript)",
+    "Markdown Lint / Lint Markdown Files",
+    "Check PR Size / Check PR Size",
+    "Vitest Tests",
+    "check-conflicts / Detect Git Conflict Markers",
+    "AI Instructions / Validate AI Instructions",
+    "Strict CSP",
+    "Container Contract"
+  ],
+  "secpal.app": [
+    "Check REUSE Compliance / Check REUSE Compliance",
+    "Check License Compatibility / Check License Compatibility",
+    "Formatting Check / Check Code Formatting",
+    "Markdown Lint / Lint Markdown Files",
+    "ESLint / Run Linter",
+    "Astro TypeScript Check / Build Project",
+    "Astro Build / Build Project",
+    "Check PR Size / Check PR Size",
+    "check-conflicts / Detect Git Conflict Markers",
+    "Analyze Code (javascript-typescript)",
+    "AI Instructions / Validate AI Instructions",
+    "Node Tests / Run Tests"
+  ]
+}'
 
-android_payload="$(bash "$SYNC_SCRIPT" --repo android --print-payload)"
-android_contexts='[
-  "Check REUSE Compliance / Check REUSE Compliance",
-  "Check License Compatibility / Check License Compatibility",
-  "Formatting Check / Check Code Formatting",
-  "check-conflicts / Detect Git Conflict Markers",
-  "ESLint / Run Linter",
-  "TypeScript Check / Build Project",
-  "Vitest Tests",
-  "Analyze with CodeQL (javascript-typescript)",
-  "Check PR Size / Check PR Size",
-  "AI Instructions / Validate AI Instructions",
-  "Markdown Lint / Lint Markdown Files",
-  "Certificate transparency"
-]'
-assert_payload_contexts_equal "$android_payload" "$android_contexts"
+mapfile -t expected_repositories < <(jq -r 'keys[]' <<<"$EXPECTED_CONTEXTS_JSON")
+if [[ "${expected_repositories[*]}" != ".github GuardGuide android api contracts frontend guardguide.de secpal.app" ]]; then
+  echo "Expected exact canonical required-check repository inventory" >&2
+  exit 1
+fi
 
-guardguide_payload="$(bash "$SYNC_SCRIPT" --repo GuardGuide --print-payload)"
-assert_payload_has_context "$guardguide_payload" "Pest Tests (PostgreSQL)"
-assert_payload_has_context "$guardguide_payload" "Pest Tests (MariaDB)"
-assert_payload_has_context "$guardguide_payload" "Analyze with CodeQL (javascript-typescript)"
-
-secpal_app_payload="$(bash "$SYNC_SCRIPT" --repo secpal.app --print-payload)"
-assert_payload_has_context "$secpal_app_payload" "Node Tests / Run Tests"
-assert_payload_has_context "$secpal_app_payload" "Analyze Code (javascript-typescript)"
-
-guardguide_de_payload="$(bash "$SYNC_SCRIPT" --repo guardguide.de --print-payload)"
-assert_payload_has_context "$guardguide_de_payload" "Node Tests / Run Tests"
-assert_payload_has_context "$guardguide_de_payload" "Astro Build / Build Project"
-
-frontend_payload="$(bash "$SYNC_SCRIPT" --repo frontend --print-payload)"
-assert_payload_has_context "$frontend_payload" "Analyze with CodeQL (javascript-typescript)"
-assert_payload_has_context "$frontend_payload" "Vitest Tests"
-
-contracts_payload="$(bash "$SYNC_SCRIPT" --repo contracts --print-payload)"
-assert_payload_has_context "$contracts_payload" "OpenAPI Lint / Validate OpenAPI Specification"
-assert_payload_has_context "$contracts_payload" "AI Instructions / Validate AI Instructions"
+declare -A payloads
+for expected_repo in "${expected_repositories[@]}"; do
+  payloads["$expected_repo"]="$(bash "$SYNC_SCRIPT" --repo "$expected_repo" --print-payload)"
+  expected_contexts="$(jq -c --arg repo "$expected_repo" '.[$repo]' <<<"$EXPECTED_CONTEXTS_JSON")"
+  assert_payload_contexts_equal "${payloads[$expected_repo]}" "$expected_contexts"
+done
 
 # The bare 'CodeQL' context is only emitted by .github (its CodeQL Applicability
 # Guardrail workflow names its job exactly 'CodeQL'). For every other repo the
 # CodeQL workflow names a different job (e.g. 'Analyze with CodeQL' / 'Analyze
 # Code'), so requiring bare 'CodeQL' there would block PRs forever.
-for non_github_payload in "$api_payload" "$android_payload" "$guardguide_payload" "$secpal_app_payload" "$guardguide_de_payload" "$frontend_payload" "$contracts_payload"; do
+for non_github_repo in GuardGuide android api contracts frontend guardguide.de secpal.app; do
+  non_github_payload="${payloads[$non_github_repo]}"
   if jq -e '.checks | any(.context == "CodeQL")' >/dev/null <<<"$non_github_payload"; then
     echo "Only the '.github' manifest entry may require the bare 'CodeQL' context; other repos must require their actual CodeQL job context (e.g. 'Analyze with CodeQL (<language>)' or 'Analyze Code (<language>)')." >&2
     echo "$non_github_payload" >&2
@@ -145,7 +234,7 @@ for non_github_payload in "$api_payload" "$android_payload" "$guardguide_payload
   fi
 done
 
-github_payload="$(bash "$SYNC_SCRIPT" --repo .github --print-payload)"
+github_payload="${payloads[.github]}"
 assert_payload_has_context "$github_payload" "Validate PR Evidence"
 assert_payload_has_context "$github_payload" "Validate PR Title And Body Language"
 assert_payload_has_context "$github_payload" "Validate Signed PR Commits"
@@ -248,14 +337,63 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-payload="$(jq -c . "$input_file")"
-printf '%s\t%s\t%s\n' "$method" "$endpoint" "$payload" >>"$GH_CALL_LOG"
+repo=""
+if [[ "$endpoint" =~ ^repos/SecPal/([^/]+)/ ]]; then
+  repo="${BASH_REMATCH[1]}"
+fi
 
-if [[ -n "${GH_FAIL_REPO:-}" && "$endpoint" == "repos/SecPal/$GH_FAIL_REPO/"* ]]; then
+if [[ "$method" == "GET" ]]; then
+  printf 'GET\t%s\t-\n' "$endpoint" >>"$GH_CALL_LOG"
+  if [[ -n "${GH_FAIL_GET_REPO:-}" && "$repo" == "$GH_FAIL_GET_REPO" ]]; then
+    exit 1
+  fi
+  state_file="${GH_REQUIRED_STATE_FILE:-}"
+  if [[ -n "${GH_STATE_DIR:-}" && -f "$GH_STATE_DIR/$repo.json" ]]; then
+    state_file="$GH_STATE_DIR/$repo.json"
+  fi
+  if [[ -z "$state_file" || ! -f "$state_file" ]]; then
+    echo "Missing fake required-status-check state for $repo" >&2
+    exit 2
+  fi
+  jq . "$state_file"
+  exit 0
+fi
+
+if [[ "$method" != "PATCH" || -z "$input_file" ]]; then
+  echo "Expected PATCH with --input for $endpoint" >&2
+  exit 2
+fi
+
+payload="$(jq -c . "$input_file")"
+printf 'PATCH\t%s\t%s\n' "$endpoint" "$payload" >>"$GH_CALL_LOG"
+
+if [[ -n "${GH_FAIL_REPO:-}" && "$repo" == "$GH_FAIL_REPO" ]]; then
+  exit 1
+fi
+if [[ -n "${GH_FAIL_PATCH_REPO:-}" && "$repo" == "$GH_FAIL_PATCH_REPO" ]]; then
   exit 1
 fi
 EOF
 chmod +x "$fake_bin/gh"
+
+state_dir="$TMP_DIR/required-states"
+mkdir -p "$state_dir"
+for expected_repo in "${expected_repositories[@]}"; do
+  jq '.strict = true | .checks |= map(.app_id = null)' \
+    <<<"${payloads[$expected_repo]}" >"$state_dir/$expected_repo.json"
+done
+
+jq '
+  .checks |= map(
+    if .context == "Validate PR Evidence" or
+       .context == "Validate PR Title And Body Language" or
+       .context == "Validate Signed PR Commits"
+    then .app_id = 15368
+    else .app_id = null
+    end
+  )
+' "$state_dir/.github.json" >"$state_dir/.github.bound.json"
+mv "$state_dir/.github.bound.json" "$state_dir/.github.json"
 
 assert_mode_conflict() {
   local label="$1"
@@ -322,14 +460,8 @@ if [[ "$(<"$review_log")" != "$expected_review_call" ]]; then
 fi
 
 status_log="$TMP_DIR/status.log"
-GH_CALL_LOG="$status_log" PATH="$fake_bin" "$SHELL_BIN" "$SYNC_SCRIPT" \
-  --repo api --apply >/dev/null
-
-if grep -Fq '/required_pull_request_reviews' "$status_log"; then
-  echo "Status apply must not update pull-request review protection" >&2
-  cat "$status_log" >&2
-  exit 1
-fi
+GH_CALL_LOG="$status_log" GH_STATE_DIR="$state_dir" PATH="$fake_bin" \
+  "$SHELL_BIN" "$SYNC_SCRIPT" --repo .github --apply >/dev/null
 
 if grep -Fq '/required_status_checks' "$review_log"; then
   echo "Review apply must not update required status checks" >&2
@@ -337,12 +469,192 @@ if grep -Fq '/required_status_checks' "$review_log"; then
   exit 1
 fi
 
+remediation_failures=0
+expected_status_endpoint='repos/SecPal/.github/branches/main/protection/required_status_checks'
+expected_status_payload="$(
+  jq -c '{
+    strict: false,
+    checks: [
+      .checks[]
+      | {
+          context,
+          app_id: (if .app_id == null then -1 else .app_id end)
+        }
+    ]
+  }' "$state_dir/.github.json"
+)"
+expected_status_log="$(printf 'GET\t%s\t-\nPATCH\t%s\t%s' \
+  "$expected_status_endpoint" "$expected_status_endpoint" "$expected_status_payload")"
+if [[ "$(<"$status_log")" != "$expected_status_log" ]]; then
+  echo "FAIL-FIRST F1: status apply must GET live state and PATCH only strict while preserving mixed bindings" >&2
+  cat "$status_log" >&2
+  remediation_failures=$((remediation_failures + 1))
+fi
+
+codecov_state_dir="$TMP_DIR/codecov-states"
+mkdir -p "$codecov_state_dir"
+for codecov_repo in .github api frontend contracts; do
+  jq -n --argjson strict false '{
+    strict: $strict,
+    checks: [
+      {context: "codecov/patch", app_id: 777},
+      {context: "unbound-check", app_id: null},
+      {context: "bound-check", app_id: 15368}
+    ]
+  }' >"$codecov_state_dir/$codecov_repo.json"
+  if [[ "$codecov_repo" != ".github" ]]; then
+    jq '.checks |= map(select(.context != "codecov/patch"))' \
+      "$codecov_state_dir/$codecov_repo.json" >"$codecov_state_dir/$codecov_repo.filtered.json"
+    mv "$codecov_state_dir/$codecov_repo.filtered.json" "$codecov_state_dir/$codecov_repo.json"
+  fi
+done
+
+codecov_log="$TMP_DIR/codecov.log"
+GH_CALL_LOG="$codecov_log" GH_STATE_DIR="$codecov_state_dir" PATH="$fake_bin" \
+  "$SHELL_BIN" "$CODECOV_SCRIPT" >/dev/null 2>&1 || true
+expected_codecov_endpoint='repos/SecPal/.github/branches/main/protection/required_status_checks'
+expected_codecov_payload='{"strict":false,"checks":[{"context":"unbound-check","app_id":-1},{"context":"bound-check","app_id":15368}]}'
+codecov_patch_line="$(sed -n '/^PATCH\trepos\/SecPal\/\.github\//p' "$codecov_log")"
+if [[ "$codecov_patch_line" != "$(printf 'PATCH\t%s\t%s' "$expected_codecov_endpoint" "$expected_codecov_payload")" ]]; then
+  echo "FAIL-FIRST F2: Codecov helper must preserve current strictness and remaining bindings" >&2
+  cat "$codecov_log" >&2
+  remediation_failures=$((remediation_failures + 1))
+fi
+
+for codecov_repo in .github api frontend contracts; do
+  codecov_endpoint="repos/SecPal/$codecov_repo/branches/main/protection/required_status_checks"
+  if [[ "$(grep -Fc "$(printf 'GET\t%s\t-' "$codecov_endpoint")" "$codecov_log")" -ne 1 ]]; then
+    echo "Codecov helper must read required checks exactly once for SecPal/$codecov_repo" >&2
+    cat "$codecov_log" >&2
+    remediation_failures=$((remediation_failures + 1))
+  fi
+done
+
+if sed -n '/^PATCH\t/p' "$codecov_log" | grep -Fqv "$expected_codecov_endpoint"; then
+  echo "Codecov helper must not PATCH repositories without a Codecov check" >&2
+  cat "$codecov_log" >&2
+  remediation_failures=$((remediation_failures + 1))
+fi
+
+if [[ $remediation_failures -ne 0 ]]; then
+  echo "Focused required-check remediation contracts failed: $remediation_failures" >&2
+  exit 1
+fi
+
+assert_sync_rejects_state() {
+  local label="$1"
+  local state_file="$2"
+  local log_file="$TMP_DIR/$label.log"
+  local output status
+
+  set +e
+  output="$(GH_CALL_LOG="$log_file" GH_REQUIRED_STATE_FILE="$state_file" PATH="$fake_bin" \
+    "$SHELL_BIN" "$SYNC_SCRIPT" --repo .github --apply 2>&1)"
+  status=$?
+  set -e
+
+  if [[ $status -eq 0 || "$output" != *"SecPal/.github"* ]]; then
+    echo "Expected $label live state to fail clearly for SecPal/.github" >&2
+    echo "$output" >&2
+    exit 1
+  fi
+  if grep -q '^PATCH' "$log_file"; then
+    echo "$label live state must fail before PATCH" >&2
+    cat "$log_file" >&2
+    exit 1
+  fi
+}
+
+missing_state="$TMP_DIR/missing-state.json"
+jq '.checks |= map(select(.context != "CodeQL"))' "$state_dir/.github.json" >"$missing_state"
+assert_sync_rejects_state missing-context "$missing_state"
+
+unexpected_state="$TMP_DIR/unexpected-state.json"
+jq '.checks += [{context: "unexpected-check", app_id: null}]' "$state_dir/.github.json" >"$unexpected_state"
+assert_sync_rejects_state unexpected-context "$unexpected_state"
+
+duplicate_state="$TMP_DIR/duplicate-state.json"
+jq '.checks += [.checks[0]]' "$state_dir/.github.json" >"$duplicate_state"
+assert_sync_rejects_state duplicate-context "$duplicate_state"
+
+malformed_state="$TMP_DIR/malformed-state.json"
+jq '.strict = "true"' "$state_dir/.github.json" >"$malformed_state"
+assert_sync_rejects_state malformed-response "$malformed_state"
+
+get_failure_log="$TMP_DIR/get-failure.log"
+set +e
+get_failure_output="$(GH_CALL_LOG="$get_failure_log" GH_STATE_DIR="$state_dir" \
+  GH_FAIL_GET_REPO=.github PATH="$fake_bin" "$SHELL_BIN" "$SYNC_SCRIPT" \
+  --repo .github --apply 2>&1)"
+get_failure_status=$?
+set -e
+if [[ $get_failure_status -eq 0 || "$get_failure_output" != *"SecPal/.github"* ]] \
+  || grep -q '^PATCH' "$get_failure_log"; then
+  echo "Required-status-check GET failure must propagate before PATCH" >&2
+  echo "$get_failure_output" >&2
+  exit 1
+fi
+
+status_patch_failure_log="$TMP_DIR/status-patch-failure.log"
+set +e
+status_patch_failure_output="$(GH_CALL_LOG="$status_patch_failure_log" GH_STATE_DIR="$state_dir" \
+  GH_FAIL_PATCH_REPO=.github PATH="$fake_bin" "$SHELL_BIN" "$SYNC_SCRIPT" \
+  --repo .github --apply 2>&1)"
+status_patch_failure_status=$?
+set -e
+if [[ $status_patch_failure_status -eq 0 || "$status_patch_failure_output" != *"SecPal/.github"* ]]; then
+  echo "Required-status-check PATCH failure must propagate and identify the repository" >&2
+  echo "$status_patch_failure_output" >&2
+  exit 1
+fi
+
+codecov_true_dir="$TMP_DIR/codecov-true-states"
+mkdir -p "$codecov_true_dir"
+for codecov_repo in .github api frontend contracts; do
+  jq '.strict = true' "$codecov_state_dir/$codecov_repo.json" >"$codecov_true_dir/$codecov_repo.json"
+done
+codecov_true_log="$TMP_DIR/codecov-true.log"
+GH_CALL_LOG="$codecov_true_log" GH_STATE_DIR="$codecov_true_dir" PATH="$fake_bin" \
+  "$SHELL_BIN" "$CODECOV_SCRIPT" >/dev/null
+expected_codecov_true_payload='{"strict":true,"checks":[{"context":"unbound-check","app_id":-1},{"context":"bound-check","app_id":15368}]}'
+if ! grep -Fxq "$(printf 'PATCH\t%s\t%s' "$expected_codecov_endpoint" "$expected_codecov_true_payload")" "$codecov_true_log"; then
+  echo "Codecov helper must preserve strict=true and remaining bindings" >&2
+  cat "$codecov_true_log" >&2
+  exit 1
+fi
+
+codecov_get_failure_log="$TMP_DIR/codecov-get-failure.log"
+set +e
+codecov_get_failure_output="$(GH_CALL_LOG="$codecov_get_failure_log" GH_STATE_DIR="$codecov_state_dir" \
+  GH_FAIL_GET_REPO=.github PATH="$fake_bin" "$SHELL_BIN" "$CODECOV_SCRIPT" 2>&1)"
+codecov_get_failure_status=$?
+set -e
+if [[ $codecov_get_failure_status -eq 0 ]] \
+  || grep -Fq $'PATCH\trepos/SecPal/.github/' "$codecov_get_failure_log"; then
+  echo "Codecov required-status-check GET failure must fail closed" >&2
+  echo "$codecov_get_failure_output" >&2
+  exit 1
+fi
+
+codecov_patch_failure_log="$TMP_DIR/codecov-patch-failure.log"
+set +e
+codecov_patch_failure_output="$(GH_CALL_LOG="$codecov_patch_failure_log" GH_STATE_DIR="$codecov_state_dir" \
+  GH_FAIL_PATCH_REPO=.github PATH="$fake_bin" "$SHELL_BIN" "$CODECOV_SCRIPT" 2>&1)"
+codecov_patch_failure_status=$?
+set -e
+if [[ $codecov_patch_failure_status -eq 0 ]]; then
+  echo "Codecov required-status-check PATCH failure must propagate" >&2
+  echo "$codecov_patch_failure_output" >&2
+  exit 1
+fi
+
 all_status_log="$TMP_DIR/all-status.log"
 all_review_log="$TMP_DIR/all-review.log"
-GH_CALL_LOG="$all_status_log" PATH="$fake_bin" "$SHELL_BIN" "$SYNC_SCRIPT" --apply >/dev/null
+GH_CALL_LOG="$all_status_log" GH_STATE_DIR="$state_dir" PATH="$fake_bin" \
+  "$SHELL_BIN" "$SYNC_SCRIPT" --apply >/dev/null
 GH_CALL_LOG="$all_review_log" PATH="$fake_bin" "$SHELL_BIN" "$SYNC_SCRIPT" --apply-review-baseline >/dev/null
 
-status_repositories="$(sed -n 's#^[^[:space:]]*[[:space:]]repos/SecPal/\([^/]*\)/branches/main/protection/required_status_checks.*#\1#p' "$all_status_log")"
+status_repositories="$(sed -n 's#^PATCH[[:space:]]repos/SecPal/\([^/]*\)/branches/main/protection/required_status_checks.*#\1#p' "$all_status_log")"
 review_repositories="$(sed -n 's#^[^[:space:]]*[[:space:]]repos/SecPal/\([^/]*\)/branches/main/protection/required_pull_request_reviews.*#\1#p' "$all_review_log")"
 if [[ -z "$status_repositories" || "$review_repositories" != "$status_repositories" ]]; then
   echo "Review baseline must iterate over the required-check managed repository set" >&2
@@ -369,5 +681,24 @@ fi
 if grep -Fq 'repos/SecPal/api/' "$failure_log"; then
   echo "Review apply must stop after a repository update fails" >&2
   cat "$failure_log" >&2
+  exit 1
+fi
+
+status_failure_log="$TMP_DIR/status-failure.log"
+set +e
+status_failure_output="$(GH_CALL_LOG="$status_failure_log" GH_STATE_DIR="$state_dir" \
+  GH_FAIL_PATCH_REPO=android PATH="$fake_bin" "$SHELL_BIN" "$SYNC_SCRIPT" --apply 2>&1)"
+status_failure_status=$?
+set -e
+
+if [[ $status_failure_status -eq 0 || "$status_failure_output" != *"SecPal/android"* ]]; then
+  echo "Status API failure must propagate and identify the repository" >&2
+  echo "$status_failure_output" >&2
+  exit 1
+fi
+
+if grep -Fq 'repos/SecPal/api/' "$status_failure_log"; then
+  echo "Status apply must stop after a repository update fails" >&2
+  cat "$status_failure_log" >&2
   exit 1
 fi

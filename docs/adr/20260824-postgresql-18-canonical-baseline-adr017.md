@@ -17,9 +17,9 @@ The 0.x production baseline must not retain an unnecessary database-major or SQL
 
 ## Binding decision
 
-PostgreSQL 18 is the sole active major for development, CI/integration, and new production reference deployments. Production PostgreSQL is host-native systemd/SELinux infrastructure; disposable PG18 containers are permitted only for bounded development/test use. PostgreSQL 16/17 are historical, migration, or negative-test evidence only. Future major upgrades start from PG18 and require separate qualification.
+PostgreSQL 18 is the sole active major for development, CI/integration, and new production reference deployments. Production PostgreSQL is host-native systemd/SELinux infrastructure; disposable PostgreSQL 18 containers are permitted only as bounded CI/integration fixtures. PostgreSQL 16/17 are historical, migration, or negative-test evidence only. Future major upgrades start from PostgreSQL 18 and require separate qualification.
 
-SecPal deliberately uses PostgreSQL-specific semantics where appropriate; it makes no multiple-SQL-engine promise. PostgreSQL initially owns relational data, DB-backed sessions, durable queues, and shared cache. Valkey is not part of the current reference architecture and may return only through a new explicit, benchmark-backed architecture decision.
+SecPal deliberately uses PostgreSQL-specific semantics; it makes no multiple-SQL-engine promise. PostgreSQL initially owns relational data, DB-backed sessions, durable queues, and shared cache. The application relies on transactional integrity, transaction-level advisory locks, row locking, JSONB, UUIDs, and relational constraints where those semantics define the operation. Valkey is not part of the current reference architecture and may return only through a new explicit, benchmark-backed architecture decision.
 
 Production packages come from the qualified Rocky/RHEL 10.2+ PostgreSQL 18
 Application Stream unless a later explicit evidence-backed architecture decision

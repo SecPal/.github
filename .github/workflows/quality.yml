@@ -113,6 +113,12 @@ jobs:
       - name: Run Polyscope replanning contract tests
         run: python3 -m unittest tests/polyscope-work-graph-replanning.py
 
+      - name: Run evidence-architecture governance tests
+        run: python3 tests/evidence-architecture-governance.py
+
+      - name: Run PostgreSQL 18 baseline governance tests
+        run: ./scripts/preflight.sh --postgresql-baseline-only
+
   vulnerability-policy:
     name: Vulnerability Policy
     runs-on: ubuntu-latest

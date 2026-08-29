@@ -26,8 +26,9 @@
 #      such hosts only ever live inside the test's own temporary workspace
 #      so the prose cannot accidentally trip the gate after a reword.
 #   5. Behaviour matches the documented classification: existing public and
-#      development hosts plus the exact private database service identity pass;
-#      an unapproved secpal.* host and another internal identity fail.
+#      development hosts, secpal.io, the io.secpal.* reverse-DNS namespace, and
+#      the exact private database service identity pass; an unapproved secpal.*
+#      host, adjacent reverse-DNS namespace, and another internal identity fail.
 #   6. The gate skips the gitignored agent scratch directory `.context/` so
 #      Polyscope-managed workspaces can stash PR body drafts and other
 #      throwaway notes that quote forbidden hosts verbatim without tripping
@@ -53,6 +54,10 @@ bad_public_domain="${domain_namespace}.xyz"
 bad_internal_domain="cache.${domain_namespace}.internal"
 bad_development_suffix="${domain_namespace}.dev.example"
 bad_direct_development="foo.${domain_namespace}.dev"
+approved_public_io="${domain_namespace}.io"
+approved_reverse_identifier="io.${domain_namespace}.polyscope.preview"
+bad_reverse_identifier="dev.${domain_namespace}.polyscope.preview"
+reverse_identifier_as_host="io.${domain_namespace}.attacker.example"
 
 if [ ! -f "$SCRIPT" ]; then
   echo "Missing scripts/check-domains.sh" >&2
@@ -185,6 +190,11 @@ Approved private service identity:
 - db.secpal.internal
 EOF
 
+printf '%s\n' \
+  "Owned public domain: https://$approved_public_io" \
+  "Approved reverse-DNS identifier: $approved_reverse_identifier" \
+  >>"$workspace/guardguide.md"
+
 set +e
 (
   cd "$workspace"
@@ -263,6 +273,16 @@ assert_domain_policy_case \
   reject \
   "$bad_internal_domain" \
   "Mixed: db.secpal.internal $bad_internal_domain"
+assert_domain_policy_case \
+  "an adjacent unapproved reverse-DNS identifier" \
+  reject \
+  "$bad_reverse_identifier" \
+  "Bad identifier: $bad_reverse_identifier"
+assert_domain_policy_case \
+  "a reverse-DNS identifier used as a public URL" \
+  reject \
+  "$reverse_identifier_as_host" \
+  "Bad public host: https://$reverse_identifier_as_host"
 
 rm "$workspace/domain-policy-case.md"
 
