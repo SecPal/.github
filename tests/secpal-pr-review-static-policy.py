@@ -689,6 +689,19 @@ DYNAMIC_IMPORT_CALLS = {
             ("_load_late_disposition_helper",),
             "spec.loader.exec_module(module)",
         ),
+        DynamicImportCall(
+            ("_load_fast_path_helper",),
+            "importlib.util.spec_from_file_location("
+            "'secpal_pr_review.fast_path', FAST_PATH_HELPER)",
+        ),
+        DynamicImportCall(
+            ("_load_fast_path_helper",),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_fast_path_helper",),
+            "spec.loader.exec_module(module)",
+        ),
     },
     "fast_path.py": {
         DynamicImportCall(
@@ -868,6 +881,10 @@ SAFE_GETATTR_CALLS = {
             ("_load_late_disposition_helper",),
             "getattr(loaded, '__file__', None)",
         ),
+        DynamicImportCall(
+            ("_load_fast_path_helper",),
+            "getattr(loaded, '__file__', None)",
+        ),
     },
     "fast_path.py": {
         DynamicImportCall(
@@ -922,6 +939,14 @@ SAFE_SYS_MODULES_CALLS = {
         ),
         DynamicImportCall(
             ("_load_late_disposition_helper",),
+            "sys.modules.pop(spec.name, None)",
+        ),
+        DynamicImportCall(
+            ("_load_fast_path_helper",),
+            "sys.modules.get('secpal_pr_review.fast_path')",
+        ),
+        DynamicImportCall(
+            ("_load_fast_path_helper",),
             "sys.modules.pop(spec.name, None)",
         ),
     },
@@ -984,6 +1009,10 @@ SAFE_SYS_MODULES_STORES = {
             ("_load_late_disposition_helper",),
             "sys.modules[spec.name]",
         ),
+        DynamicImportCall(
+            ("_load_fast_path_helper",),
+            "sys.modules[spec.name]",
+        ),
     },
     "fast_path.py": {
         DynamicImportCall(
@@ -1015,6 +1044,7 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_load_evidence_helper",
     "_load_follow_up_helper",
     "_load_late_disposition_helper",
+    "_load_fast_path_helper",
     "_late_signing_key",
     "_markdown_parser_environment",
     "_matches_late_authorization",
@@ -1217,6 +1247,11 @@ RESOLVER_LOOP_SITES = {
         "comprehension",
         ("verify_local_fix_commit",),
         "trailer_output.rstrip('\\n').split('\\x00')",
+    ),
+    LoopSite(
+        "comprehension",
+        ("verify_local_fix_commit",),
+        "integration_output.rstrip('\\n').split('\\x00')",
     ),
     LoopSite(
         "comprehension",

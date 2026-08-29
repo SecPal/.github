@@ -560,6 +560,18 @@ conflict-bearing evidence: the exact sorted conflict paths are authenticated,
 every path must be explicitly changed or deleted in the candidate, no other
 path may change, and retained text conflict markers fail closed.
 
+If exact thread resolution is part of the frozen integration feedback
+boundary, the typed integration invocation may also select canonical
+eligibility evidence. The receipt binds both evidence digests and the binder
+emits the distinct version-1.2
+`ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION`. The guarded
+resolver accepts it only through the integration-specific verifier and only
+with the canonical integration artifact. That verifier authenticates the exact
+ordered parents, combined tree, both commit trailers, reviewed state, expected
+signer, and matching receipt/attestation eligibility digest before exposing the
+minimal resolution anchor. Historical version-1.1 integration attestations
+remain valid for their original purpose and are never resolution authority.
+
 Parent 1 and its Ready/lifecycle claims are not caller assertions. A distinct
 closed `READY_INTEGRATION_PRIOR_AUTHORITY` manifest binds the prior delivery
 tree, receipt, final attestation, accepted signer, lifecycle identity, current

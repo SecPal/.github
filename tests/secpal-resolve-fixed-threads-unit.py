@@ -59,6 +59,8 @@ class FakeGit:
         signature_format: str = "ssh",
         signer_fingerprint: str = "SHA256:fixtureDeliverySigner",
         signing_key: str = "/tmp/fixture-signing-key",
+        second_parent: str | None = None,
+        integration_digest: str | None = None,
     ) -> None:
         self.expected_head = expected_head
         self.reviewed_head = reviewed_head
@@ -69,6 +71,8 @@ class FakeGit:
         self.signature_format = signature_format
         self.signer_fingerprint = signer_fingerprint
         self.signing_key = signing_key
+        self.second_parent = second_parent
+        self.integration_digest = integration_digest
         self.calls: list[tuple[str, ...]] = []
 
     def __call__(
@@ -88,9 +92,16 @@ class FakeGit:
         elif call == ("rev-parse", f"{self.expected_head}^{{tree}}"):
             stdout = f"{self.tree}\n"
         elif call == ("rev-list", "--parents", "-n", "1", self.expected_head):
-            stdout = f"{self.expected_head} {self.reviewed_head}\n"
+            parents = f"{self.reviewed_head}"
+            if self.second_parent is not None:
+                parents += f" {self.second_parent}"
+            stdout = f"{self.expected_head} {parents}\n"
         elif call[0:2] == ("show", "-s"):
-            stdout = f"{self.receipt_digest}\n"
+            stdout = (
+                f"{self.integration_digest}\n"
+                if "SecPal-Integration-Evidence" in call[2]
+                else f"{self.receipt_digest}\n"
+            )
         elif call == ("cat-file", "commit", self.expected_head):
             signature_label = (
                 "SSH SIGNATURE"
@@ -99,6 +110,12 @@ class FakeGit:
             )
             stdout = (
                 f"tree {self.tree}\nparent {self.reviewed_head}\n"
+                + (
+                    f"parent {self.second_parent}\n"
+                    if self.second_parent is not None
+                    else ""
+                )
+                +
                 f"gpgsig -----BEGIN {signature_label}-----\n signature\n"
                 f" -----END {signature_label}-----\n\nmessage\n"
             )
@@ -518,6 +535,94 @@ def validation_attestation_payload(
     return {**fields, "attestation_digest": MODULE._digest_json(fields)}
 
 
+def integration_validation_payloads(
+    reviewed: dict[str, Any], eligibility_digest: str, *, expected_head: str
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    binding = MODULE._validation_registry_binding(
+        MODULE._load_repository_entry(reviewed["repository"])
+    )
+    stable = MODULE.fast_path.StableFeedbackState.from_payload(reviewed)
+    tree = "f" * 40
+    integration = {
+        "schema_version": "1.1",
+        "kind": "TWO_PARENT_READY_INTEGRATION",
+        "authorization_id": "ready-integration-authorization-001",
+        "repository": reviewed["repository"],
+        "delivery_issue_number": 673,
+        "pull_request_number": reviewed["pull_request_number"],
+        "prior_delivery_head_sha": reviewed["head_sha"],
+        "prior_authority_digest": "a" * 64,
+        "prior_authority_tag_object_sha": "1" * 40,
+        "target_base": {
+            "ref": reviewed["base_ref"],
+            "authorized_sha": reviewed["base_sha"],
+            "observed_sha": reviewed["base_sha"],
+        },
+        "ordered_parent_shas": [reviewed["head_sha"], reviewed["base_sha"]],
+        "validated_tree_sha": tree,
+        "mechanical_merge_tree_sha": tree,
+        "mechanical_conflict_paths": [],
+        "manual_conflict_resolution_delta": [],
+        "reviewed_state_digest": reviewed["state_digest"],
+        "reviewed_feedback_digest": reviewed["feedback_digest"],
+        "validation_execution": {
+            "registry_digest": MODULE.fast_path.digest_json(binding),
+            "command_set_digest": MODULE.fast_path.digest_json(
+                binding["validation"]
+            ),
+        },
+        "expected_signer": {"kind": "SSH_PRINCIPAL", "identity": "fixture"},
+        "eligibility": {
+            "eligible": True,
+            "lifecycle_identity": "delivery-lifecycle-001",
+            "draft_before": False,
+            "draft_after": False,
+            "ready_before": True,
+            "ready_after": True,
+            "ready_transition": False,
+            "review_requested": False,
+            "unrestricted_reviews_before": 1,
+            "unrestricted_reviews_after": 1,
+            "remediation_cycles_before": 2,
+            "remediation_cycles_after": 2,
+            "exceptional_recoveries_before": 1,
+            "exceptional_recoveries_after": 1,
+            "exceptional_continuations_before": 0,
+            "exceptional_continuations_after": 1,
+            "cycle_3": False,
+        },
+    }
+    receipt = MODULE.fast_path.create_validation_receipt(
+        repository=reviewed["repository"],
+        head_sha=reviewed["head_sha"],
+        validated_tree_sha=tree,
+        registry=binding,
+        command_set=binding["validation"],
+        successful_result=True,
+        reviewed_state=stable,
+        manual_gate_evidence=[
+            {
+                "gate": gate,
+                "satisfied": True,
+                "evidence": f"Verified integration evidence {index}",
+            }
+            for index, gate in enumerate(binding["manual_gates"], start=1)
+        ],
+        eligibility_evidence_digest=eligibility_digest,
+        integration_evidence_digest=MODULE.fast_path.digest_json(integration),
+    )
+    attestation = MODULE.fast_path.create_ready_integration_attestation(
+        repository=reviewed["repository"],
+        head_sha=expected_head,
+        registry=binding,
+        command_set=binding["validation"],
+        reviewed_state=stable,
+        validation_receipt=receipt,
+        integration_evidence=integration,
+    )
+    return integration, receipt, attestation
+
+
 def validation_receipt_payload(reviewed: dict[str, Any]) -> dict[str, Any]:
     binding = MODULE._validation_registry_binding(
         MODULE._load_repository_entry(reviewed["repository"])
@@ -914,6 +1019,188 @@ def run_late_classification_origin_fixture(
 
 
 class ResolveFixedThreadsTests(TestCase):
+    def test_integration_evidence_is_normalized_before_receipt_reconstruction(
+        self,
+    ) -> None:
+        thread_id = "PRRT_INTEGRATION_NORMALIZATION"
+        reviewed = reviewed_state_payload(
+            thread_id,
+            [("PRRC_INTEGRATION_NORMALIZATION", "Normalize evidence.", None)],
+        )
+        eligibility = eligibility_payload(reviewed, (thread_id,))
+        integration, receipt, attestation = integration_validation_payloads(
+            reviewed,
+            MODULE._digest_json(eligibility),
+            expected_head="c" * 40,
+        )
+        raw_integration = copy.deepcopy(integration)
+        raw_integration["prior_delivery_head_sha"] = reviewed["head_sha"].upper()
+        raw_integration["ordered_parent_shas"][0] = reviewed["head_sha"].upper()
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reviewed_path = root / "reviewed.json"
+            attestation_path = root / "attestation.json"
+            integration_path = root / "integration.json"
+            reviewed_path.write_text(json.dumps(reviewed), encoding="utf-8")
+            attestation_path.write_text(json.dumps(attestation), encoding="utf-8")
+            integration_path.write_text(
+                json.dumps(raw_integration), encoding="utf-8"
+            )
+            state = MODULE.load_reviewed_state(
+                reviewed_path,
+                "SecPal/api",
+                123,
+                reviewed["state_digest"],
+                (thread_id,),
+            )
+            validation = MODULE.load_validation_evidence(
+                attestation_path,
+                "SecPal/api",
+                "c" * 40,
+                state,
+                integration_path,
+            )
+
+        self.assertEqual(validation.integration_evidence, integration)
+        self.assertEqual(validation.validation_receipt, receipt)
+
+    def test_malformed_integration_parent_list_fails_during_evidence_loading(
+        self,
+    ) -> None:
+        thread_id = "PRRT_INTEGRATION_PARENT_SHAPE"
+        reviewed = reviewed_state_payload(
+            thread_id,
+            [("PRRC_INTEGRATION_PARENT_SHAPE", "Validate parents.", None)],
+        )
+        eligibility = eligibility_payload(reviewed, (thread_id,))
+        integration, _receipt, attestation = integration_validation_payloads(
+            reviewed,
+            MODULE._digest_json(eligibility),
+            expected_head="c" * 40,
+        )
+        integration["ordered_parent_shas"] = None
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reviewed_path = root / "reviewed.json"
+            attestation_path = root / "attestation.json"
+            integration_path = root / "integration.json"
+            reviewed_path.write_text(json.dumps(reviewed), encoding="utf-8")
+            attestation_path.write_text(json.dumps(attestation), encoding="utf-8")
+            integration_path.write_text(json.dumps(integration), encoding="utf-8")
+            state = MODULE.load_reviewed_state(
+                reviewed_path,
+                "SecPal/api",
+                123,
+                reviewed["state_digest"],
+                (thread_id,),
+            )
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "integration validation evidence is invalid or stale",
+            ):
+                MODULE.load_validation_evidence(
+                    attestation_path,
+                    "SecPal/api",
+                    "c" * 40,
+                    state,
+                    integration_path,
+                )
+
+    def test_historical_ready_integration_attestation_cannot_authorize_resolution(
+        self,
+    ) -> None:
+        reviewed = reviewed_state_payload(
+            "PRRT_HISTORICAL_INTEGRATION",
+            [("PRRC_HISTORICAL_INTEGRATION", "Historical finding.", None)],
+        )
+        payload = {
+            "schema_version": "1.1",
+            "kind": "READY_INTEGRATION_VALIDATION_ATTESTATION",
+            "head_sha": "c" * 40,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "validation.json"
+            reviewed_path = Path(directory) / "reviewed.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            reviewed_path.write_text(json.dumps(reviewed), encoding="utf-8")
+            state = MODULE.load_reviewed_state(
+                reviewed_path,
+                "SecPal/api",
+                123,
+                reviewed["state_digest"],
+                ("PRRT_HISTORICAL_INTEGRATION",),
+            )
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "historical Ready integration attestation is not resolution authority",
+            ):
+                MODULE.load_validation_evidence(
+                    path,
+                    "SecPal/api",
+                    "c" * 40,
+                    state,
+                    Path(directory) / "integration.json",
+                )
+
+    def test_eligibility_bound_ready_integration_authorizes_exact_thread(self) -> None:
+        thread_id = "PRRT_INTEGRATION_ELIGIBLE"
+        comment = ("PRRC_INTEGRATION_ROOT", "Intentional protocol body.", None)
+        reviewed = reviewed_state_payload(thread_id, [comment])
+        eligibility = eligibility_payload(reviewed, (thread_id,))
+        eligibility_digest = MODULE._digest_json(eligibility)
+        head = "c" * 40
+        integration, receipt, attestation = integration_validation_payloads(
+            reviewed, eligibility_digest, expected_head=head
+        )
+        github = FakeGh(
+            [
+                target_response(
+                    thread_id,
+                    head=head,
+                    comments=[comment],
+                )
+            ]
+        )
+        git = FakeGit(
+            expected_head=head,
+            reviewed_head=reviewed["head_sha"],
+            second_parent=reviewed["base_sha"],
+            tree=attestation["validated_tree_sha"],
+            receipt_digest=receipt["receipt_digest"],
+            integration_digest=MODULE.fast_path.digest_json(integration),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, value in (
+                ("reviewed.json", reviewed),
+                ("validation.json", attestation),
+                ("eligibility.json", eligibility),
+                ("integration.json", integration),
+            ):
+                (root / name).write_text(json.dumps(value), encoding="utf-8")
+            with (
+                mock.patch.object(MODULE, "_run_git", git),
+                mock.patch.object(MODULE, "_run_gh", github),
+            ):
+                result = MODULE.resolve_threads(
+                    "SecPal/api",
+                    123,
+                    head,
+                    (thread_id,),
+                    apply=False,
+                    repository_root=root,
+                    reviewed_state_path=root / "reviewed.json",
+                    expected_reviewed_state_digest=reviewed["state_digest"],
+                    validation_evidence_path=root / "validation.json",
+                    eligibility_evidence_path=root / "eligibility.json",
+                    integration_evidence_path=root / "integration.json",
+                )
+
+        self.assertEqual(result["pending"], [thread_id])
+        self.assertEqual(result["status"], "success")
+
     def test_late_classification_rejects_missing_or_malformed_root_database_id(
         self,
     ) -> None:

@@ -42,6 +42,7 @@ FOLLOW_UP_HELPER = REPOSITORY_ROOT / "scripts/secpal_pr_review/follow_up.py"
 LATE_DISPOSITION_HELPER = (
     REPOSITORY_ROOT / "scripts/secpal_pr_review/late_disposition.py"
 )
+FAST_PATH_HELPER = REPOSITORY_ROOT / "scripts/secpal_pr_review/fast_path.py"
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 OID = re.compile(r"^[0-9a-fA-F]{40}$")
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -239,6 +240,34 @@ def _load_late_disposition_helper() -> Any:
 late_disposition = _load_late_disposition_helper()
 
 
+def _load_fast_path_helper() -> Any:
+    loaded = sys.modules.get("secpal_pr_review.fast_path")
+    if loaded is not None:
+        loaded_path = getattr(loaded, "__file__", None)
+        if (
+            not isinstance(loaded_path, str)
+            or Path(loaded_path).resolve() != FAST_PATH_HELPER.resolve()
+        ):
+            raise RuntimeError("Ready-integration module has an unexpected path")
+        return loaded
+    spec = importlib.util.spec_from_file_location(
+        "secpal_pr_review.fast_path", FAST_PATH_HELPER
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Cannot load Ready-integration helper")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
+    return module
+
+
+fast_path = _load_fast_path_helper()
+
+
 def _resolve_trusted_markdown_node() -> str:
     """Resolve Node only for the maintained Markdown parser bridge."""
 
@@ -314,6 +343,7 @@ class ReviewedState:
     feedback_digest: str
     targets: dict[str, ExpectedThreadState]
     thread_ids: frozenset[str]
+    payload: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -323,6 +353,9 @@ class ValidationEvidence:
     validated_tree_sha: str
     validation_receipt_digest: str
     eligibility_evidence_digest: str
+    attestation: dict[str, Any] | None = None
+    validation_receipt: dict[str, Any] | None = None
+    integration_evidence: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -872,6 +905,7 @@ def load_reviewed_state(
         feedback_digest=feedback_digest,
         targets=expected_targets,
         thread_ids=frozenset(indexed_threads),
+        payload=payload,
     )
 
 
@@ -880,6 +914,7 @@ def load_validation_evidence(
     repository: str,
     expected_head: str,
     reviewed: ReviewedState,
+    integration_evidence_path: Path | None = None,
 ) -> ValidationEvidence:
     try:
         payload = json.loads(
@@ -900,6 +935,75 @@ def load_validation_evidence(
         )
     if not isinstance(payload, dict):
         raise ResolutionError("validation evidence is unavailable or malformed")
+    if payload.get("kind") in {
+        "READY_INTEGRATION_VALIDATION_ATTESTATION",
+        "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION",
+    }:
+        if payload.get("kind") != (
+            "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"
+        ) or payload.get("schema_version") != "1.2":
+            raise ResolutionError(
+                "historical Ready integration attestation is not resolution authority"
+            )
+        if integration_evidence_path is None:
+            raise ResolutionError(
+                "integration resolution requires canonical integration evidence"
+            )
+        try:
+            integration_payload = json.loads(
+                integration_evidence_path.read_text(encoding="utf-8"),
+                parse_constant=_reject_nonfinite_json_constant,
+            )
+            stable_reviewed = fast_path.StableFeedbackState.from_payload(
+                reviewed.payload
+            )
+            integration_evidence = (
+                fast_path.normalize_ready_integration_evidence(
+                    integration_payload,
+                    repository=repository,
+                    reviewed_state=stable_reviewed,
+                    registry=registry_binding,
+                    validated_tree_sha=payload.get("validated_tree_sha"),
+                )
+            )
+            receipt = fast_path.create_validation_receipt(
+                repository=repository,
+                head_sha=reviewed.head_sha,
+                validated_tree_sha=payload.get("validated_tree_sha"),
+                registry=registry_binding,
+                command_set=registry_binding["validation"],
+                successful_result=True,
+                reviewed_state=stable_reviewed,
+                manual_gate_evidence=payload.get("manual_gate_evidence"),
+                eligibility_evidence_digest=payload.get(
+                    "eligibility_evidence_digest"
+                ),
+                integration_evidence_digest=fast_path.digest_json(
+                    integration_evidence
+                ),
+            )
+        except (OSError, ValueError, fast_path.SecurityBlocker) as exc:
+            raise ResolutionError(
+                "integration validation evidence is invalid or stale"
+            ) from exc
+        return ValidationEvidence(
+            kind="eligibility-bound-ready-integration",
+            evidence_digest=payload.get("attestation_digest", ""),
+            validated_tree_sha=payload.get("validated_tree_sha", ""),
+            validation_receipt_digest=payload.get(
+                "validation_receipt_digest", ""
+            ),
+            eligibility_evidence_digest=payload.get(
+                "eligibility_evidence_digest", ""
+            ),
+            attestation=payload,
+            validation_receipt=receipt,
+            integration_evidence=integration_evidence,
+        )
+    if integration_evidence_path is not None:
+        raise ResolutionError(
+            "ordinary validation attestation rejects integration-only evidence"
+        )
     expected_attestation = _expected_validation_attestation(
         repository,
         expected_head,
@@ -921,6 +1025,7 @@ def load_validation_evidence(
         eligibility_evidence_digest=payload[
             "eligibility_evidence_digest"
         ],
+        attestation=payload,
     )
 
 
@@ -937,7 +1042,8 @@ def verify_local_fix_commit(
     effective_runner = _run_git if runner is None else runner
     if (
         not isinstance(validation, ValidationEvidence)
-        or validation.kind != "attestation"
+        or validation.kind
+        not in {"attestation", "eligibility-bound-ready-integration"}
         or not isinstance(validation.evidence_digest, str)
         or not DIGEST.fullmatch(validation.evidence_digest)
         or not isinstance(validation.validated_tree_sha, str)
@@ -976,10 +1082,21 @@ def verify_local_fix_commit(
         root,
         ("rev-list", "--parents", "-n", "1", expected_head.lower()),
     ).stdout.split()
-    if ancestry != [expected_head.lower(), reviewed.head_sha]:
-        raise ResolutionError(
-            "validated fix commit parent does not match reviewed head"
-        )
+    if validation.kind == "attestation":
+        if ancestry != [expected_head.lower(), reviewed.head_sha]:
+            raise ResolutionError(
+                "validated fix commit parent does not match reviewed head"
+            )
+    else:
+        integration = validation.integration_evidence
+        if (
+            not isinstance(integration, dict)
+            or ancestry
+            != [expected_head.lower(), *integration.get("ordered_parent_shas", [])]
+        ):
+            raise ResolutionError(
+                "validated Ready integration parents do not match evidence"
+            )
     trailer_output = effective_runner(
         root,
         (
@@ -999,6 +1116,28 @@ def verify_local_fix_commit(
         raise ResolutionError(
             "fix commit validation-receipt trailer does not match evidence"
         )
+    integration_trailer: str | None = None
+    if validation.kind == "eligibility-bound-ready-integration":
+        integration_output = effective_runner(
+            root,
+            (
+                "show",
+                "-s",
+                "--format=%(trailers:key=SecPal-Integration-Evidence,"
+                "valueonly,separator=%x00)",
+                expected_head.lower(),
+            ),
+        ).stdout
+        integration_trailers = [
+            value.strip()
+            for value in integration_output.rstrip("\n").split("\x00")
+            if value.strip()
+        ]
+        if len(integration_trailers) != 1:
+            raise ResolutionError(
+                "integration commit evidence trailer is invalid or stale"
+            )
+        integration_trailer = integration_trailers[0]
     commit_object = effective_runner(
         root,
         ("cat-file", "commit", expected_head.lower()),
@@ -1028,6 +1167,59 @@ def verify_local_fix_commit(
         or local_signature.get("format") not in accepted_formats
     ):
         raise ResolutionError("fix commit local signature is not verified")
+    if validation.kind == "eligibility-bound-ready-integration":
+        if (
+            reviewed.payload is None
+            or validation.attestation is None
+            or validation.validation_receipt is None
+            or validation.integration_evidence is None
+        ):
+            raise ResolutionError(
+                "integration resolution evidence binding is incomplete"
+            )
+        try:
+            stable_reviewed = fast_path.StableFeedbackState.from_payload(
+                reviewed.payload
+            )
+            registry_binding = _validation_registry_binding(
+                _load_repository_entry(repository)
+            )
+            fast_path.verify_eligibility_bound_ready_integration_attestation(
+                validation.attestation,
+                repository=repository,
+                head_sha=expected_head.lower(),
+                registry=registry_binding,
+                command_set=registry_binding["validation"],
+                reviewed_state=stable_reviewed,
+                validation_receipt=validation.validation_receipt,
+                integration_evidence=validation.integration_evidence,
+                commit_parent_shas=ancestry[1:],
+                commit_tree_sha=commit_tree,
+                commit_validation_receipt_digest=trailers[0],
+                commit_integration_evidence_digest=integration_trailer,
+            )
+            expected_signer = validation.integration_evidence["expected_signer"]
+            verified_output = f"{verified.stdout}\n{verified.stderr}"
+            if expected_signer["kind"] == "SSH_PRINCIPAL":
+                signers = re.findall(
+                    r'(?m)^Good "git" signature for ([^\s]+) with ',
+                    verified_output,
+                )
+                expected_identity = expected_signer["identity"]
+            else:
+                status = re.findall(
+                    r"(?m)^\[GNUPG:\] VALIDSIG ([^\r\n]+)$",
+                    verified_output.upper(),
+                )
+                fields = status[0].split() if len(status) == 1 else []
+                signers = [fields[9] if len(fields) == 10 else fields[0]] if len(fields) in {9, 10} else []
+                expected_identity = expected_signer["identity"].upper()
+            if signers != [expected_identity]:
+                raise fast_path.SecurityBlocker(
+                    "integration commit signer does not match evidence"
+                )
+        except (KeyError, fast_path.SecurityBlocker) as exc:
+            raise ResolutionError(str(exc)) from exc
     try:
         return late_disposition.signer_from_git_verification(
             local_signature["format"],
@@ -2266,6 +2458,7 @@ def resolve_threads(
     expected_reviewed_state_digest: str | None = None,
     validation_evidence_path: Path | str | None = None,
     eligibility_evidence_path: Path | str | None = None,
+    integration_evidence_path: Path | str | None = None,
     **caller_constructed_authorization: Any,
 ) -> dict[str, Any]:
     """Resolve threads only after proving the complete local evidence chain."""
@@ -2297,6 +2490,7 @@ def resolve_threads(
         repository,
         expected_head,
         reviewed,
+        Path(integration_evidence_path) if integration_evidence_path else None,
     )
     verify_local_fix_commit(
         Path(repository_root),
@@ -2572,6 +2766,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--expected-reviewed-state-digest", required=True)
     parser.add_argument("--validation-evidence", required=True)
     parser.add_argument("--eligibility-evidence")
+    parser.add_argument("--integration-evidence")
     parser.add_argument("--delivery-issue", type=int)
     parser.add_argument("--late-disposition-evidence")
     parser.add_argument("--late-disposition-signature")
@@ -2603,6 +2798,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             arguments.final_eligibility_evidence,
         )
         if any(value is not None for value in late_values):
+            if arguments.integration_evidence is not None:
+                raise ResolutionError(
+                    "late disposition rejects integration-only evidence"
+                )
             if not all(value is not None for value in late_values):
                 raise ResolutionError(
                     "late disposition requires delivery issue, final eligibility "
@@ -2669,6 +2868,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
                 validation_evidence_path=arguments.validation_evidence,
                 eligibility_evidence_path=arguments.eligibility_evidence,
+                **(
+                    {"integration_evidence_path": arguments.integration_evidence}
+                    if arguments.integration_evidence is not None
+                    else {}
+                ),
             )
     except ResolutionError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

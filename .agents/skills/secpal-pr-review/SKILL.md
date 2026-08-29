@@ -31,6 +31,12 @@ signed validation receipt and final attestation for the fix commit. The command
 rejects a swapped state file, a non-matching local commit,
 and stale, missing, incomplete, unauthenticated, or differently bound evidence
 before any GitHub read.
+For an eligibility-bound typed Ready integration, also supply the canonical
+integration evidence. The resolver accepts only the closed version-1.2
+integration-resolution attestation and verifies its ordered two-parent
+topology, tree, receipt and integration trailers, signer, reviewed state, and
+eligibility digest through the integration-specific verifier. Never treat a
+historical integration attestation as an ordinary sole-parent attestation.
 The command first reads every target completely and requires its current
 comment identities, body digests, and resolution state to match that reviewed
 state. It then performs two complete stable target rechecks of the open PR,
