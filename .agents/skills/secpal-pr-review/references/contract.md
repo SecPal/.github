@@ -232,6 +232,107 @@ in that pre-existing commit and fails closed before any GitHub read.
 worktree state, PR identity, and resolution results. The workflow never merges;
 merge remains separately authorized by the current user instruction.
 
+## Persistent lifecycle-authority boundary
+
+`scripts/secpal_pr_review/lifecycle_authority.py` owns the independently
+authenticated lifecycle primitive, not this feedback-processing state machine.
+Its version-1 authority is a closed, signed, append-only predecessor chain. The
+maintained repository registry owns distinct transition- and authority-signer
+roles, exact SSH public keys and OpenPGP fingerprints, accepted formats, and
+one delivery-initialization anchor per issue. Each enrolled anchor also records
+the exact current terminal authority digest, PR, and head in the installed
+maintained policy. The public verifier loads that policy itself; consumers
+cannot supply signer sets, signature callbacks, or a current-tip selector.
+
+One typed initialization binds the ordinary validation receipt and final
+attestation to the repository, issue, initial PR, and exact initial head. Its
+maintained anchor digest deterministically derives the persistent lifecycle ID
+and canonical genesis event identity. Genesis establishes Draft state with
+review/remediation at zero, no Ready or exceptional history, and explicit
+Cycle-3 absence. Every later authority preserves the initialization digest,
+verifies its predecessor and separately signed typed event, then derives
+counters and history without accepting a caller-supplied result.
+
+The maintained verifier accepts only one canonical serialized evidence bundle.
+Its mandatory duplicate-aware parser rejects duplicate or unknown fields,
+non-finite JSON, noncanonical encodings, and malformed evidence before internal
+normalization. It authenticates the complete chain, accepted event and authority
+signers, repository, delivery issue, lifecycle, PR, exact 40- or 64-hex Git
+heads, finite counters, Ready/Draft history, and exceptional
+recovery/continuation history.
+Head advancement, exceptional events, and authorized PR rebinding retain the
+persistent lifecycle and cannot reset counters. Its normalized binding is
+available to future consumers, but ordinary delivery evidence does not require
+it until a consumer explicitly adopts it.
+
+An empty initialization set is the valid fail-closed pre-adoption state. Once a
+delivery issue is enrolled, the registry permits exactly one initialization
+root for that issue; replacement PRs continue it through `PR_REBOUND`. The
+maintained current-terminal selector changes as authorized transitions are
+adopted, including same-head transitions. Verification rejects a valid stale
+prefix unless its final authority digest, current PR, and current head all match
+that independently installed selector. Evidence and consumer expectations
+cannot nominate their own current terminal authority.
+
+This boundary performs no review-event loop, late-feedback processing, Ready or
+Draft mutation, replacement orchestration, merge automation, or other lifecycle
+orchestration. Those responsibilities remain outside this primitive.
+
+## Lifecycle-publication boundary
+
+`scripts/secpal_pr_review/lifecycle_publication.py` has exactly two enrollment
+modes. `NATIVE_LIFECYCLE` requires the maintained #750 initialization root and
+complete authenticated transition chain from inception. A genuinely pre-#750
+delivery may instead use exactly one explicitly authorized
+`LEGACY_ADOPTION_CHECKPOINT`. That domain-separated artifact is signed by the
+maintained legacy-adoption role using credential material cryptographically
+distinct from ordinary, lifecycle-transition, and publication signers. It
+states that its finite baseline is trusted at the migration boundary; it does
+not claim that evidence which never existed was reconstructed later. Consumers
+can distinguish native proof from the legacy migration trust root.
+
+After either root, all successors are normal #750 transitions. A legacy
+checkpoint, lifecycle identity, counters, Ready history, recovery history, and
+continuation history cannot be replaced or reset, and no second checkpoint or
+re-enrollment is permitted.
+
+Dynamic publication is one global linear journal on the protected branch
+`refs/heads/secpal-lifecycle-publications`. Installed policy fixes the GitHub
+endpoint, exact branch, ruleset identity, required deletion and
+non-fast-forward prohibitions, publication signer role, and legacy-adoption
+signer role. The verifier authenticates that live ruleset, resolves the branch
+tip once, and thereafter verifies immutable ancestry. The newest valid event
+for one lifecycle is CURRENT; an older signed event remains historical evidence
+but cannot become CURRENT after a successor.
+
+Server protection supplies rollback/deletion resistance. Exact predecessor
+lease advancement supplies cooperative concurrency safety; it is not the
+rollback trust anchor. Publication Git transport uses an isolated bare
+repository and a closed environment that ignores ambient Git configuration,
+URL rewrites, HOME, PATH, askpass/SSH overrides, agents, and loader injection.
+Current verification accepts no caller path, remote, branch, signer set, key,
+verifier callback, checkpoint, or terminal digest.
+
+Native enrollment must match the maintained #750 adoption boundary. After that
+first journal entry, a private publication-only verifier authenticates the
+maintained initialization root and complete signed #750 successor chain without
+requiring each successor to equal the static enrollment-time tip. Protected
+journal ancestry and the exact lifecycle-local predecessor select CURRENT.
+The ordinary public #750 verifier retains its maintained-current-tip check, and
+no caller-accessible skip flag exists. Legacy enrollment likewise must end
+exactly at its checkpoint terminal; every later transition is a separate
+journal advancement.
+
+The closed mutation vocabulary remains `ENROLL_EXISTING_LIFECYCLE` and
+`ADVANCE_CURRENT_TERMINAL`. Missing authorization or protection, native
+evidence without its maintained root, duplicate migration, stale journal
+prefixes, unknown documents, wrong signers, cross-identity replay, and
+predecessor/CAS drift fail closed. Zero enrollment remains the valid
+pre-adoption state.
+
+This boundary publishes authority; it does not derive lifecycle semantics,
+implement two-parent integration, or orchestrate the full finite workflow.
+
 ## Explicit CI and readiness path
 
 This separate path exists only when the current user instruction explicitly

@@ -51,6 +51,63 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-28 - Authenticate Lifecycle Authority Publication
+
+**Added:**
+
+- distinct native #750 enrollment and one-time, explicitly authorized legacy
+  adoption checkpoints that do not claim nonexistent historical proof
+- a signed global current-terminal journal on a live protected publication
+  branch with immutable predecessor binding and exact compare-and-swap
+  advancement
+- fail-closed coverage for rollback/deletion, hostile Git configuration, stale
+  terminal replay, consumer self-selection, concurrent writers, migration and
+  publication signer separation, cross-identity substitution, PR rebinding,
+  and exceptional continuation
+- exact legacy-checkpoint enrollment terminals, a cryptographically distinct
+  legacy-adoption credential, and native journal successors whose currentness
+  comes from protected ancestry without weakening ordinary #750 current-tip
+  verification
+
+---
+
+## 2026-08-28 - Authenticate Persistent Delivery Lifecycle Authority
+
+**Added:**
+
+- a closed, versioned, signed lifecycle-authority chain that derives finite
+  review, remediation, Ready/Draft, exceptional recovery/continuation, head,
+  and pull-request continuity facts from authenticated predecessor and event
+  evidence
+- an independent verifier and stable downstream binding that reject consumer
+  self-assertion while leaving ordinary delivery evidence unchanged until
+  explicit adoption
+- maintained registry trust anchors, concrete SSH/OpenPGP detached-signature
+  verification, deterministic delivery initialization, mandatory canonical raw
+  evidence parsing, and exact SHA-1/SHA-256 Git object identity validation
+
+**Fixed:**
+
+- require the installed maintained policy to select the exact current terminal
+  lifecycle authority, reject same-head stale prefixes, and permit only one
+  initialization root per delivery issue across replacement PRs
+- reject malformed non-string transition kinds through the lifecycle-domain
+  exception boundary and run lifecycle-authority regressions in every complete
+  registered validation
+
+---
+
+## 2026-08-28 - Clarify Public Provider And Managed Operations Ownership
+
+**Changed:**
+
+- refined ADR-023 so portable provider adapters, qualification, monitoring,
+  notification, recovery, and capacity capabilities remain public while private
+  operations owns customer/fleet policy, placement, commercial decisions, and
+  managed orchestration
+- made detector mutation authority, provider-product evidence, and the
+  overriding Never-in-Git boundary explicit
+
 ## 2026-08-26 - Stop Requiring Up-To-Date Pull Request Branches
 
 **Changed:**

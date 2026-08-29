@@ -872,6 +872,63 @@ expected = [
 ]
 assert [item["repository"] for item in registry["repositories"]] == expected
 
+governance = next(
+    item for item in registry["repositories"]
+    if item["repository"] == "SecPal/.github"
+)
+publication_policy = governance["lifecycle_authority_policy"]
+assert publication_policy["publication_branch"] == (
+    "refs/heads/secpal-lifecycle-publications"
+)
+assert publication_policy["publication_ruleset_id"] == 21769814
+assert publication_policy["publication_required_rules"] == [
+    "deletion", "non_fast_forward"
+]
+assert publication_policy["legacy_adoption_signer_identities"]
+legacy_identities = set(publication_policy["legacy_adoption_signer_identities"])
+assert legacy_identities <= {
+    signer["identity"] for signer in publication_policy["signers"]
+}
+routine_identities = set().union(*(
+    set(publication_policy[name])
+    for name in (
+        "transition_signer_identities",
+        "authority_signer_identities",
+        "publication_signer_identities",
+    )
+))
+assert legacy_identities.isdisjoint(routine_identities)
+signers = {
+    signer["identity"]: signer for signer in publication_policy["signers"]
+}
+legacy_credentials = {
+    credential
+    for identity in legacy_identities
+    for credential in (
+        signers[identity]["ssh_public_keys"]
+        + signers[identity]["openpgp_fingerprints"]
+    )
+}
+routine_credentials = {
+    credential
+    for identity in set(signers) - legacy_identities
+    for credential in (
+        signers[identity]["ssh_public_keys"]
+        + signers[identity]["openpgp_fingerprints"]
+    )
+}
+assert legacy_credentials.isdisjoint(routine_credentials)
+assert [
+    command["argv"] for command in governance["focused_validation"]
+] == [
+    ["python3", "-m", "unittest", "tests/secpal-resolve-fixed-threads-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-pr-review-actions-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-lifecycle-authority-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-lifecycle-publication-unit.py"],
+    ["./tests/secpal-pr-review-skill-policy.sh"],
+    ["./tests/secpal-pr-review-skill-integration.sh"],
+], "SecPal/.github must register lifecycle authority and publication regressions unconditionally"
+
 frontend_entries = [
     item for item in registry["repositories"]
     if item["repository"] == "SecPal/frontend"

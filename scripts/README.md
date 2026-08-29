@@ -135,6 +135,70 @@ See [Finite SecPal PR review workflow](../docs/secpal-pr-review-workflow.md) for
 explicit invocation, state limits, classification, guarded action ordering,
 registry decisions, recovery, and post-merge rollout prerequisites.
 
+### `secpal_pr_review/lifecycle_authority.py`
+
+Defines the reusable, orchestration-independent delivery-lifecycle authority.
+Version 1.0 uses the maintained canonical JSON/digest functions and closed,
+domain-separated initialization, transition authorization, authority snapshot,
+and evidence-bundle schemas. A registry-anchored initialization binds ordinary
+delivery receipt/attestation identity and deterministically derives the
+persistent lifecycle and canonical Draft genesis. Every later snapshot is
+derived by independently verifying the complete predecessor and event chains;
+callers cannot provide counters, Ready history, exceptional history, or a new
+lifecycle identity as resulting authority.
+
+`verify_lifecycle_authority` accepts only canonical serialized lifecycle
+evidence. It loads signer roles, SSH keys, OpenPGP fingerprints, formats, and
+one initialization root per enrolled delivery issue from the installed
+maintained repository registry. The same policy independently selects the exact
+current terminal authority digest, PR, and head, so same-head stale prefixes
+cannot nominate themselves as current. Empty anchors remain valid before
+explicit adoption; replacement PRs continue the original root through
+`PR_REBOUND`. The verifier invokes concrete `ssh-keygen`/GnuPG verification.
+Duplicate fields, noncanonical JSON, consumer-preparsed mappings, and Git OIDs
+other than exactly 40 or 64 lowercase hexadecimal characters fail closed.
+`lifecycle_authority_binding` derives a stable digest and exact verified facts
+for explicit adoption by later receipts or attestations. Existing delivery
+validation does not call this module and continues to use the ordinary
+one-parent evidence path.
+The lifecycle-authority suite is an unconditional registered validation command.
+
+### `secpal_pr_review/lifecycle_publication.py`
+
+Publishes lifecycle authority on one protected, append-only global journal
+branch outside delivery trees. Native enrollment requires the maintained #750
+root and full authenticated history. A genuinely pre-#750 lifecycle instead
+uses exactly one dedicated-role-signed `LEGACY_ADOPTION_CHECKPOINT`, explicitly
+marking its imported baseline as a migration trust decision rather than
+retroactively invented proof. Every successor after either root uses normal
+issue #750 transition derivation.
+
+The legacy-adoption credential is cryptographically distinct from ordinary,
+lifecycle-transition, and publication credentials, with overlap rejected while
+loading maintained policy. Enrollment stops exactly at the checkpoint terminal;
+post-checkpoint state is accepted only as a later journal advancement.
+
+Static policy fixes the GitHub remote, exact
+`refs/heads/secpal-lifecycle-publications` branch, live ruleset ID, deletion and
+non-fast-forward prohibitions, publication signer role, and migration signer
+role. The verifier authenticates that protection, resolves the branch once, and
+uses immutable ancestry to select the newest event for each lifecycle. Lease
+CAS prevents concurrent writer races; live branch protection independently
+prevents rollback and deletion.
+
+All transport uses a controlled temporary bare repository and closed Git
+environment. The public reader accepts repository/issue expectations but no
+repository path, remote, branch, signer set, key, verifier callback, migration
+checkpoint, or caller-selected terminal digest. Empty journals remain valid
+before adoption. The publication suite is an unconditional registered
+validation command.
+
+Native enrollment initially satisfies #750's maintained current-tip boundary.
+Once enrolled, a private publication-only verifier authenticates later complete
+successor chains from #750 while protected journal ancestry selects CURRENT. The
+ordinary #750 public verifier remains strict, and callers receive no flag or
+alternate trust input that can bypass its current-tip check.
+
 ## Work Graph
 
 ### `secpal-work-graph.py`
