@@ -24,6 +24,7 @@ PR_QUERY = """query AdvisoryPullRequest($owner: String!, $name: String!, $number
     pullRequest(number: $number) {
       number
       url
+      body
       additions
       deletions
       changedFiles
@@ -175,6 +176,8 @@ def main(argv=None, *, stdout=None, stderr=None) -> int:
                 )
             document = pr_advisory.assess(
                 pull_request=pull["url"],
+                pull_request_key=f"{arguments.repo}#{arguments.pr}",
+                pull_request_body=str(pull.get("body") or ""),
                 primary_issue=primary,
                 closing_issues=closing,
                 graph=graphs[primary],

@@ -84,6 +84,64 @@ class DeliveryGraphAdvisoryTests(TestCase):
         self.assertFalse(findings["PRIMARY_ISSUE_BLOCKED"]["mechanically_blocking"])
         self.assertTrue(all(item["advisory"] for item in report["findings"]))
 
+    def test_unready_leaf_reports_canonical_resolver_reasons_even_when_not_blocked(self):
+        report = pr_advisory.assess(
+            pull_request=f"{REPO}#800",
+            primary_issue=key(674),
+            closing_issues=(key(674),),
+            graph=resolution(leaf(674, has_acceptance_criteria=False)),
+        )
+
+        finding = report["findings"][0]
+        self.assertEqual(finding["code"], "PRIMARY_ISSUE_NOT_READY")
+        self.assertFalse(finding["graph_state"]["blocked"])
+        self.assertIn("missing_acceptance_criteria", finding["graph_state"]["reasons"])
+        self.assertIn("missing_acceptance_criteria", finding["evidence"])
+
+    def test_competing_primary_claim_excludes_current_pull_request(self):
+        graph = resolution(
+            leaf(
+                674,
+                claims=(
+                    model.Claim("current", key(800)),
+                    model.Claim("competitor", key(801)),
+                ),
+            )
+        )
+
+        report = pr_advisory.assess(
+            pull_request=f"https://github.com/{REPO}/pull/800",
+            pull_request_key=key(800),
+            primary_issue=key(674),
+            closing_issues=(key(674),),
+            graph=graph,
+        )
+
+        finding = report["findings"][0]
+        self.assertEqual(finding["code"], "COMPETING_PRIMARY_DELIVERY_CLAIM")
+        self.assertIn(key(801), finding["evidence"])
+        self.assertNotIn(key(800), finding["evidence"])
+
+    def test_parent_reference_must_match_native_parent_and_root_must_omit_it(self):
+        nested = pr_advisory.assess(
+            pull_request=f"{REPO}#800",
+            pull_request_body="Fixes #674\n\nPart of: #999\n",
+            primary_issue=key(674),
+            closing_issues=(key(674),),
+            graph=resolution(leaf(667, children=(key(674),)), leaf(674, parent=key(667))),
+        )
+        standalone = pr_advisory.assess(
+            pull_request=f"{REPO}#801",
+            pull_request_body="Fixes #674\n\nPart of: not-an-issue\n",
+            primary_issue=key(674),
+            closing_issues=(key(674),),
+            graph=resolution(leaf(674)),
+        )
+
+        self.assertEqual(nested["findings"][0]["code"], "PARENT_REFERENCE_MISMATCH")
+        self.assertIn(key(667), nested["findings"][0]["evidence"])
+        self.assertEqual(standalone["findings"][0]["code"], "UNEXPECTED_PARENT_REFERENCE")
+
 
 class EngineeringObservationTests(TestCase):
     def test_each_judgment_observation_maps_to_one_concise_canonical_rule(self):
@@ -284,6 +342,17 @@ class AdvisoryCommandTests(TestCase):
         self.assertEqual(status, 0)
         self.assertIn('"status": "not_a_delivery_pr"', stdout.getvalue())
         load_snapshot.assert_not_called()
+
+    def test_workflow_pins_node_22_before_installing_parser_dependencies(self):
+        workflow = (ROOT / ".github/workflows/pr-governance-advisory.yml").read_text(
+            encoding="utf-8"
+        )
+
+        setup = workflow.index("uses: actions/setup-node@")
+        version = workflow.index('node-version: "22.x"')
+        install = workflow.index("run: npm ci")
+        self.assertLess(setup, version)
+        self.assertLess(version, install)
 
 
 if __name__ == "__main__":

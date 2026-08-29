@@ -15,6 +15,7 @@ from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
 from . import replanning, resolver
+from .model import parse_node_key
 
 SCHEMA = "secpal-pr-advisory/v1"
 CONTRACT = "docs/work-graph-contract.md"
@@ -129,6 +130,7 @@ def _graph_state(graph: resolver.Resolution, issue: str) -> dict[str, Any]:
             "blocked": False,
             "malformed": True,
             "reasons": [node.unresolved_reason or "not_in_resolution"],
+            "claims": [],
         }
     return {
         "role": "leaf" if state.leaf else "non_leaf",
@@ -137,7 +139,21 @@ def _graph_state(graph: resolver.Resolution, issue: str) -> dict[str, Any]:
         "blocked": state.blocked,
         "malformed": state.malformed,
         "reasons": list(state.reasons),
+        "claims": [claim.pull_request for claim in state.claims],
     }
+
+
+def _expected_parent_line(issue: str, parent: str) -> str:
+    """Render the section 5.2 line from canonical native placement."""
+
+    repository, _ = parse_node_key(issue)
+    parent_repository, parent_number = parse_node_key(parent)
+    reference = (
+        f"#{parent_number}"
+        if parent_repository == repository
+        else f"https://github.com/{parent_repository}/issues/{parent_number}"
+    )
+    return f"Part of: {reference}"
 
 
 def _finding(
@@ -171,6 +187,8 @@ def _finding(
 def assess(
     *,
     pull_request: str,
+    pull_request_key: str | None = None,
+    pull_request_body: str = "",
     primary_issue: str,
     closing_issues: Sequence[str],
     graph: resolver.Resolution,
@@ -184,6 +202,86 @@ def assess(
 
     primary_state = _graph_state(graph, primary_issue)
     findings: list[dict[str, Any]] = []
+
+    if not primary_state["ready"] and not primary_state["blocked"]:
+        findings.append(
+            _finding(
+                code="PRIMARY_ISSUE_NOT_READY",
+                owning_issue=primary_issue,
+                graph_state=primary_state,
+                rule="work-graph sections 3.5 and 4.1",
+                evidence=(
+                    f"Canonical resolver reports {primary_issue} not READY: "
+                    + ", ".join(primary_state["reasons"])
+                ),
+                action="Correct the resolver-reported contract or graph condition before delivery.",
+                technically_blocking=False,
+                mechanically_blocking=False,
+            )
+        )
+
+    competing_claims = tuple(
+        claim
+        for claim in primary_state["claims"]
+        if pull_request_key is not None and claim != pull_request_key
+    )
+    if competing_claims:
+        findings.append(
+            _finding(
+                code="COMPETING_PRIMARY_DELIVERY_CLAIM",
+                owning_issue=primary_issue,
+                graph_state=primary_state,
+                rule="work-graph section 5.2",
+                evidence="Other open primary delivery claims: " + ", ".join(competing_claims),
+                action="Keep exactly one open primary delivery pull request for the leaf.",
+                technically_blocking=False,
+                mechanically_blocking=False,
+            )
+        )
+
+    node = graph.snapshot.require(primary_issue)
+    parent_reference_lines = tuple(
+        line.strip()
+        for line in pull_request_body.splitlines()
+        if line.strip().startswith("Part of:")
+    )
+    expected_parent_line = (
+        _expected_parent_line(primary_issue, node.parent)
+        if node.parent is not None
+        else None
+    )
+    if expected_parent_line is not None and parent_reference_lines != (
+        expected_parent_line,
+    ):
+        findings.append(
+            _finding(
+                code="PARENT_REFERENCE_MISMATCH",
+                owning_issue=primary_issue,
+                graph_state=primary_state,
+                rule="work-graph section 5.2",
+                evidence=(
+                    f"Canonical parent is {node.parent}; PR parent references are "
+                    + (", ".join(parent_reference_lines) if parent_reference_lines else "absent")
+                ),
+                action="Add the single exact Part of reference for the native parent.",
+                technically_blocking=False,
+                mechanically_blocking=False,
+            )
+        )
+    elif node.parent is None and node.parent_observable and parent_reference_lines:
+        findings.append(
+            _finding(
+                code="UNEXPECTED_PARENT_REFERENCE",
+                owning_issue=primary_issue,
+                graph_state=primary_state,
+                rule="work-graph section 5.2",
+                evidence="Standalone root leaf has Part of lines: "
+                + ", ".join(parent_reference_lines),
+                action="Remove Part of from a standalone root delivery pull request.",
+                technically_blocking=False,
+                mechanically_blocking=False,
+            )
+        )
 
     issue_graphs = dict(closing_graphs or {})
     for issue in dict.fromkeys(closing_issues):

@@ -301,6 +301,10 @@ native closing-issue relationships, delegates every graph predicate to the
 canonical resolver, and reports the owning issue, graph state, violated rule,
 and an action. A reported finding exits successfully and is emitted as a GitHub
 warning; only incomplete or invalid evidence makes the command fail.
+Resolver-provided readiness reasons and execution claims drive the corresponding
+advisories. The gate also compares the PR's exact `Part of` line with the native
+parent already present in that resolver snapshot; it does not derive placement
+from PR prose.
 
 ```bash
 GH_TOKEN="$(gh auth token)" \
