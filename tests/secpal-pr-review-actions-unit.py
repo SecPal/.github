@@ -6596,7 +6596,7 @@ class FastPathTests(TestCase):
             lifecycle=verified_lifecycle,
         )
         lifecycle_authority = SimpleNamespace(
-            ExpectedLifecycle=lambda **values: SimpleNamespace(**values),
+            ExpectedLifecycle=SimpleNamespace,
             LifecycleAuthorityError=ValueError,
         )
         lifecycle_publication = SimpleNamespace(
