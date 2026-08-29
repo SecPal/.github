@@ -102,7 +102,7 @@ body:
       description: Implementation details, design decisions, security considerations
       placeholder: |
         - Use libsodium XChaCha20-Poly1305 for encryption
-        - Store blind indexes as BYTEA in PostgreSQL
+        - Store blind indexes as BYTEA in PostgreSQL 18
     validations:
       required: false
 
