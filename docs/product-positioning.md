@@ -193,13 +193,15 @@ This contract delegates rather than duplicates established authority:
 - [ADR-023](adr/20260824-public-self-hosting-private-managed-operations-adr023.md)
   remains the accepted public-self-hosting and private-managed-operations
   boundary.
-- The ADR index keeps
+- The ADR index currently keeps
   [ADR-001](adr/20251027-event-sourcing-for-guard-book.md),
   [ADR-002](adr/20251027-opentimestamp-for-audit-trail.md), and
   [ADR-003](adr/20251027-offline-first-architecture.md) Proposed and
-  non-binding. Positioning language MUST NOT promote their Guard Book,
-  timestamping, or offline decisions, or any other unresolved domain idea, into
-  accepted architecture or implemented capability.
+  non-binding. While they remain non-binding, positioning language MUST NOT
+  promote their Guard Book, timestamping, offline, or related unresolved
+  decisions into accepted architecture or implemented capability. If their
+  authoritative ADR status changes, this contract follows the then-current
+  status.
 
 References to any accepted ADR describe decision authority only. They MUST NOT
 be represented as evidence that the accepted architecture is implemented,
