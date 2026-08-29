@@ -6329,7 +6329,19 @@ class FastPathTests(TestCase):
                 )
 
     def test_ready_integration_reconstructs_prior_policy_from_prior_commit(self) -> None:
-        registry_raw = actions.REGISTRY_PATH.read_text(encoding="utf-8")
+        registry = json.loads(actions.REGISTRY_PATH.read_text(encoding="utf-8"))
+        historical_binding = next(
+            item
+            for item in registry["repositories"]
+            if item["repository"] == "SecPal/.github"
+        )
+        historical_binding["focused_validation"] = historical_binding[
+            "focused_validation"
+        ][:4]
+        historical_validation_count = len(
+            historical_binding["focused_validation"]
+        ) + len(historical_binding["required_local_validation"])
+        registry_raw = json.dumps(registry)
         with mock.patch.object(
             actions,
             "_run_attestation_git",
@@ -6339,7 +6351,8 @@ class FastPathTests(TestCase):
                 REPO_ROOT, "a" * 40, "SecPal/.github"
             )
         self.assertEqual(binding["repository"], "SecPal/.github")
-        self.assertEqual(len(binding["validation"]), 10)
+        self.assertEqual(historical_validation_count, 10)
+        self.assertEqual(len(binding["validation"]), historical_validation_count)
         self.assertEqual(
             git_read.call_args.args[1],
             [
