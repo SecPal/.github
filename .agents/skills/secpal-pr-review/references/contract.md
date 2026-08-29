@@ -108,7 +108,9 @@ limits bound the complete invocation, and the helper resolves `gh` through the
 accepted trusted executable and environment boundary. Before each write, it
 verifies that the remaining budgets cover the minimum known cost of every
 stable target recheck and mutation plus the unavoidable first API read for
-every later unresolved tracked follow-up. Variable work-graph traversal growth
+every later tracked follow-up, including already-resolved targets. A tracked
+conversation is reported as safely dispositioned only after that live
+follow-up remains authenticated. Variable work-graph traversal growth
 remains bounded by the same shared budget and may still produce a structured
 partial failure when that growth was not knowable before an earlier write.
 
@@ -392,6 +394,44 @@ pre-adoption state.
 
 This boundary publishes authority; it does not derive lifecycle semantics,
 implement two-parent integration, or orchestrate the full finite workflow.
+
+## Finite lifecycle-orchestration boundary
+
+`scripts/secpal_pr_review/lifecycle_orchestration.py` reads the independently
+selected #752 CURRENT publication and consumes #750's derived state. It never
+accepts a caller-selected terminal. Every decision retains the lifecycle ID,
+review/remediation counters, explicit Cycle-3 absence, Ready history, recovery
+history, and continuation history.
+
+Replacement selects only `PR_REBOUND`. An exhausted Ready recovery selects only
+`EXCEPTIONAL_RECOVERY` after normal remediation is exhausted. An exact bounded
+normal remediation selects `REMEDIATION_COMPLETED`; both source-change paths
+preserve Ready and require fresh head-bound evidence. Exceptional recovery needs
+one exact, reasoned, finding- and head-bound user authorization and cannot be
+replayed. User-controlled orchestration accepts only canonical signed evidence
+bound to the exact CURRENT publication object and digest, lifecycle authority,
+PR, head, operation, reason, and scope; caller-constructed mappings fail closed.
+
+`Ready -> Draft` requires separate exact user authority for that Draft change,
+and a later `Draft -> Ready` requires another authority. Recovery, metadata,
+push, CI, or review authority never implies either transition.
+
+Review submissions, comments, threads, CI observations, reopen events, and
+validated Ready-integration observations are bounded evidence, not lifecycle
+transitions. They consume no counter and select no review request, Ready/Draft
+change, recovery, or recursive pass. One separately authorized additional
+review first appends `ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED`, then permits
+one current-head assessment and stops. The same-head transition changes no
+finite counter or Ready state, but its CURRENT predecessor binding makes replay
+stale after publication.
+
+Late feedback consumes #673's canonical classification with independent
+technical and mechanical blocker facts. P1/P2/security/authentication/integrity/
+fail-open or other material technical blockers stop merge readiness and cannot
+use the non-blocking path. `NON_BLOCKING_FOLLOWUP` additionally consumes #689's
+exact live follow-up verification. Its guarded resolution is recorded only as
+`SAFELY_DISPOSITIONED_TRACKED`, never fixed, implemented, or completed. #724's
+detached path remains limited to its exact authenticated disposition allowlist.
 
 ## Explicit CI and readiness path
 

@@ -196,6 +196,34 @@ validation does not call this module and continues to use the ordinary
 one-parent evidence path.
 The lifecycle-authority suite is an unconditional registered validation command.
 
+### `secpal_pr_review/lifecycle_orchestration.py`
+
+Authenticates the independently selected CURRENT lifecycle publication before
+selecting one bounded lifecycle action. It consumes the canonical work-graph
+classification and keeps technical and mechanical blocking independent. PR
+replacement selects `PR_REBOUND`; an explicitly authorized exhausted Ready
+recovery selects `EXCEPTIONAL_RECOVERY`, while bounded normal remediation
+selects `REMEDIATION_COMPLETED`; both preserve Ready. Explicit
+Ready/Draft changes require their exact separately reasoned authorization.
+Every user-controlled orchestration decision consumes canonical signed evidence
+bound to the exact CURRENT publication, authority, PR, head, operation, reason,
+and scope. Caller-constructed mappings have no authority.
+
+Review objects, CI observations, reopen events, validated Ready integrations,
+and completed feedback assessments are evidence-only observations. They never
+increment/reset counters, request another review, transition Draft/Ready, or
+create a recursive processing pass. A separately authorized additional review
+first appends `ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED`, then permits one
+bounded assessment and stops without consuming the single normal unrestricted-
+review counter. Publishing that same-head transition makes replay stale while
+preserving Ready and every finite counter.
+
+For `NON_BLOCKING_FOLLOWUP`, the orchestrator consumes the canonical #673
+classification and the #689 exact live follow-up verifier. The guarded resolver
+continues to authenticate commit-bound eligibility and reports the resolution
+as `SAFELY_DISPOSITIONED_TRACKED`, never fixed, implemented, or completed. The
+orchestration suite is an unconditional registered validation command.
+
 ### `secpal_pr_review/lifecycle_publication.py`
 
 Publishes lifecycle authority on one protected, append-only global journal

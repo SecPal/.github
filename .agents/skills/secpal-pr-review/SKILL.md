@@ -47,6 +47,9 @@ Immediately before resolving `OUTSIDE_PR_SCOPE + TRACKED_AS_FOLLOW_UP`, require
 the canonical work-graph reader to prove that the authenticated exact follow-up
 is accessible, open, and structurally complete. It may be blocked; resolution
 means tracked disposition, not implementation or completion.
+Apply the same live follow-up verification before an already-resolved tracked
+conversation is reported as safely dispositioned/tracked; external resolution
+alone is not authenticated tracking evidence.
 
 Invoke the resolver in write mode; omitting `--apply` is only a dry run:
 
@@ -160,6 +163,34 @@ directories above it. Use that source repository's:
 Never import or call the action helper from the evidence helper. Never add a
 mutation command to the evidence helper. Execute configured validation commands
 as argument arrays in the target repository, without a shell.
+
+## Finite lifecycle continuity
+
+When a completed-feedback workflow consumes persistent lifecycle state, use
+`scripts/secpal_pr_review/lifecycle_orchestration.py` over independently
+authenticated CURRENT publication. Never create a new lifecycle because a PR
+was replaced, recovered, reopened, pushed, reviewed again, or observed by CI.
+Never reset review/remediation counters or represent Cycle 3.
+
+After the first authorized Ready transition, keep that PR Ready during ordinary
+or exceptional source correction. A changed head requires fresh validation and
+a later bounded readiness assessment, not `Ready -> Draft -> Ready`. Perform a
+`Ready -> Draft` mutation only when the current user instruction explicitly
+authorizes that exact transition and gives its separate reason. Any later
+`Draft -> Ready` requires another explicit authorization and retains the same
+lifecycle and counters.
+
+Treat every review object and configured automated review as feedback evidence,
+not authority for another review, remediation cycle, or Draft/Ready transition.
+One explicitly authorized additional review permits one bounded current-head
+assessment and stops. Its canonical signed authorization must be bound to
+CURRENT and consumed through append-only lifecycle publication before the
+assessment; a caller-created mapping is not authority and a published
+authorization cannot be replayed. A material post-Ready blocker requires a
+user decision for any remaining bounded recovery authority. A tracked-follow-up
+resolution
+must be reported as safely dispositioned/tracked, never fixed, implemented, or
+completed, with technical and mechanical blocking stated separately.
 
 ## Run the finite invocation
 

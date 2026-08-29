@@ -1062,6 +1062,7 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_run_git",
     "_parse_eligibility_payload",
     "_tracked_follow_ups_from_payload",
+    "_tracked_follow_up_disposition_report",
     "_validate_manual_gate_evidence",
     "_validation_registry_binding",
     "load_repository_limits",
@@ -1208,6 +1209,7 @@ RESOLVER_LOOP_SITES = {
     ),
     LoopSite("for", ("validate_expected_targets",), "target.comments"),
     LoopSite("for", ("resolve_threads",), "thread_ids"),
+    LoopSite("for", ("_tracked_follow_up_disposition_report",), "thread_ids"),
     LoopSite("for", ("resolve_threads",), "enumerate(thread_ids)"),
     LoopSite("for", ("resolve_late_disposition_threads",), "thread_ids"),
     LoopSite(

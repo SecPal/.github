@@ -65,6 +65,11 @@
           "purpose": "Run lifecycle enrollment and current-terminal publication tests"
         },
         {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-lifecycle-orchestration-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run finite lifecycle-orchestration unit tests"
+        },
+        {
           "argv": ["./tests/secpal-pr-review-skill-policy.sh"],
           "working_directory": ".",
           "purpose": "Run finite skill policy tests"
@@ -139,7 +144,17 @@
         "publication_remote_url": "https://github.com/SecPal/.github.git",
         "publication_ruleset_id": 21769814,
         "publication_required_rules": ["deletion", "non_fast_forward"],
-        "delivery_initializations": []
+        "delivery_initializations": [
+          {
+            "delivery_issue": 692,
+            "pull_request": 757,
+            "initial_head_sha": "6c234f18f4a9cfe3fd80f78be31446efb4634f0c",
+            "initialization_digest": "4e071bcbfc17a20cc54b3f608f10418b3cc376eddce0dfba6ddbe54e2e53108f",
+            "current_pull_request": 757,
+            "current_head_sha": "6c234f18f4a9cfe3fd80f78be31446efb4634f0c",
+            "current_authority_digest": "0454247158d28fbef43f56935d31347c8c65528ae3b52e7dc17c866269fc06a4"
+          }
+        ]
       },
       "check_policy": {
         "require_ruleset_evidence": true,

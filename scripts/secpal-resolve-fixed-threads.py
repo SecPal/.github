@@ -388,6 +388,28 @@ class TargetRead:
     thread: ThreadState
 
 
+def _tracked_follow_up_disposition_report(
+    thread_ids: Sequence[str],
+    tracked: dict[str, FollowUpIdentity],
+    mechanically_cleared: set[str],
+) -> list[dict[str, Any]]:
+    """Report blocker facts without relabeling tracked work as implemented."""
+
+    report: list[dict[str, Any]] = []
+    for thread_id in thread_ids:
+        if thread_id not in tracked:
+            continue
+        report.append(
+            {
+                "thread_id": thread_id,
+                "technically_blocking": False,
+                "mechanically_blocking": thread_id not in mechanically_cleared,
+                "resolution_meaning": "SAFELY_DISPOSITIONED_TRACKED",
+            }
+        )
+    return report
+
+
 @dataclass(frozen=True)
 class RepositoryLimits:
     maximum_api_calls: int
@@ -2582,6 +2604,7 @@ def resolve_threads(
         if not initial_targets[thread_id].thread.is_resolved
     ]
     applied: list[str] = []
+    verified_tracked: set[str] = set()
 
     if apply:
         minimum_recheck_pages = sum(
@@ -2610,11 +2633,9 @@ def resolve_threads(
         for index, thread_id in enumerate(thread_ids):
             phase = "follow-up" if thread_id in tracked else "recheck"
             try:
-                if (
-                    not initial_targets[thread_id].thread.is_resolved
-                    and thread_id in tracked
-                ):
+                if thread_id in tracked:
                     follow_up_verifier(tracked[thread_id], budget)
+                    verified_tracked.add(thread_id)
                 phase = "recheck"
                 remaining_thread_ids = thread_ids[index:]
                 required_recheck_pages = sum(
@@ -2631,7 +2652,6 @@ def resolve_threads(
                 )
                 required_follow_up_reads = sum(
                     remaining_thread_id != thread_id
-                    and not initial_targets[remaining_thread_id].thread.is_resolved
                     and remaining_thread_id in tracked
                     for remaining_thread_id in remaining_thread_ids
                 )
@@ -2717,6 +2737,13 @@ def resolve_threads(
                     "already_resolved": already_resolved,
                     "pending": [],
                     "resolved": applied,
+                    "tracked_follow_up_dispositions": (
+                        _tracked_follow_up_disposition_report(
+                            thread_ids,
+                            tracked,
+                            (set(already_resolved) | set(applied)) & verified_tracked
+                        )
+                    ),
                     "failed": [
                         {
                             "thread_id": thread_id,
@@ -2751,6 +2778,11 @@ def resolve_threads(
         "already_resolved": already_resolved,
         "pending": pending if not apply else [],
         "resolved": applied,
+        "tracked_follow_up_dispositions": _tracked_follow_up_disposition_report(
+            thread_ids,
+            tracked,
+            (set(already_resolved) | set(applied)) & verified_tracked
+        ),
         "failed": [],
         "unattempted": [],
     }

@@ -212,9 +212,15 @@ class LifecycleAuthorityTests(TestCase):
             item for item in registry["repositories"]
             if item["repository"] == REPOSITORY
         )
+        anchors = authority._load_lifecycle_trust_policy(
+            REPOSITORY
+        ).initialization_anchors
+        self.assertEqual(len(anchors), 1)
+        self.assertEqual(anchors[0].delivery_issue, 692)
+        self.assertEqual(anchors[0].pull_request, 757)
         self.assertEqual(
-            authority._load_lifecycle_trust_policy(REPOSITORY).initialization_anchors,
-            (),
+            anchors[0].initialization_digest,
+            "4e071bcbfc17a20cc54b3f608f10418b3cc376eddce0dfba6ddbe54e2e53108f",
         )
         entry["lifecycle_authority_policy"]["delivery_initializations"] = [
             {
@@ -1024,6 +1030,18 @@ class LifecycleAuthorityTests(TestCase):
             authority.derive_state(
                 before, "HEAD_ADVANCED", "0" * 64, resulting_state={"ready": False}
             )
+
+    def test_additional_review_authorization_is_persistent_without_new_cycle(self) -> None:
+        chain = ready_chain()
+        before = chain.verify()
+        chain.append("ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED")
+        after = chain.verify()
+
+        self.assertNotEqual(after.authority_digest, before.authority_digest)
+        self.assertEqual(after.state, before.state)
+        self.assertEqual(after.state["unrestricted_review_count"], 1)
+        self.assertEqual(after.state["remediation_cycle_count"], 1)
+        self.assertTrue(after.state["cycle_3_absent"])
 
     def test_finite_budgets_and_event_replay_fail_closed(self) -> None:
         chain = reviewed_chain()

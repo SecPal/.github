@@ -61,6 +61,7 @@ TRANSITIONS = frozenset(
         "EXCEPTIONAL_RECOVERY",
         "EXCEPTIONAL_CONTINUATION",
         "PR_REBOUND",
+        "ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED",
     }
 )
 
@@ -1100,6 +1101,10 @@ def derive_state(
                 len(state["exceptional_continuation_history"]) + 1,
             )
         )
+    elif transition_kind == "ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED":
+        # Persist one exact authorization without manufacturing a review or
+        # remediation counter and without creating another lifecycle cycle.
+        pass
     return _validate_state(state)
 
 
@@ -1185,6 +1190,7 @@ def _validate_event_semantics(event: Mapping[str, Any]) -> None:
         "DRAFT_TO_READY",
         "READY_TO_DRAFT",
         "PR_REBOUND",
+        "ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED",
     } and predecessor_head is not None and event["resulting_head_sha"] != predecessor_head:
         raise LifecycleAuthorityError("selected transition cannot advance the delivery head")
     if transition in {"HEAD_ADVANCED", "REMEDIATION_COMPLETED"} and (

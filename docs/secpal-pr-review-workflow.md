@@ -171,6 +171,49 @@ implement two-parent integration. Those remain owned by #750, #692, and #745
 respectively. Repositories with no enrolled publication remain valid, while a
 consumer explicitly requesting published authority fails closed.
 
+## Finite lifecycle orchestration
+
+`scripts/secpal_pr_review/lifecycle_orchestration.py` authenticates #752 CURRENT
+publication and consumes #750 state before deciding any replacement, recovery,
+Ready/Draft, review, CI, integration-observation, additional-review, or late-
+feedback event. The decision contains the unchanged persistent lifecycle ID,
+finite counters, explicit Cycle-3 absence, Ready history, and exceptional-event
+counts. It selects at most one typed lifecycle transition and performs no
+mutation itself.
+
+Replacement uses `PR_REBOUND` and cannot create another lifecycle root.
+An already-authorized normal remediation commit advances the head with
+`REMEDIATION_COMPLETED` while preserving Ready and requiring fresh evidence.
+Exceptional recovery is available only on an exhausted Ready lifecycle with an
+exact new head, exact finding IDs, and one separately reasoned bounded user
+authorization. It preserves `Draft=false`, requires fresh head-bound evidence,
+and never selects another Ready transition. `Ready -> Draft` and any later
+`Draft -> Ready` each require their own exact user authorization and preserve
+the same lifecycle and consumed counters. User-controlled orchestration accepts
+only canonical signed authorization evidence bound to the exact CURRENT
+publication, lifecycle authority, PR, head, operation, reason, and scope;
+caller-constructed request fields are not authority.
+
+GitHub review submissions, review comments/threads, CI observations, reopen
+events, and validated Ready integrations are bounded evidence observations, not
+lifecycle events. They select no review request, counter change, recovery,
+Ready/Draft transition, or recursive processing. One explicitly authorized
+additional review permits one bounded current-head assessment and stops.
+Its signed authorization is consumed through an append-only
+`ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED` transition before assessment. That
+transition preserves Ready and all review/remediation counters while making the
+same authorization stale after publication.
+
+Late feedback consumes #673's canonical classification, including independent
+`technically_blocking` and `mechanically_blocking` facts. A high-risk or material
+technical blocker stops merge readiness and requires an explicit recovery
+decision; it cannot become Cycle 3 or a non-blocking follow-up. A canonical
+`NON_BLOCKING_FOLLOWUP` additionally requires #689's exact live open and
+structurally complete follow-up verification. Successful guarded resolution is
+reported as `SAFELY_DISPOSITIONED_TRACKED`, never fixed, implemented, or
+completed. #724 remains the separate authenticated unchanged-head path for the
+late dispositions in its exact allowlist.
+
 At session start, select the repository entry and materialize only the accepted
 Package-2.1 fields into a private session configuration: repository, default
 branch, allowed base repositories, reviewer identities, signature policy, check
