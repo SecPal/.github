@@ -714,26 +714,49 @@ Consequences:
 
 Every review finding MUST be classified before any code changes, because the
 class determines where the work belongs and whether the current leaf may still
-close:
+close. Use exactly one of these classifications, in priority order:
 
-1. **In-contract defect** — the finding breaks a promise the current leaf makes.
-   Fix it in the current pull request, with evidence. After that pull request
-   merged, the same defect becomes its own leaf instead (section 5.2).
-2. **Missing prerequisite** — the finding cannot be resolved without work that
-   does not exist yet. Handle it under section 7.1.
-3. **New responsibility** — the finding is real but outside the current
-   contract. Handle it under section 7.2; the current leaf still closes.
-4. **Non-blocking follow-up** — the finding is real, outside the contract, and
-   not urgent. Track it as its own node when it clears section 7.5, and mention
-   it in the pull request otherwise.
-5. **Invalid finding** — the finding does not survive classification. Reply with
-   the evidence that refutes it and change no code.
+1. `IN_CONTRACT_DEFECT` — the finding breaks a promise the current leaf makes.
+   It stays in the current delivery contract and is corrected with evidence,
+   whether discovered before or after the current evidence freeze. After the
+   pull request merged, the same defect becomes its own leaf instead (section
+   5.2).
+2. `MISSING_PREREQUISITE` — the finding cannot be resolved without work that
+   does not exist yet. Create or attach the prerequisite under section 7.1 and
+   block the current leaf with the exact native dependency.
+3. `NEW_RESPONSIBILITY` — the finding is real but outside the current contract.
+   Create the canonical owned sibling or child under section 7.2 before scope
+   expands; the current leaf still closes.
+4. `PROMOTE_TO_SUB_EPIC` — the current unit contains multiple independently
+   deliverable contracts. Promote and split it under section 7.3 before those
+   contracts are implemented.
+5. `NON_BLOCKING_FOLLOWUP` — post-freeze work is real, outside the current
+   contract, and technically non-blocking. Track it as one canonical owned
+   follow-up when it clears section 7.5 without inventing a dependency.
+6. `INVALID_FINDING` — the finding does not survive classification. Record or
+   reply with the evidence that refutes it and change neither code nor graph.
 
-Classes 3 and 4 MUST NOT be answered by growing the current pull request, and
-class 5 MUST NOT be answered by a defensive code change made only to silence the
-reviewer. No class obliges a new test: a finding justifies one only when it names
-a contract distinction or failure class the existing evidence cannot express
-(section 10.2).
+Every classification preserves two independent boolean facts:
+
+- `technically_blocking` says whether the finding makes the current delivery
+  contract technically incorrect or unsafe to deliver.
+- `mechanically_blocking` says whether a required process or authenticated
+  conversation disposition prevents the delivery workflow from advancing.
+
+Neither fact implies the other, and mechanical blocking alone never creates a
+native dependency. A valid P3 or informational finding may be mechanically
+blocking without being technically blocking. P1, P2, security,
+authentication, integrity, and fail-open findings are always technically
+blocking and MUST NOT use `NON_BLOCKING_FOLLOWUP` merely to clear mechanical
+protection. In particular, evidence freeze timing never makes such an
+in-contract defect deferrable.
+
+`NEW_RESPONSIBILITY` and `NON_BLOCKING_FOLLOWUP` MUST NOT be answered by growing
+the current pull request, and `INVALID_FINDING` MUST NOT be answered by a
+defensive code change made only to silence the reviewer. No classification
+obliges a new test: a finding justifies one only when it names a contract
+distinction or failure class the existing evidence cannot express (section
+10.2).
 
 ## 9. Evidence Classes
 

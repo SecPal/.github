@@ -119,6 +119,21 @@ Apply these rules only when the session says it is running inside Polyscope.
   between siblings, or silently substitute another issue for
   the explicit user selection.
 
+## Canonical Work-Graph Replanning
+
+- Delegate all classification and graph-placement semantics to
+  `docs/work-graph-contract.md`; do not restate or reinterpret them here.
+- When that contract requires a graph change, use the owning `SecPal/.github`
+  checkout's `python3 scripts/secpal-work-graph-replan.py plan REQUEST.json`,
+  inspect the finite plan, then use
+  `python3 scripts/secpal-work-graph-replan.py apply PLAN.json --apply` before
+  implementation scope expands. Inspect the exact recovery evidence if an
+  invocation stops after a write; use the bounded `recover` command only for a
+  known outcome.
+- The command requires the exact authenticated actor and unchanged canonical
+  state; stale state or graph drift fails closed. Never edit a plan to bypass
+  those checks or use this boundary as a generic GitHub mutation command.
+
 ## Work-graph semantics
 
 - Node types, native hierarchy and dependency meaning, sibling order, `READY`,

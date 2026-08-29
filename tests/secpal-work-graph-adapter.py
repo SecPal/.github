@@ -25,7 +25,7 @@ from unittest import TestCase, main
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from secpal_work_graph import cli, github, model, resolver  # noqa: E402
+from secpal_work_graph import cli, github, model, replan_cli, replanning, resolver  # noqa: E402
 
 REPO = "SecPal/.github"
 OTHER_REPO = "SecPal/api"
@@ -79,6 +79,7 @@ def issue_payload(
     claims=(),
     sub_cursor=None,
     dependency_cursor=None,
+    blocking_cursor=None,
 ):
     owner, name = repository.split("/")
 
@@ -95,12 +96,13 @@ def issue_payload(
             "repository": {
                 "issue": {
                     "number": number,
+                    "id": f"ISSUE_{number}",
                     "title": f"Issue {number}",
                     "url": f"https://github.com/{owner}/{name}/issues/{number}",
                     "state": state,
                     "stateReason": state_reason,
                     "body": body,
-                    "repository": {"nameWithOwner": repository},
+                    "repository": {"id": f"REPO_{owner}_{name}", "nameWithOwner": repository},
                     "parent": reference(parent) if parent else None,
                     "labels": {
                         "pageInfo": {"hasNextPage": False, "endCursor": None},
@@ -120,7 +122,18 @@ def issue_payload(
                         },
                         "nodes": [reference(value) for value in blocked_by],
                     },
-                    "blocking": {"totalCount": blocking},
+                    "blocking": {
+                        "totalCount": len(blocking) if isinstance(blocking, (list, tuple)) else blocking,
+                        "pageInfo": {
+                            "hasNextPage": blocking_cursor is not None,
+                            "endCursor": blocking_cursor,
+                        },
+                        "nodes": (
+                            [reference(value) for value in blocking]
+                            if isinstance(blocking, (list, tuple))
+                            else []
+                        ),
+                    },
                     "closedByPullRequestsReferences": {
                         "pageInfo": {"hasNextPage": False, "endCursor": None},
                         "nodes": [
@@ -201,6 +214,231 @@ class AdapterTestCase(TestCase):
 
 
 class SnapshotLoadingTests(AdapterTestCase):
+    @staticmethod
+    def prerequisite_request(current, external):
+        return {
+            "current_issue": current,
+            "finding": {
+                "classification": "MISSING_PREREQUISITE",
+                "technically_blocking": True,
+                "mechanically_blocking": True,
+                "timing": "BEFORE_FREEZE",
+                "risk": ["P2"],
+            },
+            "operation": {
+                "kind": "INSERT_PREREQUISITE",
+                "issue": {
+                    "alias": "prerequisite",
+                    "repository": REPO,
+                    "title": "Prerequisite",
+                    "body": "## Acceptance Criteria\n\n- Complete.\n",
+                },
+                "move_current_blockers": [external],
+            },
+        }
+
+    def test_replanning_upgrades_an_external_blocker_before_rewiring_it(self):
+        current = f"{REPO}#2"
+        external = f"{OTHER_REPO}#44"
+        script = {
+            f"WorkGraphIssue:{REPO}#1:": issue_payload(1, sub_issues=(current,)),
+            f"WorkGraphIssue:{REPO}#2:": issue_payload(
+                2, parent=f"{REPO}#1", blocked_by=(external,)
+            ),
+            f"WorkGraphIssue:{OTHER_REPO}#44:": issue_payload(
+                44, repository=OTHER_REPO, blocking=(current,)
+            ),
+        }
+        request = self.prerequisite_request(current, external)
+
+        snapshot, _ = replan_cli._load_plan_snapshot(self.adapter(script), request)
+        self.assertTrue(snapshot.require(external).blocking_observable)
+        plan = replanning.build_plan(snapshot, request, actor="alice")
+        self.assertEqual(
+            [step.kind for step in plan.steps if "BLOCKED_BY" in step.kind],
+            ["ADD_BLOCKED_BY", "ADD_BLOCKED_BY", "REMOVE_BLOCKED_BY"],
+        )
+
+    def test_replanning_retains_endpoint_observability_after_rewiring(self):
+        current = f"{REPO}#2"
+        prerequisite = f"{REPO}#3"
+        external = f"{OTHER_REPO}#44"
+        script = {
+            f"WorkGraphIssue:{REPO}#1:": issue_payload(
+                1, sub_issues=(prerequisite, current)
+            ),
+            f"WorkGraphIssue:{REPO}#2:": issue_payload(
+                2, parent=f"{REPO}#1", blocked_by=(prerequisite,)
+            ),
+            f"WorkGraphIssue:{REPO}#3:": issue_payload(
+                3, parent=f"{REPO}#1", blocked_by=(external,), blocking=(current,)
+            ),
+            f"WorkGraphIssue:{OTHER_REPO}#44:": issue_payload(
+                44, repository=OTHER_REPO, blocking=(prerequisite,)
+            ),
+        }
+
+        snapshot, _ = replan_cli._load_plan_snapshot(
+            self.adapter(script), self.prerequisite_request(current, external)
+        )
+
+        self.assertTrue(snapshot.require(external).blocking_observable)
+
+    def test_replanning_upgrades_an_external_prerequisite_before_promotion(self):
+        current = f"{REPO}#2"
+        external = f"{OTHER_REPO}#44"
+        script = {
+            f"WorkGraphIssue:{REPO}#1:": issue_payload(1, sub_issues=(current,)),
+            f"WorkGraphIssue:{REPO}#2:": issue_payload(
+                2, parent=f"{REPO}#1", blocked_by=(external,)
+            ),
+            f"WorkGraphIssue:{OTHER_REPO}#44:": issue_payload(
+                44, repository=OTHER_REPO, blocking=(current,)
+            ),
+        }
+        request = {
+            "current_issue": current,
+            "finding": {
+                "classification": "PROMOTE_TO_SUB_EPIC",
+                "technically_blocking": True,
+                "mechanically_blocking": True,
+                "timing": "BEFORE_FREEZE",
+                "risk": ["P2"],
+            },
+            "operation": {
+                "kind": "PROMOTE_TO_SUB_EPIC",
+                "children": [
+                    {
+                        "alias": "contract-a",
+                        "repository": REPO,
+                        "title": "Contract A",
+                        "body": "## Acceptance Criteria\n\n- A.\n",
+                    },
+                    {
+                        "alias": "contract-b",
+                        "repository": REPO,
+                        "title": "Contract B",
+                        "body": "## Acceptance Criteria\n\n- B.\n",
+                    },
+                ],
+                "blocked_by_placement": {external: ["contract-a"]},
+                "blocking_placement": {},
+            },
+        }
+
+        snapshot, _ = replan_cli._load_plan_snapshot(self.adapter(script), request)
+        self.assertTrue(snapshot.require(external).blocking_observable)
+        plan = replanning.build_plan(snapshot, request, actor="alice")
+        self.assertEqual(plan.steps[2].kind, "ADD_BLOCKED_BY")
+
+    def test_replanning_upgrades_an_external_dependent_before_promotion(self):
+        current = f"{REPO}#2"
+        dependent = f"{OTHER_REPO}#45"
+        script = {
+            f"WorkGraphIssue:{REPO}#1:": issue_payload(1, sub_issues=(current,)),
+            f"WorkGraphIssue:{REPO}#2:": issue_payload(
+                2, parent=f"{REPO}#1", blocking=(dependent,)
+            ),
+            f"WorkGraphIssue:{OTHER_REPO}#45:": issue_payload(
+                45, repository=OTHER_REPO, blocked_by=(current,)
+            ),
+        }
+        request = {
+            "current_issue": current,
+            "finding": {
+                "classification": "PROMOTE_TO_SUB_EPIC",
+                "technically_blocking": True,
+                "mechanically_blocking": True,
+                "timing": "BEFORE_FREEZE",
+                "risk": ["P2"],
+            },
+            "operation": {
+                "kind": "PROMOTE_TO_SUB_EPIC",
+                "children": [
+                    {
+                        "alias": "contract-a",
+                        "repository": REPO,
+                        "title": "Contract A",
+                        "body": "## Acceptance Criteria\n\n- A.\n",
+                    },
+                    {
+                        "alias": "contract-b",
+                        "repository": REPO,
+                        "title": "Contract B",
+                        "body": "## Acceptance Criteria\n\n- B.\n",
+                    },
+                ],
+                "blocked_by_placement": {},
+                "blocking_placement": {dependent: ["contract-b"]},
+            },
+        }
+
+        snapshot, _ = replan_cli._load_plan_snapshot(self.adapter(script), request)
+        self.assertTrue(snapshot.require(dependent).blocking_observable)
+        replanning.build_plan(snapshot, request, actor="alice")
+
+    def test_replanning_rejects_incomplete_reverse_edge_pagination(self):
+        current = f"{REPO}#2"
+        external = f"{OTHER_REPO}#44"
+        partial = issue_payload(
+            44,
+            repository=OTHER_REPO,
+            blocking=(current,),
+            blocking_cursor="BLOCK1",
+        )
+        script = {
+            f"WorkGraphIssue:{REPO}#1:": issue_payload(1, sub_issues=(current,)),
+            f"WorkGraphIssue:{REPO}#2:": issue_payload(
+                2, parent=f"{REPO}#1", blocked_by=(external,)
+            ),
+            f"WorkGraphIssue:{OTHER_REPO}#44:": partial,
+            f"WorkGraphBlocking:{OTHER_REPO}#44:BLOCK1": with_error(
+                page("blocking", ()), "FORBIDDEN", "blocking", "nodes", "0"
+            ),
+        }
+
+        with self.assertRaisesRegex(replanning.PlanError, "incomplete"):
+            replan_cli._load_plan_snapshot(
+                self.adapter(script), self.prerequisite_request(current, external)
+            )
+
+    def test_replanning_rejects_inconsistent_endpoint_directions(self):
+        current = f"{REPO}#2"
+        external = f"{OTHER_REPO}#44"
+        script = {
+            f"WorkGraphIssue:{REPO}#1:": issue_payload(1, sub_issues=(current,)),
+            f"WorkGraphIssue:{REPO}#2:": issue_payload(
+                2, parent=f"{REPO}#1", blocked_by=(external,)
+            ),
+            f"WorkGraphIssue:{OTHER_REPO}#44:": issue_payload(
+                44, repository=OTHER_REPO, blocking=()
+            ),
+        }
+
+        with self.assertRaisesRegex(replanning.PlanError, "disagree"):
+            replan_cli._load_plan_snapshot(
+                self.adapter(script), self.prerequisite_request(current, external)
+            )
+
+    def test_completed_endpoint_read_still_rejects_the_intermediate_native_limit(self):
+        current = f"{REPO}#2"
+        external = f"{OTHER_REPO}#44"
+        dependents = tuple(f"{OTHER_REPO}#{number}" for number in range(100, 149))
+        script = {
+            f"WorkGraphIssue:{REPO}#1:": issue_payload(1, sub_issues=(current,)),
+            f"WorkGraphIssue:{REPO}#2:": issue_payload(
+                2, parent=f"{REPO}#1", blocked_by=(external,)
+            ),
+            f"WorkGraphIssue:{OTHER_REPO}#44:": issue_payload(
+                44, repository=OTHER_REPO, blocking=(current, *dependents)
+            ),
+        }
+        request = self.prerequisite_request(current, external)
+        snapshot, _ = replan_cli._load_plan_snapshot(self.adapter(script), request)
+
+        with self.assertRaisesRegex(replanning.PlanError, "canonical structural"):
+            replanning.build_plan(snapshot, request, actor="alice")
+
     def test_snapshot_upgrades_a_dependency_read_when_it_becomes_scope(self):
         dependency_first = {
             "WorkGraphIssue:SecPal/.github#1:": issue_payload(
