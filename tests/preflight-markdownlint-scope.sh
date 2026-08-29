@@ -91,6 +91,23 @@ if __name__ == "__main__":
     unittest.main()
 EOF
 
+cat >"$workspace/tests/secpal-pr-advisory-unit.py" <<'EOF'
+"""Fixture stand-in that proves preflight invokes the advisory PR gate tests."""
+
+import os
+import unittest
+
+
+class PreflightFixtureTest(unittest.TestCase):
+    def test_fixture_runs(self):
+        with open(os.environ["TEST_LOG"], "a", encoding="utf-8") as log:
+            log.write("secpal-pr-advisory\n")
+
+
+if __name__ == "__main__":
+    unittest.main()
+EOF
+
 cat >"$workspace/tests/secpal-work-graph-replan-unit.py" <<'EOF'
 """Fixture stand-in for preflight's replanning operation tests."""
 
@@ -245,6 +262,7 @@ fi
 if ! grep -Fxq 'validate-ai-instructions' "$test_log" \
   || ! grep -Fxq 'validate-copilot-instructions' "$test_log" \
   || ! grep -Fxq 'polyscope-work-graph-advisory' "$test_log" \
+  || ! grep -Fxq 'secpal-pr-advisory' "$test_log" \
   || ! grep -Fxq 'evidence-architecture-governance' "$test_log" \
   || ! grep -Fxq 'postgresql-18-baseline-governance' "$test_log"; then
   echo "Expected preflight to execute the selected fixture compatibility and advisory regression tests" >&2

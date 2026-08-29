@@ -153,6 +153,15 @@
             "current_pull_request": 757,
             "current_head_sha": "6c234f18f4a9cfe3fd80f78be31446efb4634f0c",
             "current_authority_digest": "0454247158d28fbef43f56935d31347c8c65528ae3b52e7dc17c866269fc06a4"
+          },
+          {
+            "delivery_issue": 674,
+            "pull_request": 758,
+            "initial_head_sha": "325c0a3af7fd0f0d7143de7e448ea4fa7c875a65",
+            "initialization_digest": "2756e83b52c8af10c30926cb1d62d5501819a790158f560cf0f608587df321e9",
+            "current_pull_request": 758,
+            "current_head_sha": "325c0a3af7fd0f0d7143de7e448ea4fa7c875a65",
+            "current_authority_digest": "1c8f6466cb440b40df60172003604597530d4a478dbac5a622b64f4223aac050"
           }
         ]
       },

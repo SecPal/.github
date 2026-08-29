@@ -110,6 +110,9 @@ jobs:
       - name: Run Polyscope advisory contract tests
         run: python3 -m unittest tests/polyscope-work-graph-advisory.py
 
+      - name: Run advisory PR gate behavior tests
+        run: python3 -m unittest tests/secpal-pr-advisory-unit.py
+
       - name: Run graph-first replanning operation tests
         run: python3 -m unittest tests/secpal-work-graph-replan-unit.py
 

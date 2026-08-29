@@ -294,6 +294,32 @@ Requirements: an authenticated `gh` CLI, Python 3, and `npm ci` so the
 present. The tool reads through `gh api graphql` only, performs no mutation, and
 persists no state.
 
+### `secpal-pr-advisory.py`
+
+Reports #674 delivery-PR findings without blocking a merge. It reads GitHub's
+native closing-issue relationships, delegates every graph predicate to the
+canonical resolver, and reports the owning issue, graph state, violated rule,
+and an action. A reported finding exits successfully and is emitted as a GitHub
+warning; only incomplete or invalid evidence makes the command fail.
+Resolver-provided readiness reasons and execution claims drive the corresponding
+advisories. The gate also compares the PR's exact `Part of` line with the native
+parent already present in that resolver snapshot; it does not derive placement
+from PR prose.
+
+```bash
+GH_TOKEN="$(gh auth token)" \
+  scripts/secpal-pr-advisory.py --repo SecPal/.github --pr 800
+```
+
+An explicit assessment may be supplied with `--assessment FILE`. Its closed
+`secpal-pr-advisory/v1` document contains `observations`, `feedback`,
+`lifecycle_claims`, and `review_smells`. Judgment observations are explicit
+review evidence, never inferred from line, test, or mutation counts. Feedback
+is validated by the existing #673 classifier, so #692 lifecycle/disposition
+semantics remain authoritative. The gate never interprets those counts as
+standalone failures and never mutates graph, PR, lifecycle, review, or check
+state.
+
 ## Validation Scripts
 
 ### `check-domains.sh`

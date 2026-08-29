@@ -134,6 +134,19 @@ Apply these rules only when the session says it is running inside Polyscope.
   state; stale state or graph drift fails closed. Never edit a plan to bypass
   those checks or use this boundary as a generic GitHub mutation command.
 
+## Advisory Delivery-PR Gate
+
+- Before presenting a delivery PR as technically complete, run the owning
+  `SecPal/.github` checkout's `scripts/secpal-pr-advisory.py` for that PR.
+  Treat its findings as concise advisory review evidence, not merge blockers.
+- Delegate graph state to the canonical resolver and lifecycle/disposition
+  validity to the maintained lifecycle authority. Do not infer either from PR
+  prose, reset lifecycle counters, or restart review after the stable-feedback
+  stop condition.
+- Supply explicit judgment observations only when review evidence establishes
+  the violated contract rule. Test, line, and mutation counts may guide review
+  but never constitute a finding by themselves.
+
 ## Work-graph semantics
 
 - Node types, native hierarchy and dependency meaning, sibling order, `READY`,
