@@ -9,6 +9,20 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-29 - Add Advisory Delivery-PR Governance Gate
+
+**Added:**
+
+- report-only PR findings that consume canonical graph placement and maintained
+  lifecycle/disposition semantics without turning findings into merge blockers
+- concise owning-issue, graph-state, rule, action, and independent
+  technical/mechanical status in every applicable finding
+
+**Changed:**
+
+- keep test, changed-line, and mutation counts as review smells rather than
+  standalone governance failures
+
 ## 2026-08-29 - Preserve Finite Review Lifecycle Orchestration
 
 **Added:**

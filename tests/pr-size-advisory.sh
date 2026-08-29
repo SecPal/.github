@@ -125,6 +125,21 @@ if __name__ == "__main__":
     unittest.main()
 EOF
 
+  cat >"$repository/tests/secpal-pr-advisory-unit.py" <<'EOF'
+"""Fixture stand-in for preflight's advisory PR gate tests."""
+
+import unittest
+
+
+class PreflightFixtureTest(unittest.TestCase):
+    def test_fixture_runs(self):
+        pass
+
+
+if __name__ == "__main__":
+    unittest.main()
+EOF
+
   cat >"$repository/tests/secpal-work-graph-replan-unit.py" <<'EOF'
 """Fixture stand-in for preflight's replanning operation tests."""
 

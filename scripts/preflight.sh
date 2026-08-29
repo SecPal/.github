@@ -407,6 +407,7 @@ if [ -f tests/polyscope-state-audit.sh ]; then
 fi
 
 python3 -m unittest tests/polyscope-work-graph-advisory.py
+python3 -m unittest tests/secpal-pr-advisory-unit.py
 python3 -m unittest tests/secpal-work-graph-replan-unit.py
 python3 -m unittest tests/polyscope-work-graph-replanning.py
 
