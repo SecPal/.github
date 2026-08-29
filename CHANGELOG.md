@@ -9,6 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-29 - Establish Product And Public Positioning Authority
+
+**Added:**
+
+- one organization-wide semantic contract for SecPal's product identity,
+  integrated-system direction, product boundary, user value, Open Source
+  character, and honest pre-1.0 positioning
+- explicit separation of stable positioning principles from mutable product,
+  implementation, architecture-detail, prioritisation, and roadmap decisions
+- public-positioning overclaim boundaries and a successor classification for
+  the historical positioning established by #340 and #344
+
 ## 2026-08-29 - Enforce Work-Graph Delivery Gates
 
 **Changed:**
