@@ -288,7 +288,8 @@ accepted signer. It also verifies the maintained #750/#752 protected-journal
 CURRENT publication and binds its lifecycle authority digest, proof mode,
 publication identity, exceptional recovery, and unused exceptional
 continuation. Its claimed receipt must equal the prior commit trailer,
-reconstructed ordinary receipt, and final-attestation receipt. The mutable tag
+ordinary receipt reconstructed with the registry committed at that prior head,
+and final-attestation receipt. The mutable tag
 ref is resolved once; target, signature, signer, trailer, and diagnostics all
 use the resulting immutable annotated-tag OID. OpenPGP signing-subkey output is
 accepted only when its authenticated primary fingerprint is the configured

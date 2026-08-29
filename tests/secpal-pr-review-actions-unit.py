@@ -6328,6 +6328,27 @@ class FastPathTests(TestCase):
                     live_observation=None,
                 )
 
+    def test_ready_integration_reconstructs_prior_policy_from_prior_commit(self) -> None:
+        registry_raw = actions.REGISTRY_PATH.read_text(encoding="utf-8")
+        with mock.patch.object(
+            actions,
+            "_run_attestation_git",
+            return_value=SimpleNamespace(returncode=0, stdout=registry_raw, stderr=""),
+        ) as git_read:
+            binding = actions._prior_delivery_registry_binding(
+                REPO_ROOT, "a" * 40, "SecPal/.github"
+            )
+        self.assertEqual(binding["repository"], "SecPal/.github")
+        self.assertEqual(len(binding["validation"]), 10)
+        self.assertEqual(
+            git_read.call_args.args[1],
+            [
+                "show",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:.agents/skills/"
+                "secpal-pr-review/references/repositories.json",
+            ],
+        )
+
     def test_ready_integration_prior_authority_rejects_delivery_evidence_drift(
         self,
     ) -> None:
@@ -6950,6 +6971,11 @@ class FastPathTests(TestCase):
                 ) as observe,
                 mock.patch.object(
                     actions, "_verify_ready_integration_published_authority"
+                ),
+                mock.patch.object(
+                    actions,
+                    "_prior_delivery_registry_binding",
+                    return_value=binding,
                 ),
             ):
                 self.assertEqual(actions.main(argv), 0)
@@ -7604,6 +7630,11 @@ class FastPathTests(TestCase):
             mock.patch.object(actions, "_run_attestation_git", side_effect=git_result),
             mock.patch.object(
                 actions,
+                "_prior_delivery_registry_binding",
+                return_value=registry,
+            ),
+            mock.patch.object(
+                actions,
                 "_commit_validation_receipt_digest",
                 return_value=receipt_a["receipt_digest"],
             ),
@@ -7755,6 +7786,11 @@ class FastPathTests(TestCase):
                 ),
                 mock.patch.object(fast_path, "verify_validation_attestation"),
                 mock.patch.object(actions, "_run_attestation_git", side_effect=moving_run),
+                mock.patch.object(
+                    actions,
+                    "_prior_delivery_registry_binding",
+                    return_value=fast_registry(),
+                ),
                 self.assertRaisesRegex(
                     fast_path.SecurityBlocker, "prior authority tag binding is invalid"
                 ),
@@ -7780,6 +7816,11 @@ class FastPathTests(TestCase):
                     return_value={"receipt_digest": receipt_digest},
                 ),
                 mock.patch.object(fast_path, "verify_validation_attestation"),
+                mock.patch.object(
+                    actions,
+                    "_prior_delivery_registry_binding",
+                    return_value=fast_registry(),
+                ),
                 mock.patch.object(
                     actions,
                     "_verify_signature_policy_identity",
@@ -7815,6 +7856,11 @@ class FastPathTests(TestCase):
                     return_value={"receipt_digest": receipt_digest},
                 ),
                 mock.patch.object(fast_path, "verify_validation_attestation"),
+                mock.patch.object(
+                    actions,
+                    "_prior_delivery_registry_binding",
+                    return_value=fast_registry(),
+                ),
                 self.assertRaisesRegex(
                     fast_path.SecurityBlocker, "tag object is invalid"
                 ),
@@ -7837,6 +7883,11 @@ class FastPathTests(TestCase):
                     return_value={"receipt_digest": receipt_digest},
                 ),
                 mock.patch.object(fast_path, "verify_validation_attestation"),
+                mock.patch.object(
+                    actions,
+                    "_prior_delivery_registry_binding",
+                    return_value=fast_registry(),
+                ),
                 self.assertRaisesRegex(
                     fast_path.SecurityBlocker, "tag binding is invalid"
                 ),

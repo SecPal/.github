@@ -66,6 +66,8 @@ output binds the exact conflict paths and requires each to be explicitly
 changed or deleted, with no extra paths or retained text conflict markers. This
 does not relax the ordinary sole-parent path, create or push an integration,
 change Ready state, read post-push checks, or authorize merge automation.
+Historical receipt reconstruction reads the registry blob from the immutable
+prior delivery commit rather than applying a later registry to older evidence.
 
 Parent 1 additionally requires a closed prior-authority manifest authenticated
 by a signed annotated tag and independently verified ordinary receipt, final

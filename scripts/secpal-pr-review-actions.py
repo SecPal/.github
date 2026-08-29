@@ -4867,6 +4867,49 @@ def _verify_ready_integration_published_authority(
         )
 
 
+def _prior_delivery_registry_binding(
+    repository_root: Path, head: str, repository: str
+) -> dict[str, Any]:
+    """Read validation policy from the immutable prior delivery commit."""
+
+    result = _run_attestation_git(
+        repository_root,
+        [
+            "show",
+            f"{head}:.agents/skills/secpal-pr-review/references/repositories.json",
+        ],
+        allow_failure=True,
+    )
+    if result.returncode != 0:
+        raise fast_path.SecurityBlocker(
+            "prior delivery validation registry is unavailable"
+        )
+    try:
+        registry = json.loads(
+            result.stdout, object_pairs_hook=_reject_duplicate_json_object
+        )
+        entries = registry["repositories"]
+    except (KeyError, TypeError, json.JSONDecodeError, PlanError) as exc:
+        raise fast_path.SecurityBlocker(
+            "prior delivery validation registry is malformed"
+        ) from exc
+    matches = [
+        item
+        for item in entries
+        if isinstance(item, dict) and item.get("repository") == repository
+    ] if isinstance(entries, list) else []
+    if len(matches) != 1:
+        raise fast_path.SecurityBlocker(
+            "prior delivery validation registry identity is ambiguous"
+        )
+    try:
+        return _fast_registry_binding(matches[0])
+    except (KeyError, TypeError, RegistryError) as exc:
+        raise fast_path.SecurityBlocker(
+            "prior delivery validation registry entry is invalid"
+        ) from exc
+
+
 def _verify_ready_integration_prior_authority(
     *,
     arguments: argparse.Namespace,
@@ -4916,12 +4959,15 @@ def _verify_ready_integration_prior_authority(
         or tree != authority["prior_delivery_tree_sha"]
     ):
         raise fast_path.SecurityBlocker("prior delivery evidence identity changed")
+    prior_binding = _prior_delivery_registry_binding(
+        repository_root, head, arguments.repo
+    )
     expected_prior_receipt = fast_path.create_validation_receipt(
         repository=arguments.repo,
         head_sha=reviewed.head_sha,
         validated_tree_sha=tree,
-        registry=binding,
-        command_set=binding["validation"],
+        registry=prior_binding,
+        command_set=prior_binding["validation"],
         successful_result=True,
         reviewed_state=reviewed,
         manual_gate_evidence=attestation.get("manual_gate_evidence"),
@@ -4943,8 +4989,8 @@ def _verify_ready_integration_prior_authority(
         attestation,
         repository=arguments.repo,
         head_sha=head,
-        registry=binding,
-        command_set=binding["validation"],
+        registry=prior_binding,
+        command_set=prior_binding["validation"],
         reviewed_state=reviewed,
         commit_parent_sha=parent,
         commit_tree_sha=tree,

@@ -17,6 +17,8 @@ Log of notable changes to SecPal organization defaults (newest first).
   instead of the pull request's creation-time base snapshot
 - require the prior Ready manifest to match the independently verified current
   #750/#752 publication, including exceptional recovery and continuation state
+- reconstruct historical delivery receipts with the registry committed at the
+  authenticated prior head instead of applying later registry extensions
 
 ## 2026-08-28 - Harden Ready Integration Recovery Evidence
 
