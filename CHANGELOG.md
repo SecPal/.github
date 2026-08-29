@@ -14,10 +14,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 **Changed:**
 
 - refuse non-ready execution and delivery pull requests that violate the
-  canonical leaf, blocker, primary-delivery, parent-reference, or graph-first
-  replanning rules
-- require the established work-graph PR context without weakening any existing
-  managed required-check inventory
+  canonical leaf, blocker, complete primary-delivery-claim, sole-closing-leaf,
+  or parent-reference rules
+- preserve graph-first responsibility classification as an explicit review
+  judgment instead of claiming arbitrary mechanical architecture inference
+- require a distinct hard work-graph context while preserving the established
+  advisory context and every managed required-check inventory
+- invalidate and recompute hard results after bounded native issue and canonical
+  graph-replan mutations without polling or changing strict-base semantics
 
 ## 2026-08-29 - Add Advisory Delivery-PR Governance Gate
 

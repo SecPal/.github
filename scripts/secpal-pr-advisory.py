@@ -191,11 +191,16 @@ def main(argv=None, *, stdout=None, stderr=None) -> int:
                 feedback=feedback,
                 lifecycle_claims=lifecycle,
                 smells=smells,
+                enforced_primary_override=(
+                    arguments.primary_issue if arguments.enforce else None
+                ),
             )
     except (OSError, ValueError, github.GitHubError, MarkdownParserUnavailable, json.JSONDecodeError) as error:
         print(f"advisory gate evidence unavailable: {error}", file=stderr)
         return 3
 
+    if arguments.enforce:
+        document = pr_advisory.enforced_projection(document)
     hard_findings = pr_advisory.hard_gate_findings(document)
     document["gate_status"] = (
         "blocked" if arguments.enforce and hard_findings else "pass"
@@ -203,6 +208,17 @@ def main(argv=None, *, stdout=None, stderr=None) -> int:
     document["enforced"] = arguments.enforce
     document["hard_finding_count"] = len(hard_findings)
     document["hard_finding_codes"] = [finding["code"] for finding in hard_findings]
+    document["human_judgment_status"] = (
+        "reviewed_evidence_supplied"
+        if arguments.assessment is not None
+        else "explicit_review_required"
+    )
+    document["human_judgment_rule"] = "work-graph section 7.2"
+    document["human_judgment_finding_codes"] = [
+        finding["code"]
+        for finding in document["findings"]
+        if finding["code"] in pr_advisory.HUMAN_JUDGMENT_CODES
+    ]
     print(json.dumps(document, indent=2, sort_keys=True), file=stdout)
     for finding in document["findings"]:
         is_hard = arguments.enforce and finding in hard_findings

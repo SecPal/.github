@@ -20,7 +20,8 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "Validate PR Evidence",
     "Validate PR Title And Body Language",
     "Validate Signed PR Commits",
-    "Work-Graph PR Advisory"
+    "Work-Graph PR Advisory",
+    "Work-Graph PR Gate"
   ],
   "GuardGuide": [
     "check-conflicts / Detect Git Conflict Markers",

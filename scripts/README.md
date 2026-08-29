@@ -304,8 +304,9 @@ Hard findings exit with status 1 and emit a GitHub error; incomplete or invalid
 evidence fails closed separately.
 Resolver-provided readiness reasons and execution claims drive the corresponding
 advisories. The gate also compares the PR's exact `Part of` line with the native
-parent already present in that resolver snapshot; it does not derive placement
-from PR prose.
+parent already present in that resolver snapshot. That field is extracted by
+the maintained Markdown parser only from top-level paragraph metadata, so
+quoted, fenced, commented, and container examples are not authoritative.
 
 ```bash
 GH_TOKEN="$(gh auth token)" \
@@ -319,11 +320,24 @@ review evidence, never inferred from line, test, or mutation counts. Feedback
 is validated by the existing #673 classifier, so #692 lifecycle/disposition
 semantics remain authoritative. The gate never interprets those counts as
 standalone failures and never mutates graph, PR, lifecycle, review, or check
-state. The hard set is limited to execution readiness, one primary delivery
-claim and closing leaf, native-parent references, direct non-leaf closure,
-blocked delivery, and explicit independent responsibility without graph-first
-replanning. Other #674 judgment findings remain advisory, preserving #736's
-separate evidence-architecture responsibility.
+state. The hard set is limited to execution readiness, complete and sole
+primary-delivery claim evidence, one closing leaf, native-parent references,
+direct non-leaf closure, and blocked delivery. Independent-responsibility
+classification remains a mandatory section-7.2 review judgment: the report
+names that obligation explicitly but does not falsely claim source-code
+inference can enforce it. Other #674 judgment findings remain advisory,
+preserving #736's separate evidence-architecture responsibility.
+
+The required hard result is named `Work-Graph PR Gate`, distinct from the
+preserved `Work-Graph PR Advisory` context. Mutable issue body/state events run
+`secpal-work-graph-gate-refresh.py`, which first publishes `pending` for the
+bounded set of open PR heads and then recomputes the same canonical gate.
+GitHub requires both a same-name Actions check and commit status when both
+exist, so a prior head-bound success cannot hide the refreshed result. Native
+sub-issue and dependency mutations that GitHub Actions cannot trigger directly
+consume this same refresh through the maintained graph-replan mutation
+boundary. Candidate overflow, unreadable graph evidence, authentication
+failure, or publication failure stops fail closed; no polling is used.
 
 ## Validation Scripts
 

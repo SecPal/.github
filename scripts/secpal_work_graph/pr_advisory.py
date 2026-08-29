@@ -11,11 +11,12 @@ either authority.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
-from . import replanning, resolver
+from . import acceptance_criteria, replanning, resolver
 from .model import parse_node_key
 
 SCHEMA = "secpal-pr-advisory/v1"
@@ -29,15 +30,21 @@ MAX_EVIDENCE_LENGTH = 500
 HARD_GATE_CODES = frozenset(
     {
         "PRIMARY_ISSUE_NOT_READY",
+        "PRIMARY_DELIVERY_CLAIMS_UNOBSERVABLE",
+        "PRIMARY_ISSUE_OVERRIDE_MISMATCH",
         "COMPETING_PRIMARY_DELIVERY_CLAIM",
         "PARENT_REFERENCE_MISMATCH",
         "UNEXPECTED_PARENT_REFERENCE",
         "PR_CLOSES_NON_LEAF",
         "PRIMARY_ISSUE_BLOCKED",
         "MULTIPLE_DELIVERY_CONTRACTS",
-        "SECOND_RESPONSIBILITY_WITHOUT_REPLANNING",
     }
 )
+
+# Section 7.2 is a mandatory review judgment, but source files cannot establish
+# independent responsibility without arbitrary architecture inference.  Keep
+# the obligation explicit without claiming that the mechanical gate proves it.
+HUMAN_JUDGMENT_CODES = frozenset({"SECOND_RESPONSIBILITY_WITHOUT_REPLANNING"})
 
 
 @dataclass(frozen=True)
@@ -150,6 +157,7 @@ def _graph_state(graph: resolver.Resolution, issue: str) -> dict[str, Any]:
             "malformed": True,
             "reasons": [node.unresolved_reason or "not_in_resolution"],
             "claims": [],
+            "claims_observable": False,
             "children": list(node.children),
             "blocked_by": list(node.blocked_by),
         }
@@ -161,6 +169,7 @@ def _graph_state(graph: resolver.Resolution, issue: str) -> dict[str, Any]:
         "malformed": state.malformed,
         "reasons": list(state.reasons),
         "claims": [claim.pull_request for claim in state.claims],
+        "claims_observable": node.claims_observable,
         "children": list(node.children),
         "blocked_by": list(node.blocked_by),
     }
@@ -191,10 +200,14 @@ def _finding(
     mechanically_blocking: bool | None = None,
     lifecycle_rule: str | None = None,
 ) -> dict[str, Any]:
-    if not isinstance(evidence, str) or not evidence or len(evidence) > MAX_EVIDENCE_LENGTH:
+    if not isinstance(evidence, str) or not evidence:
         raise ValueError(
-            f"finding evidence must contain 1..{MAX_EVIDENCE_LENGTH} characters"
+            "finding evidence must be a non-empty string"
         )
+    if len(evidence) > MAX_EVIDENCE_LENGTH:
+        digest = hashlib.sha256(evidence.encode("utf-8")).hexdigest()
+        suffix = f"… [sha256:{digest}]"
+        evidence = evidence[: MAX_EVIDENCE_LENGTH - len(suffix)] + suffix
     item: dict[str, Any] = {
         "code": code,
         "owning_issue": owning_issue,
@@ -226,6 +239,26 @@ def hard_gate_findings(report: Mapping[str, Any]) -> tuple[Mapping[str, Any], ..
     return tuple(selected)
 
 
+def enforced_projection(report: Mapping[str, Any]) -> dict[str, Any]:
+    """Project hard findings as mechanical blockers without changing advisory truth."""
+
+    projected = dict(report)
+    findings = report.get("findings")
+    if not isinstance(findings, list):
+        raise ValueError("assessment findings are malformed")
+    projected_findings: list[dict[str, Any]] = []
+    for finding in findings:
+        if not isinstance(finding, Mapping) or not isinstance(finding.get("code"), str):
+            raise ValueError("assessment finding is malformed")
+        item = dict(finding)
+        item["enforced"] = item["code"] in HARD_GATE_CODES
+        if item["enforced"]:
+            item["mechanically_blocking"] = True
+        projected_findings.append(item)
+    projected["findings"] = projected_findings
+    return projected
+
+
 def assess(
     *,
     pull_request: str,
@@ -239,11 +272,33 @@ def assess(
     feedback: Sequence[FeedbackClaim] = (),
     lifecycle_claims: Sequence[LifecycleClaim] = (),
     smells: ReviewSmells | None = None,
+    enforced_primary_override: str | None = None,
 ) -> dict[str, Any]:
     """Return concise report-only findings for one delivery pull request."""
 
     primary_state = _graph_state(graph, primary_issue)
     findings: list[dict[str, Any]] = []
+
+    unique_closures = tuple(dict.fromkeys(closing_issues))
+    if enforced_primary_override is not None and unique_closures != (
+        enforced_primary_override,
+    ):
+        findings.append(
+            _finding(
+                code="PRIMARY_ISSUE_OVERRIDE_MISMATCH",
+                owning_issue=primary_issue,
+                graph_state=primary_state,
+                rule="work-graph section 5.2",
+                evidence=(
+                    f"Enforced primary override {enforced_primary_override} does not equal "
+                    "the sole closing issue: "
+                    + (", ".join(unique_closures) if unique_closures else "absent")
+                ),
+                action="Bind enforced delivery to the sole machine-recognizable closing leaf.",
+                technically_blocking=False,
+                mechanically_blocking=False,
+            )
+        )
 
     if not primary_state["ready"] and not primary_state["blocked"]:
         findings.append(
@@ -281,12 +336,25 @@ def assess(
             )
         )
 
+    if not primary_state["claims_observable"]:
+        findings.append(
+            _finding(
+                code="PRIMARY_DELIVERY_CLAIMS_UNOBSERVABLE",
+                owning_issue=primary_issue,
+                graph_state=primary_state,
+                rule="work-graph section 5.2",
+                evidence=(
+                    f"Canonical claim evidence for {primary_issue} is incomplete; "
+                    "sole primary delivery authority cannot be established"
+                ),
+                action="Restore complete native closing-PR claim evidence before delivery.",
+                technically_blocking=False,
+                mechanically_blocking=False,
+            )
+        )
+
     node = graph.snapshot.require(primary_issue)
-    parent_reference_lines = tuple(
-        line.strip()
-        for line in pull_request_body.splitlines()
-        if line.strip().startswith("Part of:")
-    )
+    parent_reference_lines = acceptance_criteria.parse([pull_request_body])[0].parent_references
     expected_parent_line = (
         _expected_parent_line(primary_issue, node.parent)
         if node.parent is not None
@@ -359,7 +427,6 @@ def assess(
             )
         )
 
-    unique_closures = tuple(dict.fromkeys(closing_issues))
     if len(unique_closures) > 1:
         findings.append(
             _finding(

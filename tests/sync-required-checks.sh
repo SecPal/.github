@@ -105,7 +105,8 @@ EXPECTED_CONTEXTS_JSON='{
     "Validate PR Evidence",
     "Validate PR Title And Body Language",
     "Validate Signed PR Commits",
-    "Work-Graph PR Advisory"
+    "Work-Graph PR Advisory",
+    "Work-Graph PR Gate"
   ],
   "GuardGuide": [
     "check-conflicts / Detect Git Conflict Markers",
@@ -240,11 +241,17 @@ assert_payload_has_context "$github_payload" "Validate PR Evidence"
 assert_payload_has_context "$github_payload" "Validate PR Title And Body Language"
 assert_payload_has_context "$github_payload" "Validate Signed PR Commits"
 assert_payload_has_context "$github_payload" "Work-Graph PR Advisory"
+assert_payload_has_context "$github_payload" "Work-Graph PR Gate"
 
 for non_github_repo in GuardGuide android api contracts frontend guardguide.de secpal.app; do
   if jq -e '.checks | any(.context == "Work-Graph PR Advisory")' >/dev/null \
     <<<"${payloads[$non_github_repo]}"; then
     echo "The repository-local work-graph gate context must not be invented for unmanaged caller workflows" >&2
+    exit 1
+  fi
+  if jq -e '.checks | any(.context == "Work-Graph PR Gate")' >/dev/null \
+    <<<"${payloads[$non_github_repo]}"; then
+    echo "The repository-local hard-gate context must not be invented for unavailable caller workflows" >&2
     exit 1
   fi
 done

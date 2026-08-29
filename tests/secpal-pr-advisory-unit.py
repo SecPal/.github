@@ -122,6 +122,20 @@ class DeliveryGraphAdvisoryTests(TestCase):
         self.assertIn(key(801), finding["evidence"])
         self.assertNotIn(key(800), finding["evidence"])
 
+    def test_unobservable_primary_claims_are_not_treated_as_an_empty_set(self):
+        report = pr_advisory.assess(
+            pull_request=f"https://github.com/{REPO}/pull/800",
+            pull_request_key=key(800),
+            primary_issue=key(674),
+            closing_issues=(key(674),),
+            graph=resolution(leaf(674, claims_observable=False)),
+        )
+
+        finding = report["findings"][0]
+        self.assertEqual(finding["code"], "PRIMARY_DELIVERY_CLAIMS_UNOBSERVABLE")
+        self.assertFalse(finding["graph_state"]["claims_observable"])
+        self.assertEqual(finding["rule"], "work-graph section 5.2")
+
     def test_parent_reference_must_match_native_parent_and_root_must_omit_it(self):
         nested = pr_advisory.assess(
             pull_request=f"{REPO}#800",
@@ -141,6 +155,43 @@ class DeliveryGraphAdvisoryTests(TestCase):
         self.assertEqual(nested["findings"][0]["code"], "PARENT_REFERENCE_MISMATCH")
         self.assertIn(key(667), nested["findings"][0]["evidence"])
         self.assertEqual(standalone["findings"][0]["code"], "UNEXPECTED_PARENT_REFERENCE")
+
+    def test_parent_reference_ignores_non_authoritative_markdown_examples(self):
+        body = """Fixes #674
+
+Part of: #667
+
+> Part of: #999
+
+```text
+Part of: #998
+```
+
+<!-- Part of: #997 -->
+"""
+        report = pr_advisory.assess(
+            pull_request=f"{REPO}#800",
+            pull_request_body=body,
+            primary_issue=key(674),
+            closing_issues=(key(674),),
+            graph=resolution(leaf(667, children=(key(674),)), leaf(674, parent=key(667))),
+        )
+
+        self.assertEqual(report["findings"], [])
+
+    def test_oversized_evidence_is_bounded_without_erasing_finding_identity(self):
+        report = pr_advisory.assess(
+            pull_request=f"{REPO}#800",
+            pull_request_body="Part of: " + ("x" * 900),
+            primary_issue=key(674),
+            closing_issues=(key(674),),
+            graph=resolution(leaf(674)),
+        )
+
+        finding = report["findings"][0]
+        self.assertEqual(finding["code"], "UNEXPECTED_PARENT_REFERENCE")
+        self.assertLessEqual(len(finding["evidence"]), pr_advisory.MAX_EVIDENCE_LENGTH)
+        self.assertRegex(finding["evidence"], r"… \[sha256:[0-9a-f]{64}\]$")
 
 
 class EngineeringObservationTests(TestCase):
@@ -419,8 +470,83 @@ class AdvisoryCommandTests(TestCase):
         )
 
         hard = pr_advisory.hard_gate_findings(report)
-        self.assertEqual([item["code"] for item in hard], ["SECOND_RESPONSIBILITY_WITHOUT_REPLANNING"])
-        self.assertEqual(hard[0]["rule"], "work-graph section 7.2")
+        self.assertEqual(hard, ())
+        self.assertEqual(
+            report["findings"][0]["code"], "SECOND_RESPONSIBILITY_WITHOUT_REPLANNING"
+        )
+        self.assertEqual(report["findings"][0]["rule"], "work-graph section 7.2")
+        self.assertIn(
+            "SECOND_RESPONSIBILITY_WITHOUT_REPLANNING",
+            pr_advisory.HUMAN_JUDGMENT_CODES,
+        )
+
+    def test_enforced_primary_override_must_equal_the_sole_closing_issue(self):
+        pull = {
+            "url": f"https://github.com/{REPO}/pull/800",
+            "body": "Fixes #674\n",
+            "additions": 1,
+            "deletions": 0,
+            "closingIssuesReferences": {
+                "nodes": [{"number": 674, "repository": {"nameWithOwner": REPO}}]
+            },
+        }
+        snapshots = {
+            key(674): model.build_snapshot(
+                [leaf(674, blocked_by=(key(673),)), leaf(673)]
+            ),
+            key(700): model.build_snapshot([leaf(700)]),
+        }
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (
+            patch.object(advisory_cli.github, "GitHubReadAdapter", return_value=object()),
+            patch.object(advisory_cli, "_pull_request", return_value=pull),
+            patch.object(
+                advisory_cli.github,
+                "load_snapshot",
+                side_effect=lambda _adapter, issue: (snapshots[issue], issue),
+            ),
+        ):
+            status = advisory_cli.main(
+                [
+                    "--repo",
+                    REPO,
+                    "--pr",
+                    "800",
+                    "--primary-issue",
+                    key(700),
+                    "--enforce",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+
+        self.assertEqual(status, 1)
+        report = __import__("json").loads(stdout.getvalue())
+        self.assertIn("PRIMARY_ISSUE_OVERRIDE_MISMATCH", report["hard_finding_codes"])
+        self.assertIn("work-graph section 5.2", stderr.getvalue())
+
+    def test_enforced_projection_marks_only_hard_findings_mechanically_blocking(self):
+        report = pr_advisory.assess(
+            pull_request=f"{REPO}#800",
+            primary_issue=key(674),
+            closing_issues=(key(674),),
+            graph=resolution(
+                leaf(674, blocked_by=(key(673),)),
+                leaf(673, state=model.CLOSED, state_reason="not_planned"),
+            ),
+            observations=(
+                pr_advisory.Observation("UNNAMED_EVIDENCE", "review-only observation"),
+            ),
+        )
+
+        projected = pr_advisory.enforced_projection(report)
+        findings = {item["code"]: item for item in projected["findings"]}
+        self.assertTrue(findings["PRIMARY_ISSUE_BLOCKED"]["mechanically_blocking"])
+        self.assertTrue(findings["PRIMARY_ISSUE_BLOCKED"]["enforced"])
+        self.assertIsNone(findings["EVIDENCE_WITHOUT_NAMED_CONTRACT"]["mechanically_blocking"])
+        self.assertFalse(findings["EVIDENCE_WITHOUT_NAMED_CONTRACT"]["enforced"])
+        original = {item["code"]: item for item in report["findings"]}
+        self.assertFalse(original["PRIMARY_ISSUE_BLOCKED"]["mechanically_blocking"])
 
     def test_reported_finding_is_a_successful_warning_not_a_gate_failure(self):
         pull = {
@@ -488,6 +614,16 @@ class AdvisoryCommandTests(TestCase):
         install = workflow.index("run: npm ci")
         self.assertLess(setup, version)
         self.assertLess(version, install)
+
+    def test_workflow_keeps_advisory_and_hard_context_identities_distinct(self):
+        workflow = (ROOT / ".github/workflows/pr-governance-advisory.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("name: Work-Graph PR Advisory", workflow)
+        self.assertIn("name: Work-Graph PR Gate", workflow)
+        self.assertIn("python3 scripts/secpal-pr-advisory.py --enforce", workflow)
+        self.assertIn("python3 scripts/secpal-pr-advisory.py\n", workflow)
 
 
 if __name__ == "__main__":

@@ -147,7 +147,8 @@ Apply these rules only when the session says it is running inside Polyscope.
   stop condition.
 - Supply explicit judgment observations only when review evidence establishes
   the violated contract rule. An independently deliverable second responsibility
-  requires graph-first replanning before implementation continues. Test, line,
+  requires graph-first replanning before implementation continues; `--enforce`
+  does not claim to infer that architectural judgment from source. Test, line,
   and mutation counts may guide review but never constitute a finding by
   themselves.
 

@@ -89,6 +89,24 @@ function relationshipMirrors(tokens) {
   return [...mirrors].sort();
 }
 
+function parentReferences(tokens) {
+  const references = [];
+  for (let index = 1; index < tokens.length; index += 1) {
+    const previous = tokens[index - 1];
+    const token = tokens[index];
+    if (token.type !== "inline" || previous.type !== "paragraph_open" || previous.level !== 0) {
+      continue;
+    }
+    for (const line of token.content.split(/\r?\n/)) {
+      const match = /^Part of:[ \t]*(\S(?:.*\S)?)?[ \t]*$/.exec(line);
+      if (match && match[1]) {
+        references.push(`Part of: ${match[1]}`);
+      }
+    }
+  }
+  return references;
+}
+
 function hasStatusChecklist(tokens) {
   let listDepth = 0;
   for (const token of tokens) {
@@ -112,6 +130,7 @@ function bodyFacts(body) {
   return {
     headings: headings(tokens),
     relationshipMirrors: relationshipMirrors(tokens),
+    parentReferences: parentReferences(tokens),
     // A task list is migration evidence only.  The audit never derives issue
     // state or relationships from it.
     hasStatusChecklist: hasStatusChecklist(tokens),

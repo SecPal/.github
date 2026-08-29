@@ -42,6 +42,7 @@ class StructuralBody:
     has_acceptance_criteria: bool
     relationship_mirrors: tuple[str, ...]
     has_status_checklist: bool = False
+    parent_references: tuple[str, ...] = ()
 
 
 def qualifies(heading_text: str) -> bool:
@@ -92,6 +93,9 @@ def parse(
         for item in parsed:
             headings = item.get("headings") if isinstance(item, dict) else None
             mirrors = item.get("relationshipMirrors") if isinstance(item, dict) else None
+            parent_references = (
+                item.get("parentReferences", []) if isinstance(item, dict) else None
+            )
             checklist = item.get("hasStatusChecklist", False) if isinstance(item, dict) else None
             if (
                 not isinstance(headings, list)
@@ -103,6 +107,8 @@ def parse(
                 )
                 or not isinstance(mirrors, list)
                 or any(not isinstance(mirror, str) for mirror in mirrors)
+                or not isinstance(parent_references, list)
+                or any(not isinstance(reference, str) for reference in parent_references)
                 or not isinstance(checklist, bool)
             ):
                 raise MarkdownParserUnavailable("Markdown parser returned an unexpected result")
@@ -113,6 +119,7 @@ def parse(
                     ),
                     relationship_mirrors=tuple(sorted(set(mirrors))),
                     has_status_checklist=checklist,
+                    parent_references=tuple(parent_references),
                 )
             )
     return detected
