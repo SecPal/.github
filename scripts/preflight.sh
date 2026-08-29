@@ -373,6 +373,15 @@ python3 tests/evidence-architecture-governance.py || {
   exit 1
 }
 
+if [ -f tests/postgresql-18-baseline-governance.py ]; then
+  python3 tests/postgresql-18-baseline-governance.py || {
+    echo "" >&2
+    echo "❌ PostgreSQL 18 baseline governance regression test failed!" >&2
+    echo "Keep PostgreSQL 18 as the active SecPal baseline without a legacy compatibility matrix." >&2
+    exit 1
+  }
+fi
+
 if [ -f tests/sync-required-checks.sh ]; then
   bash tests/sync-required-checks.sh || {
     echo "" >&2
