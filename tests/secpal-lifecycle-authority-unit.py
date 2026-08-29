@@ -212,9 +212,15 @@ class LifecycleAuthorityTests(TestCase):
             item for item in registry["repositories"]
             if item["repository"] == REPOSITORY
         )
+        anchors = authority._load_lifecycle_trust_policy(
+            REPOSITORY
+        ).initialization_anchors
+        self.assertEqual(len(anchors), 1)
+        self.assertEqual(anchors[0].delivery_issue, 692)
+        self.assertEqual(anchors[0].pull_request, 757)
         self.assertEqual(
-            authority._load_lifecycle_trust_policy(REPOSITORY).initialization_anchors,
-            (),
+            anchors[0].initialization_digest,
+            "4e071bcbfc17a20cc54b3f608f10418b3cc376eddce0dfba6ddbe54e2e53108f",
         )
         entry["lifecycle_authority_policy"]["delivery_initializations"] = [
             {
