@@ -53,7 +53,7 @@ instead of guessed commands.
 
 ## Architecture
 
-The workflow has six narrow parts:
+The workflow has eight narrow parts:
 
 1. [the central skill](../.agents/skills/secpal-pr-review/SKILL.md), which performs
    reasoned technical classification;
@@ -72,7 +72,9 @@ The workflow has six narrow parts:
    verifier used only by explicitly selected forensic/audit snapshot mode; and
 7. the workflow-only repository registry, current mutation-plan schema, exact
    legacy mutation-plan v1.0 schema, and fast-path batch schema under the
-   skill's `references/` directory.
+   skill's `references/` directory; and
+8. `scripts/secpal_pr_review/lifecycle_authority.py`, the separately adoptable
+   persistent lifecycle-authority primitive and independent verifier.
 
 The action helper validates persisted mutation plans against their original
 versioned shape. Version 1.0 retains legacy findings without `follow_up` and
