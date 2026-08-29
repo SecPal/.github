@@ -384,7 +384,7 @@ The sole-parent rule above remains authoritative for remediation and recovery.
 exception for one already-authorized Ready-PR integration candidate. Its closed
 version-1.1 evidence kind is `TWO_PARENT_READY_INTEGRATION`; it requires explicit
 delivery-issue, authorization-ID, and signer selectors and authenticates the
-repository, PR, prior Ready head, current registered default-branch snapshot,
+repository, PR, prior Ready head, live current registered default-branch tip,
 exact ordered parents `[prior Ready head, authorized base head]`, combined tree,
 stable-feedback digests, registered validation execution, accepted signer, and
 finite lifecycle continuity. The candidate also carries exactly one signed
@@ -399,11 +399,16 @@ path may change, and retained text conflict markers fail closed.
 
 Parent 1 and its Ready/lifecycle claims are not caller assertions. A distinct
 closed `READY_INTEGRATION_PRIOR_AUTHORITY` manifest binds the prior delivery
-tree, receipt, final attestation, accepted signer, lifecycle identity, counters,
-and Ready-without-transition state. The helper independently verifies that
+tree, receipt, final attestation, accepted signer, lifecycle identity, current
+published authority digest, exceptional-history counters, and Ready-without-
+transition state. The helper independently verifies that
 ordinary delivery chain and a signed annotated authority tag whose trailer
 binds the manifest digest. The prior commit trailer, reconstructed ordinary
 receipt, final attestation, and prior-authority receipt identity must all agree.
+It also consumes the maintained #750/#752 publication verifier and requires the
+protected journal's current entry for the delivery to match the manifest's
+publication object, publication digest, persistent lifecycle identity, current
+head, finite counters, proof mode, and unused exceptional-continuation budget.
 The mutable tag ref is resolved once to an authenticated annotated-tag object
 OID; target, signature, signer, trailer, and diagnostics thereafter use only
 that immutable object. OpenPGP authority matching distinguishes the verified
@@ -411,7 +416,8 @@ signing-subkey fingerprint from its authenticated primary-key fingerprint.
 Integration evidence and its fresh receipt bind the same authority and tag-
 object identities. During receipt creation, one trusted GitHub read must
 also prove that the open Ready PR still has parent 1 as its head and that its
-registered target-base ref currently resolves to parent 2. Missing authority,
+registered default branch currently resolves to parent 2. The pull request's
+creation-time base OID is not a current-tip authority. Missing authority,
 live-ref drift, or an unavailable observation fails closed without retry.
 
 This integration topology consumes no unrestricted review or remediation cycle,

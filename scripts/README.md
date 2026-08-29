@@ -54,8 +54,11 @@ signed push, or no commit movement for a no-push session.
 `attest-validation` also exposes a separately selected version-1.1
 `TWO_PARENT_READY_INTEGRATION` evidence path. It authenticates exactly one
 signed two-parent candidate whose first parent is the prior Ready delivery head
-and whose second parent is the explicitly authorized current registered `main`
-snapshot. The versioned manifest, fresh tree receipt, integration-evidence
+and whose second parent is the explicitly authorized live current registered
+`main` tip. The versioned manifest consumes the maintained protected-journal
+lifecycle publication for parent 1, including its persistent identity, current
+authority digest, finite exceptional history, and unused continuation budget.
+The fresh tree receipt, integration-evidence
 trailer, final attestation, expected signer, stable-feedback and eligibility
 digests, unchanged lifecycle counters, and exact bounded manual tree delta all
 fail closed together. Clean merge-tree output admits no delta. Conflict-bearing

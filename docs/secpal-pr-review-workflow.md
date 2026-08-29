@@ -284,7 +284,10 @@ The prior Ready state is supplied as a separate closed
 `READY_INTEGRATION_PRIOR_AUTHORITY` manifest. Its digest is authenticated by a
 signed annotated tag on the prior delivery head, and the binder independently
 verifies that head's ordinary receipt, final attestation, tree, signature, and
-accepted signer. Its claimed receipt must equal the prior commit trailer,
+accepted signer. It also verifies the maintained #750/#752 protected-journal
+CURRENT publication and binds its lifecycle authority digest, proof mode,
+publication identity, exceptional recovery, and unused exceptional
+continuation. Its claimed receipt must equal the prior commit trailer,
 reconstructed ordinary receipt, and final-attestation receipt. The mutable tag
 ref is resolved once; target, signature, signer, trailer, and diagnostics all
 use the resulting immutable annotated-tag OID. OpenPGP signing-subkey output is
@@ -292,9 +295,10 @@ accepted only when its authenticated primary fingerprint is the configured
 authority. The manifest binds the lifecycle identity and unchanged
 review/remediation counters, so inline integration booleans cannot establish
 Ready or lifecycle authority. Receipt creation performs one trusted GitHub
-observation of the open Ready PR and its registered target-base ref; the live PR
-head must equal parent 1 and the live base SHA must equal both the explicitly
-authorized SHA and parent 2. The read is not caller-provided evidence and any
+observation of the open Ready PR and the repository's live default-branch tip;
+the live PR head must equal parent 1 and that live tip must equal both the
+explicitly authorized SHA and parent 2. The creation-time PR base OID is not a
+current-tip selector. The read is not caller-provided evidence and any
 missing, malformed, or drifted result fails closed without retry.
 
 Before the candidate is bound, the same complete registered validation produces

@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-29 - Bind Ready Integration to Published Lifecycle Authority
+
+**Changed:**
+
+- select the integration's second parent from the live default-branch tip
+  instead of the pull request's creation-time base snapshot
+- require the prior Ready manifest to match the independently verified current
+  #750/#752 publication, including exceptional recovery and continuation state
+
 ## 2026-08-28 - Harden Ready Integration Recovery Evidence
 
 **Changed:**

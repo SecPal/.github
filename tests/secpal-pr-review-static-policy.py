@@ -214,6 +214,7 @@ ALLOWED_IMPORT_ROOTS = {
     "subprocess",
     "sys",
     "tempfile",
+    "types",
     "typing",
     "urllib",
 }
@@ -230,6 +231,7 @@ ALLOWED_IMPORTS = {
         "import subprocess",
         "import sys",
         "import tempfile",
+        "import types",
         "from dataclasses import dataclass",
         "from datetime import datetime",
         "from functools import cache",
@@ -251,6 +253,7 @@ ALLOWED_IMPORTS = {
         "import subprocess",
         "import sys",
         "import tempfile",
+        "import types",
         "from pathlib import Path",
         "from typing import Any, Iterable",
         "from urllib.parse import quote",
@@ -362,6 +365,7 @@ DIRECT_MODULE_ATTRIBUTES = {
         "site": {"getusersitepackages"},
         "sys": {"modules", "platform", "stderr", "stdout", "version_info"},
         "tempfile": {"TemporaryDirectory"},
+        "types": {"ModuleType"},
     },
     "fast_path.py": {
         "importlib": {"util"},
@@ -491,6 +495,18 @@ DYNAMIC_IMPORT_CALLS = {
         ),
         DynamicImportCall(
             ("_load_fast_path_helper",),
+            "spec.loader.exec_module(module)",
+        ),
+        DynamicImportCall(
+            ("_load_lifecycle_publication_helpers", "load"),
+            "importlib.util.spec_from_file_location(module_name, path)",
+        ),
+        DynamicImportCall(
+            ("_load_lifecycle_publication_helpers", "load"),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_lifecycle_publication_helpers", "load"),
             "spec.loader.exec_module(module)",
         ),
     },
@@ -680,6 +696,10 @@ SAFE_SYS_MODULES_CALLS = {
             ("_load_fast_path_helper",),
             "sys.modules.pop(spec.name, None)",
         ),
+        DynamicImportCall(
+            ("_load_lifecycle_publication_helpers",),
+            "sys.modules.pop(module_name, None)",
+        ),
     },
     "secpal-resolve-fixed-threads.py": {
         DynamicImportCall(
@@ -723,6 +743,18 @@ SAFE_SYS_MODULES_STORES = {
         DynamicImportCall(
             ("_load_fast_path_helper",),
             "sys.modules[spec.name]",
+        ),
+        DynamicImportCall(
+            ("_load_lifecycle_publication_helpers",),
+            "sys.modules[package_name]",
+        ),
+        DynamicImportCall(
+            ("_load_lifecycle_publication_helpers",),
+            "sys.modules[f'{package_name}.fast_path']",
+        ),
+        DynamicImportCall(
+            ("_load_lifecycle_publication_helpers", "load"),
+            "sys.modules[module_name]",
         ),
     },
     "secpal-resolve-fixed-threads.py": {

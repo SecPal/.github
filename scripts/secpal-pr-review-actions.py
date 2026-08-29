@@ -18,6 +18,7 @@ import site
 import subprocess
 import sys
 import tempfile
+import types
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import quote
@@ -42,6 +43,12 @@ REGISTRY_PATH = (
     / ".agents/skills/secpal-pr-review/references/repositories.json"
 )
 FAST_PATH_HELPER = REPOSITORY_ROOT / "scripts/secpal_pr_review/fast_path.py"
+LIFECYCLE_AUTHORITY_HELPER = (
+    REPOSITORY_ROOT / "scripts/secpal_pr_review/lifecycle_authority.py"
+)
+LIFECYCLE_PUBLICATION_HELPER = (
+    REPOSITORY_ROOT / "scripts/secpal_pr_review/lifecycle_publication.py"
+)
 FAST_BATCH_SCHEMA_PATH = (
     REPOSITORY_ROOT
     / ".agents/skills/secpal-pr-review/references/fast-path-batch.schema.json"
@@ -91,6 +98,42 @@ def _load_fast_path_helper() -> Any:
 
 fast_path = _load_fast_path_helper()
 follow_up = fast_path.follow_up
+
+
+def _load_lifecycle_publication_helpers() -> tuple[Any, Any]:
+    """Load the maintained lifecycle modules from this exact source tree."""
+
+    package_name = "secpal_ready_integration_lifecycle"
+    package = types.ModuleType(package_name)
+    package.__path__ = [str(LIFECYCLE_AUTHORITY_HELPER.parent)]
+    sys.modules[package_name] = package
+    sys.modules[f"{package_name}.fast_path"] = _load_fast_path_helper()
+
+    def load(name: str, path: Path) -> Any:
+        module_name = f"{package_name}.{name}"
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Cannot load maintained lifecycle helper: {path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    try:
+        lifecycle_authority = load("lifecycle_authority", LIFECYCLE_AUTHORITY_HELPER)
+        lifecycle_publication = load(
+            "lifecycle_publication", LIFECYCLE_PUBLICATION_HELPER
+        )
+    except BaseException:
+        for module_name in (
+            f"{package_name}.lifecycle_publication",
+            f"{package_name}.lifecycle_authority",
+            f"{package_name}.fast_path",
+            package_name,
+        ):
+            sys.modules.pop(module_name, None)
+        raise
+    return lifecycle_authority, lifecycle_publication
 
 
 def _playwright_browsers_path(account_home: Path) -> Path:
@@ -1349,6 +1392,7 @@ READY_INTEGRATION_AUTHORITY_QUERY = r"""
 query ReadyIntegrationAuthority($owner:String!, $name:String!, $number:Int!) {
   repository(owner:$owner, name:$name) {
     nameWithOwner
+    defaultBranchRef { name target { oid } }
     pullRequest(number:$number) {
       number state isDraft headRefOid baseRefName baseRefOid
       baseRepository { nameWithOwner }
@@ -1889,6 +1933,7 @@ class LiveGitHub:
             observed_repository = payload["data"]["repository"]
             pull_request = observed_repository["pullRequest"]
             base_repository = pull_request["baseRepository"]
+            default_branch = observed_repository["defaultBranchRef"]
         except (ActionCommandFailure, KeyError, TypeError) as exc:
             raise MutationFailure(
                 "trusted Ready integration authority observation is unavailable"
@@ -1901,7 +1946,11 @@ class LiveGitHub:
             "head_sha": pull_request.get("headRefOid"),
             "base_repository": base_repository.get("nameWithOwner"),
             "base_ref": pull_request.get("baseRefName"),
-            "base_sha": pull_request.get("baseRefOid"),
+            "base_sha": (
+                default_branch.get("target", {}).get("oid")
+                if default_branch.get("name") == pull_request.get("baseRefName")
+                else None
+            ),
         }
 
     def read_current_feedback(self, plan: dict[str, Any]) -> dict[str, Any]:
@@ -4744,6 +4793,14 @@ def _verify_ready_integration_lifecycle_authority(
         or eligibility["unrestricted_reviews_after"] != lifecycle["unrestricted_reviews"]
         or eligibility["remediation_cycles_before"] != lifecycle["remediation_cycles"]
         or eligibility["remediation_cycles_after"] != lifecycle["remediation_cycles"]
+        or eligibility["exceptional_recoveries_before"]
+        != lifecycle["exceptional_recoveries"]
+        or eligibility["exceptional_recoveries_after"]
+        != lifecycle["exceptional_recoveries"]
+        or eligibility["exceptional_continuations_before"]
+        != lifecycle["exceptional_continuations"]
+        or eligibility["exceptional_continuations_after"]
+        != lifecycle["exceptional_continuations"] + 1
         or eligibility["draft_before"] != lifecycle["draft"]
         or eligibility["ready_before"] != lifecycle["ready"]
         or eligibility["ready_transition"] is not False
@@ -4751,6 +4808,62 @@ def _verify_ready_integration_lifecycle_authority(
     ):
         raise fast_path.SecurityBlocker(
             "integration lifecycle differs from prior authority"
+        )
+
+
+def _verify_ready_integration_published_authority(
+    authority_manifest: dict[str, Any], integration_evidence: dict[str, Any]
+) -> None:
+    """Bind integration eligibility to the maintained live #750/#752 authority."""
+
+    try:
+        lifecycle_authority, lifecycle_publication = (
+            _load_lifecycle_publication_helpers()
+        )
+    except (ImportError, OSError, RuntimeError) as exc:
+        raise fast_path.SecurityBlocker(
+            "maintained lifecycle publication verifier is unavailable"
+        ) from exc
+    lifecycle = authority_manifest["lifecycle"]
+    try:
+        expected = lifecycle_authority.ExpectedLifecycle(
+            repository=authority_manifest["repository"],
+            delivery_issue=authority_manifest["delivery_issue_number"],
+            lifecycle_id=lifecycle["identity"],
+            pull_request=authority_manifest["pull_request_number"],
+            head_sha=authority_manifest["prior_delivery_head_sha"],
+            unrestricted_review_count=lifecycle["unrestricted_reviews"],
+            remediation_cycle_count=lifecycle["remediation_cycles"],
+            ready=True,
+            ready_transition_count=1,
+            exceptional_recovery_count=lifecycle["exceptional_recoveries"],
+            exceptional_continuation_count=lifecycle["exceptional_continuations"],
+        )
+        published = lifecycle_publication.verify_current_lifecycle_authority(
+            authority_manifest["repository"],
+            authority_manifest["delivery_issue_number"],
+            expected,
+        )
+    except (lifecycle_authority.LifecycleAuthorityError,
+            lifecycle_publication.LifecyclePublicationError) as exc:
+        raise fast_path.SecurityBlocker(
+            "current lifecycle publication authority is invalid"
+        ) from exc
+    if (
+        published.publication_oid
+        != authority_manifest["publication"]["object_oid"]
+        or published.publication_digest
+        != authority_manifest["publication"]["publication_digest"]
+        or published.lifecycle.authority_digest
+        != lifecycle["current_authority_digest"]
+        or published.lifecycle.historical_proof_mode
+        != lifecycle["historical_proof_mode"]
+        or published.lifecycle.state.get("cycle_3_absent") is not True
+        or integration_evidence["eligibility"]["lifecycle_identity"]
+        != published.lifecycle.lifecycle_id
+    ):
+        raise fast_path.SecurityBlocker(
+            "Ready integration lifecycle publication binding changed"
         )
 
 
@@ -4905,6 +5018,7 @@ def _verify_ready_integration_prior_authority(
         f"{verified_tag.stdout}\n{verified_tag.stderr}",
         authority["expected_signer"],
     )
+    _verify_ready_integration_published_authority(authority, integration_evidence)
     _verify_ready_integration_lifecycle_authority(authority, integration_evidence)
     if live_observation is not None:
         _verify_ready_integration_live_observation(

@@ -4698,6 +4698,10 @@ def ready_integration_evidence(
             "unrestricted_reviews_after": 1,
             "remediation_cycles_before": 1,
             "remediation_cycles_after": 1,
+            "exceptional_recoveries_before": 1,
+            "exceptional_recoveries_after": 1,
+            "exceptional_continuations_before": 0,
+            "exceptional_continuations_after": 1,
             "cycle_3": False,
         },
     }
@@ -4717,12 +4721,20 @@ def ready_integration_prior_authority(reviewed: Any) -> dict[str, Any]:
         "expected_signer": {"kind": "SSH_PRINCIPAL", "identity": "aroviqen"},
         "lifecycle": {
             "identity": "delivery-lifecycle-001",
+            "current_authority_digest": "d" * 64,
+            "historical_proof_mode": "legacy_migration_checkpoint",
             "draft": False,
             "ready": True,
             "ready_transition": False,
             "unrestricted_reviews": 1,
             "remediation_cycles": 1,
+            "exceptional_recoveries": 1,
+            "exceptional_continuations": 0,
             "cycle_3": False,
+        },
+        "publication": {
+            "object_oid": "e" * 40,
+            "publication_digest": "f" * 64,
         },
     }
 
@@ -6254,6 +6266,11 @@ class FastPathTests(TestCase):
             ("ready_transition", lambda item: item["lifecycle"].__setitem__("ready_transition", True)),
             ("review_counter", lambda item: item["lifecycle"].__setitem__("unrestricted_reviews", 2)),
             ("remediation_counter", lambda item: item["lifecycle"].__setitem__("remediation_cycles", 3)),
+            ("recovery_counter", lambda item: item["lifecycle"].__setitem__("exceptional_recoveries", 0)),
+            ("continuation_consumed", lambda item: item["lifecycle"].__setitem__("exceptional_continuations", 1)),
+            ("authority_digest", lambda item: item["lifecycle"].__setitem__("current_authority_digest", "x" * 64)),
+            ("proof_mode", lambda item: item["lifecycle"].__setitem__("historical_proof_mode", "asserted")),
+            ("publication_oid", lambda item: item["publication"].__setitem__("object_oid", "x" * 40)),
             ("cycle_3", lambda item: item["lifecycle"].__setitem__("cycle_3", True)),
         )
         for case, mutate in cases:
@@ -6411,6 +6428,53 @@ class FastPathTests(TestCase):
                     changed, integration, fast_registry()
                 )
 
+    def test_ready_integration_live_authority_uses_current_default_branch_tip(self) -> None:
+        payload = {
+            "data": {
+                "repository": {
+                    "nameWithOwner": "SecPal/.github",
+                    "defaultBranchRef": {
+                        "name": "main",
+                        "target": {"oid": "d" * 40},
+                    },
+                    "pullRequest": {
+                        "number": 746,
+                        "state": "OPEN",
+                        "isDraft": False,
+                        "headRefOid": "a" * 40,
+                        "baseRefName": "main",
+                        "baseRefOid": "b" * 40,
+                        "baseRepository": {"nameWithOwner": "SecPal/.github"},
+                    },
+                }
+            }
+        }
+        github = actions.LiveGitHub(
+            SimpleNamespace(run=lambda _arguments: payload)
+        )
+
+        observed = github.observe_ready_integration_authority("SecPal/.github", 746)
+
+        self.assertEqual(observed["base_ref"], "main")
+        self.assertEqual(observed["base_sha"], "d" * 40)
+
+    def test_ready_integration_accepts_current_base_after_feedback_base_advanced(self) -> None:
+        reviewed = fast_feedback()
+        integration = ready_integration_evidence(reviewed, validated_tree="a" * 40)
+        integration["target_base"]["authorized_sha"] = "d" * 40
+        integration["target_base"]["observed_sha"] = "d" * 40
+        integration["ordered_parent_shas"][1] = "d" * 40
+
+        normalized = fast_path.normalize_ready_integration_evidence(
+            integration,
+            repository="SecPal/.github",
+            reviewed_state=reviewed,
+            registry=fast_registry(),
+            validated_tree_sha="a" * 40,
+        )
+
+        self.assertEqual(normalized["target_base"]["authorized_sha"], "d" * 40)
+
     def test_ready_integration_live_authority_fails_closed_when_unavailable_or_malformed(
         self,
     ) -> None:
@@ -6460,6 +6524,8 @@ class FastPathTests(TestCase):
             ("identity", "another-lifecycle"),
             ("unrestricted_reviews", 0),
             ("remediation_cycles", 0),
+            ("exceptional_recoveries", 0),
+            ("exceptional_continuations", 1),
         ):
             changed = copy.deepcopy(authority)
             changed["lifecycle"][field] = value
@@ -6469,6 +6535,65 @@ class FastPathTests(TestCase):
                 actions._verify_ready_integration_lifecycle_authority(
                     changed, integration
                 )
+
+    def test_ready_integration_consumes_current_published_lifecycle_authority(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        authority = fast_path.normalize_ready_integration_prior_authority(
+            ready_integration_prior_authority(reviewed)
+        )
+        integration = fast_path.normalize_ready_integration_evidence(
+            ready_integration_evidence(reviewed, validated_tree="a" * 40),
+            repository="SecPal/.github",
+            reviewed_state=reviewed,
+            registry=fast_registry(),
+            validated_tree_sha="a" * 40,
+        )
+        verified_lifecycle = SimpleNamespace(
+            authority_digest=authority["lifecycle"]["current_authority_digest"],
+            lifecycle_id=authority["lifecycle"]["identity"],
+            historical_proof_mode=authority["lifecycle"]["historical_proof_mode"],
+            state={"cycle_3_absent": True},
+        )
+        published = SimpleNamespace(
+            publication_oid=authority["publication"]["object_oid"],
+            publication_digest=authority["publication"]["publication_digest"],
+            lifecycle=verified_lifecycle,
+        )
+        lifecycle_authority = SimpleNamespace(
+            ExpectedLifecycle=lambda **values: SimpleNamespace(**values),
+            LifecycleAuthorityError=ValueError,
+        )
+        lifecycle_publication = SimpleNamespace(
+            verify_current_lifecycle_authority=mock.Mock(return_value=published),
+            LifecyclePublicationError=ValueError,
+        )
+        with mock.patch.object(
+            actions,
+            "_load_lifecycle_publication_helpers",
+            return_value=(lifecycle_authority, lifecycle_publication),
+        ):
+            actions._verify_ready_integration_published_authority(
+                authority, integration
+            )
+        expected = lifecycle_publication.verify_current_lifecycle_authority.call_args.args[2]
+        self.assertEqual(expected.head_sha, reviewed.head_sha)
+        self.assertEqual(expected.exceptional_recovery_count, 1)
+        self.assertEqual(expected.exceptional_continuation_count, 0)
+
+        published.publication_digest = "0" * 64
+        with (
+            mock.patch.object(
+                actions,
+                "_load_lifecycle_publication_helpers",
+                return_value=(lifecycle_authority, lifecycle_publication),
+            ),
+            self.assertRaisesRegex(fast_path.SecurityBlocker, "binding changed"),
+        ):
+            actions._verify_ready_integration_published_authority(
+                authority, integration
+            )
 
     def test_ready_integration_rejects_actual_default_branch_sha_drift(self) -> None:
         reviewed = fast_feedback()
@@ -6819,9 +6944,14 @@ class FastPathTests(TestCase):
                 "state": "OPEN", "draft": False, "head_sha": prior_head,
                 "base_repository": "SecPal/.github", "base_ref": "main", "base_sha": target,
             }
-            with mock.patch.object(
-                actions, "_observe_ready_integration_authority_once", return_value=observation
-            ) as observe:
+            with (
+                mock.patch.object(
+                    actions, "_observe_ready_integration_authority_once", return_value=observation
+                ) as observe,
+                mock.patch.object(
+                    actions, "_verify_ready_integration_published_authority"
+                ),
+            ):
                 self.assertEqual(actions.main(argv), 0)
             observe.assert_not_called()
             ordinary = [
@@ -6961,7 +7091,6 @@ class FastPathTests(TestCase):
             "extra_parent",
             "stale_first_parent",
             "substituted_first_parent",
-            "stale_second_parent",
             "substituted_second_parent",
             "base_snapshot_mismatch",
             "tree_mismatch",
@@ -6998,10 +7127,6 @@ class FastPathTests(TestCase):
                 candidate["prior_delivery_head_sha"] = "b" * 40
             elif case == "substituted_first_parent":
                 candidate["ordered_parent_shas"][0] = "c" * 40
-            elif case == "stale_second_parent":
-                candidate["target_base"]["authorized_sha"] = "1" * 40
-                candidate["target_base"]["observed_sha"] = "1" * 40
-                candidate["ordered_parent_shas"][1] = "1" * 40
             elif case == "substituted_second_parent":
                 candidate["ordered_parent_shas"][1] = "c" * 40
             elif case == "base_snapshot_mismatch":
@@ -7660,6 +7785,9 @@ class FastPathTests(TestCase):
                     "_verify_signature_policy_identity",
                     wraps=actions._verify_signature_policy_identity,
                 ) as signature_policy,
+                mock.patch.object(
+                    actions, "_verify_ready_integration_published_authority"
+                ),
             ):
                 self.assertEqual(
                     actions._verify_ready_integration_prior_authority(

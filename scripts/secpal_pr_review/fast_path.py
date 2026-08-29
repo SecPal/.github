@@ -156,6 +156,7 @@ READY_INTEGRATION_PRIOR_AUTHORITY_KEYS = frozenset(
         "prior_final_attestation_digest",
         "expected_signer",
         "lifecycle",
+        "publication",
     }
 )
 
@@ -325,19 +326,31 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
     lifecycle = value.get("lifecycle")
     lifecycle_keys = {
         "identity",
+        "current_authority_digest",
+        "historical_proof_mode",
         "draft",
         "ready",
         "ready_transition",
         "unrestricted_reviews",
         "remediation_cycles",
+        "exceptional_recoveries",
+        "exceptional_continuations",
         "cycle_3",
     }
     if not isinstance(lifecycle, dict) or set(lifecycle) != lifecycle_keys:
         raise SecurityBlocker("Ready integration prior lifecycle authority is malformed")
     reviews = lifecycle.get("unrestricted_reviews")
     cycles = lifecycle.get("remediation_cycles")
+    recoveries = lifecycle.get("exceptional_recoveries")
+    continuations = lifecycle.get("exceptional_continuations")
     if (
         not _require_string(lifecycle.get("identity"), "Ready integration lifecycle identity")
+        or not _require_digest(
+            lifecycle.get("current_authority_digest"),
+            "Ready integration current lifecycle authority",
+        )
+        or lifecycle.get("historical_proof_mode")
+        not in {"native_lifecycle", "legacy_migration_checkpoint"}
         or lifecycle.get("draft") is not False
         or lifecycle.get("ready") is not True
         or lifecycle.get("ready_transition") is not False
@@ -347,8 +360,18 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         or isinstance(cycles, bool)
         or not isinstance(cycles, int)
         or not 0 <= cycles <= 2
+        or isinstance(recoveries, bool)
+        or recoveries != 1
+        or isinstance(continuations, bool)
+        or continuations != 0
     ):
         raise SecurityBlocker("Ready integration prior lifecycle authority is invalid")
+    publication = value.get("publication")
+    if not isinstance(publication, dict) or set(publication) != {
+        "object_oid",
+        "publication_digest",
+    }:
+        raise SecurityBlocker("Ready integration lifecycle publication is malformed")
     return {
         "schema_version": "1.1",
         "kind": READY_INTEGRATION_PRIOR_AUTHORITY_KIND,
@@ -361,6 +384,16 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         "prior_final_attestation_digest": _require_digest(value.get("prior_final_attestation_digest"), "prior final attestation"),
         "expected_signer": {"kind": signer_kind, "identity": signer_identity},
         "lifecycle": copy.deepcopy(lifecycle),
+        "publication": {
+            "object_oid": _require_oid(
+                publication.get("object_oid"),
+                "Ready integration lifecycle publication object",
+            ),
+            "publication_digest": _require_digest(
+                publication.get("publication_digest"),
+                "Ready integration lifecycle publication digest",
+            ),
+        },
     }
 
 
@@ -419,7 +452,6 @@ def normalize_ready_integration_evidence(
     if (
         target_ref != registry.get("default_branch")
         or target_ref != reviewed_state.base_ref
-        or authorized_base != reviewed_state.base_sha
         or observed_base != authorized_base
     ):
         raise SecurityBlocker("integration target-base identity or bound ref drifted")
@@ -499,6 +531,10 @@ def normalize_ready_integration_evidence(
         "unrestricted_reviews_after",
         "remediation_cycles_before",
         "remediation_cycles_after",
+        "exceptional_recoveries_before",
+        "exceptional_recoveries_after",
+        "exceptional_continuations_before",
+        "exceptional_continuations_after",
         "cycle_3",
     }
     if not isinstance(eligibility, dict) or set(eligibility) != eligibility_keys:
@@ -507,6 +543,10 @@ def normalize_ready_integration_evidence(
     after_reviews = eligibility.get("unrestricted_reviews_after")
     before_cycles = eligibility.get("remediation_cycles_before")
     after_cycles = eligibility.get("remediation_cycles_after")
+    before_recoveries = eligibility.get("exceptional_recoveries_before")
+    after_recoveries = eligibility.get("exceptional_recoveries_after")
+    before_continuations = eligibility.get("exceptional_continuations_before")
+    after_continuations = eligibility.get("exceptional_continuations_after")
     if (
         eligibility.get("eligible") is not True
         or not _require_string(
@@ -528,6 +568,12 @@ def normalize_ready_integration_evidence(
         or not isinstance(before_cycles, int)
         or not 0 <= before_cycles <= 2
         or after_cycles != before_cycles
+        or isinstance(before_recoveries, bool)
+        or before_recoveries != 1
+        or after_recoveries != before_recoveries
+        or isinstance(before_continuations, bool)
+        or before_continuations != 0
+        or after_continuations != 1
     ):
         raise SecurityBlocker("integration eligibility or lifecycle continuity is invalid")
     normalized = {
