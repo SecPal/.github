@@ -51,6 +51,44 @@ operations whose evidence does not match their logical finding. Their initial
 and final heads must also encode exactly one new linear commit per recorded
 signed push, or no commit movement for a no-push session.
 
+`attest-validation` also exposes a separately selected version-1.1
+`TWO_PARENT_READY_INTEGRATION` evidence path. It authenticates exactly one
+signed two-parent candidate whose first parent is the prior Ready delivery head
+and whose second parent is the explicitly authorized live current registered
+`main` tip. The versioned manifest consumes the maintained protected-journal
+lifecycle publication for parent 1, including its persistent identity, current
+authority digest, finite exceptional history, and unused continuation budget.
+The fresh tree receipt, integration-evidence
+trailer, final attestation, expected signer, stable-feedback and eligibility
+digests, unchanged lifecycle counters, and exact bounded manual tree delta all
+fail closed together. Clean merge-tree output admits no delta. Conflict-bearing
+output binds the exact conflict paths and requires each to be explicitly
+changed or deleted, with no extra paths or retained text conflict markers. This
+does not relax the ordinary sole-parent path, create or push an integration,
+change Ready state, read post-push checks, or authorize merge automation.
+Historical receipt reconstruction reads the registry blob from the immutable
+prior delivery commit rather than applying a later registry to older evidence.
+
+Parent 1 additionally requires a closed prior-authority manifest authenticated
+by a signed annotated tag and independently verified ordinary receipt, final
+attestation, tree, and signer. The receipt identities must agree end to end.
+The mutable tag ref is resolved once, and every tag target, signature, signer,
+trailer, and diagnostic check uses the resulting immutable annotated-tag OID.
+OpenPGP signing subkeys are accepted only through their authenticated configured
+primary fingerprint. Its lifecycle identity, Ready state, and counters
+must match the integration evidence. When creating the integration receipt, the
+command performs one trusted GitHub read and requires the live open Ready PR
+head and registered target-base SHA to equal the two authorized parents; caller-
+supplied `observed_sha` cannot substitute for that read.
+
+After an explicitly authenticated cycle-limit blocker, a separate user
+authorization may select `--exceptional-recovery-evidence` with exact recovery
+issue/authorization selectors and eligibility evidence. The closed artifact
+binds the prior Ready head/tree, new tree, exact reviewed findings/threads,
+`review=1/1`, `remediation=2/2`, no Cycle 3, and unchanged Ready state. Its
+digest is carried by the ordinary single-parent receipt and attestation; it is
+not a third remediation cycle or a reusable recovery loop.
+
 ### `secpal-resolve-fixed-threads.py`
 
 Resolves only explicitly named review threads after their findings have already

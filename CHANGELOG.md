@@ -9,6 +9,48 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-29 - Bind Ready Integration to Published Lifecycle Authority
+
+**Changed:**
+
+- select the integration's second parent from the live default-branch tip
+  instead of the pull request's creation-time base snapshot
+- require the prior Ready manifest to match the independently verified current
+  #750/#752 publication, including exceptional recovery and continuation state
+- reconstruct historical delivery receipts with the registry committed at the
+  authenticated prior head instead of applying later registry extensions
+
+## 2026-08-28 - Harden Ready Integration Recovery Evidence
+
+**Changed:**
+
+- require conflict-bearing merge-tree results to authenticate and completely
+  resolve their exact conflict paths without extra file changes or retained
+  text conflict markers
+- bind the prior Ready receipt identity across its commit, receipt,
+  attestation, and authority artifact; pin annotated authority-tag verification
+  to one immutable object; and correctly authenticate OpenPGP primary identities
+  when a signing subkey is used
+- add a closed, explicitly user-authorized exceptional-recovery artifact for a
+  Ready PR after the finite remediation limit, preserving review 1/1,
+  remediation 2/2, no Cycle 3, and monotonic Ready state
+
+---
+
+## 2026-08-27 - Authenticate Ready Pull Request Integration Heads
+
+**Added:**
+
+- added an explicitly selected evidence topology for one signed two-parent
+  integration candidate whose ordered parents, validated combined tree,
+  authenticated current `main` snapshot, stable feedback, eligibility,
+  validation execution, signer, and unchanged Ready lifecycle fail closed as
+  one final attestation while ordinary remediation remains single-parent
+- required independently signed prior Ready/lifecycle authority and one trusted
+  live target-base observation before that topology can create new evidence
+
+---
+
 ## 2026-08-28 - Authenticate Lifecycle Authority Publication
 
 **Added:**

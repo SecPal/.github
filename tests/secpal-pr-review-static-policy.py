@@ -214,6 +214,7 @@ ALLOWED_IMPORT_ROOTS = {
     "subprocess",
     "sys",
     "tempfile",
+    "types",
     "typing",
     "urllib",
 }
@@ -230,6 +231,7 @@ ALLOWED_IMPORTS = {
         "import subprocess",
         "import sys",
         "import tempfile",
+        "import types",
         "from dataclasses import dataclass",
         "from datetime import datetime",
         "from functools import cache",
@@ -251,6 +253,7 @@ ALLOWED_IMPORTS = {
         "import subprocess",
         "import sys",
         "import tempfile",
+        "import types",
         "from pathlib import Path",
         "from typing import Any, Iterable",
         "from urllib.parse import quote",
@@ -362,6 +365,7 @@ DIRECT_MODULE_ATTRIBUTES = {
         "site": {"getusersitepackages"},
         "sys": {"modules", "platform", "stderr", "stdout", "version_info"},
         "tempfile": {"TemporaryDirectory"},
+        "types": {"ModuleType"},
     },
     "fast_path.py": {
         "importlib": {"util"},
@@ -420,11 +424,16 @@ LOADED_MODULE_ATTRIBUTES = {
             "canonical_json_bytes",
             "create_validation_attestation",
             "create_validation_receipt",
+            "create_ready_integration_attestation",
             "digest_json",
             "execute_resolution_batch",
             "follow_up",
+            "normalize_ready_integration_evidence",
+            "normalize_ready_integration_prior_authority",
+            "normalize_exceptional_recovery_evidence",
             "validate_manual_gate_evidence",
             "verify_commit_signatures",
+            "verify_validation_attestation",
         },
         "follow_up": {
             "FollowUpError",
@@ -488,6 +497,18 @@ DYNAMIC_IMPORT_CALLS = {
             ("_load_fast_path_helper",),
             "spec.loader.exec_module(module)",
         ),
+        DynamicImportCall(
+            ("_load_lifecycle_publication_helpers", "load"),
+            "importlib.util.spec_from_file_location(module_name, path)",
+        ),
+        DynamicImportCall(
+            ("_load_lifecycle_publication_helpers", "load"),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_lifecycle_publication_helpers", "load"),
+            "spec.loader.exec_module(module)",
+        ),
     },
     "secpal-resolve-fixed-threads.py": {
         DynamicImportCall(
@@ -547,6 +568,102 @@ SAFE_GETATTR_CALLS = {
             ("_command_attest_validation",),
             "getattr(arguments, 'eligibility_evidence', None)",
         ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'integration_evidence', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'exceptional_recovery_evidence', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'exceptional_recovery_delivery_issue', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'exceptional_recovery_authorization_id', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'delivery_issue', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'integration_authorization_id', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'expected_integration_signer', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'prior_authority', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'prior_authority_tag_ref', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'prior_reviewed_state', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'prior_receipt', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'prior_attestation', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'expected_prior_authority_signer', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_ready_integration_prior_authority",),
+            "getattr(arguments, 'prior_authority', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_ready_integration_prior_authority",),
+            "getattr(arguments, 'prior_reviewed_state', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_ready_integration_prior_authority",),
+            "getattr(arguments, 'prior_receipt', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_ready_integration_prior_authority",),
+            "getattr(arguments, 'prior_attestation', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_ready_integration_prior_authority",),
+            "getattr(arguments, 'prior_authority_tag_ref', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_ready_integration_prior_authority",),
+            "getattr(arguments, 'expected_prior_authority_signer', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_integration_selection",),
+            "getattr(arguments, 'delivery_issue', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_integration_selection",),
+            "getattr(arguments, 'integration_authorization_id', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_integration_selection",),
+            "getattr(arguments, 'expected_integration_signer', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_exceptional_recovery_selection",),
+            "getattr(arguments, 'exceptional_recovery_delivery_issue', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_exceptional_recovery_selection",),
+            "getattr(arguments, 'exceptional_recovery_authorization_id', None)",
+        ),
     },
     "secpal-resolve-fixed-threads.py": {
         DynamicImportCall(
@@ -578,6 +695,10 @@ SAFE_SYS_MODULES_CALLS = {
         DynamicImportCall(
             ("_load_fast_path_helper",),
             "sys.modules.pop(spec.name, None)",
+        ),
+        DynamicImportCall(
+            ("_load_lifecycle_publication_helpers",),
+            "sys.modules.pop(module_name, None)",
         ),
     },
     "secpal-resolve-fixed-threads.py": {
@@ -622,6 +743,18 @@ SAFE_SYS_MODULES_STORES = {
         DynamicImportCall(
             ("_load_fast_path_helper",),
             "sys.modules[spec.name]",
+        ),
+        DynamicImportCall(
+            ("_load_lifecycle_publication_helpers",),
+            "sys.modules[package_name]",
+        ),
+        DynamicImportCall(
+            ("_load_lifecycle_publication_helpers",),
+            "sys.modules[f'{package_name}.fast_path']",
+        ),
+        DynamicImportCall(
+            ("_load_lifecycle_publication_helpers", "load"),
+            "sys.modules[module_name]",
         ),
     },
     "secpal-resolve-fixed-threads.py": {
