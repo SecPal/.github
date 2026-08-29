@@ -7117,6 +7117,7 @@ class FastPathTests(TestCase):
         entry = registry_entry("SecPal/.github")
         entry["manual_gates"] = []
         binding = actions._fast_registry_binding(entry)
+        eligibility_digest = "e" * 64
         integration = ready_integration_evidence(
             reviewed,
             validated_tree=tree,
@@ -7129,6 +7130,7 @@ class FastPathTests(TestCase):
             binding=binding,
             reviewed=reviewed,
             manual_gate_evidence=[],
+            eligibility_evidence_digest=eligibility_digest,
             integration_evidence_digest=fast_path.digest_json(integration),
         )
         integration_digest = fast_path.digest_json(integration)
@@ -7142,7 +7144,7 @@ class FastPathTests(TestCase):
             receipt="receipt.json",
             output="attestation.json",
             manual_gate_evidence=None,
-            eligibility_evidence=None,
+            eligibility_evidence="eligibility.json",
             integration_evidence="integration.json",
             delivery_issue=9,
             integration_authorization_id="ready-integration-authorization-001",
@@ -7207,10 +7209,19 @@ class FastPathTests(TestCase):
             mock.patch.object(actions, "_read_json", side_effect=read_json),
             mock.patch.object(actions, "_run_attestation_git", side_effect=git_result),
             mock.patch.object(actions, "_verify_ready_integration_prior_authority"),
+            mock.patch.object(
+                actions,
+                "_resolution_eligibility_digest",
+                return_value=eligibility_digest,
+            ),
             mock.patch.object(actions, "_write_fast_report") as write_report,
         ):
             self.assertEqual(actions._command_attest_validation(arguments), 0)
         write_report.assert_called_once()
+        self.assertEqual(
+            write_report.call_args.args[1]["kind"],
+            "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION",
+        )
 
     def test_ready_integration_evidence_fails_closed_for_identity_and_lifecycle_drift(
         self,
@@ -8180,6 +8191,115 @@ class FastPathTests(TestCase):
                 reviewed_state=reviewed,
                 validation_receipt=historical_receipt,
                 integration_evidence=integration,
+            )
+
+    def test_ready_integration_attestation_binds_resolution_eligibility(self) -> None:
+        reviewed = fast_feedback()
+        registry = fast_registry()
+        tree = "a" * 40
+        eligibility_digest = "e" * 64
+        integration = ready_integration_evidence(
+            reviewed, validated_tree=tree, registry=registry
+        )
+        receipt = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            validated_tree_sha=tree,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+            eligibility_evidence_digest=eligibility_digest,
+            integration_evidence_digest=fast_path.digest_json(integration),
+        )
+
+        attestation = fast_path.create_ready_integration_attestation(
+            repository="SecPal/.github",
+            head_sha="d" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+            integration_evidence=integration,
+        )
+
+        self.assertEqual(attestation["schema_version"], "1.2")
+        self.assertEqual(
+            attestation["kind"],
+            "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION",
+        )
+        self.assertEqual(
+            attestation["eligibility_evidence_digest"], eligibility_digest
+        )
+
+        verification = {
+            "repository": "SecPal/.github",
+            "head_sha": "d" * 40,
+            "registry": registry,
+            "command_set": registry["validation"],
+            "reviewed_state": reviewed,
+            "validation_receipt": receipt,
+            "integration_evidence": integration,
+            "commit_parent_shas": integration["ordered_parent_shas"],
+            "commit_tree_sha": tree,
+            "commit_validation_receipt_digest": receipt["receipt_digest"],
+            "commit_integration_evidence_digest": fast_path.digest_json(
+                integration
+            ),
+        }
+        fast_path.verify_eligibility_bound_ready_integration_attestation(
+            attestation, **verification
+        )
+
+        missing = copy.deepcopy(attestation)
+        missing.pop("eligibility_evidence_digest")
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "eligibility-bound"
+        ):
+            fast_path.verify_eligibility_bound_ready_integration_attestation(
+                missing, **verification
+            )
+
+        mismatched = copy.deepcopy(attestation)
+        mismatched["eligibility_evidence_digest"] = "f" * 64
+        mismatched_fields = {
+            key: value
+            for key, value in mismatched.items()
+            if key != "attestation_digest"
+        }
+        mismatched["attestation_digest"] = fast_path.digest_json(
+            mismatched_fields
+        )
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "eligibility differ"):
+            fast_path.verify_eligibility_bound_ready_integration_attestation(
+                mismatched, **verification
+            )
+
+        historical = fast_path.create_ready_integration_attestation(
+            repository="SecPal/.github",
+            head_sha="d" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            reviewed_state=reviewed,
+            validation_receipt=fast_path.create_validation_receipt(
+                repository="SecPal/.github",
+                head_sha=reviewed.head_sha,
+                validated_tree_sha=tree,
+                registry=registry,
+                command_set=registry["validation"],
+                successful_result=True,
+                reviewed_state=reviewed,
+                manual_gate_evidence=[],
+                integration_evidence_digest=fast_path.digest_json(integration),
+            ),
+            integration_evidence=integration,
+        )
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "eligibility-bound"
+        ):
+            fast_path.verify_eligibility_bound_ready_integration_attestation(
+                historical, **verification
             )
 
     def test_remediation_evidence_cannot_select_ready_integration_topology(self) -> None:

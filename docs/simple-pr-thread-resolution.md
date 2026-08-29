@@ -165,6 +165,16 @@ final attestation authenticate. The resolver recalculates that digest and
 rejects any post-validation classification, disposition, finding, or evidence
 change before its first GitHub read.
 
+For a typed two-parent Ready integration, supply the same eligibility artifact
+alongside `--integration-evidence` during validation and binding. This emits
+the closed version-1.2
+`ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION`. Resolution then
+also supplies `--integration-evidence`; the resolver uses the integration
+verifier to authenticate the exact two parents, tree, receipt and integration
+trailers, reviewed state, signer, and eligibility digest before applying the
+ordinary exact-thread checks. Version-1.1 integration attestations do not carry
+this authority and are rejected for resolution.
+
 New manifests use schema version 1.1. The resolver also reads already-authenticated
 version 1.0 manifests for the legacy resolution-eligible dispositions. It
 authenticates the original version 1.0 canonical payload before normalizing the

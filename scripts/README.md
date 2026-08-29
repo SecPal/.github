@@ -68,6 +68,13 @@ does not relax the ordinary sole-parent path, create or push an integration,
 change Ready state, read post-push checks, or authorize merge automation.
 Historical receipt reconstruction reads the registry blob from the immutable
 prior delivery commit rather than applying a later registry to older evidence.
+When exact thread resolution is required on the integration head,
+`attest-validation` may additionally consume the canonical eligibility
+artifact. That closed combination emits the version-1.2
+`ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION`; its receipt and
+attestation bind the same eligibility digest. Historical version-1.1
+integration attestations remain valid for their original integration purpose
+but are not thread-resolution authority.
 
 Parent 1 additionally requires a closed prior-authority manifest authenticated
 by a signed annotated tag and independently verified ordinary receipt, final
@@ -99,6 +106,11 @@ validation receipt for an unchanged head cannot authorize a resolution
 mutation because the pre-existing commit does not authenticate that receipt.
 The resolver verifies that evidence against the actual local commit tree,
 signature, origin, and, for a new fix commit, its parent and receipt trailer. A
+version-1.2 eligibility-bound Ready-integration attestation is instead routed
+through the integration-specific verifier with `--integration-evidence`; the
+resolver authenticates its exact ordered parents, tree, both evidence trailers,
+expected signer, and eligibility digest before normalizing the resolution
+anchor. It never routes an integration artifact through the sole-parent path. A
 separate eligibility manifest must cover every requested thread exactly and
 bind its allowed classification/disposition and finding evidence to the
 reviewed state. Its canonical digest must be authenticated by the signed

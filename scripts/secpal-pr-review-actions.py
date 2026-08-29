@@ -5314,10 +5314,6 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         raise fast_path.RecoverableLocalError(
             "integration selectors are valid only with --integration-evidence"
         )
-    if integration_evidence_path and getattr(arguments, "eligibility_evidence", None):
-        raise fast_path.SecurityBlocker(
-            "Ready integration evidence cannot be combined with remediation eligibility"
-        )
     exceptional_selectors = (
         getattr(arguments, "exceptional_recovery_delivery_issue", None),
         getattr(arguments, "exceptional_recovery_authorization_id", None),

@@ -1537,9 +1537,15 @@ def create_ready_integration_attestation(
     )
     if validation_receipt.get("integration_evidence_digest") != digest_json(normalized):
         raise SecurityBlocker("validation receipt does not bind the Ready integration evidence")
+    eligibility_digest = ordinary.get("eligibility_evidence_digest")
+    eligibility_bound = eligibility_digest is not None
     fields = {
-        "schema_version": "1.1",
-        "kind": "READY_INTEGRATION_VALIDATION_ATTESTATION",
+        "schema_version": "1.2" if eligibility_bound else "1.1",
+        "kind": (
+            "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"
+            if eligibility_bound
+            else "READY_INTEGRATION_VALIDATION_ATTESTATION"
+        ),
         "repository": normalized["repository"],
         "delivery_issue_number": normalized["delivery_issue_number"],
         "pull_request_number": normalized["pull_request_number"],
@@ -1570,7 +1576,63 @@ def create_ready_integration_attestation(
         "eligibility": copy.deepcopy(normalized["eligibility"]),
         "successful_result": True,
     }
+    if eligibility_bound:
+        fields["manual_gate_evidence"] = copy.deepcopy(
+            ordinary["manual_gate_evidence"]
+        )
+        fields["eligibility_evidence_digest"] = eligibility_digest
     return {**fields, "attestation_digest": digest_json(fields)}
+
+
+def verify_eligibility_bound_ready_integration_attestation(
+    attestation: Any,
+    *,
+    repository: str,
+    head_sha: str,
+    registry: dict[str, Any],
+    command_set: list[dict[str, Any]],
+    reviewed_state: StableFeedbackState,
+    validation_receipt: dict[str, Any],
+    integration_evidence: dict[str, Any],
+    commit_parent_shas: list[str],
+    commit_tree_sha: str,
+    commit_validation_receipt_digest: str | None,
+    commit_integration_evidence_digest: str | None,
+) -> None:
+    """Verify the closed integration-resolution attestation kind."""
+
+    if (
+        not isinstance(attestation, dict)
+        or attestation.get("schema_version") != "1.2"
+        or attestation.get("kind")
+        != "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"
+        or not isinstance(attestation.get("eligibility_evidence_digest"), str)
+        or not DIGEST.fullmatch(attestation["eligibility_evidence_digest"])
+    ):
+        raise SecurityBlocker(
+            "eligibility-bound Ready integration attestation is required"
+        )
+    if (
+        validation_receipt.get("eligibility_evidence_digest")
+        != attestation["eligibility_evidence_digest"]
+    ):
+        raise SecurityBlocker(
+            "Ready integration receipt and attestation eligibility differ"
+        )
+    verify_ready_integration_attestation(
+        attestation,
+        repository=repository,
+        head_sha=head_sha,
+        registry=registry,
+        command_set=command_set,
+        reviewed_state=reviewed_state,
+        validation_receipt=validation_receipt,
+        integration_evidence=integration_evidence,
+        commit_parent_shas=commit_parent_shas,
+        commit_tree_sha=commit_tree_sha,
+        commit_validation_receipt_digest=commit_validation_receipt_digest,
+        commit_integration_evidence_digest=commit_integration_evidence_digest,
+    )
 
 
 def verify_ready_integration_attestation(

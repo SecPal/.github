@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-29 - Authenticate Thread Eligibility on Ready Integration
+
+**Changed:**
+
+- add a versioned eligibility-bound Ready-integration attestation whose receipt
+  authenticates the exact reviewed-thread resolution eligibility
+- let the guarded fixed-thread resolver verify the specialized two-parent
+  topology, tree, evidence trailers, signer, and eligibility without treating
+  it as an ordinary sole-parent delivery
+
 ## 2026-08-29 - Bind Ready Integration to Published Lifecycle Authority
 
 **Changed:**
