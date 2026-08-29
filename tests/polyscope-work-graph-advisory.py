@@ -157,6 +157,34 @@ class PolyscopeWorkGraphAdvisoryTest(unittest.TestCase):
         self.assertIn("refuse", gate_unit)
         self.assertIn("#735", gate_unit)
 
+    def test_evidence_architecture_dispatch_gate_is_explicit_and_hard(self) -> None:
+        match = re.search(
+            r"^## Evidence Architecture Enforcement\n(?P<body>.*?)(?=^## |\Z)",
+            self.instructions,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        units = self._semantic_units(match.group("body"))
+        dispatch = [
+            unit
+            for unit in units
+            if all(
+                term in unit
+                for term in (
+                    "scripts/secpal-evidence-architecture.py",
+                    "--dispatch",
+                    ".secpal/evidence-architecture.json",
+                    "refuse",
+                )
+            )
+        ]
+        self.assertEqual(len(dispatch), 1)
+        boundary = " ".join(units)
+        self.assertIn("docs/evidence-architecture-contract.md", boundary)
+        self.assertIn("explicit declarations", boundary)
+        self.assertIn("human review", boundary)
+        self.assertNotIn("infer purity", boundary)
+
     def test_every_ready_next_unit_delegates_to_the_canonical_contract(self) -> None:
         semantic_units = [unit for unit in self.units if re.search(r"\b(?:READY|NEXT)\b", unit)]
         self.assertTrue(semantic_units)

@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -92,6 +94,38 @@ class EvidenceArchitectureGovernanceTests(unittest.TestCase):
         ):
             with self.subTest(statement=statement):
                 self.assertIn(statement, normalized_evidence)
+
+    def test_hard_result_has_distinct_identity_and_executes_the_validator(self) -> None:
+        parsed = subprocess.run(
+            [
+                "node",
+                "--input-type=module",
+                "-e",
+                (
+                    'import fs from "node:fs"; import * as yaml from "js-yaml"; '
+                    "process.stdout.write(JSON.stringify(yaml.load(fs.readFileSync(process.argv[1], 'utf8'))));"
+                ),
+                str(ROOT / ".github/workflows/quality.yml"),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        workflow = json.loads(parsed.stdout)
+        jobs = workflow["jobs"]
+        matching = [
+            job
+            for job in jobs.values()
+            if job.get("name") == "Evidence Architecture PR Gate"
+        ]
+        self.assertEqual(len(matching), 1)
+        commands = "\n".join(
+            str(step.get("run", "")) for step in matching[0].get("steps", [])
+        )
+        self.assertIn("scripts/secpal-evidence-architecture.py", commands)
+        self.assertNotEqual(matching[0]["name"], "Work-Graph PR Advisory")
+        self.assertNotEqual(matching[0]["name"], "Work-Graph PR Gate")
 
 
 if __name__ == "__main__":

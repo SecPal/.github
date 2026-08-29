@@ -152,6 +152,26 @@ Apply these rules only when the session says it is running inside Polyscope.
   and mutation counts may guide review but never constitute a finding by
   themselves.
 
+## Evidence Architecture Enforcement
+
+- Before any paid, destructive, privileged, costly, or externally mutating
+  dispatch, run the owning `SecPal/.github` checkout's
+  `scripts/secpal-evidence-architecture.py --dispatch` against the repository's
+  `.secpal/evidence-architecture.json` and any named executable agreement-result
+  evidence, and refuse dispatch unless the closed assessment passes under
+  `docs/evidence-architecture-contract.md`; never retain provider output,
+  response bodies, environment data, or secrets to manufacture an identity.
+- Mechanical evidence-architecture checks consume explicit declarations only:
+  reachable fallible trusted operations and semantic diagnostic identities,
+  declared normalization/admission surfaces and their closed capabilities, and
+  declared invariant owners and independent enforcement proofs. Missing,
+  malformed, incomplete, or unavailable declaration evidence fails closed at
+  the applicable delivery or dispatch boundary.
+- Keep human review explicit for undeclared semantic roles, responsibility and
+  layer boundaries, trust-boundary justification, and conceptual architecture.
+  The mechanical gate verifies declaration consistency and never claims that
+  arbitrary implementation shape makes architecture judgment decidable.
+
 ## Work-graph semantics
 
 - Node types, native hierarchy and dependency meaning, sibling order, `READY`,

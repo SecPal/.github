@@ -106,7 +106,8 @@ EXPECTED_CONTEXTS_JSON='{
     "Validate PR Title And Body Language",
     "Validate Signed PR Commits",
     "Work-Graph PR Advisory",
-    "Work-Graph PR Gate"
+    "Work-Graph PR Gate",
+    "Evidence Architecture PR Gate"
   ],
   "GuardGuide": [
     "check-conflicts / Detect Git Conflict Markers",
@@ -242,6 +243,7 @@ assert_payload_has_context "$github_payload" "Validate PR Title And Body Languag
 assert_payload_has_context "$github_payload" "Validate Signed PR Commits"
 assert_payload_has_context "$github_payload" "Work-Graph PR Advisory"
 assert_payload_has_context "$github_payload" "Work-Graph PR Gate"
+assert_payload_has_context "$github_payload" "Evidence Architecture PR Gate"
 
 for non_github_repo in GuardGuide android api contracts frontend guardguide.de secpal.app; do
   if jq -e '.checks | any(.context == "Work-Graph PR Advisory")' >/dev/null \
@@ -252,6 +254,11 @@ for non_github_repo in GuardGuide android api contracts frontend guardguide.de s
   if jq -e '.checks | any(.context == "Work-Graph PR Gate")' >/dev/null \
     <<<"${payloads[$non_github_repo]}"; then
     echo "The repository-local hard-gate context must not be invented for unavailable caller workflows" >&2
+    exit 1
+  fi
+  if jq -e '.checks | any(.context == "Evidence Architecture PR Gate")' >/dev/null \
+    <<<"${payloads[$non_github_repo]}"; then
+    echo "The evidence-architecture hard context must not be invented without a caller workflow" >&2
     exit 1
   fi
 done
