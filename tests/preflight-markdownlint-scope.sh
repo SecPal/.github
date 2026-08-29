@@ -101,6 +101,16 @@ with open(os.environ["TEST_LOG"], "a", encoding="utf-8") as log:
     log.write("evidence-architecture-governance\n")
 EOF
 
+cat >"$workspace/tests/postgresql-18-baseline-governance.py" <<'EOF'
+"""Fixture stand-in proving preflight requires the PostgreSQL baseline suite."""
+
+import os
+
+
+with open(os.environ["TEST_LOG"], "a", encoding="utf-8") as log:
+    log.write("postgresql-18-baseline-governance\n")
+EOF
+
 cat >"$workspace/README.md" <<'EOF'
 # Test Workspace
 EOF
@@ -205,7 +215,8 @@ fi
 if ! grep -Fxq 'validate-ai-instructions' "$test_log" \
   || ! grep -Fxq 'validate-copilot-instructions' "$test_log" \
   || ! grep -Fxq 'polyscope-work-graph-advisory' "$test_log" \
-  || ! grep -Fxq 'evidence-architecture-governance' "$test_log"; then
+  || ! grep -Fxq 'evidence-architecture-governance' "$test_log" \
+  || ! grep -Fxq 'postgresql-18-baseline-governance' "$test_log"; then
   echo "Expected preflight to execute the selected fixture compatibility and advisory regression tests" >&2
   cat "$test_log" >&2
   exit 1
