@@ -15,9 +15,17 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PREFLIGHT_PATH = REPOSITORY_ROOT / "scripts/preflight.sh"
 QUALITY_WORKFLOW_PATH = REPOSITORY_ROOT / ".github/workflows/quality.yml"
+POSTGRES_LEGACY_MAJOR_PATTERN = (
+    r"postgres(?:ql)?[\s_/:=-]*"
+    r"(?:(?:version|major)[\s_/:=-]+)?v?(?:16|17)\b"
+)
+PG_LEGACY_MAJOR_PATTERN = r"pg[\s_/:=-]*v?(?:16|17)\b"
+LEGACY_MAJOR_REFERENCE_PATTERN = (
+    rf"(?:{POSTGRES_LEGACY_MAJOR_PATTERN}|{PG_LEGACY_MAJOR_PATTERN})"
+)
 LEGACY_MAJOR_PATTERN = re.compile(
-    r"`?(?:postgres(?:ql)?|pg)[\s_/:=-]*v?(?:16|17)\b"
-    r"(?:\s*/\s*(?:(?:postgres(?:ql)?|pg)[\s_/:=-]*v?)?(?:16|17)\b)?`?",
+    rf"`?{LEGACY_MAJOR_REFERENCE_PATTERN}"
+    rf"(?:\s*/\s*(?:{LEGACY_MAJOR_REFERENCE_PATTERN}|(?:16|17)\b))?`?",
     re.IGNORECASE,
 )
 SAFE_EVIDENCE_SUFFIXES = frozenset(
@@ -60,7 +68,10 @@ def active_legacy_references(content: str) -> list[tuple[int, str]]:
 
 class PostgreSQL18BaselineGovernanceTest(unittest.TestCase):
     def test_canonical_guidance_names_the_postgresql_18_contract(self) -> None:
-        adr = (REPOSITORY_ROOT / "docs/adr/20260824-postgresql-18-canonical-baseline-adr017.md").read_text()
+        adr = (
+            REPOSITORY_ROOT
+            / "docs/adr/20260824-postgresql-18-canonical-baseline-adr017.md"
+        ).read_text(encoding="utf-8")
         normalized_adr = re.sub(r"\s+", " ", adr)
 
         for requirement in (
@@ -84,7 +95,7 @@ class PostgreSQL18BaselineGovernanceTest(unittest.TestCase):
             ".github/ISSUE_TEMPLATE/epic.yml",
             ".github/ISSUE_TEMPLATE/sub-issue.yml",
         ):
-            content = (REPOSITORY_ROOT / relative_path).read_text()
+            content = (REPOSITORY_ROOT / relative_path).read_text(encoding="utf-8")
             self.assertIn("PostgreSQL 18", content, relative_path)
 
     def test_github_guidance_has_no_legacy_major_baseline(self) -> None:
@@ -93,7 +104,7 @@ class PostgreSQL18BaselineGovernanceTest(unittest.TestCase):
                 continue
             self.assertEqual(
                 [],
-                active_legacy_references(path.read_text()),
+                active_legacy_references(path.read_text(encoding="utf-8")),
                 str(path.relative_to(REPOSITORY_ROOT)),
             )
 
@@ -113,8 +124,13 @@ class PostgreSQL18BaselineGovernanceTest(unittest.TestCase):
             "Historical note: support PostgreSQL 17 in active development.",
             "Migration note: use PostgreSQL 17 for the application.",
             "Historical context: deploy postgres:16 for the application.",
+            "Use PostgreSQL version 17 for CI.",
+            "Use Postgres version 16 for CI.",
+            "Keep PostgreSQL major 16 compatibility.",
+            "Keep Postgres major 17 compatibility.",
         ):
-            self.assertTrue(active_legacy_references(content), content)
+            with self.subTest(content=content):
+                self.assertTrue(active_legacy_references(content), content)
 
     def test_legacy_major_classifier_allows_documented_evidence(self) -> None:
         for content in (
@@ -125,11 +141,15 @@ class PostgreSQL18BaselineGovernanceTest(unittest.TestCase):
             "PostgreSQL 16 is immutable release history only.",
             "Postgres 17 is changelog history only.",
             "`PostgreSQL 16` is historical evidence only.",
+            "PostgreSQL version 16 is historical evidence only.",
+            "Postgres major 17 is a migration-specific fixture.",
         ):
-            self.assertEqual([], active_legacy_references(content), content)
+            with self.subTest(content=content):
+                self.assertIsNotNone(LEGACY_MAJOR_PATTERN.search(content), content)
+                self.assertEqual([], active_legacy_references(content), content)
 
     def test_preflight_enforces_the_governance_test_fail_closed(self) -> None:
-        preflight = PREFLIGHT_PATH.read_text()
+        preflight = PREFLIGHT_PATH.read_text(encoding="utf-8")
 
         self.assertNotRegex(
             preflight,
@@ -148,7 +168,7 @@ class PostgreSQL18BaselineGovernanceTest(unittest.TestCase):
         )
 
     def test_hosted_quality_executes_the_authoritative_preflight_path(self) -> None:
-        quality_workflow = QUALITY_WORKFLOW_PATH.read_text()
+        quality_workflow = QUALITY_WORKFLOW_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
             "run: ./scripts/preflight.sh --postgresql-baseline-only",
