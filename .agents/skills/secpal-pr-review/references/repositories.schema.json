@@ -163,11 +163,13 @@
         "transition_signer_identities",
         "authority_signer_identities",
         "publication_signer_identities",
+        "genesis_admission_signer_identities",
         "legacy_adoption_signer_identities",
         "publication_branch",
         "publication_remote_url",
         "publication_ruleset_id",
         "publication_required_rules",
+        "bootstrap_genesis_repairs",
         "delivery_initializations"
       ],
       "properties": {
@@ -218,6 +220,12 @@
           "uniqueItems": true,
           "items": { "type": "string", "minLength": 1 }
         },
+        "genesis_admission_signer_identities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
         "legacy_adoption_signer_identities": {
           "type": "array",
           "minItems": 1,
@@ -238,6 +246,38 @@
         },
         "publication_required_rules": {
           "const": ["deletion", "non_fast_forward"]
+        },
+        "bootstrap_genesis_repairs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "repair_issue",
+              "delivery_issue",
+              "pull_request",
+              "initial_head_sha",
+              "initialization_digest",
+              "validation_receipt_digest",
+              "final_attestation_digest",
+              "enrollment_publication_oid",
+              "enrollment_publication_digest"
+            ],
+            "properties": {
+              "repair_issue": { "type": "integer", "minimum": 1 },
+              "delivery_issue": { "type": "integer", "minimum": 1 },
+              "pull_request": { "type": "integer", "minimum": 1 },
+              "initial_head_sha": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
+              "initialization_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "validation_receipt_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "final_attestation_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "enrollment_publication_oid": {
+                "type": "string",
+                "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+              },
+              "enrollment_publication_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            }
+          }
         },
         "delivery_initializations": {
           "type": "array",

@@ -278,6 +278,42 @@ class LifecycleAuthorityTests(TestCase):
                 ):
                     authority._load_lifecycle_trust_policy(REPOSITORY)
 
+    def test_registry_closes_the_single_issue_736_bootstrap_repair(self) -> None:
+        registry_path = (
+            REPO_ROOT
+            / ".agents/skills/secpal-pr-review/references/repositories.json"
+        )
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        policy = authority._load_lifecycle_trust_policy(REPOSITORY)
+        self.assertEqual(len(policy.bootstrap_genesis_repairs), 1)
+        repair = policy.bootstrap_genesis_repairs[0]
+        self.assertEqual(repair.repair_issue, 774)
+        self.assertEqual(repair.delivery_issue, 736)
+        self.assertEqual(repair.pull_request, 760)
+        self.assertEqual(
+            repair.initial_head_sha,
+            "9cce12e839e5f998137cc58fea90d0a5a0a45f63",
+        )
+        self.assertEqual(
+            repair.initialization_digest,
+            "6477407a86182f6bc9964089382f288e13dbb2e0b096edb2bf4e1c228452e628",
+        )
+        entry = next(
+            item
+            for item in registry["repositories"]
+            if item["repository"] == REPOSITORY
+        )
+        repairs = entry["lifecycle_authority_policy"]["bootstrap_genesis_repairs"]
+        repairs.append(copy.deepcopy(repairs[0]))
+        with tempfile.TemporaryDirectory(prefix="bootstrap-repair-policy-") as directory:
+            policy_path = Path(directory) / "repositories.json"
+            policy_path.write_text(json.dumps(registry), encoding="utf-8")
+            with patch.object(authority, "_TRUST_REGISTRY", policy_path):
+                with self.assertRaisesRegex(
+                    authority.LifecycleAuthorityError, "ambiguous"
+                ):
+                    authority._load_lifecycle_trust_policy(REPOSITORY)
+
     def test_registry_requires_cryptographically_distinct_legacy_adoption_credential(
         self,
     ) -> None:

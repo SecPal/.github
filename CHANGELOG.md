@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-30 - Authenticate Native Genesis Before Lifecycle Publication
+
+**Changed:**
+
+- require one independently signed, protected-journal native-genesis admission
+  to be globally reachable before ordinary native lifecycle enrollment
+- retain the journal as the sole dynamic CURRENT selector while narrowing
+  static initialization entries to historical and strict-verifier compatibility
+- add one exact append-only bootstrap repair for the existing issue 736 native
+  genesis without rewriting its lifecycle or publication history
+
 ## 2026-08-29 - Define Public Status And Truth Semantics
 
 **Added:**

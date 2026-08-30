@@ -25,6 +25,11 @@ SCHEMA_VERSION = "1.0"
 PUBLICATION_KIND = "SECPAL_LIFECYCLE_AUTHORITY_PUBLICATION"
 PUBLICATION_DOMAIN = "secpal.lifecycle-authority-publication/v1"
 OPERATIONS = frozenset({"ENROLL_EXISTING_LIFECYCLE", "ADVANCE_CURRENT_TERMINAL"})
+GENESIS_ADMISSION_KIND = "SECPAL_NATIVE_LIFECYCLE_GENESIS_ADMISSION"
+GENESIS_ADMISSION_DOMAIN = "secpal.native-lifecycle-genesis-admission/v1"
+GENESIS_ADMISSION_OPERATIONS = frozenset(
+    {"ADMIT_NATIVE_GENESIS", "BOOTSTRAP_REPAIR_NATIVE_GENESIS"}
+)
 ADVANCE_TRANSITIONS = authority.TRANSITIONS - {"INITIALIZED_DRAFT"}
 PUBLICATION_FIELDS = frozenset(
     {
@@ -36,6 +41,18 @@ PUBLICATION_FIELDS = frozenset(
         "journal_predecessor_oid", "predecessor_publication_oid",
         "predecessor_publication_digest", "predecessor_terminal_authority_digest",
         "signer_identity", "signature", "publication_digest",
+    }
+)
+GENESIS_ADMISSION_FIELDS = frozenset(
+    {
+        "schema_version", "kind", "domain", "operation", "repository",
+        "delivery_issue", "pull_request", "initial_head_sha",
+        "validation_receipt_digest", "final_attestation_digest",
+        "initialization_digest", "delivery_initialization",
+        "publication_branch", "journal_predecessor_oid",
+        "target_enrollment_publication_oid",
+        "target_enrollment_publication_digest", "bootstrap_repair_issue",
+        "signer_identity", "signature", "admission_digest",
     }
 )
 _OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
@@ -61,6 +78,24 @@ class VerifiedLifecyclePublication:
     journal_predecessor_oid: str | None
     predecessor_publication_oid: str | None
     lifecycle: authority.VerifiedLifecycleAuthority
+
+
+@dataclass(frozen=True)
+class VerifiedNativeGenesisAdmission:
+    """An independently authorized native genesis, never a CURRENT selector."""
+
+    admission_oid: str
+    admission_digest: str
+    publication_branch: str
+    journal_predecessor_oid: str | None
+    repository: str
+    delivery_issue: int
+    pull_request: int
+    initial_head_sha: str
+    initialization_digest: str
+    delivery_initialization: dict[str, Any]
+    bootstrap_repair_issue: int | None = None
+    maintained_compatibility_anchor: bool = False
 
 
 def _trusted_executable(name: str) -> tuple[str, Any]:
@@ -350,8 +385,231 @@ def _canonical_bundle(serialized_evidence: bytes | str) -> tuple[dict[str, Any],
     return value, raw
 
 
+def _native_bundle(value: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Return only a closed native lifecycle bundle from publication input."""
+
+    if value.get("kind") == authority.PUBLICATION_EVIDENCE_KIND:
+        if (
+            value.get("enrollment_mode") != "NATIVE_LIFECYCLE"
+            or value.get("legacy_adoption_checkpoint") is not None
+            or not isinstance(value.get("lifecycle_evidence"), dict)
+        ):
+            raise LifecyclePublicationError(
+                "native genesis admission requires native lifecycle evidence"
+            )
+        return value["lifecycle_evidence"]
+    return value
+
+
+def _verify_genesis_admission_document(
+    raw: bytes,
+    *,
+    object_oid: str,
+    expected_branch: str,
+) -> tuple[dict[str, Any], VerifiedNativeGenesisAdmission]:
+    try:
+        document = json.loads(raw, object_pairs_hook=_reject_duplicate_pairs)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LifecyclePublicationError("genesis admission document is malformed") from exc
+    if not isinstance(document, dict) or canonical_json_bytes(document) != raw:
+        raise LifecyclePublicationError("genesis admission document is not canonical")
+    if frozenset(document) != GENESIS_ADMISSION_FIELDS:
+        raise LifecyclePublicationError(
+            "genesis admission document has missing or unknown fields"
+        )
+    if (
+        document["schema_version"] != SCHEMA_VERSION
+        or document["kind"] != GENESIS_ADMISSION_KIND
+        or document["domain"] != GENESIS_ADMISSION_DOMAIN
+        or document["operation"] not in GENESIS_ADMISSION_OPERATIONS
+    ):
+        raise LifecyclePublicationError("unknown genesis admission semantics")
+    repository = authority._require_repository(document["repository"])
+    policy = authority._load_lifecycle_trust_policy(repository)
+    if (
+        document["publication_branch"] != expected_branch
+        or expected_branch != policy.publication_branch
+    ):
+        raise LifecyclePublicationError("genesis admission branch binding is invalid")
+    issue = authority._require_positive_int(
+        document["delivery_issue"], "admitted delivery issue"
+    )
+    pull_request = authority._require_positive_int(
+        document["pull_request"], "admitted pull request"
+    )
+    initial_head = authority._require_oid(
+        document["initial_head_sha"], "admitted initial head"
+    )
+    initialization_digest = authority._require_digest(
+        document["initialization_digest"], "admitted initialization"
+    )
+    receipt = authority._require_digest(
+        document["validation_receipt_digest"], "admitted validation receipt"
+    )
+    attestation = authority._require_digest(
+        document["final_attestation_digest"], "admitted final attestation"
+    )
+    predecessor = document["journal_predecessor_oid"]
+    if predecessor is not None and not _OID.fullmatch(predecessor):
+        raise LifecyclePublicationError("genesis admission predecessor is invalid")
+    initialization = authority._verify_delivery_initialization(
+        document["delivery_initialization"],
+        policy=policy,
+        signature_verifier=authority._policy_signature_verifier(policy),
+        require_maintained_anchor=False,
+    )
+    if (
+        initialization["repository"] != repository
+        or initialization["delivery_issue"] != issue
+        or initialization["pull_request"] != pull_request
+        or initialization["initial_head_sha"] != initial_head
+        or initialization["initialization_digest"] != initialization_digest
+        or initialization["validation_receipt_digest"] != receipt
+        or initialization["final_attestation_digest"] != attestation
+    ):
+        raise LifecyclePublicationError(
+            "genesis admission does not bind the exact signed initialization"
+        )
+    target_oid = document["target_enrollment_publication_oid"]
+    target_digest = document["target_enrollment_publication_digest"]
+    repair_issue = document["bootstrap_repair_issue"]
+    if document["operation"] == "ADMIT_NATIVE_GENESIS":
+        if target_oid is not None or target_digest is not None or repair_issue is not None:
+            raise LifecyclePublicationError(
+                "ordinary genesis admission cannot claim bootstrap repair"
+            )
+    else:
+        if not isinstance(target_oid, str) or not _OID.fullmatch(target_oid):
+            raise LifecyclePublicationError("bootstrap enrollment object is invalid")
+        authority._require_digest(target_digest, "bootstrap enrollment publication")
+        repair_issue = authority._require_positive_int(repair_issue, "bootstrap repair issue")
+        matches = [
+            repair
+            for repair in policy.bootstrap_genesis_repairs
+            if (
+                repair.repair_issue == repair_issue
+                and repair.delivery_issue == issue
+                and repair.pull_request == pull_request
+                and repair.initial_head_sha == initial_head
+                and repair.initialization_digest == initialization_digest
+                and repair.validation_receipt_digest == receipt
+                and repair.final_attestation_digest == attestation
+                and repair.enrollment_publication_oid == target_oid
+                and repair.enrollment_publication_digest == target_digest
+            )
+        ]
+        if len(matches) != 1:
+            raise LifecyclePublicationError(
+                "bootstrap genesis repair is not uniquely maintained"
+            )
+    signer = authority._require_identity(
+        document["signer_identity"], "genesis admission signer"
+    )
+    signed = {
+        key: copy.deepcopy(value)
+        for key, value in document.items()
+        if key != "admission_digest"
+    }
+    digest = authority._require_digest(
+        document["admission_digest"], "genesis admission"
+    )
+    if digest != digest_json(signed):
+        raise LifecyclePublicationError("genesis admission digest mismatch")
+    try:
+        authority._verify_signature(
+            canonical_json_bytes(
+                authority._unsigned(document, "admission_digest", "signature")
+            ),
+            document["signature"],
+            signer,
+            GENESIS_ADMISSION_DOMAIN,
+            policy.genesis_admission_signer_identities,
+            authority._policy_signature_verifier(policy),
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecyclePublicationError(
+            f"genesis admission object {object_oid} signature policy failed"
+        ) from exc
+    return document, VerifiedNativeGenesisAdmission(
+        admission_oid=object_oid,
+        admission_digest=digest,
+        publication_branch=expected_branch,
+        journal_predecessor_oid=predecessor,
+        repository=repository,
+        delivery_issue=issue,
+        pull_request=pull_request,
+        initial_head_sha=initial_head,
+        initialization_digest=initialization_digest,
+        delivery_initialization=copy.deepcopy(initialization),
+        bootstrap_repair_issue=repair_issue,
+    )
+
+
+def _genesis_admission_fields(
+    *,
+    initialization: Mapping[str, Any],
+    publication_branch: str,
+    journal_predecessor_oid: str | None,
+    signer_identity: str,
+    bootstrap_repair: authority.BootstrapGenesisRepair | None = None,
+) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "kind": GENESIS_ADMISSION_KIND,
+        "domain": GENESIS_ADMISSION_DOMAIN,
+        "operation": (
+            "ADMIT_NATIVE_GENESIS"
+            if bootstrap_repair is None
+            else "BOOTSTRAP_REPAIR_NATIVE_GENESIS"
+        ),
+        "repository": initialization["repository"],
+        "delivery_issue": initialization["delivery_issue"],
+        "pull_request": initialization["pull_request"],
+        "initial_head_sha": initialization["initial_head_sha"],
+        "validation_receipt_digest": initialization["validation_receipt_digest"],
+        "final_attestation_digest": initialization["final_attestation_digest"],
+        "initialization_digest": initialization["initialization_digest"],
+        "delivery_initialization": copy.deepcopy(dict(initialization)),
+        "publication_branch": publication_branch,
+        "journal_predecessor_oid": journal_predecessor_oid,
+        "target_enrollment_publication_oid": (
+            None
+            if bootstrap_repair is None
+            else bootstrap_repair.enrollment_publication_oid
+        ),
+        "target_enrollment_publication_digest": (
+            None
+            if bootstrap_repair is None
+            else bootstrap_repair.enrollment_publication_digest
+        ),
+        "bootstrap_repair_issue": (
+            None if bootstrap_repair is None else bootstrap_repair.repair_issue
+        ),
+        "signer_identity": authority._require_identity(
+            signer_identity, "genesis admission signer"
+        ),
+    }
+
+
+def _sign_genesis_admission(
+    fields: Mapping[str, Any], signer: authority.Signer
+) -> bytes:
+    signature = authority._normalize_signature(
+        signer(canonical_json_bytes(fields), GENESIS_ADMISSION_DOMAIN),
+        fields["signer_identity"],
+    )
+    signed = {**copy.deepcopy(dict(fields)), "signature": signature}
+    return canonical_json_bytes(
+        {**signed, "admission_digest": digest_json(signed)}
+    )
+
+
 def _verify_publication_document(
-    raw: bytes, *, object_oid: str, expected_branch: str,
+    raw: bytes,
+    *,
+    object_oid: str,
+    expected_branch: str,
+    native_genesis_admission: VerifiedNativeGenesisAdmission | None = None,
 ) -> tuple[dict[str, Any], authority.VerifiedLifecycleAuthority]:
     try:
         document = json.loads(raw, object_pairs_hook=_reject_duplicate_pairs)
@@ -406,11 +664,29 @@ def _verify_publication_document(
     evidence_raw = canonical_json_bytes(evidence)
     if document["lifecycle_evidence_digest"] != hashlib.sha256(evidence_raw).hexdigest():
         raise LifecyclePublicationError("publication lifecycle-evidence digest mismatch")
-    verified = (
-        authority.verify_lifecycle_authority_for_publication(evidence_raw)
-        if document["operation"] == "ENROLL_EXISTING_LIFECYCLE"
-        else authority._verify_lifecycle_authority_for_journal(evidence_raw)
-    )
+    native = document["historical_proof_mode"] == authority.NATIVE_PROOF_MODE
+    if native:
+        if native_genesis_admission is None:
+            raise LifecyclePublicationError(
+                "native genesis is not independently admitted"
+            )
+        if (
+            native_genesis_admission.repository != repository
+            or native_genesis_admission.delivery_issue != issue
+            or native_genesis_admission.initialization_digest
+            != document["initialization_evidence_digest"]
+        ):
+            raise LifecyclePublicationError(
+                "native genesis admission identity does not match publication"
+            )
+        verified = authority._verify_lifecycle_authority_for_journal(
+            evidence_raw,
+            admitted_initialization=native_genesis_admission.delivery_initialization,
+        )
+    elif document["operation"] == "ENROLL_EXISTING_LIFECYCLE":
+        verified = authority.verify_lifecycle_authority_for_publication(evidence_raw)
+    else:
+        verified = authority._verify_lifecycle_authority_for_journal(evidence_raw)
     if (
         verified.repository != repository
         or verified.delivery_issue != issue
@@ -527,11 +803,63 @@ def _sign_publication(fields: Mapping[str, Any], signer: authority.Signer) -> by
     return canonical_json_bytes({**signed, "publication_digest": digest_json(signed)})
 
 
+def _maintained_compatibility_admission(
+    document: Mapping[str, Any], object_oid: str, publication_branch: str
+) -> VerifiedNativeGenesisAdmission | None:
+    """Project only pre-existing static native roots; never admit a new publisher."""
+
+    if (
+        document.get("operation") != "ENROLL_EXISTING_LIFECYCLE"
+        or document.get("historical_proof_mode") != authority.NATIVE_PROOF_MODE
+        or not isinstance(document.get("lifecycle_evidence"), dict)
+    ):
+        return None
+    bundle = _native_bundle(document["lifecycle_evidence"])
+    initialization = bundle.get("delivery_initialization")
+    if not isinstance(initialization, dict):
+        return None
+    repository = authority._require_repository(initialization.get("repository"))
+    policy = authority._load_lifecycle_trust_policy(repository)
+    matches = [
+        anchor
+        for anchor in policy.initialization_anchors
+        if (
+            anchor.delivery_issue == initialization.get("delivery_issue")
+            and anchor.pull_request == initialization.get("pull_request")
+            and anchor.initial_head_sha == initialization.get("initial_head_sha")
+            and anchor.initialization_digest
+            == initialization.get("initialization_digest")
+        )
+    ]
+    if len(matches) != 1:
+        return None
+    verified = authority._verify_delivery_initialization(
+        initialization,
+        policy=policy,
+        signature_verifier=authority._policy_signature_verifier(policy),
+        require_maintained_anchor=True,
+    )
+    return VerifiedNativeGenesisAdmission(
+        admission_oid=object_oid,
+        admission_digest=verified["initialization_digest"],
+        publication_branch=publication_branch,
+        journal_predecessor_oid=document.get("journal_predecessor_oid"),
+        repository=repository,
+        delivery_issue=verified["delivery_issue"],
+        pull_request=verified["pull_request"],
+        initial_head_sha=verified["initial_head_sha"],
+        initialization_digest=verified["initialization_digest"],
+        delivery_initialization=copy.deepcopy(verified),
+        maintained_compatibility_anchor=True,
+    )
+
+
 def _walk_journal(
     repository_root: Path, tip_oid: str, publication_branch: str,
 ) -> tuple[
     list[tuple[str, dict[str, Any], authority.VerifiedLifecycleAuthority]],
     dict[tuple[str, int], tuple[str, dict[str, Any], authority.VerifiedLifecycleAuthority]],
+    dict[tuple[str, int], VerifiedNativeGenesisAdmission],
 ]:
     reversed_entries: list[tuple[str, bytes, str | None]] = []
     seen: set[str] = set()
@@ -543,15 +871,110 @@ def _walk_journal(
         raw, parent = _read_publication_object(repository_root, oid)
         reversed_entries.append((oid, raw, parent))
         oid = parent
+    chronological = list(reversed(reversed_entries))
+    admissions: dict[tuple[str, int], VerifiedNativeGenesisAdmission] = {}
+    admission_positions: dict[tuple[str, int], int] = {}
+    initialization_digests: set[tuple[str, str]] = set()
+    for position, (oid, raw, parent) in enumerate(chronological):
+        try:
+            candidate = json.loads(raw, object_pairs_hook=_reject_duplicate_pairs)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise LifecyclePublicationError("journal document is malformed") from exc
+        if not isinstance(candidate, dict):
+            raise LifecyclePublicationError("journal document is malformed")
+        if candidate.get("kind") != GENESIS_ADMISSION_KIND:
+            continue
+        _, admission = _verify_genesis_admission_document(
+            raw, object_oid=oid, expected_branch=publication_branch
+        )
+        if admission.journal_predecessor_oid != parent:
+            raise LifecyclePublicationError(
+                "genesis admission journal parent binding is invalid"
+            )
+        key = (admission.repository, admission.delivery_issue)
+        digest_key = (admission.repository, admission.initialization_digest)
+        if key in admissions or digest_key in initialization_digests:
+            raise LifecyclePublicationError(
+                "native lifecycle has multiple or competing genesis admissions"
+            )
+        admissions[key] = admission
+        admission_positions[key] = position
+        initialization_digests.add(digest_key)
+
     entries: list[tuple[str, dict[str, Any], authority.VerifiedLifecycleAuthority]] = []
     latest: dict[tuple[str, int], tuple[str, dict[str, Any], authority.VerifiedLifecycleAuthority]] = {}
-    for oid, raw, parent in reversed(reversed_entries):
+    seen_bootstrap_targets: set[str] = set()
+    for position, (oid, raw, parent) in enumerate(chronological):
+        try:
+            candidate = json.loads(raw, object_pairs_hook=_reject_duplicate_pairs)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise LifecyclePublicationError("journal document is malformed") from exc
+        if isinstance(candidate, dict) and candidate.get("kind") == GENESIS_ADMISSION_KIND:
+            continue
+        candidate_repository = (
+            candidate.get("repository") if isinstance(candidate, dict) else None
+        )
+        candidate_issue = (
+            candidate.get("delivery_issue") if isinstance(candidate, dict) else None
+        )
+        admission = admissions.get((candidate_repository, candidate_issue))
+        if admission is None and isinstance(candidate, dict):
+            admission = _maintained_compatibility_admission(
+                candidate, oid, publication_branch
+            )
+            if admission is not None:
+                key = (admission.repository, admission.delivery_issue)
+                digest_key = (admission.repository, admission.initialization_digest)
+                if key in admissions or digest_key in initialization_digests:
+                    raise LifecyclePublicationError(
+                        "native lifecycle has multiple or competing genesis admissions"
+                    )
+                admissions[key] = admission
+                admission_positions[key] = position
+                initialization_digests.add(digest_key)
         document, lifecycle = _verify_publication_document(
-            raw, object_oid=oid, expected_branch=publication_branch
+            raw,
+            object_oid=oid,
+            expected_branch=publication_branch,
+            native_genesis_admission=admission,
         )
         if document["journal_predecessor_oid"] != parent:
             raise LifecyclePublicationError("publication journal parent binding is invalid")
         key = (document["repository"], document["delivery_issue"])
+        if lifecycle.historical_proof_mode == authority.NATIVE_PROOF_MODE:
+            if admission is None:
+                raise LifecyclePublicationError(
+                    "native genesis is not independently admitted"
+                )
+            admission_position = admission_positions[key]
+            if admission.maintained_compatibility_anchor:
+                pass
+            elif admission.bootstrap_repair_issue is None:
+                if admission_position >= position:
+                    raise LifecyclePublicationError(
+                        "native lifecycle publication precedes reachable genesis admission"
+                    )
+            else:
+                admission_document = _read_publication_object(
+                    repository_root, admission.admission_oid
+                )[0]
+                parsed_admission = json.loads(admission_document)
+                if (
+                    parsed_admission["target_enrollment_publication_oid"] != oid
+                    or parsed_admission["target_enrollment_publication_digest"]
+                    != document["publication_digest"]
+                    or document["operation"] != "ENROLL_EXISTING_LIFECYCLE"
+                ):
+                    if oid == parsed_admission["target_enrollment_publication_oid"]:
+                        raise LifecyclePublicationError(
+                            "bootstrap repair does not bind the exact native enrollment"
+                        )
+                else:
+                    seen_bootstrap_targets.add(oid)
+        elif admission is not None:
+            raise LifecyclePublicationError(
+                "admitted native genesis cannot be replaced by legacy adoption"
+            )
         previous = latest.get(key)
         if document["operation"] == "ENROLL_EXISTING_LIFECYCLE":
             if previous is not None:
@@ -570,7 +993,160 @@ def _walk_journal(
         item = (oid, document, lifecycle)
         entries.append(item)
         latest[key] = item
-    return entries, latest
+    for admission in admissions.values():
+        if admission.bootstrap_repair_issue is not None:
+            raw = _read_publication_object(repository_root, admission.admission_oid)[0]
+            target = json.loads(raw)["target_enrollment_publication_oid"]
+            if target not in seen_bootstrap_targets:
+                raise LifecyclePublicationError(
+                    "bootstrap repair target is absent from immutable journal ancestry"
+                )
+    return entries, latest, admissions
+
+
+def admit_native_genesis(
+    serialized_lifecycle_evidence: bytes | str,
+    *,
+    signer_identity: str,
+    signer: authority.Signer,
+) -> VerifiedNativeGenesisAdmission:
+    """Append genesis admission before any native lifecycle publication is visible."""
+
+    bundle, _ = _canonical_bundle(serialized_lifecycle_evidence)
+    native = _native_bundle(bundle)
+    native_raw = canonical_json_bytes(native)
+    verified = authority.verify_native_lifecycle_for_genesis_admission(native_raw)
+    initialization = native.get("delivery_initialization")
+    if not isinstance(initialization, dict):
+        raise LifecyclePublicationError("native lifecycle initialization is malformed")
+    policy = authority._load_lifecycle_trust_policy(verified.repository)
+    _verify_live_protection(policy)
+    with _isolated_repository(policy, write=True) as (root, credential_environment):
+        tip = _observe_remote_current_once(
+            root,
+            policy.publication_remote_url,
+            policy.publication_branch,
+            credential_environment=credential_environment,
+        )
+        if tip is not None:
+            _, latest, admissions = _walk_journal(
+                root, tip, policy.publication_branch
+            )
+            key = (verified.repository, verified.delivery_issue)
+            if key in admissions or key in latest:
+                raise LifecyclePublicationError(
+                    "native lifecycle genesis is already admitted or enrolled"
+                )
+        fields = _genesis_admission_fields(
+            initialization=initialization,
+            publication_branch=policy.publication_branch,
+            journal_predecessor_oid=tip,
+            signer_identity=signer_identity,
+        )
+        raw = _sign_genesis_admission(fields, signer)
+        object_oid = _write_publication_object(root, raw, tip)
+        _, admission = _verify_genesis_admission_document(
+            raw, object_oid=object_oid, expected_branch=policy.publication_branch
+        )
+        _walk_journal(root, object_oid, policy.publication_branch)
+        _cas_remote_ref(
+            root,
+            policy.publication_remote_url,
+            policy.publication_branch,
+            object_oid,
+            tip,
+            credential_environment=credential_environment,
+        )
+    return admission
+
+
+def repair_published_native_genesis(
+    repository: str,
+    delivery_issue: int,
+    *,
+    repair_issue: int,
+    signer_identity: str,
+    signer: authority.Signer,
+) -> VerifiedNativeGenesisAdmission:
+    """Apply one maintained repair to an exact pre-admission native enrollment."""
+
+    policy = authority._load_lifecycle_trust_policy(
+        authority._require_repository(repository)
+    )
+    issue = authority._require_positive_int(delivery_issue, "repaired delivery issue")
+    repair_identity = authority._require_positive_int(repair_issue, "repair issue")
+    matches = [
+        repair
+        for repair in policy.bootstrap_genesis_repairs
+        if repair.delivery_issue == issue and repair.repair_issue == repair_identity
+    ]
+    if len(matches) != 1:
+        raise LifecyclePublicationError(
+            "bootstrap genesis repair is not uniquely maintained"
+        )
+    repair = matches[0]
+    _verify_live_protection(policy)
+    with _isolated_repository(policy, write=True) as (root, credential_environment):
+        tip = _observe_remote_current_once(
+            root,
+            policy.publication_remote_url,
+            policy.publication_branch,
+            credential_environment=credential_environment,
+        )
+        if tip is None:
+            raise LifecyclePublicationError("publication journal repair target is unavailable")
+        target_raw, _ = _read_publication_object(
+            root, repair.enrollment_publication_oid
+        )
+        try:
+            target = json.loads(target_raw, object_pairs_hook=_reject_duplicate_pairs)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise LifecyclePublicationError(
+                "bootstrap repair target publication is malformed"
+            ) from exc
+        if (
+            not isinstance(target, dict)
+            or target.get("kind") != PUBLICATION_KIND
+            or target.get("operation") != "ENROLL_EXISTING_LIFECYCLE"
+            or target.get("repository") != repository
+            or target.get("delivery_issue") != issue
+            or target.get("pull_request") != repair.pull_request
+            or target.get("initialization_evidence_digest")
+            != repair.initialization_digest
+            or target.get("publication_digest")
+            != repair.enrollment_publication_digest
+        ):
+            raise LifecyclePublicationError(
+                "bootstrap repair target is not the exact maintained native enrollment"
+            )
+        native = _native_bundle(target.get("lifecycle_evidence", {}))
+        initialization = native.get("delivery_initialization")
+        if not isinstance(initialization, dict):
+            raise LifecyclePublicationError(
+                "bootstrap repair target initialization is malformed"
+            )
+        fields = _genesis_admission_fields(
+            initialization=initialization,
+            publication_branch=policy.publication_branch,
+            journal_predecessor_oid=tip,
+            signer_identity=signer_identity,
+            bootstrap_repair=repair,
+        )
+        raw = _sign_genesis_admission(fields, signer)
+        object_oid = _write_publication_object(root, raw, tip)
+        _, admission = _verify_genesis_admission_document(
+            raw, object_oid=object_oid, expected_branch=policy.publication_branch
+        )
+        _walk_journal(root, object_oid, policy.publication_branch)
+        _cas_remote_ref(
+            root,
+            policy.publication_remote_url,
+            policy.publication_branch,
+            object_oid,
+            tip,
+            credential_environment=credential_environment,
+        )
+    return admission
 
 
 def enroll_existing_lifecycle(
@@ -580,7 +1156,17 @@ def enroll_existing_lifecycle(
     """Publish one native lifecycle or one explicit legacy migration checkpoint."""
 
     bundle, bundle_raw = _canonical_bundle(serialized_evidence)
-    verified = authority.verify_lifecycle_authority_for_publication(bundle_raw)
+    is_native = not (
+        bundle.get("kind") == authority.PUBLICATION_EVIDENCE_KIND
+        and bundle.get("enrollment_mode") == "LEGACY_ADOPTION_CHECKPOINT"
+    )
+    verified = (
+        authority.verify_native_lifecycle_for_genesis_admission(
+            canonical_json_bytes(_native_bundle(bundle))
+        )
+        if is_native
+        else authority.verify_lifecycle_authority_for_publication(bundle_raw)
+    )
     policy = authority._load_lifecycle_trust_policy(verified.repository)
     _verify_live_protection(policy)
     with _isolated_repository(policy, write=True) as (root, credential_environment):
@@ -588,9 +1174,31 @@ def enroll_existing_lifecycle(
             root, policy.publication_remote_url, policy.publication_branch,
             credential_environment=credential_environment,
         )
-        latest = {} if tip is None else _walk_journal(root, tip, policy.publication_branch)[1]
+        latest: dict[
+            tuple[str, int],
+            tuple[str, dict[str, Any], authority.VerifiedLifecycleAuthority],
+        ] = {}
+        admissions: dict[tuple[str, int], VerifiedNativeGenesisAdmission] = {}
+        if tip is not None:
+            _, latest, admissions = _walk_journal(
+                root, tip, policy.publication_branch
+            )
         if (verified.repository, verified.delivery_issue) in latest:
             raise LifecyclePublicationError("delivery lifecycle is already enrolled")
+        admission = admissions.get((verified.repository, verified.delivery_issue))
+        if is_native:
+            if admission is None:
+                raise LifecyclePublicationError(
+                    "native genesis is not independently admitted"
+                )
+            verified = authority._verify_lifecycle_authority_for_journal(
+                bundle_raw,
+                admitted_initialization=admission.delivery_initialization,
+            )
+        elif admission is not None:
+            raise LifecyclePublicationError(
+                "admitted native genesis cannot use legacy adoption"
+            )
         fields = _publication_fields(
             operation="ENROLL_EXISTING_LIFECYCLE", verified=verified,
             bundle=bundle, bundle_raw=bundle_raw,
@@ -601,7 +1209,10 @@ def enroll_existing_lifecycle(
         raw = _sign_publication(fields, signer)
         object_oid = _write_publication_object(root, raw, tip)
         document, lifecycle = _verify_publication_document(
-            raw, object_oid=object_oid, expected_branch=policy.publication_branch
+            raw,
+            object_oid=object_oid,
+            expected_branch=policy.publication_branch,
+            native_genesis_admission=admission,
         )
         _cas_remote_ref(
             root, policy.publication_remote_url, policy.publication_branch,
@@ -620,8 +1231,15 @@ def advance_current_terminal(
     """Append one exact #750 successor to the protected global journal."""
 
     bundle, bundle_raw = _canonical_bundle(serialized_evidence)
-    successor = authority._verify_lifecycle_authority_for_journal(bundle_raw)
-    policy = authority._load_lifecycle_trust_policy(successor.repository)
+    lifecycle_bundle = _lifecycle_bundle({"lifecycle_evidence": bundle})
+    initialization = lifecycle_bundle.get("delivery_initialization")
+    if not isinstance(initialization, dict):
+        raise LifecyclePublicationError("lifecycle initialization is malformed")
+    repository = authority._require_repository(initialization.get("repository"))
+    issue = authority._require_positive_int(
+        initialization.get("delivery_issue"), "delivery issue"
+    )
+    policy = authority._load_lifecycle_trust_policy(repository)
     _verify_live_protection(policy)
     with _isolated_repository(policy, write=True) as (root, credential_environment):
         tip = _observe_remote_current_once(
@@ -630,7 +1248,16 @@ def advance_current_terminal(
         )
         if tip is None:
             raise LifecyclePublicationError("current lifecycle publication is unavailable")
-        _, latest = _walk_journal(root, tip, policy.publication_branch)
+        _, latest, admissions = _walk_journal(
+            root, tip, policy.publication_branch
+        )
+        admission = admissions.get((repository, issue))
+        successor = authority._verify_lifecycle_authority_for_journal(
+            bundle_raw,
+            admitted_initialization=(
+                None if admission is None else admission.delivery_initialization
+            ),
+        )
         previous = latest.get((successor.repository, successor.delivery_issue))
         if previous is None:
             raise LifecyclePublicationError("current lifecycle publication is unavailable")
@@ -649,7 +1276,10 @@ def advance_current_terminal(
         raw = _sign_publication(fields, signer)
         object_oid = _write_publication_object(root, raw, tip)
         document, lifecycle = _verify_publication_document(
-            raw, object_oid=object_oid, expected_branch=policy.publication_branch
+            raw,
+            object_oid=object_oid,
+            expected_branch=policy.publication_branch,
+            native_genesis_admission=admission,
         )
         _cas_remote_ref(
             root, policy.publication_remote_url, policy.publication_branch,
@@ -677,7 +1307,7 @@ def verify_current_lifecycle_authority(
         )
         if tip is None:
             raise LifecyclePublicationError("current lifecycle publication is unavailable")
-        _, latest = _walk_journal(root, tip, policy.publication_branch)
+        _, latest, _ = _walk_journal(root, tip, policy.publication_branch)
         key = (repository, authority._require_positive_int(delivery_issue, "delivery issue"))
         current = latest.get(key)
         if current is None:

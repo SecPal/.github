@@ -146,6 +146,21 @@ class InitializationAnchor:
 
 
 @dataclass(frozen=True)
+class BootstrapGenesisRepair:
+    """One maintained, one-time repair allowance for pre-admission publication."""
+
+    repair_issue: int
+    delivery_issue: int
+    pull_request: int
+    initial_head_sha: str
+    initialization_digest: str
+    validation_receipt_digest: str
+    final_attestation_digest: str
+    enrollment_publication_oid: str
+    enrollment_publication_digest: str
+
+
+@dataclass(frozen=True)
 class LifecycleTrustPolicy:
     """Installed trust policy; never accepted as lifecycle evidence input."""
 
@@ -156,11 +171,13 @@ class LifecycleTrustPolicy:
     signers: Mapping[str, TrustedSigner]
     initialization_anchors: tuple[InitializationAnchor, ...]
     publication_signer_identities: frozenset[str] = frozenset()
+    genesis_admission_signer_identities: frozenset[str] = frozenset()
     legacy_adoption_signer_identities: frozenset[str] = frozenset()
     publication_branch: str = "refs/heads/secpal-lifecycle-publications"
     publication_remote_url: str = ""
     publication_ruleset_id: int = 0
     publication_required_rules: frozenset[str] = frozenset()
+    bootstrap_genesis_repairs: tuple[BootstrapGenesisRepair, ...] = ()
 
 
 EVENT_FIELDS = frozenset(
@@ -563,11 +580,13 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
             "transition_signer_identities",
             "authority_signer_identities",
             "publication_signer_identities",
+            "genesis_admission_signer_identities",
             "legacy_adoption_signer_identities",
             "publication_branch",
             "publication_remote_url",
             "publication_ruleset_id",
             "publication_required_rules",
+            "bootstrap_genesis_repairs",
             "delivery_initializations",
         }
     )
@@ -630,6 +649,9 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
     transition_signers = role_identities("transition_signer_identities")
     authority_signers = role_identities("authority_signer_identities")
     publication_signers = role_identities("publication_signer_identities")
+    genesis_admission_signers = role_identities(
+        "genesis_admission_signer_identities"
+    )
     legacy_adoption_signers = role_identities("legacy_adoption_signer_identities")
 
     def credential_identities(identity: str) -> frozenset[tuple[str, bytes]]:
@@ -662,7 +684,12 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
                     "legacy-adoption signer credentials are ambiguous"
                 )
             legacy_credentials[credential] = identity
-    routine_signers = transition_signers | authority_signers | publication_signers
+    routine_signers = (
+        transition_signers
+        | authority_signers
+        | publication_signers
+        | genesis_admission_signers
+    )
     if legacy_adoption_signers & routine_signers:
         raise LifecycleAuthorityError(
             "legacy-adoption authority must use a distinct signer identity"
@@ -743,17 +770,76 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
         or len(required_rules) != 2
     ):
         raise LifecycleAuthorityError("lifecycle publication protection policy is invalid")
+    repair_fields = frozenset(
+        {
+            "repair_issue",
+            "delivery_issue",
+            "pull_request",
+            "initial_head_sha",
+            "initialization_digest",
+            "validation_receipt_digest",
+            "final_attestation_digest",
+            "enrollment_publication_oid",
+            "enrollment_publication_digest",
+        }
+    )
+    raw_repairs = policy["bootstrap_genesis_repairs"]
+    if not isinstance(raw_repairs, list):
+        raise LifecycleAuthorityError("bootstrap genesis-repair policy is invalid")
+    repairs: list[BootstrapGenesisRepair] = []
+    repair_issues: set[int] = set()
+    repaired_deliveries: set[int] = set()
+    for value in raw_repairs:
+        item = _require_closed(value, repair_fields, "bootstrap genesis repair")
+        repair_issue = _require_positive_int(item["repair_issue"], "repair issue")
+        delivery_issue = _require_positive_int(
+            item["delivery_issue"], "repaired delivery issue"
+        )
+        if repair_issue in repair_issues or delivery_issue in repaired_deliveries:
+            raise LifecycleAuthorityError("bootstrap genesis repairs are ambiguous")
+        repair_issues.add(repair_issue)
+        repaired_deliveries.add(delivery_issue)
+        repairs.append(
+            BootstrapGenesisRepair(
+                repair_issue=repair_issue,
+                delivery_issue=delivery_issue,
+                pull_request=_require_positive_int(
+                    item["pull_request"], "repaired pull request"
+                ),
+                initial_head_sha=_require_oid(
+                    item["initial_head_sha"], "repaired initial head"
+                ),
+                initialization_digest=_require_digest(
+                    item["initialization_digest"], "repaired initialization"
+                ),
+                validation_receipt_digest=_require_digest(
+                    item["validation_receipt_digest"], "repaired validation receipt"
+                ),
+                final_attestation_digest=_require_digest(
+                    item["final_attestation_digest"], "repaired final attestation"
+                ),
+                enrollment_publication_oid=_require_oid(
+                    item["enrollment_publication_oid"], "repaired enrollment publication"
+                ),
+                enrollment_publication_digest=_require_digest(
+                    item["enrollment_publication_digest"],
+                    "repaired enrollment publication digest",
+                ),
+            )
+        )
     return LifecycleTrustPolicy(
         repository=repository,
         accepted_formats=frozenset(formats),
         transition_signer_identities=transition_signers,
         authority_signer_identities=authority_signers,
         publication_signer_identities=publication_signers,
+        genesis_admission_signer_identities=genesis_admission_signers,
         legacy_adoption_signer_identities=legacy_adoption_signers,
         publication_branch=publication_branch,
         publication_remote_url=publication_remote,
         publication_ruleset_id=ruleset_id,
         publication_required_rules=frozenset(required_rules),
+        bootstrap_genesis_repairs=tuple(repairs),
         signers=signers,
         initialization_anchors=tuple(anchors),
     )
@@ -1570,9 +1656,28 @@ def _verify_unanchored_lifecycle_bundle(
     )
 
 
+def verify_native_lifecycle_for_genesis_admission(
+    serialized_evidence: bytes | str,
+    expected: ExpectedLifecycle | None = None,
+) -> VerifiedLifecycleAuthority:
+    """Verify native derivation without allowing it to admit its own genesis."""
+
+    if not isinstance(serialized_evidence, (bytes, str)):
+        raise LifecycleAuthorityError(
+            "native genesis admission requires canonical serialized lifecycle evidence"
+        )
+    bundle = _require_closed(
+        _load_canonical_json(serialized_evidence, "native lifecycle evidence"),
+        BUNDLE_FIELDS,
+        "lifecycle evidence",
+    )
+    return _verify_unanchored_lifecycle_bundle(bundle, expected)
+
+
 def _verify_native_lifecycle_bundle_for_journal(
     bundle: Any,
     expected: ExpectedLifecycle | None = None,
+    admitted_initialization: Mapping[str, Any] | None = None,
 ) -> VerifiedLifecycleAuthority:
     """Verify an adopted native chain without selecting CURRENT from static tip state."""
 
@@ -1583,11 +1688,18 @@ def _verify_native_lifecycle_bundle_for_journal(
     repository = _require_repository(initialization_value.get("repository"))
     policy = _load_lifecycle_trust_policy(repository)
     signature_verifier = _policy_signature_verifier(policy)
+    if admitted_initialization is None:
+        raise LifecycleAuthorityError("native genesis is not independently admitted")
     initialization = _verify_delivery_initialization(
-        initialization_value,
+        admitted_initialization,
         policy=policy,
         signature_verifier=signature_verifier,
+        require_maintained_anchor=False,
     )
+    if initialization != initialization_value:
+        raise LifecycleAuthorityError(
+            "native genesis admission does not match lifecycle initialization"
+        )
     return _verify_lifecycle_bundle_from_initialization(
         bundle, initialization, policy, signature_verifier, expected
     )
@@ -1916,6 +2028,7 @@ def verify_lifecycle_authority_for_publication(
 def _verify_lifecycle_authority_for_journal(
     serialized_evidence: bytes | str,
     expected: ExpectedLifecycle | None = None,
+    admitted_initialization: Mapping[str, Any] | None = None,
 ) -> VerifiedLifecycleAuthority:
     """Authenticate one journal-carried chain; journal ancestry selects CURRENT."""
 
@@ -1942,7 +2055,9 @@ def _verify_lifecycle_authority_for_journal(
             if wrapper["legacy_adoption_checkpoint"] is not None:
                 raise LifecycleAuthorityError("native lifecycle cannot carry a legacy checkpoint")
             return replace(
-                _verify_native_lifecycle_bundle_for_journal(bundle, expected),
+                _verify_native_lifecycle_bundle_for_journal(
+                    bundle, expected, admitted_initialization
+                ),
                 historical_proof_mode=NATIVE_PROOF_MODE,
             )
         if mode != "LEGACY_ADOPTION_CHECKPOINT" or wrapper["legacy_adoption_checkpoint"] is None:
@@ -1958,7 +2073,9 @@ def _verify_lifecycle_authority_for_journal(
             wrapper["legacy_adoption_checkpoint"], bundle, result, policy
         )
     return replace(
-        _verify_native_lifecycle_bundle_for_journal(parsed, expected),
+        _verify_native_lifecycle_bundle_for_journal(
+            parsed, expected, admitted_initialization
+        ),
         historical_proof_mode=NATIVE_PROOF_MODE,
     )
 
