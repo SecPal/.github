@@ -446,6 +446,116 @@ class LifecyclePublicationTests(TestCase):
                     )
                 )
 
+    def test_native_enrollment_requires_prior_global_genesis_admission(self) -> None:
+        chain = Chain()
+        chain.append("INITIALIZED_DRAFT")
+        native = authority.serialize_publication_lifecycle_evidence(
+            lifecycle_evidence=chain.raw()
+        )
+
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError,
+            "native genesis is not independently admitted",
+        ):
+            publication.enroll_existing_lifecycle(
+                native, signer_identity=SIGNER, signer=signer_for()
+            )
+
+        admission = publication.admit_native_genesis(
+            chain.raw(), signer_identity=SIGNER, signer=signer_for()
+        )
+        self.assertEqual(admission.delivery_issue, ISSUE)
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "unavailable"
+        ):
+            publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE)
+
+        enrolled = publication.enroll_existing_lifecycle(
+            native, signer_identity=SIGNER, signer=signer_for()
+        )
+        self.assertEqual(enrolled.journal_predecessor_oid, admission.admission_oid)
+        self.assertEqual(
+            publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE)
+            .lifecycle.initialization_evidence_digest,
+            chain.initialization["initialization_digest"],
+        )
+
+    def test_branch_local_anchor_cannot_publish_before_global_admission(self) -> None:
+        chain = Chain()
+        chain.append("INITIALIZED_DRAFT")
+        branch_local_policy = replace(
+            self.policy,
+            initialization_anchors=(
+                authority.InitializationAnchor(
+                    ISSUE,
+                    PR,
+                    HEADS[0],
+                    chain.initialization["initialization_digest"],
+                    PR,
+                    chain.head,
+                    chain.authorities[-1]["authority_digest"],
+                ),
+            ),
+        )
+        native = authority.serialize_publication_lifecycle_evidence(
+            lifecycle_evidence=chain.raw()
+        )
+
+        with patch.object(
+            authority, "_load_lifecycle_trust_policy", return_value=branch_local_policy
+        ):
+            with self.assertRaisesRegex(
+                publication.LifecyclePublicationError,
+                "native genesis is not independently admitted",
+            ):
+                publication.enroll_existing_lifecycle(
+                    native, signer_identity=SIGNER, signer=signer_for()
+                )
+
+    def test_independent_native_deliveries_do_not_share_source_state(self) -> None:
+        first = Chain()
+        first.append("INITIALIZED_DRAFT")
+        second = Chain(ISSUE + 1)
+        second.append("INITIALIZED_DRAFT")
+
+        first_admission = publication.admit_native_genesis(
+            first.raw(), signer_identity=SIGNER, signer=signer_for()
+        )
+        first_publication = publication.enroll_existing_lifecycle(
+            authority.serialize_publication_lifecycle_evidence(
+                lifecycle_evidence=first.raw()
+            ),
+            signer_identity=SIGNER,
+            signer=signer_for(),
+        )
+        second_admission = publication.admit_native_genesis(
+            second.raw(), signer_identity=SIGNER, signer=signer_for()
+        )
+        second_publication = publication.enroll_existing_lifecycle(
+            authority.serialize_publication_lifecycle_evidence(
+                lifecycle_evidence=second.raw()
+            ),
+            signer_identity=SIGNER,
+            signer=signer_for(),
+        )
+
+        self.assertEqual(first_publication.journal_predecessor_oid,
+                         first_admission.admission_oid)
+        self.assertEqual(second_admission.journal_predecessor_oid,
+                         first_publication.publication_oid)
+        self.assertEqual(second_publication.journal_predecessor_oid,
+                         second_admission.admission_oid)
+        self.assertEqual(
+            publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE)
+            .lifecycle.lifecycle_id,
+            first.lifecycle_id,
+        )
+        self.assertEqual(
+            publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE + 1)
+            .lifecycle.lifecycle_id,
+            second.lifecycle_id,
+        )
+
     def test_native_journal_rejects_wrong_predecessor_and_identity_substitution(
         self,
     ) -> None:
