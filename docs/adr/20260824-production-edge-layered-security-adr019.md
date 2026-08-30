@@ -462,7 +462,7 @@ and shared work remains represented in the `SecPal/deployment` graph without
 reinterpretation; its `SecPal/deployment` subtree represents public portable
 PROTECTED implementation work; and `SecPal/operations` separately represents
 private Managed Edge composition. Descendant responsibilities remain governed by
-their native issue graph.
+their native GitHub issue graph.
 
 ## Non-goals
 
