@@ -54,6 +54,13 @@ starting from the same journal tip cannot both append; the CAS loser produces no
 globally visible object. A retry is a fresh operation against newly verified
 ancestry. A second or competing admission for one delivery fails closed.
 
+The maintained writer surface exposes this order directly:
+`admit_native_genesis` appends the admission, `enroll_existing_lifecycle`
+requires that admission in its freshly observed ancestry, and
+`advance_current_terminal` preserves the admitted initialization while appending
+one exact lifecycle successor. Callers cannot combine these operations or pass
+an alternate journal, trust policy, signer set, or CURRENT selector.
+
 ## Maintained compatibility anchors
 
 The existing `delivery_initializations` entries for issues 692, 674, and 735
@@ -91,6 +98,12 @@ publication. Only this maintained repair may authenticate a publication that
 precedes its admission. Ordinary admissions must precede enrollment. The repair
 cannot create a lifecycle, reset a counter, represent recovery or continuation,
 adopt legacy history, or select CURRENT.
+
+After issue 774 is merged, `repair_published_native_genesis` is the only writer
+surface for that maintained exception. It reads the exact target publication by
+immutable object ID, constructs the domain-separated repair admission, verifies
+the complete resulting ancestry before CAS, and fails if the repair is absent,
+stale, duplicated, competing, or already consumed.
 
 Issue 774 itself uses the already-maintained ordinary one-parent delivery
 evidence compatibility boundary: exact source validation receipt, final
