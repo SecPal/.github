@@ -12,7 +12,11 @@ This repository contains general project documentation, settings, and community 
 
 ## About SecPal
 
-SecPal is the operations software for German private security services. Everything the day-to-day operation needs — in one system that just works.
+SecPal is being built as open-source integrated operations software for private
+security services operating in Germany. It is intended to connect operational
+and administrative work where doing so creates genuine domain value instead of
+narrowing the product to one specialist tool. SecPal is under active development
+and remains pre-1.0.
 
 ## Repositories
 
