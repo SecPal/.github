@@ -652,7 +652,10 @@ cannot invalidate authentic historical delivery evidence.
 It also consumes the maintained #750/#752 publication verifier and requires the
 protected journal's current entry for the delivery to match the manifest's
 publication object, publication digest, persistent lifecycle identity, current
-head, finite counters, proof mode, and unused exceptional-continuation budget.
+head, finite counters, proof mode, exact finite exceptional-recovery and exceptional-continuation histories,
+and Ready-without-transition state. Ordinary typed Ready integration uses `HEAD_ADVANCED`: it preserves each
+authenticated exceptional history exactly, consumes neither exceptional recovery nor exceptional continuation,
+and leaves review, remediation, and Ready-transition history unchanged.
 The mutable tag ref is resolved once to an authenticated annotated-tag object
 OID; target, signature, signer, trailer, and diagnostics thereafter use only
 that immutable object. OpenPGP authority matching distinguishes the verified

@@ -443,10 +443,14 @@ signed annotated tag on the prior delivery head, and the binder independently
 verifies that head's ordinary receipt, final attestation, tree, signature, and
 accepted signer. It also verifies the maintained #750/#752 protected-journal
 CURRENT publication and binds its lifecycle authority digest, proof mode,
-publication identity, exceptional recovery, and unused exceptional
-continuation. Its claimed receipt must equal the prior commit trailer,
-ordinary receipt reconstructed with the registry committed at that prior head,
-and final-attestation receipt. The mutable tag
+publication identity, and exact exceptional recovery and continuation history.
+Ordinary typed integration is the canonical `HEAD_ADVANCED`
+transition: it preserves the exact authenticated exceptional-recovery and
+exceptional-continuation history and consumes neither budget. A later
+`EXCEPTIONAL_RECOVERY` or `EXCEPTIONAL_CONTINUATION` remains a distinct,
+explicitly authorized lifecycle action. The manifest's claimed receipt must
+equal the prior commit trailer, ordinary receipt reconstructed with the registry
+committed at that prior head, and final-attestation receipt. The mutable tag
 ref is resolved once; target, signature, signer, trailer, and diagnostics all
 use the resulting immutable annotated-tag OID. OpenPGP signing-subkey output is
 accepted only when its authenticated primary fingerprint is the configured
@@ -485,9 +489,13 @@ historical version-1.1 integration attestation remains valid for integration
 authentication but cannot authorize resolution. Other evidence-mode
 combinations remain closed.
 
-The integration evidence proves unchanged unrestricted-review and remediation
-counters, no Cycle 3, no review request, no Ready transition, and preserved
-`Draft=false` / `Ready=true`. It is not remediation and cannot be replayed through
+The integration evidence proves unchanged unrestricted-review, remediation,
+exceptional-recovery, and exceptional-continuation counters, no Cycle 3, no
+review request, no Ready transition, and preserved `Draft=false` / `Ready=true`.
+After the signed integration head is created, its fresh lifecycle authority is
+derived from the authenticated predecessor through `HEAD_ADVANCED` and
+published through the canonical lifecycle-publication boundary. It is not
+remediation and cannot be replayed through
 the remediation path. Conversely, ordinary remediation evidence cannot select
 the integration path. The helper does not create the integration commit, push a
 branch, observe post-push checks, transition the PR, or authorize merging. After

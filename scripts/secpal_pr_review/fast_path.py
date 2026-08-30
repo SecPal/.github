@@ -361,9 +361,11 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         or not isinstance(cycles, int)
         or not 0 <= cycles <= 2
         or isinstance(recoveries, bool)
-        or recoveries != 1
+        or not isinstance(recoveries, int)
+        or not 0 <= recoveries <= 1
         or isinstance(continuations, bool)
-        or continuations != 0
+        or not isinstance(continuations, int)
+        or not 0 <= continuations <= 1
     ):
         raise SecurityBlocker("Ready integration prior lifecycle authority is invalid")
     publication = value.get("publication")
@@ -569,11 +571,17 @@ def normalize_ready_integration_evidence(
         or not 0 <= before_cycles <= 2
         or after_cycles != before_cycles
         or isinstance(before_recoveries, bool)
-        or before_recoveries != 1
+        or not isinstance(before_recoveries, int)
+        or not 0 <= before_recoveries <= 1
+        or isinstance(after_recoveries, bool)
+        or not isinstance(after_recoveries, int)
         or after_recoveries != before_recoveries
         or isinstance(before_continuations, bool)
-        or before_continuations != 0
-        or after_continuations != 1
+        or not isinstance(before_continuations, int)
+        or not 0 <= before_continuations <= 1
+        or isinstance(after_continuations, bool)
+        or not isinstance(after_continuations, int)
+        or after_continuations != before_continuations
     ):
         raise SecurityBlocker("integration eligibility or lifecycle continuity is invalid")
     normalized = {
