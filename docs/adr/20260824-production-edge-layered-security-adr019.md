@@ -9,26 +9,484 @@ SPDX-License-Identifier: CC0-1.0 -->
 
 **Decision provenance:** This ADR records architecture decisions deliberately
 adopted during the August 2026 rebaseline. 2026-08-24 is the durable ADR record
-date, not an assertion that this PR first made those decisions.
+date, not an assertion that the original ADR pull request first made those
+decisions. The 2026-08-29 rebaseline under
+[#768](https://github.com/SecPal/.github/issues/768) incorporates empirical
+PROTECTED Edge evidence while retaining the original DIRECT decision as an
+explicit mode. It is a refinement of ADR-019, not a competing Edge ADR.
 
-## Context
+## Context and decision history
 
-Public ingress needs a single trusted identity and layered enforcement boundary.
+Public ingress needs one canonical client identity, an authenticated backend
+trust boundary, and layered security enforcement. The original decision
+established host-native HAProxy as the sole public Edge, TLS terminator, and
+owner of canonical client identity derived from TCP source. It deliberately
+rejected caller-controlled forwarded identity and combined nftables, CrowdSec,
+HAProxy CrowdSec SPOA, CrowdSec AppSec/Coraza, and a pinned OWASP CRS.
+
+That decision remains valid for direct self-hosting. A completed CloudFront
+Multi-Tenant Sandbox PoC subsequently demonstrated a second coherent production
+Edge contract in which a managed Viewer Edge authenticates to HAProxy, supplies
+validated Viewer metadata, and is independently restricted at provider and host
+network layers. Treating that path as the original direct TCP contract would
+make both trust models ambiguous.
+
+The production architecture therefore names two Edge modes: `DIRECT` and
+`PROTECTED`. The modes are orthogonal to ADR-022's `single`, `replacement`, and
+`ha` deployment topologies. DIRECT remains a valid self-hosting and sovereignty
+path. PROTECTED does not replace it.
 
 ## Binding decision
 
-Host-native HAProxy is the sole public edge, with fixed loopback application backends and no container-IP discovery/runtime socket. HAProxy terminates TLS. External Certbot owns ACME: HTTP-01 handling is exact; all other HTTP redirects to HTTPS; publication is atomic, validated with `haproxy -c`, gracefully reloaded, and retains last-known-good material.
+### DIRECT mode
 
-Canonical client identity is TCP source. Public clients cannot inject trusted `Forwarded`, XFF, or X-Real-IP semantics. Permanent HA may expose a dedicated private HAProxy listener accepting PROXY v2 only from allowlisted L4 load-balancer peers; public/direct bypass is not trusted. TLS 1.2 and TLS 1.3, HTTP/2, and HTTP/1.1 are the reference protocols; this ADR makes no HTTP/3 commitment.
+DIRECT retains the original architecture:
 
-Security layers are SELinux/seccomp/capabilities/rootless confinement, nftables, CrowdSec host decisioning, HAProxy CrowdSec SPOA, CrowdSec AppSec/Coraza with pinned OWASP CRS, then application MFA/RBAC/rate limiting. CrowdSec/AppSec/runtime-detector outage is Security **DEGRADED**, not authentication or readiness failure. Runtime process/syscall detection remains technology-neutral pending qualification. The self-hosted reference uses a local CrowdSec Security Engine/LAPI without mandatory Central, Console, community, or premium threat-intelligence data; managed external-data use is a separate licensing/rights decision.
+```text
+Internet
+→ Provider network
+→ host firewall
+→ HAProxy
+→ CrowdSec/AppSec
+→ SecPal
+```
 
-## Consequences
+Host-native HAProxy is the public HTTP(S) Edge, with fixed loopback application
+backends and no container-IP discovery or runtime socket. HAProxy terminates
+Viewer TLS. External Certbot owns ACME: HTTP-01 handling is exact; all other
+HTTP redirects to HTTPS. Certificate publication is atomic, candidate material
+is validated with `haproxy -c`, HAProxy reload is graceful, and
+last-known-good material is retained on failure.
 
-Only HAProxy is public and trusted client identity has one canonical source.
-Security-signal outages remain visible and operationally actionable without
-silently changing application authentication or readiness semantics.
+Canonical client identity comes from the direct network path. Public callers
+cannot inject trusted `Forwarded`, XFF, or X-Real-IP semantics. Permanent HA may
+expose a dedicated private HAProxy listener accepting PROXY v2 only from
+allowlisted L4 load-balancer peers; arbitrary public PROXY or forwarded identity
+remains untrusted.
 
-## Relationships and non-goals
+DIRECT retains the layered security contract: SELinux, seccomp, capabilities,
+rootless confinement, nftables, CrowdSec host decisioning, HAProxy CrowdSec
+SPOA, CrowdSec AppSec/Coraza with pinned OWASP CRS, then application MFA, RBAC,
+and rate limiting. CrowdSec, AppSec, or runtime-detector outage is Security
+**DEGRADED**, not authentication or readiness failure. Runtime process/syscall
+detection remains technology-neutral pending qualification. The self-hosted
+reference uses a local CrowdSec Security Engine/LAPI without mandatory Central,
+Console, community, or premium threat-intelligence data; managed external-data
+use requires a separate licensing and rights decision.
 
-This does not choose Falco or Tetragon. See [#695](https://github.com/SecPal/.github/issues/695), ADR-018 and ADR-022.
+Existing DIRECT implementations and delivery issues remain mode-specific work.
+This ADR rebaseline does not rewrite them or make them inherit PROTECTED's
+CloudFront-only network contract.
+
+### PROTECTED mode
+
+PROTECTED introduces a managed Viewer Edge while retaining HAProxy as the
+canonical Origin and backend trust boundary:
+
+```text
+Viewer
+→ CloudFront Multi-Tenant Viewer TLS (`https-only`)
+→ Shared AWS WAF/AMR
+→ CloudFront viewer-request Function/KVS
+→ `CachingDisabled` / Origin Request Policy
+→ HTTPS-only Origin transport
+→ Provider Firewall
+→ nftables
+→ HAProxy Origin TLS + Origin Authentication
+→ canonical forwarding metadata
+→ SecPal
+```
+
+These boxes describe ordered processing and trust boundaries, not necessarily
+physically separate network hops. AWS WAF evaluates the Viewer request before
+the viewer-request CloudFront Function. WAF/AMR enforcement and logging must not
+depend on `X-SecPal-*` headers generated by that Function; Function-generated
+Origin-authentication metadata exists only downstream of WAF. This order is a
+CloudFront platform invariant, not a SecPal implementation preference.
+
+HAProxy is not an arbitrarily Internet-reachable Viewer Edge in this mode. The
+CloudFront-to-Origin path must satisfy independent network restrictions and
+HTTPS Origin authentication, then per-deployment Origin authentication before
+HAProxy admits the request.
+
+#### Multi-Tenant distribution
+
+PROTECTED uses CloudFront SaaS Manager / Multi-Tenant Distribution. One SecPal
+deployment corresponds to one Distribution Tenant. Tenants may share a
+Connection Group and Distribution baseline while retaining a tenant-specific
+`OriginDomain`.
+
+The PoC observed no cross-tenant Origin leak. That bounded observation does not
+establish real production multi-customer scale. A current AWS quota also does
+not become a SecPal product guarantee for the maximum number of domains per
+tenant.
+
+#### Managed Viewer certificate lifecycle
+
+CloudFront manages PROTECTED Viewer certificates. Provisioning must model the
+demonstrated state machine rather than treating certificate attachment as part
+of a one-step tenant create:
+
+```text
+Create Distribution Tenant
+→ Domain/DNS ready
+→ Managed Certificate Request
+→ validation
+→ certificate ISSUED
+→ GetManagedCertificateDetails / current ETag
+→ UpdateDistributionTenant with issued Certificate ARN
+→ domain active
+```
+
+The authenticated and dynamic PROTECTED application behavior has the binding
+`ViewerProtocolPolicy = https-only`. It must not use `allow-all`, and it does not
+accept an application request containing credentials, cookies, Authorization
+data, or a body over plaintext HTTP merely to redirect it. Requests reaching
+SecPal through this behavior therefore have authoritative external scheme
+`https`. A future separately qualified unauthenticated redirect-only behavior
+may exist, but it must not carry authenticated or dynamic SecPal traffic and is
+outside this decision.
+
+Certbot remains the DIRECT Viewer-certificate contract. It is not implicitly
+applied to PROTECTED Viewer TLS.
+
+#### Shared WAF and AMR
+
+Distribution-level shared AWS WAF is the PROTECTED baseline. The tested PoC used
+`AWSManagedRulesAntiDDoSRuleSet`, which consumed 50 WCU in the tested version,
+exposed three internal rules, ran Count-only, and required no Tenant WAF
+overrides.
+
+This evidence does not qualify production AMR behavior under real attacks,
+guarantee 50 WCU for future managed-rule versions, or make Count-only the final
+production enforcement policy. Production enforcement, rollout, capacity, and
+response policy remain later implementation decisions.
+
+#### Viewer Host contract
+
+The CloudFront Function reads Viewer `Host` as read-only request metadata and
+validates it against the Tenant mapping. CloudFront's Origin-side HTTP `Host`
+remains the actual Origin Host. The validated original Viewer Host travels in a
+separate internal trusted header.
+
+Viewer-supplied trusted headers are untrusted input. The Function overwrites
+the three `X-SecPal-*` Origin-boundary headers defined below; it does not
+preserve or append caller values. Forwarding any other Viewer header through an
+Origin Request Policy does not make that header trusted.
+
+#### Viewer IP contract
+
+`CloudFront-Viewer-Address` is not the canonical PROTECTED Viewer-IP source. The
+canonical metadata path is:
+
+```text
+event.viewer.ip
+→ CloudFront Function
+→ X-SecPal-Viewer-IP
+→ HAProxy native IPv4/IPv6 parse
+→ canonical X-Forwarded-For
+```
+
+The PoC demonstrated real IPv4 and IPv6 Viewer paths. Forged or duplicate
+Viewer-IP headers were harmless, and forged XFF was discarded. HAProxy `src`
+remains the actual CloudFront TCP peer; HAProxy must not use `set-src` to replace
+it with the Viewer IP.
+
+#### Per-deployment Origin authentication
+
+Each deployment has an independent random Origin credential. There is no global
+Fleet secret:
+
+```text
+Distribution Tenant ID
+→ KVS Mapping
+→ deployment-specific Origin Token
+```
+
+The Function always overwrites:
+
+- `X-SecPal-Origin-Token`;
+- `X-SecPal-Viewer-Host`; and
+- `X-SecPal-Viewer-IP`.
+
+HAProxy validates header cardinality, the deployment-specific token, the
+expected Viewer Host, and a natively parsed IPv4 or IPv6 Viewer IP. Only after
+that validation does HAProxy translate the internal metadata into the one
+application-facing forwarding contract.
+
+Before the request reaches SecPal, HAProxy discards caller-controlled proxy and
+forwarding identity metadata, including `Forwarded`, `X-Forwarded-For`,
+`X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Real-IP`, and equivalent
+caller-controlled `X-Forwarded-*` fields that could become authoritative. It
+does not append trusted values to a caller-controlled forwarding chain. HAProxy
+then creates exactly:
+
+```text
+X-Forwarded-For   = validated event.viewer.ip
+X-Forwarded-Host  = validated Viewer Host
+X-Forwarded-Proto = https
+```
+
+There is one authoritative Viewer IP, external Host, and external scheme. The
+scheme derives from mandatory Viewer HTTPS, never from a Viewer-supplied scheme
+header. `Forwarded` and `X-Real-IP` need not be recreated as parallel
+authorities. HAProxy `src` remains the actual CloudFront TCP peer.
+
+After translation, HAProxy removes `X-SecPal-Origin-Token` and
+`X-SecPal-Viewer-IP`, and removes or otherwise prevents
+`X-SecPal-Viewer-Host` from becoming a second application-level Host authority.
+All three are Origin-boundary internals; SecPal consumes the canonical
+HAProxy-generated forwarding contract instead of trusting them directly.
+
+Origin tokens are Never in Git and never embedded in Function code. KVS values
+must not introduce a Fleet-wide shared credential.
+
+#### KVS trust contract
+
+CloudFront Control Plane and CloudFront KeyValueStore Data Plane are separate
+interfaces, and their ETags are not interchangeable. `UpdateKeys` is the atomic
+write path. The provisioning contract needs Data Plane
+`DescribeKeyValueStore` and `UpdateKeys`; secret-read permissions `GetKey` and
+`ListKeys` are not required for provisioning.
+
+These are trust and least-authority properties. This ADR does not embed a full
+production IAM policy.
+
+#### Origin request and caching policy
+
+The Origin Request Policy carries the headers, cookies, and query strings
+required by the qualified SecPal transport while keeping the Origin-side HTTP
+`Host` equal to the configured `OriginDomain`. In particular, it must carry the
+three Function-overwritten `X-SecPal-*` headers plus the Authorization, cookie,
+query-string, and other request data required by the qualified transport.
+Policy inclusion transports a Viewer header; it grants no authenticity. Trust
+arises only from the platform order, Function validation and overwrite of
+internal Origin metadata, HAProxy Origin authentication, and HAProxy's
+canonical reconstruction.
+
+Normal authenticated and dynamic SecPal PROTECTED traffic has the binding
+`CachingDisabled` baseline. A cache hit must not bypass Origin-side processing,
+and user- or session-specific responses must not cross Viewer boundaries under
+an unsafe cache key.
+
+A future route-specific cache behavior requires a separate qualification that
+proves the route is cache-safe, prevents authenticated or session-specific
+responses from crossing Viewer or Tenant boundaries, correctly excludes or
+represents Authorization and Cookie semantics, defines the cache key, jointly
+reviews the Origin Request Policy and cache policy, defines response-privacy
+semantics, and provides conformance evidence against cross-user and cross-Tenant
+disclosure. Until then, authenticated and dynamic traffic remains
+`CachingDisabled`.
+
+#### Origin TLS and certificate lifecycle
+
+PROTECTED has the binding `OriginProtocolPolicy = https-only`. `http-only` and
+`match-viewer` are not valid for the normative Origin path; CloudFront always
+uses HTTPS to HAProxy regardless of Viewer behavior. HAProxy owns Origin TLS
+termination with a certificate for the tenant-specific `OriginDomain`, separate
+from the CloudFront-managed Viewer certificate and Viewer Domain.
+
+CloudFront must authenticate that TLS endpoint. The Origin certificate must be
+currently valid, chain to a certificate authority CloudFront accepts for custom
+Origin TLS, not be self-signed, and cover the configured `OriginDomain` by its
+hostname/SAN. Certificate, chain, validity, or hostname failure is fail-closed.
+An Origin token presented over a connection that has not passed this TLS
+contract is never sufficient authentication.
+
+Portable deployment automation owns the PROTECTED Origin-certificate lifecycle.
+Steady-state PROTECTED operation does not require public port 80, so the
+production reference renewal path must remain compatible with port 80 being
+permanently closed. DNS-01 is the reference ACME challenge model; the exact
+DNS-provider adapter remains downstream implementation work.
+
+Replacement material is staged. Before publication, validation covers at least
+the private-key/certificate match, certificate chain, required `OriginDomain`
+SAN/hostname, validity window, and HAProxy configuration using the candidate:
+
+```text
+candidate valid
+→ atomic publication
+→ `haproxy -c`
+→ graceful reload
+→ acceptance
+→ candidate becomes current/LKG
+```
+
+Any failure retains the previous valid Origin certificate and configuration.
+Invalid or incomplete material must never replace known-good material. This ADR
+defines the lifecycle invariant but implements no ACME client or DNS-provider
+adapter.
+
+#### Origin network lockdown
+
+The PROTECTED Origin is not directly reachable from the Internet. Two
+independent enforcement layers admit destination TCP 443 on the Origin HTTPS
+listener only from the validated AWS `CLOUDFRONT_ORIGIN_FACING` prefix contract:
+
+1. a provider layer, such as Hetzner Cloud Firewall; and
+2. host-native nftables.
+
+TCP 443 is the network selector, not proof of TLS; the separate Origin TLS
+contract above establishes and authenticates HTTPS.
+
+The PoC demonstrated each layer independently and both together. Origin-token
+authentication does not replace either network layer. DIRECT must not inherit
+this CloudFront-only allowlist.
+
+#### AWS prefix last-known-good contract
+
+The PROTECTED network boundary requires a fail-closed updater for AWS
+`ip-ranges.json`, restricted to service `CLOUDFRONT_ORIGIN_FACING`:
+
+```text
+download
+→ TLS validation
+→ JSON validation
+→ service-specific extraction
+→ non-empty
+→ CIDR validation
+→ no 0/0
+→ deterministic candidate
+→ provider/host validation
+→ controlled mutation
+→ acceptance
+→ only then new LKG
+```
+
+A download, candidate, or validation failure retains the existing
+last-known-good allowlist. Invalid input must never turn into an empty allowlist.
+The permanent updater is later implementation work, not part of this ADR
+delivery.
+
+#### WAF security logging and privacy
+
+CloudFront Standard Access Logging and Real-Time Logging are not prerequisites
+for the demonstrated PROTECTED contract and were disabled. Security-relevant
+WAF logging can use a default `DROP` behavior, narrow AMR/DDoS `KEEP` filters,
+and disabled sampling.
+
+`RedactedFields` is not universal redaction. Data minimization follows
+primarily from a narrow `LoggingFilter`, not from a blanket redaction
+assumption. Final production retention remains an explicit open policy and is
+not fixed here.
+
+### Common transport baseline
+
+The common reference protocols remain TLS 1.2 and TLS 1.3, HTTP/2, and
+HTTP/1.1. This ADR makes no HTTP/3 commitment.
+
+The complete PROTECTED path empirically passed 43 compatibility checks covering
+GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE, request bodies, query strings,
+Authorization, session-cookie roundtrip, CSRF-like transport, CORS, an
+Android/API-like request, a 100 MiB upload, `CachingDisabled` runtime, SSE, and
+WebSocket. This is architecture evidence for the transport boundary, not proof
+that every SecPal application feature has been exercised. The PoC harness is
+not production implementation and is not adopted into the repositories.
+
+### Deferred capabilities
+
+gRPC is `GRPC_NOT_ENABLED_FUTURE_CAPABILITY`. It was not runtime-qualified, and
+this ADR does not claim that current SecPal production supports it. A future
+decision must account for the AWS WAF request-body inspection limitation on
+gRPC rather than assuming the HTTP request-body contract applies unchanged.
+
+WebAuthn and Passkeys are `WEBAUTHN_APPLICATION_LEVEL_NOT_TESTED`. The Browser
+Origin contract is architecturally compatible, but no real SecPal Passkey test
+has established application-runtime PASS.
+
+## Evidence boundary
+
+### Empirically proven
+
+The Sandbox evidence established the bounded technical contracts described
+above: Multi-Tenant isolation for the tested Tenants, the managed-certificate
+state machine, shared WAF/AMR PoC configuration, Viewer Host and IPv4/IPv6
+identity transport, forged-header handling, per-deployment Origin
+authentication, KVS Control/Data Plane separation, both network-lockdown layers,
+filtered WAF security logging, and the 43 transport compatibility checks.
+
+The PoC's forged-header evidence covered its recorded internal-header and XFF
+cases. It did not by itself prove the complete application-facing forwarding
+cleanup now required below.
+
+### Architecture and security invariants established by review
+
+Independent architecture review makes the WAF-before-Function platform order,
+mandatory Viewer HTTPS, HTTPS-only and authenticated Origin TLS, the
+Origin-certificate LKG lifecycle, full forwarding metadata cleanup and
+reconstruction, and `CachingDisabled` for authenticated or dynamic traffic
+explicit. These are binding security requirements; they are not retroactively
+represented as additional Sandbox PASS results. Later public implementation and
+conformance work must enforce and qualify them.
+
+### Still open
+
+The evidence does not establish:
+
+- a production SLA or DDoS guarantee;
+- a production cost curve or real production multi-customer scale;
+- gRPC runtime or WebAuthn application-runtime support;
+- final WAF retention or DPA/TIA acceptance;
+- a final production domain product limit;
+- final production admin-network identity; or
+- final runtime secret-store design.
+
+Those claims require separately owned decisions and production evidence.
+
+## Ownership and information boundary
+
+ADR-023 remains binding. Portable PROTECTED technical capabilities belong in
+public `SecPal/deployment`, including later AWS Edge OpenTofu, a Hetzner adapter,
+WAF/AMR configuration, Function code, KVS contracts, HAProxy Origin
+authentication, nftables, prefix LKG automation, and conformance.
+
+Private `SecPal/operations` owns concrete Fleet composition, customer deployment
+inventory, placement, rollout, Managed policy, and commercial or operational
+state. Neither repository may store secrets, API keys, private keys, KVS secret
+values, customer data, OpenTofu/Terraform state, or mutable confidential live
+desired/observed state. Never in Git overrides both ownership classifications.
+
+## Consequences and follow-up boundary
+
+The public Edge and client-identity contract is mode-specific instead of
+implicitly universal. DIRECT retains HAProxy, Certbot, CrowdSec/Coraza, and
+direct network identity. PROTECTED terminates mandatory Viewer TLS and shared
+WAF at CloudFront, disables caching for authenticated and dynamic traffic, uses
+authenticated HTTPS to HAProxy, and retains HAProxy as the Origin/backend trust
+boundary. The real CloudFront TCP peer remains separate from canonical Viewer
+identity, Host, and scheme.
+
+Existing DIRECT issues
+[`SecPal/deployment#89`](https://github.com/SecPal/deployment/issues/89),
+[`#102`](https://github.com/SecPal/deployment/issues/102),
+[`#103`](https://github.com/SecPal/deployment/issues/103),
+[`#104`](https://github.com/SecPal/deployment/issues/104), and
+[`#106`](https://github.com/SecPal/deployment/issues/106) are neither reparented
+nor silently reinterpreted by this decision. After this rebaseline is accepted,
+their continued validity, mode-specific clarification, or supersession must be
+decided separately.
+
+The Direct-only Edge wording in
+[#695](https://github.com/SecPal/.github/issues/695) remains stale planning
+language while this architecture proposal is under review. It must be
+reconciled after this rebaseline is accepted and merged, rather than being
+rewritten as if an unmerged proposal were already authoritative. Only then
+should a public PROTECTED implementation Sub-Epic and its technical Leaf order
+be defined from the accepted architecture.
+
+## Non-goals
+
+This decision does not implement or embed OpenTofu, CloudFront Function code,
+HAProxy or nftables configuration, AWS IAM policy, Hetzner or AWS API code,
+ACME client or DNS-provider code, deployment scripts, certificate issuance,
+production credentials, mutable infrastructure state, a production retention
+period, or private Fleet orchestration. It does not choose Falco or Tetragon and
+does not create downstream implementation contracts before the architecture is
+accepted.
+
+## Relationships
+
+See [#695](https://github.com/SecPal/.github/issues/695),
+[#767](https://github.com/SecPal/.github/issues/767), ADR-018, ADR-022, and
+ADR-023. ADR-018 owns the host/runtime boundary, ADR-022 owns topology, and
+ADR-023 owns the public/private capability boundary.
