@@ -588,7 +588,7 @@ def integration_validation_payloads(
             "exceptional_recoveries_before": 1,
             "exceptional_recoveries_after": 1,
             "exceptional_continuations_before": 0,
-            "exceptional_continuations_after": 1,
+            "exceptional_continuations_after": 0,
             "cycle_3": False,
         },
     }

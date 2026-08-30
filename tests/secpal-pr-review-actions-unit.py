@@ -4652,9 +4652,17 @@ def ready_integration_evidence(
     *,
     validated_tree: str,
     registry: dict[str, Any] | None = None,
+    remediation_cycles: int = 1,
+    exceptional_recoveries: int = 1,
+    exceptional_continuations: int = 0,
 ) -> dict[str, Any]:
     registry = registry or fast_registry()
-    authority = ready_integration_prior_authority(reviewed)
+    authority = ready_integration_prior_authority(
+        reviewed,
+        remediation_cycles=remediation_cycles,
+        exceptional_recoveries=exceptional_recoveries,
+        exceptional_continuations=exceptional_continuations,
+    )
     return {
         "schema_version": "1.1",
         "kind": "TWO_PARENT_READY_INTEGRATION",
@@ -4696,18 +4704,24 @@ def ready_integration_evidence(
             "review_requested": False,
             "unrestricted_reviews_before": 1,
             "unrestricted_reviews_after": 1,
-            "remediation_cycles_before": 1,
-            "remediation_cycles_after": 1,
-            "exceptional_recoveries_before": 1,
-            "exceptional_recoveries_after": 1,
-            "exceptional_continuations_before": 0,
-            "exceptional_continuations_after": 1,
+            "remediation_cycles_before": remediation_cycles,
+            "remediation_cycles_after": remediation_cycles,
+            "exceptional_recoveries_before": exceptional_recoveries,
+            "exceptional_recoveries_after": exceptional_recoveries,
+            "exceptional_continuations_before": exceptional_continuations,
+            "exceptional_continuations_after": exceptional_continuations,
             "cycle_3": False,
         },
     }
 
 
-def ready_integration_prior_authority(reviewed: Any) -> dict[str, Any]:
+def ready_integration_prior_authority(
+    reviewed: Any,
+    *,
+    remediation_cycles: int = 1,
+    exceptional_recoveries: int = 1,
+    exceptional_continuations: int = 0,
+) -> dict[str, Any]:
     return {
         "schema_version": "1.1",
         "kind": "READY_INTEGRATION_PRIOR_AUTHORITY",
@@ -4727,9 +4741,9 @@ def ready_integration_prior_authority(reviewed: Any) -> dict[str, Any]:
             "ready": True,
             "ready_transition": False,
             "unrestricted_reviews": 1,
-            "remediation_cycles": 1,
-            "exceptional_recoveries": 1,
-            "exceptional_continuations": 0,
+            "remediation_cycles": remediation_cycles,
+            "exceptional_recoveries": exceptional_recoveries,
+            "exceptional_continuations": exceptional_continuations,
             "cycle_3": False,
         },
         "publication": {
@@ -6363,8 +6377,8 @@ class FastPathTests(TestCase):
             ("ready_transition", lambda item: item["lifecycle"].__setitem__("ready_transition", True)),
             ("review_counter", lambda item: item["lifecycle"].__setitem__("unrestricted_reviews", 2)),
             ("remediation_counter", lambda item: item["lifecycle"].__setitem__("remediation_cycles", 3)),
-            ("recovery_counter", lambda item: item["lifecycle"].__setitem__("exceptional_recoveries", 0)),
-            ("continuation_consumed", lambda item: item["lifecycle"].__setitem__("exceptional_continuations", 1)),
+            ("recovery_counter", lambda item: item["lifecycle"].__setitem__("exceptional_recoveries", 2)),
+            ("continuation_counter", lambda item: item["lifecycle"].__setitem__("exceptional_continuations", 2)),
             ("authority_digest", lambda item: item["lifecycle"].__setitem__("current_authority_digest", "x" * 64)),
             ("proof_mode", lambda item: item["lifecycle"].__setitem__("historical_proof_mode", "asserted")),
             ("publication_oid", lambda item: item["publication"].__setitem__("object_oid", "x" * 40)),
@@ -6660,6 +6674,101 @@ class FastPathTests(TestCase):
         ):
             changed = copy.deepcopy(authority)
             changed["lifecycle"][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "lifecycle differs"
+            ):
+                actions._verify_ready_integration_lifecycle_authority(
+                    changed, integration
+                )
+
+    def test_ready_integration_accepts_authenticated_current_ready_histories(self) -> None:
+        reviewed = fast_feedback()
+        histories = (
+            ("native", 0, 0, 0),
+            ("remediated_once", 1, 0, 0),
+            ("remediated_twice", 2, 0, 0),
+            ("historical_recovery", 2, 1, 0),
+            ("historical_continuation", 2, 1, 1),
+        )
+        for name, remediations, recoveries, continuations in histories:
+            with self.subTest(history=name):
+                authority = fast_path.normalize_ready_integration_prior_authority(
+                    ready_integration_prior_authority(
+                        reviewed,
+                        remediation_cycles=remediations,
+                        exceptional_recoveries=recoveries,
+                        exceptional_continuations=continuations,
+                    )
+                )
+                integration = fast_path.normalize_ready_integration_evidence(
+                    ready_integration_evidence(
+                        reviewed,
+                        validated_tree="a" * 40,
+                        remediation_cycles=remediations,
+                        exceptional_recoveries=recoveries,
+                        exceptional_continuations=continuations,
+                    ),
+                    repository="SecPal/.github",
+                    reviewed_state=reviewed,
+                    registry=fast_registry(),
+                    validated_tree_sha="a" * 40,
+                )
+                actions._verify_ready_integration_lifecycle_authority(
+                    authority, integration
+                )
+                self.assertEqual(
+                    integration["eligibility"]["exceptional_recoveries_after"],
+                    recoveries,
+                )
+                self.assertEqual(
+                    integration["eligibility"]["exceptional_continuations_after"],
+                    continuations,
+                )
+
+    def test_ready_integration_rejects_caller_forged_history_changes(self) -> None:
+        reviewed = fast_feedback()
+        authority = fast_path.normalize_ready_integration_prior_authority(
+            ready_integration_prior_authority(
+                reviewed,
+                exceptional_recoveries=0,
+                exceptional_continuations=0,
+            )
+        )
+        original = ready_integration_evidence(
+            reviewed,
+            validated_tree="a" * 40,
+            exceptional_recoveries=0,
+            exceptional_continuations=0,
+        )
+        for field, forged in (
+            ("exceptional_recoveries_after", 1),
+            ("exceptional_continuations_after", 1),
+        ):
+            candidate = copy.deepcopy(original)
+            candidate["eligibility"][field] = forged
+            with self.subTest(field=field), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                fast_path.normalize_ready_integration_evidence(
+                    candidate,
+                    repository="SecPal/.github",
+                    reviewed_state=reviewed,
+                    registry=fast_registry(),
+                    validated_tree_sha="a" * 40,
+                )
+        integration = fast_path.normalize_ready_integration_evidence(
+            original,
+            repository="SecPal/.github",
+            reviewed_state=reviewed,
+            registry=fast_registry(),
+            validated_tree_sha="a" * 40,
+        )
+        for field, forged in (
+            ("exceptional_recoveries", 1),
+            ("exceptional_continuations", 1),
+        ):
+            changed = copy.deepcopy(authority)
+            changed["lifecycle"][field] = forged
             with self.subTest(field=field), self.assertRaisesRegex(
                 fast_path.SecurityBlocker, "lifecycle differs"
             ):

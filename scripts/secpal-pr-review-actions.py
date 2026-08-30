@@ -4801,7 +4801,7 @@ def _verify_ready_integration_lifecycle_authority(
         or eligibility["exceptional_continuations_before"]
         != lifecycle["exceptional_continuations"]
         or eligibility["exceptional_continuations_after"]
-        != lifecycle["exceptional_continuations"] + 1
+        != lifecycle["exceptional_continuations"]
         or eligibility["draft_before"] != lifecycle["draft"]
         or eligibility["ready_before"] != lifecycle["ready"]
         or eligibility["ready_transition"] is not False

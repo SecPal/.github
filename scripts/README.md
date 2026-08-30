@@ -57,7 +57,10 @@ signed two-parent candidate whose first parent is the prior Ready delivery head
 and whose second parent is the explicitly authorized live current registered
 `main` tip. The versioned manifest consumes the maintained protected-journal
 lifecycle publication for parent 1, including its persistent identity, current
-authority digest, finite exceptional history, and unused continuation budget.
+authority digest, and finite exceptional history. Ordinary typed integration
+uses `HEAD_ADVANCED` and preserves both exceptional counters exactly; it does
+not consume recovery or continuation budget.
+
 The fresh tree receipt, integration-evidence
 trailer, final attestation, expected signer, stable-feedback and eligibility
 digests, unchanged lifecycle counters, and exact bounded manual tree delta all
