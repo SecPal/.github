@@ -7606,10 +7606,9 @@ class FastPathTests(TestCase):
                 ("ordinary prose", "ordinary maintained text\n"),
                 ("empty file", ""),
                 ("documentation separator", "heading\n=======\nbody\n"),
-                (
-                    "standalone non-opening components",
-                    "||||||| base example\n=======\n>>>>>>> closing example\n",
-                ),
+                ("isolated base component", "||||||| base example\n"),
+                ("isolated separator component", "=======\n"),
+                ("isolated close component", ">>>>>>> closing example\n"),
                 (
                     "opening-like text outside the grammar",
                     "<<<<<<<not-a-marker\n <<<<<<< indented\n<<<<<<<\ttabbed\n",
@@ -7698,6 +7697,18 @@ class FastPathTests(TestCase):
                     "<<<<<<< ours\n=======\n=======\nright\n>>>>>>> theirs\n",
                 ),
                 (
+                    "truncated two-way tail",
+                    "=======\ntheirs\n>>>>>>> branch\n",
+                ),
+                (
+                    "truncated diff3 tail",
+                    "||||||| base\nbase\n=======\ntheirs\n>>>>>>> branch\n",
+                ),
+                (
+                    "malformed truncated diff3 tail",
+                    "||||||| base\nbase\n>>>>>>> branch\n",
+                ),
+                (
                     "CRLF conflict",
                     "<<<<<<< ours\r\nleft\r\n=======\r\nright\r\n>>>>>>> theirs\r\n",
                 ),
@@ -7770,6 +7781,63 @@ class FastPathTests(TestCase):
             ):
                 actions._verify_integration_tree_delta(
                     repository, late_nul, late_nul_tree
+                )
+
+            conflict_prefix = (
+                b"<<<<<<< retained\nleft\n=======\nright\n>>>>>>> retained\n"
+            )
+            nul_before_boundary_tree, nul_before_boundary = candidate(
+                {
+                    "a.txt": (
+                        conflict_prefix
+                        + b"x" * (7999 - len(conflict_prefix))
+                        + b"\x00"
+                    ),
+                    "b.txt": "resolved b\n",
+                }
+            )
+            actions._verify_integration_tree_delta(
+                repository, nul_before_boundary, nul_before_boundary_tree
+            )
+            nul_at_boundary_tree, nul_at_boundary = candidate(
+                {
+                    "a.txt": (
+                        conflict_prefix
+                        + b"x" * (8000 - len(conflict_prefix))
+                        + b"\x00"
+                    ),
+                    "b.txt": "resolved b\n",
+                }
+            )
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "retains Git conflict markers"
+            ):
+                actions._verify_integration_tree_delta(
+                    repository, nul_at_boundary, nul_at_boundary_tree
+                )
+            multibyte_late_nul_tree, multibyte_late_nul = candidate(
+                {
+                    "a.txt": conflict_prefix + "é".encode("utf-8") * 5000 + b"\x00",
+                    "b.txt": "resolved b\n",
+                }
+            )
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "retains Git conflict markers"
+            ):
+                actions._verify_integration_tree_delta(
+                    repository, multibyte_late_nul, multibyte_late_nul_tree
+                )
+            undecodable_text_tree, undecodable_text = candidate(
+                {
+                    "a.txt": conflict_prefix + b"\xff",
+                    "b.txt": "resolved b\n",
+                }
+            )
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "retains Git conflict markers"
+            ):
+                actions._verify_integration_tree_delta(
+                    repository, undecodable_text, undecodable_text_tree
                 )
 
             limit = actions.MAX_INTEGRATION_CONFLICT_CONTENT_BYTES

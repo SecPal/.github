@@ -4327,7 +4327,8 @@ def _run_attestation_git(
     arguments: list[str],
     *,
     allow_failure: bool = False,
-) -> subprocess.CompletedProcess[str]:
+    raw_output: bool = False,
+) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
     try:
         git_executable = evidence.resolve_trusted_executable("git")
     except evidence.CommandPolicyError as exc:
@@ -4342,9 +4343,9 @@ def _run_attestation_git(
             check=False,
             stdin=subprocess.DEVNULL,
             capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+            text=not raw_output,
+            encoding=None if raw_output else "utf-8",
+            errors=None if raw_output else "replace",
             env=evidence.command_environment("git"),
             timeout=EXTERNAL_COMMAND_TIMEOUT_SECONDS,
         )
@@ -4617,24 +4618,27 @@ def _reject_integration_conflict_markers(
             )
         blobs.append((path, object_oid.lower(), size))
 
-    for _path, object_oid, _expected_size in blobs:
+    for _path, object_oid, expected_size in blobs:
         result = _run_attestation_git(
             repository_root,
             ["cat-file", "blob", object_oid],
             allow_failure=True,
+            raw_output=True,
         )
         if (
             result.returncode != 0
-            or not isinstance(result.stdout, str)
+            or not isinstance(result.stdout, bytes)
+            or len(result.stdout) != expected_size
         ):
             raise fast_path.SecurityBlocker(
                 "resolved integration conflict content cannot be authenticated"
             )
-        content = result.stdout
+        raw_content = result.stdout
         # Match Git's established binary-file sniff: a NUL in the initial
         # 8,000-byte inspection window excludes the blob from text scanning.
-        if "\x00" in content[:8000]:
+        if b"\x00" in raw_content[:8000]:
             continue
+        content = raw_content.decode("utf-8", "replace")
         state = "OUTSIDE"
         for line in content.split("\n"):
             marker = _integration_conflict_marker_kind(line)
@@ -4643,7 +4647,24 @@ def _reject_integration_conflict_markers(
             if state == "OUTSIDE":
                 if marker == "OPEN":
                     state = "OURS"
+                elif marker == "BASE":
+                    state = "TRUNCATED_BASE"
+                elif marker == "SEPARATOR":
+                    state = "TRUNCATED_THEIRS"
                 continue
+            if state == "TRUNCATED_BASE":
+                if marker == "BASE":
+                    continue
+                if marker == "SEPARATOR":
+                    state = "TRUNCATED_THEIRS"
+                    continue
+            elif state == "TRUNCATED_THEIRS":
+                if marker == "SEPARATOR":
+                    continue
+                if marker == "CLOSE":
+                    raise fast_path.SecurityBlocker(
+                        "resolved integration tree retains Git conflict markers"
+                    )
             if state == "OURS":
                 if marker == "BASE":
                     state = "BASE"
@@ -4661,7 +4682,7 @@ def _reject_integration_conflict_markers(
             raise fast_path.SecurityBlocker(
                 "resolved integration tree retains Git conflict markers"
             )
-        if state != "OUTSIDE":
+        if state in {"OURS", "BASE", "THEIRS"}:
             raise fast_path.SecurityBlocker(
                 "resolved integration tree retains Git conflict markers"
             )
