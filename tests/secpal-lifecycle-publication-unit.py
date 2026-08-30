@@ -259,6 +259,26 @@ class LifecyclePublicationTests(TestCase):
         ).stdout.strip()
         return value
 
+    def test_pre_enrollment_absence_is_bound_to_the_observed_protected_tip(self) -> None:
+        absence = publication.verify_pre_enrollment_absence(REPOSITORY, ISSUE)
+        self.assertEqual(absence.repository, REPOSITORY)
+        self.assertEqual(absence.delivery_issue, ISSUE)
+        self.assertEqual(absence.publication_branch, BRANCH)
+        self.assertIsNone(absence.observed_tip_oid)
+        self.assertRegex(absence.evidence_digest, r"^[0-9a-f]{64}$")
+
+    def test_pre_enrollment_absence_rejects_existing_native_genesis(self) -> None:
+        chain = Chain()
+        chain.append("INITIALIZED_DRAFT")
+        publication.admit_native_genesis(
+            chain.raw(), signer_identity=SIGNER, signer=signer_for()
+        )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError,
+            "already has native genesis or CURRENT",
+        ):
+            publication.verify_pre_enrollment_absence(REPOSITORY, ISSUE)
+
     def test_public_consumer_cannot_inject_trust_or_select_terminal(self) -> None:
         parameters = inspect.signature(publication.verify_current_lifecycle_authority).parameters
         self.assertEqual(list(parameters), ["repository", "delivery_issue", "expected"])

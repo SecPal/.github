@@ -98,6 +98,17 @@ class VerifiedNativeGenesisAdmission:
     maintained_compatibility_anchor: bool = False
 
 
+@dataclass(frozen=True)
+class VerifiedPreEnrollmentAbsence:
+    """Authenticated proof that neither genesis nor CURRENT owns a delivery."""
+
+    repository: str
+    delivery_issue: int
+    publication_branch: str
+    observed_tip_oid: str | None
+    evidence_digest: str
+
+
 def _trusted_executable(name: str) -> tuple[str, Any]:
     helper = authority._load_trusted_command_helper()
     if name not in {"git", "gh"}:
@@ -1319,4 +1330,50 @@ def verify_current_lifecycle_authority(
         publication_oid, document["publication_digest"], policy.publication_branch,
         document["journal_predecessor_oid"],
         document["predecessor_publication_oid"], lifecycle,
+    )
+
+
+def verify_pre_enrollment_absence(
+    repository: str, delivery_issue: int
+) -> VerifiedPreEnrollmentAbsence:
+    """Observe the protected journal once and reject any existing native authority."""
+
+    policy = authority._load_lifecycle_trust_policy(repository)
+    _verify_live_protection(policy)
+    issue = authority._require_positive_int(delivery_issue, "delivery issue")
+    with _isolated_repository(policy, write=False) as (root, credential_environment):
+        tip = _observe_remote_current_once(
+            root,
+            policy.publication_remote_url,
+            policy.publication_branch,
+            credential_environment=credential_environment,
+        )
+        latest: dict[tuple[str, int], Any] = {}
+        admissions: dict[tuple[str, int], Any] = {}
+        if tip is not None:
+            _, latest, admissions = _walk_journal(
+                root, tip, policy.publication_branch
+            )
+    key = (repository, issue)
+    if key in latest or key in admissions:
+        raise LifecyclePublicationError(
+            "delivery already has native genesis or CURRENT lifecycle authority"
+        )
+    fields = {
+        "schema_version": "1.0",
+        "kind": "VERIFIED_PRE_ENROLLMENT_LIFECYCLE_ABSENCE",
+        "repository": repository,
+        "delivery_issue": issue,
+        "publication_branch": policy.publication_branch,
+        "observed_tip_oid": tip,
+        "current_publication": False,
+        "native_genesis": False,
+        "lifecycle_aware_head_advancement": False,
+    }
+    return VerifiedPreEnrollmentAbsence(
+        repository,
+        issue,
+        policy.publication_branch,
+        tip,
+        digest_json(fields),
     )

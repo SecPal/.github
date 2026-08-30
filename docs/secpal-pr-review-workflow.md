@@ -96,6 +96,46 @@ explicit Cycle-3 absence, Draft/Ready state and transition history, and bounded
 exceptional recovery and continuation history. Head advancement and authorized
 PR rebinding preserve every lifecycle fact.
 
+Initialization schema 1.1 additionally accepts exactly one maintained
+`AUTHENTICATED_PRE_ENROLLMENT_DRAFT_INTEGRATION_HEAD` proof. That proof is
+returned only after the separately typed
+`PRE_ENROLLMENT_DRAFT_INTEGRATION` verifier authenticates the signed candidate,
+its two ordered Draft/current-main parents, exact tree, receipt, final
+attestation, signer, PR, issue, repository, and bounded conflict evidence. A
+generic merge commit cannot supply this proof. The resulting lifecycle still
+starts with the ordinary `INITIALIZED_DRAFT` state and zero review,
+remediation, Ready-transition, exceptional-recovery, and
+exceptional-continuation counters; Cycle 3 remains absent. Native genesis is
+then admitted and enrolled through the admission-first publication boundary.
+The integration itself is not a lifecycle transition.
+
+## Pre-enrollment Draft current-main integration
+
+An open Draft delivery that has not entered lifecycle authority may use the
+closed `PRE_ENROLLMENT_DRAFT_INTEGRATION` topology. Its first parent is the
+authenticated live Draft PR head and its second parent is the freshly observed
+registered default-branch head. The canonical work graph must identify the
+delivery as a READY leaf, and the protected lifecycle journal must prove both
+CURRENT and native-genesis absence. A signed authorization fixes the exact
+repository, issue, PR, both parents, expected signer, and operation identity.
+
+The shared Git mechanics derive the mechanical merge tree, canonical conflict
+paths, raw resolution delta, ordered parents, and candidate signature. Clean
+merges require exact mechanical-tree equality. Conflict-bearing merges require
+one exact changed/deleted entry per conflict path, no other path, and no
+retained conflict markers. Complete validation binds the frozen tree in
+`PRE_ENROLLMENT_DRAFT_INTEGRATION_VALIDATION_RECEIPT`; the signed candidate and
+`PRE_ENROLLMENT_DRAFT_INTEGRATION_FINAL_ATTESTATION` bind the final head,
+receipt, evidence digest, signer, current-main observation, and initial Draft
+identity.
+
+This path is not ordinary sole-parent remediation and is not
+`TWO_PARENT_READY_INTEGRATION`: it consumes no Ready authority, review budget,
+remediation budget, recovery, or continuation. One invocation observes one
+final current state, constructs and non-force-pushes at most one candidate,
+verifies exact final head equality, and stops without retry or any merge,
+review-request, Ready-transition, graph, issue, label, or lifecycle mutation.
+
 The installed repository registry is the lifecycle trust-policy source. It
 separately assigns transition and authority signer roles, accepted signature
 formats, SSH public keys, OpenPGP fingerprints, and unique initialization
