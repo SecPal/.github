@@ -821,14 +821,26 @@ def _maintained_compatibility_admission(
     repository = authority._require_repository(initialization.get("repository"))
     policy = authority._load_lifecycle_trust_policy(repository)
     matches = [
-        anchor
-        for anchor in policy.initialization_anchors
+        historical
+        for historical in policy.historical_compatibility_publications
         if (
-            anchor.delivery_issue == initialization.get("delivery_issue")
-            and anchor.pull_request == initialization.get("pull_request")
-            and anchor.initial_head_sha == initialization.get("initial_head_sha")
-            and anchor.initialization_digest
+            historical.repository == repository
+            and historical.delivery_issue == initialization.get("delivery_issue")
+            and historical.pull_request == initialization.get("pull_request")
+            and historical.initial_head_sha
+            == initialization.get("initial_head_sha")
+            and historical.initialization_digest
             == initialization.get("initialization_digest")
+            and historical.delivery_issue == document.get("delivery_issue")
+            and historical.pull_request == document.get("pull_request")
+            and historical.initial_head_sha == document.get("head_sha")
+            and historical.initialization_digest
+            == document.get("initialization_evidence_digest")
+            and historical.enrollment_publication_oid == object_oid
+            and historical.enrollment_publication_digest
+            == document.get("publication_digest")
+            and historical.historical_proof_mode
+            == document.get("historical_proof_mode")
         )
     ]
     if len(matches) != 1:
@@ -841,7 +853,7 @@ def _maintained_compatibility_admission(
     )
     return VerifiedNativeGenesisAdmission(
         admission_oid=object_oid,
-        admission_digest=verified["initialization_digest"],
+        admission_digest=matches[0].enrollment_publication_digest,
         publication_branch=publication_branch,
         journal_predecessor_oid=document.get("journal_predecessor_oid"),
         repository=repository,
