@@ -350,14 +350,6 @@ class LifecycleAuthorityTests(TestCase):
             )
         )
 
-        entry = next(
-            item
-            for item in registry["repositories"]
-            if item["repository"] == REPOSITORY
-        )
-        compatibility = entry["lifecycle_authority_policy"][
-            "historical_compatibility_publications"
-        ]
         mutations = (
             lambda values: values.append(copy.deepcopy(values[0])),
             lambda values: values[1].update(
