@@ -595,6 +595,17 @@ fi
 grep -Fq 'normal_signed_remediation_commits: 1' "$CONTRACT" || fail 'commit limit drifted'
 grep -Fq 'normal_fast_forward_pushes: 1' "$CONTRACT" || fail 'push limit drifted'
 grep -Fq 'maximum_evidence_replies_total: 10' "$CONTRACT" || fail 'reply limit drifted'
+if grep -Fq 'unused exceptional-continuation budget' "$CONTRACT"; then
+  fail 'Ready integration still requires an unused continuation budget'
+fi
+for continuation_requirement in \
+  'exact finite exceptional-recovery and exceptional-continuation histories' \
+  "Ordinary typed Ready integration uses \`HEAD_ADVANCED\`" \
+  'preserves each authenticated exceptional history exactly' \
+  'consumes neither exceptional recovery nor exceptional continuation'; do
+  grep -Fq "$continuation_requirement" <<<"$contract_text" \
+    || fail "Ready integration continuation-history contract is incomplete: $continuation_requirement"
+done
 grep -Fq 'WAIT_FOR_EXPLICIT_USER_MERGE_AUTHORIZATION' "$CONTRACT" || fail 'user checkpoint missing'
 grep -Fq 'A normal invocation has one remediation pass.' "$CONTRACT" || fail 'single-pass rule missing'
 grep -Fq 'never appends unreviewed feedback' "$CONTRACT" || fail 'late-feedback rule missing'
