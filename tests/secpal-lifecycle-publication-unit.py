@@ -476,7 +476,7 @@ class LifecyclePublicationTests(TestCase):
             lifecycle_evidence=chain.raw()
         )
         with patch.object(authority, "_load_lifecycle_trust_policy", return_value=policy):
-            admission = publication.admit_native_genesis(
+            publication.admit_native_genesis(
                 chain.raw(), signer_identity=SIGNER, signer=signer_for()
             )
             enrolled = publication.enroll_existing_lifecycle(
