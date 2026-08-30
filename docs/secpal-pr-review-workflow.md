@@ -145,10 +145,12 @@ credential overlap even when the duplicate key is assigned another principal.
 Legacy enrollment ends exactly at the checkpoint terminal, so post-checkpoint
 continuations and PR rebinding cannot be folded into the migration root.
 
-The maintained registry contains only static trust: publication and migration
-signer roles, the exact GitHub endpoint, publication branch, and live ruleset
-identity and required protections. It never contains a candidate head,
-terminal digest, or current publication object. Dynamic events form one signed
+The maintained registry contains only trust policy: publication, native-genesis
+admission, and migration signer roles; the exact GitHub endpoint, publication
+branch, and live ruleset identity and required protections; historical native
+compatibility roots; and the one closed issue 736 bootstrap-repair identity.
+New candidate heads, terminal digests, and current publication objects are not
+registered there. Dynamic events form one signed
 linear journal on `refs/heads/secpal-lifecycle-publications` outside delivery
 trees. The live ruleset prohibits deletion and non-fast-forward updates without
 bypass; lease-based CAS separately rejects stale cooperative writers.
@@ -159,12 +161,21 @@ CURRENT. Consumer expectations are post-verification constraints; callers
 cannot supply the remote, branch, trust, migration checkpoint, or terminal
 selector. Publication Git operations use a controlled bare repository and
 closed environment, preventing ambient URL rewrites and transport overrides.
-For native adoption, the first journal entry must satisfy the ordinary
-maintained #750 current-tip boundary. Later journal successors use a private
+For native adoption, a separately signed genesis admission must be reachable in
+journal ancestry before the first lifecycle publication. A branch-local static
+anchor cannot substitute for admission. The already-maintained native roots
+that predate this ordering remain narrow historical compatibility inputs, not a
+future enrollment mechanism. Later journal successors use a private
 publication-only verification path for the same initialization root and full
 signed transition chain; authenticated journal ancestry then selects CURRENT.
 The ordinary #750 verifier keeps its static current-tip requirement, and no
 consumer-controlled bypass is exposed.
+
+The one `BOOTSTRAP_REPAIR_NATIVE_GENESIS` operation for issue 736 binds the
+maintained exact original initialization, receipt, attestation, signer,
+signature, and enrollment publication. It is allowed to follow that existing
+enrollment, appends without rewriting history, and selects no terminal. See
+[Native Lifecycle Genesis Admission](native-lifecycle-genesis-admission.md).
 
 Publication does not derive lifecycle state, orchestrate lifecycle events, or
 implement two-parent integration. Those remain owned by #750, #692, and #745

@@ -31,6 +31,31 @@ HEADS = [character * 40 for character in "abcdef1234567890"]
 SECRET = b"lifecycle-publication-hermetic-signature"
 BRANCH = "refs/heads/secpal-lifecycle-publications"
 RULESET_ID = 21769814
+ISSUE_736 = 736
+PR_760 = 760
+INITIAL_HEAD_736 = "9cce12e839e5f998137cc58fea90d0a5a0a45f63"
+CURRENT_HEAD_736 = "40e218ade8b4f6c9121cebbfe286dfc077d185e3"
+INITIALIZATION_DIGEST_736 = (
+    "6477407a86182f6bc9964089382f288e13dbb2e0b096edb2bf4e1c228452e628"
+)
+RECEIPT_DIGEST_736 = (
+    "ae9cf6c0480aae0effa72bc8128e569db82f84b86351642c14c37ecabdccecc4"
+)
+ATTESTATION_DIGEST_736 = (
+    "dad96cfa78d2a2c4d09818b761ec88d9385569e24a8e5117bab16be2351cbd25"
+)
+REAL_SIGNING_KEY = (
+    "ssh-ed25519 "
+    "AAAAC3NzaC1lZDI1NTE5AAAAIDDKiPWdlHKFaHJL+GQ3EQRs9St95lITw217D17rZ2qB"
+)
+INITIALIZATION_SIGNATURE_736 = """-----BEGIN SSH SIGNATURE-----
+U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgMMqI9Z2UcoVockv4ZDcRBGz1K3
+3mUhPDbXsPXutnaoEAAAArc2VjcGFsLmRlbGl2ZXJ5LWxpZmVjeWNsZS1pbml0aWFsaXph
+dGlvbi92MQAAAAAAAAAGc2hhNTEyAAAAUwAAAAtzc2gtZWQyNTUxOQAAAEBPW9HoSyuSvG
+OJlECFurceXxvpEtXnEVHKkVJAmmUG94F0LXvzaYo8F3VI149HLSctY33Cs8W9vZn1jZ+2
+IhwP
+-----END SSH SIGNATURE-----
+"""
 
 
 def signer_for(identity: str = SIGNER) -> authority.Signer:
@@ -42,6 +67,14 @@ def signer_for(identity: str = SIGNER) -> authority.Signer:
 
 def verify_signature(payload: bytes, signature: dict[str, Any], expected_signer: str,
                      domain: str) -> authority.VerifiedSignature:
+    if signature["value"].startswith("-----BEGIN SSH SIGNATURE-----"):
+        authority._verify_ssh_signature(
+            payload,
+            signature["value"],
+            authority.TrustedSigner(SIGNER, (REAL_SIGNING_KEY,), ()),
+            domain,
+        )
+        return authority.VerifiedSignature(expected_signer, signature["format"])
     expected = signer_for(expected_signer)(payload, domain)["value"]
     if signature["value"] != expected or signature["signer_identity"] != expected_signer:
         raise ValueError("invalid test signature")
@@ -124,6 +157,39 @@ class Chain:
         )
 
 
+def issue_736_chain() -> Chain:
+    chain = Chain(ISSUE_736)
+    chain.initialization = {
+        "schema_version": "1.0",
+        "kind": authority.INITIALIZATION_KIND,
+        "domain": authority.INITIALIZATION_DOMAIN,
+        "repository": REPOSITORY,
+        "delivery_issue": ISSUE_736,
+        "pull_request": PR_760,
+        "initial_head_sha": INITIAL_HEAD_736,
+        "validation_receipt_digest": RECEIPT_DIGEST_736,
+        "final_attestation_digest": ATTESTATION_DIGEST_736,
+        "signer_identity": SIGNER,
+        "signature": {
+            "format": "ssh",
+            "signer_identity": SIGNER,
+            "value": INITIALIZATION_SIGNATURE_736,
+        },
+        "initialization_digest": INITIALIZATION_DIGEST_736,
+    }
+    chain.lifecycle_id = authority.delivery_initialization_lifecycle_id(
+        INITIALIZATION_DIGEST_736
+    )
+    chain.pull_request = PR_760
+    chain.head = INITIAL_HEAD_736
+    chain.append("INITIALIZED_DRAFT")
+    chain.append("UNRESTRICTED_REVIEW_CONSUMED")
+    chain.append("REMEDIATION_COMPLETED", head="1" * 40)
+    chain.append("DRAFT_TO_READY")
+    chain.append("REMEDIATION_COMPLETED", head=CURRENT_HEAD_736)
+    return chain
+
+
 def recovered_ready_chain(issue: int = ISSUE) -> Chain:
     chain = Chain(issue)
     chain.append("INITIALIZED_DRAFT")
@@ -157,6 +223,7 @@ class LifecyclePublicationTests(TestCase):
             authority_signer_identities=frozenset({SIGNER}),
             signers={SIGNER: trusted, LEGACY_SIGNER: legacy_trusted},
             initialization_anchors=(), publication_signer_identities=frozenset({SIGNER}),
+            genesis_admission_signer_identities=frozenset({SIGNER}),
             legacy_adoption_signer_identities=frozenset({LEGACY_SIGNER}),
             publication_branch=BRANCH, publication_remote_url=str(self.remote),
             publication_ruleset_id=RULESET_ID,
@@ -216,7 +283,9 @@ class LifecyclePublicationTests(TestCase):
             authority.verify_lifecycle_authority_for_publication(native)
         with self.assertRaises(authority.LifecycleAuthorityError):
             authority.verify_lifecycle_authority_for_publication(chain.raw())
-        with self.assertRaises(authority.LifecycleAuthorityError):
+        with self.assertRaises(
+            (authority.LifecycleAuthorityError, publication.LifecyclePublicationError)
+        ):
             publication.enroll_existing_lifecycle(
                 native, signer_identity=SIGNER, signer=signer_for()
             )
@@ -407,6 +476,9 @@ class LifecyclePublicationTests(TestCase):
             lifecycle_evidence=chain.raw()
         )
         with patch.object(authority, "_load_lifecycle_trust_policy", return_value=policy):
+            publication.admit_native_genesis(
+                chain.raw(), signer_identity=SIGNER, signer=signer_for()
+            )
             enrolled = publication.enroll_existing_lifecycle(
                 native_h, signer_identity=SIGNER, signer=signer_for()
             )
@@ -446,6 +518,300 @@ class LifecyclePublicationTests(TestCase):
                     )
                 )
 
+    def test_native_enrollment_requires_prior_global_genesis_admission(self) -> None:
+        chain = Chain()
+        chain.append("INITIALIZED_DRAFT")
+        native = authority.serialize_publication_lifecycle_evidence(
+            lifecycle_evidence=chain.raw()
+        )
+
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError,
+            "native genesis is not independently admitted",
+        ):
+            publication.enroll_existing_lifecycle(
+                native, signer_identity=SIGNER, signer=signer_for()
+            )
+
+        admission = publication.admit_native_genesis(
+            chain.raw(), signer_identity=SIGNER, signer=signer_for()
+        )
+        self.assertEqual(admission.delivery_issue, ISSUE)
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "unavailable"
+        ):
+            publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE)
+
+        enrolled = publication.enroll_existing_lifecycle(
+            native, signer_identity=SIGNER, signer=signer_for()
+        )
+        self.assertEqual(enrolled.journal_predecessor_oid, admission.admission_oid)
+        self.assertEqual(
+            publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE)
+            .lifecycle.initialization_evidence_digest,
+            chain.initialization["initialization_digest"],
+        )
+
+    def test_exact_issue_736_genesis_repairs_without_changing_current(self) -> None:
+        chain = issue_736_chain()
+        bundle, bundle_raw = publication._canonical_bundle(chain.raw())
+        verified = authority.verify_native_lifecycle_for_genesis_admission(bundle_raw)
+        fields = publication._publication_fields(
+            operation="ENROLL_EXISTING_LIFECYCLE",
+            verified=verified,
+            bundle=bundle,
+            bundle_raw=bundle_raw,
+            publication_branch=BRANCH,
+            journal_predecessor_oid=None,
+            predecessor=None,
+            predecessor_oid=None,
+            signer_identity=SIGNER,
+        )
+        raw = publication._sign_publication(fields, signer_for())
+        enrollment_oid = publication._write_publication_object(
+            self.probe, raw, None
+        )
+        enrollment_digest = json.loads(raw)["publication_digest"]
+        publication._cas_remote_ref(
+            self.probe, str(self.remote), BRANCH, enrollment_oid, None
+        )
+        repair = authority.BootstrapGenesisRepair(
+            repair_issue=774,
+            delivery_issue=ISSUE_736,
+            pull_request=PR_760,
+            initial_head_sha=INITIAL_HEAD_736,
+            initialization_digest=INITIALIZATION_DIGEST_736,
+            validation_receipt_digest=RECEIPT_DIGEST_736,
+            final_attestation_digest=ATTESTATION_DIGEST_736,
+            enrollment_publication_oid=enrollment_oid,
+            enrollment_publication_digest=enrollment_digest,
+        )
+        repaired_policy = replace(
+            self.policy, bootstrap_genesis_repairs=(repair,)
+        )
+
+        with patch.object(
+            authority, "_load_lifecycle_trust_policy", return_value=repaired_policy
+        ):
+            with self.assertRaisesRegex(
+                publication.LifecyclePublicationError,
+                "native genesis is not independently admitted",
+            ):
+                publication.verify_current_lifecycle_authority(
+                    REPOSITORY, ISSUE_736
+                )
+            admission = publication.repair_published_native_genesis(
+                REPOSITORY,
+                ISSUE_736,
+                repair_issue=774,
+                signer_identity=SIGNER,
+                signer=signer_for(),
+            )
+            current = publication.verify_current_lifecycle_authority(
+                REPOSITORY, ISSUE_736
+            )
+
+        self.assertEqual(current.publication_oid, enrollment_oid)
+        self.assertEqual(current.lifecycle.lifecycle_id, chain.lifecycle_id)
+        self.assertEqual(current.lifecycle.initialization_evidence_digest,
+                         INITIALIZATION_DIGEST_736)
+        self.assertEqual(current.lifecycle.pull_request, PR_760)
+        self.assertEqual(current.lifecycle.head_sha, CURRENT_HEAD_736)
+        self.assertEqual(current.lifecycle.state["unrestricted_review_count"], 1)
+        self.assertEqual(current.lifecycle.state["remediation_cycle_count"], 2)
+        self.assertEqual(current.lifecycle.state["exceptional_recovery_count"], 0)
+        self.assertEqual(current.lifecycle.state["exceptional_continuation_count"], 0)
+        self.assertEqual(current.lifecycle.state["ready_transition_count"], 1)
+        self.assertIs(current.lifecycle.state["ready"], True)
+        self.assertEqual(admission.bootstrap_repair_issue, 774)
+        self.assertEqual(admission.journal_predecessor_oid, enrollment_oid)
+        self.assertEqual(self.remote_tip(), admission.admission_oid)
+        ancestry = subprocess.run(
+            ["git", "--git-dir", str(self.remote), "rev-list", self.remote_tip()],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        self.assertEqual(ancestry, [admission.admission_oid, enrollment_oid])
+
+    def test_branch_local_anchor_cannot_publish_before_global_admission(self) -> None:
+        chain = Chain()
+        chain.append("INITIALIZED_DRAFT")
+        branch_local_policy = replace(
+            self.policy,
+            initialization_anchors=(
+                authority.InitializationAnchor(
+                    ISSUE,
+                    PR,
+                    HEADS[0],
+                    chain.initialization["initialization_digest"],
+                    PR,
+                    chain.head,
+                    chain.authorities[-1]["authority_digest"],
+                ),
+            ),
+        )
+        native = authority.serialize_publication_lifecycle_evidence(
+            lifecycle_evidence=chain.raw()
+        )
+
+        with patch.object(
+            authority, "_load_lifecycle_trust_policy", return_value=branch_local_policy
+        ):
+            with self.assertRaisesRegex(
+                publication.LifecyclePublicationError,
+                "native genesis is not independently admitted",
+            ):
+                publication.enroll_existing_lifecycle(
+                    native, signer_identity=SIGNER, signer=signer_for()
+                )
+
+    def test_independent_native_deliveries_do_not_share_source_state(self) -> None:
+        first = Chain()
+        first.append("INITIALIZED_DRAFT")
+        second = Chain(ISSUE + 1)
+        second.append("INITIALIZED_DRAFT")
+
+        first_admission = publication.admit_native_genesis(
+            first.raw(), signer_identity=SIGNER, signer=signer_for()
+        )
+        first_publication = publication.enroll_existing_lifecycle(
+            authority.serialize_publication_lifecycle_evidence(
+                lifecycle_evidence=first.raw()
+            ),
+            signer_identity=SIGNER,
+            signer=signer_for(),
+        )
+        second_admission = publication.admit_native_genesis(
+            second.raw(), signer_identity=SIGNER, signer=signer_for()
+        )
+        second_publication = publication.enroll_existing_lifecycle(
+            authority.serialize_publication_lifecycle_evidence(
+                lifecycle_evidence=second.raw()
+            ),
+            signer_identity=SIGNER,
+            signer=signer_for(),
+        )
+
+        self.assertEqual(first_publication.journal_predecessor_oid,
+                         first_admission.admission_oid)
+        self.assertEqual(second_admission.journal_predecessor_oid,
+                         first_publication.publication_oid)
+        self.assertEqual(second_publication.journal_predecessor_oid,
+                         second_admission.admission_oid)
+        self.assertEqual(
+            publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE)
+            .lifecycle.lifecycle_id,
+            first.lifecycle_id,
+        )
+        self.assertEqual(
+            publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE + 1)
+            .lifecycle.lifecycle_id,
+            second.lifecycle_id,
+        )
+
+    def test_native_genesis_admission_is_closed_unique_and_not_legacy(self) -> None:
+        chain = Chain()
+        chain.append("INITIALIZED_DRAFT")
+        admission = publication.admit_native_genesis(
+            chain.raw(), signer_identity=SIGNER, signer=signer_for()
+        )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "already admitted"
+        ):
+            publication.admit_native_genesis(
+                chain.raw(), signer_identity=SIGNER, signer=signer_for()
+            )
+
+        competitor = Chain()
+        competitor.initialization["initial_head_sha"] = HEADS[1]
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            publication.admit_native_genesis(
+                competitor.raw(), signer_identity=SIGNER, signer=signer_for()
+            )
+
+        with self.assertRaises(
+            (authority.LifecycleAuthorityError, publication.LifecyclePublicationError)
+        ):
+            publication.admit_native_genesis(
+                chain.raw(),
+                signer_identity=OTHER_SIGNER,
+                signer=signer_for(OTHER_SIGNER),
+            )
+
+        publication._observe_remote_current_once(
+            self.probe, str(self.remote), BRANCH
+        )
+        admission_raw = publication._read_publication_object(
+            self.probe, admission.admission_oid
+        )[0]
+        document = json.loads(admission_raw)
+        mutations = (
+            ("repository", "Other/repo"),
+            ("delivery_issue", ISSUE + 1),
+            ("pull_request", PR + 1),
+            ("initial_head_sha", HEADS[9]),
+            ("initialization_digest", "9" * 64),
+            ("validation_receipt_digest", "8" * 64),
+            ("final_attestation_digest", "7" * 64),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field):
+                changed = copy.deepcopy(document)
+                changed[field] = value
+                with self.assertRaises(
+                    (authority.LifecycleAuthorityError,
+                     publication.LifecyclePublicationError)
+                ):
+                    publication._verify_genesis_admission_document(
+                        authority.canonical_json_bytes(changed),
+                        object_oid=admission.admission_oid,
+                        expected_branch=BRANCH,
+                    )
+
+        legacy = recovered_ready_chain(ISSUE)
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError,
+            "admitted native genesis cannot use legacy adoption",
+        ):
+            publication.enroll_existing_lifecycle(
+                legacy.published(), signer_identity=SIGNER, signer=signer_for()
+            )
+
+    def test_concurrent_genesis_admission_cas_has_one_winner(self) -> None:
+        first = Chain()
+        first.append("INITIALIZED_DRAFT")
+        second = Chain(ISSUE + 1)
+        second.append("INITIALIZED_DRAFT")
+        objects: list[str] = []
+        for chain in (first, second):
+            fields = publication._genesis_admission_fields(
+                initialization=chain.initialization,
+                publication_branch=BRANCH,
+                journal_predecessor_oid=None,
+                signer_identity=SIGNER,
+            )
+            raw = publication._sign_genesis_admission(fields, signer_for())
+            objects.append(
+                publication._write_publication_object(self.probe, raw, None)
+            )
+
+        publication._cas_remote_ref(
+            self.probe, str(self.remote), BRANCH, objects[0], None
+        )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "compare-and-swap"
+        ):
+            publication._cas_remote_ref(
+                self.probe, str(self.remote), BRANCH, objects[1], None
+            )
+        self.assertEqual(self.remote_tip(), objects[0])
+        _, latest, admissions = publication._walk_journal(
+            self.probe, objects[0], BRANCH
+        )
+        self.assertEqual(latest, {})
+        self.assertEqual(set(admissions), {(REPOSITORY, ISSUE)})
+
     def test_native_journal_rejects_wrong_predecessor_and_identity_substitution(
         self,
     ) -> None:
@@ -465,6 +831,9 @@ class LifecyclePublicationTests(TestCase):
             lifecycle_evidence=chain.raw()
         )
         with patch.object(authority, "_load_lifecycle_trust_policy", return_value=policy):
+            admission = publication.admit_native_genesis(
+                chain.raw(), signer_identity=SIGNER, signer=signer_for()
+            )
             publication.enroll_existing_lifecycle(
                 native_h, signer_identity=SIGNER, signer=signer_for()
             )
@@ -480,7 +849,10 @@ class LifecyclePublicationTests(TestCase):
                 self.probe, h2.publication_oid
             )[0]
             h2_document, h2_lifecycle = publication._verify_publication_document(
-                h2_raw, object_oid=h2.publication_oid, expected_branch=BRANCH
+                h2_raw,
+                object_oid=h2.publication_oid,
+                expected_branch=BRANCH,
+                native_genesis_admission=admission,
             )
             chain.append("HEAD_ADVANCED", head=HEADS[2])
             native_h3, native_h3_raw = publication._canonical_bundle(
@@ -489,7 +861,8 @@ class LifecyclePublicationTests(TestCase):
                 )
             )
             h3_lifecycle = authority._verify_lifecycle_authority_for_journal(
-                native_h3_raw
+                native_h3_raw,
+                admitted_initialization=chain.initialization,
             )
             publication._require_exact_successor(
                 h2_lifecycle,

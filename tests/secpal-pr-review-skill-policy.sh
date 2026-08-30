@@ -902,6 +902,18 @@ assert publication_policy["publication_required_rules"] == [
     "deletion", "non_fast_forward"
 ]
 assert publication_policy["legacy_adoption_signer_identities"]
+assert publication_policy["genesis_admission_signer_identities"]
+assert publication_policy["bootstrap_genesis_repairs"] == [{
+    "repair_issue": 774,
+    "delivery_issue": 736,
+    "pull_request": 760,
+    "initial_head_sha": "9cce12e839e5f998137cc58fea90d0a5a0a45f63",
+    "initialization_digest": "6477407a86182f6bc9964089382f288e13dbb2e0b096edb2bf4e1c228452e628",
+    "validation_receipt_digest": "ae9cf6c0480aae0effa72bc8128e569db82f84b86351642c14c37ecabdccecc4",
+    "final_attestation_digest": "dad96cfa78d2a2c4d09818b761ec88d9385569e24a8e5117bab16be2351cbd25",
+    "enrollment_publication_oid": "0bb379a9af38bb14a49c651104d31149bb6c7f18",
+    "enrollment_publication_digest": "44fb6c570d4e875f2655e363bfe667107d69d37eedf62487bbf4551cf9288a9d",
+}]
 legacy_identities = set(publication_policy["legacy_adoption_signer_identities"])
 assert legacy_identities <= {
     signer["identity"] for signer in publication_policy["signers"]
@@ -912,6 +924,7 @@ routine_identities = set().union(*(
         "transition_signer_identities",
         "authority_signer_identities",
         "publication_signer_identities",
+        "genesis_admission_signer_identities",
     )
 ))
 assert legacy_identities.isdisjoint(routine_identities)

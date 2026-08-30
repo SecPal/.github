@@ -231,7 +231,10 @@ orchestration suite is an unconditional registered validation command.
 
 Publishes lifecycle authority on one protected, append-only global journal
 branch outside delivery trees. Native enrollment requires the maintained #750
-root and full authenticated history. A genuinely pre-#750 lifecycle instead
+root, full authenticated history, and an independently signed native-genesis
+admission already reachable in protected journal ancestry. Admission is a
+separate typed journal operation that selects no CURRENT terminal. A genuinely
+pre-#750 lifecycle instead
 uses exactly one dedicated-role-signed `LEGACY_ADOPTION_CHECKPOINT`, explicitly
 marking its imported baseline as a migration trust decision rather than
 retroactively invented proof. Every successor after either root uses normal
@@ -249,6 +252,15 @@ role. The verifier authenticates that protection, resolves the branch once, and
 uses immutable ancestry to select the newest event for each lifecycle. Lease
 CAS prevents concurrent writer races; live branch protection independently
 prevents rollback and deletion.
+
+New native delivery publication is a two-CAS sequence: admission first, then
+enrollment after re-verifying the reachable admission. A branch-local static
+anchor cannot publish. Existing maintained static anchors remain compatibility
+roots only for native enrollments that predate this sequence. One closed issue
+774 repair allowance admits the exact existing issue 736 initialization after
+independently verifying its signed initialization and original enrollment; the
+repair appends to rather than rewrites journal history. See
+[`docs/native-lifecycle-genesis-admission.md`](../docs/native-lifecycle-genesis-admission.md).
 
 All transport uses a controlled temporary bare repository and closed Git
 environment. The public reader accepts repository/issue expectations but no

@@ -215,9 +215,9 @@ class LifecycleAuthorityTests(TestCase):
         anchors = authority._load_lifecycle_trust_policy(
             REPOSITORY
         ).initialization_anchors
-        self.assertEqual(len(anchors), 4)
+        self.assertEqual(len(anchors), 3)
         delivered = {anchor.delivery_issue: anchor for anchor in anchors}
-        self.assertEqual(set(delivered), {674, 692, 735, 771})
+        self.assertEqual(set(delivered), {674, 692, 735})
         self.assertEqual(delivered[692].pull_request, 757)
         self.assertEqual(
             delivered[692].initialization_digest,
@@ -232,11 +232,6 @@ class LifecycleAuthorityTests(TestCase):
         self.assertEqual(
             delivered[735].initialization_digest,
             "6b630e40702ae69145226f8b40c8e6540914cd6e12815720551330faa2ca9d3d",
-        )
-        self.assertEqual(delivered[771].pull_request, 772)
-        self.assertEqual(
-            delivered[771].initialization_digest,
-            "20dadaf6af396488b44c2191c3624b2293c5c735959cfd14b0481e13164facf6",
         )
         entry["lifecycle_authority_policy"]["delivery_initializations"] = [
             {
@@ -278,6 +273,42 @@ class LifecycleAuthorityTests(TestCase):
                     "initialization_digest"
                 ] = "1" * 64
                 policy_path.write_text(json.dumps(registry), encoding="utf-8")
+                with self.assertRaisesRegex(
+                    authority.LifecycleAuthorityError, "ambiguous"
+                ):
+                    authority._load_lifecycle_trust_policy(REPOSITORY)
+
+    def test_registry_closes_the_single_issue_736_bootstrap_repair(self) -> None:
+        registry_path = (
+            REPO_ROOT
+            / ".agents/skills/secpal-pr-review/references/repositories.json"
+        )
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        policy = authority._load_lifecycle_trust_policy(REPOSITORY)
+        self.assertEqual(len(policy.bootstrap_genesis_repairs), 1)
+        repair = policy.bootstrap_genesis_repairs[0]
+        self.assertEqual(repair.repair_issue, 774)
+        self.assertEqual(repair.delivery_issue, 736)
+        self.assertEqual(repair.pull_request, 760)
+        self.assertEqual(
+            repair.initial_head_sha,
+            "9cce12e839e5f998137cc58fea90d0a5a0a45f63",
+        )
+        self.assertEqual(
+            repair.initialization_digest,
+            "6477407a86182f6bc9964089382f288e13dbb2e0b096edb2bf4e1c228452e628",
+        )
+        entry = next(
+            item
+            for item in registry["repositories"]
+            if item["repository"] == REPOSITORY
+        )
+        repairs = entry["lifecycle_authority_policy"]["bootstrap_genesis_repairs"]
+        repairs.append(copy.deepcopy(repairs[0]))
+        with tempfile.TemporaryDirectory(prefix="bootstrap-repair-policy-") as directory:
+            policy_path = Path(directory) / "repositories.json"
+            policy_path.write_text(json.dumps(registry), encoding="utf-8")
+            with patch.object(authority, "_TRUST_REGISTRY", policy_path):
                 with self.assertRaisesRegex(
                     authority.LifecycleAuthorityError, "ambiguous"
                 ):

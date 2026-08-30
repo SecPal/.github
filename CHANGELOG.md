@@ -9,6 +9,31 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-30 - Authenticate Native Genesis Before Lifecycle Publication
+
+**Changed:**
+
+- require one independently signed, protected-journal native-genesis admission
+  to be globally reachable before ordinary native lifecycle enrollment
+- retain the journal as the sole dynamic CURRENT selector while narrowing
+  static initialization entries to historical and strict-verifier compatibility
+- add one exact append-only bootstrap repair for the existing issue 736 native
+  genesis without rewriting its lifecycle or publication history
+
+## 2026-08-29 - Define Public Status And Truth Semantics
+
+**Added:**
+
+- one organization-wide public claim vocabulary that separates product
+  direction, work state, source implementation, non-production deployment,
+  production deployment, scoped real-system verification, production operation,
+  architecture status, qualification, and historical evidence without creating
+  a maturity ladder
+- evidence-scope, semantic-currentness, fail-toward-truth downgrade, conflict,
+  and no-claim-by-absence rules for public factual statements
+- public consequences of canonical work-graph and evidence-architecture
+  authority without duplicating either contract
+
 ## 2026-08-29 - Establish Product And Public Positioning Authority
 
 **Added:**
