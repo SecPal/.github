@@ -55,6 +55,11 @@
           "purpose": "Run guarded-action unit tests"
         },
         {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-pre-enrollment-integration-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run pre-enrollment Draft integration unit tests"
+        },
+        {
           "argv": ["python3", "-m", "unittest", "tests/secpal-lifecycle-authority-unit.py"],
           "working_directory": ".",
           "purpose": "Run persistent lifecycle-authority unit tests"
@@ -116,6 +121,17 @@
         "require_github_verified": true,
         "require_local_verified": true,
         "accepted_formats": ["ssh", "openpgp"]
+      },
+      "pre_enrollment_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-pre-enrollment-draft",
+        "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
       },
       "lifecycle_authority_policy": {
         "schema_version": "1.0",

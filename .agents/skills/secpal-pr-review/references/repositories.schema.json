@@ -110,6 +110,9 @@
         "lifecycle_authority_policy": {
           "$ref": "#/$defs/lifecycle_authority_policy"
         },
+        "pre_enrollment_integration_policy": {
+          "$ref": "#/$defs/pre_enrollment_integration_policy"
+        },
         "check_policy": { "type": "object" },
         "manual_gates": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "unsupported_operations": {
@@ -151,6 +154,32 @@
         "working_directory": { "type": "string", "minLength": 1 },
         "purpose": { "type": "string", "minLength": 1 },
         "execution_policy": { "enum": ["always", "focused-only"] }
+      }
+    },
+    "pre_enrollment_integration_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "command",
+        "topology_kind",
+        "allowed_mutation",
+        "maximum_candidates",
+        "maximum_pushes",
+        "force_push",
+        "automatic_retry",
+        "merge_pull_request"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "command": { "const": "integrate-pre-enrollment-draft" },
+        "topology_kind": { "const": "PRE_ENROLLMENT_DRAFT_INTEGRATION" },
+        "allowed_mutation": { "const": "NON_FORCE_PUSH_EXACT_PR_BRANCH" },
+        "maximum_candidates": { "const": 1 },
+        "maximum_pushes": { "const": 1 },
+        "force_push": { "const": false },
+        "automatic_retry": { "const": false },
+        "merge_pull_request": { "const": false }
       }
     },
     "lifecycle_authority_policy": {

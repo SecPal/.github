@@ -27,6 +27,7 @@ import tempfile
 from typing import Any, Callable, Mapping, Sequence
 
 from .fast_path import canonical_json_bytes, digest_json
+from . import pre_enrollment_integration
 
 
 SCHEMA_VERSION = "1.0"
@@ -258,6 +259,7 @@ INITIALIZATION_FIELDS = frozenset(
         "initialization_digest",
     }
 )
+INITIALIZATION_WITH_HEAD_PROOF_FIELDS = INITIALIZATION_FIELDS | {"initial_head_proof"}
 BUNDLE_FIELDS = frozenset(
     {
         "schema_version",
@@ -465,11 +467,12 @@ def create_delivery_initialization(
     final_attestation_digest: str,
     signer_identity: str,
     signer: Signer,
+    initial_head_proof: pre_enrollment_integration.VerifiedInitialHeadProof | None = None,
 ) -> dict[str, Any]:
-    """Create signed ordinary-delivery initialization evidence."""
+    """Create signed initialization for an ordinary or verified typed initial head."""
 
     fields = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": "1.1" if initial_head_proof is not None else SCHEMA_VERSION,
         "kind": INITIALIZATION_KIND,
         "domain": INITIALIZATION_DOMAIN,
         "repository": _require_repository(repository),
@@ -484,6 +487,30 @@ def create_delivery_initialization(
         ),
         "signer_identity": _require_identity(signer_identity, "initialization signer"),
     }
+    if initial_head_proof is not None:
+        if not pre_enrollment_integration.is_verified_initial_head_proof(
+            initial_head_proof
+        ):
+            raise LifecycleAuthorityError(
+                "initial-head proof was not returned by the maintained verifier"
+            )
+        proof = initial_head_proof.to_dict()
+        if (
+            proof["kind"]
+            != pre_enrollment_integration.INITIAL_HEAD_PROOF_KIND
+            or proof["repository"] != fields["repository"]
+            or proof["delivery_issue"] != fields["delivery_issue"]
+            or proof["pull_request"] != fields["pull_request"]
+            or proof["initial_head_sha"] != fields["initial_head_sha"]
+            or proof["validation_receipt_digest"]
+            != fields["validation_receipt_digest"]
+            or proof["final_attestation_digest"]
+            != fields["final_attestation_digest"]
+        ):
+            raise LifecycleAuthorityError(
+                "verified pre-enrollment initial-head proof identity changed"
+            )
+        fields["initial_head_proof"] = proof
     signature = _normalize_signature(
         signer(canonical_json_bytes(fields), INITIALIZATION_DOMAIN), signer_identity
     )
@@ -498,10 +525,15 @@ def _verify_delivery_initialization(
     signature_verifier: SignatureVerifier,
     require_maintained_anchor: bool = True,
 ) -> dict[str, Any]:
-    initialization = _require_closed(
-        value, INITIALIZATION_FIELDS, "delivery initialization"
+    if not isinstance(value, dict):
+        raise LifecycleAuthorityError("delivery initialization schema is not closed")
+    expected_fields = (
+        INITIALIZATION_WITH_HEAD_PROOF_FIELDS
+        if value.get("schema_version") == "1.1"
+        else INITIALIZATION_FIELDS
     )
-    if initialization["schema_version"] != SCHEMA_VERSION:
+    initialization = _require_closed(value, expected_fields, "delivery initialization")
+    if initialization["schema_version"] not in {SCHEMA_VERSION, "1.1"}:
         raise LifecycleAuthorityError("unknown delivery-initialization version")
     if (
         initialization["kind"] != INITIALIZATION_KIND
@@ -516,6 +548,35 @@ def _verify_delivery_initialization(
     head = _require_oid(initialization["initial_head_sha"], "initial head")
     _require_digest(initialization["validation_receipt_digest"], "validation receipt")
     _require_digest(initialization["final_attestation_digest"], "final attestation")
+    if initialization["schema_version"] == "1.1":
+        proof = _require_closed(
+            initialization["initial_head_proof"],
+            frozenset(
+                {
+                    "kind", "repository", "delivery_issue", "pull_request",
+                    "initial_head_sha", "validation_receipt_digest",
+                    "final_attestation_digest", "integration_evidence_digest",
+                }
+            ),
+            "initial-head proof",
+        )
+        if (
+            proof["kind"] != pre_enrollment_integration.INITIAL_HEAD_PROOF_KIND
+            or proof["repository"] != repository
+            or proof["delivery_issue"] != issue
+            or proof["pull_request"] != pull_request
+            or proof["initial_head_sha"] != head
+            or proof["validation_receipt_digest"]
+            != initialization["validation_receipt_digest"]
+            or proof["final_attestation_digest"]
+            != initialization["final_attestation_digest"]
+        ):
+            raise LifecycleAuthorityError(
+                "authenticated pre-enrollment initial-head proof is inconsistent"
+            )
+        _require_digest(
+            proof["integration_evidence_digest"], "integration evidence"
+        )
     signer = _require_identity(initialization["signer_identity"], "initialization signer")
     signed = {
         key: copy.deepcopy(item)

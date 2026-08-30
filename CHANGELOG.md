@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-30 - Authenticate Pre-Enrollment Draft Integration
+
+**Added:**
+
+- one explicitly authorized, signed two-parent path for reconciling the exact
+  current registered default branch into an open, unenrolled Draft delivery
+- exact mechanical clean-merge and bounded conflict-resolution evidence,
+  candidate-specific validation receipt, final attestation, and typed initial
+  lifecycle-head handoff without fabricating lifecycle state
+
 ## 2026-08-30 - Authenticate Native Genesis Before Lifecycle Publication
 
 **Changed:**

@@ -43,6 +43,9 @@ REGISTRY_PATH = (
     / ".agents/skills/secpal-pr-review/references/repositories.json"
 )
 FAST_PATH_HELPER = REPOSITORY_ROOT / "scripts/secpal_pr_review/fast_path.py"
+PRE_ENROLLMENT_INTEGRATION_HELPER = (
+    REPOSITORY_ROOT / "scripts/secpal_pr_review/pre_enrollment_integration.py"
+)
 LIFECYCLE_AUTHORITY_HELPER = (
     REPOSITORY_ROOT / "scripts/secpal_pr_review/lifecycle_authority.py"
 )
@@ -100,6 +103,32 @@ fast_path = _load_fast_path_helper()
 follow_up = fast_path.follow_up
 
 
+def _load_pre_enrollment_integration_helper() -> Any:
+    module_name = "secpal_pr_review.pre_enrollment_integration"
+    loaded = sys.modules.get(module_name)
+    if loaded is not None:
+        return loaded
+    spec = importlib.util.spec_from_file_location(
+        module_name, PRE_ENROLLMENT_INTEGRATION_HELPER
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Cannot load pre-enrollment integration helper")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+pre_enrollment = _load_pre_enrollment_integration_helper()
+
+
+def _read_pre_enrollment_json(path: str, label: str) -> Any:
+    try:
+        return pre_enrollment.loads_closed_json(Path(path).read_bytes())
+    except OSError as exc:
+        raise fast_path.RecoverableLocalError(f"cannot read {label}") from exc
+
+
 def _load_lifecycle_publication_helpers() -> tuple[Any, Any]:
     """Load the maintained lifecycle modules from this exact source tree."""
 
@@ -108,6 +137,9 @@ def _load_lifecycle_publication_helpers() -> tuple[Any, Any]:
     package.__path__ = [str(LIFECYCLE_AUTHORITY_HELPER.parent)]
     sys.modules[package_name] = package
     sys.modules[f"{package_name}.fast_path"] = _load_fast_path_helper()
+    sys.modules[f"{package_name}.pre_enrollment_integration"] = (
+        _load_pre_enrollment_integration_helper()
+    )
 
     def load(name: str, path: Path) -> Any:
         module_name = f"{package_name}.{name}"
@@ -1394,8 +1426,13 @@ query ReadyIntegrationAuthority($owner:String!, $name:String!, $number:Int!) {
     nameWithOwner
     defaultBranchRef { name target { oid } }
     pullRequest(number:$number) {
-      number state isDraft headRefOid baseRefName baseRefOid
+      number state isDraft headRefName headRefOid baseRefName baseRefOid
       baseRepository { nameWithOwner }
+      headRepository { nameWithOwner }
+      closingIssuesReferences(first:100) {
+        nodes { repository { nameWithOwner } number state }
+        pageInfo { hasNextPage }
+      }
     }
   }
 }
@@ -1943,8 +1980,25 @@ class LiveGitHub:
             "pull_request_number": pull_request.get("number"),
             "state": pull_request.get("state"),
             "draft": pull_request.get("isDraft"),
+            "head_ref": pull_request.get("headRefName"),
             "head_sha": pull_request.get("headRefOid"),
             "base_repository": base_repository.get("nameWithOwner"),
+            "head_repository": pull_request.get("headRepository", {}).get(
+                "nameWithOwner"
+            ),
+            "closing_issues": [
+                {
+                    "repository": item.get("repository", {}).get("nameWithOwner"),
+                    "number": item.get("number"),
+                    "state": item.get("state"),
+                }
+                for item in pull_request.get("closingIssuesReferences", {}).get(
+                    "nodes", []
+                )
+            ],
+            "closing_issues_complete": not pull_request.get(
+                "closingIssuesReferences", {}
+            ).get("pageInfo", {}).get("hasNextPage", True),
             "base_ref": pull_request.get("baseRefName"),
             "base_sha": (
                 default_branch.get("target", {}).get("oid")
@@ -4127,6 +4181,9 @@ def build_parser() -> argparse.ArgumentParser:
     attestation_parser.add_argument("--manual-gate-evidence")
     attestation_parser.add_argument("--eligibility-evidence")
     attestation_parser.add_argument("--integration-evidence")
+    attestation_parser.add_argument("--pre-enrollment-integration-evidence")
+    attestation_parser.add_argument("--validation-receipt-id")
+    attestation_parser.add_argument("--final-attestation-id")
     attestation_parser.add_argument("--exceptional-recovery-evidence")
     attestation_parser.add_argument("--exceptional-recovery-delivery-issue", type=_positive_integer)
     attestation_parser.add_argument("--exceptional-recovery-authorization-id")
@@ -4150,6 +4207,25 @@ def build_parser() -> argparse.ArgumentParser:
     batch_parser.add_argument("--attestation")
     batch_parser.add_argument("--output")
     batch_parser.add_argument("--apply", action="store_true")
+    pre_enrollment_parser = subparsers.add_parser(
+        "integrate-pre-enrollment-draft"
+    )
+    pre_enrollment_parser.add_argument("--repo", required=True)
+    pre_enrollment_parser.add_argument("--pr", required=True, type=_positive_integer)
+    pre_enrollment_parser.add_argument(
+        "--delivery-issue", required=True, type=_positive_integer
+    )
+    pre_enrollment_parser.add_argument("--repo-root", default=".")
+    pre_enrollment_parser.add_argument("--registry")
+    pre_enrollment_parser.add_argument("--evidence", required=True)
+    pre_enrollment_parser.add_argument("--authorization-id", required=True)
+    pre_enrollment_parser.add_argument("--expected-signer", required=True)
+    pre_enrollment_parser.add_argument("--validation-receipt-id", required=True)
+    pre_enrollment_parser.add_argument("--final-attestation-id", required=True)
+    pre_enrollment_parser.add_argument("--commit-subject", required=True)
+    pre_enrollment_parser.add_argument("--receipt-output", required=True)
+    pre_enrollment_parser.add_argument("--attestation-output", required=True)
+    pre_enrollment_parser.add_argument("--apply", action="store_true")
     return parser
 
 
@@ -4273,6 +4349,9 @@ def _fast_registry_binding(entry: dict[str, Any]) -> dict[str, Any]:
                 if command.get("execution_policy") == "focused-only"
             ]
         ),
+        "pre_enrollment_integration_policy": copy.deepcopy(
+            entry.get("pre_enrollment_integration_policy")
+        ),
     }
 
 
@@ -4352,6 +4431,58 @@ def _run_attestation_git(
             evidence.redact_diagnostic(completed.stderr or "local Git command failed")
         )
     return completed
+
+
+def _run_pre_enrollment_work_graph(
+    repository_root: Path, arguments: list[str]
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, *arguments],
+        cwd=repository_root,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=EXTERNAL_COMMAND_TIMEOUT_SECONDS,
+    )
+
+
+def _create_signed_pre_enrollment_commit(
+    repository_root: Path, arguments: list[str], message: str
+) -> subprocess.CompletedProcess[str]:
+    git_executable = evidence.resolve_trusted_executable("git")
+    return subprocess.run(
+        [git_executable, *arguments],
+        cwd=repository_root,
+        input=message,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=evidence.command_environment("git"),
+        timeout=EXTERNAL_COMMAND_TIMEOUT_SECONDS,
+    )
+
+
+def _push_pre_enrollment_commit(
+    repository_root: Path, arguments: list[str]
+) -> subprocess.CompletedProcess[str]:
+    git_executable = evidence.resolve_trusted_executable("git")
+    return subprocess.run(
+        [git_executable, *arguments],
+        cwd=repository_root,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=evidence.command_environment("git"),
+        timeout=EXTERNAL_COMMAND_TIMEOUT_SECONDS,
+    )
 
 
 def _validated_commit_parent(repository_root: Path, head: str) -> str:
@@ -4781,6 +4912,84 @@ def _verify_ready_integration_live_observation(
         or observation["base_sha"] != integration_evidence["ordered_parent_shas"][1]
     ):
         raise fast_path.SecurityBlocker("current target-base authority drifted")
+
+
+def _verify_pre_enrollment_external_authority(
+    evidence_value: dict[str, Any], repository_root: Path
+) -> None:
+    """Authenticate signed selection, canonical graph, and journal absence once."""
+
+    lifecycle_authority, lifecycle_publication = _load_lifecycle_publication_helpers()
+    policy = lifecycle_authority._load_lifecycle_trust_policy(
+        evidence_value["repository"]
+    )
+    pre_enrollment.verify_authorization(
+        evidence_value["authorization"],
+        accepted_signers=policy.transition_signer_identities,
+        verifier=lambda payload, signature, signer, domain: (
+            lifecycle_authority._verify_signature(
+                payload,
+                signature,
+                signer,
+                domain,
+                policy.transition_signer_identities,
+                lifecycle_authority._policy_signature_verifier(policy),
+            )
+            is not None
+        ),
+    )
+    try:
+        graph_result = _run_pre_enrollment_work_graph(
+            repository_root,
+            [
+                str(REPOSITORY_ROOT / "scripts/secpal-work-graph.py"),
+                "validate-issue",
+                f'{evidence_value["repository"]}#{evidence_value["delivery_issue"]}',
+            ],
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise fast_path.SecurityBlocker(
+            "canonical pre-enrollment work-graph evidence is unavailable"
+        ) from exc
+    try:
+        graph = json.loads(graph_result.stdout)
+        issue = graph["issue"]
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise fast_path.SecurityBlocker(
+            "canonical pre-enrollment work-graph evidence is unavailable"
+        ) from exc
+    if (
+        graph_result.returncode != 0
+        or graph.get("complete") is not True
+        or issue.get("key")
+        != f'{evidence_value["repository"]}#{evidence_value["delivery_issue"]}'
+        or issue.get("leaf") is not True
+        or issue.get("ready") is not True
+        or issue.get("blocked_by") != []
+        or fast_path.digest_json(graph)
+        != evidence_value["work_graph"]["evidence_digest"]
+    ):
+        raise fast_path.SecurityBlocker(
+            "canonical work graph does not authorize pre-enrollment execution"
+        )
+    absence = lifecycle_publication.verify_pre_enrollment_absence(
+        evidence_value["repository"], evidence_value["delivery_issue"]
+    )
+    if (
+        absence.evidence_digest
+        != evidence_value["lifecycle_absence"]["evidence_digest"]
+        or any(
+            evidence_value["lifecycle_absence"][key] is not False
+            for key in (
+                "current_publication",
+                "native_genesis",
+                "lifecycle_aware_head_advancement",
+            )
+        )
+    ):
+        raise fast_path.SecurityBlocker(
+            "delivery has lifecycle authority or stale lifecycle-absence evidence"
+        )
 
 
 def _verify_ready_integration_lifecycle_authority(
@@ -5296,6 +5505,29 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
     entry = select_repository(registry, arguments.repo)
     binding = _fast_registry_binding(entry)
     integration_evidence_path = getattr(arguments, "integration_evidence", None)
+    pre_enrollment_evidence_path = getattr(
+        arguments, "pre_enrollment_integration_evidence", None
+    )
+    if integration_evidence_path and pre_enrollment_evidence_path:
+        raise fast_path.SecurityBlocker(
+            "Ready and pre-enrollment integration kinds are mutually exclusive"
+        )
+    if pre_enrollment_evidence_path and binding.get(
+        "pre_enrollment_integration_policy"
+    ) != {
+        "schema_version": "1.0",
+        "command": "integrate-pre-enrollment-draft",
+        "topology_kind": pre_enrollment.KIND,
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": False,
+        "automatic_retry": False,
+        "merge_pull_request": False,
+    }:
+        raise fast_path.SecurityBlocker(
+            "repository has no closed pre-enrollment integration policy"
+        )
     exceptional_recovery_path = getattr(
         arguments, "exceptional_recovery_evidence", None
     )
@@ -5310,9 +5542,27 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         getattr(arguments, "prior_attestation", None),
         getattr(arguments, "expected_prior_authority_signer", None),
     )
-    if not integration_evidence_path and any(integration_selectors):
+    if not (integration_evidence_path or pre_enrollment_evidence_path) and any(
+        integration_selectors
+    ):
         raise fast_path.RecoverableLocalError(
-            "integration selectors are valid only with --integration-evidence"
+            "integration selectors require one explicitly typed integration evidence"
+        )
+    if pre_enrollment_evidence_path and any(integration_selectors[3:]):
+        raise fast_path.SecurityBlocker(
+            "pre-enrollment integration cannot consume Ready prior authority"
+        )
+    if pre_enrollment_evidence_path and not all(
+        (
+            arguments.validation_receipt_id,
+            arguments.final_attestation_id,
+            arguments.delivery_issue,
+            arguments.integration_authorization_id,
+            arguments.expected_integration_signer,
+        )
+    ):
+        raise fast_path.RecoverableLocalError(
+            "pre-enrollment integration requires exact receipt, attestation, delivery, authorization, and signer selectors"
         )
     exceptional_selectors = (
         getattr(arguments, "exceptional_recovery_delivery_issue", None),
@@ -5323,7 +5573,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             "exceptional recovery selectors require --exceptional-recovery-evidence"
         )
     if exceptional_recovery_path and (
-        integration_evidence_path
+        (integration_evidence_path or pre_enrollment_evidence_path)
         or not getattr(arguments, "eligibility_evidence", None)
         or not all(exceptional_selectors)
     ):
@@ -5337,30 +5587,66 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             raise fast_path.SecurityBlocker(
                 "worktree is not clean while binding the validated commit"
             )
-        receipt = _read_json(arguments.receipt, "validation receipt")
+        receipt = (
+            _read_pre_enrollment_json(arguments.receipt, "validation receipt")
+            if pre_enrollment_evidence_path
+            else _read_json(arguments.receipt, "validation receipt")
+        )
         if not isinstance(receipt, dict):
             raise fast_path.SecurityBlocker("validation receipt is malformed")
-        if reviewed.head_sha != receipt.get("head_sha"):
+        pre_enrollment_evidence = (
+            pre_enrollment.normalize_evidence(
+                _read_pre_enrollment_json(
+                    pre_enrollment_evidence_path,
+                    "pre-enrollment integration evidence",
+                ),
+                registry=binding,
+            )
+            if pre_enrollment_evidence_path
+            else None
+        )
+        if pre_enrollment_evidence is not None and (
+            pre_enrollment_evidence["delivery_issue"] != arguments.delivery_issue
+            or pre_enrollment_evidence["authorization"]["authorization_id"]
+            != arguments.integration_authorization_id
+            or pre_enrollment_evidence["expected_signer"]
+            != arguments.expected_integration_signer
+            or pre_enrollment_evidence["draft_pr"]["head_sha"]
+            != reviewed.head_sha
+        ):
+            raise fast_path.SecurityBlocker(
+                "pre-enrollment integration selection or Draft head changed"
+            )
+        if pre_enrollment_evidence is None and reviewed.head_sha != receipt.get("head_sha"):
             raise fast_path.SecurityBlocker(
                 "receipt head does not match reviewed feedback head"
             )
         receipt_fields = {key: value for key, value in receipt.items() if key != "receipt_digest"}
-        expected_receipt = _validation_receipt(
-            repository=arguments.repo,
-            head_sha=receipt.get("head_sha"),
-            tree_sha=receipt.get("validated_tree_sha"),
-            binding=binding,
-            reviewed=reviewed,
-            manual_gate_evidence=receipt.get("manual_gate_evidence"),
-            eligibility_evidence_digest=receipt.get(
-                "eligibility_evidence_digest"
-            ),
-            integration_evidence_digest=receipt.get(
-                "integration_evidence_digest"
-            ),
-            exceptional_recovery_evidence_digest=receipt.get(
-                "exceptional_recovery_evidence_digest"
-            ),
+        expected_receipt = (
+            pre_enrollment.create_validation_receipt(
+                evidence=pre_enrollment_evidence,
+                registry=binding,
+                successful_result=True,
+                receipt_id=receipt.get("receipt_id"),
+            )
+            if pre_enrollment_evidence is not None
+            else _validation_receipt(
+                repository=arguments.repo,
+                head_sha=receipt.get("head_sha"),
+                tree_sha=receipt.get("validated_tree_sha"),
+                binding=binding,
+                reviewed=reviewed,
+                manual_gate_evidence=receipt.get("manual_gate_evidence"),
+                eligibility_evidence_digest=receipt.get(
+                    "eligibility_evidence_digest"
+                ),
+                integration_evidence_digest=receipt.get(
+                    "integration_evidence_digest"
+                ),
+                exceptional_recovery_evidence_digest=receipt.get(
+                    "exceptional_recovery_evidence_digest"
+                ),
+            )
         )
         if receipt != expected_receipt or fast_path.digest_json(receipt_fields) != receipt.get("receipt_digest"):
             raise fast_path.SecurityBlocker("validation receipt is invalid or stale")
@@ -5402,6 +5688,51 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 )
             _verify_integration_tree_delta(
                 repository_root, integration_evidence, tree
+            )
+        elif pre_enrollment_evidence is not None:
+            _verify_pre_enrollment_external_authority(
+                pre_enrollment_evidence, repository_root
+            )
+            live_observation = LiveGitHub().observe_ready_integration_authority(
+                arguments.repo, pre_enrollment_evidence["pull_request"]
+            )
+            if (
+                live_observation["repository"]
+                != pre_enrollment_evidence["repository"]
+                or live_observation["base_repository"]
+                != pre_enrollment_evidence["repository"]
+                or live_observation["head_repository"]
+                != pre_enrollment_evidence["repository"]
+                or live_observation["state"] != "OPEN"
+                or live_observation["draft"] is not True
+                or live_observation["head_sha"]
+                != pre_enrollment_evidence["draft_pr"]["head_sha"]
+                or live_observation["base_ref"]
+                != pre_enrollment_evidence["current_main"]["ref"]
+                or live_observation["base_sha"]
+                != pre_enrollment_evidence["current_main"]["sha"]
+                or live_observation.get("closing_issues_complete") is not True
+                or live_observation.get("closing_issues")
+                != [{
+                    "repository": pre_enrollment_evidence["repository"],
+                    "number": pre_enrollment_evidence["delivery_issue"],
+                    "state": "OPEN",
+                }]
+            ):
+                raise fast_path.SecurityBlocker(
+                    "Draft PR or current main drifted before candidate binding"
+                )
+            parents = _validated_integration_commit_parents(
+                repository_root,
+                head,
+                pre_enrollment_evidence["ordered_parent_shas"],
+            )
+            if parents[0] != reviewed.head_sha:
+                raise fast_path.SecurityBlocker(
+                    "pre-enrollment candidate does not preserve the Draft head"
+                )
+            _verify_integration_tree_delta(
+                repository_root, pre_enrollment_evidence, tree
             )
         else:
             if "integration_evidence_digest" in receipt:
@@ -5449,10 +5780,14 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             raise fast_path.SecurityBlocker(
                 "signed commit does not contain exactly the validated staged tree"
             )
-        if (
-            _commit_validation_receipt_digest(repository_root, head)
-            != receipt["receipt_digest"]
-        ):
+        receipt_trailer = (
+            "SecPal-Pre-Enrollment-Validation-Receipt"
+            if pre_enrollment_evidence is not None
+            else "SecPal-Validation-Receipt"
+        )
+        if _commit_trailer_digest(repository_root, head, receipt_trailer) != receipt[
+            "receipt_digest"
+        ]:
             raise fast_path.SecurityBlocker(
                 "signed commit does not bind the validation receipt"
             )
@@ -5462,6 +5797,15 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         ):
             raise fast_path.SecurityBlocker(
                 "signed integration commit does not bind the integration evidence"
+            )
+        if pre_enrollment_evidence is not None and (
+            _commit_trailer_digest(
+                repository_root, head, "SecPal-Pre-Enrollment-Integration"
+            )
+            != fast_path.digest_json(pre_enrollment_evidence)
+        ):
+            raise fast_path.SecurityBlocker(
+                "signed candidate does not bind pre-enrollment integration evidence"
             )
         supplied_manual_evidence = getattr(
             arguments, "manual_gate_evidence", None
@@ -5528,6 +5872,30 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 validation_receipt=receipt,
                 integration_evidence=integration_evidence,
             )
+        elif pre_enrollment_evidence is not None:
+            signature_format = local_signature.get("format")
+            _verify_integration_signer(
+                f"{verified_commit.stdout}\n{verified_commit.stderr}",
+                {
+                    "kind": (
+                        "OPENPGP_FINGERPRINT"
+                        if signature_format == "openpgp"
+                        else "SSH_PRINCIPAL"
+                    ),
+                    "identity": pre_enrollment_evidence["expected_signer"],
+                },
+            )
+            attestation = pre_enrollment.create_final_attestation(
+                evidence=pre_enrollment_evidence,
+                registry=binding,
+                receipt=receipt,
+                candidate_head_sha=head,
+                candidate_parent_shas=parents,
+                candidate_tree_sha=tree,
+                verified_signer=pre_enrollment_evidence["expected_signer"],
+                signature_format=signature_format,
+                attestation_id=arguments.final_attestation_id,
+            )
         else:
             attestation = fast_path.create_validation_attestation(
                 repository=arguments.repo,
@@ -5559,6 +5927,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
     )
     tree = _staged_tree(repository_root, status)
     integration_evidence = None
+    pre_enrollment_evidence = None
     exceptional_recovery = None
     if integration_evidence_path:
         integration_evidence = fast_path.normalize_ready_integration_evidence(
@@ -5577,6 +5946,29 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             live_observation=None,
         )
         _verify_integration_tree_delta(repository_root, integration_evidence, tree)
+    if pre_enrollment_evidence_path:
+        pre_enrollment_evidence = pre_enrollment.normalize_evidence(
+            _read_pre_enrollment_json(
+                pre_enrollment_evidence_path,
+                "pre-enrollment integration evidence",
+            ),
+            registry=binding,
+        )
+        if (
+            pre_enrollment_evidence["delivery_issue"] != arguments.delivery_issue
+            or pre_enrollment_evidence["authorization"]["authorization_id"]
+            != arguments.integration_authorization_id
+            or pre_enrollment_evidence["expected_signer"]
+            != arguments.expected_integration_signer
+            or pre_enrollment_evidence["draft_pr"]["head_sha"] != reviewed.head_sha
+            or pre_enrollment_evidence["validated_tree_sha"] != tree
+        ):
+            raise fast_path.SecurityBlocker(
+                "pre-enrollment integration selection, head, or tree changed"
+            )
+        _verify_integration_tree_delta(
+            repository_root, pre_enrollment_evidence, tree
+        )
     if exceptional_recovery_path:
         if eligibility_evidence_digest is None:
             raise fast_path.SecurityBlocker(
@@ -5649,6 +6041,44 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         _verify_ready_integration_live_observation(
             live_observation, integration_evidence, binding
         )
+    if pre_enrollment_evidence_path:
+        pre_after = pre_enrollment.normalize_evidence(
+            _read_pre_enrollment_json(
+                pre_enrollment_evidence_path,
+                "pre-enrollment integration evidence",
+            ),
+            registry=binding,
+        )
+        if pre_after != pre_enrollment_evidence:
+            raise fast_path.SecurityBlocker(
+                "pre-enrollment integration evidence changed during validation"
+            )
+        _verify_pre_enrollment_external_authority(pre_after, repository_root)
+        live_observation = LiveGitHub().observe_ready_integration_authority(
+            arguments.repo, pre_after["pull_request"]
+        )
+        if (
+            live_observation["repository"] != pre_after["repository"]
+            or live_observation["base_repository"] != pre_after["repository"]
+            or live_observation["head_repository"] != pre_after["repository"]
+            or live_observation["pull_request_number"] != pre_after["pull_request"]
+            or live_observation["state"] != "OPEN"
+            or live_observation["draft"] is not True
+            or live_observation["head_sha"] != pre_after["draft_pr"]["head_sha"]
+            or live_observation["base_ref"] != pre_after["current_main"]["ref"]
+            or live_observation["base_ref"] != binding["default_branch"]
+            or live_observation["base_sha"] != pre_after["current_main"]["sha"]
+            or live_observation.get("closing_issues_complete") is not True
+            or live_observation.get("closing_issues")
+            != [{
+                "repository": pre_after["repository"],
+                "number": pre_after["delivery_issue"],
+                "state": "OPEN",
+            }]
+        ):
+            raise fast_path.SecurityBlocker(
+                "Draft PR or registered current main drifted during final validation"
+            )
     if exceptional_recovery_path:
         recovery_after = _load_exceptional_recovery_evidence(
             path=exceptional_recovery_path,
@@ -5678,24 +6108,33 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             raise fast_path.SecurityBlocker(
                 "exceptional recovery Ready-head authority drifted"
             )
-    receipt = _validation_receipt(
-        repository=arguments.repo,
-        head_sha=head,
-        tree_sha=tree,
-        binding=binding,
-        reviewed=reviewed,
-        manual_gate_evidence=manual_gate_evidence,
-        eligibility_evidence_digest=eligibility_evidence_digest,
-        integration_evidence_digest=(
-            fast_path.digest_json(integration_evidence)
-            if integration_evidence is not None
-            else None
-        ),
-        exceptional_recovery_evidence_digest=(
-            fast_path.digest_json(exceptional_recovery)
-            if exceptional_recovery is not None
-            else None
-        ),
+    receipt = (
+        pre_enrollment.create_validation_receipt(
+            evidence=pre_enrollment_evidence,
+            registry=binding,
+            successful_result=True,
+            receipt_id=arguments.validation_receipt_id,
+        )
+        if pre_enrollment_evidence is not None
+        else _validation_receipt(
+            repository=arguments.repo,
+            head_sha=head,
+            tree_sha=tree,
+            binding=binding,
+            reviewed=reviewed,
+            manual_gate_evidence=manual_gate_evidence,
+            eligibility_evidence_digest=eligibility_evidence_digest,
+            integration_evidence_digest=(
+                fast_path.digest_json(integration_evidence)
+                if integration_evidence is not None
+                else None
+            ),
+            exceptional_recovery_evidence_digest=(
+                fast_path.digest_json(exceptional_recovery)
+                if exceptional_recovery is not None
+                else None
+            ),
+        )
     )
     _write_fast_report(arguments.output, receipt)
     return 0
@@ -5763,6 +6202,295 @@ def _command_resolve_batch(arguments: argparse.Namespace) -> int:
     return 0 if report["status"] == "BATCH_APPLIED" else 3
 
 
+def _command_integrate_pre_enrollment_draft(arguments: argparse.Namespace) -> int:
+    """Create and non-force-push one exact authenticated Draft integration."""
+
+    if not arguments.apply:
+        raise fast_path.RecoverableLocalError(
+            "pre-enrollment integration requires explicit --apply"
+        )
+    if (
+        not arguments.commit_subject.strip()
+        or "\n" in arguments.commit_subject
+        or "\r" in arguments.commit_subject
+    ):
+        raise fast_path.RecoverableLocalError("commit subject must be one non-empty line")
+    repository_root = Path(arguments.repo_root).resolve(strict=True)
+    head, status = _attestation_local_state(repository_root, arguments.repo)
+    registry_value = load_registry(arguments.registry)
+    entry = select_repository(registry_value, arguments.repo)
+    binding = _fast_registry_binding(entry)
+    if binding.get("pre_enrollment_integration_policy") != {
+        "schema_version": "1.0",
+        "command": "integrate-pre-enrollment-draft",
+        "topology_kind": pre_enrollment.KIND,
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": False,
+        "automatic_retry": False,
+        "merge_pull_request": False,
+    }:
+        raise fast_path.SecurityBlocker(
+            "repository has no closed pre-enrollment integration policy"
+        )
+    try:
+        selected = pre_enrollment.normalize_evidence(
+            _read_pre_enrollment_json(
+                arguments.evidence, "pre-enrollment integration evidence"
+            ),
+            registry=binding,
+        )
+    except pre_enrollment.PreEnrollmentIntegrationError as exc:
+        raise fast_path.SecurityBlocker(str(exc)) from exc
+    if (
+        selected["repository"] != arguments.repo
+        or selected["pull_request"] != arguments.pr
+        or selected["delivery_issue"] != arguments.delivery_issue
+        or selected["authorization"]["authorization_id"]
+        != arguments.authorization_id
+        or selected["expected_signer"] != arguments.expected_signer
+        or selected["draft_pr"]["head_sha"] != head
+    ):
+        raise fast_path.SecurityBlocker(
+            "explicit pre-enrollment selection differs from the evidence or local head"
+        )
+    staged_tree = _staged_tree(repository_root, status)
+    if staged_tree != selected["validated_tree_sha"]:
+        raise fast_path.SecurityBlocker(
+            "staged tree is not the exact authorized integration tree"
+        )
+
+    lifecycle_authority, _ = _load_lifecycle_publication_helpers()
+    policy = lifecycle_authority._load_lifecycle_trust_policy(arguments.repo)
+    policy_verifier = lifecycle_authority._policy_signature_verifier(policy)
+    observed_head_ref: list[str] = []
+
+    def authorization_verifier(
+        payload: bytes, signature: dict[str, str], signer: str, domain: str
+    ) -> bool:
+        lifecycle_authority._verify_signature(
+            payload,
+            signature,
+            signer,
+            domain,
+            policy.transition_signer_identities,
+            policy_verifier,
+        )
+        return True
+
+    def derive_tree(
+        parents: list[str], validated_tree: str
+    ) -> tuple[str, list[str], list[dict[str, str]], bool]:
+        mechanical_tree, conflict_paths = _mechanical_integration_result(
+            repository_root, parents
+        )
+        delta = _integration_tree_delta(
+            repository_root, mechanical_tree, validated_tree
+        )
+        _reject_integration_conflict_markers(
+            repository_root, validated_tree, conflict_paths
+        )
+        return mechanical_tree, conflict_paths, delta, False
+
+    def run_validation(expected_tree: str) -> bool:
+        result = _run_registered_validations(entry, repository_root)
+        head_after, status_after = _attestation_local_state(
+            repository_root, arguments.repo
+        )
+        tree_after = _staged_tree(repository_root, status_after)
+        return bool(result) and (
+            head_after == head
+            and status_after == status
+            and tree_after == expected_tree
+        )
+
+    def observe_frozen_state() -> pre_enrollment.FrozenObservation:
+        _verify_pre_enrollment_external_authority(selected, repository_root)
+        live = LiveGitHub().observe_ready_integration_authority(
+            arguments.repo, arguments.pr
+        )
+        head_ref = live.get("head_ref")
+        if (
+            live.get("repository") != arguments.repo
+            or live.get("base_repository") != arguments.repo
+            or live.get("head_repository") != arguments.repo
+            or live.get("pull_request_number") != arguments.pr
+            or live.get("state") != "OPEN"
+            or live.get("draft") is not True
+            or live.get("head_sha") != selected["draft_pr"]["head_sha"]
+            or live.get("base_ref") != binding["default_branch"]
+            or live.get("base_ref") != selected["current_main"]["ref"]
+            or live.get("base_sha") != selected["current_main"]["sha"]
+            or not isinstance(head_ref, str)
+            or not head_ref
+            or head_ref == binding["default_branch"]
+            or live.get("closing_issues_complete") is not True
+            or live.get("closing_issues")
+            != [{
+                "repository": arguments.repo,
+                "number": arguments.delivery_issue,
+                "state": "OPEN",
+            }]
+        ):
+            raise fast_path.SecurityBlocker(
+                "final Draft PR/current-main observation is stale or malformed"
+            )
+        ref_check = _run_attestation_git(
+            repository_root,
+            ["check-ref-format", f"refs/heads/{head_ref}"],
+            allow_failure=True,
+        )
+        if ref_check.returncode != 0:
+            raise fast_path.SecurityBlocker("Draft delivery branch ref is unsafe")
+        observed_head_ref[:] = [head_ref]
+        return pre_enrollment.FrozenObservation(
+            selected["draft_pr"],
+            selected["current_main"],
+            selected["work_graph"],
+            selected["lifecycle_absence"],
+        )
+
+    def create_candidate(
+        tree: str,
+        parents: list[str],
+        trailers: dict[str, str],
+        expected_signer: str,
+    ) -> dict[str, Any]:
+        message = (
+            f"{arguments.commit_subject}\n\n"
+            f"SecPal-Pre-Enrollment-Integration: "
+            f'{trailers["SecPal-Pre-Enrollment-Integration"]}\n'
+            f"SecPal-Pre-Enrollment-Validation-Receipt: "
+            f'{trailers["SecPal-Pre-Enrollment-Validation-Receipt"]}\n'
+        )
+        try:
+            created = _create_signed_pre_enrollment_commit(
+                repository_root,
+                [
+                    "commit-tree", "-S", tree,
+                    "-p", parents[0], "-p", parents[1],
+                ],
+                message,
+            )
+        except (OSError, subprocess.TimeoutExpired, evidence.CommandPolicyError) as exc:
+            raise fast_path.SecurityBlocker(
+                "signed integration candidate creation is unavailable"
+            ) from exc
+        candidate = created.stdout.strip()
+        if created.returncode != 0 or not OID_PATTERN.fullmatch(candidate):
+            raise fast_path.SecurityBlocker("signed integration candidate was not created")
+        commit_object = _run_attestation_git(
+            repository_root, ["cat-file", "commit", candidate], allow_failure=True
+        )
+        verified = _run_attestation_git(
+            repository_root, ["verify-commit", "--raw", candidate], allow_failure=True
+        )
+        local_signature = evidence.interpret_local_signature(
+            verified.returncode,
+            f"{verified.stdout}\n{verified.stderr}",
+            signature_format_hint=(
+                evidence._commit_signature_format(commit_object.stdout)
+                if commit_object.returncode == 0
+                else "unknown"
+            ),
+        )
+        fast_path.verify_commit_signatures(
+            [{
+                "oid": candidate,
+                "source": "USER",
+                "local_signature": local_signature,
+                "github_verification": {"verified": False, "reason": "not_required"},
+            }],
+            {**binding["signature_policy"], "require_github_verified": False},
+        )
+        signature_format = local_signature.get("format")
+        _verify_integration_signer(
+            f"{verified.stdout}\n{verified.stderr}",
+            {
+                "kind": (
+                    "OPENPGP_FINGERPRINT"
+                    if signature_format == "openpgp"
+                    else "SSH_PRINCIPAL"
+                ),
+                "identity": expected_signer,
+            },
+        )
+        for trailer, expected in trailers.items():
+            if _commit_trailer_digest(repository_root, candidate, trailer) != expected:
+                raise fast_path.SecurityBlocker(
+                    "signed integration candidate trailer changed"
+                )
+        return {
+            "head_sha": candidate,
+            "tree_sha": tree,
+            "parent_shas": parents,
+            "verified_signer": expected_signer,
+            "signature_format": signature_format,
+        }
+
+    def push_candidate(candidate: str, expected_old_head: str) -> bool:
+        if observed_head_ref == [] or expected_old_head != head:
+            raise fast_path.SecurityBlocker("push compare-and-set identity is unavailable")
+        try:
+            pushed = _push_pre_enrollment_commit(
+                repository_root,
+                [
+                    "push", "--porcelain", "origin",
+                    f"{candidate}:refs/heads/{observed_head_ref[0]}",
+                ],
+            )
+        except (OSError, subprocess.TimeoutExpired, evidence.CommandPolicyError):
+            return False
+        return pushed.returncode == 0
+
+    def observe_final_head() -> str:
+        live = LiveGitHub().observe_ready_integration_authority(
+            arguments.repo, arguments.pr
+        )
+        if (
+            live.get("repository") != arguments.repo
+            or live.get("base_repository") != arguments.repo
+            or live.get("head_repository") != arguments.repo
+            or live.get("pull_request_number") != arguments.pr
+            or live.get("state") != "OPEN"
+            or live.get("draft") is not True
+            or live.get("base_sha") != selected["current_main"]["sha"]
+            or live.get("closing_issues_complete") is not True
+            or live.get("closing_issues")
+            != [{
+                "repository": arguments.repo,
+                "number": arguments.delivery_issue,
+                "state": "OPEN",
+            }]
+        ):
+            raise fast_path.SecurityBlocker(
+                "final Draft PR state or current-main equality changed"
+            )
+        return str(live.get("head_sha") or "")
+
+    try:
+        result = pre_enrollment.execute_once(
+            evidence=selected,
+            registry=binding,
+            accepted_authorization_signers=policy.transition_signer_identities,
+            authorization_verifier=authorization_verifier,
+            derive_tree=derive_tree,
+            run_registered_validation=run_validation,
+            observe_frozen_state=observe_frozen_state,
+            create_signed_candidate=create_candidate,
+            push_fast_forward=push_candidate,
+            observe_final_pr_head=observe_final_head,
+            receipt_id=arguments.validation_receipt_id,
+            attestation_id=arguments.final_attestation_id,
+        )
+    except pre_enrollment.PreEnrollmentIntegrationError as exc:
+        raise fast_path.SecurityBlocker(str(exc)) from exc
+    _write_fast_report(arguments.receipt_output, result.validation_receipt)
+    _write_fast_report(arguments.attestation_output, result.final_attestation)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         arguments = build_parser().parse_args(argv)
@@ -5774,6 +6502,8 @@ def main(argv: list[str] | None = None) -> int:
             return _command_attest_validation(arguments)
         if arguments.command == "resolve-batch":
             return _command_resolve_batch(arguments)
+        if arguments.command == "integrate-pre-enrollment-draft":
+            return _command_integrate_pre_enrollment_draft(arguments)
         return _command_mutation(arguments)
     except fast_path.RecoverableLocalError as exc:
         report = {
