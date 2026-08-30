@@ -55,6 +55,9 @@ FAST_BATCH_SCHEMA_PATH = (
 )
 EXTERNAL_COMMAND_TIMEOUT_SECONDS = 30
 LOCAL_VALIDATION_TIMEOUT_SECONDS = 600
+# Conflict-bearing integration paths are governance source intended for human
+# review. Bound their aggregate authenticated blob content before Git emits it.
+MAX_INTEGRATION_CONFLICT_CONTENT_BYTES = 4 * 1024 * 1024
 
 
 def _load_evidence_helper() -> Any:
@@ -4547,118 +4550,121 @@ def _reject_integration_conflict_markers(
     validated_tree: str,
     conflict_paths: list[str],
 ) -> None:
-    # Git performs the authenticated tree/path selection and binary-file
-    # filtering. Fixed strings only select candidate lines; the state machine
-    # below is the single authoritative definition of conflict-block syntax.
-    result = _run_attestation_git(
-        repository_root,
-        [
-            "grep",
-            "-n",
-            "-I",
-            "-F",
-            "-z",
-            "--full-name",
-            "-e",
-            "<<<<<<<",
-            "-e",
-            "|||||||",
-            "-e",
-            "=======",
-            "-e",
-            ">>>>>>>",
-            validated_tree,
-            "--",
-            *(f":(literal){path}" for path in conflict_paths),
-        ],
-        allow_failure=True,
-    )
-    if result.returncode == 1:
-        return
-    if result.returncode != 0:
-        raise fast_path.SecurityBlocker(
-            "resolved integration conflict content cannot be authenticated"
+    # Git authenticates exact literal tree entries and immutable object sizes.
+    # Python reads only the bounded blobs and owns the sole conflict grammar.
+    blobs: list[tuple[str, str, int]] = []
+    aggregate_size = 0
+    for path in conflict_paths:
+        entry = _run_attestation_git(
+            repository_root,
+            [
+                "ls-tree",
+                "-z",
+                "--full-tree",
+                validated_tree,
+                "--",
+                f":(literal){path}",
+            ],
+            allow_failure=True,
         )
-
-    allowed_sources = {f"{validated_tree}:{path}" for path in conflict_paths}
-    records: list[tuple[str, int, str]] = []
-    cursor = 0
-    while cursor < len(result.stdout):
-        source_end = result.stdout.find("\x00", cursor)
-        line_number_end = result.stdout.find("\x00", source_end + 1)
-        content_end = result.stdout.find("\n", line_number_end + 1)
-        if min(source_end, line_number_end, content_end) < 0:
+        if entry.returncode != 0:
             raise fast_path.SecurityBlocker(
                 "resolved integration conflict content cannot be authenticated"
             )
-        source = result.stdout[cursor:source_end]
-        line_number_text = result.stdout[source_end + 1:line_number_end]
+        if entry.stdout == "":
+            continue
+        if not entry.stdout.endswith("\x00") or entry.stdout.count("\x00") != 1:
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content cannot be authenticated"
+            )
+        record = entry.stdout[:-1]
+        metadata, separator, observed_path = record.partition("\t")
+        parts = metadata.split()
+        if separator != "\t" or len(parts) != 3 or observed_path != path:
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content cannot be authenticated"
+            )
+        mode, object_type, object_oid = parts
+        if mode == "160000" and object_type == "commit":
+            continue
         if (
-            source not in allowed_sources
-            or not line_number_text.isascii()
-            or not line_number_text.isdecimal()
+            mode not in {"100644", "100755", "120000"}
+            or object_type != "blob"
+            or not OID_PATTERN.fullmatch(object_oid)
         ):
             raise fast_path.SecurityBlocker(
                 "resolved integration conflict content cannot be authenticated"
             )
-        line_number = int(line_number_text)
-        if line_number < 1:
+        size_result = _run_attestation_git(
+            repository_root,
+            ["cat-file", "-s", object_oid],
+            allow_failure=True,
+        )
+        size_text = size_result.stdout.strip()
+        if (
+            size_result.returncode != 0
+            or not size_text.isascii()
+            or not size_text.isdecimal()
+        ):
             raise fast_path.SecurityBlocker(
                 "resolved integration conflict content cannot be authenticated"
             )
-        records.append(
-            (source, line_number, result.stdout[line_number_end + 1:content_end])
-        )
-        cursor = content_end + 1
-    if not records:
-        raise fast_path.SecurityBlocker(
-            "resolved integration conflict content cannot be authenticated"
-        )
+        size = int(size_text)
+        aggregate_size += size
+        if aggregate_size > MAX_INTEGRATION_CONFLICT_CONTENT_BYTES:
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content exceeds the authenticated size bound"
+            )
+        blobs.append((path, object_oid.lower(), size))
 
-    state = "OUTSIDE"
-    current_source: str | None = None
-    prior_line_number = 0
-    for source, line_number, line in records:
-        if source != current_source:
-            if state != "OUTSIDE":
+    for _path, object_oid, _expected_size in blobs:
+        result = _run_attestation_git(
+            repository_root,
+            ["cat-file", "blob", object_oid],
+            allow_failure=True,
+        )
+        if (
+            result.returncode != 0
+            or not isinstance(result.stdout, str)
+        ):
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content cannot be authenticated"
+            )
+        content = result.stdout
+        # Match Git's established binary-file sniff: a NUL in the initial
+        # 8,000-byte inspection window excludes the blob from text scanning.
+        if "\x00" in content[:8000]:
+            continue
+        state = "OUTSIDE"
+        for line in content.split("\n"):
+            marker = _integration_conflict_marker_kind(line)
+            if marker is None:
+                continue
+            if state == "OUTSIDE":
+                if marker == "OPEN":
+                    state = "OURS"
+                continue
+            if state == "OURS":
+                if marker == "BASE":
+                    state = "BASE"
+                    continue
+                if marker == "SEPARATOR":
+                    state = "THEIRS"
+                    continue
+            elif state == "BASE" and marker == "SEPARATOR":
+                state = "THEIRS"
+                continue
+            elif state == "THEIRS" and marker == "CLOSE":
                 raise fast_path.SecurityBlocker(
                     "resolved integration tree retains Git conflict markers"
                 )
-            current_source = source
-            prior_line_number = 0
-        if line_number <= prior_line_number:
-            raise fast_path.SecurityBlocker(
-                "resolved integration conflict content cannot be authenticated"
-            )
-        prior_line_number = line_number
-        marker = _integration_conflict_marker_kind(line)
-        if marker is None:
-            continue
-        if state == "OUTSIDE":
-            if marker == "OPEN":
-                state = "OURS"
-            continue
-        if state == "OURS":
-            if marker == "BASE":
-                state = "BASE"
-                continue
-            if marker == "SEPARATOR":
-                state = "THEIRS"
-                continue
-        elif state == "BASE" and marker == "SEPARATOR":
-            state = "THEIRS"
-            continue
-        elif state == "THEIRS" and marker == "CLOSE":
             raise fast_path.SecurityBlocker(
                 "resolved integration tree retains Git conflict markers"
             )
-        raise fast_path.SecurityBlocker(
-            "resolved integration tree retains Git conflict markers"
-        )
-    if state != "OUTSIDE":
-        raise fast_path.SecurityBlocker(
-            "resolved integration tree retains Git conflict markers"
-        )
+        if state != "OUTSIDE":
+            raise fast_path.SecurityBlocker(
+                "resolved integration tree retains Git conflict markers"
+            )
 
 
 def _integration_conflict_marker_kind(line: str) -> str | None:

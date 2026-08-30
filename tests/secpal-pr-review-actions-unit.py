@@ -7567,13 +7567,16 @@ class FastPathTests(TestCase):
             )
 
             def candidate(
-                updates: dict[str, str | None],
+                updates: dict[str, str | bytes | None],
             ) -> tuple[str, dict[str, Any]]:
                 git("read-tree", mechanical_tree)
                 for path, content in updates.items():
                     target = repository / path
                     if content is None:
                         git("rm", "-q", "-f", "--cached", "--ignore-unmatch", path)
+                    elif isinstance(content, bytes):
+                        target.write_bytes(content)
+                        git("add", path)
                     else:
                         target.write_text(content, encoding="utf-8")
                         git("add", path)
@@ -7655,6 +7658,15 @@ class FastPathTests(TestCase):
                 actions._verify_integration_tree_delta(
                     repository, marker, marker_tree
                 )
+            diff3_tree, diff3 = candidate(
+                {
+                    "a.txt": (
+                        "<<<<<<< ours\nleft\n||||||| base\nbase\n"
+                        "=======\nright\n>>>>>>> theirs\n"
+                    ),
+                    "b.txt": "resolved b\n",
+                }
+            )
             bare_marker_tree, bare_marker = candidate(
                 {
                     "a.txt": "<<<<<<<\nleft\n=======\nright\n>>>>>>>\n",
@@ -7701,11 +7713,105 @@ class FastPathTests(TestCase):
                             repository, unresolved, unresolved_tree
                         )
 
+            configured_separator_tree, configured_separator = candidate(
+                {"a.txt": "heading\n=======\nbody\n", "b.txt": "resolved b\n"}
+            )
+            for case, settings in (
+                ("column", {"grep.column": "true"}),
+                ("color", {"color.grep": "always"}),
+                (
+                    "column and color",
+                    {"grep.column": "true", "color.grep": "always"},
+                ),
+            ):
+                with self.subTest(ambient_git_configuration=case):
+                    for key, value in settings.items():
+                        git("config", key, value)
+                    try:
+                        actions._verify_integration_tree_delta(
+                            repository, configured_separator, configured_separator_tree
+                        )
+                        for unresolved_tree, unresolved in (
+                            (marker_tree, marker),
+                            (diff3_tree, diff3),
+                        ):
+                            with self.assertRaisesRegex(
+                                fast_path.SecurityBlocker,
+                                "retains Git conflict markers",
+                            ):
+                                actions._verify_integration_tree_delta(
+                                    repository, unresolved, unresolved_tree
+                                )
+                    finally:
+                        for key in settings:
+                            git("config", "--unset-all", key)
+
+            binary_tree, binary = candidate(
+                {
+                    "a.txt": (
+                        b"\x00<<<<<<< retained\nleft\n=======\nright\n"
+                        b">>>>>>> retained\n"
+                    ),
+                    "b.txt": "resolved b\n",
+                }
+            )
+            actions._verify_integration_tree_delta(repository, binary, binary_tree)
+            late_nul_tree, late_nul = candidate(
+                {
+                    "a.txt": (
+                        b"<<<<<<< retained\nleft\n=======\nright\n"
+                        b">>>>>>> retained\n" + b"x" * 8000 + b"\x00"
+                    ),
+                    "b.txt": "resolved b\n",
+                }
+            )
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "retains Git conflict markers"
+            ):
+                actions._verify_integration_tree_delta(
+                    repository, late_nul, late_nul_tree
+                )
+
+            limit = actions.MAX_INTEGRATION_CONFLICT_CONTENT_BYTES
+            boundary_tree, boundary = candidate(
+                {"a.txt": "=======\n" + "x" * (limit - 8), "b.txt": None}
+            )
+            actions._verify_integration_tree_delta(
+                repository, boundary, boundary_tree
+            )
+            oversized_tree, oversized = candidate(
+                {"a.txt": "x" * (limit + 1), "b.txt": None}
+            )
+            with (
+                mock.patch.object(
+                    actions,
+                    "_run_attestation_git",
+                    wraps=actions._run_attestation_git,
+                ) as run_git,
+                self.assertRaisesRegex(
+                    fast_path.SecurityBlocker,
+                    "conflict content exceeds the authenticated size bound",
+                ),
+            ):
+                actions._verify_integration_tree_delta(
+                    repository, oversized, oversized_tree
+                )
+            commands = [call.args[1] for call in run_git.call_args_list]
+            self.assertTrue(
+                any(command[:2] == ["cat-file", "-s"] for command in commands)
+            )
+            self.assertFalse(
+                any(command[:2] == ["cat-file", "blob"] for command in commands)
+            )
+
     def test_prior_771_resolved_tree_accepts_authenticated_separator_lines(
         self,
     ) -> None:
+        prior_head = "4bea89ef822e31a37a6a679550ff9757853b1e55"
+        current_main = "daa953695caaed338b81dad1fc8d8f7012382ae7"
+        mechanical_tree = "78265627279ab10448a35659846f81d266cb7a1e"
         resolved_tree = "a95eeb850ff1b5158ba87da5e355f0d00ed7ee13"
-        conflict_paths = [
+        expected_conflict_paths = [
             ".agents/skills/secpal-pr-review/references/repositories.json",
             ".agents/skills/secpal-pr-review/references/repositories.schema.json",
             "CHANGELOG.md",
@@ -7718,28 +7824,131 @@ class FastPathTests(TestCase):
             "tests/secpal-lifecycle-publication-unit.py",
             "tests/secpal-pr-review-skill-policy.sh",
         ]
-        separator_records = "".join(
-            f"{resolved_tree}:scripts/README.md\x00{line}\x00{'=' * 40}\n"
-            for line in (579, 581, 594, 596)
-        )
-
-        with mock.patch.object(
-            actions,
-            "_run_attestation_git",
-            return_value=SimpleNamespace(
-                returncode=0, stdout=separator_records, stderr=""
-            ),
-        ) as run_git:
-            actions._reject_integration_conflict_markers(
-                REPO_ROOT, resolved_tree, conflict_paths
+        bundle = FIXTURES / "issue771-exact-candidate.bundle"
+        with tempfile.TemporaryDirectory(prefix="secpal-issue771-candidate-") as directory:
+            repository = Path(directory) / "repository"
+            subprocess.run(
+                ["git", "clone", "-q", "--no-checkout", str(REPO_ROOT), str(repository)],
+                check=True,
             )
-
-        command = run_git.call_args.args[1]
-        self.assertIn(resolved_tree, command)
-        self.assertEqual(
-            command[-len(conflict_paths):],
-            [f":(literal){path}" for path in conflict_paths],
-        )
+            subprocess.run(
+                [
+                    "git", "fetch", "-q", str(bundle),
+                    "refs/heads/issue771-ready-counters:refs/heads/issue771-ready-counters",
+                    "refs/heads/issue771-resolved-fixture:refs/heads/issue771-resolved-fixture",
+                ],
+                cwd=repository,
+                check=True,
+            )
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "rev-parse", "refs/heads/issue771-ready-counters"],
+                    cwd=repository, check=True, capture_output=True, text=True,
+                ).stdout.strip(),
+                prior_head,
+            )
+            observed_resolved_tree = subprocess.run(
+                ["git", "rev-parse", "refs/heads/issue771-resolved-fixture^{tree}"],
+                cwd=repository, check=True, capture_output=True, text=True,
+            ).stdout.strip()
+            self.assertEqual(observed_resolved_tree, resolved_tree)
+            observed_mechanical_tree, conflict_paths = (
+                actions._mechanical_integration_result(
+                    repository, [prior_head, current_main]
+                )
+            )
+            self.assertEqual(observed_mechanical_tree, mechanical_tree)
+            self.assertEqual(conflict_paths, expected_conflict_paths)
+            reviewed = fast_path.StableFeedbackState(
+                repository="SecPal/.github",
+                pull_request_number=772,
+                head_sha=prior_head,
+                base_ref="main",
+                base_sha=current_main,
+                pr_state="OPEN",
+                feedback={
+                    "pull_request_reactions": [],
+                    "reviews": [],
+                    "conversation_comments": [],
+                    "threads": [],
+                },
+            )
+            value = ready_integration_evidence(
+                reviewed, validated_tree=resolved_tree
+            )
+            value["mechanical_merge_tree_sha"] = mechanical_tree
+            value["mechanical_conflict_paths"] = conflict_paths
+            value["manual_conflict_resolution_delta"] = (
+                actions._integration_tree_delta(
+                    repository, mechanical_tree, resolved_tree
+                )
+            )
+            expected_delta_oids = {
+                ".agents/skills/secpal-pr-review/references/repositories.json": (
+                    "8a5cfe22c65344d07c67ead9451638db0c8786b9",
+                    "46e5f260802319bf3ee05d1dbb3c0cda9d9e1639",
+                ),
+                ".agents/skills/secpal-pr-review/references/repositories.schema.json": (
+                    "5692c76b1096ed46c08c58197329af233e4b223b",
+                    "aedf34c46a49bb589169f2b2a1ac664b4b86bbfc",
+                ),
+                "CHANGELOG.md": (
+                    "fc9fd01c480a68b41c827c5ff55177d7619b54f5",
+                    "edb184325addf9da3c2fe279acb8403b914cfeb1",
+                ),
+                "docs/native-lifecycle-genesis-admission.md": (
+                    "424223d808a31aa43aae19da453e438cb2906215",
+                    "b8a27537f7a5685f2745a03da362008742f260ea",
+                ),
+                "docs/secpal-pr-review-workflow.md": (
+                    "5f7a61d598a7c020d488888646ad589caafd9f1b",
+                    "e551a54ae16061de895b76aeb6d384a94dc7ca67",
+                ),
+                "scripts/README.md": (
+                    "c30c480daf38cd7b5da3a6255ca2641c30a9e5df",
+                    "f8df0b6d87b7424543d2bf3faa59da1add655524",
+                ),
+                "scripts/secpal_pr_review/lifecycle_authority.py": (
+                    "a04e1ab67f400d20ece90279edeef907daceb2c3",
+                    "78d379455cf3e4b34d023e67d621e67c20bdc18b",
+                ),
+                "scripts/secpal_pr_review/lifecycle_publication.py": (
+                    "13819a9de8b6e2944819a02c8fac9a16c92dd1cb",
+                    "b1dc232e42f9dd6c6dff889d303ff44126acbc3e",
+                ),
+                "tests/secpal-lifecycle-authority-unit.py": (
+                    "0e2522e79b7c1a44fbc582ceb2e21cfa2ea0fc3a",
+                    "3c803689e5f66ba8a16419518c8ae0655b4160d8",
+                ),
+                "tests/secpal-lifecycle-publication-unit.py": (
+                    "75a7844ee79235e80f2ed3896b7f81077033de03",
+                    "810eb90147a30c7e9f35db4386f91a234785e577",
+                ),
+                "tests/secpal-pr-review-skill-policy.sh": (
+                    "d00b04c7b0454b0682087b5bd260084b43bf0b67",
+                    "36c54529315959d1838fe7b1ce6c51d1f58cd5e2",
+                ),
+            }
+            self.assertEqual(
+                value["ordered_parent_shas"], [prior_head, current_main]
+            )
+            self.assertEqual(
+                {
+                    item["path"]: (item["old_oid"], item["new_oid"])
+                    for item in value["manual_conflict_resolution_delta"]
+                },
+                expected_delta_oids,
+            )
+            integration = fast_path.normalize_ready_integration_evidence(
+                value,
+                repository="SecPal/.github",
+                reviewed_state=reviewed,
+                registry=fast_registry(),
+                validated_tree_sha=resolved_tree,
+            )
+            actions._verify_integration_tree_delta(
+                repository, integration, resolved_tree
+            )
 
     def test_shared_marker_primitive_is_integration_lifecycle_neutral(self) -> None:
         for topology in (
@@ -7752,7 +7961,7 @@ class FastPathTests(TestCase):
                     actions,
                     "_run_attestation_git",
                     return_value=SimpleNamespace(
-                        returncode=1, stdout="", stderr=""
+                        returncode=0, stdout="", stderr=""
                     ),
                 ) as run_git,
             ):
@@ -7764,17 +7973,18 @@ class FastPathTests(TestCase):
     def test_marker_primitive_rejects_unauthenticated_scan_results(self) -> None:
         tree = "a" * 40
         path = "authenticated-conflict.txt"
-        source = f"{tree}:{path}"
+        oid = "b" * 40
         for case, returncode, output in (
             ("Git failure", 2, ""),
-            ("empty success", 0, ""),
-            ("wrong source", 0, f"{tree}:other.txt\x001\x00=======\n"),
+            ("truncated record", 0, f"100644 blob {oid}\t{path}"),
+            ("wrong path", 0, f"100644 blob {oid}\tother.txt\x00"),
             (
-                "nonmonotonic lines",
+                "multiple records",
                 0,
-                f"{source}\x002\x00=======\n{source}\x001\x00=======\n",
+                f"100644 blob {oid}\t{path}\x00100644 blob {oid}\t{path}\x00",
             ),
-            ("truncated record", 0, f"{source}\x001\x00======="),
+            ("tree entry", 0, f"040000 tree {oid}\t{path}\x00"),
+            ("invalid object", 0, f"100644 blob invalid\t{path}\x00"),
         ):
             with (
                 self.subTest(case=case),
@@ -7784,6 +7994,36 @@ class FastPathTests(TestCase):
                     return_value=SimpleNamespace(
                         returncode=returncode, stdout=output, stderr="failed"
                     ),
+                ),
+                self.assertRaisesRegex(
+                    fast_path.SecurityBlocker, "cannot be authenticated"
+                ),
+            ):
+                actions._reject_integration_conflict_markers(
+                    REPO_ROOT, tree, [path]
+                )
+
+        valid_entry = SimpleNamespace(
+            returncode=0,
+            stdout=f"100644 blob {oid}\t{path}\x00",
+            stderr="",
+        )
+        for case, second in (
+            (
+                "object size failure",
+                SimpleNamespace(returncode=1, stdout="", stderr="failed"),
+            ),
+            (
+                "malformed object size",
+                SimpleNamespace(returncode=0, stdout="unknown\n", stderr=""),
+            ),
+        ):
+            with (
+                self.subTest(case=case),
+                mock.patch.object(
+                    actions,
+                    "_run_attestation_git",
+                    side_effect=[valid_entry, second],
                 ),
                 self.assertRaisesRegex(
                     fast_path.SecurityBlocker, "cannot be authenticated"
