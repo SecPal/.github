@@ -342,10 +342,11 @@ orchestration. Those responsibilities remain outside this primitive.
 
 ## Lifecycle-publication boundary
 
-`scripts/secpal_pr_review/lifecycle_publication.py` has exactly two enrollment
-modes. `NATIVE_LIFECYCLE` requires the maintained #750 initialization root and
-complete authenticated transition chain from inception. A genuinely pre-#750
-delivery may instead use exactly one explicitly authorized
+`scripts/secpal_pr_review/lifecycle_publication.py` has exactly two lifecycle
+proof modes. `NATIVE_LIFECYCLE` has a signed #750 initialization and complete
+authenticated transition chain from inception. The initialization establishes
+the immutable native genesis identity; it does not by itself authorize ordinary
+publication. A genuinely pre-#750 delivery may instead use exactly one explicitly authorized
 `LEGACY_ADOPTION_CHECKPOINT`. That domain-separated artifact is signed by the
 maintained legacy-adoption role using credential material cryptographically
 distinct from ordinary, lifecycle-transition, and publication signers. It
@@ -375,22 +376,47 @@ URL rewrites, HOME, PATH, askpass/SSH overrides, agents, and loader injection.
 Current verification accepts no caller path, remote, branch, signer set, key,
 verifier callback, checkpoint, or terminal digest.
 
-Native enrollment must match the maintained #750 adoption boundary. After that
-first journal entry, a private publication-only verifier authenticates the
-maintained initialization root and complete signed #750 successor chain without
-requiring each successor to equal the static enrollment-time tip. Protected
-journal ancestry and the exact lifecycle-local predecessor select CURRENT.
-The ordinary public #750 verifier retains its maintained-current-tip check, and
-no caller-accessible skip flag exists. Legacy enrollment likewise must end
-exactly at its checkpoint terminal; every later transition is a separate
-journal advancement.
+Ordinary new native publication is admission-first. `ADMIT_NATIVE_GENESIS` is a
+separately authenticated, signed journal operation that binds the exact native
+initialization. It must be globally reachable in protected ancestry before
+`ENROLL_EXISTING_LIFECYCLE` can publish that lifecycle. Admission alone selects
+no CURRENT terminal. Enrollment without the earlier reachable admission fails
+closed. `ADVANCE_CURRENT_TERMINAL` then changes CURRENT only by appending one
+exact authenticated lifecycle successor whose lifecycle-local predecessor is
+the prior selected publication.
 
-The closed mutation vocabulary remains `ENROLL_EXISTING_LIFECYCLE` and
-`ADVANCE_CURRENT_TERMINAL`. Missing authorization or protection, native
-evidence without its maintained root, duplicate migration, stale journal
-prefixes, unknown documents, wrong signers, cross-identity replay, and
-predecessor/CAS drift fail closed. Zero enrollment remains the valid
-pre-adoption state.
+`BOOTSTRAP_REPAIR_NATIVE_GENESIS` is a narrowly typed historical repair, not an
+ordinary enrollment mechanism. Maintained policy currently permits only the
+exact #736 repair introduced by #774, including its original initialization and
+enrollment publication OID/digest. The repair appends to the journal, changes no
+historical object, selects no terminal, and cannot authorize another delivery.
+
+The separately maintained pre-#774 compatibility registry is another bounded
+historical exception. Each entry binds repository, issue, PR, static initial
+head, initialization digest, `native_lifecycle` proof mode, and the exact
+historical enrollment publication OID and signed publication digest. Only that
+immutable enrollment object may use the compatibility ordering exemption. A
+newly created candidate publication cannot inherit the exception merely by
+embedding the same signed initialization. Static initialization trust,
+historical compatibility-publication trust, and dynamic CURRENT terminal
+selection are distinct authorities.
+
+After an authenticated enrollment root, a private publication-only verifier
+authenticates the same initialization and complete signed #750 successor chain
+without requiring each successor to equal the static enrollment-time tip. The
+ordinary public #750 verifier retains its maintained-current-tip check, and no
+caller-accessible skip flag exists. Legacy enrollment likewise must end exactly
+at its checkpoint terminal; every later transition is a separate journal
+advancement.
+
+The closed publication vocabulary is `ADMIT_NATIVE_GENESIS`,
+`BOOTSTRAP_REPAIR_NATIVE_GENESIS`, `ENROLL_EXISTING_LIFECYCLE`, and
+`ADVANCE_CURRENT_TERMINAL`. Missing admission or protection, a candidate that
+self-nominates compatibility identity, duplicate or competing genesis,
+native-to-legacy downgrade, duplicate migration, stale journal prefixes,
+unknown documents, wrong signers, cross-identity replay, and predecessor/CAS
+drift fail closed. Protected journal ancestry remains the sole dynamic CURRENT
+selector. Zero enrollment remains the valid pre-adoption state.
 
 This boundary publishes authority; it does not derive lifecycle semantics,
 implement two-parent integration, or orchestrate the full finite workflow.

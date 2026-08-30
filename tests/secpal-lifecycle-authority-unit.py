@@ -233,6 +233,9 @@ class LifecycleAuthorityTests(TestCase):
             delivered[735].initialization_digest,
             "6b630e40702ae69145226f8b40c8e6540914cd6e12815720551330faa2ca9d3d",
         )
+        entry["lifecycle_authority_policy"][
+            "historical_compatibility_publications"
+        ] = []
         entry["lifecycle_authority_policy"]["delivery_initializations"] = [
             {
                 "delivery_issue": ISSUE,
@@ -313,6 +316,99 @@ class LifecycleAuthorityTests(TestCase):
                     authority.LifecycleAuthorityError, "ambiguous"
                 ):
                     authority._load_lifecycle_trust_policy(REPOSITORY)
+
+    def test_registry_closes_exact_historical_compatibility_publications(
+        self,
+    ) -> None:
+        registry_path = (
+            REPO_ROOT
+            / ".agents/skills/secpal-pr-review/references/repositories.json"
+        )
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        policy = authority._load_lifecycle_trust_policy(REPOSITORY)
+        historical = {
+            item.delivery_issue: item
+            for item in policy.historical_compatibility_publications
+        }
+        self.assertEqual(set(historical), {674, 692, 735})
+        self.assertEqual(
+            historical[692].enrollment_publication_oid,
+            "52e76a4eef0fdbb297c16d4bcf64b813bef84062",
+        )
+        self.assertEqual(
+            historical[674].enrollment_publication_oid,
+            "80950f8908f29ead325eb99caf1977e51fad37e1",
+        )
+        self.assertEqual(
+            historical[735].enrollment_publication_oid,
+            "2a5c2d9554ca7b70fd4f2e486da18ae9697af912",
+        )
+        self.assertTrue(
+            all(
+                item.historical_proof_mode == authority.NATIVE_PROOF_MODE
+                for item in historical.values()
+            )
+        )
+
+        entry = next(
+            item
+            for item in registry["repositories"]
+            if item["repository"] == REPOSITORY
+        )
+        compatibility = entry["lifecycle_authority_policy"][
+            "historical_compatibility_publications"
+        ]
+        mutations = (
+            lambda values: values.append(copy.deepcopy(values[0])),
+            lambda values: values[1].update(
+                enrollment_publication_oid=values[0][
+                    "enrollment_publication_oid"
+                ]
+            ),
+            lambda values: values[1].update(
+                enrollment_publication_digest=values[0][
+                    "enrollment_publication_digest"
+                ]
+            ),
+            lambda values: values[0].update(repository="Other/repo"),
+            lambda values: values[0].update(delivery_issue=999),
+            lambda values: values[0].update(pull_request=999),
+            lambda values: values[0].update(initial_head_sha=HEADS[9]),
+            lambda values: values[0].update(initialization_digest="9" * 64),
+            lambda values: values[0].update(
+                historical_proof_mode="legacy_migration_checkpoint"
+            ),
+            lambda values: values[0].pop("enrollment_publication_digest"),
+            lambda values: values[0].update(unknown_authority="forbidden"),
+            lambda values: values[0].update(
+                enrollment_publication_oid="not-an-oid"
+            ),
+            lambda values: values[0].update(
+                enrollment_publication_digest="not-a-digest"
+            ),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                changed = copy.deepcopy(registry)
+                changed_entry = next(
+                    item
+                    for item in changed["repositories"]
+                    if item["repository"] == REPOSITORY
+                )
+                values = changed_entry["lifecycle_authority_policy"][
+                    "historical_compatibility_publications"
+                ]
+                mutation(values)
+                with tempfile.TemporaryDirectory(
+                    prefix="historical-compatibility-policy-"
+                ) as directory:
+                    policy_path = Path(directory) / "repositories.json"
+                    policy_path.write_text(json.dumps(changed), encoding="utf-8")
+                    with patch.object(authority, "_TRUST_REGISTRY", policy_path):
+                        with self.assertRaises(
+                            authority.LifecycleAuthorityError
+                        ):
+                            authority._load_lifecycle_trust_policy(REPOSITORY)
 
     def test_registry_requires_cryptographically_distinct_legacy_adoption_credential(
         self,

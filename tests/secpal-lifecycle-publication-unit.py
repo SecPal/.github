@@ -68,6 +68,8 @@ def signer_for(identity: str = SIGNER) -> authority.Signer:
 def verify_signature(payload: bytes, signature: dict[str, Any], expected_signer: str,
                      domain: str) -> authority.VerifiedSignature:
     if signature["value"].startswith("-----BEGIN SSH SIGNATURE-----"):
+        if expected_signer != SIGNER or signature["signer_identity"] != SIGNER:
+            raise ValueError("real SSH test signature belongs to a different signer")
         authority._verify_ssh_signature(
             payload,
             signature["value"],
@@ -258,6 +260,31 @@ class LifecyclePublicationTests(TestCase):
             check=True, capture_output=True, text=True,
         ).stdout.strip()
         return value
+
+    def test_real_ssh_verifier_proves_the_requested_signer(self) -> None:
+        initialization = issue_736_chain().initialization
+        payload = authority.canonical_json_bytes(
+            authority._unsigned(
+                initialization, "initialization_digest", "signature"
+            )
+        )
+
+        verified = verify_signature(
+            payload,
+            initialization["signature"],
+            SIGNER,
+            authority.INITIALIZATION_DOMAIN,
+        )
+        self.assertEqual(verified.signer_identity, SIGNER)
+        substituted_signature = copy.deepcopy(initialization["signature"])
+        substituted_signature["signer_identity"] = OTHER_SIGNER
+        with self.assertRaises(ValueError):
+            verify_signature(
+                payload,
+                substituted_signature,
+                OTHER_SIGNER,
+                authority.INITIALIZATION_DOMAIN,
+            )
 
     def test_public_consumer_cannot_inject_trust_or_select_terminal(self) -> None:
         parameters = inspect.signature(publication.verify_current_lifecycle_authority).parameters
@@ -551,6 +578,171 @@ class LifecyclePublicationTests(TestCase):
             .lifecycle.initialization_evidence_digest,
             chain.initialization["initialization_digest"],
         )
+
+    def test_static_root_does_not_admit_a_new_enrollment_publication(self) -> None:
+        chain = Chain()
+        chain.append("INITIALIZED_DRAFT")
+        anchor = authority.InitializationAnchor(
+            ISSUE,
+            PR,
+            HEADS[0],
+            chain.initialization["initialization_digest"],
+            PR,
+            chain.head,
+            chain.authorities[-1]["authority_digest"],
+        )
+        historical_bundle, historical_raw = publication._canonical_bundle(
+            authority.serialize_publication_lifecycle_evidence(
+                lifecycle_evidence=chain.raw()
+            )
+        )
+        historical_lifecycle = authority.verify_native_lifecycle_for_genesis_admission(
+            chain.raw()
+        )
+        historical_fields = publication._publication_fields(
+            operation="ENROLL_EXISTING_LIFECYCLE",
+            verified=historical_lifecycle,
+            bundle=historical_bundle,
+            bundle_raw=historical_raw,
+            publication_branch=BRANCH,
+            journal_predecessor_oid=None,
+            predecessor=None,
+            predecessor_oid=None,
+            signer_identity=SIGNER,
+        )
+        historical_document = publication._sign_publication(
+            historical_fields, signer_for()
+        )
+        historical_oid = publication._write_publication_object(
+            self.probe, historical_document, None
+        )
+        historical_digest = json.loads(historical_document)["publication_digest"]
+        compatibility = authority.HistoricalCompatibilityPublication(
+            repository=REPOSITORY,
+            delivery_issue=ISSUE,
+            pull_request=PR,
+            initial_head_sha=HEADS[0],
+            initialization_digest=chain.initialization["initialization_digest"],
+            enrollment_publication_oid=historical_oid,
+            enrollment_publication_digest=historical_digest,
+            historical_proof_mode=authority.NATIVE_PROOF_MODE,
+        )
+        compatibility_policy = replace(
+            self.policy,
+            initialization_anchors=(anchor,),
+            historical_compatibility_publications=(compatibility,),
+        )
+        with patch.object(
+            authority,
+            "_load_lifecycle_trust_policy",
+            return_value=compatibility_policy,
+        ):
+            entries, latest, admissions = publication._walk_journal(
+                self.probe, historical_oid, BRANCH
+            )
+        self.assertEqual([item[0] for item in entries], [historical_oid])
+        self.assertEqual(latest[(REPOSITORY, ISSUE)][0], historical_oid)
+        self.assertEqual(admissions[(REPOSITORY, ISSUE)].admission_digest,
+                         historical_digest)
+
+        incompatible_identities = (
+            replace(compatibility, enrollment_publication_oid=HEADS[9]),
+            replace(compatibility, enrollment_publication_digest="9" * 64),
+            replace(compatibility, repository="Other/repo"),
+            replace(compatibility, delivery_issue=ISSUE + 1),
+            replace(compatibility, pull_request=PR + 1),
+            replace(compatibility, initial_head_sha=HEADS[9]),
+            replace(compatibility, initialization_digest="8" * 64),
+        )
+        for incompatible in incompatible_identities:
+            with self.subTest(incompatible=incompatible):
+                changed_policy = replace(
+                    compatibility_policy,
+                    historical_compatibility_publications=(incompatible,),
+                )
+                with patch.object(
+                    authority,
+                    "_load_lifecycle_trust_policy",
+                    return_value=changed_policy,
+                ):
+                    with self.assertRaisesRegex(
+                        publication.LifecyclePublicationError,
+                        "native genesis is not independently admitted",
+                    ):
+                        publication._walk_journal(
+                            self.probe, historical_oid, BRANCH
+                        )
+
+        tree = publication._run_git(
+            self.probe, ["rev-parse", f"{historical_oid}^{{tree}}"]
+        ).stdout.decode("ascii").strip()
+        copied_object = publication._run_git(
+            self.probe,
+            ["commit-tree", tree],
+            input_bytes=b"Copied immutable publication object\n",
+            extra_environment={
+                "GIT_AUTHOR_NAME": "SecPal Lifecycle Publication",
+                "GIT_AUTHOR_EMAIL": "publication@secpal.invalid",
+                "GIT_AUTHOR_DATE": "@1 +0000",
+                "GIT_COMMITTER_NAME": "SecPal Lifecycle Publication",
+                "GIT_COMMITTER_EMAIL": "publication@secpal.invalid",
+                "GIT_COMMITTER_DATE": "@1 +0000",
+            },
+        ).stdout.decode("ascii").strip()
+        self.assertNotEqual(copied_object, historical_oid)
+        with patch.object(
+            authority,
+            "_load_lifecycle_trust_policy",
+            return_value=compatibility_policy,
+        ):
+            with self.assertRaisesRegex(
+                publication.LifecyclePublicationError,
+                "native genesis is not independently admitted",
+            ):
+                publication._walk_journal(self.probe, copied_object, BRANCH)
+
+        chain.append("HEAD_ADVANCED", head=HEADS[1])
+        candidate_bundle, candidate_raw = publication._canonical_bundle(
+            authority.serialize_publication_lifecycle_evidence(
+                lifecycle_evidence=chain.raw()
+            )
+        )
+        candidate_lifecycle = authority.verify_native_lifecycle_for_genesis_admission(
+            chain.raw()
+        )
+        candidate_fields = publication._publication_fields(
+            operation="ENROLL_EXISTING_LIFECYCLE",
+            verified=candidate_lifecycle,
+            bundle=candidate_bundle,
+            bundle_raw=candidate_raw,
+            publication_branch=BRANCH,
+            journal_predecessor_oid=None,
+            predecessor=None,
+            predecessor_oid=None,
+            signer_identity=SIGNER,
+        )
+        candidate_document = publication._sign_publication(
+            candidate_fields, signer_for()
+        )
+        candidate_oid = publication._write_publication_object(
+            self.probe, candidate_document, None
+        )
+        self.assertNotEqual(candidate_oid, historical_oid)
+        self.assertNotEqual(
+            json.loads(candidate_document)["publication_digest"],
+            json.loads(historical_document)["publication_digest"],
+        )
+
+        with patch.object(
+            authority,
+            "_load_lifecycle_trust_policy",
+            return_value=compatibility_policy,
+        ):
+            with self.assertRaisesRegex(
+                publication.LifecyclePublicationError,
+                "native genesis is not independently admitted",
+            ):
+                publication._walk_journal(self.probe, candidate_oid, BRANCH)
 
     def test_exact_issue_736_genesis_repairs_without_changing_current(self) -> None:
         chain = issue_736_chain()

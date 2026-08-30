@@ -161,6 +161,20 @@ class BootstrapGenesisRepair:
 
 
 @dataclass(frozen=True)
+class HistoricalCompatibilityPublication:
+    """One exact pre-admission native enrollment allowed by maintained policy."""
+
+    repository: str
+    delivery_issue: int
+    pull_request: int
+    initial_head_sha: str
+    initialization_digest: str
+    enrollment_publication_oid: str
+    enrollment_publication_digest: str
+    historical_proof_mode: str
+
+
+@dataclass(frozen=True)
 class LifecycleTrustPolicy:
     """Installed trust policy; never accepted as lifecycle evidence input."""
 
@@ -178,6 +192,9 @@ class LifecycleTrustPolicy:
     publication_ruleset_id: int = 0
     publication_required_rules: frozenset[str] = frozenset()
     bootstrap_genesis_repairs: tuple[BootstrapGenesisRepair, ...] = ()
+    historical_compatibility_publications: tuple[
+        HistoricalCompatibilityPublication, ...
+    ] = ()
 
 
 EVENT_FIELDS = frozenset(
@@ -587,6 +604,7 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
             "publication_ruleset_id",
             "publication_required_rules",
             "bootstrap_genesis_repairs",
+            "historical_compatibility_publications",
             "delivery_initializations",
         }
     )
@@ -827,6 +845,95 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
                 ),
             )
         )
+    compatibility_fields = frozenset(
+        {
+            "repository",
+            "delivery_issue",
+            "pull_request",
+            "initial_head_sha",
+            "initialization_digest",
+            "enrollment_publication_oid",
+            "enrollment_publication_digest",
+            "historical_proof_mode",
+        }
+    )
+    raw_compatibility = policy["historical_compatibility_publications"]
+    if not isinstance(raw_compatibility, list):
+        raise LifecycleAuthorityError(
+            "historical compatibility-publication policy is invalid"
+        )
+    compatibility_publications: list[HistoricalCompatibilityPublication] = []
+    compatibility_initializations: set[tuple[int, str]] = set()
+    compatibility_oids: set[str] = set()
+    compatibility_digests: set[str] = set()
+    for value in raw_compatibility:
+        item = _require_closed(
+            value,
+            compatibility_fields,
+            "historical compatibility publication",
+        )
+        compatibility_repository = _require_repository(item["repository"])
+        compatibility_issue = _require_positive_int(
+            item["delivery_issue"], "historical compatibility delivery issue"
+        )
+        compatibility_pr = _require_positive_int(
+            item["pull_request"], "historical compatibility pull request"
+        )
+        compatibility_head = _require_oid(
+            item["initial_head_sha"], "historical compatibility initial head"
+        )
+        compatibility_initialization = _require_digest(
+            item["initialization_digest"],
+            "historical compatibility initialization",
+        )
+        compatibility_oid = _require_oid(
+            item["enrollment_publication_oid"],
+            "historical compatibility enrollment publication",
+        )
+        compatibility_digest = _require_digest(
+            item["enrollment_publication_digest"],
+            "historical compatibility enrollment publication digest",
+        )
+        initialization_key = (
+            compatibility_issue,
+            compatibility_initialization,
+        )
+        matching_anchors = [
+            anchor
+            for anchor in anchors
+            if (
+                anchor.delivery_issue == compatibility_issue
+                and anchor.pull_request == compatibility_pr
+                and anchor.initial_head_sha == compatibility_head
+                and anchor.initialization_digest == compatibility_initialization
+            )
+        ]
+        if (
+            compatibility_repository != repository
+            or item["historical_proof_mode"] != NATIVE_PROOF_MODE
+            or len(matching_anchors) != 1
+            or initialization_key in compatibility_initializations
+            or compatibility_oid in compatibility_oids
+            or compatibility_digest in compatibility_digests
+        ):
+            raise LifecycleAuthorityError(
+                "historical compatibility publications are ambiguous or mismatched"
+            )
+        compatibility_initializations.add(initialization_key)
+        compatibility_oids.add(compatibility_oid)
+        compatibility_digests.add(compatibility_digest)
+        compatibility_publications.append(
+            HistoricalCompatibilityPublication(
+                repository=compatibility_repository,
+                delivery_issue=compatibility_issue,
+                pull_request=compatibility_pr,
+                initial_head_sha=compatibility_head,
+                initialization_digest=compatibility_initialization,
+                enrollment_publication_oid=compatibility_oid,
+                enrollment_publication_digest=compatibility_digest,
+                historical_proof_mode=item["historical_proof_mode"],
+            )
+        )
     return LifecycleTrustPolicy(
         repository=repository,
         accepted_formats=frozenset(formats),
@@ -840,6 +947,9 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
         publication_ruleset_id=ruleset_id,
         publication_required_rules=frozenset(required_rules),
         bootstrap_genesis_repairs=tuple(repairs),
+        historical_compatibility_publications=tuple(
+            compatibility_publications
+        ),
         signers=signers,
         initialization_anchors=tuple(anchors),
     )
