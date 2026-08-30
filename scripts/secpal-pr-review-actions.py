@@ -55,6 +55,9 @@ FAST_BATCH_SCHEMA_PATH = (
 )
 EXTERNAL_COMMAND_TIMEOUT_SECONDS = 30
 LOCAL_VALIDATION_TIMEOUT_SECONDS = 600
+# Conflict-bearing integration paths are governance source intended for human
+# review. Bound their aggregate authenticated blob content before Git emits it.
+MAX_INTEGRATION_CONFLICT_CONTENT_BYTES = 4 * 1024 * 1024
 
 
 def _load_evidence_helper() -> Any:
@@ -4324,7 +4327,8 @@ def _run_attestation_git(
     arguments: list[str],
     *,
     allow_failure: bool = False,
-) -> subprocess.CompletedProcess[str]:
+    raw_output: bool = False,
+) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
     try:
         git_executable = evidence.resolve_trusted_executable("git")
     except evidence.CommandPolicyError as exc:
@@ -4339,9 +4343,9 @@ def _run_attestation_git(
             check=False,
             stdin=subprocess.DEVNULL,
             capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+            text=not raw_output,
+            encoding=None if raw_output else "utf-8",
+            errors=None if raw_output else "replace",
             env=evidence.command_environment("git"),
             timeout=EXTERNAL_COMMAND_TIMEOUT_SECONDS,
         )
@@ -4547,35 +4551,154 @@ def _reject_integration_conflict_markers(
     validated_tree: str,
     conflict_paths: list[str],
 ) -> None:
-    result = _run_attestation_git(
-        repository_root,
-        [
-            "grep",
-            "-n",
-            "-I",
-            "-E",
-            "-e",
-            "^<{7,}( |$)",
-            "-e",
-            "^={7,}$",
-            "-e",
-            "^>{7,}( |$)",
-            "-e",
-            "^\\|{7,}( |$)",
-            validated_tree,
-            "--",
-            *(f":(literal){path}" for path in conflict_paths),
-        ],
-        allow_failure=True,
-    )
-    if result.returncode == 0:
-        raise fast_path.SecurityBlocker(
-            "resolved integration tree retains Git conflict markers"
+    # Git authenticates exact literal tree entries and immutable object sizes.
+    # Python reads only the bounded blobs and owns the sole conflict grammar.
+    blobs: list[tuple[str, str, int]] = []
+    aggregate_size = 0
+    for path in conflict_paths:
+        entry = _run_attestation_git(
+            repository_root,
+            [
+                "ls-tree",
+                "-z",
+                "--full-tree",
+                validated_tree,
+                "--",
+                f":(literal){path}",
+            ],
+            allow_failure=True,
         )
-    if result.returncode != 1:
-        raise fast_path.SecurityBlocker(
-            "resolved integration conflict content cannot be authenticated"
+        if entry.returncode != 0:
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content cannot be authenticated"
+            )
+        if entry.stdout == "":
+            continue
+        if not entry.stdout.endswith("\x00") or entry.stdout.count("\x00") != 1:
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content cannot be authenticated"
+            )
+        record = entry.stdout[:-1]
+        metadata, separator, observed_path = record.partition("\t")
+        parts = metadata.split()
+        if separator != "\t" or len(parts) != 3 or observed_path != path:
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content cannot be authenticated"
+            )
+        mode, object_type, object_oid = parts
+        if mode == "160000" and object_type == "commit":
+            continue
+        if (
+            mode not in {"100644", "100755", "120000"}
+            or object_type != "blob"
+            or not OID_PATTERN.fullmatch(object_oid)
+        ):
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content cannot be authenticated"
+            )
+        size_result = _run_attestation_git(
+            repository_root,
+            ["cat-file", "-s", object_oid],
+            allow_failure=True,
         )
+        size_text = size_result.stdout.strip()
+        if (
+            size_result.returncode != 0
+            or not size_text.isascii()
+            or not size_text.isdecimal()
+        ):
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content cannot be authenticated"
+            )
+        size = int(size_text)
+        aggregate_size += size
+        if aggregate_size > MAX_INTEGRATION_CONFLICT_CONTENT_BYTES:
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content exceeds the authenticated size bound"
+            )
+        blobs.append((path, object_oid.lower(), size))
+
+    for _path, object_oid, expected_size in blobs:
+        result = _run_attestation_git(
+            repository_root,
+            ["cat-file", "blob", object_oid],
+            allow_failure=True,
+            raw_output=True,
+        )
+        if (
+            result.returncode != 0
+            or not isinstance(result.stdout, bytes)
+            or len(result.stdout) != expected_size
+        ):
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content cannot be authenticated"
+            )
+        raw_content = result.stdout
+        # Match Git's established binary-file sniff: a NUL in the initial
+        # 8,000-byte inspection window excludes the blob from text scanning.
+        if b"\x00" in raw_content[:8000]:
+            continue
+        content = raw_content.decode("utf-8", "replace")
+        state = "OUTSIDE"
+        for line in content.split("\n"):
+            marker = _integration_conflict_marker_kind(line)
+            if marker is None:
+                continue
+            if state == "OUTSIDE":
+                if marker == "OPEN":
+                    state = "OURS"
+                elif marker == "BASE":
+                    state = "TRUNCATED_BASE"
+                elif marker == "SEPARATOR":
+                    state = "TRUNCATED_THEIRS"
+                continue
+            if state == "TRUNCATED_BASE":
+                if marker == "BASE":
+                    continue
+                if marker == "SEPARATOR":
+                    state = "TRUNCATED_THEIRS"
+                    continue
+            elif state == "TRUNCATED_THEIRS":
+                if marker == "SEPARATOR":
+                    continue
+                if marker == "CLOSE":
+                    raise fast_path.SecurityBlocker(
+                        "resolved integration tree retains Git conflict markers"
+                    )
+            if state == "OURS":
+                if marker == "BASE":
+                    state = "BASE"
+                    continue
+                if marker == "SEPARATOR":
+                    state = "THEIRS"
+                    continue
+            elif state == "BASE" and marker == "SEPARATOR":
+                state = "THEIRS"
+                continue
+            elif state == "THEIRS" and marker == "CLOSE":
+                raise fast_path.SecurityBlocker(
+                    "resolved integration tree retains Git conflict markers"
+                )
+            raise fast_path.SecurityBlocker(
+                "resolved integration tree retains Git conflict markers"
+            )
+        if state in {"OURS", "BASE", "THEIRS"}:
+            raise fast_path.SecurityBlocker(
+                "resolved integration tree retains Git conflict markers"
+            )
+
+
+def _integration_conflict_marker_kind(line: str) -> str | None:
+    line = line.removesuffix("\r")
+    for character, kind in (("<", "OPEN"), ("|", "BASE"), (">", "CLOSE")):
+        run_length = len(line) - len(line.lstrip(character))
+        if run_length >= 7 and (
+            run_length == len(line) or line[run_length] == " "
+        ):
+            return kind
+    if len(line) >= 7 and not line.strip("="):
+        return "SEPARATOR"
+    return None
 
 
 def _verify_integration_tree_delta(

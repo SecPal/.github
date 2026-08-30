@@ -255,9 +255,12 @@ prevents rollback and deletion.
 
 New native delivery publication is a two-CAS sequence: admission first, then
 enrollment after re-verifying the reachable admission. A branch-local static
-anchor cannot publish. Existing maintained static anchors remain compatibility
-roots only for native enrollments that predate this sequence. One closed issue
-774 repair allowance admits the exact existing issue 736 initialization after
+anchor cannot publish. A separate closed historical-compatibility registry
+binds every retained pre-#774 exception to its repository, issue, PR, initial
+head, initialization digest, proof mode, exact enrollment object OID, and signed
+publication digest. A new publication carrying the same initialization cannot
+inherit that exception. One closed issue 774 repair allowance admits the exact
+existing issue 736 initialization after
 independently verifying its signed initialization and original enrollment; the
 repair appends to rather than rewrites journal history. See
 [`docs/native-lifecycle-genesis-admission.md`](../docs/native-lifecycle-genesis-admission.md).

@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-30 - Authenticate Historical Native Compatibility Publications
+
+**Changed:**
+
+- bind every retained pre-admission native compatibility exception to the exact
+  historical enrollment object and signed publication digest
+- reject later enrollment objects that reuse a static initialization without a
+  preceding native-genesis admission
+- align the mandatory publication contract with admission-first authority and
+  make real-SSH regression verification prove the requested signer identity
+
 ## 2026-08-30 - Authenticate Native Genesis Before Lifecycle Publication
 
 **Changed:**

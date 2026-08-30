@@ -16,16 +16,16 @@ not contain a terminal authority digest and cannot select CURRENT.
 
 ## Trust ownership
 
-| Question                                | Authoritative object                                                                                                                             |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Who may create native genesis evidence? | The closed initialization signer role and signed `SECPAL_DELIVERY_LIFECYCLE_INITIALIZATION`                                                      |
-| What proves genesis admission?          | A domain-separated admission signed by the maintained genesis-admission role, or an explicitly retained pre-#774 maintained compatibility anchor |
-| When is admission globally reachable?   | When its exact CAS successor is visible in protected journal ancestry                                                                            |
-| What proves uniqueness?                 | Complete ancestry traversal rejects a second delivery identity or initialization digest admission                                                |
-| What selects CURRENT?                   | The latest valid lifecycle publication for the delivery in protected journal ancestry                                                            |
-| What prevents rollback?                 | Live deletion/non-fast-forward protection plus immutable predecessor binding                                                                     |
-| What prevents competing genesis?        | Closed identity/digest admission indexes and exact journal CAS                                                                                   |
-| What resolves concurrent enrollment?    | One expected-predecessor CAS wins; a loser has no visible admission and must begin a fresh bounded operation                                     |
+| Question                                | Authoritative object                                                                                                                                                   |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Who may create native genesis evidence? | The closed initialization signer role and signed `SECPAL_DELIVERY_LIFECYCLE_INITIALIZATION`                                                                            |
+| What proves genesis admission?          | A domain-separated admission signed by the maintained genesis-admission role, or one exact enrollment object in the closed pre-#774 compatibility-publication registry |
+| When is admission globally reachable?   | When its exact CAS successor is visible in protected journal ancestry                                                                                                  |
+| What proves uniqueness?                 | Complete ancestry traversal rejects a second delivery identity or initialization digest admission                                                                      |
+| What selects CURRENT?                   | The latest valid lifecycle publication for the delivery in protected journal ancestry                                                                                  |
+| What prevents rollback?                 | Live deletion/non-fast-forward protection plus immutable predecessor binding                                                                                           |
+| What prevents competing genesis?        | Closed identity/digest admission indexes and exact journal CAS                                                                                                         |
+| What resolves concurrent enrollment?    | One expected-predecessor CAS wins; a loser has no visible admission and must begin a fresh bounded operation                                                           |
 
 Initialization creation binds the repository, delivery issue, pull request,
 static initial head, validation receipt digest, final attestation digest,
@@ -61,19 +61,38 @@ requires that admission in its freshly observed ancestry, and
 one exact lifecycle successor. Callers cannot combine these operations or pass
 an alternate journal, trust policy, signer set, or CURRENT selector.
 
-## Maintained compatibility anchors
+## Maintained compatibility publications
 
 The existing `delivery_initializations` entries for issues 692, 674, and 735
-remain historical compatibility roots for native enrollments published before
-this admission operation existed. Their initialization identity remains static.
-Their `current_*` fields continue to serve the strict ordinary #750 verifier for
-callers that have not adopted journal-selected CURRENT; journal traversal does
-not use those fields to select a terminal.
+remain static initialization roots. Their `current_*` fields continue to serve
+the strict ordinary #750 verifier for callers that have not adopted
+journal-selected CURRENT; journal traversal does not use those fields to select
+a terminal.
+
+A separate closed `historical_compatibility_publications` registry binds the
+only enrollment objects allowed to use the pre-#774 ordering exception:
+
+- issue 692 / PR 757: object `52e76a4eef0fdbb297c16d4bcf64b813bef84062`,
+  publication digest
+  `ace5dd8f514870f33d734d6e8f6f7371b48783c6a6823d6a496b895f4cc0ac5e`;
+- issue 674 / PR 758: object `80950f8908f29ead325eb99caf1977e51fad37e1`,
+  publication digest
+  `b5fa17ae18f5fc7208c7e13b9c361d59adc0128446404e79bbf42587679cbfad`;
+- issue 735 / PR 759: object `2a5c2d9554ca7b70fd4f2e486da18ae9697af912`,
+  publication digest
+  `abd53fe73fc29257656151b3ad3777cbe72012102a5a5bcec95ec23529c0e211`.
+
+Each entry also binds the repository, original PR, static initial head,
+initialization digest, and native historical proof mode. Journal traversal
+admits compatibility only when the immutable object being inspected and its
+signed document match every maintained binding.
 
 Adding a new branch-local `delivery_initializations` entry cannot authorize
-ordinary publication. New native delivery enrollment requires a preceding
-protected-journal admission. Existing compatibility roots are not a template
-for future enrollment and must not be expanded for that purpose.
+ordinary publication. Reusing one of the static initializations in a different
+publication object cannot authorize publication either. New native delivery
+enrollment requires a preceding protected-journal admission. Existing
+compatibility publications are not a template for future enrollment and must
+not be expanded for that purpose.
 
 ## Issue 736 bootstrap repair
 

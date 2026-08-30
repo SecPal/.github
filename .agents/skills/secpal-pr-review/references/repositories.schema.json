@@ -170,6 +170,7 @@
         "publication_ruleset_id",
         "publication_required_rules",
         "bootstrap_genesis_repairs",
+        "historical_compatibility_publications",
         "delivery_initializations"
       ],
       "properties": {
@@ -276,6 +277,36 @@
                 "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
               },
               "enrollment_publication_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            }
+          }
+        },
+        "historical_compatibility_publications": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "repository",
+              "delivery_issue",
+              "pull_request",
+              "initial_head_sha",
+              "initialization_digest",
+              "enrollment_publication_oid",
+              "enrollment_publication_digest",
+              "historical_proof_mode"
+            ],
+            "properties": {
+              "repository": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+              "delivery_issue": { "type": "integer", "minimum": 1 },
+              "pull_request": { "type": "integer", "minimum": 1 },
+              "initial_head_sha": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
+              "initialization_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "enrollment_publication_oid": {
+                "type": "string",
+                "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+              },
+              "enrollment_publication_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "historical_proof_mode": { "const": "native_lifecycle" }
             }
           }
         },
