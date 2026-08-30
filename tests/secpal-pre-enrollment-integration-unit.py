@@ -8,8 +8,7 @@ import importlib.util
 import copy
 from pathlib import Path
 import sys
-import unittest
-from unittest import mock
+from unittest import TestCase, main, mock
 
 from scripts.secpal_pr_review import fast_path
 from scripts.secpal_pr_review import lifecycle_authority
@@ -25,7 +24,7 @@ sys.modules[SPEC.name] = actions
 SPEC.loader.exec_module(actions)
 
 
-class PreEnrollmentIntegrationBoundaryTests(unittest.TestCase):
+class PreEnrollmentIntegrationBoundaryTests(TestCase):
     def test_attestation_cli_can_select_typed_draft_pre_enrollment_integration(self) -> None:
         arguments = actions.build_parser().parse_args(
             [
@@ -219,7 +218,7 @@ def evidence(*, conflict_path: str | None = None) -> dict[str, object]:
     return item
 
 
-class PreEnrollmentIntegrationContractTests(unittest.TestCase):
+class PreEnrollmentIntegrationContractTests(TestCase):
     def normalized(self, item: dict[str, object] | None = None) -> dict[str, object]:
         return integration.normalize_evidence(item or evidence(), registry=registry())
 
@@ -484,4 +483,4 @@ class PreEnrollmentIntegrationContractTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    main()
