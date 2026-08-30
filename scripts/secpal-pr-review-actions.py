@@ -4547,35 +4547,131 @@ def _reject_integration_conflict_markers(
     validated_tree: str,
     conflict_paths: list[str],
 ) -> None:
+    # Git performs the authenticated tree/path selection and binary-file
+    # filtering. Fixed strings only select candidate lines; the state machine
+    # below is the single authoritative definition of conflict-block syntax.
     result = _run_attestation_git(
         repository_root,
         [
             "grep",
             "-n",
             "-I",
-            "-E",
+            "-F",
+            "-z",
+            "--full-name",
             "-e",
-            "^<{7,}( |$)",
+            "<<<<<<<",
             "-e",
-            "^={7,}$",
+            "|||||||",
             "-e",
-            "^>{7,}( |$)",
+            "=======",
             "-e",
-            "^\\|{7,}( |$)",
+            ">>>>>>>",
             validated_tree,
             "--",
             *(f":(literal){path}" for path in conflict_paths),
         ],
         allow_failure=True,
     )
-    if result.returncode == 0:
-        raise fast_path.SecurityBlocker(
-            "resolved integration tree retains Git conflict markers"
-        )
-    if result.returncode != 1:
+    if result.returncode == 1:
+        return
+    if result.returncode != 0:
         raise fast_path.SecurityBlocker(
             "resolved integration conflict content cannot be authenticated"
         )
+
+    allowed_sources = {f"{validated_tree}:{path}" for path in conflict_paths}
+    records: list[tuple[str, int, str]] = []
+    cursor = 0
+    while cursor < len(result.stdout):
+        source_end = result.stdout.find("\x00", cursor)
+        line_number_end = result.stdout.find("\x00", source_end + 1)
+        content_end = result.stdout.find("\n", line_number_end + 1)
+        if min(source_end, line_number_end, content_end) < 0:
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content cannot be authenticated"
+            )
+        source = result.stdout[cursor:source_end]
+        line_number_text = result.stdout[source_end + 1:line_number_end]
+        if (
+            source not in allowed_sources
+            or not line_number_text.isascii()
+            or not line_number_text.isdecimal()
+        ):
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content cannot be authenticated"
+            )
+        line_number = int(line_number_text)
+        if line_number < 1:
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content cannot be authenticated"
+            )
+        records.append(
+            (source, line_number, result.stdout[line_number_end + 1:content_end])
+        )
+        cursor = content_end + 1
+    if not records:
+        raise fast_path.SecurityBlocker(
+            "resolved integration conflict content cannot be authenticated"
+        )
+
+    state = "OUTSIDE"
+    current_source: str | None = None
+    prior_line_number = 0
+    for source, line_number, line in records:
+        if source != current_source:
+            if state != "OUTSIDE":
+                raise fast_path.SecurityBlocker(
+                    "resolved integration tree retains Git conflict markers"
+                )
+            current_source = source
+            prior_line_number = 0
+        if line_number <= prior_line_number:
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content cannot be authenticated"
+            )
+        prior_line_number = line_number
+        marker = _integration_conflict_marker_kind(line)
+        if marker is None:
+            continue
+        if state == "OUTSIDE":
+            if marker == "OPEN":
+                state = "OURS"
+            continue
+        if state == "OURS":
+            if marker == "BASE":
+                state = "BASE"
+                continue
+            if marker == "SEPARATOR":
+                state = "THEIRS"
+                continue
+        elif state == "BASE" and marker == "SEPARATOR":
+            state = "THEIRS"
+            continue
+        elif state == "THEIRS" and marker == "CLOSE":
+            raise fast_path.SecurityBlocker(
+                "resolved integration tree retains Git conflict markers"
+            )
+        raise fast_path.SecurityBlocker(
+            "resolved integration tree retains Git conflict markers"
+        )
+    if state != "OUTSIDE":
+        raise fast_path.SecurityBlocker(
+            "resolved integration tree retains Git conflict markers"
+        )
+
+
+def _integration_conflict_marker_kind(line: str) -> str | None:
+    line = line.removesuffix("\r")
+    for character, kind in (("<", "OPEN"), ("|", "BASE"), (">", "CLOSE")):
+        run_length = len(line) - len(line.lstrip(character))
+        if run_length >= 7 and (
+            run_length == len(line) or line[run_length] == " "
+        ):
+            return kind
+    if len(line) >= 7 and not line.strip("="):
+        return "SEPARATOR"
+    return None
 
 
 def _verify_integration_tree_delta(

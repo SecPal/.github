@@ -7599,6 +7599,26 @@ class FastPathTests(TestCase):
             actions._verify_integration_tree_delta(
                 repository, resolved, resolved_tree
             )
+            for case, content in (
+                ("ordinary prose", "ordinary maintained text\n"),
+                ("empty file", ""),
+                ("documentation separator", "heading\n=======\nbody\n"),
+                (
+                    "standalone non-opening components",
+                    "||||||| base example\n=======\n>>>>>>> closing example\n",
+                ),
+                (
+                    "opening-like text outside the grammar",
+                    "<<<<<<<not-a-marker\n <<<<<<< indented\n<<<<<<<\ttabbed\n",
+                ),
+            ):
+                with self.subTest(resolved_content=case):
+                    text_tree, text_evidence = candidate(
+                        {"a.txt": content, "b.txt": "resolved b\n"}
+                    )
+                    actions._verify_integration_tree_delta(
+                        repository, text_evidence, text_tree
+                    )
             deleted_tree, deleted = candidate({"a.txt": None, "b.txt": None})
             actions._verify_integration_tree_delta(
                 repository, deleted, deleted_tree
@@ -7646,6 +7666,131 @@ class FastPathTests(TestCase):
             ):
                 actions._verify_integration_tree_delta(
                     repository, bare_marker, bare_marker_tree
+                )
+            for case, content in (
+                (
+                    "diff3",
+                    "<<<<<<< ours\nleft\n||||||| base\nbase\n=======\nright\n>>>>>>> theirs\n",
+                ),
+                (
+                    "longer runs",
+                    "<<<<<<<<< ours\nleft\n||||||||| base\nbase\n=========\nright\n>>>>>>>>> theirs\n",
+                ),
+                ("incomplete opening", "<<<<<<< unresolved\nleft\n"),
+                (
+                    "nested opening",
+                    "<<<<<<< outer\n<<<<<<< inner\n=======\nright\n>>>>>>> outer\n",
+                ),
+                (
+                    "extra separator in open conflict",
+                    "<<<<<<< ours\n=======\n=======\nright\n>>>>>>> theirs\n",
+                ),
+                (
+                    "CRLF conflict",
+                    "<<<<<<< ours\r\nleft\r\n=======\r\nright\r\n>>>>>>> theirs\r\n",
+                ),
+            ):
+                with self.subTest(unresolved_content=case):
+                    unresolved_tree, unresolved = candidate(
+                        {"a.txt": content, "b.txt": "resolved b\n"}
+                    )
+                    with self.assertRaisesRegex(
+                        fast_path.SecurityBlocker, "retains Git conflict markers"
+                    ):
+                        actions._verify_integration_tree_delta(
+                            repository, unresolved, unresolved_tree
+                        )
+
+    def test_prior_771_resolved_tree_accepts_authenticated_separator_lines(
+        self,
+    ) -> None:
+        resolved_tree = "a95eeb850ff1b5158ba87da5e355f0d00ed7ee13"
+        conflict_paths = [
+            ".agents/skills/secpal-pr-review/references/repositories.json",
+            ".agents/skills/secpal-pr-review/references/repositories.schema.json",
+            "CHANGELOG.md",
+            "docs/native-lifecycle-genesis-admission.md",
+            "docs/secpal-pr-review-workflow.md",
+            "scripts/README.md",
+            "scripts/secpal_pr_review/lifecycle_authority.py",
+            "scripts/secpal_pr_review/lifecycle_publication.py",
+            "tests/secpal-lifecycle-authority-unit.py",
+            "tests/secpal-lifecycle-publication-unit.py",
+            "tests/secpal-pr-review-skill-policy.sh",
+        ]
+        separator_records = "".join(
+            f"{resolved_tree}:scripts/README.md\x00{line}\x00{'=' * 40}\n"
+            for line in (579, 581, 594, 596)
+        )
+
+        with mock.patch.object(
+            actions,
+            "_run_attestation_git",
+            return_value=SimpleNamespace(
+                returncode=0, stdout=separator_records, stderr=""
+            ),
+        ) as run_git:
+            actions._reject_integration_conflict_markers(
+                REPO_ROOT, resolved_tree, conflict_paths
+            )
+
+        command = run_git.call_args.args[1]
+        self.assertIn(resolved_tree, command)
+        self.assertEqual(
+            command[-len(conflict_paths):],
+            [f":(literal){path}" for path in conflict_paths],
+        )
+
+    def test_shared_marker_primitive_is_integration_lifecycle_neutral(self) -> None:
+        for topology in (
+            "TWO_PARENT_READY_INTEGRATION",
+            "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+        ):
+            with (
+                self.subTest(topology=topology),
+                mock.patch.object(
+                    actions,
+                    "_run_attestation_git",
+                    return_value=SimpleNamespace(
+                        returncode=1, stdout="", stderr=""
+                    ),
+                ) as run_git,
+            ):
+                actions._reject_integration_conflict_markers(
+                    REPO_ROOT, "a" * 40, ["authenticated-conflict.txt"]
+                )
+                self.assertNotIn(topology, run_git.call_args.args[1])
+
+    def test_marker_primitive_rejects_unauthenticated_scan_results(self) -> None:
+        tree = "a" * 40
+        path = "authenticated-conflict.txt"
+        source = f"{tree}:{path}"
+        for case, returncode, output in (
+            ("Git failure", 2, ""),
+            ("empty success", 0, ""),
+            ("wrong source", 0, f"{tree}:other.txt\x001\x00=======\n"),
+            (
+                "nonmonotonic lines",
+                0,
+                f"{source}\x002\x00=======\n{source}\x001\x00=======\n",
+            ),
+            ("truncated record", 0, f"{source}\x001\x00======="),
+        ):
+            with (
+                self.subTest(case=case),
+                mock.patch.object(
+                    actions,
+                    "_run_attestation_git",
+                    return_value=SimpleNamespace(
+                        returncode=returncode, stdout=output, stderr="failed"
+                    ),
+                ),
+                self.assertRaisesRegex(
+                    fast_path.SecurityBlocker, "cannot be authenticated"
+                ),
+            ):
+                actions._reject_integration_conflict_markers(
+                    REPO_ROOT, tree, [path]
                 )
 
     def test_ready_integration_rejects_unexpected_merge_tree_status(self) -> None:
