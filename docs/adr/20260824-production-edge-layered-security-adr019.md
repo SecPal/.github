@@ -456,23 +456,13 @@ authenticated HTTPS to HAProxy, and retains HAProxy as the Origin/backend trust
 boundary. The real CloudFront TCP peer remains separate from canonical Viewer
 identity, Host, and scheme.
 
-Existing DIRECT issues
-[`SecPal/deployment#89`](https://github.com/SecPal/deployment/issues/89),
-[`#102`](https://github.com/SecPal/deployment/issues/102),
-[`#103`](https://github.com/SecPal/deployment/issues/103),
-[`#104`](https://github.com/SecPal/deployment/issues/104), and
-[`#106`](https://github.com/SecPal/deployment/issues/106) are neither reparented
-nor silently reinterpreted by this decision. After this rebaseline is accepted,
-their continued validity, mode-specific clarification, or supersession must be
-decided separately.
-
-The Direct-only Edge wording in
-[#695](https://github.com/SecPal/.github/issues/695) remains stale planning
-language while this architecture proposal is under review. It must be
-reconciled after this rebaseline is accepted and merged, rather than being
-rewritten as if an unmerged proposal were already authoritative. Only then
-should a public PROTECTED implementation Sub-Epic and its technical Leaf order
-be defined from the accepted architecture.
+ADR-019's DIRECT/PROTECTED rebaseline has been accepted. Native coordination is
+owned by [#767](https://github.com/SecPal/.github/issues/767): existing DIRECT
+and shared work remains represented in the `SecPal/deployment` graph without
+reinterpretation; its `SecPal/deployment` subtree represents public portable
+PROTECTED implementation work; and `SecPal/operations` separately represents
+private Managed Edge composition. Descendant responsibilities remain governed by
+their native issue graph.
 
 ## Non-goals
 
