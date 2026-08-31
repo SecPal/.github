@@ -7576,6 +7576,98 @@ class FastPathTests(TestCase):
                     REPO_ROOT, integration, "a" * 40
                 )
 
+    def test_ready_integration_v12_delta_uses_registered_item_limit_before_git_work(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        registry = fast_registry()
+        maximum_items = registry["limits"]["maximum_items"]
+
+        def delta(count: int) -> list[dict[str, str]]:
+            return [
+                {
+                    "path": f"preservation/{index:05d}.txt",
+                    "status": "M",
+                    "old_mode": "100644",
+                    "new_mode": "100644",
+                    "old_oid": "1" * 40,
+                    "new_oid": "2" * 40,
+                }
+                for index in range(count)
+            ]
+
+        boundary = ready_integration_evidence(
+            reviewed,
+            validated_tree="a" * 40,
+            registry=registry,
+            schema_version="1.2",
+        )
+        boundary["authenticated_resolution_delta"] = delta(maximum_items)
+        with mock.patch.object(actions, "_run_attestation_git") as git_runner:
+            normalized = fast_path.normalize_ready_integration_evidence(
+                boundary,
+                repository="SecPal/.github",
+                reviewed_state=reviewed,
+                registry=registry,
+                validated_tree_sha="a" * 40,
+            )
+        self.assertEqual(
+            len(normalized["authenticated_resolution_delta"]), maximum_items
+        )
+        git_runner.assert_not_called()
+
+        over_limit = copy.deepcopy(boundary)
+        over_limit["authenticated_resolution_delta"] = delta(maximum_items + 1)
+        with mock.patch.object(actions, "_run_attestation_git") as git_runner:
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "registered item limit"
+            ):
+                fast_path.normalize_ready_integration_evidence(
+                    over_limit,
+                    repository="SecPal/.github",
+                    reviewed_state=reviewed,
+                    registry=registry,
+                    validated_tree_sha="a" * 40,
+                )
+        git_runner.assert_not_called()
+
+        historical = ready_integration_evidence(
+            reviewed,
+            validated_tree="a" * 40,
+            registry=registry,
+        )
+        historical["manual_conflict_resolution_delta"] = delta(maximum_items + 1)
+        normalized_historical = fast_path.normalize_ready_integration_evidence(
+            historical,
+            repository="SecPal/.github",
+            reviewed_state=reviewed,
+            registry=registry,
+            validated_tree_sha="a" * 40,
+        )
+        self.assertEqual(
+            len(normalized_historical["manual_conflict_resolution_delta"]),
+            maximum_items + 1,
+        )
+
+        invalid_registry = copy.deepcopy(registry)
+        invalid_registry["limits"]["maximum_items"] = 0
+        invalid_limit = ready_integration_evidence(
+            reviewed,
+            validated_tree="a" * 40,
+            registry=invalid_registry,
+            schema_version="1.2",
+        )
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "registered integration item limit is invalid"
+        ):
+            fast_path.normalize_ready_integration_evidence(
+                invalid_limit,
+                repository="SecPal/.github",
+                reviewed_state=reviewed,
+                registry=invalid_registry,
+                validated_tree_sha="a" * 40,
+            )
+
     def test_ready_integration_authenticates_exact_parent2_preservation(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="secpal-integration-parent2-preservation-"

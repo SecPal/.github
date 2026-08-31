@@ -645,7 +645,19 @@ def normalize_ready_integration_evidence(
         if schema_version == "1.1"
         else "authenticated_resolution_delta"
     )
-    normalized[delta_field] = _ready_integration_delta(value.get(delta_field))
+    raw_delta = value.get(delta_field)
+    if schema_version == "1.2":
+        limits = registry.get("limits") if isinstance(registry, dict) else None
+        maximum_items = limits.get("maximum_items") if isinstance(limits, dict) else None
+        if (
+            isinstance(maximum_items, bool)
+            or not isinstance(maximum_items, int)
+            or maximum_items < 1
+        ):
+            raise SecurityBlocker("registered integration item limit is invalid")
+        if isinstance(raw_delta, list) and len(raw_delta) > maximum_items:
+            raise SecurityBlocker("Ready integration delta exceeds the registered item limit")
+    normalized[delta_field] = _ready_integration_delta(raw_delta)
     return normalized
 
 
