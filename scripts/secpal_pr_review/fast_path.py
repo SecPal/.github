@@ -118,7 +118,7 @@ EXCEPTIONAL_RECOVERY_KEYS = frozenset(
         "lifecycle",
     }
 )
-READY_INTEGRATION_KEYS = frozenset(
+READY_INTEGRATION_COMMON_KEYS = frozenset(
     {
         "schema_version",
         "kind",
@@ -134,7 +134,6 @@ READY_INTEGRATION_KEYS = frozenset(
         "validated_tree_sha",
         "mechanical_merge_tree_sha",
         "mechanical_conflict_paths",
-        "manual_conflict_resolution_delta",
         "reviewed_state_digest",
         "reviewed_feedback_digest",
         "validation_execution",
@@ -142,6 +141,28 @@ READY_INTEGRATION_KEYS = frozenset(
         "eligibility",
     }
 )
+READY_INTEGRATION_KEYS_BY_VERSION = {
+    "1.1": READY_INTEGRATION_COMMON_KEYS | {"manual_conflict_resolution_delta"},
+    "1.2": READY_INTEGRATION_COMMON_KEYS | {"authenticated_resolution_delta"},
+}
+READY_INTEGRATION_ATTESTATION_BY_VERSION = {
+    ("1.1", False): ("1.1", "READY_INTEGRATION_VALIDATION_ATTESTATION"),
+    (
+        "1.1",
+        True,
+    ): ("1.2", "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"),
+    (
+        "1.2",
+        False,
+    ): ("1.3", "AUTHENTICATED_RESOLUTION_READY_INTEGRATION_VALIDATION_ATTESTATION"),
+    (
+        "1.2",
+        True,
+    ): (
+        "1.4",
+        "ELIGIBILITY_BOUND_AUTHENTICATED_RESOLUTION_READY_INTEGRATION_VALIDATION_ATTESTATION",
+    ),
+}
 
 READY_INTEGRATION_PRIOR_AUTHORITY_KEYS = frozenset(
     {
@@ -277,6 +298,12 @@ def _ready_integration_delta(value: Any) -> list[dict[str, str]]:
     return normalized
 
 
+def normalize_ready_integration_delta(value: Any) -> list[dict[str, str]]:
+    """Normalize one canonical Ready-integration tree delta."""
+
+    return _ready_integration_delta(value)
+
+
 def _ready_integration_conflict_paths(value: Any) -> list[str]:
     if not isinstance(value, list):
         raise SecurityBlocker("integration mechanical conflict paths are malformed")
@@ -409,11 +436,13 @@ def normalize_ready_integration_evidence(
 ) -> dict[str, Any]:
     """Normalize and admit one explicitly authorized Ready-head integration."""
 
-    if not isinstance(value, dict) or set(value) != READY_INTEGRATION_KEYS:
+    schema_version = value.get("schema_version") if isinstance(value, dict) else None
+    expected_keys = READY_INTEGRATION_KEYS_BY_VERSION.get(schema_version)
+    if expected_keys is None or set(value) != expected_keys:
         raise SecurityBlocker("Ready integration evidence is malformed or ambiguous")
     if any(SECRET_VALUE.search(item) for item in _all_strings(value)):
         raise SecurityBlocker("Ready integration evidence contains secret-like text")
-    if value.get("schema_version") != "1.1" or value.get("kind") != READY_INTEGRATION_KIND:
+    if value.get("kind") != READY_INTEGRATION_KIND:
         raise SecurityBlocker("Ready integration topology kind or version is unsupported")
     normalized_repository = _require_string(value.get("repository"), "integration repository")
     if normalized_repository != repository or reviewed_state.repository != repository:
@@ -585,7 +614,7 @@ def normalize_ready_integration_evidence(
     ):
         raise SecurityBlocker("integration eligibility or lifecycle continuity is invalid")
     normalized = {
-        "schema_version": "1.1",
+        "schema_version": schema_version,
         "kind": READY_INTEGRATION_KIND,
         "authorization_id": authorization_id,
         "repository": normalized_repository,
@@ -608,9 +637,6 @@ def normalize_ready_integration_evidence(
         "mechanical_conflict_paths": _ready_integration_conflict_paths(
             value.get("mechanical_conflict_paths")
         ),
-        "manual_conflict_resolution_delta": _ready_integration_delta(
-            value.get("manual_conflict_resolution_delta")
-        ),
         "reviewed_state_digest": reviewed_state_digest,
         "reviewed_feedback_digest": reviewed_feedback_digest,
         "validation_execution": normalized_execution,
@@ -620,6 +646,24 @@ def normalize_ready_integration_evidence(
         },
         "eligibility": copy.deepcopy(eligibility),
     }
+    delta_field = (
+        "manual_conflict_resolution_delta"
+        if schema_version == "1.1"
+        else "authenticated_resolution_delta"
+    )
+    raw_delta = value.get(delta_field)
+    if schema_version == "1.2":
+        limits = registry.get("limits") if isinstance(registry, dict) else None
+        maximum_items = limits.get("maximum_items") if isinstance(limits, dict) else None
+        if (
+            isinstance(maximum_items, bool)
+            or not isinstance(maximum_items, int)
+            or maximum_items < 1
+        ):
+            raise SecurityBlocker("registered integration item limit is invalid")
+        if isinstance(raw_delta, list) and len(raw_delta) > maximum_items:
+            raise SecurityBlocker("Ready integration delta exceeds the registered item limit")
+    normalized[delta_field] = _ready_integration_delta(raw_delta)
     return normalized
 
 
@@ -1547,13 +1591,12 @@ def create_ready_integration_attestation(
         raise SecurityBlocker("validation receipt does not bind the Ready integration evidence")
     eligibility_digest = ordinary.get("eligibility_evidence_digest")
     eligibility_bound = eligibility_digest is not None
+    attestation_version, attestation_kind = READY_INTEGRATION_ATTESTATION_BY_VERSION[
+        (normalized["schema_version"], eligibility_bound)
+    ]
     fields = {
-        "schema_version": "1.2" if eligibility_bound else "1.1",
-        "kind": (
-            "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"
-            if eligibility_bound
-            else "READY_INTEGRATION_VALIDATION_ATTESTATION"
-        ),
+        "schema_version": attestation_version,
+        "kind": attestation_kind,
         "repository": normalized["repository"],
         "delivery_issue_number": normalized["delivery_issue_number"],
         "pull_request_number": normalized["pull_request_number"],
@@ -1570,9 +1613,6 @@ def create_ready_integration_attestation(
         "mechanical_conflict_paths": copy.deepcopy(
             normalized["mechanical_conflict_paths"]
         ),
-        "manual_conflict_resolution_delta": copy.deepcopy(
-            normalized["manual_conflict_resolution_delta"]
-        ),
         "validation_receipt_digest": ordinary["validation_receipt_digest"],
         "integration_evidence_digest": digest_json(normalized),
         "registry_digest": ordinary["registry_digest"],
@@ -1584,6 +1624,12 @@ def create_ready_integration_attestation(
         "eligibility": copy.deepcopy(normalized["eligibility"]),
         "successful_result": True,
     }
+    delta_field = (
+        "manual_conflict_resolution_delta"
+        if normalized["schema_version"] == "1.1"
+        else "authenticated_resolution_delta"
+    )
+    fields[delta_field] = copy.deepcopy(normalized[delta_field])
     if eligibility_bound:
         fields["manual_gate_evidence"] = copy.deepcopy(
             ordinary["manual_gate_evidence"]
@@ -1609,11 +1655,19 @@ def verify_eligibility_bound_ready_integration_attestation(
 ) -> None:
     """Verify the closed integration-resolution attestation kind."""
 
+    evidence_version = (
+        integration_evidence.get("schema_version")
+        if isinstance(integration_evidence, dict)
+        else None
+    )
+    expected_type = READY_INTEGRATION_ATTESTATION_BY_VERSION.get(
+        (evidence_version, True)
+    )
     if (
         not isinstance(attestation, dict)
-        or attestation.get("schema_version") != "1.2"
-        or attestation.get("kind")
-        != "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"
+        or expected_type is None
+        or (attestation.get("schema_version"), attestation.get("kind"))
+        != expected_type
         or not isinstance(attestation.get("eligibility_evidence_digest"), str)
         or not DIGEST.fullmatch(attestation["eligibility_evidence_digest"])
     ):

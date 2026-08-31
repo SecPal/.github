@@ -633,6 +633,20 @@ conflict-bearing evidence: the exact sorted conflict paths are authenticated,
 every path must be explicitly changed or deleted in the candidate, no other
 path may change, and retained text conflict markers fail closed.
 
+Version-1.2 evidence retains the same `TWO_PARENT_READY_INTEGRATION` primitive
+and replaces the conflict-only field with one canonical
+`authenticated_resolution_delta`. The verifier derives every raw
+mechanical-tree/candidate-tree path as either an authenticated conflict
+resolution or exact parent-2 preservation; no classification or preservation
+path list is caller input. A non-conflict path is admitted only when the
+candidate path state equals parent 2 exactly, including absence, mode, object
+type, and OID; both parents changed that path from one verifier-derived unique
+merge base; and the mechanical state differs from parent 2. Zero or multiple
+merge bases, a third value, an unchanged parent, or any unclassified path fail
+closed. This works for both clean and conflict-bearing mechanical merges while
+preserving `NO_UNAUTHENTICATED_THIRD_TREE_CONTENT`. Version-1.1 evidence is
+always evaluated by its original zero-delta/conflict-only rules.
+
 If exact thread resolution is part of the frozen integration feedback
 boundary, the typed integration invocation may also select canonical
 eligibility evidence. The receipt binds both evidence digests and the binder
@@ -644,6 +658,13 @@ ordered parents, combined tree, both commit trailers, reviewed state, expected
 signer, and matching receipt/attestation eligibility digest before exposing the
 minimal resolution anchor. Historical version-1.1 integration attestations
 remain valid for their original purpose and are never resolution authority.
+Version-1.2 integration evidence maps instead to version-1.3
+`AUTHENTICATED_RESOLUTION_READY_INTEGRATION_VALIDATION_ATTESTATION`, or to
+version-1.4
+`ELIGIBILITY_BOUND_AUTHENTICATED_RESOLUTION_READY_INTEGRATION_VALIDATION_ATTESTATION`
+when eligibility is bound. Each evidence version accepts only its exact
+attestation mapping, so neither historical nor broadened semantics can be
+wrapped across versions.
 
 Parent 1 and its Ready/lifecycle claims are not caller assertions. A distinct
 closed `READY_INTEGRATION_PRIOR_AUTHORITY` manifest binds the prior delivery

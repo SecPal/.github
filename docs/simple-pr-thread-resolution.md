@@ -174,14 +174,18 @@ rejects any post-validation classification, disposition, finding, or evidence
 change before its first GitHub read.
 
 For a typed two-parent Ready integration, supply the same eligibility artifact
-alongside `--integration-evidence` during validation and binding. This emits
-the closed version-1.2
-`ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION`. Resolution then
+alongside `--integration-evidence` during validation and binding. Historical
+version-1.1 integration evidence emits the closed version-1.2
+`ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION`; version-1.2
+integration evidence emits version-1.4
+`ELIGIBILITY_BOUND_AUTHENTICATED_RESOLUTION_READY_INTEGRATION_VALIDATION_ATTESTATION`.
+Resolution then
 also supplies `--integration-evidence`; the resolver uses the integration
 verifier to authenticate the exact two parents, tree, receipt and integration
 trailers, reviewed state, signer, and eligibility digest before applying the
-ordinary exact-thread checks. Version-1.1 integration attestations do not carry
-this authority and are rejected for resolution.
+ordinary exact-thread checks. The version-1.1 ordinary integration attestation
+and version-1.3 ordinary authenticated-resolution attestation do not carry this
+authority and are rejected for resolution.
 
 New manifests use schema version 1.1. The resolver also reads already-authenticated
 version 1.0 manifests for the legacy resolution-eligible dispositions. It

@@ -478,6 +478,17 @@ canonical non-empty conflict set; every path must be changed or deleted, no
 other path may change, and retained text conflict markers are rejected. The
 synthetic conflict tree itself is never accepted as a resolved candidate.
 
+Those are immutable version-1.1 rules. Version-1.2 keeps the same topology and
+uses one `authenticated_resolution_delta`. For every raw delta path, the
+verifier derives either `CONFLICT_RESOLUTION` under the rules above or
+`EXACT_PARENT2_PRESERVATION`; callers provide neither classification nor a
+preservation list. Exact parent-2 preservation requires one merge base derived
+from the ordered parents, both parent path states different from that base,
+candidate identity equal to parent 2 in presence, mode, type, and OID, and a
+different mechanical state. It applies to otherwise clean as well as mixed
+conflict-bearing integrations. Anything else remains unauthenticated third-tree
+content and fails closed.
+
 When the integration must authorize exact reviewed-thread resolution,
 `--eligibility-evidence` may accompany `--integration-evidence`. The receipt
 binds both digests and binding emits the distinct version-1.2
@@ -488,6 +499,12 @@ tree, both trailers, reviewed state, expected signer, and eligibility. The
 historical version-1.1 integration attestation remains valid for integration
 authentication but cannot authorize resolution. Other evidence-mode
 combinations remain closed.
+Version-1.2 integration evidence emits version-1.3
+`AUTHENTICATED_RESOLUTION_READY_INTEGRATION_VALIDATION_ATTESTATION`, or the
+eligibility-bound version-1.4
+`ELIGIBILITY_BOUND_AUTHENTICATED_RESOLUTION_READY_INTEGRATION_VALIDATION_ATTESTATION`.
+The resolver accepts the latter through the same integration-specific boundary.
+Evidence and attestation versions cannot be crossed.
 
 The integration evidence proves unchanged unrestricted-review, remediation,
 exceptional-recovery, and exceptional-continuation counters, no Cycle 3, no

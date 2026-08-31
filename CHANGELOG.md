@@ -9,6 +9,20 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-31 - Authenticate Exact Current-Main Preservation
+
+**Changed:**
+
+- extend typed Ready integration with an immutable evidence version that can
+  authenticate exact parent-2 path state under a unique merge base and strict
+  dual-change restriction
+- derive conflict-resolution and parent-2-preservation classifications in the
+  verifier while preserving historical conflict-only evidence semantics and
+  rejecting all unauthenticated third-tree content
+- bind the broadened evidence only through new exact ordinary and
+  eligibility-bound attestation versions without changing `HEAD_ADVANCED`
+  lifecycle semantics
+
 ## 2026-08-31 - Authenticate Idempotent Fixed-Thread Satisfaction
 
 **Changed:**
