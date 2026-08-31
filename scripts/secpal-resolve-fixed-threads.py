@@ -977,7 +977,7 @@ def load_validation_evidence(
             ),
         }:
             raise ResolutionError(
-                "historical Ready integration attestation is not resolution authority"
+                "Ready integration attestation is not eligibility-bound resolution authority"
             )
         if integration_evidence_path is None:
             raise ResolutionError(

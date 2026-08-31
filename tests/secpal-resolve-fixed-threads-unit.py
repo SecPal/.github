@@ -1197,7 +1197,7 @@ class ResolveFixedThreadsTests(TestCase):
                     integration_path,
                 )
 
-    def test_historical_ready_integration_attestation_cannot_authorize_resolution(
+    def test_non_eligibility_bound_ready_integration_attestation_cannot_authorize_resolution(
         self,
     ) -> None:
         reviewed = reviewed_state_payload(
@@ -1233,7 +1233,7 @@ class ResolveFixedThreadsTests(TestCase):
                 )
                 with self.assertRaisesRegex(
                     MODULE.ResolutionError,
-                    "historical Ready integration attestation is not resolution authority",
+                    "Ready integration attestation is not eligibility-bound resolution authority",
                 ):
                     MODULE.load_validation_evidence(
                         path,
