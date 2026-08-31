@@ -7668,6 +7668,96 @@ class FastPathTests(TestCase):
                 validated_tree_sha="a" * 40,
             )
 
+    def test_parent2_preservation_batches_parent_state_authentication(self) -> None:
+        base = "1" * 40
+        parent1 = "2" * 40
+        parent2 = "3" * 40
+        mechanical_tree = "4" * 40
+        validated_tree = "5" * 40
+
+        def delta(count: int) -> list[dict[str, str]]:
+            return [
+                {
+                    "path": f"preservation/{index}.txt",
+                    "status": "M",
+                    "old_mode": "100644",
+                    "new_mode": "100644",
+                    "old_oid": "6" * 40,
+                    "new_oid": "7" * 40,
+                }
+                for index in range(count)
+            ]
+
+        observed_ls_tree_calls = []
+        observed_tree_delta_calls = []
+        for count in (1, 3):
+            authenticated_delta = delta(count)
+            integration = {
+                "schema_version": "1.2",
+                "ordered_parent_shas": [parent1, parent2],
+                "mechanical_merge_tree_sha": mechanical_tree,
+                "mechanical_conflict_paths": [],
+                "authenticated_resolution_delta": authenticated_delta,
+            }
+
+            def git_state(arguments: list[str]) -> SimpleNamespace:
+                self.assertEqual(arguments[0], "ls-tree")
+                tree = arguments[3]
+                path = arguments[-1].removeprefix(":(literal)")
+                oid = {
+                    base: "8" * 40,
+                    parent1: "9" * 40,
+                    parent2: "a" * 40,
+                    mechanical_tree: "9" * 40,
+                    validated_tree: "a" * 40,
+                }[tree]
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=f"100644 blob {oid}\t{path}\x00",
+                    stderr="",
+                )
+
+            with (
+                self.subTest(count=count),
+                mock.patch.object(
+                    actions,
+                    "_mechanical_integration_result",
+                    return_value=(mechanical_tree, []),
+                ),
+                mock.patch.object(
+                    actions,
+                    "_integration_tree_delta",
+                    return_value=authenticated_delta,
+                ) as tree_delta_runner,
+                mock.patch.object(
+                    actions,
+                    "_unique_integration_merge_base",
+                    return_value=base,
+                ),
+                mock.patch.object(
+                    actions,
+                    "_run_attestation_git",
+                    side_effect=lambda _root, arguments, **_kwargs: git_state(arguments),
+                ) as git_runner,
+            ):
+                actions._verify_integration_tree_delta(
+                    REPO_ROOT, integration, validated_tree
+                )
+            observed_ls_tree_calls.append(
+                [call.args[1][0] for call in git_runner.call_args_list].count("ls-tree"),
+            )
+            observed_tree_delta_calls.append(tree_delta_runner.call_count)
+            self.assertEqual(
+                [call.args[1:] for call in tree_delta_runner.call_args_list],
+                [
+                    (mechanical_tree, validated_tree),
+                    (base, parent1),
+                    (base, parent2),
+                ],
+            )
+        self.assertEqual(observed_ls_tree_calls, [0, 0])
+        self.assertEqual(observed_tree_delta_calls, [3, 3])
+
     def test_ready_integration_authenticates_exact_parent2_preservation(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="secpal-integration-parent2-preservation-"
@@ -7985,59 +8075,97 @@ class FastPathTests(TestCase):
                     )
                 )
 
-    def test_authenticated_tree_path_state_preserves_git_identity(self) -> None:
-        with tempfile.TemporaryDirectory(
-            prefix="secpal-integration-path-state-"
-        ) as directory:
-            repository = Path(directory)
+    def test_integration_delta_path_state_preserves_git_identity(self) -> None:
+        oid = "1" * 40
+        for mode, object_type in (
+            ("100644", "blob"),
+            ("100755", "blob"),
+            ("120000", "blob"),
+            ("160000", "commit"),
+        ):
+            with self.subTest(mode=mode):
+                self.assertEqual(
+                    actions._integration_delta_path_state(mode, oid),
+                    actions._git_path_state(True, mode, object_type, oid),
+                )
+        self.assertEqual(
+            actions._integration_delta_path_state("000000", "0" * 40),
+            actions._git_path_state(False, None, None, None),
+        )
 
-            def git(*arguments: str) -> str:
-                return subprocess.run(
-                    ["git", *arguments],
-                    cwd=repository,
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                ).stdout.strip()
-
-            git("init", "-q")
-            git("config", "user.name", "Path State Fixture")
-            git("config", "user.email", "path-state@example.test")
-            (repository / "regular.txt").write_text("regular\n", encoding="utf-8")
-            executable = repository / "executable.sh"
-            executable.write_text("#!/bin/sh\n", encoding="utf-8")
-            executable.chmod(0o755)
-            (repository / "link").symlink_to("regular.txt")
-            git("add", ".")
-            git("commit", "-q", "-m", "tree states")
-            commit = git("rev-parse", "HEAD")
-            git("update-index", "--add", "--cacheinfo", f"160000,{commit},gitlink")
-            tree = git("write-tree")
-
-            for path, mode, object_type in (
-                ("regular.txt", "100644", "blob"),
-                ("executable.sh", "100755", "blob"),
-                ("link", "120000", "blob"),
-                ("gitlink", "160000", "commit"),
+    def test_integration_delta_path_state_rejects_malformed_authority(self) -> None:
+        for case, mode, oid in (
+            ("unsupported mode", "100600", "1" * 40),
+            ("malformed oid", "100644", "not-an-oid"),
+            ("zero present oid", "100644", "0" * 40),
+            ("nonzero absent oid", "000000", "1" * 40),
+        ):
+            with (
+                self.subTest(case=case),
+                self.assertRaises(fast_path.SecurityBlocker),
             ):
-                with self.subTest(path=path):
-                    self.assertEqual(
-                        actions._authenticated_tree_path_state(
-                            repository, tree, path
-                        ),
-                        actions._git_path_state(
-                            True,
-                            mode,
-                            object_type,
-                            git("rev-parse", f"{tree}:{path}"),
-                        ),
-                    )
-            self.assertEqual(
-                actions._authenticated_tree_path_state(
-                    repository, tree, "absent.txt"
-                ),
-                actions._git_path_state(False, None, None, None),
+                actions._integration_delta_path_state(mode, oid)
+
+        impossible = {
+            "path": "policy.txt",
+            "status": "M",
+            "old_mode": "000000",
+            "new_mode": "100644",
+            "old_oid": "0" * 40,
+            "new_oid": "1" * 40,
+        }
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "impossible state transition"
+        ):
+            actions._integration_delta_states(impossible)
+
+        malformed_status = copy.deepcopy(impossible)
+        malformed_status.update(
+            status="X", old_mode="100644", old_oid="2" * 40
+        )
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "impossible state transition"
+        ):
+            actions._integration_delta_states(malformed_status)
+
+        parent1_delta = {
+            "path": "policy.txt",
+            "status": "M",
+            "old_mode": "100644",
+            "new_mode": "100644",
+            "old_oid": "1" * 40,
+            "new_oid": "2" * 40,
+        }
+        parent2_delta = copy.deepcopy(parent1_delta)
+        parent2_delta.update(old_oid="3" * 40, new_oid="4" * 40)
+        candidate_delta = copy.deepcopy(parent1_delta)
+        candidate_delta.update(old_oid="2" * 40, new_oid="4" * 40)
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "neither an authenticated conflict"
+        ):
+            actions._verify_exact_parent2_preservation(
+                parent1_delta=parent1_delta,
+                parent2_delta=parent2_delta,
+                candidate_delta=candidate_delta,
             )
+
+    def test_integration_tree_delta_rejects_duplicate_raw_paths(self) -> None:
+        raw_entry = (
+            f":100644 100644 {'1' * 40} {'2' * 40} M\x00policy.txt\x00"
+        )
+        with (
+            mock.patch.object(
+                actions,
+                "_run_attestation_git",
+                return_value=SimpleNamespace(
+                    returncode=0,
+                    stdout=raw_entry + raw_entry,
+                    stderr="",
+                ),
+            ),
+            self.assertRaisesRegex(fast_path.SecurityBlocker, "repeats a path"),
+        ):
+            actions._integration_tree_delta(REPO_ROOT, "1" * 40, "2" * 40)
 
     def test_parent2_preservation_cannot_delete_parent1_only_work(self) -> None:
         with tempfile.TemporaryDirectory(

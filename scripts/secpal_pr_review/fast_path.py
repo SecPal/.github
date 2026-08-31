@@ -298,6 +298,12 @@ def _ready_integration_delta(value: Any) -> list[dict[str, str]]:
     return normalized
 
 
+def normalize_ready_integration_delta(value: Any) -> list[dict[str, str]]:
+    """Normalize one canonical Ready-integration tree delta."""
+
+    return _ready_integration_delta(value)
+
+
 def _ready_integration_conflict_paths(value: Any) -> list[str]:
     if not isinstance(value, list):
         raise SecurityBlocker("integration mechanical conflict paths are malformed")

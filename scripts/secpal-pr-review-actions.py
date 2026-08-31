@@ -4510,50 +4510,65 @@ def _integration_tree_delta(
                 "new_oid": new_oid.lower(),
             }
         )
-    return sorted(delta, key=lambda item: item["path"])
-
-
-def _authenticated_tree_path_state(
-    repository_root: Path,
-    tree: str,
-    path: str,
-) -> _GitPathState:
-    result = _run_attestation_git(
-        repository_root,
-        ["ls-tree", "-z", "--full-tree", tree, "--", f":(literal){path}"],
-        allow_failure=True,
+    normalized = fast_path.normalize_ready_integration_delta(
+        sorted(delta, key=lambda item: item["path"])
     )
-    if result.returncode != 0:
-        raise fast_path.SecurityBlocker(
-            "integration path state cannot be authenticated"
-        )
-    if result.stdout == "":
+    for entry in normalized:
+        _integration_delta_states(entry)
+    return normalized
+
+
+def _integration_delta_path_state(mode: str, oid: str) -> _GitPathState:
+    if mode == "000000":
+        if not OID_PATTERN.fullmatch(oid) or set(oid) != {"0"}:
+            raise fast_path.SecurityBlocker(
+                "integration tree delta has noncanonical absent state"
+            )
         return _git_path_state(False, None, None, None)
-    if not result.stdout.endswith("\x00") or result.stdout.count("\x00") != 1:
-        raise fast_path.SecurityBlocker(
-            "integration path state cannot be authenticated"
-        )
-    metadata, separator, observed_path = result.stdout[:-1].partition("\t")
-    parts = metadata.split()
-    if separator != "\t" or len(parts) != 3 or observed_path != path:
-        raise fast_path.SecurityBlocker(
-            "integration path state cannot be authenticated"
-        )
-    mode, object_type, oid = parts
+    object_type = {
+        "100644": "blob",
+        "100755": "blob",
+        "120000": "blob",
+        "160000": "commit",
+    }.get(mode)
     if (
-        (mode, object_type)
-        not in {
-            ("100644", "blob"),
-            ("100755", "blob"),
-            ("120000", "blob"),
-            ("160000", "commit"),
-        }
+        object_type is None
         or not OID_PATTERN.fullmatch(oid)
+        or set(oid) == {"0"}
     ):
         raise fast_path.SecurityBlocker(
-            "integration path state cannot be authenticated"
+            "integration tree delta has invalid present state"
         )
     return _git_path_state(True, mode, object_type, oid.lower())
+
+
+def _integration_delta_states(
+    entry: dict[str, str],
+) -> tuple[_GitPathState, _GitPathState]:
+    old_state = _integration_delta_path_state(entry["old_mode"], entry["old_oid"])
+    new_state = _integration_delta_path_state(entry["new_mode"], entry["new_oid"])
+    status = entry["status"]
+    valid_transition = (
+        (status == "A" and not old_state[0] and new_state[0])
+        or (status == "D" and old_state[0] and not new_state[0])
+        or (status in {"M", "T"} and old_state[0] and new_state[0])
+    )
+    if not valid_transition or old_state == new_state:
+        raise fast_path.SecurityBlocker(
+            "integration tree delta has an impossible state transition"
+        )
+    return old_state, new_state
+
+
+def _index_integration_tree_delta(
+    delta: list[dict[str, str]],
+) -> dict[str, dict[str, str]]:
+    indexed = {entry["path"]: entry for entry in delta}
+    if len(indexed) != len(delta):
+        raise fast_path.SecurityBlocker(
+            "integration tree delta repeats a path"
+        )
+    return indexed
 
 
 def _unique_integration_merge_base(
@@ -4594,30 +4609,23 @@ def _is_exact_parent2_preservation(
 
 
 def _verify_exact_parent2_preservation(
-    repository_root: Path,
     *,
-    path: str,
-    merge_base: str,
-    parent1: str,
-    parent2: str,
-    mechanical_tree: str,
-    validated_tree: str,
+    parent1_delta: dict[str, str],
+    parent2_delta: dict[str, str],
+    candidate_delta: dict[str, str],
 ) -> None:
-    base_state = _authenticated_tree_path_state(repository_root, merge_base, path)
-    parent1_state = _authenticated_tree_path_state(repository_root, parent1, path)
-    parent2_state = _authenticated_tree_path_state(repository_root, parent2, path)
-    mechanical_state = _authenticated_tree_path_state(
-        repository_root, mechanical_tree, path
-    )
-    candidate_state = _authenticated_tree_path_state(
-        repository_root, validated_tree, path
-    )
-    if not _is_exact_parent2_preservation(
-        base_state=base_state,
-        parent1_state=parent1_state,
-        parent2_state=parent2_state,
-        mechanical_state=mechanical_state,
-        candidate_state=candidate_state,
+    base_state, parent1_state = _integration_delta_states(parent1_delta)
+    parent2_base_state, parent2_state = _integration_delta_states(parent2_delta)
+    mechanical_state, candidate_state = _integration_delta_states(candidate_delta)
+    if (
+        base_state != parent2_base_state
+        or not _is_exact_parent2_preservation(
+            base_state=base_state,
+            parent1_state=parent1_state,
+            parent2_state=parent2_state,
+            mechanical_state=mechanical_state,
+            candidate_state=candidate_state,
+        )
     ):
         raise fast_path.SecurityBlocker(
             "integration delta path is neither an authenticated conflict "
@@ -4892,28 +4900,37 @@ def _verify_integration_tree_delta(
         path for path in delta_paths if path not in conflict_path_set
     ]
     merge_base = None
+    parent1_delta_by_path: dict[str, dict[str, str]] = {}
+    parent2_delta_by_path: dict[str, dict[str, str]] = {}
     if preservation_paths:
         merge_base = _unique_integration_merge_base(
             repository_root, integration_evidence["ordered_parent_shas"]
         )
     parent1, parent2 = integration_evidence["ordered_parent_shas"]
+    if merge_base is not None:
+        parent1_delta_by_path = _index_integration_tree_delta(
+            _integration_tree_delta(repository_root, merge_base, parent1)
+        )
+        parent2_delta_by_path = _index_integration_tree_delta(
+            _integration_tree_delta(repository_root, merge_base, parent2)
+        )
     derived_classifications: dict[str, str] = {}
-    for path in delta_paths:
+    for candidate_delta in delta:
+        path = candidate_delta["path"]
         if path in conflict_path_set:
             derived_classifications[path] = _CONFLICT_RESOLUTION
         else:
-            if merge_base is None:
+            parent1_delta = parent1_delta_by_path.get(path)
+            parent2_delta = parent2_delta_by_path.get(path)
+            if parent1_delta is None or parent2_delta is None:
                 raise fast_path.SecurityBlocker(
-                    "integration resolution delta classification is incomplete"
+                    "integration delta path is neither an authenticated conflict "
+                    "resolution nor exact parent-2 preservation"
                 )
             _verify_exact_parent2_preservation(
-                repository_root,
-                path=path,
-                merge_base=merge_base,
-                parent1=parent1,
-                parent2=parent2,
-                mechanical_tree=mechanical_tree,
-                validated_tree=validated_tree,
+                parent1_delta=parent1_delta,
+                parent2_delta=parent2_delta,
+                candidate_delta=candidate_delta,
             )
             derived_classifications[path] = _EXACT_PARENT2_PRESERVATION
     if len(derived_classifications) != len(delta):
