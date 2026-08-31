@@ -520,7 +520,11 @@ per-thread eligibility manifest authenticated by the signed validation
 receipt. It then verifies the exact PR head and target identity without reading checks,
 rules, reactions, unrelated feedback, mergeability, or branch protection. It
 reads each target completely and requires its comments to match the
-reviewed-state identities and digests. Immediately before a tracked-follow-up
+reviewed-state identities and digests. The complete original ordered eligibility
+remains authoritative after a partial result: an exact target captured
+unresolved but now resolved is an authenticated zero-write satisfaction, while
+an exact unresolved target follows the ordinary guarded mutation path and all
+other drift fails closed. Immediately before a tracked-follow-up
 mutation it also performs the authenticated, fail-closed live work-graph
 verification described above. Immediately before each mutation or successful
 already-resolved report, it requires two more equal

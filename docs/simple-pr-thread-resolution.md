@@ -49,6 +49,10 @@ exact follow-up identity authenticated by the signed eligibility digest.
 Every apply invocation therefore performs three complete target reads per
 thread before any mutation cost. Already-resolved targets are treated
 idempotently and require no write, but receive the same two stable rechecks.
+That no-op is idempotent satisfaction of the authenticated original target set:
+the resolver proves only that the exact required terminal postcondition is
+already true, without attributing the earlier resolution. The authenticated
+ordered set is never narrowed to a caller-selected remaining suffix.
 Target comments are cursor-paginated as needed. A dry run performs only the
 initial read. The complete invocation shares the canonical repository
 registry's API-call, review-thread, and comment limits. Before each write it
@@ -95,9 +99,11 @@ The command verifies only the invariants required for this operation:
   proves the same follow-up remains accessible, open, and structurally complete;
   a blocked follow-up is allowed and does not become a prerequisite;
 - every requested thread belongs to that PR;
-- every requested thread and its comment identities, body digests, reply
-  relationships, and resolution state match the supplied reviewed-state
-  capture;
+- every requested thread and its comment identities, body digests, and reply
+  relationships match the supplied reviewed-state capture; resolution state
+  also matches except that the exact authenticated transition from reviewed
+  unresolved to live resolved satisfies the required terminal postcondition
+  without a mutation;
 - PR state, head, resolved/outdated state, and canonical target-comment state
   produce two equal complete projections immediately before each mutation or
   successful already-resolved report;
@@ -108,7 +114,9 @@ The command verifies only the invariants required for this operation:
 
 If a later target fails after an earlier resolution succeeds, the command stops
 without retry, prints a structured report naming resolved, failed, and
-unattempted targets, and exits nonzero.
+unattempted targets, and exits nonzero. A later invocation still authenticates
+and processes the complete original order: exact resolved targets are stable
+zero-write no-ops, and exact unresolved targets use the same guarded write path.
 
 It intentionally does **not** block resolution because of:
 
