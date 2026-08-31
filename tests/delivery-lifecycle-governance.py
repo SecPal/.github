@@ -35,6 +35,10 @@ def section(markdown: str, heading: str) -> str:
     return match.group("body")
 
 
+def text_blocks(markdown: str) -> list[str]:
+    return re.findall(r"^```text\n(.*?)^```$", markdown, re.MULTILINE | re.DOTALL)
+
+
 class DeliveryLifecycleGovernanceTests(TestCase):
     def test_canonical_delivery_lifecycle_is_draft_first_and_finite(self) -> None:
         lifecycle = section(
@@ -55,15 +59,30 @@ class DeliveryLifecycleGovernanceTests(TestCase):
             with self.subTest(semantic=semantic):
                 self.assertRegex(lifecycle, re.compile(semantic, re.IGNORECASE | re.DOTALL))
 
+        blocks = text_blocks(lifecycle)
+        self.assertGreaterEqual(len(blocks), 3)
+        state_machine = blocks[0]
         lifecycle_order = [
             "CREATE_AS_DRAFT",
             "PRE_READY",
             "DRAFT_TO_READY",
             "FINITE_REVIEW",
+            "OPTIONAL_SINGLE_REMEDIATION_COMMIT",
             "MERGE",
         ]
-        positions = [lifecycle.index(state) for state in lifecycle_order]
+        for state in lifecycle_order:
+            with self.subTest(state=state):
+                self.assertIn(state, state_machine)
+        positions = [state_machine.find(state) for state in lifecycle_order]
+        self.assertNotIn(-1, positions)
         self.assertEqual(positions, sorted(positions))
+
+        lifecycle_examples = "\n".join(blocks[1:])
+        normalized_examples = lifecycle_examples.replace(
+            "OPTIONAL_SINGLE_REMEDIATION_COMMIT", ""
+        )
+        self.assertNotIn("REMEDIATION COMMIT", normalized_examples)
+        self.assertIn("OPTIONAL_SINGLE_REMEDIATION_COMMIT", lifecycle_examples)
 
         self.assertRegex(lifecycle, r"NEW\s*->\s*DRAFT\s*->\s*READY\s*->\s*MERGED")
         self.assertRegex(lifecycle, r"NEW\s*->\s*READY.*invalid")
@@ -89,6 +108,7 @@ class DeliveryLifecycleGovernanceTests(TestCase):
                 prompt = prompts[prompt_name]
                 self.assertRegex(prompt, re.compile(r"create.*draft PR", re.IGNORECASE))
                 self.assertRegex(prompt, re.compile(r"must not.*directly.*Ready", re.IGNORECASE))
+                self.assertIn("English PR body", prompt)
 
 
 if __name__ == "__main__":

@@ -516,7 +516,7 @@ CREATE_AS_DRAFT
   -> PRE_READY
   -> DRAFT_TO_READY exactly once
   -> FINITE_REVIEW
-  -> OPTIONAL_SINGLE_REMEDIATION
+  -> OPTIONAL_SINGLE_REMEDIATION_COMMIT
   -> MERGE
 ```
 
@@ -532,7 +532,7 @@ The lifecycle admits these sequences:
 
 ```text
 NEW -> DRAFT -> READY -> MERGED
-NEW -> DRAFT -> READY -> REVIEW -> REMEDIATION COMMIT -> READY -> MERGED
+NEW -> DRAFT -> READY -> REVIEW -> OPTIONAL_SINGLE_REMEDIATION_COMMIT -> READY -> MERGED
 ```
 
 It rejects these sequences:
@@ -540,7 +540,7 @@ It rejects these sequences:
 ```text
 NEW -> READY                                      invalid: direct Ready creation
 DRAFT -> READY -> DRAFT -> READY                  invalid: Ready/Draft churn
-READY -> REVIEW -> REMEDIATION -> NEW REVIEW REQUEST
+READY -> REVIEW -> OPTIONAL_SINGLE_REMEDIATION_COMMIT -> NEW REVIEW REQUEST
                                                   invalid: recursive review
 ```
 
