@@ -539,16 +539,23 @@ It rejects these sequences:
 
 ```text
 NEW -> READY                                      invalid: direct Ready creation
-DRAFT -> READY -> DRAFT -> READY                  invalid: Ready/Draft churn
+DRAFT -> READY -> DRAFT -> READY                  invalid: ordinary or unauthorized Ready/Draft churn
 READY -> REVIEW -> OPTIONAL_SINGLE_REMEDIATION_COMMIT -> NEW REVIEW REQUEST
                                                   invalid: recursive review
 ```
 
-Ready is monotonic after the first authorized transition. Ordinary remediation,
-CI, findings, metadata changes, or recovery do not return the pull request to
-Draft. Finite-review authority remains distinct from readiness authority: a new
-commit does not authorize another review, remediation produces no new review
-request, and `Draft -> Ready` does not create an unbounded review lifecycle.
+Ready is monotonic after the first authorized transition during the ordinary
+lifecycle. Ordinary remediation, CI, findings, metadata changes, feedback, or
+recovery do not return the pull request to Draft or authorize another review
+cycle. The only exception is an exact `Ready -> Draft` transition that the
+current operator explicitly authorizes for an independently stated reason. A
+later `Draft -> Ready` transition requires its own explicit operator
+authorization. This bounded exception preserves the same lifecycle and does
+not permit ordinary or unauthorized Ready/Draft churn.
+
+Finite-review authority remains distinct from readiness authority: a new commit
+does not authorize another review, remediation produces no new review request,
+and `Draft -> Ready` does not create an unbounded review lifecycle.
 Explicit operator interruption, including a stop, pause, prohibition, or scope
 narrowing, supersedes any pending delivery or delegated action.
 

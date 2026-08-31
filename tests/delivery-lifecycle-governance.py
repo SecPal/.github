@@ -13,6 +13,7 @@ from unittest import TestCase, main, mock
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "docs/work-graph-contract.md"
 ROLLOUT = ROOT / "scripts/polyscope-rollout.py"
+POLYSCOPE_RUNTIME_TEMPLATE = ROOT / "templates/polyscope-codex-AGENTS.md"
 
 
 def load_rollout():
@@ -52,6 +53,9 @@ class DeliveryLifecycleGovernanceTests(TestCase):
             r"explicit.*operator.*authoriz.*Draft.*Ready",
             r"exactly one.*Draft.*Ready",
             r"Ready.*monotonic",
+            r"Ready.*Draft.*exact.*operator.*authoriz",
+            r"later.*Draft.*Ready.*own.*operator.*authoriz",
+            r"ordinary.*Ready.Draft churn.*prohibit",
             r"new\s+commit.*does not.*authoriz.*another review",
             r"remediat.*no.*new review request",
         )
@@ -86,7 +90,10 @@ class DeliveryLifecycleGovernanceTests(TestCase):
 
         self.assertRegex(lifecycle, r"NEW\s*->\s*DRAFT\s*->\s*READY\s*->\s*MERGED")
         self.assertRegex(lifecycle, r"NEW\s*->\s*READY.*invalid")
-        self.assertRegex(lifecycle, r"READY\s*->\s*DRAFT\s*->\s*READY.*invalid")
+        self.assertRegex(
+            lifecycle,
+            r"READY\s*->\s*DRAFT\s*->\s*READY.*invalid: ordinary or unauthorized",
+        )
 
     def test_every_polyscope_pr_creation_path_requires_draft(self) -> None:
         rollout = load_rollout()
@@ -109,6 +116,16 @@ class DeliveryLifecycleGovernanceTests(TestCase):
                 self.assertRegex(prompt, re.compile(r"create.*draft PR", re.IGNORECASE))
                 self.assertRegex(prompt, re.compile(r"must not.*directly.*Ready", re.IGNORECASE))
                 self.assertIn("English PR body", prompt)
+
+        runtime_template = POLYSCOPE_RUNTIME_TEMPLATE.read_text(encoding="utf-8")
+        self.assertRegex(
+            runtime_template,
+            re.compile(r"every new SecPal delivery pull request.*created as Draft", re.IGNORECASE),
+        )
+        self.assertRegex(
+            runtime_template,
+            re.compile(r"must not.*directly.*Ready", re.IGNORECASE | re.DOTALL),
+        )
 
 
 if __name__ == "__main__":
