@@ -308,6 +308,7 @@ def resolve_threads(
     expected_targets: dict[str, Any] | None = None,
     eligibility_manifest: dict[str, Any] | None = None,
     follow_up_verifier: Any = MODULE.verify_live_follow_up,
+    recovery_bound: bool = False,
 ) -> dict[str, Any]:
     immutable_thread_ids = tuple(thread_ids)
     if expected_targets is None:
@@ -390,11 +391,18 @@ def resolve_threads(
             "state_digest"
         ]
     eligibility_digest = MODULE._digest_json(eligibility_manifest)
-    attestation = validation_attestation_payload(
-        reviewed,
-        eligibility_digest,
-        expected_head=expected_head,
-    )
+    if recovery_bound:
+        _receipt, attestation = recovery_validation_payloads(
+            reviewed,
+            eligibility_digest,
+            expected_head=expected_head,
+        )
+    else:
+        attestation = validation_attestation_payload(
+            reviewed,
+            eligibility_digest,
+            expected_head=expected_head,
+        )
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         reviewed_path = root / "reviewed.json"
@@ -533,6 +541,47 @@ def validation_attestation_payload(
         "eligibility_evidence_digest": eligibility_evidence_digest,
     }
     return {**fields, "attestation_digest": MODULE._digest_json(fields)}
+
+
+def recovery_validation_payloads(
+    reviewed: dict[str, Any],
+    eligibility_evidence_digest: str,
+    *,
+    expected_head: str = "c" * 40,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    binding = MODULE._validation_registry_binding(
+        MODULE._load_repository_entry(reviewed["repository"])
+    )
+    stable = MODULE.fast_path.StableFeedbackState.from_payload(reviewed)
+    receipt = MODULE.fast_path.create_validation_receipt(
+        repository=reviewed["repository"],
+        head_sha=reviewed["head_sha"],
+        validated_tree_sha="f" * 40,
+        registry=binding,
+        command_set=binding["validation"],
+        successful_result=True,
+        reviewed_state=stable,
+        manual_gate_evidence=[
+            {
+                "gate": gate,
+                "satisfied": True,
+                "evidence": f"Verified recovery evidence {index}",
+            }
+            for index, gate in enumerate(binding["manual_gates"], start=1)
+        ],
+        eligibility_evidence_digest=eligibility_evidence_digest,
+        exceptional_recovery_evidence_digest="9" * 64,
+    )
+    attestation = MODULE.fast_path.create_validation_attestation(
+        repository=reviewed["repository"],
+        head_sha=expected_head,
+        registry=binding,
+        command_set=binding["validation"],
+        successful_result=True,
+        reviewed_state=stable,
+        validation_receipt=receipt,
+    )
+    return receipt, attestation
 
 
 def integration_validation_payloads(
@@ -1019,6 +1068,145 @@ def run_late_classification_origin_fixture(
 
 
 class ResolveFixedThreadsTests(TestCase):
+    def test_recovery_bound_attestation_uses_canonical_source_verifier(self) -> None:
+        thread_id = "PRRT_RECOVERY_BOUND"
+        reviewed_payload = reviewed_state_payload(
+            thread_id,
+            [("PRRC_RECOVERY_BOUND", "Corrected recovery finding.", None)],
+            outdated=True,
+        )
+        eligibility = eligibility_payload(reviewed_payload, (thread_id,))
+        receipt, attestation = recovery_validation_payloads(
+            reviewed_payload,
+            MODULE._digest_json(eligibility),
+        )
+        binding = MODULE._validation_registry_binding(
+            MODULE._load_repository_entry(reviewed_payload["repository"])
+        )
+        stable = MODULE.fast_path.StableFeedbackState.from_payload(reviewed_payload)
+        MODULE.fast_path.verify_validation_attestation(
+            attestation,
+            repository=reviewed_payload["repository"],
+            head_sha=attestation["head_sha"],
+            registry=binding,
+            command_set=binding["validation"],
+            reviewed_state=stable,
+            commit_parent_sha=reviewed_payload["head_sha"],
+            commit_tree_sha=receipt["validated_tree_sha"],
+            commit_validation_receipt_digest=receipt["receipt_digest"],
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reviewed_path = root / "reviewed.json"
+            attestation_path = root / "attestation.json"
+            reviewed_path.write_text(json.dumps(reviewed_payload), encoding="utf-8")
+            attestation_path.write_text(json.dumps(attestation), encoding="utf-8")
+            reviewed = MODULE.load_reviewed_state(
+                reviewed_path,
+                reviewed_payload["repository"],
+                reviewed_payload["pull_request_number"],
+                reviewed_payload["state_digest"],
+                (thread_id,),
+            )
+            validation = MODULE.load_validation_evidence(
+                attestation_path,
+                reviewed_payload["repository"],
+                attestation["head_sha"],
+                reviewed,
+            )
+
+        self.assertEqual(validation.attestation, attestation)
+        self.assertEqual(validation.validation_receipt, receipt)
+
+    def test_recovery_bound_attestation_rejects_digest_binding_drift(self) -> None:
+        thread_id = "PRRT_RECOVERY_BINDING"
+        reviewed_payload = reviewed_state_payload(thread_id, [])
+        eligibility = eligibility_payload(reviewed_payload, (thread_id,))
+        _receipt, attestation = recovery_validation_payloads(
+            reviewed_payload,
+            MODULE._digest_json(eligibility),
+        )
+        mutations = {
+            "missing": None,
+            "substituted": "8" * 64,
+            "malformed": "not-a-digest",
+        }
+        for label, digest in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                changed = copy.deepcopy(attestation)
+                if digest is None:
+                    changed.pop("exceptional_recovery_evidence_digest")
+                else:
+                    changed["exceptional_recovery_evidence_digest"] = digest
+                fields = {
+                    key: value
+                    for key, value in changed.items()
+                    if key != "attestation_digest"
+                }
+                changed["attestation_digest"] = MODULE._digest_json(fields)
+                root = Path(directory)
+                reviewed_path = root / "reviewed.json"
+                attestation_path = root / "attestation.json"
+                reviewed_path.write_text(
+                    json.dumps(reviewed_payload), encoding="utf-8"
+                )
+                attestation_path.write_text(json.dumps(changed), encoding="utf-8")
+                reviewed = MODULE.load_reviewed_state(
+                    reviewed_path,
+                    reviewed_payload["repository"],
+                    reviewed_payload["pull_request_number"],
+                    reviewed_payload["state_digest"],
+                    (thread_id,),
+                )
+                with self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "validation evidence is invalid or stale",
+                ):
+                    MODULE.load_validation_evidence(
+                        attestation_path,
+                        reviewed_payload["repository"],
+                        attestation["head_sha"],
+                        reviewed,
+                    )
+
+    def test_recovery_bound_source_keeps_current_outdated_target_independent(
+        self,
+    ) -> None:
+        thread_id = "PRRT_RECOVERY_OUTDATED"
+        comment = ("PRRC_RECOVERY_OUTDATED", "Exact current target.", None)
+        current = FakeGh(
+            [
+                target_response(
+                    thread_id,
+                    head="c" * 40,
+                    comments=[comment],
+                    outdated=True,
+                )
+            ]
+        )
+
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "c" * 40,
+            [thread_id],
+            apply=False,
+            runner=current,
+            expected_targets={
+                thread_id: expected_thread_state(
+                    thread_id,
+                    [comment],
+                    outdated=True,
+                )
+            },
+            recovery_bound=True,
+        )
+
+        self.assertEqual(result["pending"], [thread_id])
+        self.assertEqual(result["resolved"], [])
+        self.assertEqual(len(current.calls), 1)
+
     def test_resolved_target_with_outdated_state_drift_is_incompatible(
         self,
     ) -> None:

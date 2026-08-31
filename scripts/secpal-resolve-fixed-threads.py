@@ -525,108 +525,6 @@ def _validation_registry_binding(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _validate_manual_gate_evidence(
-    value: Any,
-    registered_gates: Any,
-) -> list[dict[str, Any]]:
-    if not isinstance(registered_gates, list) or any(
-        not isinstance(gate, str) or not gate for gate in registered_gates
-    ):
-        raise ResolutionError("registered manual gates are malformed")
-    if not isinstance(value, list) or len(value) != len(registered_gates):
-        raise ResolutionError("validation evidence is invalid or stale")
-    normalized: list[dict[str, Any]] = []
-    for index, gate in enumerate(registered_gates):
-        item = value[index]
-        evidence_text = item.get("evidence") if isinstance(item, dict) else None
-        if (
-            not isinstance(item, dict)
-            or set(item) != {"gate", "satisfied", "evidence"}
-            or item.get("gate") != gate
-            or item.get("satisfied") is not True
-            or not isinstance(evidence_text, str)
-            or not EVIDENCE_TEXT.fullmatch(evidence_text)
-            or SECRET_VALUE.search(evidence_text)
-        ):
-            raise ResolutionError("validation evidence is invalid or stale")
-        normalized.append(
-            {"gate": gate, "satisfied": True, "evidence": evidence_text}
-        )
-    return normalized
-
-
-def _expected_validation_receipt(
-    repository: str,
-    reviewed: ReviewedState,
-    validated_tree_sha: Any,
-    manual_gate_evidence: Any,
-    eligibility_evidence_digest: Any,
-    registry_binding: dict[str, Any],
-) -> dict[str, Any]:
-    if not isinstance(validated_tree_sha, str) or not OID.fullmatch(
-        validated_tree_sha
-    ):
-        raise ResolutionError("validation evidence is invalid or stale")
-    if (
-        not isinstance(eligibility_evidence_digest, str)
-        or not DIGEST.fullmatch(eligibility_evidence_digest)
-    ):
-        raise ResolutionError("validation evidence is invalid or stale")
-    fields = {
-        "schema_version": "1.0",
-        "kind": "VALIDATION_RECEIPT",
-        "repository": repository,
-        "head_sha": reviewed.head_sha,
-        "validated_tree_sha": validated_tree_sha.lower(),
-        "registry_digest": _digest_json(registry_binding),
-        "command_set_digest": _digest_json(registry_binding["validation"]),
-        "successful_result": True,
-        "reviewed_state_digest": reviewed.state_digest,
-        "reviewed_feedback_digest": reviewed.feedback_digest,
-        "manual_gate_evidence": _validate_manual_gate_evidence(
-            manual_gate_evidence,
-            registry_binding["manual_gates"],
-        ),
-        "eligibility_evidence_digest": eligibility_evidence_digest,
-    }
-    return {**fields, "receipt_digest": _digest_json(fields)}
-
-
-def _expected_validation_attestation(
-    repository: str,
-    expected_head: str,
-    reviewed: ReviewedState,
-    payload: dict[str, Any],
-    registry_binding: dict[str, Any],
-) -> dict[str, Any]:
-    receipt = _expected_validation_receipt(
-        repository,
-        reviewed,
-        payload.get("validated_tree_sha"),
-        payload.get("manual_gate_evidence"),
-        payload.get("eligibility_evidence_digest"),
-        registry_binding,
-    )
-    fields = {
-        "schema_version": "1.0",
-        "repository": repository,
-        "head_sha": expected_head.lower(),
-        "registry_digest": receipt["registry_digest"],
-        "command_set_digest": receipt["command_set_digest"],
-        "successful_result": True,
-        "reviewed_head_sha": reviewed.head_sha,
-        "reviewed_state_digest": reviewed.state_digest,
-        "reviewed_feedback_digest": reviewed.feedback_digest,
-        "validated_tree_sha": receipt["validated_tree_sha"],
-        "validation_receipt_digest": receipt["receipt_digest"],
-        "manual_gate_evidence": receipt["manual_gate_evidence"],
-        "eligibility_evidence_digest": receipt[
-            "eligibility_evidence_digest"
-        ],
-    }
-    return {**fields, "attestation_digest": _digest_json(fields)}
-
-
 def _run_gh(arguments: Sequence[str]) -> dict[str, Any]:
     if tuple(arguments[: len(GH_GRAPHQL_PREFIX)]) != GH_GRAPHQL_PREFIX:
         raise ResolutionError("gh command is outside the allowed GraphQL surface")
@@ -1026,13 +924,34 @@ def load_validation_evidence(
         raise ResolutionError(
             "ordinary validation attestation rejects integration-only evidence"
         )
-    expected_attestation = _expected_validation_attestation(
-        repository,
-        expected_head,
-        reviewed,
-        payload,
-        registry_binding,
-    )
+    try:
+        receipt = fast_path.create_validation_receipt(
+            repository=repository,
+            head_sha=reviewed.head_sha,
+            validated_tree_sha=payload.get("validated_tree_sha"),
+            registry=registry_binding,
+            command_set=registry_binding["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=payload.get("manual_gate_evidence"),
+            eligibility_evidence_digest=payload.get(
+                "eligibility_evidence_digest"
+            ),
+            exceptional_recovery_evidence_digest=payload.get(
+                "exceptional_recovery_evidence_digest"
+            ),
+        )
+        expected_attestation = fast_path.create_validation_attestation(
+            repository=repository,
+            head_sha=expected_head.lower(),
+            registry=registry_binding,
+            command_set=registry_binding["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+        )
+    except fast_path.SecurityBlocker as exc:
+        raise ResolutionError("validation evidence is invalid or stale") from exc
     if payload != expected_attestation:
         if payload.get("head_sha") != expected_head.lower():
             raise ResolutionError(
@@ -1048,6 +967,7 @@ def load_validation_evidence(
             "eligibility_evidence_digest"
         ],
         attestation=payload,
+        validation_receipt=receipt,
     )
 
 
@@ -1189,7 +1109,27 @@ def verify_local_fix_commit(
         or local_signature.get("format") not in accepted_formats
     ):
         raise ResolutionError("fix commit local signature is not verified")
-    if validation.kind == "eligibility-bound-ready-integration":
+    if validation.kind == "attestation":
+        if validation.attestation is None:
+            raise ResolutionError("validation evidence binding is incomplete")
+        try:
+            registry_binding = _validation_registry_binding(
+                _load_repository_entry(repository)
+            )
+            fast_path.verify_validation_attestation(
+                validation.attestation,
+                repository=repository,
+                head_sha=expected_head.lower(),
+                registry=registry_binding,
+                command_set=registry_binding["validation"],
+                reviewed_state=reviewed,
+                commit_parent_sha=ancestry[1],
+                commit_tree_sha=commit_tree,
+                commit_validation_receipt_digest=trailers[0],
+            )
+        except (IndexError, fast_path.SecurityBlocker) as exc:
+            raise ResolutionError(str(exc)) from exc
+    else:
         if (
             reviewed.payload is None
             or validation.attestation is None
