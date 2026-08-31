@@ -960,10 +960,22 @@ def load_validation_evidence(
     if payload.get("kind") in {
         "READY_INTEGRATION_VALIDATION_ATTESTATION",
         "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION",
+        "AUTHENTICATED_RESOLUTION_READY_INTEGRATION_VALIDATION_ATTESTATION",
+        "ELIGIBILITY_BOUND_AUTHENTICATED_RESOLUTION_READY_INTEGRATION_VALIDATION_ATTESTATION",
     }:
-        if payload.get("kind") != (
-            "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"
-        ) or payload.get("schema_version") != "1.2":
+        if (
+            payload.get("schema_version"),
+            payload.get("kind"),
+        ) not in {
+            (
+                "1.2",
+                "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION",
+            ),
+            (
+                "1.4",
+                "ELIGIBILITY_BOUND_AUTHENTICATED_RESOLUTION_READY_INTEGRATION_VALIDATION_ATTESTATION",
+            ),
+        }:
             raise ResolutionError(
                 "historical Ready integration attestation is not resolution authority"
             )

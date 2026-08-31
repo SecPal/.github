@@ -60,6 +60,20 @@ LOCAL_VALIDATION_TIMEOUT_SECONDS = 600
 MAX_INTEGRATION_CONFLICT_CONTENT_BYTES = 4 * 1024 * 1024
 
 
+_GitPathState = tuple[bool, str | None, str | None, str | None]
+_CONFLICT_RESOLUTION = "CONFLICT_RESOLUTION"
+_EXACT_PARENT2_PRESERVATION = "EXACT_PARENT2_PRESERVATION"
+
+
+def _git_path_state(
+    exists: bool,
+    mode: str | None,
+    object_type: str | None,
+    oid: str | None,
+) -> _GitPathState:
+    return exists, mode, object_type, oid
+
+
 def _load_evidence_helper() -> Any:
     spec = importlib.util.spec_from_file_location("secpal_pr_review_evidence_shared", EVIDENCE_HELPER)
     if spec is None or spec.loader is None:
@@ -4499,6 +4513,118 @@ def _integration_tree_delta(
     return sorted(delta, key=lambda item: item["path"])
 
 
+def _authenticated_tree_path_state(
+    repository_root: Path,
+    tree: str,
+    path: str,
+) -> _GitPathState:
+    result = _run_attestation_git(
+        repository_root,
+        ["ls-tree", "-z", "--full-tree", tree, "--", f":(literal){path}"],
+        allow_failure=True,
+    )
+    if result.returncode != 0:
+        raise fast_path.SecurityBlocker(
+            "integration path state cannot be authenticated"
+        )
+    if result.stdout == "":
+        return _git_path_state(False, None, None, None)
+    if not result.stdout.endswith("\x00") or result.stdout.count("\x00") != 1:
+        raise fast_path.SecurityBlocker(
+            "integration path state cannot be authenticated"
+        )
+    metadata, separator, observed_path = result.stdout[:-1].partition("\t")
+    parts = metadata.split()
+    if separator != "\t" or len(parts) != 3 or observed_path != path:
+        raise fast_path.SecurityBlocker(
+            "integration path state cannot be authenticated"
+        )
+    mode, object_type, oid = parts
+    if (
+        (mode, object_type)
+        not in {
+            ("100644", "blob"),
+            ("100755", "blob"),
+            ("120000", "blob"),
+            ("160000", "commit"),
+        }
+        or not OID_PATTERN.fullmatch(oid)
+    ):
+        raise fast_path.SecurityBlocker(
+            "integration path state cannot be authenticated"
+        )
+    return _git_path_state(True, mode, object_type, oid.lower())
+
+
+def _unique_integration_merge_base(
+    repository_root: Path,
+    ordered_parents: list[str],
+) -> str:
+    result = _run_attestation_git(
+        repository_root,
+        ["merge-base", "--all", *ordered_parents],
+        allow_failure=True,
+    )
+    merge_bases = result.stdout.splitlines()
+    if (
+        result.returncode != 0
+        or len(merge_bases) != 1
+        or not OID_PATTERN.fullmatch(merge_bases[0])
+    ):
+        raise fast_path.SecurityBlocker(
+            "exact parent-2 preservation requires one unambiguous merge base"
+        )
+    return merge_bases[0].lower()
+
+
+def _is_exact_parent2_preservation(
+    *,
+    base_state: _GitPathState,
+    parent1_state: _GitPathState,
+    parent2_state: _GitPathState,
+    mechanical_state: _GitPathState,
+    candidate_state: _GitPathState,
+) -> bool:
+    return (
+        candidate_state == parent2_state
+        and parent1_state != base_state
+        and parent2_state != base_state
+        and mechanical_state != parent2_state
+    )
+
+
+def _verify_exact_parent2_preservation(
+    repository_root: Path,
+    *,
+    path: str,
+    merge_base: str,
+    parent1: str,
+    parent2: str,
+    mechanical_tree: str,
+    validated_tree: str,
+) -> None:
+    base_state = _authenticated_tree_path_state(repository_root, merge_base, path)
+    parent1_state = _authenticated_tree_path_state(repository_root, parent1, path)
+    parent2_state = _authenticated_tree_path_state(repository_root, parent2, path)
+    mechanical_state = _authenticated_tree_path_state(
+        repository_root, mechanical_tree, path
+    )
+    candidate_state = _authenticated_tree_path_state(
+        repository_root, validated_tree, path
+    )
+    if not _is_exact_parent2_preservation(
+        base_state=base_state,
+        parent1_state=parent1_state,
+        parent2_state=parent2_state,
+        mechanical_state=mechanical_state,
+        candidate_state=candidate_state,
+    ):
+        raise fast_path.SecurityBlocker(
+            "integration delta path is neither an authenticated conflict "
+            "resolution nor exact parent-2 preservation"
+        )
+
+
 def _mechanical_integration_result(
     repository_root: Path,
     ordered_parents: list[str],
@@ -4723,24 +4849,81 @@ def _verify_integration_tree_delta(
         integration_evidence["mechanical_merge_tree_sha"],
         validated_tree,
     )
-    if delta != integration_evidence["manual_conflict_resolution_delta"]:
+    schema_version = integration_evidence["schema_version"]
+    if schema_version not in {"1.1", "1.2"}:
         raise fast_path.SecurityBlocker(
-            "integration manual conflict-resolution delta is not authenticated"
+            "Ready integration topology kind or version is unsupported"
+        )
+    delta_field = (
+        "manual_conflict_resolution_delta"
+        if schema_version == "1.1"
+        else "authenticated_resolution_delta"
+    )
+    if delta != integration_evidence[delta_field]:
+        raise fast_path.SecurityBlocker(
+            "integration resolution delta is not authenticated"
         )
     delta_paths = [item["path"] for item in delta]
-    if not conflict_paths:
+    if schema_version == "1.1" and not conflict_paths:
         if delta:
             raise fast_path.SecurityBlocker(
                 "clean mechanical integration cannot authorize a manual delta"
             )
         return
-    if delta_paths != conflict_paths:
+    if schema_version == "1.1":
+        if delta_paths != conflict_paths:
+            raise fast_path.SecurityBlocker(
+                "every unresolved mechanical conflict must be explicitly resolved"
+            )
+        _reject_integration_conflict_markers(
+            repository_root, validated_tree, conflict_paths
+        )
+        return
+
+    conflict_path_set = set(conflict_paths)
+    resolved_conflict_paths = [
+        path for path in delta_paths if path in conflict_path_set
+    ]
+    if resolved_conflict_paths != conflict_paths:
         raise fast_path.SecurityBlocker(
             "every unresolved mechanical conflict must be explicitly resolved"
         )
-    _reject_integration_conflict_markers(
-        repository_root, validated_tree, conflict_paths
-    )
+    preservation_paths = [
+        path for path in delta_paths if path not in conflict_path_set
+    ]
+    merge_base = None
+    if preservation_paths:
+        merge_base = _unique_integration_merge_base(
+            repository_root, integration_evidence["ordered_parent_shas"]
+        )
+    parent1, parent2 = integration_evidence["ordered_parent_shas"]
+    derived_classifications: dict[str, str] = {}
+    for path in delta_paths:
+        if path in conflict_path_set:
+            derived_classifications[path] = _CONFLICT_RESOLUTION
+        else:
+            if merge_base is None:
+                raise fast_path.SecurityBlocker(
+                    "integration resolution delta classification is incomplete"
+                )
+            _verify_exact_parent2_preservation(
+                repository_root,
+                path=path,
+                merge_base=merge_base,
+                parent1=parent1,
+                parent2=parent2,
+                mechanical_tree=mechanical_tree,
+                validated_tree=validated_tree,
+            )
+            derived_classifications[path] = _EXACT_PARENT2_PRESERVATION
+    if len(derived_classifications) != len(delta):
+        raise fast_path.SecurityBlocker(
+            "integration resolution delta classification is incomplete"
+        )
+    if conflict_paths:
+        _reject_integration_conflict_markers(
+            repository_root, validated_tree, conflict_paths
+        )
 
 
 def _verify_integration_signer(

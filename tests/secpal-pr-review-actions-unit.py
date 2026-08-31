@@ -4652,6 +4652,7 @@ def ready_integration_evidence(
     *,
     validated_tree: str,
     registry: dict[str, Any] | None = None,
+    schema_version: str = "1.1",
     remediation_cycles: int = 1,
     exceptional_recoveries: int = 1,
     exceptional_continuations: int = 0,
@@ -4663,8 +4664,8 @@ def ready_integration_evidence(
         exceptional_recoveries=exceptional_recoveries,
         exceptional_continuations=exceptional_continuations,
     )
-    return {
-        "schema_version": "1.1",
+    value = {
+        "schema_version": schema_version,
         "kind": "TWO_PARENT_READY_INTEGRATION",
         "authorization_id": "ready-integration-authorization-001",
         "repository": reviewed.repository,
@@ -4682,7 +4683,6 @@ def ready_integration_evidence(
         "validated_tree_sha": validated_tree,
         "mechanical_merge_tree_sha": validated_tree,
         "mechanical_conflict_paths": [],
-        "manual_conflict_resolution_delta": [],
         "reviewed_state_digest": reviewed.state_digest,
         "reviewed_feedback_digest": reviewed.feedback_digest,
         "validation_execution": {
@@ -4713,6 +4713,13 @@ def ready_integration_evidence(
             "cycle_3": False,
         },
     }
+    delta_field = (
+        "manual_conflict_resolution_delta"
+        if schema_version == "1.1"
+        else "authenticated_resolution_delta"
+    )
+    value[delta_field] = []
+    return value
 
 
 def ready_integration_prior_authority(
@@ -6691,39 +6698,47 @@ class FastPathTests(TestCase):
             ("historical_continuation", 2, 1, 1),
         )
         for name, remediations, recoveries, continuations in histories:
-            with self.subTest(history=name):
-                authority = fast_path.normalize_ready_integration_prior_authority(
-                    ready_integration_prior_authority(
-                        reviewed,
-                        remediation_cycles=remediations,
-                        exceptional_recoveries=recoveries,
-                        exceptional_continuations=continuations,
+            for schema_version in ("1.1", "1.2"):
+                with self.subTest(
+                    history=name, integration_schema_version=schema_version
+                ):
+                    authority = fast_path.normalize_ready_integration_prior_authority(
+                        ready_integration_prior_authority(
+                            reviewed,
+                            remediation_cycles=remediations,
+                            exceptional_recoveries=recoveries,
+                            exceptional_continuations=continuations,
+                        )
                     )
-                )
-                integration = fast_path.normalize_ready_integration_evidence(
-                    ready_integration_evidence(
-                        reviewed,
-                        validated_tree="a" * 40,
-                        remediation_cycles=remediations,
-                        exceptional_recoveries=recoveries,
-                        exceptional_continuations=continuations,
-                    ),
-                    repository="SecPal/.github",
-                    reviewed_state=reviewed,
-                    registry=fast_registry(),
-                    validated_tree_sha="a" * 40,
-                )
-                actions._verify_ready_integration_lifecycle_authority(
-                    authority, integration
-                )
-                self.assertEqual(
-                    integration["eligibility"]["exceptional_recoveries_after"],
-                    recoveries,
-                )
-                self.assertEqual(
-                    integration["eligibility"]["exceptional_continuations_after"],
-                    continuations,
-                )
+                    integration = fast_path.normalize_ready_integration_evidence(
+                        ready_integration_evidence(
+                            reviewed,
+                            validated_tree="a" * 40,
+                            schema_version=schema_version,
+                            remediation_cycles=remediations,
+                            exceptional_recoveries=recoveries,
+                            exceptional_continuations=continuations,
+                        ),
+                        repository="SecPal/.github",
+                        reviewed_state=reviewed,
+                        registry=fast_registry(),
+                        validated_tree_sha="a" * 40,
+                    )
+                    actions._verify_ready_integration_lifecycle_authority(
+                        authority, integration
+                    )
+                    self.assertEqual(
+                        integration["eligibility"][
+                            "exceptional_recoveries_after"
+                        ],
+                        recoveries,
+                    )
+                    self.assertEqual(
+                        integration["eligibility"][
+                            "exceptional_continuations_after"
+                        ],
+                        continuations,
+                    )
 
     def test_ready_integration_rejects_caller_forged_history_changes(self) -> None:
         reviewed = fast_feedback()
@@ -7559,6 +7574,700 @@ class FastPathTests(TestCase):
             ):
                 actions._verify_integration_tree_delta(
                     REPO_ROOT, integration, "a" * 40
+                )
+
+    def test_ready_integration_authenticates_exact_parent2_preservation(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="secpal-integration-parent2-preservation-"
+        ) as directory:
+            repository = Path(directory)
+
+            def git(*arguments: str) -> str:
+                return subprocess.run(
+                    ["git", *arguments],
+                    cwd=repository,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+
+            git("init", "-q")
+            git("config", "user.name", "Parent Preservation Fixture")
+            git("config", "user.email", "parent-preservation@example.test")
+            (repository / "policy.txt").write_text(
+                "base heading\nshared body\nbase ending\n", encoding="utf-8"
+            )
+            git("add", "policy.txt")
+            git("commit", "-q", "-m", "base")
+            base = git("rev-parse", "HEAD")
+
+            git("checkout", "-q", "-b", "parent1")
+            (repository / "policy.txt").write_text(
+                "parent1 heading\nshared body\nbase ending\n", encoding="utf-8"
+            )
+            git("commit", "-qam", "parent1")
+            parent1 = git("rev-parse", "HEAD")
+
+            git("checkout", "-q", "-b", "parent2", base)
+            (repository / "policy.txt").write_text(
+                "base heading\nshared body\nparent2 ending\n", encoding="utf-8"
+            )
+            git("commit", "-qam", "parent2")
+            parent2 = git("rev-parse", "HEAD")
+
+            mechanical_tree, conflict_paths = actions._mechanical_integration_result(
+                repository, [parent1, parent2]
+            )
+            self.assertEqual(conflict_paths, [])
+            self.assertEqual(
+                git("show", f"{mechanical_tree}:policy.txt"),
+                "parent1 heading\nshared body\nparent2 ending",
+            )
+            git("read-tree", mechanical_tree)
+            git("add", "policy.txt")
+            candidate_tree = git("write-tree")
+            self.assertEqual(candidate_tree, git("rev-parse", f"{parent2}^{{tree}}"))
+
+            reviewed = fast_path.StableFeedbackState(
+                repository="SecPal/.github",
+                pull_request_number=123,
+                head_sha=parent1,
+                base_ref="main",
+                base_sha=parent2,
+                pr_state="OPEN",
+                feedback={
+                    "pull_request_reactions": [],
+                    "reviews": [],
+                    "conversation_comments": [],
+                    "threads": [],
+                },
+            )
+            historical = ready_integration_evidence(
+                reviewed, validated_tree=candidate_tree
+            )
+            historical["mechanical_merge_tree_sha"] = mechanical_tree
+            historical["manual_conflict_resolution_delta"] = (
+                actions._integration_tree_delta(
+                    repository, mechanical_tree, candidate_tree
+                )
+            )
+            historical = fast_path.normalize_ready_integration_evidence(
+                historical,
+                repository="SecPal/.github",
+                reviewed_state=reviewed,
+                registry=fast_registry(),
+                validated_tree_sha=candidate_tree,
+            )
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "clean mechanical integration"
+            ):
+                actions._verify_integration_tree_delta(
+                    repository, historical, candidate_tree
+                )
+
+            extended = copy.deepcopy(historical)
+            extended["schema_version"] = "1.2"
+            extended["authenticated_resolution_delta"] = extended.pop(
+                "manual_conflict_resolution_delta"
+            )
+            extended = fast_path.normalize_ready_integration_evidence(
+                extended,
+                repository="SecPal/.github",
+                reviewed_state=reviewed,
+                registry=fast_registry(),
+                validated_tree_sha=candidate_tree,
+            )
+            actions._verify_integration_tree_delta(
+                repository, extended, candidate_tree
+            )
+
+            for caller_field in (
+                "resolution_classifications",
+                "parent2_preservation_paths",
+            ):
+                caller_controlled = copy.deepcopy(extended)
+                caller_controlled[caller_field] = ["policy.txt"]
+                with (
+                    self.subTest(caller_field=caller_field),
+                    self.assertRaisesRegex(
+                        fast_path.SecurityBlocker, "malformed or ambiguous"
+                    ),
+                ):
+                    fast_path.normalize_ready_integration_evidence(
+                        caller_controlled,
+                        repository="SecPal/.github",
+                        reviewed_state=reviewed,
+                        registry=fast_registry(),
+                        validated_tree_sha=candidate_tree,
+                    )
+
+            reinterpreted_historical = copy.deepcopy(historical)
+            reinterpreted_historical["authenticated_resolution_delta"] = (
+                reinterpreted_historical.pop("manual_conflict_resolution_delta")
+            )
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "malformed or ambiguous"
+            ):
+                fast_path.normalize_ready_integration_evidence(
+                    reinterpreted_historical,
+                    repository="SecPal/.github",
+                    reviewed_state=reviewed,
+                    registry=fast_registry(),
+                    validated_tree_sha=candidate_tree,
+                )
+
+            def extended_for(tree: str) -> dict[str, Any]:
+                value = ready_integration_evidence(
+                    reviewed,
+                    validated_tree=tree,
+                    schema_version="1.2",
+                )
+                value["mechanical_merge_tree_sha"] = mechanical_tree
+                value["authenticated_resolution_delta"] = (
+                    actions._integration_tree_delta(repository, mechanical_tree, tree)
+                )
+                return fast_path.normalize_ready_integration_evidence(
+                    value,
+                    repository="SecPal/.github",
+                    reviewed_state=reviewed,
+                    registry=fast_registry(),
+                    validated_tree_sha=tree,
+                )
+
+            for case in (
+                "third object",
+                "wrong mode",
+                "candidate deletion",
+                "candidate addition",
+            ):
+                git("read-tree", mechanical_tree)
+                (repository / "policy.txt").write_text(
+                    "base heading\nshared body\nparent2 ending\n",
+                    encoding="utf-8",
+                )
+                git("add", "policy.txt")
+                if case == "third object":
+                    (repository / "policy.txt").write_text(
+                        "unauthenticated third value\n", encoding="utf-8"
+                    )
+                    git("add", "policy.txt")
+                elif case == "wrong mode":
+                    git("update-index", "--chmod=+x", "policy.txt")
+                elif case == "candidate deletion":
+                    git("rm", "-q", "--cached", "policy.txt")
+                else:
+                    (repository / "extra.txt").write_text(
+                        "unauthenticated addition\n", encoding="utf-8"
+                    )
+                    git("add", "extra.txt")
+                rejected_tree = git("write-tree")
+                rejected = extended_for(rejected_tree)
+                with (
+                    self.subTest(rejected_candidate=case),
+                    self.assertRaisesRegex(
+                        fast_path.SecurityBlocker,
+                        "neither an authenticated conflict resolution nor exact parent-2",
+                    ),
+                ):
+                    actions._verify_integration_tree_delta(
+                        repository, rejected, rejected_tree
+                    )
+
+    def test_parent2_preservation_path_state_rules_are_exact(self) -> None:
+        absent = actions._git_path_state(False, None, None, None)
+        base_blob = actions._git_path_state(True, "100644", "blob", "1" * 40)
+        parent1_blob = actions._git_path_state(True, "100644", "blob", "2" * 40)
+        parent2_blob = actions._git_path_state(True, "100644", "blob", "3" * 40)
+        mechanical_blob = actions._git_path_state(
+            True, "100644", "blob", "4" * 40
+        )
+        executable_parent2 = actions._git_path_state(
+            True, "100755", "blob", "3" * 40
+        )
+
+        accepted = (
+            (
+                "exact blob",
+                base_blob,
+                parent1_blob,
+                parent2_blob,
+                mechanical_blob,
+                parent2_blob,
+            ),
+            (
+                "exact parent2 deletion",
+                base_blob,
+                parent1_blob,
+                absent,
+                mechanical_blob,
+                absent,
+            ),
+            (
+                "exact parent2 addition",
+                absent,
+                parent1_blob,
+                parent2_blob,
+                mechanical_blob,
+                parent2_blob,
+            ),
+        )
+        for case, base, parent1, parent2, mechanical, candidate in accepted:
+            with self.subTest(accepted=case):
+                self.assertTrue(
+                    actions._is_exact_parent2_preservation(
+                        base_state=base,
+                        parent1_state=parent1,
+                        parent2_state=parent2,
+                        mechanical_state=mechanical,
+                        candidate_state=candidate,
+                    )
+                )
+
+        rejected = (
+            (
+                "parent2 equals base",
+                base_blob,
+                parent1_blob,
+                base_blob,
+                mechanical_blob,
+                base_blob,
+            ),
+            (
+                "parent1 equals base",
+                base_blob,
+                base_blob,
+                parent2_blob,
+                mechanical_blob,
+                parent2_blob,
+            ),
+            (
+                "third object",
+                base_blob,
+                parent1_blob,
+                parent2_blob,
+                mechanical_blob,
+                mechanical_blob,
+            ),
+            (
+                "wrong mode with matching object",
+                base_blob,
+                parent1_blob,
+                parent2_blob,
+                mechanical_blob,
+                executable_parent2,
+            ),
+            (
+                "candidate deletion while parent2 retains",
+                base_blob,
+                parent1_blob,
+                parent2_blob,
+                mechanical_blob,
+                absent,
+            ),
+            (
+                "candidate addition while parent2 is absent",
+                base_blob,
+                parent1_blob,
+                absent,
+                mechanical_blob,
+                parent2_blob,
+            ),
+            (
+                "mechanical tree already equals parent2",
+                base_blob,
+                parent1_blob,
+                parent2_blob,
+                parent2_blob,
+                parent2_blob,
+            ),
+        )
+        for case, base, parent1, parent2, mechanical, candidate in rejected:
+            with self.subTest(rejected=case):
+                self.assertFalse(
+                    actions._is_exact_parent2_preservation(
+                        base_state=base,
+                        parent1_state=parent1,
+                        parent2_state=parent2,
+                        mechanical_state=mechanical,
+                        candidate_state=candidate,
+                    )
+                )
+
+    def test_authenticated_tree_path_state_preserves_git_identity(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="secpal-integration-path-state-"
+        ) as directory:
+            repository = Path(directory)
+
+            def git(*arguments: str) -> str:
+                return subprocess.run(
+                    ["git", *arguments],
+                    cwd=repository,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+
+            git("init", "-q")
+            git("config", "user.name", "Path State Fixture")
+            git("config", "user.email", "path-state@example.test")
+            (repository / "regular.txt").write_text("regular\n", encoding="utf-8")
+            executable = repository / "executable.sh"
+            executable.write_text("#!/bin/sh\n", encoding="utf-8")
+            executable.chmod(0o755)
+            (repository / "link").symlink_to("regular.txt")
+            git("add", ".")
+            git("commit", "-q", "-m", "tree states")
+            commit = git("rev-parse", "HEAD")
+            git("update-index", "--add", "--cacheinfo", f"160000,{commit},gitlink")
+            tree = git("write-tree")
+
+            for path, mode, object_type in (
+                ("regular.txt", "100644", "blob"),
+                ("executable.sh", "100755", "blob"),
+                ("link", "120000", "blob"),
+                ("gitlink", "160000", "commit"),
+            ):
+                with self.subTest(path=path):
+                    self.assertEqual(
+                        actions._authenticated_tree_path_state(
+                            repository, tree, path
+                        ),
+                        actions._git_path_state(
+                            True,
+                            mode,
+                            object_type,
+                            git("rev-parse", f"{tree}:{path}"),
+                        ),
+                    )
+            self.assertEqual(
+                actions._authenticated_tree_path_state(
+                    repository, tree, "absent.txt"
+                ),
+                actions._git_path_state(False, None, None, None),
+            )
+
+    def test_parent2_preservation_cannot_delete_parent1_only_work(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="secpal-integration-parent1-only-"
+        ) as directory:
+            repository = Path(directory)
+
+            def git(*arguments: str) -> str:
+                return subprocess.run(
+                    ["git", *arguments],
+                    cwd=repository,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+
+            git("init", "-q")
+            git("config", "user.name", "Dual Change Fixture")
+            git("config", "user.email", "dual-change@example.test")
+            (repository / "branch.txt").write_text("base\n", encoding="utf-8")
+            (repository / "main.txt").write_text("base\n", encoding="utf-8")
+            git("add", ".")
+            git("commit", "-q", "-m", "base")
+            base = git("rev-parse", "HEAD")
+            git("checkout", "-q", "-b", "parent1")
+            (repository / "branch.txt").write_text(
+                "parent1 only\n", encoding="utf-8"
+            )
+            git("commit", "-qam", "parent1")
+            parent1 = git("rev-parse", "HEAD")
+            git("checkout", "-q", "-b", "parent2", base)
+            (repository / "main.txt").write_text("parent2\n", encoding="utf-8")
+            git("commit", "-qam", "parent2")
+            parent2 = git("rev-parse", "HEAD")
+            mechanical_tree, conflict_paths = actions._mechanical_integration_result(
+                repository, [parent1, parent2]
+            )
+            self.assertEqual(conflict_paths, [])
+            git("read-tree", mechanical_tree)
+            git("add", "branch.txt")
+            candidate_tree = git("write-tree")
+            self.assertEqual(candidate_tree, git("rev-parse", f"{parent2}^{{tree}}"))
+
+            reviewed = fast_path.StableFeedbackState(
+                repository="SecPal/.github",
+                pull_request_number=123,
+                head_sha=parent1,
+                base_ref="main",
+                base_sha=parent2,
+                pr_state="OPEN",
+                feedback={
+                    "pull_request_reactions": [],
+                    "reviews": [],
+                    "conversation_comments": [],
+                    "threads": [],
+                },
+            )
+            integration = ready_integration_evidence(
+                reviewed,
+                validated_tree=candidate_tree,
+                schema_version="1.2",
+            )
+            integration["mechanical_merge_tree_sha"] = mechanical_tree
+            integration["authenticated_resolution_delta"] = (
+                actions._integration_tree_delta(
+                    repository, mechanical_tree, candidate_tree
+                )
+            )
+            integration = fast_path.normalize_ready_integration_evidence(
+                integration,
+                repository="SecPal/.github",
+                reviewed_state=reviewed,
+                registry=fast_registry(),
+                validated_tree_sha=candidate_tree,
+            )
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "neither an authenticated conflict resolution nor exact parent-2",
+            ):
+                actions._verify_integration_tree_delta(
+                    repository, integration, candidate_tree
+                )
+
+    def test_ready_integration_mixes_conflict_and_parent2_preservation(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="secpal-integration-mixed-resolution-"
+        ) as directory:
+            repository = Path(directory)
+
+            def git(*arguments: str) -> str:
+                return subprocess.run(
+                    ["git", *arguments],
+                    cwd=repository,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+
+            git("init", "-q")
+            git("config", "user.name", "Mixed Resolution Fixture")
+            git("config", "user.email", "mixed-resolution@example.test")
+            (repository / "conflict.txt").write_text("base\n", encoding="utf-8")
+            (repository / "policy.txt").write_text(
+                "base heading\nshared body\nbase ending\n", encoding="utf-8"
+            )
+            git("add", ".")
+            git("commit", "-q", "-m", "base")
+            base = git("rev-parse", "HEAD")
+
+            git("checkout", "-q", "-b", "parent1")
+            (repository / "conflict.txt").write_text("parent1\n", encoding="utf-8")
+            (repository / "policy.txt").write_text(
+                "parent1 heading\nshared body\nbase ending\n", encoding="utf-8"
+            )
+            git("commit", "-qam", "parent1")
+            parent1 = git("rev-parse", "HEAD")
+
+            git("checkout", "-q", "-b", "parent2", base)
+            (repository / "conflict.txt").write_text("parent2\n", encoding="utf-8")
+            (repository / "policy.txt").write_text(
+                "base heading\nshared body\nparent2 ending\n", encoding="utf-8"
+            )
+            git("commit", "-qam", "parent2")
+            parent2 = git("rev-parse", "HEAD")
+
+            mechanical_tree, conflict_paths = actions._mechanical_integration_result(
+                repository, [parent1, parent2]
+            )
+            self.assertEqual(conflict_paths, ["conflict.txt"])
+            git("read-tree", mechanical_tree)
+            git("add", "policy.txt")
+            (repository / "conflict.txt").write_text(
+                "reviewed resolution\n", encoding="utf-8"
+            )
+            git("add", "conflict.txt")
+            candidate_tree = git("write-tree")
+
+            reviewed = fast_path.StableFeedbackState(
+                repository="SecPal/.github",
+                pull_request_number=123,
+                head_sha=parent1,
+                base_ref="main",
+                base_sha=parent2,
+                pr_state="OPEN",
+                feedback={
+                    "pull_request_reactions": [],
+                    "reviews": [],
+                    "conversation_comments": [],
+                    "threads": [],
+                },
+            )
+            integration = ready_integration_evidence(
+                reviewed,
+                validated_tree=candidate_tree,
+                schema_version="1.2",
+            )
+            integration["mechanical_merge_tree_sha"] = mechanical_tree
+            integration["mechanical_conflict_paths"] = conflict_paths
+            integration["authenticated_resolution_delta"] = (
+                actions._integration_tree_delta(
+                    repository, mechanical_tree, candidate_tree
+                )
+            )
+            integration = fast_path.normalize_ready_integration_evidence(
+                integration,
+                repository="SecPal/.github",
+                reviewed_state=reviewed,
+                registry=fast_registry(),
+                validated_tree_sha=candidate_tree,
+            )
+            actions._verify_integration_tree_delta(
+                repository, integration, candidate_tree
+            )
+
+            omitted = copy.deepcopy(integration)
+            omitted["authenticated_resolution_delta"] = [
+                item
+                for item in omitted["authenticated_resolution_delta"]
+                if item["path"] != "conflict.txt"
+            ]
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "resolution delta is not authenticated"
+            ):
+                actions._verify_integration_tree_delta(
+                    repository, omitted, candidate_tree
+                )
+
+            for case, changed_delta in (
+                (
+                    "noncanonical",
+                    list(reversed(integration["authenticated_resolution_delta"])),
+                ),
+                (
+                    "duplicate",
+                    [
+                        integration["authenticated_resolution_delta"][0],
+                        integration["authenticated_resolution_delta"][0],
+                    ],
+                ),
+            ):
+                changed = copy.deepcopy(integration)
+                changed["authenticated_resolution_delta"] = changed_delta
+                with self.subTest(delta_shape=case), self.assertRaises(
+                    fast_path.SecurityBlocker
+                ):
+                    fast_path.normalize_ready_integration_evidence(
+                        changed,
+                        repository="SecPal/.github",
+                        reviewed_state=reviewed,
+                        registry=fast_registry(),
+                        validated_tree_sha=candidate_tree,
+                    )
+
+            for case, marker_content in (
+                (
+                    "complete conflict block",
+                    "<<<<<<< parent1\nleft\n=======\nright\n>>>>>>> parent2\n",
+                ),
+                ("truncated conflict tail", "=======\nright\n>>>>>>> parent2\n"),
+            ):
+                git("read-tree", mechanical_tree)
+                (repository / "policy.txt").write_text(
+                    "base heading\nshared body\nparent2 ending\n",
+                    encoding="utf-8",
+                )
+                git("add", "policy.txt")
+                (repository / "conflict.txt").write_text(
+                    marker_content, encoding="utf-8"
+                )
+                git("add", "conflict.txt")
+                marker_tree = git("write-tree")
+                marker_evidence = ready_integration_evidence(
+                    reviewed,
+                    validated_tree=marker_tree,
+                    schema_version="1.2",
+                )
+                marker_evidence["mechanical_merge_tree_sha"] = mechanical_tree
+                marker_evidence["mechanical_conflict_paths"] = conflict_paths
+                marker_evidence["authenticated_resolution_delta"] = (
+                    actions._integration_tree_delta(
+                        repository, mechanical_tree, marker_tree
+                    )
+                )
+                marker_evidence = fast_path.normalize_ready_integration_evidence(
+                    marker_evidence,
+                    repository="SecPal/.github",
+                    reviewed_state=reviewed,
+                    registry=fast_registry(),
+                    validated_tree_sha=marker_tree,
+                )
+                with (
+                    self.subTest(retained_markers=case),
+                    self.assertRaisesRegex(
+                        fast_path.SecurityBlocker, "retains Git conflict markers"
+                    ),
+                ):
+                    actions._verify_integration_tree_delta(
+                        repository, marker_evidence, marker_tree
+                    )
+
+    def test_parent2_preservation_rejects_multiple_merge_bases(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="secpal-integration-multiple-bases-"
+        ) as directory:
+            repository = Path(directory)
+
+            def git(*arguments: str, input_text: str | None = None) -> str:
+                return subprocess.run(
+                    ["git", *arguments],
+                    cwd=repository,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    input=input_text,
+                ).stdout.strip()
+
+            git("init", "-q")
+            git("config", "user.name", "Multiple Base Fixture")
+            git("config", "user.email", "multiple-base@example.test")
+            (repository / "base.txt").write_text("base\n", encoding="utf-8")
+            git("add", "base.txt")
+            git("commit", "-q", "-m", "base")
+            base = git("rev-parse", "HEAD")
+            git("checkout", "-q", "-b", "left")
+            (repository / "left.txt").write_text("left\n", encoding="utf-8")
+            git("add", "left.txt")
+            git("commit", "-q", "-m", "left")
+            left = git("rev-parse", "HEAD")
+            git("checkout", "-q", "-b", "right", base)
+            (repository / "right.txt").write_text("right\n", encoding="utf-8")
+            git("add", "right.txt")
+            git("commit", "-q", "-m", "right")
+            right = git("rev-parse", "HEAD")
+            left_tree = git("rev-parse", f"{left}^{{tree}}")
+            right_tree = git("rev-parse", f"{right}^{{tree}}")
+            parent1 = git(
+                "commit-tree",
+                left_tree,
+                "-p",
+                left,
+                "-p",
+                right,
+                input_text="first merge\n",
+            )
+            parent2 = git(
+                "commit-tree",
+                right_tree,
+                "-p",
+                right,
+                "-p",
+                left,
+                input_text="second merge\n",
+            )
+            self.assertEqual(
+                set(git("merge-base", "--all", parent1, parent2).splitlines()),
+                {left, right},
+            )
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "one unambiguous merge base"
+            ):
+                actions._unique_integration_merge_base(
+                    repository, [parent1, parent2]
                 )
 
     def test_ready_integration_rejects_unchanged_synthetic_conflict_tree(self) -> None:
@@ -8862,6 +9571,147 @@ class FastPathTests(TestCase):
         ):
             fast_path.verify_eligibility_bound_ready_integration_attestation(
                 historical, **verification
+            )
+
+    def test_parent2_preservation_uses_exact_new_attestation_versions(self) -> None:
+        reviewed = fast_feedback()
+        registry = fast_registry()
+        tree = "a" * 40
+        integration = ready_integration_evidence(
+            reviewed,
+            validated_tree=tree,
+            registry=registry,
+            schema_version="1.2",
+        )
+
+        def receipt(*, eligibility: bool) -> dict[str, Any]:
+            return fast_path.create_validation_receipt(
+                repository="SecPal/.github",
+                head_sha=reviewed.head_sha,
+                validated_tree_sha=tree,
+                registry=registry,
+                command_set=registry["validation"],
+                successful_result=True,
+                reviewed_state=reviewed,
+                manual_gate_evidence=[],
+                eligibility_evidence_digest="e" * 64 if eligibility else None,
+                integration_evidence_digest=fast_path.digest_json(integration),
+            )
+
+        ordinary_receipt = receipt(eligibility=False)
+        ordinary = fast_path.create_ready_integration_attestation(
+            repository="SecPal/.github",
+            head_sha="d" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            reviewed_state=reviewed,
+            validation_receipt=ordinary_receipt,
+            integration_evidence=integration,
+        )
+        self.assertEqual(
+            (ordinary["schema_version"], ordinary["kind"]),
+            (
+                "1.3",
+                "AUTHENTICATED_RESOLUTION_READY_INTEGRATION_VALIDATION_ATTESTATION",
+            ),
+        )
+        self.assertIn("authenticated_resolution_delta", ordinary)
+        self.assertNotIn("manual_conflict_resolution_delta", ordinary)
+        fast_path.verify_ready_integration_attestation(
+            ordinary,
+            repository="SecPal/.github",
+            head_sha="d" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            reviewed_state=reviewed,
+            validation_receipt=ordinary_receipt,
+            integration_evidence=integration,
+            commit_parent_shas=integration["ordered_parent_shas"],
+            commit_tree_sha=tree,
+            commit_validation_receipt_digest=ordinary_receipt["receipt_digest"],
+            commit_integration_evidence_digest=fast_path.digest_json(integration),
+        )
+
+        eligibility_receipt = receipt(eligibility=True)
+        eligibility_bound = fast_path.create_ready_integration_attestation(
+            repository="SecPal/.github",
+            head_sha="d" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            reviewed_state=reviewed,
+            validation_receipt=eligibility_receipt,
+            integration_evidence=integration,
+        )
+        self.assertEqual(
+            (eligibility_bound["schema_version"], eligibility_bound["kind"]),
+            (
+                "1.4",
+                "ELIGIBILITY_BOUND_AUTHENTICATED_RESOLUTION_READY_INTEGRATION_VALIDATION_ATTESTATION",
+            ),
+        )
+
+        verification = {
+            "repository": "SecPal/.github",
+            "head_sha": "d" * 40,
+            "registry": registry,
+            "command_set": registry["validation"],
+            "reviewed_state": reviewed,
+            "validation_receipt": eligibility_receipt,
+            "integration_evidence": integration,
+            "commit_parent_shas": integration["ordered_parent_shas"],
+            "commit_tree_sha": tree,
+            "commit_validation_receipt_digest": eligibility_receipt[
+                "receipt_digest"
+            ],
+            "commit_integration_evidence_digest": fast_path.digest_json(
+                integration
+            ),
+        }
+        fast_path.verify_eligibility_bound_ready_integration_attestation(
+            eligibility_bound, **verification
+        )
+
+        historical_integration = ready_integration_evidence(
+            reviewed, validated_tree=tree, registry=registry
+        )
+        historical_receipt = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            validated_tree_sha=tree,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+            eligibility_evidence_digest="e" * 64,
+            integration_evidence_digest=fast_path.digest_json(
+                historical_integration
+            ),
+        )
+        historical_attestation = fast_path.create_ready_integration_attestation(
+            repository="SecPal/.github",
+            head_sha="d" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            reviewed_state=reviewed,
+            validation_receipt=historical_receipt,
+            integration_evidence=historical_integration,
+        )
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "eligibility-bound"):
+            fast_path.verify_eligibility_bound_ready_integration_attestation(
+                historical_attestation, **verification
+            )
+        historical_verification = {
+            **verification,
+            "validation_receipt": historical_receipt,
+            "integration_evidence": historical_integration,
+            "commit_integration_evidence_digest": fast_path.digest_json(
+                historical_integration
+            ),
+        }
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "eligibility-bound"):
+            fast_path.verify_eligibility_bound_ready_integration_attestation(
+                eligibility_bound, **historical_verification
             )
 
     def test_remediation_evidence_cannot_select_ready_integration_topology(self) -> None:
