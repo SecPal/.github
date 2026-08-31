@@ -92,11 +92,16 @@ evidence remains readable only for the legacy resolution-eligible dispositions
 and is authenticated in its original canonical form before internal
 normalization. Version 1.0 cannot carry `follow_up` or authorize
 `TRACKED_AS_FOLLOW_UP`; those semantics require version 1.1.
-It then reads every named target
-completely, and requires its comment
-identities, body digests, reply relationships, and resolution state to match the
-feedback that was actually classified. It then verifies PR membership and
-records current resolved/outdated state. Immediately before each write or
+It then reads every named target in the authenticated original order and
+requires its comment identities, body digests, and reply relationships to match
+the feedback that was actually classified. Resolution state must also match,
+except that an exact target captured unresolved may be classified as already
+satisfied when live evidence proves it resolved and every other binding remains
+unchanged. That classification proves only the required terminal postcondition,
+never who performed the earlier resolution, and issues no mutation. An exact
+unresolved target remains actionable; every other difference is incompatible
+drift and fails closed. It then verifies PR membership and records current
+resolved/outdated state. Immediately before each write or
 successful already-resolved report, it performs two more equal complete target
 projections, rechecks the open PR and expected head, and verifies the exact
 target state. It then verifies that a mutation response
@@ -117,7 +122,9 @@ partial failure when that growth was not knowable before an earlier write.
 Duplicate or malformed direct-call inputs fail before the first read. If a
 later target fails after an earlier resolution succeeded, the helper stops
 without retry, emits one structured report naming resolved, failed, and
-unattempted targets, and exits nonzero.
+unattempted targets, and exits nonzero. A later invocation derives no remaining
+set: it re-authenticates the complete original ordered eligibility and treats
+only exact already-achieved terminal postconditions as zero-write no-ops.
 
 The resolution-only path performs no feedback classification, validation,
 attestation creation, commit, push, Required Check read, readiness audit, review

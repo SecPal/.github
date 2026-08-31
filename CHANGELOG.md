@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-08-31 - Authenticate Idempotent Fixed-Thread Satisfaction
+
+**Changed:**
+
+- preserve the complete authenticated ordered target set after a bounded
+  partial fixed-thread resolution result
+- treat an exact original target whose resolved postcondition is independently
+  proven as a stable zero-write no-op while retaining the guarded mutation path
+  and every existing drift check for unresolved targets
+
 ## 2026-08-30 - Authenticate Historical Native Compatibility Publications
 
 **Changed:**

@@ -1793,13 +1793,13 @@ def validate_expected_targets(
     return expected_targets
 
 
-def _matches_reviewed_target(
+def _matches_reviewed_target_identity(
     current: ThreadState,
     reviewed: ExpectedThreadState,
 ) -> bool:
     return (
         current.thread_id == reviewed.thread_id
-        and current.is_resolved == reviewed.is_resolved
+        and current.is_outdated == reviewed.is_outdated
         and tuple(
             (item.comment_id, item.body_digest, item.reply_to_id)
             for item in current.comments
@@ -1809,6 +1809,19 @@ def _matches_reviewed_target(
             for item in reviewed.comments
         )
     )
+
+
+def _classify_reviewed_target(
+    current: ThreadState,
+    reviewed: ExpectedThreadState,
+) -> str:
+    if not _matches_reviewed_target_identity(current, reviewed):
+        return "INCOMPATIBLE_DRIFT"
+    if current.is_resolved:
+        return "ALREADY_SATISFIED"
+    if reviewed.is_resolved:
+        return "INCOMPATIBLE_DRIFT"
+    return "ACTIONABLE"
 
 
 def _reply_state_digest(thread: ThreadState) -> tuple[str, int]:
@@ -2581,6 +2594,7 @@ def resolve_threads(
         limits.maximum_comments,
     )
     initial_targets: dict[str, TargetRead] = {}
+    target_classifications: dict[str, str] = {}
     for thread_id in thread_ids:
         target = read_target_thread(
             repository,
@@ -2591,17 +2605,22 @@ def resolve_threads(
         )
         require_expected_target(target, repository, number, expected_head)
         reviewed_target = reviewed_targets[thread_id]
-        if not _matches_reviewed_target(target.thread, reviewed_target):
+        classification = _classify_reviewed_target(
+            target.thread,
+            reviewed_target,
+        )
+        if classification == "INCOMPATIBLE_DRIFT":
             raise ResolutionError(
                 f"target thread differs from reviewed feedback: {thread_id}"
             )
         initial_targets[thread_id] = target
+        target_classifications[thread_id] = classification
 
     already_resolved: list[str] = []
     pending = [
         thread_id
         for thread_id in thread_ids
-        if not initial_targets[thread_id].thread.is_resolved
+        if target_classifications[thread_id] == "ACTIONABLE"
     ]
     applied: list[str] = []
     verified_tracked: set[str] = set()
@@ -2647,7 +2666,7 @@ def resolve_threads(
                     for remaining_thread_id in remaining_thread_ids
                 )
                 required_mutations = sum(
-                    not initial_targets[remaining_thread_id].thread.is_resolved
+                    target_classifications[remaining_thread_id] == "ACTIONABLE"
                     for remaining_thread_id in remaining_thread_ids
                 )
                 required_follow_up_reads = sum(
@@ -2698,7 +2717,7 @@ def resolve_threads(
                     raise ResolutionError(
                         f"target thread changed before resolution: {thread_id}"
                     )
-                if initial_targets[thread_id].thread.is_resolved:
+                if target_classifications[thread_id] == "ALREADY_SATISFIED":
                     already_resolved.append(thread_id)
                     continue
                 phase = "mutation"
@@ -2760,11 +2779,11 @@ def resolve_threads(
                 }
             applied.append(thread_id)
     else:
-        already_resolved = sorted(
+        already_resolved = [
             thread_id
             for thread_id in thread_ids
-            if initial_targets[thread_id].thread.is_resolved
-        )
+            if target_classifications[thread_id] == "ALREADY_SATISFIED"
+        ]
 
     return {
         "repository": repository,

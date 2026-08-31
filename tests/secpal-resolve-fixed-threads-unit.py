@@ -1019,6 +1019,86 @@ def run_late_classification_origin_fixture(
 
 
 class ResolveFixedThreadsTests(TestCase):
+    def test_resolved_target_with_outdated_state_drift_is_incompatible(
+        self,
+    ) -> None:
+        reviewed = expected_thread_state(
+            "PRRT_OUTDATED_DRIFT",
+            [("PRRC_OUTDATED_DRIFT", "Keep outdated state bound.", None)],
+            resolved=False,
+            outdated=False,
+        )
+        current = MODULE.ThreadState(
+            thread_id="PRRT_OUTDATED_DRIFT",
+            is_resolved=True,
+            is_outdated=True,
+            comments=(
+                MODULE.ThreadCommentState(
+                    comment_id="PRRC_OUTDATED_DRIFT",
+                    database_id=1,
+                    body_digest=MODULE._body_digest("Keep outdated state bound."),
+                    reply_to_id=None,
+                ),
+            ),
+        )
+
+        self.assertEqual(
+            MODULE._classify_reviewed_target(current, reviewed),
+            "INCOMPATIBLE_DRIFT",
+        )
+
+    def test_target_classification_preserves_reviewed_outdated_state(
+        self,
+    ) -> None:
+        thread_id = "PRRT_OUTDATED_CLASSIFICATION"
+        comment_id = "PRRC_OUTDATED_CLASSIFICATION"
+        body = "Preserve the reviewed target state."
+
+        def current(*, resolved: bool, outdated: bool) -> Any:
+            return MODULE.ThreadState(
+                thread_id=thread_id,
+                is_resolved=resolved,
+                is_outdated=outdated,
+                comments=(
+                    MODULE.ThreadCommentState(
+                        comment_id=comment_id,
+                        database_id=1,
+                        body_digest=MODULE._body_digest(body),
+                        reply_to_id=None,
+                    ),
+                ),
+            )
+
+        cases = (
+            (False, False, True, "ALREADY_SATISFIED"),
+            (True, True, False, "INCOMPATIBLE_DRIFT"),
+            (False, False, False, "ACTIONABLE"),
+            (False, True, True, "ALREADY_SATISFIED"),
+            (True, False, False, "INCOMPATIBLE_DRIFT"),
+        )
+        for reviewed_resolved, reviewed_outdated, current_resolved, expected in cases:
+            reviewed = expected_thread_state(
+                thread_id,
+                [(comment_id, body, None)],
+                resolved=reviewed_resolved,
+                outdated=reviewed_outdated,
+            )
+            with self.subTest(
+                reviewed_resolved=reviewed_resolved,
+                reviewed_outdated=reviewed_outdated,
+                current_resolved=current_resolved,
+            ):
+                self.assertEqual(
+                    MODULE._classify_reviewed_target(
+                        current(
+                            resolved=current_resolved,
+                            outdated=reviewed_outdated,
+                        ),
+                        reviewed,
+                    ),
+                    expected,
+                )
+
     def test_integration_evidence_is_normalized_before_receipt_reconstruction(
         self,
     ) -> None:
@@ -4396,6 +4476,70 @@ class ResolveFixedThreadsTests(TestCase):
         self.assertEqual(result["resolved"], [])
         self.assertEqual(len(fake.calls), 3)
 
+    def test_resolved_postcondition_still_requires_exact_comment_state(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        reviewed = [
+            ("PRRC_root", "reviewed body", None),
+            ("PRRC_reply", "reviewed reply", "PRRC_root"),
+        ]
+        cases = {
+            "substituted top-level comment": [
+                ("PRRC_other", "reviewed body", None),
+                ("PRRC_reply", "reviewed reply", "PRRC_other"),
+            ],
+            "changed finding body": [
+                ("PRRC_root", "changed body", None),
+                ("PRRC_reply", "reviewed reply", "PRRC_root"),
+            ],
+            "material new reply": [
+                *reviewed,
+                ("PRRC_newReply", "new reply", "PRRC_root"),
+            ],
+            "edited reply": [
+                ("PRRC_root", "reviewed body", None),
+                ("PRRC_reply", "edited reply", "PRRC_root"),
+            ],
+            "deleted reply": [reviewed[0]],
+        }
+        for label, live_comments in cases.items():
+            fake = FakeGh(
+                [
+                    target_response(
+                        thread_id,
+                        resolved=True,
+                        comments=live_comments,
+                    )
+                ]
+            )
+            with (
+                self.subTest(label=label),
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "differs from reviewed feedback",
+                ),
+            ):
+                resolve_threads(
+                    "SecPal/api",
+                    123,
+                    "a" * 40,
+                    (thread_id,),
+                    apply=True,
+                    expected_targets={
+                        thread_id: expected_thread_state(
+                            thread_id,
+                            reviewed,
+                        )
+                    },
+                    runner=fake,
+                )
+            self.assertEqual(len(fake.calls), 1)
+            self.assertFalse(
+                any(
+                    f"query={MODULE.RESOLVE_MUTATION}" in call
+                    for call in fake.calls
+                )
+            )
+
     def test_already_resolved_tracked_follow_up_is_reverified_before_safe_report(self) -> None:
         thread_id = "PRRT_exampleTrackedResolved"
         identity = MODULE.FollowUpIdentity(
@@ -5101,30 +5245,30 @@ class ResolveFixedThreadsTests(TestCase):
 
         self.assertEqual(len(fake.calls), 1)
 
-    def test_outdated_change_after_reviewed_capture_remains_allowed_and_stable(
+    def test_outdated_change_after_reviewed_capture_blocks_before_mutation(
         self,
     ) -> None:
         thread_id = "PRRT_exampleOne"
         fake = FakeGh(
             [
                 target_response(thread_id, outdated=True),
-                target_response(thread_id, outdated=True),
-                target_response(thread_id, outdated=True),
-                resolve_response(thread_id),
             ]
         )
 
-        result = resolve_threads(
-            "SecPal/api",
-            123,
-            "a" * 40,
-            [thread_id],
-            apply=True,
-            runner=fake,
-        )
+        with self.assertRaisesRegex(
+            MODULE.ResolutionError,
+            "differs from reviewed feedback",
+        ):
+            resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [thread_id],
+                apply=True,
+                runner=fake,
+            )
 
-        self.assertEqual(result["resolved"], [thread_id])
-        self.assertEqual(len(fake.calls), 4)
+        self.assertEqual(len(fake.calls), 1)
 
     def test_reviewed_state_digest_drift_blocks_before_validation_or_github(
         self,
@@ -5467,6 +5611,41 @@ class ResolveFixedThreadsTests(TestCase):
             evidence_digest.evidence_digest,
             MODULE._digest_json(manifest),
         )
+
+    def test_eligibility_rejects_caller_selected_target_set(self) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        third = "PRRT_exampleThree"
+        reviewed = reviewed_state_payload(first, [])
+        manifest = eligibility_payload(reviewed, (first, second))
+        cases = {
+            "omitted": (second,),
+            "added": (first, second, third),
+            "duplicated": (first, first, second),
+            "reordered": (second, first),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "eligibility.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            for label, caller_targets in cases.items():
+                with (
+                    self.subTest(label=label),
+                    self.assertRaisesRegex(
+                        MODULE.ResolutionError,
+                        "cover requested threads exactly",
+                    ),
+                ):
+                    MODULE.load_eligibility_evidence(
+                        path,
+                        "SecPal/api",
+                        123,
+                        reviewed["head_sha"],
+                        reviewed["state_digest"],
+                        caller_targets,
+                        authenticated_evidence_digest=MODULE._digest_json(
+                            manifest
+                        ),
+                    )
 
     def test_authenticated_v1_0_legacy_eligibility_remains_readable(self) -> None:
         thread_id = "PRRT_exampleOne"
@@ -6615,6 +6794,110 @@ class ResolveFixedThreadsTests(TestCase):
         )
         self.assertEqual(result["unattempted"], [third])
         self.assertEqual(result["status"], "failed")
+
+    def test_partial_batch_reinvocation_authenticates_resolved_prefix(self) -> None:
+        first = "PRRT_exampleOne"
+        second = "PRRT_exampleTwo"
+        eligibility = eligibility_payload(
+            reviewed_state_payload(first, []),
+            (first, second),
+        )
+        eligibility["eligible_threads"][1].update(
+            classification="INVALID_FALSE_OR_MISLEADING",
+            disposition="DISPROVEN_WITH_EVIDENCE",
+        )
+        partial = FakeGh(
+            [
+                target_response(first),
+                target_response(second),
+                target_response(first),
+                target_response(first),
+                resolve_response(first),
+                target_response(second),
+                target_response(second, head="c" * 40),
+            ]
+        )
+
+        first_result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            (first, second),
+            apply=True,
+            eligibility_manifest=eligibility,
+            runner=partial,
+        )
+
+        self.assertEqual(first_result["status"], "failed")
+        self.assertEqual(first_result["resolved"], [first])
+        self.assertEqual(first_result["failed"][0]["thread_id"], second)
+        self.assertEqual(first_result["failed"][0]["phase"], "recheck")
+        self.assertEqual(first_result["failed"][0]["write_result"], "not_attempted")
+
+        repeated = FakeGh(
+            [
+                target_response(first, resolved=True),
+                target_response(second),
+                target_response(first, resolved=True),
+                target_response(first, resolved=True),
+                target_response(second),
+                target_response(second),
+                resolve_response(second),
+            ]
+        )
+
+        repeated_result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            (first, second),
+            apply=True,
+            eligibility_manifest=eligibility,
+            runner=repeated,
+        )
+
+        self.assertEqual(repeated_result["status"], "success")
+        self.assertEqual(repeated_result["already_resolved"], [first])
+        self.assertEqual(repeated_result["resolved"], [second])
+        self.assertEqual(len(repeated.calls), 7)
+        self.assertEqual(
+            sum(
+                f"query={MODULE.RESOLVE_MUTATION}" in call
+                for call in repeated.calls
+            ),
+            1,
+        )
+
+        duplicate = FakeGh(
+            [
+                target_response(first, resolved=True),
+                target_response(second, resolved=True),
+                target_response(first, resolved=True),
+                target_response(first, resolved=True),
+                target_response(second, resolved=True),
+                target_response(second, resolved=True),
+            ]
+        )
+
+        duplicate_result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            (first, second),
+            apply=True,
+            eligibility_manifest=eligibility,
+            runner=duplicate,
+        )
+
+        self.assertEqual(duplicate_result["status"], "success")
+        self.assertEqual(duplicate_result["already_resolved"], [first, second])
+        self.assertEqual(duplicate_result["resolved"], [])
+        self.assertFalse(
+            any(
+                f"query={MODULE.RESOLVE_MUTATION}" in call
+                for call in duplicate.calls
+            )
+        )
 
     def test_follow_up_operational_error_uses_structured_partial_failure(
         self,

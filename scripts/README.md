@@ -119,8 +119,13 @@ bind its allowed classification/disposition and finding evidence to the
 reviewed state. Its canonical digest must be authenticated by the signed
 validation receipt and final attestation, so it cannot be created or changed
 after validation. Together they bind the operation to the caller-provided PR
-head and reviewed target-comment identities, digests, and resolution state. After one
-initial complete target read, it requires two more equal complete target
+head, the complete original ordered target set, and reviewed target-comment
+identities, digests, and resolution state. An exact original target whose
+reviewed state was unresolved may be classified as already satisfied when its
+live state is resolved and every other binding still matches; that authenticated
+postcondition produces no write. Every unresolved exact target retains the
+ordinary guarded mutation path, and every other difference fails closed. After
+one initial complete target read, the resolver requires two more equal complete target
 projections immediately before each write or successful already-resolved
 report, and keeps thread resolution separate from CI and merge-readiness
 decisions. It accepts
