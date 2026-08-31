@@ -1019,6 +1019,86 @@ def run_late_classification_origin_fixture(
 
 
 class ResolveFixedThreadsTests(TestCase):
+    def test_resolved_target_with_outdated_state_drift_is_incompatible(
+        self,
+    ) -> None:
+        reviewed = expected_thread_state(
+            "PRRT_OUTDATED_DRIFT",
+            [("PRRC_OUTDATED_DRIFT", "Keep outdated state bound.", None)],
+            resolved=False,
+            outdated=False,
+        )
+        current = MODULE.ThreadState(
+            thread_id="PRRT_OUTDATED_DRIFT",
+            is_resolved=True,
+            is_outdated=True,
+            comments=(
+                MODULE.ThreadCommentState(
+                    comment_id="PRRC_OUTDATED_DRIFT",
+                    database_id=1,
+                    body_digest=MODULE._body_digest("Keep outdated state bound."),
+                    reply_to_id=None,
+                ),
+            ),
+        )
+
+        self.assertEqual(
+            MODULE._classify_reviewed_target(current, reviewed),
+            "INCOMPATIBLE_DRIFT",
+        )
+
+    def test_target_classification_preserves_reviewed_outdated_state(
+        self,
+    ) -> None:
+        thread_id = "PRRT_OUTDATED_CLASSIFICATION"
+        comment_id = "PRRC_OUTDATED_CLASSIFICATION"
+        body = "Preserve the reviewed target state."
+
+        def current(*, resolved: bool, outdated: bool) -> Any:
+            return MODULE.ThreadState(
+                thread_id=thread_id,
+                is_resolved=resolved,
+                is_outdated=outdated,
+                comments=(
+                    MODULE.ThreadCommentState(
+                        comment_id=comment_id,
+                        database_id=1,
+                        body_digest=MODULE._body_digest(body),
+                        reply_to_id=None,
+                    ),
+                ),
+            )
+
+        cases = (
+            (False, False, True, "ALREADY_SATISFIED"),
+            (True, True, False, "INCOMPATIBLE_DRIFT"),
+            (False, False, False, "ACTIONABLE"),
+            (False, True, True, "ALREADY_SATISFIED"),
+            (True, False, False, "INCOMPATIBLE_DRIFT"),
+        )
+        for reviewed_resolved, reviewed_outdated, current_resolved, expected in cases:
+            reviewed = expected_thread_state(
+                thread_id,
+                [(comment_id, body, None)],
+                resolved=reviewed_resolved,
+                outdated=reviewed_outdated,
+            )
+            with self.subTest(
+                reviewed_resolved=reviewed_resolved,
+                reviewed_outdated=reviewed_outdated,
+                current_resolved=current_resolved,
+            ):
+                self.assertEqual(
+                    MODULE._classify_reviewed_target(
+                        current(
+                            resolved=current_resolved,
+                            outdated=reviewed_outdated,
+                        ),
+                        reviewed,
+                    ),
+                    expected,
+                )
+
     def test_integration_evidence_is_normalized_before_receipt_reconstruction(
         self,
     ) -> None:
@@ -5165,30 +5245,30 @@ class ResolveFixedThreadsTests(TestCase):
 
         self.assertEqual(len(fake.calls), 1)
 
-    def test_outdated_change_after_reviewed_capture_remains_allowed_and_stable(
+    def test_outdated_change_after_reviewed_capture_blocks_before_mutation(
         self,
     ) -> None:
         thread_id = "PRRT_exampleOne"
         fake = FakeGh(
             [
                 target_response(thread_id, outdated=True),
-                target_response(thread_id, outdated=True),
-                target_response(thread_id, outdated=True),
-                resolve_response(thread_id),
             ]
         )
 
-        result = resolve_threads(
-            "SecPal/api",
-            123,
-            "a" * 40,
-            [thread_id],
-            apply=True,
-            runner=fake,
-        )
+        with self.assertRaisesRegex(
+            MODULE.ResolutionError,
+            "differs from reviewed feedback",
+        ):
+            resolve_threads(
+                "SecPal/api",
+                123,
+                "a" * 40,
+                [thread_id],
+                apply=True,
+                runner=fake,
+            )
 
-        self.assertEqual(result["resolved"], [thread_id])
-        self.assertEqual(len(fake.calls), 4)
+        self.assertEqual(len(fake.calls), 1)
 
     def test_reviewed_state_digest_drift_blocks_before_validation_or_github(
         self,
