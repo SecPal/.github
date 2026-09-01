@@ -61,12 +61,13 @@ def verify_signature(
 
 
 class Chain:
-    def __init__(self, heads: list[str]) -> None:
+    def __init__(self, heads: list[str], *, pull_request: int = PULL_REQUEST) -> None:
         self.heads = heads
+        self.pull_request = pull_request
         self.initialization = authority.create_delivery_initialization(
             repository=REPOSITORY,
             delivery_issue=DELIVERY_ISSUE,
-            pull_request=PULL_REQUEST,
+            pull_request=pull_request,
             initial_head_sha=heads[0],
             validation_receipt_digest="1" * 64,
             final_attestation_digest="2" * 64,
@@ -98,7 +99,7 @@ class Chain:
             repository=REPOSITORY,
             delivery_issue=DELIVERY_ISSUE,
             lifecycle_id=self.lifecycle_id,
-            pull_request=PULL_REQUEST,
+            pull_request=self.pull_request,
             predecessor_authority_digest=(
                 None if not self.authorities else self.authorities[-1]["authority_digest"]
             ),
@@ -171,10 +172,13 @@ class RecoveryFixture:
         authorization_scope_omissions: tuple[str, ...] = (),
         authorization_signer: str = SIGNER,
         authorization_delivery_issue: int = DELIVERY_ISSUE,
-        authorization_pull_request: int = PULL_REQUEST,
+        authorization_pull_request: int | None = None,
         authorization_lifecycle_id: str | None = None,
+        pull_request: int = PULL_REQUEST,
+        reviewed_pull_request: int | bool | None = None,
         prior_continuation: bool = False,
     ) -> None:
+        self.pull_request = pull_request
         self.source = root / "source"
         self.remote = root / "publication.git"
         subprocess.run(["git", "init", "-q", str(self.source)], check=True)
@@ -259,7 +263,7 @@ class RecoveryFixture:
             check=True,
         )
 
-        chain = Chain(self.heads)
+        chain = Chain(self.heads, pull_request=pull_request)
         chain.append("INITIALIZED_DRAFT")
         chain.append("UNRESTRICTED_REVIEW_CONSUMED")
         chain.append("REMEDIATION_COMPLETED", head=self.heads[1])
@@ -274,7 +278,11 @@ class RecoveryFixture:
         )
         self.reviewed = fast_path.StableFeedbackState(
             repository=REPOSITORY,
-            pull_request_number=PULL_REQUEST,
+            pull_request_number=(
+                pull_request
+                if reviewed_pull_request is None
+                else reviewed_pull_request
+            ),
             head_sha=self.heads[2],
             base_ref="main",
             base_sha=self.heads[0],
@@ -296,7 +304,7 @@ class RecoveryFixture:
         self.eligibility = {
             "schema_version": "1.1",
             "repository": REPOSITORY,
-            "pull_request_number": PULL_REQUEST,
+            "pull_request_number": pull_request,
             "reviewed_head_sha": self.reviewed.head_sha,
             "reviewed_state_digest": self.reviewed.state_digest,
             "eligible_threads": [
@@ -311,6 +319,11 @@ class RecoveryFixture:
             ],
         }
         eligibility_digest = fast_path.digest_json(self.eligibility)
+        effective_authorization_pull_request = (
+            pull_request
+            if authorization_pull_request is None
+            else authorization_pull_request
+        )
         authorization_lifecycle = replace(
             self.predecessor.lifecycle,
             lifecycle_id=(
@@ -318,7 +331,7 @@ class RecoveryFixture:
                 if authorization_lifecycle_id is None
                 else authorization_lifecycle_id
             ),
-            pull_request=authorization_pull_request,
+            pull_request=effective_authorization_pull_request,
             head_sha=(
                 self.heads[2]
                 if authorization_predecessor_head is None
@@ -326,7 +339,7 @@ class RecoveryFixture:
             ),
         )
         authorization_scope = {
-            "pull_request": authorization_pull_request,
+            "pull_request": effective_authorization_pull_request,
             "predecessor_head_sha": (
                 self.heads[2]
                 if authorization_predecessor_head is None
@@ -406,7 +419,7 @@ class RecoveryFixture:
                 "authorization_id": authorization["authorization_id"],
                 "repository": REPOSITORY,
                 "delivery_issue_number": DELIVERY_ISSUE,
-                "pull_request_number": PULL_REQUEST,
+                "pull_request_number": pull_request,
                 "prior_ready_head_sha": self.heads[2],
                 "prior_ready_tree_sha": self.trees[2],
                 "recovery_tree_sha": self.trees[3],
@@ -441,7 +454,7 @@ class RecoveryFixture:
         repository_root: Path | None = None,
         repository: str = REPOSITORY,
         delivery_issue: int = DELIVERY_ISSUE,
-        pull_request: int = PULL_REQUEST,
+        pull_request: int | None = None,
         resulting_head_sha: str | None = None,
     ) -> Any:
         return orchestration.verify_exceptional_recovery_authority(
@@ -460,7 +473,9 @@ class RecoveryFixture:
             ),
             repository=repository,
             delivery_issue=delivery_issue,
-            pull_request=pull_request,
+            pull_request=(
+                self.pull_request if pull_request is None else pull_request
+            ),
             resulting_head_sha=(
                 self.heads[3] if resulting_head_sha is None else resulting_head_sha
             ),
@@ -541,6 +556,41 @@ class ExceptionalRecoveryAuthorityTests(TestCase):
         self.assertEqual(verified.recovery_tree_sha, fixture.trees[3])
         self.assertEqual(verified.finding_ids, (FINDING_ID,))
         self.assertEqual(verified.thread_ids, (THREAD_ID,))
+
+    def test_reviewed_state_rejects_boolean_pull_request_identities(self) -> None:
+        fixture = self.fixture()
+        for boolean_identity in (True, False):
+            with self.subTest(pull_request_number=boolean_identity):
+                payload = fixture.reviewed.to_dict()
+                payload["pull_request_number"] = boolean_identity
+                with self.assertRaises(fast_path.SecurityBlocker):
+                    internally_consistent = fast_path.StableFeedbackState.from_payload(
+                        payload
+                    ).to_dict()
+                    fast_path.verify_reviewed_state_evidence(internally_consistent)
+
+    def test_reviewed_state_accepts_positive_integer_pull_request_identities(
+        self,
+    ) -> None:
+        fixture = self.fixture()
+        for pull_request in (1, PULL_REQUEST):
+            with self.subTest(pull_request_number=pull_request):
+                payload = fixture.reviewed.to_dict()
+                payload["pull_request_number"] = pull_request
+                internally_consistent = fast_path.StableFeedbackState.from_payload(
+                    payload
+                ).to_dict()
+                reviewed = fast_path.verify_reviewed_state_evidence(
+                    internally_consistent
+                )
+                self.assertEqual(reviewed.pull_request_number, pull_request)
+
+    def test_exceptional_recovery_rejects_boolean_integer_pr_alias(self) -> None:
+        with self.assertRaises(
+            (fast_path.SecurityBlocker, orchestration.LifecycleOrchestrationError)
+        ):
+            fixture = self.fixture(pull_request=1, reviewed_pull_request=True)
+            fixture.verify()
 
     def test_signed_authorization_operation_mismatch_fails(self) -> None:
         fixture = self.fixture(authorization_operation="REMEDIATION_COMPLETED")

@@ -901,8 +901,9 @@ class StableFeedbackState:
         self.repository = _require_string(self.repository, "repository")
         if not REPOSITORY.fullmatch(self.repository):
             raise SecurityBlocker("repository identity is invalid")
-        if not isinstance(self.pull_request_number, int) or self.pull_request_number < 1:
-            raise SecurityBlocker("pull request identity is invalid")
+        self.pull_request_number = _require_positive_integer(
+            self.pull_request_number, "pull request identity"
+        )
         self.head_sha = _require_oid(self.head_sha, "stable feedback head")
         self.base_ref = _require_string(self.base_ref, "stable feedback base")
         self.base_sha = _require_oid(self.base_sha, "stable feedback base SHA")
