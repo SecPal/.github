@@ -532,6 +532,26 @@ def verify_exceptional_recovery_authority(
     finding_ids = sorted(flattened_findings)
     eligibility_digest = fast_path.digest_json(eligibility)
 
+    _authorization(
+        orchestration_authorization,
+        event_id=transition.event_id,
+        operation="EXCEPTIONAL_RECOVERY",
+        expected_scope={
+            "pull_request": pull_request,
+            "predecessor_head_sha": predecessor.head_sha,
+            "resulting_head_sha": resulting_head_sha,
+            "reviewed_state_digest": reviewed.state_digest,
+            "reviewed_feedback_digest": reviewed.feedback_digest,
+            "eligibility_evidence_digest": eligibility_digest,
+            "finding_ids": finding_ids,
+            "thread_ids": thread_ids,
+        },
+        observed=transition.predecessor,
+        lifecycle=predecessor,
+        verifier=_verify_user_authorization,
+        verified_item=authorization,
+    )
+
     try:
         prior_tree = _immutable_commit_tree(
             repository_root, repository, predecessor.head_sha
@@ -563,22 +583,6 @@ def verify_exceptional_recovery_authority(
         raise LifecycleOrchestrationError(
             "Exceptional Recovery projection differs from verified authority"
         )
-
-    _authorization(
-        orchestration_authorization,
-        event_id=transition.event_id,
-        operation="EXCEPTIONAL_RECOVERY",
-        expected_scope={
-            "pull_request": pull_request,
-            "predecessor_head_sha": predecessor.head_sha,
-            "resulting_head_sha": resulting_head_sha,
-            "finding_ids": finding_ids,
-        },
-        observed=transition.predecessor,
-        lifecycle=predecessor,
-        verifier=_verify_user_authorization,
-        verified_item=authorization,
-    )
 
     try:
         predecessor_state = authority._validate_state(

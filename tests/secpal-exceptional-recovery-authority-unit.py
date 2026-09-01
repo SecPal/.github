@@ -163,7 +163,12 @@ class RecoveryFixture:
         authorization_operation: str = "EXCEPTIONAL_RECOVERY",
         authorization_predecessor_head: str | None = None,
         authorization_resulting_head: str | None = None,
+        authorization_reviewed_state_digest: str | None = None,
+        authorization_reviewed_feedback_digest: str | None = None,
+        authorization_eligibility_evidence_digest: str | None = None,
         authorization_finding_ids: list[str] | None = None,
+        authorization_thread_ids: list[str] | None = None,
+        authorization_scope_omissions: tuple[str, ...] = (),
         authorization_signer: str = SIGNER,
         authorization_delivery_issue: int = DELIVERY_ISSUE,
         authorization_pull_request: int = PULL_REQUEST,
@@ -267,71 +272,6 @@ class RecoveryFixture:
         self.predecessor = publication.enroll_existing_lifecycle(
             chain.published(), signer_identity=SIGNER, signer=signer_for()
         )
-        authorization_lifecycle = replace(
-            self.predecessor.lifecycle,
-            lifecycle_id=(
-                self.predecessor.lifecycle.lifecycle_id
-                if authorization_lifecycle_id is None
-                else authorization_lifecycle_id
-            ),
-            pull_request=authorization_pull_request,
-            head_sha=(
-                self.heads[2]
-                if authorization_predecessor_head is None
-                else authorization_predecessor_head
-            ),
-        )
-        self.authorization = orchestration.create_user_authorization(
-            authorization_id="fixture-recovery-authorization",
-            repository=REPOSITORY,
-            delivery_issue=authorization_delivery_issue,
-            lifecycle=authorization_lifecycle,
-            publication_oid=self.predecessor.publication_oid,
-            publication_digest=self.predecessor.publication_digest,
-            operation=authorization_operation,
-            reason="Correct the exact generic finding",
-            scope={
-                "pull_request": authorization_pull_request,
-                "predecessor_head_sha": (
-                    self.heads[2]
-                    if authorization_predecessor_head is None
-                    else authorization_predecessor_head
-                ),
-                "resulting_head_sha": (
-                    self.heads[3]
-                    if authorization_resulting_head is None
-                    else authorization_resulting_head
-                ),
-                "finding_ids": (
-                    [FINDING_ID]
-                    if authorization_finding_ids is None
-                    else authorization_finding_ids
-                ),
-            },
-            signer_identity=authorization_signer,
-            signer=signer_for(authorization_signer),
-        )
-        authorization = authority.loads_closed_json(self.authorization)
-        event_id = (
-            "authorization:" + "f" * 64
-            if substituted_event_id
-            else f"authorization:{authorization['authorization_digest']}"
-        )
-        checkpoint = copy.deepcopy(chain.checkpoint)
-        chain.append(transition_kind, head=self.heads[3], event_id=event_id)
-        chain.checkpoint = checkpoint
-        self.recovery_publication = publication.advance_current_terminal(
-            chain.published(), signer_identity=SIGNER, signer=signer_for()
-        )
-        if later_successor:
-            chain.append("EXCEPTIONAL_CONTINUATION", head=self.heads[4])
-            chain.checkpoint = checkpoint
-            self.current_publication = publication.advance_current_terminal(
-                chain.published(), signer_identity=SIGNER, signer=signer_for()
-            )
-        else:
-            self.current_publication = self.recovery_publication
-
         self.reviewed = fast_path.StableFeedbackState(
             repository=REPOSITORY,
             pull_request_number=PULL_REQUEST,
@@ -371,6 +311,94 @@ class RecoveryFixture:
             ],
         }
         eligibility_digest = fast_path.digest_json(self.eligibility)
+        authorization_lifecycle = replace(
+            self.predecessor.lifecycle,
+            lifecycle_id=(
+                self.predecessor.lifecycle.lifecycle_id
+                if authorization_lifecycle_id is None
+                else authorization_lifecycle_id
+            ),
+            pull_request=authorization_pull_request,
+            head_sha=(
+                self.heads[2]
+                if authorization_predecessor_head is None
+                else authorization_predecessor_head
+            ),
+        )
+        authorization_scope = {
+            "pull_request": authorization_pull_request,
+            "predecessor_head_sha": (
+                self.heads[2]
+                if authorization_predecessor_head is None
+                else authorization_predecessor_head
+            ),
+            "resulting_head_sha": (
+                self.heads[3]
+                if authorization_resulting_head is None
+                else authorization_resulting_head
+            ),
+            "reviewed_state_digest": (
+                self.reviewed.state_digest
+                if authorization_reviewed_state_digest is None
+                else authorization_reviewed_state_digest
+            ),
+            "reviewed_feedback_digest": (
+                self.reviewed.feedback_digest
+                if authorization_reviewed_feedback_digest is None
+                else authorization_reviewed_feedback_digest
+            ),
+            "eligibility_evidence_digest": (
+                eligibility_digest
+                if authorization_eligibility_evidence_digest is None
+                else authorization_eligibility_evidence_digest
+            ),
+            "finding_ids": (
+                [FINDING_ID]
+                if authorization_finding_ids is None
+                else authorization_finding_ids
+            ),
+            "thread_ids": (
+                [THREAD_ID]
+                if authorization_thread_ids is None
+                else authorization_thread_ids
+            ),
+        }
+        for omitted_field in authorization_scope_omissions:
+            authorization_scope.pop(omitted_field)
+        self.authorization = orchestration.create_user_authorization(
+            authorization_id="fixture-recovery-authorization",
+            repository=REPOSITORY,
+            delivery_issue=authorization_delivery_issue,
+            lifecycle=authorization_lifecycle,
+            publication_oid=self.predecessor.publication_oid,
+            publication_digest=self.predecessor.publication_digest,
+            operation=authorization_operation,
+            reason="Correct the exact generic finding",
+            scope=authorization_scope,
+            signer_identity=authorization_signer,
+            signer=signer_for(authorization_signer),
+        )
+        authorization = authority.loads_closed_json(self.authorization)
+        event_id = (
+            "authorization:" + "f" * 64
+            if substituted_event_id
+            else f"authorization:{authorization['authorization_digest']}"
+        )
+        checkpoint = copy.deepcopy(chain.checkpoint)
+        chain.append(transition_kind, head=self.heads[3], event_id=event_id)
+        chain.checkpoint = checkpoint
+        self.recovery_publication = publication.advance_current_terminal(
+            chain.published(), signer_identity=SIGNER, signer=signer_for()
+        )
+        if later_successor:
+            chain.append("EXCEPTIONAL_CONTINUATION", head=self.heads[4])
+            chain.checkpoint = checkpoint
+            self.current_publication = publication.advance_current_terminal(
+                chain.published(), signer_identity=SIGNER, signer=signer_for()
+            )
+        else:
+            self.current_publication = self.recovery_publication
+
         self.recovery = fast_path.normalize_exceptional_recovery_evidence(
             {
                 "schema_version": "1.0",
@@ -538,6 +566,23 @@ class ExceptionalRecoveryAuthorityTests(TestCase):
         with self.assertRaises(orchestration.LifecycleOrchestrationError):
             fixture.verify()
 
+    def test_signed_authorization_required_review_scope_omission_fails(self) -> None:
+        fixture = self.fixture(authorization_scope_omissions=("thread_ids",))
+
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            fixture.verify()
+
+    def test_valid_signature_over_substituted_review_scope_fails(self) -> None:
+        fixture = self.fixture(
+            authorization_reviewed_state_digest="5" * 64,
+            authorization_reviewed_feedback_digest="6" * 64,
+            authorization_eligibility_evidence_digest="7" * 64,
+            authorization_thread_ids=["PRRT_attacker_substitute"],
+        )
+
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            fixture.verify()
+
     def test_non_recovery_lifecycle_transition_fails(self) -> None:
         fixture = self.fixture(transition_kind="HEAD_ADVANCED")
 
@@ -590,6 +635,42 @@ class ExceptionalRecoveryAuthorityTests(TestCase):
                 changed[field] = "0" * 64
                 with self.assertRaises(orchestration.LifecycleOrchestrationError):
                     fixture.verify(reviewed=changed)
+
+    def test_coordinated_review_authority_substitution_fails(self) -> None:
+        fixture = self.fixture()
+        reviewed_payload = fixture.reviewed.to_dict()
+        reviewed_payload["threads"][0]["node_id"] = "PRRT_attacker_substitute"
+        substituted_reviewed = fast_path.StableFeedbackState.from_payload(
+            reviewed_payload
+        )
+        substituted_eligibility = copy.deepcopy(fixture.eligibility)
+        substituted_eligibility[
+            "reviewed_state_digest"
+        ] = substituted_reviewed.state_digest
+        substituted_eligibility["eligible_threads"][0][
+            "thread_id"
+        ] = "PRRT_attacker_substitute"
+        substituted_eligibility_digest = fast_path.digest_json(
+            substituted_eligibility
+        )
+        substituted_recovery = copy.deepcopy(fixture.recovery)
+        substituted_recovery[
+            "reviewed_state_digest"
+        ] = substituted_reviewed.state_digest
+        substituted_recovery[
+            "reviewed_feedback_digest"
+        ] = substituted_reviewed.feedback_digest
+        substituted_recovery[
+            "eligibility_evidence_digest"
+        ] = substituted_eligibility_digest
+        substituted_recovery["thread_ids"] = ["PRRT_attacker_substitute"]
+
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            fixture.verify(
+                substituted_recovery,
+                reviewed=substituted_reviewed.to_dict(),
+                eligibility=substituted_eligibility,
+            )
 
     def test_eligibility_and_thread_set_substitution_fails(self) -> None:
         fixture = self.fixture()
