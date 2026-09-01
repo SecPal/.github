@@ -22,6 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.secpal_pr_review import lifecycle_authority as authority
+from scripts.secpal_pr_review import fast_path
 
 REPOSITORY = "SecPal/.github"
 ISSUE = 750
@@ -178,7 +179,155 @@ def verify_raw(authorities: list[dict[str, Any]], events: list[dict[str, Any]]) 
     )
 
 
+def authenticated_external_evidence(
+    *,
+    observed: list[dict[str, Any]],
+    state: dict[str, Any],
+    repository: str = "Example/governance",
+    delivery_issue: int = 41,
+    pull_request: int = 42,
+) -> authority.VerifiedExactStateAdoptionExternalEvidence:
+    reviewed = fast_path.StableFeedbackState(
+        repository=repository, pull_request_number=pull_request,
+        head_sha=HEADS[1], base_ref="main", base_sha=HEADS[0],
+        pr_state="OPEN", feedback={
+            "pull_request_reactions": [], "reviews": [],
+            "conversation_comments": [], "threads": [],
+        },
+    )
+    registry = {"manual_gates": []}
+    receipt = fast_path.create_validation_receipt(
+        repository=repository, head_sha=reviewed.head_sha,
+        validated_tree_sha=HEADS[3], registry=registry, command_set=[],
+        successful_result=True, reviewed_state=reviewed,
+        manual_gate_evidence=[],
+    )
+    attestation = fast_path.create_validation_attestation(
+        repository=repository, head_sha=HEADS[2], registry=registry,
+        command_set=[], successful_result=True, reviewed_state=reviewed,
+        validation_receipt=receipt,
+    )
+    validation = fast_path.verify_validation_attestation(
+        attestation, repository=repository, head_sha=HEADS[2],
+        registry=registry, command_set=[], reviewed_state=reviewed,
+        commit_parent_sha=HEADS[1], commit_tree_sha=HEADS[3],
+        commit_validation_receipt_digest=receipt["receipt_digest"],
+    )
+    commit = {
+        "oid": HEADS[2],
+        "source": "USER",
+        "signer_identity": SIGNER,
+        "local_signature": {
+            "verified": True, "state": "valid", "format": "ssh",
+        },
+        "github_verification": {"verified": True, "reason": "valid"},
+    }
+    with patch.object(
+        authority,
+        "_load_delivery_signature_policy",
+        return_value={
+            "accepted_formats": ["ssh", "openpgp"],
+            "require_github_verified": True,
+        },
+    ):
+        return authority.authenticate_exact_state_adoption_external_evidence(
+            repository=repository,
+            delivery_issue=delivery_issue,
+            pull_request=pull_request,
+            head_sha=HEADS[2],
+            tree_sha=HEADS[3],
+            pull_request_state="OPEN",
+            commit_signature_evidence=commit,
+            validation_evidence=validation,
+            observed_pre_enrollment_history=observed,
+            intended_state=state,
+        )
+
+
 class LifecycleAuthorityTests(TestCase):
+    def test_exact_adoption_constructor_requires_verified_external_evidence(self) -> None:
+        parameters = inspect.signature(
+            authority.create_exact_state_adoption_evidence
+        ).parameters
+        self.assertIn("verified_external_evidence", parameters)
+        for caller_selected in (
+            "commit_signature_status",
+            "validation_receipt_digest",
+            "source_validation_evidence_digest",
+            "adoption_source_evidence_digest",
+            "supporting_evidence",
+            "supporting_evidence_digests",
+        ):
+            self.assertNotIn(caller_selected, parameters)
+
+        forged = fast_path.VerifiedValidationEvidence(
+            repository="Example/governance", pull_request_number=42,
+            head_sha=HEADS[2],
+            tree_sha=HEADS[3], validation_receipt_digest="2" * 64,
+            final_attestation_digest="4" * 64,
+            source_validation_evidence_digest="3" * 64,
+            _verification_seal=object(),
+        )
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "validation evidence"
+        ):
+            authority.authenticate_exact_state_adoption_external_evidence(
+                repository="Example/governance", delivery_issue=41,
+                pull_request=42, head_sha=HEADS[2], tree_sha=HEADS[3],
+                pull_request_state="OPEN", commit_signature_evidence={},
+                validation_evidence=forged,
+                observed_pre_enrollment_history=[], intended_state={},
+            )
+
+    def test_exact_adoption_rejects_fabricated_ordinary_ready_provenance(self) -> None:
+        state = authority.initial_state()
+        state.update(
+            unrestricted_review_count=1,
+            remediation_cycle_count=2,
+            draft=False,
+            ready=True,
+            ready_transition_count=1,
+            ready_history=[
+                {
+                    "sequence": 1,
+                    "transition_kind": "DRAFT_TO_READY",
+                    "event_authorization_digest": "1" * 64,
+                }
+            ],
+        )
+        observed = [
+            {"sequence": 1, "kind": "PR_CREATED_DRAFT", "observed_at": "2026-08-01T00:00:00Z", "head_sha": HEADS[0], "reviewed_head_sha": None},
+            {"sequence": 2, "kind": "DRAFT_TO_READY_OBSERVED", "observed_at": "2026-08-02T00:00:00Z", "head_sha": HEADS[0], "reviewed_head_sha": None},
+            {"sequence": 3, "kind": "REVIEW_SUBMITTED", "observed_at": "2026-08-03T00:00:00Z", "head_sha": HEADS[0], "reviewed_head_sha": HEADS[0]},
+            {"sequence": 4, "kind": "REMEDIATION_HEAD_OBSERVED", "observed_at": "2026-08-04T00:00:00Z", "head_sha": HEADS[1], "reviewed_head_sha": None},
+            {"sequence": 5, "kind": "REMEDIATION_HEAD_OBSERVED", "observed_at": "2026-08-05T00:00:00Z", "head_sha": HEADS[2], "reviewed_head_sha": None},
+        ]
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError,
+            "ordinary authorization provenance",
+        ):
+            authenticated_external_evidence(observed=observed, state=state)
+
+    def test_adoption_timestamp_requires_a_real_canonical_utc_instant(self) -> None:
+        for invalid in (
+            "2026-99-99T99:99:99Z",
+            "2026-02-30T12:00:00Z",
+            "2026-08-01T24:00:00Z",
+            "2026-08-01T12:60:00Z",
+            "2026-08-01T12:00:60Z",
+            "2026-08-01T12:00:00+00:00",
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(
+                authority.LifecycleAuthorityError
+            ):
+                authority._require_adoption_timestamp(invalid, "adoption timestamp")
+        self.assertEqual(
+            authority._require_adoption_timestamp(
+                "2026-08-01T12:00:00Z", "adoption timestamp"
+            ),
+            "2026-08-01T12:00:00Z",
+        )
+
     def test_exact_state_adoption_preserves_ready_before_review_observation(self) -> None:
         observed = [
             {
@@ -228,7 +377,7 @@ class LifecycleAuthorityTests(TestCase):
                 {
                     "sequence": 1,
                     "transition_kind": "DRAFT_TO_READY",
-                    "event_authorization_digest": "1" * 64,
+                    "observation_digest": authority.digest_json(observed[1]),
                 }
             ],
         )
@@ -243,21 +392,10 @@ class LifecycleAuthorityTests(TestCase):
             )
 
         evidence = authority.create_exact_state_adoption_evidence(
-            repository="Example/governance",
-            delivery_issue=41,
-            pull_request=42,
-            head_sha=HEADS[2],
-            tree_sha=HEADS[3],
-            pull_request_state="OPEN",
-            commit_signature_status="VERIFIED",
-            commit_signer_identity=SIGNER,
-            validation_receipt_digest="2" * 64,
-            source_validation_evidence_digest="3" * 64,
-            adoption_source_evidence_digest="4" * 64,
-            observed_pre_enrollment_history=observed,
-            intended_state=state,
+            verified_external_evidence=authenticated_external_evidence(
+                observed=observed, state=state
+            ),
             adoption_timestamp="2026-08-06T00:00:00Z",
-            supporting_evidence_digests=["5" * 64],
         )
         authorization = authority.create_exact_state_adoption_authorization(
             adoption_evidence=evidence,

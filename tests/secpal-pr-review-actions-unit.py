@@ -6861,7 +6861,7 @@ class FastPathTests(TestCase):
             adoption_source_evidence_digest=authority[
                 "prior_final_attestation_digest"
             ],
-            source_validation_evidence_digest="f" * 64,
+            source_validation_evidence_digest="e" * 64,
         )
         published = SimpleNamespace(
             publication_oid=authority["publication"]["object_oid"],
@@ -6880,14 +6880,27 @@ class FastPathTests(TestCase):
             return_value=(lifecycle_authority, lifecycle_publication),
         ):
             actions._verify_ready_integration_published_authority(
-                authority, integration
+                authority,
+                integration,
+                verified_source_validation_evidence_digest="e" * 64,
             )
+            published.lifecycle.source_validation_evidence_digest = "f" * 64
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "source evidence"
+            ):
+                actions._verify_ready_integration_published_authority(
+                    authority,
+                    integration,
+                    verified_source_validation_evidence_digest="e" * 64,
+                )
             published.lifecycle.adoption_source_evidence_digest = "0" * 64
             with self.assertRaisesRegex(
                 fast_path.SecurityBlocker, "adoption source evidence"
             ):
                 actions._verify_ready_integration_published_authority(
-                    authority, integration
+                    authority,
+                    integration,
+                    verified_source_validation_evidence_digest="e" * 64,
                 )
 
     def test_ready_integration_rejects_actual_default_branch_sha_drift(self) -> None:

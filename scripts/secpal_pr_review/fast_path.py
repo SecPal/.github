@@ -960,6 +960,32 @@ class StableFeedbackState:
         }
 
 
+_VERIFIED_VALIDATION_EVIDENCE = object()
+
+
+@dataclass(frozen=True)
+class VerifiedValidationEvidence:
+    """Canonical source evidence exposed only after full attestation verification."""
+
+    repository: str
+    pull_request_number: int
+    head_sha: str
+    tree_sha: str
+    validation_receipt_digest: str
+    final_attestation_digest: str
+    source_validation_evidence_digest: str
+    _verification_seal: object
+
+
+def is_verified_validation_evidence(value: Any) -> bool:
+    """Reject caller-constructed validation summaries at trust boundaries."""
+
+    return (
+        isinstance(value, VerifiedValidationEvidence)
+        and value._verification_seal is _VERIFIED_VALIDATION_EVIDENCE
+    )
+
+
 def verify_reviewed_state_evidence(value: Any) -> StableFeedbackState:
     """Verify one complete closed reviewed-state document."""
 
@@ -1809,7 +1835,19 @@ def verify_validation_attestation(
     commit_parent_sha: str,
     commit_tree_sha: str,
     commit_validation_receipt_digest: str | None,
-) -> None:
+) -> VerifiedValidationEvidence:
+    if isinstance(reviewed_state, StableFeedbackState):
+        reviewed_pull_request = reviewed_state.pull_request_number
+    elif isinstance(reviewed_state.payload, dict):
+        reviewed_pull_request = reviewed_state.payload.get("pull_request_number")
+    else:
+        reviewed_pull_request = None
+    if (
+        not isinstance(reviewed_pull_request, int)
+        or isinstance(reviewed_pull_request, bool)
+        or reviewed_pull_request <= 0
+    ):
+        raise SecurityBlocker("reviewed pull-request identity is missing")
     if (
         _require_oid(commit_parent_sha, "validated commit parent")
         != reviewed_state.head_sha
@@ -1853,6 +1891,26 @@ def verify_validation_attestation(
         raise SecurityBlocker("validation attestation binding is invalid or stale")
     if attestation["successful_result"] is not True:
         raise SecurityBlocker("complete validation did not succeed")
+    source_binding = {
+        "repository": repository,
+        "pull_request_number": reviewed_pull_request,
+        "head_sha": head_sha,
+        "tree_sha": commit_tree_sha,
+        "validation_receipt_digest": receipt["receipt_digest"],
+        "final_attestation_digest": expected["attestation_digest"],
+        "reviewed_state_digest": reviewed_state.state_digest,
+        "reviewed_feedback_digest": reviewed_state.feedback_digest,
+    }
+    return VerifiedValidationEvidence(
+        repository=repository,
+        pull_request_number=reviewed_pull_request,
+        head_sha=head_sha,
+        tree_sha=commit_tree_sha,
+        validation_receipt_digest=receipt["receipt_digest"],
+        final_attestation_digest=expected["attestation_digest"],
+        source_validation_evidence_digest=digest_json(source_binding),
+        _verification_seal=_VERIFIED_VALIDATION_EVIDENCE,
+    )
 
 
 def verify_commit_signatures(

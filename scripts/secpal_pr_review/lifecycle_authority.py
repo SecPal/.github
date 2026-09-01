@@ -14,6 +14,7 @@ import base64
 import binascii
 import copy
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from functools import cache
 import hashlib
 import importlib.util
@@ -26,7 +27,14 @@ import sys
 import tempfile
 from typing import Any, Callable, Mapping, Sequence
 
-from .fast_path import canonical_json_bytes, digest_json
+from .fast_path import (
+    SecurityBlocker,
+    VerifiedValidationEvidence,
+    canonical_json_bytes,
+    digest_json,
+    is_verified_validation_evidence,
+    verify_commit_signatures,
+)
 
 
 SCHEMA_VERSION = "1.0"
@@ -132,6 +140,29 @@ class VerifiedLifecycleAuthority:
     validation_receipt_digest: str | None = None
     source_validation_evidence_digest: str | None = None
     adoption_source_evidence_digest: str | None = None
+
+
+_VERIFIED_EXACT_ADOPTION_EVIDENCE = object()
+
+
+@dataclass(frozen=True)
+class VerifiedExactStateAdoptionExternalEvidence:
+    """Verifier-derived delivery facts accepted by exact adoption assembly."""
+
+    repository: str
+    delivery_issue: int
+    pull_request: int
+    head_sha: str
+    tree_sha: str
+    pull_request_state: str
+    commit_signature_evidence_digest: str
+    validation_receipt_digest: str
+    source_validation_evidence_digest: str
+    adoption_source_evidence_digest: str
+    observed_pre_enrollment_history: tuple[dict[str, Any], ...]
+    intended_state: dict[str, Any]
+    supporting_evidence_digests: tuple[str, ...]
+    _verification_seal: object
 
 
 @dataclass(frozen=True)
@@ -251,6 +282,15 @@ AUTHORITY_FIELDS = frozenset(
         "authority_digest",
     }
 )
+CURRENT_HEAD_EVIDENCE_FIELDS = frozenset(
+    {
+        "head_sha",
+        "tree_sha",
+        "validation_receipt_digest",
+        "source_validation_evidence_digest",
+        "final_attestation_digest",
+    }
+)
 SIGNATURE_FIELDS = frozenset({"format", "signer_identity", "value"})
 STATE_FIELDS = frozenset(
     {
@@ -269,6 +309,9 @@ STATE_FIELDS = frozenset(
 )
 HISTORY_FIELDS = frozenset(
     {"sequence", "transition_kind", "event_authorization_digest"}
+)
+ADOPTED_HISTORY_FIELDS = frozenset(
+    {"sequence", "transition_kind", "observation_digest"}
 )
 INITIALIZATION_FIELDS = frozenset(
     {
@@ -330,7 +373,7 @@ EXACT_ADOPTION_EVIDENCE_FIELDS = frozenset(
         "schema_version", "kind", "domain", "proof_version", "repository",
         "delivery_issue", "pull_request", "head_sha", "tree_sha",
         "pull_request_state", "commit_signature_status",
-        "commit_signer_identity", "validation_receipt_digest",
+        "commit_signature_evidence_digest", "validation_receipt_digest",
         "source_validation_evidence_digest", "adoption_source_evidence_digest",
         "observed_pre_enrollment_history", "observed_history_digest",
         "intended_state", "intended_state_digest", "adoption_timestamp",
@@ -1007,6 +1050,29 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
     )
 
 
+def _load_delivery_signature_policy(repository: str) -> dict[str, Any]:
+    """Load commit-signature policy from the same maintained registry."""
+
+    try:
+        registry = loads_closed_json(_TRUST_REGISTRY.read_bytes())
+    except OSError as exc:
+        raise LifecycleAuthorityError(
+            "maintained delivery signature policy is unavailable"
+        ) from exc
+    entries = registry.get("repositories") if isinstance(registry, dict) else None
+    matches = [
+        item for item in entries
+        if isinstance(item, dict) and item.get("repository") == repository
+    ] if isinstance(entries, list) else []
+    if len(matches) != 1 or not isinstance(
+        matches[0].get("signature_policy"), dict
+    ):
+        raise LifecycleAuthorityError(
+            "repository has no unique maintained delivery signature policy"
+        )
+    return copy.deepcopy(matches[0]["signature_policy"])
+
+
 @cache
 def _load_trusted_command_helper() -> Any:
     """Load the maintained external-command trust boundary by exact path."""
@@ -1196,29 +1262,50 @@ def _history_entry(transition: str, event_digest: str, sequence: int) -> dict[st
     }
 
 
-def _validate_history(value: Any, label: str, allowed: frozenset[str]) -> list[dict[str, Any]]:
+def _validate_history(
+    value: Any,
+    label: str,
+    allowed: frozenset[str],
+    *,
+    allow_adopted_observations: bool = False,
+) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         raise LifecycleAuthorityError(f"{label} must be a list")
     normalized: list[dict[str, Any]] = []
     for index, item in enumerate(value, 1):
-        entry = _require_closed(item, HISTORY_FIELDS, f"{label} entry")
+        if isinstance(item, Mapping) and set(item) == HISTORY_FIELDS:
+            entry = _require_closed(item, HISTORY_FIELDS, f"{label} entry")
+            provenance_field = "event_authorization_digest"
+        elif (
+            allow_adopted_observations
+            and isinstance(item, Mapping)
+            and set(item) == ADOPTED_HISTORY_FIELDS
+        ):
+            entry = _require_closed(
+                item, ADOPTED_HISTORY_FIELDS, f"{label} adopted entry"
+            )
+            provenance_field = "observation_digest"
+        else:
+            raise LifecycleAuthorityError(
+                f"{label} entry contains unknown or missing fields"
+            )
         if entry["sequence"] != index or isinstance(entry["sequence"], bool):
             raise LifecycleAuthorityError(f"{label} sequence is not canonical")
         if entry["transition_kind"] not in allowed:
             raise LifecycleAuthorityError(f"{label} transition is invalid")
-        normalized.append(
-            {
-                "sequence": index,
-                "transition_kind": entry["transition_kind"],
-                "event_authorization_digest": _require_digest(
-                    entry["event_authorization_digest"], f"{label} event digest"
-                ),
-            }
-        )
+        normalized.append({
+            "sequence": index,
+            "transition_kind": entry["transition_kind"],
+            provenance_field: _require_digest(
+                entry[provenance_field], f"{label} provenance digest"
+            ),
+        })
     return normalized
 
 
-def _validate_state(value: Any) -> dict[str, Any]:
+def _validate_state(
+    value: Any, *, allow_adopted_observations: bool = False
+) -> dict[str, Any]:
     state = _require_closed(value, STATE_FIELDS, "lifecycle state")
     review = _require_counter(
         state["unrestricted_review_count"],
@@ -1250,6 +1337,7 @@ def _validate_state(value: Any) -> dict[str, Any]:
         state["ready_history"],
         "Ready history",
         frozenset({"DRAFT_TO_READY", "READY_TO_DRAFT"}),
+        allow_adopted_observations=allow_adopted_observations,
     )
     ready_count = _require_counter(
         state["ready_transition_count"],
@@ -1264,11 +1352,13 @@ def _validate_state(value: Any) -> dict[str, Any]:
         state["exceptional_recovery_history"],
         "exceptional-recovery history",
         frozenset({"EXCEPTIONAL_RECOVERY"}),
+        allow_adopted_observations=allow_adopted_observations,
     )
     continuation_history = _validate_history(
         state["exceptional_continuation_history"],
         "exceptional-continuation history",
         frozenset({"EXCEPTIONAL_CONTINUATION"}),
+        allow_adopted_observations=allow_adopted_observations,
     )
     if recovery != len(recovery_history) or continuation != len(continuation_history):
         raise LifecycleAuthorityError("exceptional lifecycle counts do not match history")
@@ -1287,18 +1377,18 @@ def _validate_state(value: Any) -> dict[str, Any]:
     }
 
 
-def derive_state(
+def _derive_state(
     predecessor_state: Mapping[str, Any],
     transition_kind: str,
     event_authorization_digest: str,
-    **caller_assertions: Any,
+    *,
+    allow_adopted_observations: bool,
 ) -> dict[str, Any]:
-    """Derive the sole permitted next state; caller-supplied results are refused."""
-
-    if caller_assertions:
-        raise LifecycleAuthorityError("caller-supplied resulting lifecycle state is forbidden")
     transition_kind = _require_transition_kind(transition_kind, allow_genesis=False)
-    state = copy.deepcopy(_validate_state(dict(predecessor_state)))
+    state = copy.deepcopy(_validate_state(
+        dict(predecessor_state),
+        allow_adopted_observations=allow_adopted_observations,
+    ))
     digest = _require_digest(
         event_authorization_digest, "transition authorization digest"
     )
@@ -1353,7 +1443,29 @@ def derive_state(
         # Persist one exact authorization without manufacturing a review or
         # remediation counter and without creating another lifecycle cycle.
         pass
-    return _validate_state(state)
+    return _validate_state(
+        state, allow_adopted_observations=allow_adopted_observations
+    )
+
+
+def derive_state(
+    predecessor_state: Mapping[str, Any],
+    transition_kind: str,
+    event_authorization_digest: str,
+    **caller_assertions: Any,
+) -> dict[str, Any]:
+    """Derive the sole permitted next state; caller-supplied results are refused."""
+
+    if caller_assertions:
+        raise LifecycleAuthorityError(
+            "caller-supplied resulting lifecycle state is forbidden"
+        )
+    return _derive_state(
+        predecessor_state,
+        transition_kind,
+        event_authorization_digest,
+        allow_adopted_observations=False,
+    )
 
 
 def create_transition_authorization(
@@ -1575,8 +1687,19 @@ def _verify_authority_shape(
     *,
     accepted_signers: frozenset[str],
     signature_verifier: SignatureVerifier,
+    allow_adopted_observations: bool = False,
 ) -> dict[str, Any]:
-    authority = _require_closed(value, AUTHORITY_FIELDS, "lifecycle authority")
+    fields = set(value) if isinstance(value, Mapping) else set()
+    has_current_evidence = fields == AUTHORITY_FIELDS | {"current_head_evidence"}
+    if has_current_evidence and not allow_adopted_observations:
+        raise LifecycleAuthorityError(
+            "ordinary lifecycle authority cannot carry adopted current evidence"
+        )
+    authority = _require_closed(
+        value,
+        AUTHORITY_FIELDS | ({"current_head_evidence"} if has_current_evidence else set()),
+        "lifecycle authority",
+    )
     if authority["schema_version"] != SCHEMA_VERSION:
         raise LifecycleAuthorityError("unknown lifecycle-authority version")
     if authority["kind"] != AUTHORITY_KIND or authority["domain"] != AUTHORITY_DOMAIN:
@@ -1596,8 +1719,31 @@ def _verify_authority_shape(
     if authority["predecessor_head_sha"] is not None:
         _require_oid(authority["predecessor_head_sha"], "predecessor head")
     if authority["state_before"] is not None:
-        _validate_state(authority["state_before"])
-    _validate_state(authority["state_after"])
+        _validate_state(
+            authority["state_before"],
+            allow_adopted_observations=allow_adopted_observations,
+        )
+    _validate_state(
+        authority["state_after"],
+        allow_adopted_observations=allow_adopted_observations,
+    )
+    if has_current_evidence:
+        current = _require_closed(
+            authority["current_head_evidence"],
+            CURRENT_HEAD_EVIDENCE_FIELDS,
+            "adopted current-head evidence",
+        )
+        if current["head_sha"] != authority["head_sha"]:
+            raise LifecycleAuthorityError(
+                "adopted current-head evidence does not bind authority head"
+            )
+        _require_oid(current["tree_sha"], "adopted current tree")
+        for field in (
+            "validation_receipt_digest",
+            "source_validation_evidence_digest",
+            "final_attestation_digest",
+        ):
+            _require_digest(current[field], f"adopted current {field}")
     signer = _require_identity(authority["signer_identity"], "authority signer")
     signed = {
         key: copy.deepcopy(item) for key, item in authority.items() if key != "authority_digest"
@@ -1873,11 +2019,24 @@ def _legacy_checkpoint_state(value: Any) -> dict[str, Any]:
     return state
 
 
-def _require_adoption_timestamp(value: Any, label: str) -> str:
+def _parse_adoption_timestamp(value: Any, label: str) -> datetime:
     if not isinstance(value, str) or not re.fullmatch(
         r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", value
     ):
         raise LifecycleAuthorityError(f"{label} is invalid")
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError as exc:
+        raise LifecycleAuthorityError(f"{label} is invalid") from exc
+    if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != value:
+        raise LifecycleAuthorityError(f"{label} is not canonical UTC")
+    return parsed
+
+
+def _require_adoption_timestamp(value: Any, label: str) -> str:
+    _parse_adoption_timestamp(value, label)
     return value
 
 
@@ -1897,20 +2056,21 @@ def _normalize_observed_pre_enrollment_history(
         }
     )
     normalized: list[dict[str, Any]] = []
-    previous_timestamp: str | None = None
+    previous_instant: datetime | None = None
     for sequence, raw in enumerate(value, 1):
         item = _require_closed(
             raw, OBSERVED_HISTORY_FIELDS, "observed pre-enrollment history entry"
         )
         kind = item["kind"]
         timestamp = _require_adoption_timestamp(item["observed_at"], "observation time")
+        instant = _parse_adoption_timestamp(timestamp, "observation time")
         head = _require_oid(item["head_sha"], "observed head")
         reviewed_head = item["reviewed_head_sha"]
         if (
             item["sequence"] != sequence
             or isinstance(item["sequence"], bool)
             or kind not in allowed
-            or (previous_timestamp is not None and timestamp < previous_timestamp)
+            or (previous_instant is not None and instant < previous_instant)
             or (kind == "REVIEW_SUBMITTED") != (reviewed_head is not None)
         ):
             raise LifecycleAuthorityError(
@@ -1927,8 +2087,10 @@ def _normalize_observed_pre_enrollment_history(
                 "reviewed_head_sha": reviewed_head,
             }
         )
-        previous_timestamp = timestamp
-    state = _validate_state(dict(intended_state))
+        previous_instant = instant
+    state = _validate_state(
+        dict(intended_state), allow_adopted_observations=True
+    )
     kinds = [item["kind"] for item in normalized]
     if kinds[0] != "PR_CREATED_DRAFT" or normalized[-1]["head_sha"] != expected_head:
         raise LifecycleAuthorityError(
@@ -1962,34 +2124,173 @@ def _normalize_observed_pre_enrollment_history(
         raise LifecycleAuthorityError(
             "observed pre-enrollment history does not authenticate intended state"
         )
+    history_provenance = {
+        "ready_history": [
+            {
+                "sequence": sequence,
+                "transition_kind": (
+                    "DRAFT_TO_READY"
+                    if item["kind"] == "DRAFT_TO_READY_OBSERVED"
+                    else "READY_TO_DRAFT"
+                ),
+                "observation_digest": digest_json(item),
+            }
+            for sequence, item in enumerate(
+                (
+                    entry for entry in normalized
+                    if entry["kind"] in {
+                        "DRAFT_TO_READY_OBSERVED", "READY_TO_DRAFT_OBSERVED"
+                    }
+                ),
+                1,
+            )
+        ],
+        "exceptional_recovery_history": [
+            {
+                "sequence": sequence,
+                "transition_kind": "EXCEPTIONAL_RECOVERY",
+                "observation_digest": digest_json(item),
+            }
+            for sequence, item in enumerate(
+                (
+                    entry for entry in normalized
+                    if entry["kind"] == "EXCEPTIONAL_RECOVERY_OBSERVED"
+                ),
+                1,
+            )
+        ],
+        "exceptional_continuation_history": [
+            {
+                "sequence": sequence,
+                "transition_kind": "EXCEPTIONAL_CONTINUATION",
+                "observation_digest": digest_json(item),
+            }
+            for sequence, item in enumerate(
+                (
+                    entry for entry in normalized
+                    if entry["kind"] == "EXCEPTIONAL_CONTINUATION_OBSERVED"
+                ),
+                1,
+            )
+        ],
+    }
+    for field, expected_history in history_provenance.items():
+        if state[field] != expected_history:
+            raise LifecycleAuthorityError(
+                "adopted history cannot claim ordinary authorization provenance"
+            )
     return normalized
 
 
-def create_exact_state_adoption_evidence(
-    *, repository: str, delivery_issue: int, pull_request: int, head_sha: str,
-    tree_sha: str, pull_request_state: str, commit_signature_status: str,
-    commit_signer_identity: str, validation_receipt_digest: str,
-    source_validation_evidence_digest: str, adoption_source_evidence_digest: str,
+def authenticate_exact_state_adoption_external_evidence(
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    head_sha: str,
+    tree_sha: str,
+    pull_request_state: str,
+    commit_signature_evidence: Mapping[str, Any],
+    validation_evidence: VerifiedValidationEvidence,
     observed_pre_enrollment_history: Sequence[Mapping[str, Any]],
-    intended_state: Mapping[str, Any], adoption_timestamp: str,
-    supporting_evidence_digests: Sequence[str],
-) -> dict[str, Any]:
-    """Create canonical facts for one exact pre-enrollment adoption boundary."""
+    intended_state: Mapping[str, Any],
+) -> VerifiedExactStateAdoptionExternalEvidence:
+    """Authenticate external artifacts before any adoption proof is assembled."""
 
     repository = _require_repository(repository)
     issue = _require_positive_int(delivery_issue, "adopted delivery issue")
     pr = _require_positive_int(pull_request, "adopted pull request")
     head = _require_oid(head_sha, "adopted head")
     tree = _require_oid(tree_sha, "adopted tree")
-    if pull_request_state != "OPEN" or commit_signature_status != "VERIFIED":
+    if pull_request_state != "OPEN":
+        raise LifecycleAuthorityError("adoption requires an open delivery")
+    if not is_verified_validation_evidence(validation_evidence) or (
+        validation_evidence.repository != repository
+        or validation_evidence.pull_request_number != pr
+        or validation_evidence.head_sha != head
+        or validation_evidence.tree_sha != tree
+    ):
+        raise LifecycleAuthorityError(
+            "adoption validation evidence does not bind the delivery"
+        )
+    commit = copy.deepcopy(dict(commit_signature_evidence))
+    try:
+        verified_commits = verify_commit_signatures(
+            [commit], _load_delivery_signature_policy(repository)
+        )
+    except SecurityBlocker as exc:
+        raise LifecycleAuthorityError(
+            "adoption commit signature evidence is invalid"
+        ) from exc
+    if len(verified_commits) != 1 or verified_commits[0]["oid"] != head:
+        raise LifecycleAuthorityError(
+            "adoption commit signature evidence changed identity"
+        )
+    signature_evidence_digest = digest_json(verified_commits[0])
+    state = _validate_state(
+        dict(intended_state), allow_adopted_observations=True
+    )
+    history = _normalize_observed_pre_enrollment_history(
+        list(observed_pre_enrollment_history),
+        expected_head=head,
+        intended_state=state,
+    )
+    supporting_digests = tuple(sorted({
+        validation_evidence.validation_receipt_digest,
+        validation_evidence.source_validation_evidence_digest,
+        validation_evidence.final_attestation_digest,
+        signature_evidence_digest,
+        digest_json(history),
+    }))
+    return VerifiedExactStateAdoptionExternalEvidence(
+        repository=repository,
+        delivery_issue=issue,
+        pull_request=pr,
+        head_sha=head,
+        tree_sha=tree,
+        pull_request_state=pull_request_state,
+        commit_signature_evidence_digest=signature_evidence_digest,
+        validation_receipt_digest=validation_evidence.validation_receipt_digest,
+        source_validation_evidence_digest=(
+            validation_evidence.source_validation_evidence_digest
+        ),
+        adoption_source_evidence_digest=validation_evidence.final_attestation_digest,
+        observed_pre_enrollment_history=tuple(copy.deepcopy(history)),
+        intended_state=copy.deepcopy(state),
+        supporting_evidence_digests=supporting_digests,
+        _verification_seal=_VERIFIED_EXACT_ADOPTION_EVIDENCE,
+    )
+
+
+def _assemble_exact_state_adoption_evidence(
+    *, repository: str, delivery_issue: int, pull_request: int, head_sha: str,
+    tree_sha: str, pull_request_state: str, commit_signature_evidence_digest: str,
+    validation_receipt_digest: str, source_validation_evidence_digest: str,
+    adoption_source_evidence_digest: str,
+    observed_pre_enrollment_history: Sequence[Mapping[str, Any]],
+    intended_state: Mapping[str, Any], adoption_timestamp: str,
+    supporting_evidence_digests: Sequence[str],
+) -> dict[str, Any]:
+    """Assemble canonical proof fields from already authenticated evidence."""
+
+    repository = _require_repository(repository)
+    issue = _require_positive_int(delivery_issue, "adopted delivery issue")
+    pr = _require_positive_int(pull_request, "adopted pull request")
+    head = _require_oid(head_sha, "adopted head")
+    tree = _require_oid(tree_sha, "adopted tree")
+    if pull_request_state != "OPEN":
         raise LifecycleAuthorityError("adoption requires an open signed delivery")
-    signer_identity = _require_identity(commit_signer_identity, "commit signer")
-    state = _validate_state(dict(intended_state))
+    state = _validate_state(
+        dict(intended_state), allow_adopted_observations=True
+    )
     history = _normalize_observed_pre_enrollment_history(
         list(observed_pre_enrollment_history), expected_head=head, intended_state=state
     )
     timestamp = _require_adoption_timestamp(adoption_timestamp, "adoption timestamp")
-    if timestamp < history[-1]["observed_at"]:
+    observation_instant = _parse_adoption_timestamp(
+        history[-1]["observed_at"], "observation time"
+    )
+    if _parse_adoption_timestamp(timestamp, "adoption timestamp") < observation_instant:
         raise LifecycleAuthorityError("adoption cannot be backdated before observation")
     supporting = list(supporting_evidence_digests)
     if not supporting or len(supporting) != len(set(supporting)):
@@ -2007,8 +2308,10 @@ def create_exact_state_adoption_evidence(
         "head_sha": head,
         "tree_sha": tree,
         "pull_request_state": pull_request_state,
-        "commit_signature_status": commit_signature_status,
-        "commit_signer_identity": signer_identity,
+        "commit_signature_status": "VERIFIED",
+        "commit_signature_evidence_digest": _require_digest(
+            commit_signature_evidence_digest, "commit signature evidence"
+        ),
         "validation_receipt_digest": _require_digest(
             validation_receipt_digest, "adoption validation receipt"
         ),
@@ -2035,6 +2338,40 @@ def create_exact_state_adoption_evidence(
     return {**fields, "adoption_evidence_digest": digest_json(fields)}
 
 
+def create_exact_state_adoption_evidence(
+    *, verified_external_evidence: VerifiedExactStateAdoptionExternalEvidence,
+    adoption_timestamp: str,
+) -> dict[str, Any]:
+    """Create canonical facts for one exact pre-enrollment adoption boundary."""
+
+    evidence = verified_external_evidence
+    if (
+        not isinstance(evidence, VerifiedExactStateAdoptionExternalEvidence)
+        or evidence._verification_seal is not _VERIFIED_EXACT_ADOPTION_EVIDENCE
+    ):
+        raise LifecycleAuthorityError(
+            "exact adoption requires verifier-derived external evidence"
+        )
+    return _assemble_exact_state_adoption_evidence(
+        repository=evidence.repository,
+        delivery_issue=evidence.delivery_issue,
+        pull_request=evidence.pull_request,
+        head_sha=evidence.head_sha,
+        tree_sha=evidence.tree_sha,
+        pull_request_state=evidence.pull_request_state,
+        commit_signature_evidence_digest=(
+            evidence.commit_signature_evidence_digest
+        ),
+        validation_receipt_digest=evidence.validation_receipt_digest,
+        source_validation_evidence_digest=evidence.source_validation_evidence_digest,
+        adoption_source_evidence_digest=evidence.adoption_source_evidence_digest,
+        observed_pre_enrollment_history=evidence.observed_pre_enrollment_history,
+        intended_state=evidence.intended_state,
+        adoption_timestamp=adoption_timestamp,
+        supporting_evidence_digests=evidence.supporting_evidence_digests,
+    )
+
+
 def _verify_exact_state_adoption_evidence(value: Any) -> dict[str, Any]:
     evidence = _require_closed(
         value, EXACT_ADOPTION_EVIDENCE_FIELDS, "exact-state adoption evidence"
@@ -2045,14 +2382,16 @@ def _verify_exact_state_adoption_evidence(value: Any) -> dict[str, Any]:
         or evidence["kind"] != EXACT_ADOPTION_EVIDENCE_KIND
         or evidence["domain"] != EXACT_ADOPTION_EVIDENCE_DOMAIN
         or evidence["ordinary_lifecycle_events"] != []
+        or evidence["commit_signature_status"] != "VERIFIED"
     ):
         raise LifecycleAuthorityError("exact-state adoption evidence semantics are unknown")
-    rebuilt = create_exact_state_adoption_evidence(
+    rebuilt = _assemble_exact_state_adoption_evidence(
         repository=evidence["repository"], delivery_issue=evidence["delivery_issue"],
         pull_request=evidence["pull_request"], head_sha=evidence["head_sha"],
         tree_sha=evidence["tree_sha"], pull_request_state=evidence["pull_request_state"],
-        commit_signature_status=evidence["commit_signature_status"],
-        commit_signer_identity=evidence["commit_signer_identity"],
+        commit_signature_evidence_digest=evidence[
+            "commit_signature_evidence_digest"
+        ],
         validation_receipt_digest=evidence["validation_receipt_digest"],
         source_validation_evidence_digest=evidence["source_validation_evidence_digest"],
         adoption_source_evidence_digest=evidence["adoption_source_evidence_digest"],
@@ -2294,6 +2633,10 @@ def _verify_exact_state_adoption_bundle(
     previous_pr = result.pull_request
     state = copy.deepcopy(result.state)
     last_signer = result.authority_signer_identity
+    current_tree = result.tree_sha
+    current_receipt = result.validation_receipt_digest
+    current_source = result.source_validation_evidence_digest
+    current_attestation = result.adoption_source_evidence_digest
     for raw_event, raw_authority in zip(events_raw, authorities_raw):
         event = _verify_transition_authorization(
             raw_event,
@@ -2304,6 +2647,7 @@ def _verify_exact_state_adoption_bundle(
             raw_authority,
             accepted_signers=policy.authority_signer_identities,
             signature_verifier=verifier,
+            allow_adopted_observations=True,
         )
         if (
             event["event_id"] in event_ids
@@ -2321,7 +2665,12 @@ def _verify_exact_state_adoption_bundle(
             raise LifecycleAuthorityError(
                 "exact-state adoption successor authorization is not continuous"
             )
-        derived = derive_state(state, event["transition_kind"], event["event_digest"])
+        derived = _derive_state(
+            state,
+            event["transition_kind"],
+            event["event_digest"],
+            allow_adopted_observations=True,
+        )
         resulting_pr = (
             event["replacement_pull_request"]
             if event["transition_kind"] == "PR_REBOUND"
@@ -2345,6 +2694,17 @@ def _verify_exact_state_adoption_bundle(
             raise LifecycleAuthorityError(
                 "exact-state adoption successor authority is not derived"
             )
+        head_changed = event["resulting_head_sha"] != previous_head
+        current_evidence = snapshot.get("current_head_evidence")
+        if head_changed != (current_evidence is not None):
+            raise LifecycleAuthorityError(
+                "exact-state adoption successor current evidence is incomplete"
+            )
+        if current_evidence is not None:
+            current_tree = current_evidence["tree_sha"]
+            current_receipt = current_evidence["validation_receipt_digest"]
+            current_source = current_evidence["source_validation_evidence_digest"]
+            current_attestation = current_evidence["final_attestation_digest"]
         event_ids.add(event["event_id"])
         event_digests.add(event["event_digest"])
         previous_digest = snapshot["authority_digest"]
@@ -2359,6 +2719,10 @@ def _verify_exact_state_adoption_bundle(
         head_sha=previous_head,
         state=copy.deepcopy(state),
         authority_signer_identity=last_signer,
+        tree_sha=current_tree,
+        validation_receipt_digest=current_receipt,
+        source_validation_evidence_digest=current_source,
+        adoption_source_evidence_digest=current_attestation,
     )
     if expected is not None:
         _compare_expected(verified, expected)
@@ -2369,6 +2733,7 @@ def issue_exact_state_adoption_successor_authority(
     *, serialized_adoption_evidence: bytes | str,
     authorization: Mapping[str, Any], signer_identity: str,
     authority_signer: Signer,
+    current_head_evidence: VerifiedValidationEvidence | None = None,
 ) -> dict[str, Any]:
     """Issue one ordinary successor from the authenticated adopted predecessor."""
 
@@ -2401,12 +2766,48 @@ def issue_exact_state_adoption_successor_authority(
         raise LifecycleAuthorityError(
             "transition authorization does not continue adopted predecessor"
         )
-    state = derive_state(
-        predecessor.state, event["transition_kind"], event["event_digest"]
+    state = _derive_state(
+        predecessor.state,
+        event["transition_kind"],
+        event["event_digest"],
+        allow_adopted_observations=True,
     )
     fields = _authority_unsigned_fields(
         event=event, predecessor={"state_after": predecessor.state}, state=state
     )
+    head_changed = event["resulting_head_sha"] != predecessor.head_sha
+    resulting_pr = (
+        event["replacement_pull_request"]
+        if event["transition_kind"] == "PR_REBOUND"
+        else predecessor.pull_request
+    )
+    if head_changed:
+        if (
+            not is_verified_validation_evidence(current_head_evidence)
+            or current_head_evidence.repository != predecessor.repository
+            or current_head_evidence.pull_request_number != resulting_pr
+            or current_head_evidence.head_sha != event["resulting_head_sha"]
+        ):
+            raise LifecycleAuthorityError(
+                "head-changing adopted successor requires verified current evidence"
+            )
+        fields["current_head_evidence"] = {
+            "head_sha": current_head_evidence.head_sha,
+            "tree_sha": current_head_evidence.tree_sha,
+            "validation_receipt_digest": (
+                current_head_evidence.validation_receipt_digest
+            ),
+            "source_validation_evidence_digest": (
+                current_head_evidence.source_validation_evidence_digest
+            ),
+            "final_attestation_digest": (
+                current_head_evidence.final_attestation_digest
+            ),
+        }
+    elif current_head_evidence is not None:
+        raise LifecycleAuthorityError(
+            "same-head adopted successor cannot replace current evidence"
+        )
     fields["signer_identity"] = _require_identity(
         signer_identity, "authority signer"
     )

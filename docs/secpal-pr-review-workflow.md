@@ -151,6 +151,13 @@ genesis and CURRENT baseline; the observed timestamps remain observations and
 `ordinary_lifecycle_events` remains empty. It neither reorders platform history
 nor backdates authority.
 
+Proof assembly accepts only the verifier-derived external-evidence boundary.
+The maintained validation receipt and final-attestation verifier derives the
+source-evidence identity; canonical commit-signature and observation admission
+derives the remaining facts. Callers cannot nominate trusted evidence digests.
+Observation-derived Ready and exceptional history entries bind their canonical
+observation digest and never carry an ordinary event-authorization digest.
+
 Exact-state adoption reuses the maintained migration signer role, enrollment
 uniqueness, protected publication journal, CAS, lifecycle identity and authority
 digest conventions. Later transitions use the ordinary successor verifier, and
@@ -159,6 +166,12 @@ boundary with the adopted tree, receipt, and adoption-time attestation bound by
 the proof. Native deliveries cannot self-select adoption, a second enrollment
 root remains forbidden, and adoption is not a lifecycle state, Recovery,
 Continuation, or permission to cure ordinary ordering after the fact.
+
+For a later head-changing ordinary successor, the immutable adoption proof
+remains the genesis while the signed successor authority binds verifier-derived
+current-head tree, receipt, final attestation, and source-evidence identity.
+Prior-Ready verification authenticates those current facts and the unchanged
+genesis chain; it never treats genesis evidence as evidence for a later head.
 
 The maintained migration role uses public credential material distinct from
 ordinary, lifecycle-transition, and publication signers; policy loading rejects

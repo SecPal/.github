@@ -17,6 +17,8 @@ Log of notable changes to SecPal organization defaults (newest first).
   enrollment family for independently authenticated pre-enrollment state
 - require a separately signed exact-scope, one-use authorization and preserve
   observed platform chronology without synthesizing ordinary lifecycle events
+- derive adopted source and current-head evidence through maintained verifiers,
+  and distinguish observation provenance from ordinary event authorization
 - reuse the protected publication journal, adoption signer, enrollment
   uniqueness, ordinary successor path, and prior-Ready trust boundary
 

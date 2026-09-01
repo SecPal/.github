@@ -222,6 +222,12 @@ authority at the real adoption time. The proof uses the maintained adoption
 signer and existing publication/successor machinery; it does not weaken native
 genesis or event-derived state verification and is not available as an ordinary
 delivery escape hatch.
+External facts enter proof assembly only through the canonical verifier-derived
+boundary: the existing receipt/final-attestation verifier derives source
+evidence, signature admission authenticates the commit, and observation
+normalization derives history provenance. Later head-changing successors bind
+fresh verified current-head evidence in the signed ordinary authority while the
+original adoption proof remains immutable.
 The lifecycle-authority suite is an unconditional registered validation command.
 
 ### `secpal_pr_review/lifecycle_orchestration.py`
