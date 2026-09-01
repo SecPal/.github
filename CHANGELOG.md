@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-01 - Authenticate Post-Fix Outdated Thread State
+
+**Changed:**
+
+- accept only the exact GitHub-derived `isOutdated=false` to
+  `isOutdated=true` target transition after independent source-fix and
+  eligibility authentication
+- retain complete ordered target-set enforcement, exact thread content and
+  identity checks, stable pre-write reads, and zero-write handling for already
+  resolved targets
+
 ## 2026-08-31 - Authenticate Idempotent Fixed-Thread Satisfaction
 
 **Changed:**
