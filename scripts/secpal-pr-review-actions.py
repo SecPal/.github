@@ -5309,92 +5309,12 @@ def _resolution_eligibility_digest(
     reviewed: Any,
 ) -> str:
     payload = _read_json(path, "resolution eligibility evidence")
-    expected_keys = {
-        "schema_version",
-        "repository",
-        "pull_request_number",
-        "reviewed_head_sha",
-        "reviewed_state_digest",
-        "eligible_threads",
-    }
-    threads = payload.get("eligible_threads") if isinstance(payload, dict) else None
-    if (
-        not isinstance(payload, dict)
-        or set(payload) != expected_keys
-        or payload.get("schema_version") != "1.1"
-        or payload.get("repository") != repository
-        or payload.get("pull_request_number") != reviewed.pull_request_number
-        or isinstance(payload.get("pull_request_number"), bool)
-        or payload.get("reviewed_head_sha") != reviewed.head_sha
-        or payload.get("reviewed_state_digest") != reviewed.state_digest
-        or not isinstance(threads, list)
-    ):
-        raise fast_path.SecurityBlocker(
-            "resolution eligibility evidence is invalid or stale"
-        )
-    reviewed_threads = {
-        item.get("node_id"): item
-        for item in reviewed.feedback.get("threads", [])
-        if isinstance(item, dict)
-    }
-    observed_thread_ids: list[str] = []
-    for item in threads:
-        if not isinstance(item, dict) or set(item) != {
-            "thread_id",
-            "classification",
-            "disposition",
-            "finding_ids",
-            "evidence_digest",
-            "follow_up",
-        }:
-            raise fast_path.SecurityBlocker(
-                "resolution eligibility evidence thread is malformed"
-            )
-        thread_id = item.get("thread_id")
-        classification = item.get("classification")
-        disposition = item.get("disposition")
-        finding_ids = item.get("finding_ids")
-        reviewed_thread = reviewed_threads.get(thread_id)
-        if (
-            not isinstance(thread_id, str)
-            or not re.fullmatch(r"PRRT_[A-Za-z0-9_-]+", thread_id)
-            or not isinstance(classification, str)
-            or disposition
-            not in fast_path.CLASSIFICATION_DISPOSITIONS.get(
-                classification, frozenset()
-            )
-            or not isinstance(finding_ids, list)
-            or not finding_ids
-            or any(
-                not isinstance(finding_id, str)
-                or not fast_path.IDENTITY.fullmatch(finding_id)
-                or fast_path.SECRET_VALUE.search(finding_id)
-                for finding_id in finding_ids
-            )
-            or len(finding_ids) != len(set(finding_ids))
-            or not isinstance(item.get("evidence_digest"), str)
-            or not fast_path.DIGEST.fullmatch(item["evidence_digest"])
-            or not isinstance(reviewed_thread, dict)
-            or reviewed_thread.get("is_resolved") is not False
-        ):
-            raise fast_path.SecurityBlocker(
-                "resolution eligibility evidence thread is ineligible"
-            )
-        if disposition == "TRACKED_AS_FOLLOW_UP":
-            try:
-                follow_up.parse_follow_up(item.get("follow_up"))
-            except follow_up.FollowUpError as exc:
-                raise fast_path.SecurityBlocker(str(exc)) from exc
-        elif item.get("follow_up") is not None:
-            raise fast_path.SecurityBlocker(
-                "only tracked out-of-scope eligibility may carry follow-up identity"
-            )
-        observed_thread_ids.append(thread_id)
-    if len(observed_thread_ids) != len(set(observed_thread_ids)):
-        raise fast_path.SecurityBlocker(
-            "resolution eligibility evidence contains duplicate threads"
-        )
-    return fast_path.digest_json(payload)
+    normalized = fast_path.normalize_resolution_eligibility_evidence(
+        payload,
+        repository=repository,
+        reviewed_state=reviewed,
+    )
+    return fast_path.digest_json(normalized)
 
 
 def _command_attest_validation(arguments: argparse.Namespace) -> int:
