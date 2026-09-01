@@ -5083,6 +5083,10 @@ def _verify_ready_integration_prior_authority(
     ):
         raise fast_path.SecurityBlocker("Ready integration prior authority identity changed")
     reviewed = _load_fast_state(required_paths[1])
+    if reviewed.pull_request_number != authority["pull_request_number"]:
+        raise fast_path.SecurityBlocker(
+            "prior delivery pull-request identity changed"
+        )
     receipt = _read_json(required_paths[2], "prior validation receipt")
     attestation = _read_json(required_paths[3], "prior validation attestation")
     head = authority["prior_delivery_head_sha"]

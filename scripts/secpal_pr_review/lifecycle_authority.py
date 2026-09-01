@@ -2057,6 +2057,16 @@ def _normalize_observed_pre_enrollment_history(
     )
     normalized: list[dict[str, Any]] = []
     previous_instant: datetime | None = None
+    effective_head: str | None = None
+    observed_heads: set[str] = set()
+    head_changing_observations = frozenset(
+        {
+            "REMEDIATION_HEAD_OBSERVED",
+            "EXCEPTIONAL_RECOVERY_OBSERVED",
+            "EXCEPTIONAL_CONTINUATION_OBSERVED",
+            "HEAD_ADVANCED_OBSERVED",
+        }
+    )
     for sequence, raw in enumerate(value, 1):
         item = _require_closed(
             raw, OBSERVED_HISTORY_FIELDS, "observed pre-enrollment history entry"
@@ -2078,6 +2088,15 @@ def _normalize_observed_pre_enrollment_history(
             )
         if reviewed_head is not None:
             reviewed_head = _require_oid(reviewed_head, "observed reviewed head")
+        if kind == "REMEDIATION_HEAD_OBSERVED" and (
+            head == effective_head or head in observed_heads
+        ):
+            raise LifecycleAuthorityError(
+                "remediation observation must advance the delivery head"
+            )
+        if effective_head is None or kind in head_changing_observations:
+            effective_head = head
+        observed_heads.add(head)
         normalized.append(
             {
                 "sequence": sequence,
@@ -2695,8 +2714,9 @@ def _verify_exact_state_adoption_bundle(
                 "exact-state adoption successor authority is not derived"
             )
         head_changed = event["resulting_head_sha"] != previous_head
+        delivery_identity_changed = head_changed or resulting_pr != previous_pr
         current_evidence = snapshot.get("current_head_evidence")
-        if head_changed != (current_evidence is not None):
+        if delivery_identity_changed != (current_evidence is not None):
             raise LifecycleAuthorityError(
                 "exact-state adoption successor current evidence is incomplete"
             )
@@ -2781,7 +2801,10 @@ def issue_exact_state_adoption_successor_authority(
         if event["transition_kind"] == "PR_REBOUND"
         else predecessor.pull_request
     )
-    if head_changed:
+    delivery_identity_changed = (
+        head_changed or resulting_pr != predecessor.pull_request
+    )
+    if delivery_identity_changed:
         if (
             not is_verified_validation_evidence(current_head_evidence)
             or current_head_evidence.repository != predecessor.repository
@@ -2789,7 +2812,7 @@ def issue_exact_state_adoption_successor_authority(
             or current_head_evidence.head_sha != event["resulting_head_sha"]
         ):
             raise LifecycleAuthorityError(
-                "head-changing adopted successor requires verified current evidence"
+                "delivery-identity-changing adopted successor requires verified current evidence"
             )
         fields["current_head_evidence"] = {
             "head_sha": current_head_evidence.head_sha,
@@ -2806,7 +2829,7 @@ def issue_exact_state_adoption_successor_authority(
         }
     elif current_head_evidence is not None:
         raise LifecycleAuthorityError(
-            "same-head adopted successor cannot replace current evidence"
+            "unchanged adopted successor cannot replace current evidence"
         )
     fields["signer_identity"] = _require_identity(
         signer_identity, "authority signer"

@@ -6439,6 +6439,69 @@ class FastPathTests(TestCase):
                     live_observation=None,
                 )
 
+    def test_ready_integration_prior_authority_rejects_reviewed_pr_mismatch(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        authority = fast_path.normalize_ready_integration_prior_authority(
+            ready_integration_prior_authority(reviewed)
+        )
+        integration = fast_path.normalize_ready_integration_evidence(
+            ready_integration_evidence(reviewed, validated_tree="a" * 40),
+            repository="SecPal/.github",
+            reviewed_state=reviewed,
+            registry=fast_registry(),
+            validated_tree_sha="a" * 40,
+        )
+        mismatched = fast_path.StableFeedbackState(
+            repository=reviewed.repository,
+            pull_request_number=reviewed.pull_request_number + 1,
+            head_sha=reviewed.head_sha,
+            base_ref=reviewed.base_ref,
+            base_sha=reviewed.base_sha,
+            pr_state=reviewed.pr_state,
+            feedback=reviewed.feedback,
+        )
+        arguments = SimpleNamespace(
+            repo="SecPal/.github",
+            delivery_issue=9,
+            prior_authority="authority.json",
+            prior_reviewed_state="prior-reviewed.json",
+            prior_receipt="prior-receipt.json",
+            prior_attestation="prior-attestation.json",
+            prior_authority_tag_ref="refs/tags/prior-authority",
+            expected_prior_authority_signer="aroviqen",
+        )
+        with (
+            mock.patch.object(actions, "_read_json", return_value=authority),
+            mock.patch.object(actions, "_load_fast_state", return_value=mismatched),
+            mock.patch.object(
+                actions,
+                "_validated_commit_parent",
+                return_value="e" * 40,
+            ),
+            mock.patch.object(
+                actions,
+                "_run_attestation_git",
+                return_value=SimpleNamespace(
+                    returncode=0,
+                    stdout=authority["prior_delivery_tree_sha"],
+                    stderr="",
+                ),
+            ),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "prior delivery pull-request identity changed",
+            ),
+        ):
+            actions._verify_ready_integration_prior_authority(
+                arguments=arguments,
+                repository_root=REPO_ROOT,
+                binding=fast_registry(),
+                integration_evidence=integration,
+                live_observation=None,
+            )
+
     def test_ready_integration_reconstructs_prior_policy_from_prior_commit(self) -> None:
         registry = json.loads(actions.REGISTRY_PATH.read_text(encoding="utf-8"))
         historical_binding = next(
@@ -9797,6 +9860,70 @@ class FastPathTests(TestCase):
                     commit_validation_receipt_digest=attestation[
                         "validation_receipt_digest"
                     ],
+                )
+
+    def test_validation_evidence_rejects_repository_substitution(self) -> None:
+        reviewed = fast_feedback()
+        registry = fast_registry()
+        receipt = fast_path.create_validation_receipt(
+            repository=reviewed.repository,
+            head_sha=reviewed.head_sha,
+            validated_tree_sha="a" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+        )
+        attestation = fast_path.create_validation_attestation(
+            repository=reviewed.repository,
+            head_sha=p21.HEAD,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+        )
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker,
+            "reviewed repository identity changed",
+        ):
+            fast_path.verify_validation_attestation(
+                attestation,
+                repository="Other/governance",
+                head_sha=p21.HEAD,
+                registry=registry,
+                command_set=registry["validation"],
+                reviewed_state=reviewed,
+                commit_parent_sha=reviewed.head_sha,
+                commit_tree_sha="a" * 40,
+                commit_validation_receipt_digest=receipt["receipt_digest"],
+            )
+
+    def test_validation_evidence_rejects_noncanonical_reviewed_state(self) -> None:
+        for reviewed_state in (
+            None,
+            {},
+            object(),
+            SimpleNamespace(payload={"pull_request_number": 1}),
+        ):
+            with (
+                self.subTest(reviewed_state=type(reviewed_state).__name__),
+                self.assertRaisesRegex(
+                    fast_path.SecurityBlocker,
+                    "reviewed state is not canonical",
+                ),
+            ):
+                fast_path.verify_validation_attestation(
+                    {},
+                    repository="SecPal/.github",
+                    head_sha=p21.HEAD,
+                    registry=fast_registry(),
+                    command_set=fast_registry()["validation"],
+                    reviewed_state=reviewed_state,
+                    commit_parent_sha="a" * 40,
+                    commit_tree_sha="b" * 40,
+                    commit_validation_receipt_digest="c" * 64,
                 )
 
     def test_atomic_json_output_supports_spaces(self) -> None:

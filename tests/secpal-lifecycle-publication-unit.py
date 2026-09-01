@@ -282,10 +282,10 @@ def exact_adoption_evidence() -> tuple[bytes, dict[str, Any]]:
 
 
 def verified_validation_evidence(
-    *, head: str, tree: str, parent: str
+    *, head: str, tree: str, parent: str, pull_request: int = PR
 ) -> fast_path.VerifiedValidationEvidence:
     reviewed = fast_path.StableFeedbackState(
-        repository=REPOSITORY, pull_request_number=PR, head_sha=parent,
+        repository=REPOSITORY, pull_request_number=pull_request, head_sha=parent,
         base_ref="main", base_sha=HEADS[0], pr_state="OPEN",
         feedback={"pull_request_reactions": [], "reviews": [],
                   "conversation_comments": [], "threads": []},
@@ -619,6 +619,67 @@ class LifecyclePublicationTests(TestCase):
                         enrolled.lifecycle.source_validation_evidence_digest
                     ),
                 )
+
+    def test_exact_adoption_pr_rebound_requires_replacement_pr_evidence(self) -> None:
+        serialized, proof = exact_adoption_evidence()
+        event = authority.create_transition_authorization(
+            event_id="adopted-pr-rebound-1",
+            repository=REPOSITORY,
+            delivery_issue=ISSUE,
+            lifecycle_id=proof["lifecycle_id"],
+            pull_request=PR,
+            predecessor_authority_digest=proof["proof_digest"],
+            predecessor_head_sha=HEADS[2],
+            resulting_head_sha=HEADS[2],
+            transition_kind="PR_REBOUND",
+            replacement_pull_request=PR + 1,
+            initialization_evidence_digest=proof["adoption_evidence_digest"],
+            signer_identity=SIGNER,
+            signer=signer_for(),
+        )
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError,
+            "delivery-identity-changing adopted successor requires verified current evidence",
+        ):
+            authority.issue_exact_state_adoption_successor_authority(
+                serialized_adoption_evidence=serialized,
+                authorization=event,
+                signer_identity=SIGNER,
+                authority_signer=signer_for(),
+            )
+        old_pr_evidence = verified_validation_evidence(
+            head=HEADS[2], tree=HEADS[3], parent=HEADS[1]
+        )
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError,
+            "verified current evidence",
+        ):
+            authority.issue_exact_state_adoption_successor_authority(
+                serialized_adoption_evidence=serialized,
+                authorization=event,
+                signer_identity=SIGNER,
+                authority_signer=signer_for(),
+                current_head_evidence=old_pr_evidence,
+            )
+
+        current = verified_validation_evidence(
+            head=HEADS[2],
+            tree=HEADS[3],
+            parent=HEADS[1],
+            pull_request=PR + 1,
+        )
+        snapshot = authority.issue_exact_state_adoption_successor_authority(
+            serialized_adoption_evidence=serialized,
+            authorization=event,
+            signer_identity=SIGNER,
+            authority_signer=signer_for(),
+            current_head_evidence=current,
+        )
+        self.assertEqual(snapshot["pull_request"], PR + 1)
+        self.assertEqual(
+            snapshot["current_head_evidence"]["source_validation_evidence_digest"],
+            current.source_validation_evidence_digest,
+        )
 
     def test_legacy_checkpoint_requires_dedicated_role_and_valid_authorization(self) -> None:
         chain = recovered_ready_chain()

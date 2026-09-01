@@ -986,6 +986,21 @@ def is_verified_validation_evidence(value: Any) -> bool:
     )
 
 
+def _require_reviewed_state_identity(
+    repository: Any, reviewed_state: Any
+) -> StableFeedbackState:
+    """Require one canonical reviewed state for the exact repository."""
+
+    repository = _require_string(repository, "reviewed repository")
+    if not REPOSITORY.fullmatch(repository):
+        raise SecurityBlocker("reviewed repository identity is malformed")
+    if not isinstance(reviewed_state, StableFeedbackState):
+        raise SecurityBlocker("reviewed state is not canonical")
+    if reviewed_state.repository != repository:
+        raise SecurityBlocker("reviewed repository identity changed")
+    return reviewed_state
+
+
 def verify_reviewed_state_evidence(value: Any) -> StableFeedbackState:
     """Verify one complete closed reviewed-state document."""
 
@@ -1836,18 +1851,8 @@ def verify_validation_attestation(
     commit_tree_sha: str,
     commit_validation_receipt_digest: str | None,
 ) -> VerifiedValidationEvidence:
-    if isinstance(reviewed_state, StableFeedbackState):
-        reviewed_pull_request = reviewed_state.pull_request_number
-    elif isinstance(reviewed_state.payload, dict):
-        reviewed_pull_request = reviewed_state.payload.get("pull_request_number")
-    else:
-        reviewed_pull_request = None
-    if (
-        not isinstance(reviewed_pull_request, int)
-        or isinstance(reviewed_pull_request, bool)
-        or reviewed_pull_request <= 0
-    ):
-        raise SecurityBlocker("reviewed pull-request identity is missing")
+    reviewed_state = _require_reviewed_state_identity(repository, reviewed_state)
+    reviewed_pull_request = reviewed_state.pull_request_number
     if (
         _require_oid(commit_parent_sha, "validated commit parent")
         != reviewed_state.head_sha

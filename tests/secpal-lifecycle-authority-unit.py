@@ -308,6 +308,35 @@ class LifecycleAuthorityTests(TestCase):
         ):
             authenticated_external_evidence(observed=observed, state=state)
 
+    def test_exact_adoption_rejects_duplicate_remediation_heads(self) -> None:
+        observed = [
+            {"sequence": 1, "kind": "PR_CREATED_DRAFT", "observed_at": "2026-08-01T00:00:00Z", "head_sha": HEADS[0], "reviewed_head_sha": None},
+            {"sequence": 2, "kind": "DRAFT_TO_READY_OBSERVED", "observed_at": "2026-08-02T00:00:00Z", "head_sha": HEADS[0], "reviewed_head_sha": None},
+            {"sequence": 3, "kind": "REVIEW_SUBMITTED", "observed_at": "2026-08-03T00:00:00Z", "head_sha": HEADS[0], "reviewed_head_sha": HEADS[0]},
+            {"sequence": 4, "kind": "REMEDIATION_HEAD_OBSERVED", "observed_at": "2026-08-04T00:00:00Z", "head_sha": HEADS[2], "reviewed_head_sha": None},
+            {"sequence": 5, "kind": "REMEDIATION_HEAD_OBSERVED", "observed_at": "2026-08-05T00:00:00Z", "head_sha": HEADS[2], "reviewed_head_sha": None},
+        ]
+        state = authority.initial_state()
+        state.update(
+            unrestricted_review_count=1,
+            remediation_cycle_count=2,
+            draft=False,
+            ready=True,
+            ready_transition_count=1,
+            ready_history=[
+                {
+                    "sequence": 1,
+                    "transition_kind": "DRAFT_TO_READY",
+                    "observation_digest": authority.digest_json(observed[1]),
+                }
+            ],
+        )
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError,
+            "remediation observation must advance the delivery head",
+        ):
+            authenticated_external_evidence(observed=observed, state=state)
+
     def test_adoption_timestamp_requires_a_real_canonical_utc_instant(self) -> None:
         for invalid in (
             "2026-99-99T99:99:99Z",

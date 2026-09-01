@@ -1149,13 +1149,16 @@ def verify_local_fix_commit(
             registry_binding = _validation_registry_binding(
                 _load_repository_entry(repository)
             )
+            stable_reviewed = fast_path.StableFeedbackState.from_payload(
+                reviewed.payload
+            )
             fast_path.verify_validation_attestation(
                 validation.attestation,
                 repository=repository,
                 head_sha=expected_head.lower(),
                 registry=registry_binding,
                 command_set=registry_binding["validation"],
-                reviewed_state=reviewed,
+                reviewed_state=stable_reviewed,
                 commit_parent_sha=ancestry[1],
                 commit_tree_sha=commit_tree,
                 commit_validation_receipt_digest=trailers[0],
