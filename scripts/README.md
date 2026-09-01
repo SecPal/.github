@@ -124,7 +124,13 @@ identities, digests, and resolution state. An exact original target whose
 reviewed state was unresolved may be classified as already satisfied when its
 live state is resolved and every other binding still matches; that authenticated
 postcondition produces no write. Every unresolved exact target retains the
-ordinary guarded mutation path, and every other difference fails closed. After
+ordinary guarded mutation path, and every other difference fails closed. A
+Recovery-bound ordinary attestation also retains and passes the existing
+`--delivery-issue`, `--exceptional-recovery-evidence`, and
+`--exceptional-recovery-authorization` artifacts. Ordinary non-Recovery and
+Ready-integration invocations omit that tuple. The shared Recovery verifier may
+authenticate only the installed lifecycle-publication journal protection; it
+does not grant delivery-PR branch-protection or merge-readiness authority. After
 one initial complete target read, the resolver requires two more equal complete target
 projections immediately before each write or successful already-resolved
 report, and keeps thread resolution separate from CI and merge-readiness

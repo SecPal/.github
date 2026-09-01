@@ -163,6 +163,22 @@ python3 scripts/secpal-resolve-fixed-threads.py \
 ```
 
 Repeat `--thread-id` to resolve several fixed threads in one invocation.
+
+For a Recovery-bound ordinary final attestation only, retain the already
+accepted Recovery document and exact signed orchestration authorization and add
+the complete tuple:
+
+```bash
+  --delivery-issue DELIVERY_ISSUE_NUMBER \
+  --exceptional-recovery-evidence READY_EXCEPTIONAL_RECOVERY.json \
+  --exceptional-recovery-authorization SIGNED_RECOVERY_AUTHORIZATION.json
+```
+
+Omit the tuple for ordinary non-Recovery evidence and for Ready-integration
+evidence. The shared verifier authenticates the exact Recovery lifecycle and
+may read only the installed protection for the lifecycle-publication journal;
+this does not authorize delivery-PR branch-protection or merge-readiness reads.
+
 The ordered `eligible_threads` array in the eligibility manifest must list
 those IDs in the same order and cover no additional thread. Its top-level
 bindings are `repository`, `pull_request_number`, `reviewed_head_sha`, and

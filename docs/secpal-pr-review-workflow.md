@@ -517,8 +517,13 @@ recursive recovery.
 The simple resolver first verifies the caller-captured reviewed-state digest,
 successful validation attestation, actual local signed commit, and exact
 per-thread eligibility manifest authenticated by the signed validation
-receipt. It then verifies the exact PR head and target identity without reading checks,
-rules, reactions, unrelated feedback, mergeability, or branch protection. It
+receipt. A Recovery-bound ordinary attestation additionally retains and passes
+`--delivery-issue`, `--exceptional-recovery-evidence`, and
+`--exceptional-recovery-authorization` from the accepted Recovery authority.
+The shared verifier alone may authenticate the installed ruleset for
+`refs/heads/secpal-lifecycle-publications`. The resolver then verifies the exact
+PR head and target identity without reading checks, delivery-PR rules,
+reactions, unrelated feedback, mergeability, or merge readiness. It
 reads each target completely and requires its comments to match the
 reviewed-state identities and digests. The complete original ordered eligibility
 remains authoritative after a partial result: an exact target captured

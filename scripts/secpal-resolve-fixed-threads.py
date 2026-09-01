@@ -105,6 +105,7 @@ FIXED_THREAD_RESOLUTION_CONTRACT = {
     "allowed_github_operations": [
         "READ_NAMED_REVIEW_THREAD",
         "READ_AUTHENTICATED_FOLLOW_UP_WORK_GRAPH",
+        "AUTHENTICATE_LIFECYCLE_PUBLICATION_PROTECTION",
         "RESOLVE_NAMED_REVIEW_THREAD",
     ],
     "prohibited_hosted_reads": [
@@ -269,15 +270,13 @@ fast_path = _load_fast_path_helper()
 
 
 def _load_lifecycle_orchestration_helper() -> Any:
-    repository_root_text = str(REPOSITORY_ROOT)
-    added_repository_root = repository_root_text not in sys.path
-    if added_repository_root:
-        sys.path.insert(0, repository_root_text)
+    scripts_root_text = str(REPOSITORY_ROOT / "scripts")
+    original_sys_path = list(sys.path)
+    sys.path.insert(0, scripts_root_text)
     try:
         from secpal_pr_review import lifecycle_orchestration as module
     finally:
-        if added_repository_root:
-            sys.path.remove(repository_root_text)
+        sys.path[:] = original_sys_path
     loaded_path = getattr(module, "__file__", None)
     expected_path = (
         REPOSITORY_ROOT
@@ -954,6 +953,14 @@ def load_validation_evidence(
         raise ResolutionError(
             "ordinary validation attestation rejects integration-only evidence"
         )
+    eligibility_evidence_digest = payload.get("eligibility_evidence_digest")
+    if (
+        not isinstance(eligibility_evidence_digest, str)
+        or not DIGEST.fullmatch(eligibility_evidence_digest)
+    ):
+        raise ResolutionError(
+            "validation evidence eligibility digest is missing or malformed"
+        )
     try:
         receipt = fast_path.create_validation_receipt(
             repository=repository,
@@ -964,9 +971,7 @@ def load_validation_evidence(
             successful_result=True,
             reviewed_state=reviewed,
             manual_gate_evidence=payload.get("manual_gate_evidence"),
-            eligibility_evidence_digest=payload.get(
-                "eligibility_evidence_digest"
-            ),
+            eligibility_evidence_digest=eligibility_evidence_digest,
             exceptional_recovery_evidence_digest=payload.get(
                 "exceptional_recovery_evidence_digest"
             ),
@@ -993,9 +998,7 @@ def load_validation_evidence(
         evidence_digest=payload["attestation_digest"],
         validated_tree_sha=payload["validated_tree_sha"],
         validation_receipt_digest=payload["validation_receipt_digest"],
-        eligibility_evidence_digest=payload[
-            "eligibility_evidence_digest"
-        ],
+        eligibility_evidence_digest=eligibility_evidence_digest,
         attestation=payload,
         validation_receipt=receipt,
     )

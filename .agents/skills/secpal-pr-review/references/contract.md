@@ -133,6 +133,18 @@ only. It is also the default post-push resolution step after
 feedback remediation. It is not selected for a separately requested readiness
 audit, forensic evidence capture, or merge evaluation.
 
+When an ordinary final attestation carries an
+`exceptional_recovery_evidence_digest`, the same invocation must retain and
+pass the already accepted Recovery authority tuple:
+`--delivery-issue`, `--exceptional-recovery-evidence`, and
+`--exceptional-recovery-authorization`. These are the existing Recovery
+document and exact signed orchestration authorization; no wrapper evidence is
+created. Ordinary non-Recovery and Ready-integration invocations omit the
+tuple. The shared verifier may authenticate the installed protection of the
+lifecycle-publication journal. That narrow authority read does not permit
+delivery-PR branch protection, Required Checks, CI, CodeQL, mergeability, or
+merge-readiness inspection.
+
 ### Authenticated post-final-push late disposition
 
 Commit-bound eligibility above remains unchanged and is the normal remediation
@@ -282,13 +294,18 @@ remote, and PR head equality.
 the exact eligible thread IDs, current head, reviewed-state file and captured
 digest, successful validation evidence bound to the verified fix commit, local
 commit proof, and exact per-thread eligibility evidence authenticated by the
-signed validation receipt. Resolution depends
+signed validation receipt. A Recovery-bound ordinary attestation additionally
+supplies the retained delivery issue, accepted Recovery document, and exact
+signed orchestration authorization. Resolution depends
 only on those inputs, the open PR, exact head, target
 membership, equality with the
 reviewed target-comment identities and digests, two equal complete current
 target projections, and exact mutation response. It does not read or depend on
-hosted CI, Required Checks, CodeQL, mergeability, branch protection, PR
-reactions, unrelated feedback, or worktree cleanliness.
+hosted CI, Required Checks, CodeQL, mergeability, delivery-PR branch
+protection, PR reactions, unrelated feedback, or worktree cleanliness. The
+shared Exceptional Recovery verifier alone may authenticate the installed
+protection of `refs/heads/secpal-lifecycle-publications` as required by the
+accepted publication authority.
 
 Only the final attestation for a signed delivery commit is accepted as the
 delivery anchor. A raw validation receipt for an unchanged head has no receipt

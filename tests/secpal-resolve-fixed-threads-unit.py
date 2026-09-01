@@ -13,7 +13,7 @@ import socket
 import subprocess
 import sys
 import tempfile
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from typing import Any, Sequence
@@ -1091,6 +1091,52 @@ def run_late_classification_origin_fixture(
 
 
 class ResolveFixedThreadsTests(TestCase):
+    def test_lifecycle_helper_import_ignores_repository_root_shadow(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            canonical_package = root / "scripts/secpal_pr_review"
+            shadow_package = root / "secpal_pr_review"
+            canonical_package.mkdir(parents=True)
+            shadow_package.mkdir()
+            (canonical_package / "__init__.py").write_text("", encoding="utf-8")
+            (canonical_package / "lifecycle_orchestration.py").write_text(
+                'ORIGIN = "canonical"\n', encoding="utf-8"
+            )
+            marker = root / "shadow-executed"
+            (shadow_package / "__init__.py").write_text("", encoding="utf-8")
+            (shadow_package / "lifecycle_orchestration.py").write_text(
+                "from pathlib import Path\n"
+                f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            module_names = (
+                "secpal_pr_review",
+                "secpal_pr_review.lifecycle_orchestration",
+            )
+            loaded_modules = {
+                name: sys.modules.get(name) for name in module_names
+            }
+            original_path = list(sys.path)
+            try:
+                for name in module_names:
+                    sys.modules.pop(name, None)
+                with mock.patch.object(MODULE, "REPOSITORY_ROOT", root):
+                    loaded = MODULE._load_lifecycle_orchestration_helper()
+                self.assertEqual(loaded.ORIGIN, "canonical")
+                self.assertEqual(
+                    Path(loaded.__file__).resolve(),
+                    (canonical_package / "lifecycle_orchestration.py").resolve(),
+                )
+                self.assertFalse(marker.exists())
+                self.assertEqual(sys.path, original_path)
+            finally:
+                for name in module_names:
+                    sys.modules.pop(name, None)
+                for name, loaded in loaded_modules.items():
+                    if loaded is not None:
+                        sys.modules[name] = loaded
+                sys.path[:] = original_path
+
     def test_recovery_bound_source_requires_independent_recovery_authority(
         self,
     ) -> None:
@@ -1118,6 +1164,124 @@ class ResolveFixedThreadsTests(TestCase):
             )
 
         self.assertEqual(current.calls, [])
+
+    def test_ordinary_attestation_requires_eligibility_digest_before_indexing(
+        self,
+    ) -> None:
+        thread_id = "PRRT_ELIGIBILITY_OMISSION"
+        reviewed = reviewed_state_payload(thread_id, [])
+        registry = MODULE._validation_registry_binding(
+            MODULE._load_repository_entry(reviewed["repository"])
+        )
+        stable = MODULE.fast_path.StableFeedbackState.from_payload(reviewed)
+        gates = [
+            {
+                "gate": gate,
+                "satisfied": True,
+                "evidence": f"Verified omission fixture {index}",
+            }
+            for index, gate in enumerate(registry["manual_gates"], start=1)
+        ]
+        receipt = MODULE.fast_path.create_validation_receipt(
+            repository=reviewed["repository"],
+            head_sha=reviewed["head_sha"],
+            validated_tree_sha="f" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=stable,
+            manual_gate_evidence=gates,
+            eligibility_evidence_digest=None,
+        )
+        attestation = MODULE.fast_path.create_validation_attestation(
+            repository=reviewed["repository"],
+            head_sha="c" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=stable,
+            validation_receipt=receipt,
+        )
+        self.assertNotIn("eligibility_evidence_digest", attestation)
+        eligibility = eligibility_payload(reviewed, (thread_id,))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reviewed_path = root / "reviewed.json"
+            attestation_path = root / "attestation.json"
+            eligibility_path = root / "eligibility.json"
+            reviewed_path.write_text(json.dumps(reviewed), encoding="utf-8")
+            attestation_path.write_text(
+                json.dumps(attestation), encoding="utf-8"
+            )
+            eligibility_path.write_text(
+                json.dumps(eligibility), encoding="utf-8"
+            )
+            stderr = StringIO()
+            fake = FakeGh([])
+            with redirect_stdout(StringIO()), redirect_stderr(stderr), mock.patch.object(
+                MODULE, "_run_gh", fake
+            ):
+                exit_code = MODULE.main(
+                    [
+                        "--repo",
+                        "SecPal/api",
+                        "--pr",
+                        "123",
+                        "--repo-root",
+                        str(root),
+                        "--expected-head",
+                        "c" * 40,
+                        "--reviewed-state",
+                        str(reviewed_path),
+                        "--expected-reviewed-state-digest",
+                        reviewed["state_digest"],
+                        "--validation-evidence",
+                        str(attestation_path),
+                        "--eligibility-evidence",
+                        str(eligibility_path),
+                        "--thread-id",
+                        thread_id,
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn(
+            "ERROR: validation evidence eligibility digest is missing or malformed",
+            stderr.getvalue(),
+        )
+        self.assertNotIn("Traceback", stderr.getvalue())
+        self.assertEqual(fake.calls, [])
+
+    def test_ordinary_attestation_rejects_malformed_eligibility_digest(self) -> None:
+        thread_id = "PRRT_ELIGIBILITY_MALFORMED"
+        reviewed_payload = reviewed_state_payload(thread_id, [])
+        attestation = validation_attestation_payload(reviewed_payload)
+        attestation["eligibility_evidence_digest"] = "not-a-digest"
+        fields = {
+            key: value
+            for key, value in attestation.items()
+            if key != "attestation_digest"
+        }
+        attestation["attestation_digest"] = MODULE._digest_json(fields)
+        reviewed = mock.Mock(
+            head_sha=reviewed_payload["head_sha"],
+            state_digest=reviewed_payload["state_digest"],
+            feedback_digest=reviewed_payload["feedback_digest"],
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "attestation.json"
+            path.write_text(json.dumps(attestation), encoding="utf-8")
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "validation evidence eligibility digest is missing or malformed",
+            ):
+                MODULE.load_validation_evidence(
+                    path,
+                    reviewed_payload["repository"],
+                    attestation["head_sha"],
+                    reviewed,
+                )
 
     def test_validation_evidence_rejects_duplicate_recovery_binding(self) -> None:
         thread_id = "PRRT_RECOVERY_DUPLICATE"
@@ -4415,8 +4579,13 @@ class ResolveFixedThreadsTests(TestCase):
             [
                 "READ_NAMED_REVIEW_THREAD",
                 "READ_AUTHENTICATED_FOLLOW_UP_WORK_GRAPH",
+                "AUTHENTICATE_LIFECYCLE_PUBLICATION_PROTECTION",
                 "RESOLVE_NAMED_REVIEW_THREAD",
             ],
+        )
+        self.assertIn(
+            "BRANCH_PROTECTION",
+            registry["fixed_thread_resolution"]["prohibited_hosted_reads"],
         )
         self.assertIn(
             "MERGE_READINESS",

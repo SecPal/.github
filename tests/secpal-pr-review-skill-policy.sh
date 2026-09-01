@@ -785,6 +785,21 @@ grep -Fq 'canonical eligibility-manifest digest' "$CONTRACT" \
   || fail 'contract does not authenticate per-thread eligibility evidence'
 grep -Fq 'signed validation receipt and final attestation' "$SKILL" \
   || fail 'skill does not authenticate the eligibility manifest before resolution'
+grep -Fq -- '--exceptional-recovery-authorization' "$SKILL" \
+  || fail 'skill does not wire canonical Recovery authority into resolution'
+grep -Fq -- '--exceptional-recovery-evidence' <<<"$simple_skill_section" \
+  || fail 'skill simple-resolution route omits Recovery evidence'
+grep -Fq -- '--exceptional-recovery-authorization' <<<"$simple_skill_section" \
+  || fail 'skill simple-resolution route omits signed Recovery authorization'
+grep -Fq -- '--delivery-issue' <<<"$simple_skill_section" \
+  || fail 'skill simple-resolution route omits Recovery delivery issue'
+grep -Fq 'Omit all three inputs for ordinary non-Recovery evidence' \
+  <<<"$simple_skill_section" \
+  || fail 'skill makes Recovery authority inputs ambiguous for ordinary evidence'
+grep -Fq -- '--exceptional-recovery-evidence' "$CONTRACT" \
+  || fail 'contract does not retain Recovery evidence for resolution'
+grep -Fq -- '--exceptional-recovery-authorization' "$SIMPLE_RESOLUTION_DOC" \
+  || fail 'simple resolver documentation omits Recovery authority wiring'
 grep -Fq 'attest-validation --eligibility-evidence' "$SIMPLE_RESOLUTION_DOC" \
   || fail 'simple resolver documentation omits eligibility attestation'
 jq -e '
@@ -797,6 +812,7 @@ jq -e '
     ],
     "allowed_github_operations": [
       "READ_NAMED_REVIEW_THREAD", "READ_AUTHENTICATED_FOLLOW_UP_WORK_GRAPH",
+      "AUTHENTICATE_LIFECYCLE_PUBLICATION_PROTECTION",
       "RESOLVE_NAMED_REVIEW_THREAD"
     ],
     "prohibited_hosted_reads": [
