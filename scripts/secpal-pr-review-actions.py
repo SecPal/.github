@@ -4936,7 +4936,10 @@ def _verify_ready_integration_lifecycle_authority(
 
 
 def _verify_ready_integration_published_authority(
-    authority_manifest: dict[str, Any], integration_evidence: dict[str, Any]
+    authority_manifest: dict[str, Any],
+    integration_evidence: dict[str, Any],
+    *,
+    verified_source_validation_evidence_digest: str | None = None,
 ) -> None:
     """Bind integration eligibility to the maintained live #750/#752 authority."""
 
@@ -4988,6 +4991,18 @@ def _verify_ready_integration_published_authority(
     ):
         raise fast_path.SecurityBlocker(
             "Ready integration lifecycle publication binding changed"
+        )
+    if published.lifecycle.historical_proof_mode == "exact_state_adoption" and (
+        published.lifecycle.tree_sha != authority_manifest["prior_delivery_tree_sha"]
+        or published.lifecycle.validation_receipt_digest
+        != authority_manifest["prior_validation_receipt_digest"]
+        or published.lifecycle.adoption_source_evidence_digest
+        != authority_manifest["prior_final_attestation_digest"]
+        or published.lifecycle.source_validation_evidence_digest
+        != verified_source_validation_evidence_digest
+    ):
+        raise fast_path.SecurityBlocker(
+            "Ready integration exact-adoption source evidence binding changed"
         )
 
 
@@ -5068,6 +5083,10 @@ def _verify_ready_integration_prior_authority(
     ):
         raise fast_path.SecurityBlocker("Ready integration prior authority identity changed")
     reviewed = _load_fast_state(required_paths[1])
+    if reviewed.pull_request_number != authority["pull_request_number"]:
+        raise fast_path.SecurityBlocker(
+            "prior delivery pull-request identity changed"
+        )
     receipt = _read_json(required_paths[2], "prior validation receipt")
     attestation = _read_json(required_paths[3], "prior validation attestation")
     head = authority["prior_delivery_head_sha"]
@@ -5109,7 +5128,7 @@ def _verify_ready_integration_prior_authority(
         != attestation.get("validation_receipt_digest")
     ):
         raise fast_path.SecurityBlocker("prior delivery receipt identity changed")
-    fast_path.verify_validation_attestation(
+    verified_validation = fast_path.verify_validation_attestation(
         attestation,
         repository=arguments.repo,
         head_sha=head,
@@ -5188,7 +5207,13 @@ def _verify_ready_integration_prior_authority(
         f"{verified_tag.stdout}\n{verified_tag.stderr}",
         authority["expected_signer"],
     )
-    _verify_ready_integration_published_authority(authority, integration_evidence)
+    _verify_ready_integration_published_authority(
+        authority,
+        integration_evidence,
+        verified_source_validation_evidence_digest=(
+            verified_validation.source_validation_evidence_digest
+        ),
+    )
     _verify_ready_integration_lifecycle_authority(authority, integration_evidence)
     if live_observation is not None:
         _verify_ready_integration_live_observation(

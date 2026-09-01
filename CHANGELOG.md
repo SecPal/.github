@@ -9,6 +9,19 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-01 - Authenticate Exact Pre-Enrollment State Adoption
+
+**Added:**
+
+- add one versioned exact-state-adoption proof inside the existing lifecycle
+  enrollment family for independently authenticated pre-enrollment state
+- require a separately signed exact-scope, one-use authorization and preserve
+  observed platform chronology without synthesizing ordinary lifecycle events
+- derive adopted source and current-head evidence through maintained verifiers,
+  and distinguish observation provenance from ordinary event authorization
+- reuse the protected publication journal, adoption signer, enrollment
+  uniqueness, ordinary successor path, and prior-Ready trust boundary
+
 ## 2026-09-01 - Authenticate Post-Fix Outdated Thread State
 
 **Changed:**

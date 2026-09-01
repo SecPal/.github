@@ -350,7 +350,11 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             "Ready integration current lifecycle authority",
         )
         or lifecycle.get("historical_proof_mode")
-        not in {"native_lifecycle", "legacy_migration_checkpoint"}
+        not in {
+            "native_lifecycle",
+            "legacy_migration_checkpoint",
+            "exact_state_adoption",
+        }
         or lifecycle.get("draft") is not False
         or lifecycle.get("ready") is not True
         or lifecycle.get("ready_transition") is not False
@@ -954,6 +958,47 @@ class StableFeedbackState:
             "feedback_digest": self.feedback_digest,
             "state_digest": self.state_digest,
         }
+
+
+_VERIFIED_VALIDATION_EVIDENCE = object()
+
+
+@dataclass(frozen=True)
+class VerifiedValidationEvidence:
+    """Canonical source evidence exposed only after full attestation verification."""
+
+    repository: str
+    pull_request_number: int
+    head_sha: str
+    tree_sha: str
+    validation_receipt_digest: str
+    final_attestation_digest: str
+    source_validation_evidence_digest: str
+    _verification_seal: object
+
+
+def is_verified_validation_evidence(value: Any) -> bool:
+    """Reject caller-constructed validation summaries at trust boundaries."""
+
+    return (
+        isinstance(value, VerifiedValidationEvidence)
+        and value._verification_seal is _VERIFIED_VALIDATION_EVIDENCE
+    )
+
+
+def _require_reviewed_state_identity(
+    repository: Any, reviewed_state: Any
+) -> StableFeedbackState:
+    """Require one canonical reviewed state for the exact repository."""
+
+    repository = _require_string(repository, "reviewed repository")
+    if not REPOSITORY.fullmatch(repository):
+        raise SecurityBlocker("reviewed repository identity is malformed")
+    if not isinstance(reviewed_state, StableFeedbackState):
+        raise SecurityBlocker("reviewed state is not canonical")
+    if reviewed_state.repository != repository:
+        raise SecurityBlocker("reviewed repository identity changed")
+    return reviewed_state
 
 
 def verify_reviewed_state_evidence(value: Any) -> StableFeedbackState:
@@ -1805,7 +1850,9 @@ def verify_validation_attestation(
     commit_parent_sha: str,
     commit_tree_sha: str,
     commit_validation_receipt_digest: str | None,
-) -> None:
+) -> VerifiedValidationEvidence:
+    reviewed_state = _require_reviewed_state_identity(repository, reviewed_state)
+    reviewed_pull_request = reviewed_state.pull_request_number
     if (
         _require_oid(commit_parent_sha, "validated commit parent")
         != reviewed_state.head_sha
@@ -1849,6 +1896,26 @@ def verify_validation_attestation(
         raise SecurityBlocker("validation attestation binding is invalid or stale")
     if attestation["successful_result"] is not True:
         raise SecurityBlocker("complete validation did not succeed")
+    source_binding = {
+        "repository": repository,
+        "pull_request_number": reviewed_pull_request,
+        "head_sha": head_sha,
+        "tree_sha": commit_tree_sha,
+        "validation_receipt_digest": receipt["receipt_digest"],
+        "final_attestation_digest": expected["attestation_digest"],
+        "reviewed_state_digest": reviewed_state.state_digest,
+        "reviewed_feedback_digest": reviewed_state.feedback_digest,
+    }
+    return VerifiedValidationEvidence(
+        repository=repository,
+        pull_request_number=reviewed_pull_request,
+        head_sha=head_sha,
+        tree_sha=commit_tree_sha,
+        validation_receipt_digest=receipt["receipt_digest"],
+        final_attestation_digest=expected["attestation_digest"],
+        source_validation_evidence_digest=digest_json(source_binding),
+        _verification_seal=_VERIFIED_VALIDATION_EVIDENCE,
+    )
 
 
 def verify_commit_signatures(

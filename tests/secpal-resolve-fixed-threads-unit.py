@@ -349,6 +349,7 @@ def resolve_threads(
             for thread_id in immutable_thread_ids
         ],
     }
+    feedback["threads"].sort(key=lambda item: item["node_id"])
     identity = {
         "repository": repository,
         "pull_request_number": number,
