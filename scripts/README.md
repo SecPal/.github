@@ -213,6 +213,15 @@ other than exactly 40 or 64 lowercase hexadecimal characters fail closed.
 for explicit adoption by later receipts or attestations. Existing delivery
 validation does not call this module and continues to use the ordinary
 one-parent evidence path.
+
+The same enrollment family also defines the versioned exact-state-adoption
+proof. It authenticates normalized pre-enrollment observations and one exact
+finite current state under a separately signed one-use authorization, while
+keeping the ordinary event list empty and starting cryptographic lifecycle
+authority at the real adoption time. The proof uses the maintained adoption
+signer and existing publication/successor machinery; it does not weaken native
+genesis or event-derived state verification and is not available as an ordinary
+delivery escape hatch.
 The lifecycle-authority suite is an unconditional registered validation command.
 
 ### `secpal_pr_review/lifecycle_orchestration.py`

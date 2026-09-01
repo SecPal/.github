@@ -350,7 +350,11 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             "Ready integration current lifecycle authority",
         )
         or lifecycle.get("historical_proof_mode")
-        not in {"native_lifecycle", "legacy_migration_checkpoint"}
+        not in {
+            "native_lifecycle",
+            "legacy_migration_checkpoint",
+            "exact_state_adoption",
+        }
         or lifecycle.get("draft") is not False
         or lifecycle.get("ready") is not True
         or lifecycle.get("ready_transition") is not False

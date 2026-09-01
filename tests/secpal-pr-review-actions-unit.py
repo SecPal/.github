@@ -6835,6 +6835,61 @@ class FastPathTests(TestCase):
                 authority, integration
             )
 
+    def test_ready_integration_binds_exact_adoption_source_evidence(self) -> None:
+        reviewed = fast_feedback()
+        raw_authority = ready_integration_prior_authority(reviewed)
+        raw_authority["lifecycle"]["historical_proof_mode"] = (
+            "exact_state_adoption"
+        )
+        authority = fast_path.normalize_ready_integration_prior_authority(
+            raw_authority
+        )
+        integration = fast_path.normalize_ready_integration_evidence(
+            ready_integration_evidence(reviewed, validated_tree="a" * 40),
+            repository="SecPal/.github", reviewed_state=reviewed,
+            registry=fast_registry(), validated_tree_sha="a" * 40,
+        )
+        verified_lifecycle = SimpleNamespace(
+            authority_digest=authority["lifecycle"]["current_authority_digest"],
+            lifecycle_id=authority["lifecycle"]["identity"],
+            historical_proof_mode="exact_state_adoption",
+            state={"cycle_3_absent": True},
+            tree_sha=authority["prior_delivery_tree_sha"],
+            validation_receipt_digest=authority[
+                "prior_validation_receipt_digest"
+            ],
+            adoption_source_evidence_digest=authority[
+                "prior_final_attestation_digest"
+            ],
+            source_validation_evidence_digest="f" * 64,
+        )
+        published = SimpleNamespace(
+            publication_oid=authority["publication"]["object_oid"],
+            publication_digest=authority["publication"]["publication_digest"],
+            lifecycle=verified_lifecycle,
+        )
+        lifecycle_authority = SimpleNamespace(
+            ExpectedLifecycle=SimpleNamespace, LifecycleAuthorityError=ValueError,
+        )
+        lifecycle_publication = SimpleNamespace(
+            verify_current_lifecycle_authority=mock.Mock(return_value=published),
+            LifecyclePublicationError=ValueError,
+        )
+        with mock.patch.object(
+            actions, "_load_lifecycle_publication_helpers",
+            return_value=(lifecycle_authority, lifecycle_publication),
+        ):
+            actions._verify_ready_integration_published_authority(
+                authority, integration
+            )
+            published.lifecycle.adoption_source_evidence_digest = "0" * 64
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "adoption source evidence"
+            ):
+                actions._verify_ready_integration_published_authority(
+                    authority, integration
+                )
+
     def test_ready_integration_rejects_actual_default_branch_sha_drift(self) -> None:
         reviewed = fast_feedback()
         final_head = reviewed.head_sha

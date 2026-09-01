@@ -655,7 +655,11 @@ def _verify_publication_document(
     authority._require_identity(document["lifecycle_id"], "lifecycle identity")
     authority._require_positive_int(document["pull_request"], "pull request")
     authority._require_oid(document["head_sha"], "publication head")
-    if document["historical_proof_mode"] not in {authority.NATIVE_PROOF_MODE, authority.LEGACY_PROOF_MODE}:
+    if document["historical_proof_mode"] not in {
+        authority.NATIVE_PROOF_MODE,
+        authority.LEGACY_PROOF_MODE,
+        authority.EXACT_ADOPTION_PROOF_MODE,
+    }:
         raise LifecyclePublicationError("publication historical-proof mode is invalid")
     for field in ("journal_predecessor_oid", "predecessor_publication_oid"):
         if document[field] is not None and not _OID.fullmatch(document[field]):
@@ -736,6 +740,15 @@ def _verify_publication_document(
 
 def _lifecycle_bundle(document: Mapping[str, Any]) -> Mapping[str, Any]:
     evidence = document["lifecycle_evidence"]
+    if (
+        isinstance(evidence, dict)
+        and evidence.get("kind") == authority.EXACT_ADOPTION_EVIDENCE_KIND
+        and set(evidence) == authority.EXACT_ADOPTION_PUBLICATION_FIELDS
+    ):
+        return {
+            "transition_authorizations": evidence["transition_authorizations"],
+            "authority_chain": evidence["authority_chain"],
+        }
     bundle = (
         evidence.get("lifecycle_evidence")
         if isinstance(evidence, dict) and evidence.get("kind") == authority.PUBLICATION_EVIDENCE_KIND
@@ -783,6 +796,19 @@ def _require_exact_successor(
             or new_evidence.get("legacy_adoption_checkpoint") != old_evidence.get("legacy_adoption_checkpoint")
         ):
             raise LifecyclePublicationError("lifecycle enrollment root changed during advancement")
+    if (
+        isinstance(old_evidence, dict)
+        and old_evidence.get("kind") == authority.EXACT_ADOPTION_EVIDENCE_KIND
+    ):
+        if (
+            not isinstance(new_evidence, dict)
+            or new_evidence.get("kind") != authority.EXACT_ADOPTION_EVIDENCE_KIND
+            or new_evidence.get("exact_state_adoption_proof")
+            != old_evidence.get("exact_state_adoption_proof")
+        ):
+            raise LifecyclePublicationError(
+                "exact-state adoption root changed during advancement"
+            )
 
 
 def _publication_fields(
@@ -1185,7 +1211,11 @@ def enroll_existing_lifecycle(
     """Publish one native lifecycle or one explicit legacy migration checkpoint."""
 
     bundle, bundle_raw = _canonical_bundle(serialized_evidence)
-    is_native = not (
+    exact_adoption = (
+        bundle.get("kind") == authority.EXACT_ADOPTION_EVIDENCE_KIND
+        and bundle.get("enrollment_mode") == "EXACT_STATE_ADOPTION"
+    )
+    is_native = not exact_adoption and not (
         bundle.get("kind") == authority.PUBLICATION_EVIDENCE_KIND
         and bundle.get("enrollment_mode") == "LEGACY_ADOPTION_CHECKPOINT"
     )
@@ -1261,13 +1291,22 @@ def advance_current_terminal(
 
     bundle, bundle_raw = _canonical_bundle(serialized_evidence)
     lifecycle_bundle = _lifecycle_bundle({"lifecycle_evidence": bundle})
-    initialization = lifecycle_bundle.get("delivery_initialization")
-    if not isinstance(initialization, dict):
-        raise LifecyclePublicationError("lifecycle initialization is malformed")
-    repository = authority._require_repository(initialization.get("repository"))
-    issue = authority._require_positive_int(
-        initialization.get("delivery_issue"), "delivery issue"
-    )
+    if bundle.get("kind") == authority.EXACT_ADOPTION_EVIDENCE_KIND:
+        proof = bundle.get("exact_state_adoption_proof")
+        if not isinstance(proof, dict):
+            raise LifecyclePublicationError("exact-state adoption proof is malformed")
+        repository = authority._require_repository(proof.get("repository"))
+        issue = authority._require_positive_int(
+            proof.get("delivery_issue"), "delivery issue"
+        )
+    else:
+        initialization = lifecycle_bundle.get("delivery_initialization")
+        if not isinstance(initialization, dict):
+            raise LifecyclePublicationError("lifecycle initialization is malformed")
+        repository = authority._require_repository(initialization.get("repository"))
+        issue = authority._require_positive_int(
+            initialization.get("delivery_issue"), "delivery issue"
+        )
     policy = authority._load_lifecycle_trust_policy(repository)
     _verify_live_protection(policy)
     with _isolated_repository(policy, write=True) as (root, credential_environment):

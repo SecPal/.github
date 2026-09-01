@@ -4989,6 +4989,17 @@ def _verify_ready_integration_published_authority(
         raise fast_path.SecurityBlocker(
             "Ready integration lifecycle publication binding changed"
         )
+    if published.lifecycle.historical_proof_mode == "exact_state_adoption" and (
+        published.lifecycle.tree_sha != authority_manifest["prior_delivery_tree_sha"]
+        or published.lifecycle.validation_receipt_digest
+        != authority_manifest["prior_validation_receipt_digest"]
+        or published.lifecycle.adoption_source_evidence_digest
+        != authority_manifest["prior_final_attestation_digest"]
+        or published.lifecycle.source_validation_evidence_digest is None
+    ):
+        raise fast_path.SecurityBlocker(
+            "Ready integration exact-adoption source evidence binding changed"
+        )
 
 
 def _prior_delivery_registry_binding(

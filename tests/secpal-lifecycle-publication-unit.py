@@ -203,6 +203,58 @@ def recovered_ready_chain(issue: int = ISSUE) -> Chain:
     return chain
 
 
+def exact_adoption_evidence() -> tuple[bytes, dict[str, Any]]:
+    history = [
+        {"sequence": 1, "kind": "PR_CREATED_DRAFT",
+         "observed_at": "2026-08-01T00:00:00Z", "head_sha": HEADS[0],
+         "reviewed_head_sha": None},
+        {"sequence": 2, "kind": "DRAFT_TO_READY_OBSERVED",
+         "observed_at": "2026-08-02T00:00:00Z", "head_sha": HEADS[0],
+         "reviewed_head_sha": None},
+        {"sequence": 3, "kind": "REVIEW_SUBMITTED",
+         "observed_at": "2026-08-03T00:00:00Z", "head_sha": HEADS[0],
+         "reviewed_head_sha": HEADS[0]},
+        {"sequence": 4, "kind": "REMEDIATION_HEAD_OBSERVED",
+         "observed_at": "2026-08-04T00:00:00Z", "head_sha": HEADS[1],
+         "reviewed_head_sha": None},
+        {"sequence": 5, "kind": "REMEDIATION_HEAD_OBSERVED",
+         "observed_at": "2026-08-05T00:00:00Z", "head_sha": HEADS[2],
+         "reviewed_head_sha": None},
+    ]
+    state = authority.initial_state()
+    state.update(
+        unrestricted_review_count=1, remediation_cycle_count=2,
+        draft=False, ready=True, ready_transition_count=1,
+        ready_history=[{
+            "sequence": 1, "transition_kind": "DRAFT_TO_READY",
+            "event_authorization_digest": "6" * 64,
+        }],
+    )
+    evidence = authority.create_exact_state_adoption_evidence(
+        repository=REPOSITORY, delivery_issue=ISSUE, pull_request=PR,
+        head_sha=HEADS[2], tree_sha=HEADS[3], pull_request_state="OPEN",
+        commit_signature_status="VERIFIED", commit_signer_identity=SIGNER,
+        validation_receipt_digest="1" * 64,
+        source_validation_evidence_digest="2" * 64,
+        adoption_source_evidence_digest="3" * 64,
+        observed_pre_enrollment_history=history, intended_state=state,
+        adoption_timestamp="2026-08-06T00:00:00Z",
+        supporting_evidence_digests=["4" * 64, "5" * 64],
+    )
+    authorization = authority.create_exact_state_adoption_authorization(
+        adoption_evidence=evidence, authorization_id="exact-adoption-auth-1",
+        bounded_uses=1, signer_identity=LEGACY_SIGNER,
+        signer=signer_for(LEGACY_SIGNER),
+    )
+    proof = authority.create_exact_state_adoption_proof(
+        adoption_evidence=evidence, authorization=authorization,
+        signer_identity=LEGACY_SIGNER, signer=signer_for(LEGACY_SIGNER),
+    )
+    return authority.serialize_exact_state_adoption_evidence(
+        exact_state_adoption_proof=proof
+    ), proof
+
+
 class LifecyclePublicationTests(TestCase):
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory(prefix="lifecycle-publication-")
@@ -334,6 +386,55 @@ class LifecyclePublicationTests(TestCase):
             publication.enroll_existing_lifecycle(
                 chain.published(), signer_identity=SIGNER, signer=signer_for()
             )
+
+    def test_exact_adoption_enrolls_once_and_uses_normal_successor_path(self) -> None:
+        serialized, proof = exact_adoption_evidence()
+        enrolled = publication.enroll_existing_lifecycle(
+            serialized, signer_identity=SIGNER, signer=signer_for()
+        )
+        self.assertEqual(
+            enrolled.lifecycle.historical_proof_mode,
+            authority.EXACT_ADOPTION_PROOF_MODE,
+        )
+        self.assertEqual(enrolled.lifecycle.authority_digest, proof["proof_digest"])
+        self.assertEqual(enrolled.lifecycle.state["remediation_cycle_count"], 2)
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "already enrolled"
+        ):
+            publication.enroll_existing_lifecycle(
+                serialized, signer_identity=SIGNER, signer=signer_for()
+            )
+
+        event = authority.create_transition_authorization(
+            event_id="adopted-head-advanced-1", repository=REPOSITORY,
+            delivery_issue=ISSUE, lifecycle_id=enrolled.lifecycle.lifecycle_id,
+            pull_request=PR,
+            predecessor_authority_digest=enrolled.lifecycle.authority_digest,
+            predecessor_head_sha=HEADS[2], resulting_head_sha=HEADS[4],
+            transition_kind="HEAD_ADVANCED", replacement_pull_request=None,
+            initialization_evidence_digest=(
+                enrolled.lifecycle.initialization_evidence_digest
+            ),
+            signer_identity=SIGNER, signer=signer_for(),
+        )
+        snapshot = authority.issue_exact_state_adoption_successor_authority(
+            serialized_adoption_evidence=serialized, authorization=event,
+            signer_identity=SIGNER, authority_signer=signer_for(),
+        )
+        successor = authority.serialize_exact_state_adoption_evidence(
+            exact_state_adoption_proof=proof,
+            transition_authorizations=[event], authority_chain=[snapshot],
+        )
+        advanced = publication.advance_current_terminal(
+            successor, signer_identity=SIGNER, signer=signer_for()
+        )
+        self.assertEqual(advanced.lifecycle.head_sha, HEADS[4])
+        self.assertEqual(advanced.lifecycle.state, enrolled.lifecycle.state)
+        self.assertEqual(
+            publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE)
+            .lifecycle.authority_digest,
+            snapshot["authority_digest"],
+        )
 
     def test_legacy_checkpoint_requires_dedicated_role_and_valid_authorization(self) -> None:
         chain = recovered_ready_chain()

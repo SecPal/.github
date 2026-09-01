@@ -41,6 +41,13 @@ BUNDLE_DOMAIN = "secpal.delivery-lifecycle-evidence/v1"
 LEGACY_ADOPTION_KIND = "SECPAL_LEGACY_LIFECYCLE_ADOPTION_CHECKPOINT"
 LEGACY_ADOPTION_DOMAIN = "secpal.legacy-lifecycle-adoption-checkpoint/v1"
 LEGACY_PROOF_MODE = "legacy_migration_checkpoint"
+EXACT_ADOPTION_PROOF_KIND = "SECPAL_EXACT_STATE_ADOPTION_PROOF"
+EXACT_ADOPTION_PROOF_DOMAIN = "secpal.exact-state-adoption-proof/v1"
+EXACT_ADOPTION_AUTHORIZATION_KIND = "SECPAL_EXACT_STATE_ADOPTION_AUTHORIZATION"
+EXACT_ADOPTION_AUTHORIZATION_DOMAIN = "secpal.exact-state-adoption-authorization/v1"
+EXACT_ADOPTION_EVIDENCE_KIND = "SECPAL_EXACT_STATE_ADOPTION_EVIDENCE"
+EXACT_ADOPTION_EVIDENCE_DOMAIN = "secpal.exact-state-adoption-evidence/v1"
+EXACT_ADOPTION_PROOF_MODE = "exact_state_adoption"
 NATIVE_PROOF_MODE = "native_lifecycle"
 PUBLICATION_EVIDENCE_KIND = "SECPAL_PUBLISHED_LIFECYCLE_EVIDENCE"
 PUBLICATION_EVIDENCE_DOMAIN = "secpal.published-lifecycle-evidence/v1"
@@ -121,6 +128,10 @@ class VerifiedLifecycleAuthority:
     authority_signer_identity: str
     historical_proof_mode: str = NATIVE_PROOF_MODE
     legacy_adoption_checkpoint_digest: str | None = None
+    tree_sha: str | None = None
+    validation_receipt_digest: str | None = None
+    source_validation_evidence_digest: str | None = None
+    adoption_source_evidence_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -309,6 +320,47 @@ LEGACY_ADOPTION_FIELDS = frozenset(
         "signer_identity",
         "signature",
         "checkpoint_digest",
+    }
+)
+OBSERVED_HISTORY_FIELDS = frozenset(
+    {"sequence", "kind", "observed_at", "head_sha", "reviewed_head_sha"}
+)
+EXACT_ADOPTION_EVIDENCE_FIELDS = frozenset(
+    {
+        "schema_version", "kind", "domain", "proof_version", "repository",
+        "delivery_issue", "pull_request", "head_sha", "tree_sha",
+        "pull_request_state", "commit_signature_status",
+        "commit_signer_identity", "validation_receipt_digest",
+        "source_validation_evidence_digest", "adoption_source_evidence_digest",
+        "observed_pre_enrollment_history", "observed_history_digest",
+        "intended_state", "intended_state_digest", "adoption_timestamp",
+        "supporting_evidence_digests", "ordinary_lifecycle_events",
+        "head_advanced_count", "head_advanced_history_digest",
+        "adoption_evidence_digest",
+    }
+)
+EXACT_ADOPTION_AUTHORIZATION_FIELDS = frozenset(
+    {
+        "schema_version", "kind", "domain", "proof_version", "repository",
+        "delivery_issue", "pull_request", "head_sha", "tree_sha",
+        "adoption_evidence_digest", "intended_state_digest",
+        "authorization_id", "bounded_uses", "signer_identity", "signature",
+        "authorization_digest",
+    }
+)
+EXACT_ADOPTION_PROOF_FIELDS = frozenset(
+    (EXACT_ADOPTION_EVIDENCE_FIELDS - {"kind", "domain"})
+    | {
+        "kind", "domain", "historical_proof_mode", "lifecycle_id",
+        "authorization", "authorization_digest", "signer_identity", "signature",
+        "proof_digest",
+    }
+)
+EXACT_ADOPTION_PUBLICATION_FIELDS = frozenset(
+    {
+        "schema_version", "kind", "domain", "enrollment_mode",
+        "exact_state_adoption_proof", "transition_authorizations",
+        "authority_chain",
     }
 )
 PUBLICATION_EVIDENCE_FIELDS = frozenset(
@@ -1821,6 +1873,553 @@ def _legacy_checkpoint_state(value: Any) -> dict[str, Any]:
     return state
 
 
+def _require_adoption_timestamp(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", value
+    ):
+        raise LifecycleAuthorityError(f"{label} is invalid")
+    return value
+
+
+def _normalize_observed_pre_enrollment_history(
+    value: Any, *, expected_head: str, intended_state: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """Normalize factual observations without recasting them as lifecycle events."""
+
+    if not isinstance(value, list) or not value:
+        raise LifecycleAuthorityError("observed pre-enrollment history is required")
+    allowed = frozenset(
+        {
+            "PR_CREATED_DRAFT", "DRAFT_TO_READY_OBSERVED",
+            "READY_TO_DRAFT_OBSERVED", "REVIEW_SUBMITTED",
+            "REMEDIATION_HEAD_OBSERVED", "EXCEPTIONAL_RECOVERY_OBSERVED",
+            "EXCEPTIONAL_CONTINUATION_OBSERVED", "HEAD_ADVANCED_OBSERVED",
+        }
+    )
+    normalized: list[dict[str, Any]] = []
+    previous_timestamp: str | None = None
+    for sequence, raw in enumerate(value, 1):
+        item = _require_closed(
+            raw, OBSERVED_HISTORY_FIELDS, "observed pre-enrollment history entry"
+        )
+        kind = item["kind"]
+        timestamp = _require_adoption_timestamp(item["observed_at"], "observation time")
+        head = _require_oid(item["head_sha"], "observed head")
+        reviewed_head = item["reviewed_head_sha"]
+        if (
+            item["sequence"] != sequence
+            or isinstance(item["sequence"], bool)
+            or kind not in allowed
+            or (previous_timestamp is not None and timestamp < previous_timestamp)
+            or (kind == "REVIEW_SUBMITTED") != (reviewed_head is not None)
+        ):
+            raise LifecycleAuthorityError(
+                "observed pre-enrollment chronology is not canonical"
+            )
+        if reviewed_head is not None:
+            reviewed_head = _require_oid(reviewed_head, "observed reviewed head")
+        normalized.append(
+            {
+                "sequence": sequence,
+                "kind": kind,
+                "observed_at": timestamp,
+                "head_sha": head,
+                "reviewed_head_sha": reviewed_head,
+            }
+        )
+        previous_timestamp = timestamp
+    state = _validate_state(dict(intended_state))
+    kinds = [item["kind"] for item in normalized]
+    if kinds[0] != "PR_CREATED_DRAFT" or normalized[-1]["head_sha"] != expected_head:
+        raise LifecycleAuthorityError(
+            "observed pre-enrollment history does not bind the delivery boundary"
+        )
+    draft = True
+    ready_transitions = 0
+    for kind in kinds[1:]:
+        if kind == "DRAFT_TO_READY_OBSERVED":
+            if not draft:
+                raise LifecycleAuthorityError("observed Ready chronology contains hidden churn")
+            draft = False
+            ready_transitions += 1
+        elif kind == "READY_TO_DRAFT_OBSERVED":
+            if draft:
+                raise LifecycleAuthorityError("observed Draft chronology contains hidden churn")
+            draft = True
+    if (
+        kinds.count("PR_CREATED_DRAFT") != 1
+        or kinds.count("REVIEW_SUBMITTED") != state["unrestricted_review_count"]
+        or kinds.count("REMEDIATION_HEAD_OBSERVED")
+        != state["remediation_cycle_count"]
+        or kinds.count("EXCEPTIONAL_RECOVERY_OBSERVED")
+        != state["exceptional_recovery_count"]
+        or kinds.count("EXCEPTIONAL_CONTINUATION_OBSERVED")
+        != state["exceptional_continuation_count"]
+        or ready_transitions != state["ready_transition_count"]
+        or draft != state["draft"]
+        or (not draft) != state["ready"]
+    ):
+        raise LifecycleAuthorityError(
+            "observed pre-enrollment history does not authenticate intended state"
+        )
+    return normalized
+
+
+def create_exact_state_adoption_evidence(
+    *, repository: str, delivery_issue: int, pull_request: int, head_sha: str,
+    tree_sha: str, pull_request_state: str, commit_signature_status: str,
+    commit_signer_identity: str, validation_receipt_digest: str,
+    source_validation_evidence_digest: str, adoption_source_evidence_digest: str,
+    observed_pre_enrollment_history: Sequence[Mapping[str, Any]],
+    intended_state: Mapping[str, Any], adoption_timestamp: str,
+    supporting_evidence_digests: Sequence[str],
+) -> dict[str, Any]:
+    """Create canonical facts for one exact pre-enrollment adoption boundary."""
+
+    repository = _require_repository(repository)
+    issue = _require_positive_int(delivery_issue, "adopted delivery issue")
+    pr = _require_positive_int(pull_request, "adopted pull request")
+    head = _require_oid(head_sha, "adopted head")
+    tree = _require_oid(tree_sha, "adopted tree")
+    if pull_request_state != "OPEN" or commit_signature_status != "VERIFIED":
+        raise LifecycleAuthorityError("adoption requires an open signed delivery")
+    signer_identity = _require_identity(commit_signer_identity, "commit signer")
+    state = _validate_state(dict(intended_state))
+    history = _normalize_observed_pre_enrollment_history(
+        list(observed_pre_enrollment_history), expected_head=head, intended_state=state
+    )
+    timestamp = _require_adoption_timestamp(adoption_timestamp, "adoption timestamp")
+    if timestamp < history[-1]["observed_at"]:
+        raise LifecycleAuthorityError("adoption cannot be backdated before observation")
+    supporting = list(supporting_evidence_digests)
+    if not supporting or len(supporting) != len(set(supporting)):
+        raise LifecycleAuthorityError("adoption supporting evidence is ambiguous")
+    for digest in supporting:
+        _require_digest(digest, "adoption supporting evidence")
+    fields = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": EXACT_ADOPTION_EVIDENCE_KIND,
+        "domain": EXACT_ADOPTION_EVIDENCE_DOMAIN,
+        "proof_version": SCHEMA_VERSION,
+        "repository": repository,
+        "delivery_issue": issue,
+        "pull_request": pr,
+        "head_sha": head,
+        "tree_sha": tree,
+        "pull_request_state": pull_request_state,
+        "commit_signature_status": commit_signature_status,
+        "commit_signer_identity": signer_identity,
+        "validation_receipt_digest": _require_digest(
+            validation_receipt_digest, "adoption validation receipt"
+        ),
+        "source_validation_evidence_digest": _require_digest(
+            source_validation_evidence_digest, "source validation evidence"
+        ),
+        "adoption_source_evidence_digest": _require_digest(
+            adoption_source_evidence_digest, "adoption-time source evidence"
+        ),
+        "observed_pre_enrollment_history": history,
+        "observed_history_digest": digest_json(history),
+        "intended_state": copy.deepcopy(state),
+        "intended_state_digest": digest_json(state),
+        "adoption_timestamp": timestamp,
+        "supporting_evidence_digests": supporting,
+        "ordinary_lifecycle_events": [],
+        "head_advanced_count": sum(
+            item["kind"] == "HEAD_ADVANCED_OBSERVED" for item in history
+        ),
+        "head_advanced_history_digest": digest_json(
+            [item for item in history if item["kind"] == "HEAD_ADVANCED_OBSERVED"]
+        ),
+    }
+    return {**fields, "adoption_evidence_digest": digest_json(fields)}
+
+
+def _verify_exact_state_adoption_evidence(value: Any) -> dict[str, Any]:
+    evidence = _require_closed(
+        value, EXACT_ADOPTION_EVIDENCE_FIELDS, "exact-state adoption evidence"
+    )
+    if (
+        evidence["schema_version"] != SCHEMA_VERSION
+        or evidence["proof_version"] != SCHEMA_VERSION
+        or evidence["kind"] != EXACT_ADOPTION_EVIDENCE_KIND
+        or evidence["domain"] != EXACT_ADOPTION_EVIDENCE_DOMAIN
+        or evidence["ordinary_lifecycle_events"] != []
+    ):
+        raise LifecycleAuthorityError("exact-state adoption evidence semantics are unknown")
+    rebuilt = create_exact_state_adoption_evidence(
+        repository=evidence["repository"], delivery_issue=evidence["delivery_issue"],
+        pull_request=evidence["pull_request"], head_sha=evidence["head_sha"],
+        tree_sha=evidence["tree_sha"], pull_request_state=evidence["pull_request_state"],
+        commit_signature_status=evidence["commit_signature_status"],
+        commit_signer_identity=evidence["commit_signer_identity"],
+        validation_receipt_digest=evidence["validation_receipt_digest"],
+        source_validation_evidence_digest=evidence["source_validation_evidence_digest"],
+        adoption_source_evidence_digest=evidence["adoption_source_evidence_digest"],
+        observed_pre_enrollment_history=evidence["observed_pre_enrollment_history"],
+        intended_state=evidence["intended_state"],
+        adoption_timestamp=evidence["adoption_timestamp"],
+        supporting_evidence_digests=evidence["supporting_evidence_digests"],
+    )
+    if rebuilt != evidence:
+        raise LifecycleAuthorityError("exact-state adoption evidence binding changed")
+    return rebuilt
+
+
+def create_exact_state_adoption_authorization(
+    *, adoption_evidence: Mapping[str, Any], authorization_id: str,
+    bounded_uses: int, signer_identity: str, signer: Signer,
+) -> dict[str, Any]:
+    """Sign one exact-scope, one-use authorization independently of the proof."""
+
+    evidence = _verify_exact_state_adoption_evidence(adoption_evidence)
+    fields = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": EXACT_ADOPTION_AUTHORIZATION_KIND,
+        "domain": EXACT_ADOPTION_AUTHORIZATION_DOMAIN,
+        "proof_version": SCHEMA_VERSION,
+        "repository": evidence["repository"],
+        "delivery_issue": evidence["delivery_issue"],
+        "pull_request": evidence["pull_request"],
+        "head_sha": evidence["head_sha"],
+        "tree_sha": evidence["tree_sha"],
+        "adoption_evidence_digest": evidence["adoption_evidence_digest"],
+        "intended_state_digest": evidence["intended_state_digest"],
+        "authorization_id": _require_identity(authorization_id, "adoption authorization"),
+        "bounded_uses": bounded_uses,
+        "signer_identity": _require_identity(signer_identity, "adoption authorization signer"),
+    }
+    if bounded_uses != 1 or isinstance(bounded_uses, bool):
+        raise LifecycleAuthorityError("exact-state adoption authorization must have one use")
+    signature = _normalize_signature(
+        signer(canonical_json_bytes(fields), EXACT_ADOPTION_AUTHORIZATION_DOMAIN),
+        fields["signer_identity"],
+    )
+    signed = {**fields, "signature": signature}
+    return {**signed, "authorization_digest": digest_json(signed)}
+
+
+def create_exact_state_adoption_proof(
+    *, adoption_evidence: Mapping[str, Any], authorization: Mapping[str, Any],
+    signer_identity: str, signer: Signer,
+) -> dict[str, Any]:
+    """Create the signed adoption genesis; no ordinary history is synthesized."""
+
+    evidence = _verify_exact_state_adoption_evidence(adoption_evidence)
+    authorization_item = copy.deepcopy(dict(authorization))
+    fields = {
+        **{key: copy.deepcopy(value) for key, value in evidence.items()
+           if key not in {"kind", "domain"}},
+        "kind": EXACT_ADOPTION_PROOF_KIND,
+        "domain": EXACT_ADOPTION_PROOF_DOMAIN,
+        "historical_proof_mode": EXACT_ADOPTION_PROOF_MODE,
+        "lifecycle_id": f"lifecycle-adoption:{evidence['adoption_evidence_digest']}",
+        "authorization": authorization_item,
+        "authorization_digest": authorization_item.get("authorization_digest"),
+        "signer_identity": _require_identity(signer_identity, "exact adoption signer"),
+    }
+    signature = _normalize_signature(
+        signer(canonical_json_bytes(fields), EXACT_ADOPTION_PROOF_DOMAIN),
+        fields["signer_identity"],
+    )
+    signed = {**fields, "signature": signature}
+    return {**signed, "proof_digest": digest_json(signed)}
+
+
+def verify_exact_state_adoption_proof(
+    proof_value: Any, expected: ExpectedLifecycle | None = None
+) -> VerifiedLifecycleAuthority:
+    """Authenticate one exact adopted baseline using maintained adoption trust."""
+
+    proof = _require_closed(
+        proof_value, EXACT_ADOPTION_PROOF_FIELDS, "exact-state adoption proof"
+    )
+    if (
+        proof["schema_version"] != SCHEMA_VERSION
+        or proof["proof_version"] != SCHEMA_VERSION
+        or proof["kind"] != EXACT_ADOPTION_PROOF_KIND
+        or proof["domain"] != EXACT_ADOPTION_PROOF_DOMAIN
+        or proof["historical_proof_mode"] != EXACT_ADOPTION_PROOF_MODE
+    ):
+        raise LifecycleAuthorityError("exact-state adoption proof semantics are unknown")
+    evidence = _verify_exact_state_adoption_evidence(
+        {
+            **{key: copy.deepcopy(proof[key]) for key in EXACT_ADOPTION_EVIDENCE_FIELDS},
+            "kind": EXACT_ADOPTION_EVIDENCE_KIND,
+            "domain": EXACT_ADOPTION_EVIDENCE_DOMAIN,
+        }
+    )
+    expected_lifecycle = f"lifecycle-adoption:{evidence['adoption_evidence_digest']}"
+    if proof["lifecycle_id"] != expected_lifecycle:
+        raise LifecycleAuthorityError("exact-state adoption lifecycle identity changed")
+    repository = evidence["repository"]
+    policy = _load_lifecycle_trust_policy(repository)
+    verifier = _policy_signature_verifier(policy)
+    authorization = _require_closed(
+        proof["authorization"], EXACT_ADOPTION_AUTHORIZATION_FIELDS,
+        "exact-state adoption authorization",
+    )
+    if (
+        authorization["schema_version"] != SCHEMA_VERSION
+        or authorization["proof_version"] != SCHEMA_VERSION
+        or authorization["kind"] != EXACT_ADOPTION_AUTHORIZATION_KIND
+        or authorization["domain"] != EXACT_ADOPTION_AUTHORIZATION_DOMAIN
+        or authorization["bounded_uses"] != 1
+        or isinstance(authorization["bounded_uses"], bool)
+        or any(
+            authorization[field] != evidence[field]
+            for field in (
+                "repository", "delivery_issue", "pull_request", "head_sha",
+                "tree_sha", "adoption_evidence_digest", "intended_state_digest",
+            )
+        )
+    ):
+        raise LifecycleAuthorityError("exact-state adoption authorization scope changed")
+    authorization_signer = _require_identity(
+        authorization["signer_identity"], "adoption authorization signer"
+    )
+    authorization_signed = {
+        key: copy.deepcopy(value) for key, value in authorization.items()
+        if key != "authorization_digest"
+    }
+    authorization_digest = _require_digest(
+        authorization["authorization_digest"], "adoption authorization"
+    )
+    if (
+        authorization_digest != digest_json(authorization_signed)
+        or proof["authorization_digest"] != authorization_digest
+    ):
+        raise LifecycleAuthorityError("exact-state adoption authorization digest mismatch")
+    _verify_signature(
+        canonical_json_bytes(
+            _unsigned(authorization, "authorization_digest", "signature")
+        ),
+        authorization["signature"], authorization_signer,
+        EXACT_ADOPTION_AUTHORIZATION_DOMAIN,
+        policy.legacy_adoption_signer_identities, verifier,
+    )
+    proof_signer = _require_identity(proof["signer_identity"], "exact adoption signer")
+    proof_signed = {
+        key: copy.deepcopy(value) for key, value in proof.items()
+        if key != "proof_digest"
+    }
+    proof_digest = _require_digest(proof["proof_digest"], "exact adoption proof")
+    if proof_digest != digest_json(proof_signed):
+        raise LifecycleAuthorityError("exact-state adoption proof digest mismatch")
+    _verify_signature(
+        canonical_json_bytes(_unsigned(proof, "proof_digest", "signature")),
+        proof["signature"], proof_signer, EXACT_ADOPTION_PROOF_DOMAIN,
+        policy.legacy_adoption_signer_identities, verifier,
+    )
+    result = VerifiedLifecycleAuthority(
+        authority_digest=proof_digest,
+        repository=repository,
+        delivery_issue=evidence["delivery_issue"],
+        lifecycle_id=expected_lifecycle,
+        initialization_evidence_digest=evidence["adoption_evidence_digest"],
+        pull_request=evidence["pull_request"],
+        head_sha=evidence["head_sha"],
+        state=copy.deepcopy(evidence["intended_state"]),
+        authority_signer_identity=proof_signer,
+        historical_proof_mode=EXACT_ADOPTION_PROOF_MODE,
+        legacy_adoption_checkpoint_digest=proof_digest,
+        tree_sha=evidence["tree_sha"],
+        validation_receipt_digest=evidence["validation_receipt_digest"],
+        source_validation_evidence_digest=evidence[
+            "source_validation_evidence_digest"
+        ],
+        adoption_source_evidence_digest=evidence[
+            "adoption_source_evidence_digest"
+        ],
+    )
+    if expected is not None:
+        _compare_expected(result, expected)
+    return result
+
+
+def serialize_exact_state_adoption_evidence(
+    *, exact_state_adoption_proof: Mapping[str, Any],
+    transition_authorizations: Sequence[Mapping[str, Any]] = (),
+    authority_chain: Sequence[Mapping[str, Any]] = (),
+) -> bytes:
+    """Serialize one adopted genesis and its ordinary post-adoption successors."""
+
+    return canonical_json_bytes(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "kind": EXACT_ADOPTION_EVIDENCE_KIND,
+            "domain": EXACT_ADOPTION_EVIDENCE_DOMAIN,
+            "enrollment_mode": "EXACT_STATE_ADOPTION",
+            "exact_state_adoption_proof": copy.deepcopy(
+                dict(exact_state_adoption_proof)
+            ),
+            "transition_authorizations": copy.deepcopy(
+                list(transition_authorizations)
+            ),
+            "authority_chain": copy.deepcopy(list(authority_chain)),
+        }
+    )
+
+
+def _verify_exact_state_adoption_bundle(
+    value: Any, expected: ExpectedLifecycle | None = None
+) -> VerifiedLifecycleAuthority:
+    bundle = _require_closed(
+        value, EXACT_ADOPTION_PUBLICATION_FIELDS, "exact-state adoption lifecycle evidence"
+    )
+    if (
+        bundle["schema_version"] != SCHEMA_VERSION
+        or bundle["kind"] != EXACT_ADOPTION_EVIDENCE_KIND
+        or bundle["domain"] != EXACT_ADOPTION_EVIDENCE_DOMAIN
+        or bundle["enrollment_mode"] != "EXACT_STATE_ADOPTION"
+    ):
+        raise LifecycleAuthorityError("exact-state adoption lifecycle semantics are unknown")
+    result = verify_exact_state_adoption_proof(
+        bundle["exact_state_adoption_proof"]
+    )
+    events_raw = bundle["transition_authorizations"]
+    authorities_raw = bundle["authority_chain"]
+    if (
+        not isinstance(events_raw, list)
+        or not isinstance(authorities_raw, list)
+        or len(events_raw) != len(authorities_raw)
+    ):
+        raise LifecycleAuthorityError("exact-state adoption successor chain is incomplete")
+    policy = _load_lifecycle_trust_policy(result.repository)
+    verifier = _policy_signature_verifier(policy)
+    event_ids: set[str] = set()
+    event_digests: set[str] = set()
+    previous_digest = result.authority_digest
+    previous_head = result.head_sha
+    previous_pr = result.pull_request
+    state = copy.deepcopy(result.state)
+    last_signer = result.authority_signer_identity
+    for raw_event, raw_authority in zip(events_raw, authorities_raw):
+        event = _verify_transition_authorization(
+            raw_event,
+            accepted_signers=policy.transition_signer_identities,
+            signature_verifier=verifier,
+        )
+        snapshot = _verify_authority_shape(
+            raw_authority,
+            accepted_signers=policy.authority_signer_identities,
+            signature_verifier=verifier,
+        )
+        if (
+            event["event_id"] in event_ids
+            or event["event_digest"] in event_digests
+            or event["transition_kind"] == "INITIALIZED_DRAFT"
+            or event["repository"] != result.repository
+            or event["delivery_issue"] != result.delivery_issue
+            or event["lifecycle_id"] != result.lifecycle_id
+            or event["pull_request"] != previous_pr
+            or event["predecessor_authority_digest"] != previous_digest
+            or event["predecessor_head_sha"] != previous_head
+            or event["initialization_evidence_digest"]
+            != result.initialization_evidence_digest
+        ):
+            raise LifecycleAuthorityError(
+                "exact-state adoption successor authorization is not continuous"
+            )
+        derived = derive_state(state, event["transition_kind"], event["event_digest"])
+        resulting_pr = (
+            event["replacement_pull_request"]
+            if event["transition_kind"] == "PR_REBOUND"
+            else event["pull_request"]
+        )
+        if (
+            snapshot["repository"] != result.repository
+            or snapshot["delivery_issue"] != result.delivery_issue
+            or snapshot["lifecycle_id"] != result.lifecycle_id
+            or snapshot["pull_request"] != resulting_pr
+            or snapshot["head_sha"] != event["resulting_head_sha"]
+            or snapshot["predecessor_authority_digest"] != previous_digest
+            or snapshot["predecessor_head_sha"] != previous_head
+            or snapshot["transition_kind"] != event["transition_kind"]
+            or snapshot["event_authorization_digest"] != event["event_digest"]
+            or snapshot["initialization_evidence_digest"]
+            != result.initialization_evidence_digest
+            or snapshot["state_before"] != state
+            or snapshot["state_after"] != derived
+        ):
+            raise LifecycleAuthorityError(
+                "exact-state adoption successor authority is not derived"
+            )
+        event_ids.add(event["event_id"])
+        event_digests.add(event["event_digest"])
+        previous_digest = snapshot["authority_digest"]
+        previous_head = snapshot["head_sha"]
+        previous_pr = snapshot["pull_request"]
+        state = derived
+        last_signer = snapshot["signer_identity"]
+    verified = replace(
+        result,
+        authority_digest=previous_digest,
+        pull_request=previous_pr,
+        head_sha=previous_head,
+        state=copy.deepcopy(state),
+        authority_signer_identity=last_signer,
+    )
+    if expected is not None:
+        _compare_expected(verified, expected)
+    return verified
+
+
+def issue_exact_state_adoption_successor_authority(
+    *, serialized_adoption_evidence: bytes | str,
+    authorization: Mapping[str, Any], signer_identity: str,
+    authority_signer: Signer,
+) -> dict[str, Any]:
+    """Issue one ordinary successor from the authenticated adopted predecessor."""
+
+    bundle = _require_closed(
+        _load_canonical_json(
+            serialized_adoption_evidence, "exact-state adoption lifecycle evidence"
+        ),
+        EXACT_ADOPTION_PUBLICATION_FIELDS,
+        "exact-state adoption lifecycle evidence",
+    )
+    predecessor = _verify_exact_state_adoption_bundle(bundle)
+    policy = _load_lifecycle_trust_policy(predecessor.repository)
+    verifier = _policy_signature_verifier(policy)
+    event = _verify_transition_authorization(
+        authorization,
+        accepted_signers=policy.transition_signer_identities,
+        signature_verifier=verifier,
+    )
+    if (
+        event["transition_kind"] == "INITIALIZED_DRAFT"
+        or event["repository"] != predecessor.repository
+        or event["delivery_issue"] != predecessor.delivery_issue
+        or event["lifecycle_id"] != predecessor.lifecycle_id
+        or event["pull_request"] != predecessor.pull_request
+        or event["predecessor_authority_digest"] != predecessor.authority_digest
+        or event["predecessor_head_sha"] != predecessor.head_sha
+        or event["initialization_evidence_digest"]
+        != predecessor.initialization_evidence_digest
+    ):
+        raise LifecycleAuthorityError(
+            "transition authorization does not continue adopted predecessor"
+        )
+    state = derive_state(
+        predecessor.state, event["transition_kind"], event["event_digest"]
+    )
+    fields = _authority_unsigned_fields(
+        event=event, predecessor={"state_after": predecessor.state}, state=state
+    )
+    fields["signer_identity"] = _require_identity(
+        signer_identity, "authority signer"
+    )
+    if fields["signer_identity"] not in policy.authority_signer_identities:
+        raise LifecycleAuthorityError("authority signer is not independently accepted")
+    signature = _normalize_signature(
+        authority_signer(canonical_json_bytes(fields), AUTHORITY_DOMAIN),
+        fields["signer_identity"],
+    )
+    signed = {**fields, "signature": signature}
+    return {**signed, "authority_digest": digest_json(signed)}
+
+
 def create_legacy_adoption_checkpoint(
     serialized_lifecycle_evidence: bytes | str,
     *,
@@ -2102,6 +2701,12 @@ def verify_lifecycle_authority_for_publication(
             "publication enrollment requires canonical serialized lifecycle evidence"
         )
     parsed = _load_canonical_json(serialized_evidence, "published lifecycle evidence")
+    if isinstance(parsed, dict) and set(parsed) == EXACT_ADOPTION_PUBLICATION_FIELDS:
+        if parsed.get("transition_authorizations") != [] or parsed.get("authority_chain") != []:
+            raise LifecycleAuthorityError(
+                "exact-state adoption enrollment must begin at its proof baseline"
+            )
+        return _verify_exact_state_adoption_bundle(parsed, expected)
     if isinstance(parsed, dict) and set(parsed) == PUBLICATION_EVIDENCE_FIELDS:
         wrapper = _require_closed(parsed, PUBLICATION_EVIDENCE_FIELDS, "published lifecycle evidence")
         if (
@@ -2147,6 +2752,8 @@ def _verify_lifecycle_authority_for_journal(
             "publication journal requires canonical serialized lifecycle evidence"
         )
     parsed = _load_canonical_json(serialized_evidence, "journal lifecycle evidence")
+    if isinstance(parsed, dict) and set(parsed) == EXACT_ADOPTION_PUBLICATION_FIELDS:
+        return _verify_exact_state_adoption_bundle(parsed, expected)
     if isinstance(parsed, dict) and set(parsed) == PUBLICATION_EVIDENCE_FIELDS:
         wrapper = _require_closed(
             parsed, PUBLICATION_EVIDENCE_FIELDS, "journal lifecycle evidence"

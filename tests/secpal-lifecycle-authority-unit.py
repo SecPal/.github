@@ -179,6 +179,193 @@ def verify_raw(authorities: list[dict[str, Any]], events: list[dict[str, Any]]) 
 
 
 class LifecycleAuthorityTests(TestCase):
+    def test_exact_state_adoption_preserves_ready_before_review_observation(self) -> None:
+        observed = [
+            {
+                "sequence": 1,
+                "kind": "PR_CREATED_DRAFT",
+                "observed_at": "2026-08-01T00:00:00Z",
+                "head_sha": HEADS[0],
+                "reviewed_head_sha": None,
+            },
+            {
+                "sequence": 2,
+                "kind": "DRAFT_TO_READY_OBSERVED",
+                "observed_at": "2026-08-02T00:00:00Z",
+                "head_sha": HEADS[0],
+                "reviewed_head_sha": None,
+            },
+            {
+                "sequence": 3,
+                "kind": "REVIEW_SUBMITTED",
+                "observed_at": "2026-08-03T00:00:00Z",
+                "head_sha": HEADS[0],
+                "reviewed_head_sha": HEADS[0],
+            },
+            {
+                "sequence": 4,
+                "kind": "REMEDIATION_HEAD_OBSERVED",
+                "observed_at": "2026-08-04T00:00:00Z",
+                "head_sha": HEADS[1],
+                "reviewed_head_sha": None,
+            },
+            {
+                "sequence": 5,
+                "kind": "REMEDIATION_HEAD_OBSERVED",
+                "observed_at": "2026-08-05T00:00:00Z",
+                "head_sha": HEADS[2],
+                "reviewed_head_sha": None,
+            },
+        ]
+        state = authority.initial_state()
+        state.update(
+            unrestricted_review_count=1,
+            remediation_cycle_count=2,
+            draft=False,
+            ready=True,
+            ready_transition_count=1,
+            ready_history=[
+                {
+                    "sequence": 1,
+                    "transition_kind": "DRAFT_TO_READY",
+                    "event_authorization_digest": "1" * 64,
+                }
+            ],
+        )
+
+        # The ordinary engine truthfully rejects this chronology: Ready cannot
+        # be derived before review.  Adoption must not "correct" that history.
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "Draft-to-Ready transition"
+        ):
+            authority.derive_state(
+                authority.initial_state(), "DRAFT_TO_READY", "1" * 64
+            )
+
+        evidence = authority.create_exact_state_adoption_evidence(
+            repository="Example/governance",
+            delivery_issue=41,
+            pull_request=42,
+            head_sha=HEADS[2],
+            tree_sha=HEADS[3],
+            pull_request_state="OPEN",
+            commit_signature_status="VERIFIED",
+            commit_signer_identity=SIGNER,
+            validation_receipt_digest="2" * 64,
+            source_validation_evidence_digest="3" * 64,
+            adoption_source_evidence_digest="4" * 64,
+            observed_pre_enrollment_history=observed,
+            intended_state=state,
+            adoption_timestamp="2026-08-06T00:00:00Z",
+            supporting_evidence_digests=["5" * 64],
+        )
+        authorization = authority.create_exact_state_adoption_authorization(
+            adoption_evidence=evidence,
+            authorization_id="exact-adoption-authorization-1",
+            bounded_uses=1,
+            signer_identity=SIGNER,
+            signer=signer_for(),
+        )
+        proof = authority.create_exact_state_adoption_proof(
+            adoption_evidence=evidence,
+            authorization=authorization,
+            signer_identity=SIGNER,
+            signer=signer_for(),
+        )
+        with patch.object(
+            authority,
+            "_load_lifecycle_trust_policy",
+            return_value=authority.LifecycleTrustPolicy(
+                repository="Example/governance",
+                accepted_formats=frozenset({"ssh"}),
+                transition_signer_identities=frozenset({SIGNER}),
+                authority_signer_identities=frozenset({SIGNER}),
+                signers={
+                    SIGNER: authority.TrustedSigner(
+                        SIGNER, ("ssh-ed25519 AAAA",), ()
+                    )
+                },
+                initialization_anchors=(),
+                legacy_adoption_signer_identities=frozenset({SIGNER}),
+            ),
+        ), patch.object(
+            authority, "_policy_signature_verifier", return_value=verify_signature
+        ):
+            verified = authority.verify_exact_state_adoption_proof(proof)
+
+        self.assertEqual(verified.state, state)
+        self.assertEqual(
+            [item["kind"] for item in proof["observed_pre_enrollment_history"]],
+            [
+                "PR_CREATED_DRAFT",
+                "DRAFT_TO_READY_OBSERVED",
+                "REVIEW_SUBMITTED",
+                "REMEDIATION_HEAD_OBSERVED",
+                "REMEDIATION_HEAD_OBSERVED",
+            ],
+        )
+        self.assertEqual(proof["ordinary_lifecycle_events"], [])
+
+        for field, replacement in (
+            ("repository", "Other/governance"),
+            ("delivery_issue", 99),
+            ("pull_request", 100),
+            ("head_sha", HEADS[4]),
+            ("tree_sha", HEADS[5]),
+            ("validation_receipt_digest", "7" * 64),
+            ("source_validation_evidence_digest", "8" * 64),
+            ("adoption_source_evidence_digest", "9" * 64),
+            ("proof_version", "2.0"),
+        ):
+            changed = copy.deepcopy(evidence)
+            changed[field] = replacement
+            with self.subTest(evidence_field=field), self.assertRaises(
+                authority.LifecycleAuthorityError
+            ):
+                authority._verify_exact_state_adoption_evidence(changed)
+
+        missing_ready = copy.deepcopy(evidence)
+        missing_ready["observed_pre_enrollment_history"].pop(1)
+        for sequence, item in enumerate(
+            missing_ready["observed_pre_enrollment_history"], 1
+        ):
+            item["sequence"] = sequence
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "intended state"
+        ):
+            authority._verify_exact_state_adoption_evidence(missing_ready)
+
+        invented_review = copy.deepcopy(evidence)
+        invented_review["observed_pre_enrollment_history"].insert(
+            3,
+            {
+                "sequence": 4,
+                "kind": "REVIEW_SUBMITTED",
+                "observed_at": "2026-08-03T00:00:01Z",
+                "head_sha": HEADS[0],
+                "reviewed_head_sha": HEADS[0],
+            },
+        )
+        for sequence, item in enumerate(
+            invented_review["observed_pre_enrollment_history"], 1
+        ):
+            item["sequence"] = sequence
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "intended state"
+        ):
+            authority._verify_exact_state_adoption_evidence(invented_review)
+
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "must have one use"
+        ):
+            authority.create_exact_state_adoption_authorization(
+                adoption_evidence=evidence,
+                authorization_id="exact-adoption-authorization-2",
+                bounded_uses=2,
+                signer_identity=SIGNER,
+                signer=signer_for(),
+            )
+
     def test_public_verifier_does_not_accept_consumer_trust_inputs(self) -> None:
         parameters = inspect.signature(authority.verify_lifecycle_authority).parameters
         self.assertEqual(list(parameters), ["serialized_evidence", "expected"])
