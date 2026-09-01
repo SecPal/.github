@@ -336,8 +336,12 @@ python3 scripts/secpal-resolve-fixed-threads.py \
 Commit-bound `--eligibility-evidence` and detached
 `--late-disposition-evidence` are mutually exclusive. Missing, non-canonical,
 duplicate-keyed, unknown-version, unsigned, corrupt, differently signed, or
-rebound evidence fails before GitHub access. Any live head, PR, thread, comment,
-body, reply, resolution, or outdated-state drift blocks before mutation.
+rebound evidence fails before GitHub access. For ordinary commit-bound
+eligibility, only authenticated reviewed `isOutdated=false` to live
+`isOutdated=true` is compatible when every other target binding remains exact;
+every other outdated-state difference blocks. Detached late-disposition
+authority remains exact: any live head, PR, thread, comment, body, reply,
+resolution, or outdated-state drift from that authority blocks before mutation.
 
 ## Operational rule
 

@@ -1851,7 +1851,15 @@ def _matches_reviewed_target_identity(
 ) -> bool:
     return (
         current.thread_id == reviewed.thread_id
-        and current.is_outdated == reviewed.is_outdated
+        and type(current.is_outdated) is bool
+        and type(reviewed.is_outdated) is bool
+        and (
+            current.is_outdated == reviewed.is_outdated
+            or (
+                reviewed.is_outdated is False
+                and current.is_outdated is True
+            )
+        )
         and tuple(
             (item.comment_id, item.body_digest, item.reply_to_id)
             for item in current.comments

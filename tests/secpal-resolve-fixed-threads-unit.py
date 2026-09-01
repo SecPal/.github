@@ -1589,7 +1589,38 @@ class ResolveFixedThreadsTests(TestCase):
         self.assertEqual(result["resolved"], [])
         self.assertEqual(len(current.calls), 1)
 
-    def test_resolved_target_with_outdated_state_drift_is_incompatible(
+    def test_unresolved_target_accepts_monotonic_post_fix_outdated_drift(
+        self,
+    ) -> None:
+        thread_id = "PRRT_GENERIC_POST_FIX_OUTDATED"
+        comment_id = "PRRC_GENERIC_POST_FIX_OUTDATED"
+        body = "The exact authenticated source correction is present."
+        reviewed = expected_thread_state(
+            thread_id,
+            [(comment_id, body, None)],
+            resolved=False,
+            outdated=False,
+        )
+        current = MODULE.ThreadState(
+            thread_id=thread_id,
+            is_resolved=False,
+            is_outdated=True,
+            comments=(
+                MODULE.ThreadCommentState(
+                    comment_id=comment_id,
+                    database_id=1001,
+                    body_digest=MODULE._body_digest(body),
+                    reply_to_id=None,
+                ),
+            ),
+        )
+
+        self.assertEqual(
+            MODULE._classify_reviewed_target(current, reviewed),
+            "ACTIONABLE",
+        )
+
+    def test_resolved_target_composes_with_monotonic_post_fix_outdated_drift(
         self,
     ) -> None:
         reviewed = expected_thread_state(
@@ -1614,10 +1645,10 @@ class ResolveFixedThreadsTests(TestCase):
 
         self.assertEqual(
             MODULE._classify_reviewed_target(current, reviewed),
-            "INCOMPATIBLE_DRIFT",
+            "ALREADY_SATISFIED",
         )
 
-    def test_target_classification_preserves_reviewed_outdated_state(
+    def test_target_classification_allows_only_directional_outdated_drift(
         self,
     ) -> None:
         thread_id = "PRRT_OUTDATED_CLASSIFICATION"
@@ -1640,13 +1671,29 @@ class ResolveFixedThreadsTests(TestCase):
             )
 
         cases = (
-            (False, False, True, "ALREADY_SATISFIED"),
-            (True, True, False, "INCOMPATIBLE_DRIFT"),
-            (False, False, False, "ACTIONABLE"),
-            (False, True, True, "ALREADY_SATISFIED"),
-            (True, False, False, "INCOMPATIBLE_DRIFT"),
+            (False, False, False, False, "ACTIONABLE"),
+            (False, False, False, True, "ACTIONABLE"),
+            (False, False, True, False, "ALREADY_SATISFIED"),
+            (False, False, True, True, "ALREADY_SATISFIED"),
+            (False, True, False, True, "ACTIONABLE"),
+            (False, True, False, False, "INCOMPATIBLE_DRIFT"),
+            (False, True, True, True, "ALREADY_SATISFIED"),
+            (False, True, True, False, "INCOMPATIBLE_DRIFT"),
+            (True, False, False, False, "INCOMPATIBLE_DRIFT"),
+            (True, False, True, False, "ALREADY_SATISFIED"),
+            (True, False, True, True, "ALREADY_SATISFIED"),
+            (True, True, False, True, "INCOMPATIBLE_DRIFT"),
+            (True, True, False, False, "INCOMPATIBLE_DRIFT"),
+            (True, True, True, True, "ALREADY_SATISFIED"),
+            (True, True, True, False, "INCOMPATIBLE_DRIFT"),
         )
-        for reviewed_resolved, reviewed_outdated, current_resolved, expected in cases:
+        for (
+            reviewed_resolved,
+            reviewed_outdated,
+            current_resolved,
+            current_outdated,
+            expected,
+        ) in cases:
             reviewed = expected_thread_state(
                 thread_id,
                 [(comment_id, body, None)],
@@ -1657,16 +1704,72 @@ class ResolveFixedThreadsTests(TestCase):
                 reviewed_resolved=reviewed_resolved,
                 reviewed_outdated=reviewed_outdated,
                 current_resolved=current_resolved,
+                current_outdated=current_outdated,
             ):
                 self.assertEqual(
                     MODULE._classify_reviewed_target(
                         current(
                             resolved=current_resolved,
-                            outdated=reviewed_outdated,
+                            outdated=current_outdated,
                         ),
                         reviewed,
                     ),
                     expected,
+                )
+
+    def test_target_classification_rejects_non_boolean_outdated_state(self) -> None:
+        thread_id = "PRRT_MALFORMED_OUTDATED_CLASSIFICATION"
+        reviewed_comment = MODULE.ThreadCommentState(
+            comment_id="PRRC_MALFORMED_OUTDATED_CLASSIFICATION",
+            database_id=None,
+            body_digest=MODULE._body_digest("Reject malformed metadata."),
+            reply_to_id=None,
+        )
+        current_comment = MODULE.ThreadCommentState(
+            comment_id="PRRC_MALFORMED_OUTDATED_CLASSIFICATION",
+            database_id=1,
+            body_digest=MODULE._body_digest("Reject malformed metadata."),
+            reply_to_id=None,
+        )
+        valid_reviewed = MODULE.ExpectedThreadState(
+            thread_id=thread_id,
+            is_resolved=False,
+            is_outdated=False,
+            comments=(reviewed_comment,),
+        )
+        self.assertEqual(
+            MODULE.validate_expected_targets(
+                (thread_id,), {thread_id: valid_reviewed}
+            ),
+            {thread_id: valid_reviewed},
+        )
+        for reviewed_outdated, current_outdated in (
+            (False, None),
+            (False, "true"),
+            (False, 1),
+            (None, True),
+            ("false", True),
+            (0, True),
+        ):
+            reviewed = MODULE.ExpectedThreadState(
+                thread_id=thread_id,
+                is_resolved=False,
+                is_outdated=reviewed_outdated,
+                comments=(reviewed_comment,),
+            )
+            current = MODULE.ThreadState(
+                thread_id=thread_id,
+                is_resolved=False,
+                is_outdated=current_outdated,
+                comments=(current_comment,),
+            )
+            with self.subTest(
+                reviewed_outdated=reviewed_outdated,
+                current_outdated=current_outdated,
+            ):
+                self.assertEqual(
+                    MODULE._classify_reviewed_target(current, reviewed),
+                    "INCOMPATIBLE_DRIFT",
                 )
 
     def test_integration_evidence_is_normalized_before_receipt_reconstruction(
@@ -5051,6 +5154,43 @@ class ResolveFixedThreadsTests(TestCase):
         self.assertEqual(result["resolved"], [])
         self.assertEqual(len(fake.calls), 3)
 
+    def test_outdated_drift_already_resolved_target_receives_no_second_write(
+        self,
+    ) -> None:
+        thread_id = "PRRT_postFixAlreadyResolved"
+        fake = FakeGh(
+            [
+                target_response(thread_id, resolved=True, outdated=True),
+                target_response(thread_id, resolved=True, outdated=True),
+                target_response(thread_id, resolved=True, outdated=True),
+            ]
+        )
+
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            [thread_id],
+            apply=True,
+            runner=fake,
+            expected_targets={
+                thread_id: expected_thread_state(
+                    thread_id,
+                    resolved=False,
+                    outdated=False,
+                ),
+            },
+        )
+
+        self.assertEqual(result["already_resolved"], [thread_id])
+        self.assertEqual(result["resolved"], [])
+        self.assertFalse(
+            any(
+                f"query={MODULE.RESOLVE_MUTATION}" in call
+                for call in fake.calls
+            )
+        )
+
     def test_resolved_postcondition_still_requires_exact_comment_state(self) -> None:
         thread_id = "PRRT_exampleOne"
         reviewed = [
@@ -5074,6 +5214,10 @@ class ResolveFixedThreadsTests(TestCase):
                 ("PRRC_root", "reviewed body", None),
                 ("PRRC_reply", "edited reply", "PRRC_root"),
             ],
+            "reparented reply": [
+                ("PRRC_root", "reviewed body", None),
+                ("PRRC_reply", "reviewed reply", None),
+            ],
             "deleted reply": [reviewed[0]],
         }
         for label, live_comments in cases.items():
@@ -5082,6 +5226,7 @@ class ResolveFixedThreadsTests(TestCase):
                     target_response(
                         thread_id,
                         resolved=True,
+                        outdated=True,
                         comments=live_comments,
                     )
                 ]
@@ -5882,15 +6027,34 @@ class ResolveFixedThreadsTests(TestCase):
 
         self.assertEqual(len(fake.calls), 1)
 
-    def test_outdated_change_after_reviewed_capture_blocks_before_mutation(
+    def test_outdated_change_after_reviewed_capture_remains_actionable(
         self,
     ) -> None:
         thread_id = "PRRT_exampleOne"
         fake = FakeGh(
             [
                 target_response(thread_id, outdated=True),
+                target_response(thread_id, outdated=True),
+                target_response(thread_id, outdated=True),
+                resolve_response(thread_id),
             ]
         )
+
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "a" * 40,
+            [thread_id],
+            apply=True,
+            runner=fake,
+        )
+
+        self.assertEqual(result["resolved"], [thread_id])
+        self.assertEqual(len(fake.calls), 4)
+
+    def test_outdated_state_regression_blocks_before_mutation(self) -> None:
+        thread_id = "PRRT_exampleOne"
+        fake = FakeGh([target_response(thread_id, outdated=False)])
 
         with self.assertRaisesRegex(
             MODULE.ResolutionError,
@@ -5903,6 +6067,9 @@ class ResolveFixedThreadsTests(TestCase):
                 [thread_id],
                 apply=True,
                 runner=fake,
+                expected_targets={
+                    thread_id: expected_thread_state(thread_id, outdated=True),
+                },
             )
 
         self.assertEqual(len(fake.calls), 1)

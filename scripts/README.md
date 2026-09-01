@@ -123,8 +123,13 @@ head, the complete original ordered target set, and reviewed target-comment
 identities, digests, and resolution state. An exact original target whose
 reviewed state was unresolved may be classified as already satisfied when its
 live state is resolved and every other binding still matches; that authenticated
-postcondition produces no write. Every unresolved exact target retains the
-ordinary guarded mutation path, and every other difference fails closed. A
+postcondition produces no write. An unresolved target also retains the ordinary
+guarded mutation path when its outdated state is exact or changes only from
+authenticated reviewed `false` to live `true`, provided the accepted source-fix
+authority, PR and head, thread and comment identities, bodies and replies,
+eligibility, classification, disposition, and every other binding remain exact.
+This compatibility does not normalize stale targets: `true` to `false`, missing
+or non-boolean outdated state, and every other difference fail closed. A
 Recovery-bound ordinary attestation also retains and passes the existing
 `--delivery-issue`, `--exceptional-recovery-evidence`, and
 `--exceptional-recovery-authorization` artifacts. Ordinary non-Recovery and
