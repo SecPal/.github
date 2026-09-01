@@ -13,7 +13,7 @@ import socket
 import subprocess
 import sys
 import tempfile
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from typing import Any, Sequence
@@ -308,6 +308,8 @@ def resolve_threads(
     expected_targets: dict[str, Any] | None = None,
     eligibility_manifest: dict[str, Any] | None = None,
     follow_up_verifier: Any = MODULE.verify_live_follow_up,
+    recovery_bound: bool = False,
+    recovery_authority: bool = True,
 ) -> dict[str, Any]:
     immutable_thread_ids = tuple(thread_ids)
     if expected_targets is None:
@@ -390,21 +392,34 @@ def resolve_threads(
             "state_digest"
         ]
     eligibility_digest = MODULE._digest_json(eligibility_manifest)
-    attestation = validation_attestation_payload(
-        reviewed,
-        eligibility_digest,
-        expected_head=expected_head,
-    )
+    if recovery_bound:
+        _receipt, attestation = recovery_validation_payloads(
+            reviewed,
+            eligibility_digest,
+            expected_head=expected_head,
+        )
+    else:
+        attestation = validation_attestation_payload(
+            reviewed,
+            eligibility_digest,
+            expected_head=expected_head,
+        )
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         reviewed_path = root / "reviewed.json"
         validation_path = root / "validation.json"
         eligibility_path = root / "eligibility.json"
+        recovery_path = root / "recovery.json"
+        recovery_authorization_path = root / "recovery-authorization.json"
         reviewed_path.write_text(json.dumps(reviewed), encoding="utf-8")
         validation_path.write_text(json.dumps(attestation), encoding="utf-8")
         eligibility_path.write_text(
             json.dumps(eligibility_manifest),
             encoding="utf-8",
+        )
+        recovery_path.write_text("{}", encoding="utf-8")
+        recovery_authorization_path.write_text(
+            "fixture signed authorization", encoding="utf-8"
         )
         git = FakeGit(
             expected_head=expected_head,
@@ -421,6 +436,11 @@ def resolve_threads(
                 "verify_live_follow_up",
                 follow_up_verifier,
             ),
+            mock.patch.object(
+                MODULE.lifecycle_orchestration,
+                "verify_exceptional_recovery_authority",
+                return_value=mock.Mock(recovery_digest="9" * 64),
+            ),
         ):
             return MODULE.resolve_threads(
                 repository,
@@ -433,6 +453,17 @@ def resolve_threads(
                 expected_reviewed_state_digest=reviewed["state_digest"],
                 validation_evidence_path=validation_path,
                 eligibility_evidence_path=eligibility_path,
+                **(
+                    {
+                        "exceptional_recovery_delivery_issue": 790,
+                        "exceptional_recovery_evidence_path": recovery_path,
+                        "exceptional_recovery_authorization_path": (
+                            recovery_authorization_path
+                        ),
+                    }
+                    if recovery_bound and recovery_authority
+                    else {}
+                ),
             )
 
 
@@ -533,6 +564,47 @@ def validation_attestation_payload(
         "eligibility_evidence_digest": eligibility_evidence_digest,
     }
     return {**fields, "attestation_digest": MODULE._digest_json(fields)}
+
+
+def recovery_validation_payloads(
+    reviewed: dict[str, Any],
+    eligibility_evidence_digest: str,
+    *,
+    expected_head: str = "c" * 40,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    binding = MODULE._validation_registry_binding(
+        MODULE._load_repository_entry(reviewed["repository"])
+    )
+    stable = MODULE.fast_path.StableFeedbackState.from_payload(reviewed)
+    receipt = MODULE.fast_path.create_validation_receipt(
+        repository=reviewed["repository"],
+        head_sha=reviewed["head_sha"],
+        validated_tree_sha="f" * 40,
+        registry=binding,
+        command_set=binding["validation"],
+        successful_result=True,
+        reviewed_state=stable,
+        manual_gate_evidence=[
+            {
+                "gate": gate,
+                "satisfied": True,
+                "evidence": f"Verified recovery evidence {index}",
+            }
+            for index, gate in enumerate(binding["manual_gates"], start=1)
+        ],
+        eligibility_evidence_digest=eligibility_evidence_digest,
+        exceptional_recovery_evidence_digest="9" * 64,
+    )
+    attestation = MODULE.fast_path.create_validation_attestation(
+        repository=reviewed["repository"],
+        head_sha=expected_head,
+        registry=binding,
+        command_set=binding["validation"],
+        successful_result=True,
+        reviewed_state=stable,
+        validation_receipt=receipt,
+    )
+    return receipt, attestation
 
 
 def integration_validation_payloads(
@@ -1019,6 +1091,504 @@ def run_late_classification_origin_fixture(
 
 
 class ResolveFixedThreadsTests(TestCase):
+    def test_lifecycle_helper_import_ignores_repository_root_shadow(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            canonical_package = root / "scripts/secpal_pr_review"
+            shadow_package = root / "secpal_pr_review"
+            canonical_package.mkdir(parents=True)
+            shadow_package.mkdir()
+            (canonical_package / "__init__.py").write_text("", encoding="utf-8")
+            (canonical_package / "lifecycle_orchestration.py").write_text(
+                'ORIGIN = "canonical"\n', encoding="utf-8"
+            )
+            marker = root / "shadow-executed"
+            (shadow_package / "__init__.py").write_text("", encoding="utf-8")
+            (shadow_package / "lifecycle_orchestration.py").write_text(
+                "from pathlib import Path\n"
+                f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            module_names = (
+                "secpal_pr_review",
+                "secpal_pr_review.lifecycle_orchestration",
+            )
+            loaded_modules = {
+                name: sys.modules.get(name) for name in module_names
+            }
+            original_path = list(sys.path)
+            try:
+                for name in module_names:
+                    sys.modules.pop(name, None)
+                with mock.patch.object(MODULE, "REPOSITORY_ROOT", root):
+                    loaded = MODULE._load_lifecycle_orchestration_helper()
+                self.assertEqual(loaded.ORIGIN, "canonical")
+                self.assertEqual(
+                    Path(loaded.__file__).resolve(),
+                    (canonical_package / "lifecycle_orchestration.py").resolve(),
+                )
+                self.assertFalse(marker.exists())
+                self.assertEqual(sys.path, original_path)
+            finally:
+                for name in module_names:
+                    sys.modules.pop(name, None)
+                for name, loaded in loaded_modules.items():
+                    if loaded is not None:
+                        sys.modules[name] = loaded
+                sys.path[:] = original_path
+
+    def test_recovery_bound_source_requires_independent_recovery_authority(
+        self,
+    ) -> None:
+        thread_id = "PRRT_RECOVERY_AUTHORITY"
+        current = FakeGh(
+            [target_response(thread_id, head="c" * 40, outdated=True)]
+        )
+
+        with self.assertRaisesRegex(
+            MODULE.ResolutionError,
+            "Recovery-bound source evidence requires canonical Recovery authority",
+        ):
+            resolve_threads(
+                "SecPal/api",
+                123,
+                "c" * 40,
+                [thread_id],
+                apply=False,
+                runner=current,
+                expected_targets={
+                    thread_id: expected_thread_state(thread_id, outdated=True)
+                },
+                recovery_bound=True,
+                recovery_authority=False,
+            )
+
+        self.assertEqual(current.calls, [])
+
+    def test_ordinary_attestation_requires_eligibility_digest_before_indexing(
+        self,
+    ) -> None:
+        thread_id = "PRRT_ELIGIBILITY_OMISSION"
+        reviewed = reviewed_state_payload(thread_id, [])
+        registry = MODULE._validation_registry_binding(
+            MODULE._load_repository_entry(reviewed["repository"])
+        )
+        stable = MODULE.fast_path.StableFeedbackState.from_payload(reviewed)
+        gates = [
+            {
+                "gate": gate,
+                "satisfied": True,
+                "evidence": f"Verified omission fixture {index}",
+            }
+            for index, gate in enumerate(registry["manual_gates"], start=1)
+        ]
+        receipt = MODULE.fast_path.create_validation_receipt(
+            repository=reviewed["repository"],
+            head_sha=reviewed["head_sha"],
+            validated_tree_sha="f" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=stable,
+            manual_gate_evidence=gates,
+            eligibility_evidence_digest=None,
+        )
+        attestation = MODULE.fast_path.create_validation_attestation(
+            repository=reviewed["repository"],
+            head_sha="c" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=stable,
+            validation_receipt=receipt,
+        )
+        self.assertNotIn("eligibility_evidence_digest", attestation)
+        eligibility = eligibility_payload(reviewed, (thread_id,))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reviewed_path = root / "reviewed.json"
+            attestation_path = root / "attestation.json"
+            eligibility_path = root / "eligibility.json"
+            reviewed_path.write_text(json.dumps(reviewed), encoding="utf-8")
+            attestation_path.write_text(
+                json.dumps(attestation), encoding="utf-8"
+            )
+            eligibility_path.write_text(
+                json.dumps(eligibility), encoding="utf-8"
+            )
+            stderr = StringIO()
+            fake = FakeGh([])
+            with redirect_stdout(StringIO()), redirect_stderr(stderr), mock.patch.object(
+                MODULE, "_run_gh", fake
+            ):
+                exit_code = MODULE.main(
+                    [
+                        "--repo",
+                        "SecPal/api",
+                        "--pr",
+                        "123",
+                        "--repo-root",
+                        str(root),
+                        "--expected-head",
+                        "c" * 40,
+                        "--reviewed-state",
+                        str(reviewed_path),
+                        "--expected-reviewed-state-digest",
+                        reviewed["state_digest"],
+                        "--validation-evidence",
+                        str(attestation_path),
+                        "--eligibility-evidence",
+                        str(eligibility_path),
+                        "--thread-id",
+                        thread_id,
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn(
+            "ERROR: validation evidence eligibility digest is missing or malformed",
+            stderr.getvalue(),
+        )
+        self.assertNotIn("Traceback", stderr.getvalue())
+        self.assertEqual(fake.calls, [])
+
+    def test_ordinary_attestation_rejects_malformed_eligibility_digest(self) -> None:
+        thread_id = "PRRT_ELIGIBILITY_MALFORMED"
+        reviewed_payload = reviewed_state_payload(thread_id, [])
+        attestation = validation_attestation_payload(reviewed_payload)
+        attestation["eligibility_evidence_digest"] = "not-a-digest"
+        fields = {
+            key: value
+            for key, value in attestation.items()
+            if key != "attestation_digest"
+        }
+        attestation["attestation_digest"] = MODULE._digest_json(fields)
+        reviewed = mock.Mock(
+            head_sha=reviewed_payload["head_sha"],
+            state_digest=reviewed_payload["state_digest"],
+            feedback_digest=reviewed_payload["feedback_digest"],
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "attestation.json"
+            path.write_text(json.dumps(attestation), encoding="utf-8")
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "validation evidence eligibility digest is missing or malformed",
+            ):
+                MODULE.load_validation_evidence(
+                    path,
+                    reviewed_payload["repository"],
+                    attestation["head_sha"],
+                    reviewed,
+                )
+
+    def test_validation_evidence_rejects_duplicate_recovery_binding(self) -> None:
+        thread_id = "PRRT_RECOVERY_DUPLICATE"
+        reviewed_payload = reviewed_state_payload(thread_id, [])
+        eligibility = eligibility_payload(reviewed_payload, (thread_id,))
+        _receipt, attestation = recovery_validation_payloads(
+            reviewed_payload,
+            MODULE._digest_json(eligibility),
+        )
+        canonical = json.dumps(attestation, separators=(",", ":"))
+        binding = (
+            '"exceptional_recovery_evidence_digest":"' + "9" * 64 + '"'
+        )
+        duplicate = binding + "," + binding
+        self.assertEqual(canonical.count(binding), 1)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reviewed_path = root / "reviewed.json"
+            attestation_path = root / "attestation.json"
+            reviewed_path.write_text(json.dumps(reviewed_payload), encoding="utf-8")
+            attestation_path.write_text(
+                canonical.replace(binding, duplicate), encoding="utf-8"
+            )
+            reviewed = MODULE.load_reviewed_state(
+                reviewed_path,
+                reviewed_payload["repository"],
+                reviewed_payload["pull_request_number"],
+                reviewed_payload["state_digest"],
+                (thread_id,),
+            )
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "validation evidence is unavailable or malformed",
+            ):
+                MODULE.load_validation_evidence(
+                    attestation_path,
+                    reviewed_payload["repository"],
+                    attestation["head_sha"],
+                    reviewed,
+                )
+
+    def test_recovery_authority_consumer_cross_binds_shared_verifier(self) -> None:
+        thread_id = "PRRT_RECOVERY_CONSUMER"
+        reviewed_payload = reviewed_state_payload(thread_id, [])
+        eligibility_payload_value = eligibility_payload(
+            reviewed_payload, (thread_id,)
+        )
+        eligibility_digest = MODULE._digest_json(eligibility_payload_value)
+        _receipt, attestation = recovery_validation_payloads(
+            reviewed_payload, eligibility_digest
+        )
+        reviewed = MODULE.ReviewedState(
+            head_sha=reviewed_payload["head_sha"],
+            state_digest=reviewed_payload["state_digest"],
+            feedback_digest=reviewed_payload["feedback_digest"],
+            targets={},
+            thread_ids=frozenset({thread_id}),
+            payload=reviewed_payload,
+        )
+        validation = MODULE.ValidationEvidence(
+            kind="attestation",
+            evidence_digest=attestation["attestation_digest"],
+            validated_tree_sha=attestation["validated_tree_sha"],
+            validation_receipt_digest=attestation[
+                "validation_receipt_digest"
+            ],
+            eligibility_evidence_digest=eligibility_digest,
+            attestation=attestation,
+        )
+        eligibility = MODULE.EligibilityEvidence(
+            eligibility_digest,
+            MODULE._canonical_json_bytes(eligibility_payload_value),
+            (thread_id,),
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recovery_path = root / "recovery.json"
+            authorization_path = root / "authorization.json"
+            recovery_path.write_text('{"schema_version":"1.0"}', encoding="utf-8")
+            authorization_path.write_bytes(b"signed authorization")
+            verifier = mock.Mock(
+                return_value=mock.Mock(recovery_digest="9" * 64)
+            )
+            with mock.patch.object(
+                MODULE.lifecycle_orchestration,
+                "verify_exceptional_recovery_authority",
+                verifier,
+            ):
+                MODULE.verify_recovery_bound_source_authority(
+                    validation,
+                    reviewed,
+                    eligibility,
+                    repository_root=root,
+                    repository=reviewed_payload["repository"],
+                    delivery_issue=790,
+                    pull_request=reviewed_payload["pull_request_number"],
+                    resulting_head_sha=attestation["head_sha"],
+                    recovery_evidence_path=recovery_path,
+                    recovery_authorization_path=authorization_path,
+                )
+
+        verifier.assert_called_once_with(
+            {"schema_version": "1.0"},
+            orchestration_authorization=b"signed authorization",
+            reviewed_state_evidence=reviewed_payload,
+            eligibility_evidence=eligibility_payload_value,
+            repository_root=root,
+            repository=reviewed_payload["repository"],
+            delivery_issue=790,
+            pull_request=reviewed_payload["pull_request_number"],
+            resulting_head_sha=attestation["head_sha"],
+        )
+
+    def test_recovery_authority_consumer_rejects_substituted_digest(self) -> None:
+        validation = MODULE.ValidationEvidence(
+            kind="attestation",
+            evidence_digest="1" * 64,
+            validated_tree_sha="2" * 40,
+            validation_receipt_digest="3" * 64,
+            eligibility_evidence_digest="4" * 64,
+            attestation={"exceptional_recovery_evidence_digest": "9" * 64},
+        )
+        reviewed = MODULE.ReviewedState(
+            head_sha="5" * 40,
+            state_digest="6" * 64,
+            feedback_digest="7" * 64,
+            targets={},
+            thread_ids=frozenset(),
+            payload={},
+        )
+        eligibility_payload_value = {}
+        eligibility = MODULE.EligibilityEvidence(
+            MODULE._digest_json(eligibility_payload_value),
+            MODULE._canonical_json_bytes(eligibility_payload_value),
+            (),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recovery_path = root / "recovery.json"
+            authorization_path = root / "authorization.json"
+            recovery_path.write_text("{}", encoding="utf-8")
+            authorization_path.write_bytes(b"signed authorization")
+            with (
+                mock.patch.object(
+                    MODULE.lifecycle_orchestration,
+                    "verify_exceptional_recovery_authority",
+                    return_value=mock.Mock(recovery_digest="8" * 64),
+                ),
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "substituted Recovery authority",
+                ),
+            ):
+                MODULE.verify_recovery_bound_source_authority(
+                    validation,
+                    reviewed,
+                    eligibility,
+                    repository_root=root,
+                    repository="SecPal/api",
+                    delivery_issue=790,
+                    pull_request=123,
+                    resulting_head_sha="a" * 40,
+                    recovery_evidence_path=recovery_path,
+                    recovery_authorization_path=authorization_path,
+                )
+
+    def test_recovery_bound_attestation_uses_canonical_source_verifier(self) -> None:
+        thread_id = "PRRT_RECOVERY_BOUND"
+        reviewed_payload = reviewed_state_payload(
+            thread_id,
+            [("PRRC_RECOVERY_BOUND", "Corrected recovery finding.", None)],
+            outdated=True,
+        )
+        eligibility = eligibility_payload(reviewed_payload, (thread_id,))
+        receipt, attestation = recovery_validation_payloads(
+            reviewed_payload,
+            MODULE._digest_json(eligibility),
+        )
+        binding = MODULE._validation_registry_binding(
+            MODULE._load_repository_entry(reviewed_payload["repository"])
+        )
+        stable = MODULE.fast_path.StableFeedbackState.from_payload(reviewed_payload)
+        MODULE.fast_path.verify_validation_attestation(
+            attestation,
+            repository=reviewed_payload["repository"],
+            head_sha=attestation["head_sha"],
+            registry=binding,
+            command_set=binding["validation"],
+            reviewed_state=stable,
+            commit_parent_sha=reviewed_payload["head_sha"],
+            commit_tree_sha=receipt["validated_tree_sha"],
+            commit_validation_receipt_digest=receipt["receipt_digest"],
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reviewed_path = root / "reviewed.json"
+            attestation_path = root / "attestation.json"
+            reviewed_path.write_text(json.dumps(reviewed_payload), encoding="utf-8")
+            attestation_path.write_text(json.dumps(attestation), encoding="utf-8")
+            reviewed = MODULE.load_reviewed_state(
+                reviewed_path,
+                reviewed_payload["repository"],
+                reviewed_payload["pull_request_number"],
+                reviewed_payload["state_digest"],
+                (thread_id,),
+            )
+            validation = MODULE.load_validation_evidence(
+                attestation_path,
+                reviewed_payload["repository"],
+                attestation["head_sha"],
+                reviewed,
+            )
+
+        self.assertEqual(validation.attestation, attestation)
+        self.assertEqual(validation.validation_receipt, receipt)
+
+    def test_recovery_bound_attestation_rejects_digest_binding_drift(self) -> None:
+        thread_id = "PRRT_RECOVERY_BINDING"
+        reviewed_payload = reviewed_state_payload(thread_id, [])
+        eligibility = eligibility_payload(reviewed_payload, (thread_id,))
+        _receipt, attestation = recovery_validation_payloads(
+            reviewed_payload,
+            MODULE._digest_json(eligibility),
+        )
+        mutations = {
+            "missing": None,
+            "substituted": "8" * 64,
+            "malformed": "not-a-digest",
+        }
+        for label, digest in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                changed = copy.deepcopy(attestation)
+                if digest is None:
+                    changed.pop("exceptional_recovery_evidence_digest")
+                else:
+                    changed["exceptional_recovery_evidence_digest"] = digest
+                fields = {
+                    key: value
+                    for key, value in changed.items()
+                    if key != "attestation_digest"
+                }
+                changed["attestation_digest"] = MODULE._digest_json(fields)
+                root = Path(directory)
+                reviewed_path = root / "reviewed.json"
+                attestation_path = root / "attestation.json"
+                reviewed_path.write_text(
+                    json.dumps(reviewed_payload), encoding="utf-8"
+                )
+                attestation_path.write_text(json.dumps(changed), encoding="utf-8")
+                reviewed = MODULE.load_reviewed_state(
+                    reviewed_path,
+                    reviewed_payload["repository"],
+                    reviewed_payload["pull_request_number"],
+                    reviewed_payload["state_digest"],
+                    (thread_id,),
+                )
+                with self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "validation evidence is invalid or stale",
+                ):
+                    MODULE.load_validation_evidence(
+                        attestation_path,
+                        reviewed_payload["repository"],
+                        attestation["head_sha"],
+                        reviewed,
+                    )
+
+    def test_recovery_bound_source_keeps_current_outdated_target_independent(
+        self,
+    ) -> None:
+        thread_id = "PRRT_RECOVERY_OUTDATED"
+        comment = ("PRRC_RECOVERY_OUTDATED", "Exact current target.", None)
+        current = FakeGh(
+            [
+                target_response(
+                    thread_id,
+                    head="c" * 40,
+                    comments=[comment],
+                    outdated=True,
+                )
+            ]
+        )
+
+        result = resolve_threads(
+            "SecPal/api",
+            123,
+            "c" * 40,
+            [thread_id],
+            apply=False,
+            runner=current,
+            expected_targets={
+                thread_id: expected_thread_state(
+                    thread_id,
+                    [comment],
+                    outdated=True,
+                )
+            },
+            recovery_bound=True,
+        )
+
+        self.assertEqual(result["pending"], [thread_id])
+        self.assertEqual(result["resolved"], [])
+        self.assertEqual(len(current.calls), 1)
+
     def test_unresolved_target_accepts_monotonic_post_fix_outdated_drift(
         self,
     ) -> None:
@@ -4112,8 +4682,13 @@ class ResolveFixedThreadsTests(TestCase):
             [
                 "READ_NAMED_REVIEW_THREAD",
                 "READ_AUTHENTICATED_FOLLOW_UP_WORK_GRAPH",
+                "AUTHENTICATE_LIFECYCLE_PUBLICATION_PROTECTION",
                 "RESOLVE_NAMED_REVIEW_THREAD",
             ],
+        )
+        self.assertIn(
+            "BRANCH_PROTECTION",
+            registry["fixed_thread_resolution"]["prohibited_hosted_reads"],
         )
         self.assertIn(
             "MERGE_READINESS",
@@ -5265,6 +5840,68 @@ class ResolveFixedThreadsTests(TestCase):
                     "final-eligibility.json",
                     "--eligibility-evidence",
                     "ordinary-eligibility.json",
+                ]
+            )
+
+    def test_recovery_authority_cli_requires_exact_closed_input_set(self) -> None:
+        arguments = [
+            "--repo",
+            "SecPal/api",
+            "--pr",
+            "123",
+            "--repo-root",
+            "/delivery",
+            "--expected-head",
+            "a" * 40,
+            "--reviewed-state",
+            "reviewed.json",
+            "--expected-reviewed-state-digest",
+            "b" * 64,
+            "--validation-evidence",
+            "attestation.json",
+            "--eligibility-evidence",
+            "eligibility.json",
+            "--thread-id",
+            "PRRT_exampleOne",
+        ]
+        with self.assertRaises(SystemExit):
+            MODULE.parse_args(
+                [
+                    *arguments,
+                    "--delivery-issue",
+                    "790",
+                    "--exceptional-recovery-evidence",
+                    "recovery.json",
+                ]
+            )
+        parsed = MODULE.parse_args(
+            [
+                *arguments,
+                "--delivery-issue",
+                "790",
+                "--exceptional-recovery-evidence",
+                "recovery.json",
+                "--exceptional-recovery-authorization",
+                "authorization.json",
+            ]
+        )
+        self.assertEqual(parsed.delivery_issue, 790)
+        self.assertEqual(parsed.exceptional_recovery_evidence, "recovery.json")
+        self.assertEqual(
+            parsed.exceptional_recovery_authorization, "authorization.json"
+        )
+        with self.assertRaises(SystemExit):
+            MODULE.parse_args(
+                [
+                    *arguments,
+                    "--integration-evidence",
+                    "integration.json",
+                    "--delivery-issue",
+                    "790",
+                    "--exceptional-recovery-evidence",
+                    "recovery.json",
+                    "--exceptional-recovery-authorization",
+                    "authorization.json",
                 ]
             )
 

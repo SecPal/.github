@@ -69,6 +69,22 @@ python3 scripts/secpal-resolve-fixed-threads.py \
 
 Repeat `--thread-id REVIEW_THREAD_NODE_ID` for each additional fixed thread.
 
+When and only when the final attestation carries an
+`exceptional_recovery_evidence_digest`, retain the existing accepted Recovery
+document and its exact signed orchestration authorization and add this closed
+tuple to the same resolver invocation:
+
+```bash
+  --delivery-issue DELIVERY_ISSUE_NUMBER \
+  --exceptional-recovery-evidence READY_EXCEPTIONAL_RECOVERY.json \
+  --exceptional-recovery-authorization SIGNED_RECOVERY_AUTHORIZATION.json
+```
+
+Omit all three inputs for ordinary non-Recovery evidence. Never combine them
+with Ready-integration evidence. The shared Exceptional Recovery verifier owns
+the lifecycle, publication, and signer authentication; the resolver does not
+reconstruct that authority.
+
 For an exact technically non-blocking thread outside the authenticated final
 feedback boundary and observed on the unchanged final delivery head, do not
 create an empty delivery commit. Require the complete final reviewed-state and
@@ -253,7 +269,9 @@ The following state machine applies only to the full feedback-remediation path.
    repository, PR, repository root, current head OID, reviewed-state file and
    digest, successful validation evidence for that fix commit, exact
    per-thread eligibility evidence whose canonical digest is authenticated by
-   the signed receipt, and thread IDs. This
+   the signed receipt, and thread IDs. A Recovery-bound ordinary attestation
+   also requires the retained delivery issue, accepted Recovery document, and
+   exact signed orchestration authorization described above. This
    reads only the named targets, requires their comments to equal the reviewed
    feedback, and does not reclassify or gate on unrelated PR state.
 9. Report the commit, branch, remote synchronization, local validation,

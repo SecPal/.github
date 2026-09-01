@@ -105,6 +105,7 @@ FIXED_THREAD_RESOLUTION_CONTRACT = {
     "allowed_github_operations": [
         "READ_NAMED_REVIEW_THREAD",
         "READ_AUTHENTICATED_FOLLOW_UP_WORK_GRAPH",
+        "AUTHENTICATE_LIFECYCLE_PUBLICATION_PROTECTION",
         "RESOLVE_NAMED_REVIEW_THREAD",
     ],
     "prohibited_hosted_reads": [
@@ -266,6 +267,32 @@ def _load_fast_path_helper() -> Any:
 
 
 fast_path = _load_fast_path_helper()
+
+
+def _load_lifecycle_orchestration_helper() -> Any:
+    scripts_root_text = str(REPOSITORY_ROOT / "scripts")
+    original_sys_path = list(sys.path)
+    sys.path.insert(0, scripts_root_text)
+    try:
+        from secpal_pr_review import lifecycle_orchestration as module
+    finally:
+        sys.path[:] = original_sys_path
+    loaded_path = getattr(module, "__file__", None)
+    expected_path = (
+        REPOSITORY_ROOT
+        / "scripts/secpal_pr_review/lifecycle_orchestration.py"
+    )
+    if (
+        not isinstance(loaded_path, str)
+        or Path(loaded_path).resolve() != expected_path.resolve()
+    ):
+        raise RuntimeError(
+            "Canonical lifecycle orchestration module has an unexpected path"
+        )
+    return module
+
+
+lifecycle_orchestration = _load_lifecycle_orchestration_helper()
 
 
 def _resolve_trusted_markdown_node() -> str:
@@ -523,108 +550,6 @@ def _validation_registry_binding(entry: dict[str, Any]) -> dict[str, Any]:
             if command.get("execution_policy") == "focused-only"
         ],
     }
-
-
-def _validate_manual_gate_evidence(
-    value: Any,
-    registered_gates: Any,
-) -> list[dict[str, Any]]:
-    if not isinstance(registered_gates, list) or any(
-        not isinstance(gate, str) or not gate for gate in registered_gates
-    ):
-        raise ResolutionError("registered manual gates are malformed")
-    if not isinstance(value, list) or len(value) != len(registered_gates):
-        raise ResolutionError("validation evidence is invalid or stale")
-    normalized: list[dict[str, Any]] = []
-    for index, gate in enumerate(registered_gates):
-        item = value[index]
-        evidence_text = item.get("evidence") if isinstance(item, dict) else None
-        if (
-            not isinstance(item, dict)
-            or set(item) != {"gate", "satisfied", "evidence"}
-            or item.get("gate") != gate
-            or item.get("satisfied") is not True
-            or not isinstance(evidence_text, str)
-            or not EVIDENCE_TEXT.fullmatch(evidence_text)
-            or SECRET_VALUE.search(evidence_text)
-        ):
-            raise ResolutionError("validation evidence is invalid or stale")
-        normalized.append(
-            {"gate": gate, "satisfied": True, "evidence": evidence_text}
-        )
-    return normalized
-
-
-def _expected_validation_receipt(
-    repository: str,
-    reviewed: ReviewedState,
-    validated_tree_sha: Any,
-    manual_gate_evidence: Any,
-    eligibility_evidence_digest: Any,
-    registry_binding: dict[str, Any],
-) -> dict[str, Any]:
-    if not isinstance(validated_tree_sha, str) or not OID.fullmatch(
-        validated_tree_sha
-    ):
-        raise ResolutionError("validation evidence is invalid or stale")
-    if (
-        not isinstance(eligibility_evidence_digest, str)
-        or not DIGEST.fullmatch(eligibility_evidence_digest)
-    ):
-        raise ResolutionError("validation evidence is invalid or stale")
-    fields = {
-        "schema_version": "1.0",
-        "kind": "VALIDATION_RECEIPT",
-        "repository": repository,
-        "head_sha": reviewed.head_sha,
-        "validated_tree_sha": validated_tree_sha.lower(),
-        "registry_digest": _digest_json(registry_binding),
-        "command_set_digest": _digest_json(registry_binding["validation"]),
-        "successful_result": True,
-        "reviewed_state_digest": reviewed.state_digest,
-        "reviewed_feedback_digest": reviewed.feedback_digest,
-        "manual_gate_evidence": _validate_manual_gate_evidence(
-            manual_gate_evidence,
-            registry_binding["manual_gates"],
-        ),
-        "eligibility_evidence_digest": eligibility_evidence_digest,
-    }
-    return {**fields, "receipt_digest": _digest_json(fields)}
-
-
-def _expected_validation_attestation(
-    repository: str,
-    expected_head: str,
-    reviewed: ReviewedState,
-    payload: dict[str, Any],
-    registry_binding: dict[str, Any],
-) -> dict[str, Any]:
-    receipt = _expected_validation_receipt(
-        repository,
-        reviewed,
-        payload.get("validated_tree_sha"),
-        payload.get("manual_gate_evidence"),
-        payload.get("eligibility_evidence_digest"),
-        registry_binding,
-    )
-    fields = {
-        "schema_version": "1.0",
-        "repository": repository,
-        "head_sha": expected_head.lower(),
-        "registry_digest": receipt["registry_digest"],
-        "command_set_digest": receipt["command_set_digest"],
-        "successful_result": True,
-        "reviewed_head_sha": reviewed.head_sha,
-        "reviewed_state_digest": reviewed.state_digest,
-        "reviewed_feedback_digest": reviewed.feedback_digest,
-        "validated_tree_sha": receipt["validated_tree_sha"],
-        "validation_receipt_digest": receipt["receipt_digest"],
-        "manual_gate_evidence": receipt["manual_gate_evidence"],
-        "eligibility_evidence_digest": receipt[
-            "eligibility_evidence_digest"
-        ],
-    }
-    return {**fields, "attestation_digest": _digest_json(fields)}
 
 
 def _run_gh(arguments: Sequence[str]) -> dict[str, Any]:
@@ -942,6 +867,7 @@ def load_validation_evidence(
         payload = json.loads(
             path.read_text(encoding="utf-8"),
             parse_constant=_reject_nonfinite_json_constant,
+            object_pairs_hook=_reject_duplicate_json_object,
         )
     except (OSError, ValueError) as exc:
         raise ResolutionError(
@@ -975,6 +901,7 @@ def load_validation_evidence(
             integration_payload = json.loads(
                 integration_evidence_path.read_text(encoding="utf-8"),
                 parse_constant=_reject_nonfinite_json_constant,
+                object_pairs_hook=_reject_duplicate_json_object,
             )
             stable_reviewed = fast_path.StableFeedbackState.from_payload(
                 reviewed.payload
@@ -1026,13 +953,40 @@ def load_validation_evidence(
         raise ResolutionError(
             "ordinary validation attestation rejects integration-only evidence"
         )
-    expected_attestation = _expected_validation_attestation(
-        repository,
-        expected_head,
-        reviewed,
-        payload,
-        registry_binding,
-    )
+    eligibility_evidence_digest = payload.get("eligibility_evidence_digest")
+    if (
+        not isinstance(eligibility_evidence_digest, str)
+        or not DIGEST.fullmatch(eligibility_evidence_digest)
+    ):
+        raise ResolutionError(
+            "validation evidence eligibility digest is missing or malformed"
+        )
+    try:
+        receipt = fast_path.create_validation_receipt(
+            repository=repository,
+            head_sha=reviewed.head_sha,
+            validated_tree_sha=payload.get("validated_tree_sha"),
+            registry=registry_binding,
+            command_set=registry_binding["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=payload.get("manual_gate_evidence"),
+            eligibility_evidence_digest=eligibility_evidence_digest,
+            exceptional_recovery_evidence_digest=payload.get(
+                "exceptional_recovery_evidence_digest"
+            ),
+        )
+        expected_attestation = fast_path.create_validation_attestation(
+            repository=repository,
+            head_sha=expected_head.lower(),
+            registry=registry_binding,
+            command_set=registry_binding["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+        )
+    except fast_path.SecurityBlocker as exc:
+        raise ResolutionError("validation evidence is invalid or stale") from exc
     if payload != expected_attestation:
         if payload.get("head_sha") != expected_head.lower():
             raise ResolutionError(
@@ -1044,10 +998,9 @@ def load_validation_evidence(
         evidence_digest=payload["attestation_digest"],
         validated_tree_sha=payload["validated_tree_sha"],
         validation_receipt_digest=payload["validation_receipt_digest"],
-        eligibility_evidence_digest=payload[
-            "eligibility_evidence_digest"
-        ],
+        eligibility_evidence_digest=eligibility_evidence_digest,
         attestation=payload,
+        validation_receipt=receipt,
     )
 
 
@@ -1189,7 +1142,27 @@ def verify_local_fix_commit(
         or local_signature.get("format") not in accepted_formats
     ):
         raise ResolutionError("fix commit local signature is not verified")
-    if validation.kind == "eligibility-bound-ready-integration":
+    if validation.kind == "attestation":
+        if validation.attestation is None:
+            raise ResolutionError("validation evidence binding is incomplete")
+        try:
+            registry_binding = _validation_registry_binding(
+                _load_repository_entry(repository)
+            )
+            fast_path.verify_validation_attestation(
+                validation.attestation,
+                repository=repository,
+                head_sha=expected_head.lower(),
+                registry=registry_binding,
+                command_set=registry_binding["validation"],
+                reviewed_state=reviewed,
+                commit_parent_sha=ancestry[1],
+                commit_tree_sha=commit_tree,
+                commit_validation_receipt_digest=trailers[0],
+            )
+        except (IndexError, fast_path.SecurityBlocker) as exc:
+            raise ResolutionError(str(exc)) from exc
+    else:
         if (
             reviewed.payload is None
             or validation.attestation is None
@@ -1450,6 +1423,85 @@ def load_eligibility_evidence(
         canonical_payload,
         parsed.thread_ids,
     )
+
+
+def verify_recovery_bound_source_authority(
+    validation: ValidationEvidence,
+    reviewed: ReviewedState,
+    eligibility: EligibilityEvidence,
+    *,
+    repository_root: Path,
+    repository: str,
+    delivery_issue: int | None,
+    pull_request: int,
+    resulting_head_sha: str,
+    recovery_evidence_path: Path | None,
+    recovery_authorization_path: Path | None,
+) -> None:
+    """Cross-bind ordinary Recovery source evidence to lifecycle authority."""
+
+    attestation = validation.attestation
+    recovery_digest = (
+        attestation.get("exceptional_recovery_evidence_digest")
+        if validation.kind == "attestation" and isinstance(attestation, dict)
+        else None
+    )
+    recovery_inputs = (
+        delivery_issue,
+        recovery_evidence_path,
+        recovery_authorization_path,
+    )
+    if recovery_digest is None:
+        if any(value is not None for value in recovery_inputs):
+            raise ResolutionError(
+                "ordinary source evidence rejects Exceptional Recovery authority"
+            )
+        return
+    if (
+        not isinstance(delivery_issue, int)
+        or isinstance(delivery_issue, bool)
+        or delivery_issue < 1
+        or recovery_evidence_path is None
+        or recovery_authorization_path is None
+    ):
+        raise ResolutionError(
+            "Recovery-bound source evidence requires canonical Recovery authority"
+        )
+    try:
+        recovery_evidence = json.loads(
+            recovery_evidence_path.read_text(encoding="utf-8"),
+            parse_constant=_reject_nonfinite_json_constant,
+            object_pairs_hook=_reject_duplicate_json_object,
+        )
+        recovery_authorization = recovery_authorization_path.read_bytes()
+        eligibility_evidence = json.loads(
+            eligibility.canonical_payload,
+            parse_constant=_reject_nonfinite_json_constant,
+            object_pairs_hook=_reject_duplicate_json_object,
+        )
+        verified = lifecycle_orchestration.verify_exceptional_recovery_authority(
+            recovery_evidence,
+            orchestration_authorization=recovery_authorization,
+            reviewed_state_evidence=reviewed.payload,
+            eligibility_evidence=eligibility_evidence,
+            repository_root=repository_root,
+            repository=repository,
+            delivery_issue=delivery_issue,
+            pull_request=pull_request,
+            resulting_head_sha=resulting_head_sha,
+        )
+    except (
+        OSError,
+        ValueError,
+        lifecycle_orchestration.LifecycleOrchestrationError,
+    ) as exc:
+        raise ResolutionError(
+            "Recovery-bound source evidence has invalid Recovery authority"
+        ) from exc
+    if verified.recovery_digest != recovery_digest:
+        raise ResolutionError(
+            "Recovery-bound source evidence has substituted Recovery authority"
+        )
 
 
 def load_final_feedback_boundary(
@@ -2502,6 +2554,9 @@ def resolve_threads(
     validation_evidence_path: Path | str | None = None,
     eligibility_evidence_path: Path | str | None = None,
     integration_evidence_path: Path | str | None = None,
+    exceptional_recovery_delivery_issue: int | None = None,
+    exceptional_recovery_evidence_path: Path | str | None = None,
+    exceptional_recovery_authorization_path: Path | str | None = None,
     **caller_constructed_authorization: Any,
 ) -> dict[str, Any]:
     """Resolve threads only after proving the complete local evidence chain."""
@@ -2550,6 +2605,26 @@ def resolve_threads(
         reviewed.state_digest,
         thread_ids,
         authenticated_evidence_digest=validation.eligibility_evidence_digest,
+    )
+    verify_recovery_bound_source_authority(
+        validation,
+        reviewed,
+        eligibility,
+        repository_root=Path(repository_root),
+        repository=repository,
+        delivery_issue=exceptional_recovery_delivery_issue,
+        pull_request=number,
+        resulting_head_sha=expected_head,
+        recovery_evidence_path=(
+            Path(exceptional_recovery_evidence_path)
+            if exceptional_recovery_evidence_path is not None
+            else None
+        ),
+        recovery_authorization_path=(
+            Path(exceptional_recovery_authorization_path)
+            if exceptional_recovery_authorization_path is not None
+            else None
+        ),
     )
     expected_targets = reviewed.targets
     reviewed_state_digest = reviewed.state_digest
@@ -2827,6 +2902,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--eligibility-evidence")
     parser.add_argument("--integration-evidence")
     parser.add_argument("--delivery-issue", type=int)
+    parser.add_argument("--exceptional-recovery-evidence")
+    parser.add_argument("--exceptional-recovery-authorization")
     parser.add_argument("--late-disposition-evidence")
     parser.add_argument("--late-disposition-signature")
     parser.add_argument("--late-classification-evidence")
@@ -2849,7 +2926,6 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
                 "expected reviewed state digest must be a SHA-256 digest"
             )
         late_values = (
-            arguments.delivery_issue,
             arguments.late_disposition_evidence,
             arguments.late_disposition_signature,
             arguments.late_classification_evidence,
@@ -2857,11 +2933,17 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             arguments.final_eligibility_evidence,
         )
         if any(value is not None for value in late_values):
-            if arguments.integration_evidence is not None:
+            if (
+                arguments.integration_evidence is not None
+                or arguments.exceptional_recovery_evidence is not None
+                or arguments.exceptional_recovery_authorization is not None
+            ):
                 raise ResolutionError(
-                    "late disposition rejects integration-only evidence"
+                    "late disposition rejects unrelated authority evidence"
                 )
-            if not all(value is not None for value in late_values):
+            if arguments.delivery_issue is None or not all(
+                value is not None for value in late_values
+            ):
                 raise ResolutionError(
                     "late disposition requires delivery issue, final eligibility "
                     "evidence, classification evidence/signature, and disposition "
@@ -2875,6 +2957,22 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             raise ResolutionError(
                 "commit-bound resolution requires eligibility evidence"
             )
+        else:
+            recovery_values = (
+                arguments.delivery_issue,
+                arguments.exceptional_recovery_evidence,
+                arguments.exceptional_recovery_authorization,
+            )
+            if any(value is not None for value in recovery_values):
+                if arguments.integration_evidence is not None:
+                    raise ResolutionError(
+                        "Ready integration rejects Exceptional Recovery authority"
+                    )
+                if not all(value is not None for value in recovery_values):
+                    raise ResolutionError(
+                        "Exceptional Recovery authority requires delivery issue, "
+                        "Recovery evidence, and signed authorization"
+                    )
     except ResolutionError as exc:
         parser.error(str(exc))
     return arguments
@@ -2927,6 +3025,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
                 validation_evidence_path=arguments.validation_evidence,
                 eligibility_evidence_path=arguments.eligibility_evidence,
+                **(
+                    {
+                        "exceptional_recovery_delivery_issue": (
+                            arguments.delivery_issue
+                        ),
+                        "exceptional_recovery_evidence_path": (
+                            arguments.exceptional_recovery_evidence
+                        ),
+                        "exceptional_recovery_authorization_path": (
+                            arguments.exceptional_recovery_authorization
+                        ),
+                    }
+                    if arguments.exceptional_recovery_evidence is not None
+                    else {}
+                ),
                 **(
                     {"integration_evidence_path": arguments.integration_evidence}
                     if arguments.integration_evidence is not None
