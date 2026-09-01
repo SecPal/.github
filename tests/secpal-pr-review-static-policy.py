@@ -268,6 +268,7 @@ ALLOWED_IMPORT_ROOTS = {
     "re",
     "secrets",
     "secpal_work_graph",
+    "secpal_pr_review",
     "site",
     "stat",
     "subprocess",
@@ -354,6 +355,7 @@ ALLOWED_IMPORTS = {
         "from dataclasses import dataclass",
         "from pathlib import Path",
         "from typing import Any, Callable, Sequence",
+        "from secpal_pr_review import lifecycle_orchestration as module",
     },
     "late_disposition.py": {
         "from __future__ import annotations",
@@ -473,7 +475,7 @@ DIRECT_MODULE_ATTRIBUTES = {
     "secpal-resolve-fixed-threads.py": {
         "importlib": {"util"},
         "operator": {"attrgetter"},
-        "sys": {"argv", "modules", "stderr"},
+        "sys": {"argv", "modules", "path", "stderr"},
     },
     "late_disposition.py": {
         "errno": {"EINVAL", "ENOTSUP"},
@@ -536,6 +538,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "digest_json",
             "execute_resolution_batch",
             "follow_up",
+            "normalize_resolution_eligibility_evidence",
             "normalize_ready_integration_evidence",
             "normalize_ready_integration_prior_authority",
             "normalize_exceptional_recovery_evidence",
@@ -593,6 +596,10 @@ LOADED_MODULE_ATTRIBUTES = {
             "read_signing_configuration",
             "sign_artifact",
             "signer_from_git_verification",
+        },
+        "lifecycle_orchestration": {
+            "LifecycleOrchestrationError",
+            "verify_exceptional_recovery_authority",
         },
     },
     "secpal-create-late-disposition.py": {
@@ -885,6 +892,10 @@ SAFE_GETATTR_CALLS = {
             ("_load_fast_path_helper",),
             "getattr(loaded, '__file__', None)",
         ),
+        DynamicImportCall(
+            ("_load_lifecycle_orchestration_helper",),
+            "getattr(module, '__file__', None)",
+        ),
     },
     "fast_path.py": {
         DynamicImportCall(
@@ -1045,6 +1056,7 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_load_follow_up_helper",
     "_load_late_disposition_helper",
     "_load_fast_path_helper",
+    "_load_lifecycle_orchestration_helper",
     "_late_signing_key",
     "_markdown_parser_environment",
     "_classify_reviewed_target",
@@ -1081,6 +1093,7 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "validate_expected_targets",
     "validate_request",
     "verify_local_fix_commit",
+    "verify_recovery_bound_source_authority",
     "verify_live_follow_up",
 }
 RESOLVER_CLASS_SHAPES = {
@@ -1111,11 +1124,23 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
         "_reject_nonfinite_json_constant",
     ),
     DynamicImportCall(
+        ("load_validation_evidence",),
+        "_reject_duplicate_json_object",
+    ),
+    DynamicImportCall(
         ("load_eligibility_evidence",),
         "_reject_nonfinite_json_constant",
     ),
     DynamicImportCall(
         ("load_eligibility_evidence",),
+        "_reject_duplicate_json_object",
+    ),
+    DynamicImportCall(
+        ("verify_recovery_bound_source_authority",),
+        "_reject_nonfinite_json_constant",
+    ),
+    DynamicImportCall(
+        ("verify_recovery_bound_source_authority",),
         "_reject_duplicate_json_object",
     ),
     DynamicImportCall(
@@ -1307,6 +1332,12 @@ RESOLVER_LOOP_SITES = {
         "thread_ids[index + 1:]",
     ),
     LoopSite("comprehension", ("parse_args",), "late_values"),
+    LoopSite(
+        "comprehension",
+        ("verify_recovery_bound_source_authority",),
+        "recovery_inputs",
+    ),
+    LoopSite("comprehension", ("parse_args",), "recovery_values"),
 }
 
 

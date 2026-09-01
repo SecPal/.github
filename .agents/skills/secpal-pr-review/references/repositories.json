@@ -70,6 +70,16 @@
           "purpose": "Run finite lifecycle-orchestration unit tests"
         },
         {
+          "argv": [
+            "python3",
+            "-m",
+            "unittest",
+            "tests/secpal-exceptional-recovery-authority-unit.py"
+          ],
+          "working_directory": ".",
+          "purpose": "Run composite Exceptional Recovery authority unit tests"
+        },
+        {
           "argv": ["./tests/secpal-pr-review-skill-policy.sh"],
           "working_directory": ".",
           "purpose": "Run finite skill policy tests"

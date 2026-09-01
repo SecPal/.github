@@ -268,6 +268,34 @@ def _load_fast_path_helper() -> Any:
 fast_path = _load_fast_path_helper()
 
 
+def _load_lifecycle_orchestration_helper() -> Any:
+    repository_root_text = str(REPOSITORY_ROOT)
+    added_repository_root = repository_root_text not in sys.path
+    if added_repository_root:
+        sys.path.insert(0, repository_root_text)
+    try:
+        from secpal_pr_review import lifecycle_orchestration as module
+    finally:
+        if added_repository_root:
+            sys.path.remove(repository_root_text)
+    loaded_path = getattr(module, "__file__", None)
+    expected_path = (
+        REPOSITORY_ROOT
+        / "scripts/secpal_pr_review/lifecycle_orchestration.py"
+    )
+    if (
+        not isinstance(loaded_path, str)
+        or Path(loaded_path).resolve() != expected_path.resolve()
+    ):
+        raise RuntimeError(
+            "Canonical lifecycle orchestration module has an unexpected path"
+        )
+    return module
+
+
+lifecycle_orchestration = _load_lifecycle_orchestration_helper()
+
+
 def _resolve_trusted_markdown_node() -> str:
     """Resolve Node only for the maintained Markdown parser bridge."""
 
@@ -840,6 +868,7 @@ def load_validation_evidence(
         payload = json.loads(
             path.read_text(encoding="utf-8"),
             parse_constant=_reject_nonfinite_json_constant,
+            object_pairs_hook=_reject_duplicate_json_object,
         )
     except (OSError, ValueError) as exc:
         raise ResolutionError(
@@ -873,6 +902,7 @@ def load_validation_evidence(
             integration_payload = json.loads(
                 integration_evidence_path.read_text(encoding="utf-8"),
                 parse_constant=_reject_nonfinite_json_constant,
+                object_pairs_hook=_reject_duplicate_json_object,
             )
             stable_reviewed = fast_path.StableFeedbackState.from_payload(
                 reviewed.payload
@@ -1390,6 +1420,85 @@ def load_eligibility_evidence(
         canonical_payload,
         parsed.thread_ids,
     )
+
+
+def verify_recovery_bound_source_authority(
+    validation: ValidationEvidence,
+    reviewed: ReviewedState,
+    eligibility: EligibilityEvidence,
+    *,
+    repository_root: Path,
+    repository: str,
+    delivery_issue: int | None,
+    pull_request: int,
+    resulting_head_sha: str,
+    recovery_evidence_path: Path | None,
+    recovery_authorization_path: Path | None,
+) -> None:
+    """Cross-bind ordinary Recovery source evidence to lifecycle authority."""
+
+    attestation = validation.attestation
+    recovery_digest = (
+        attestation.get("exceptional_recovery_evidence_digest")
+        if validation.kind == "attestation" and isinstance(attestation, dict)
+        else None
+    )
+    recovery_inputs = (
+        delivery_issue,
+        recovery_evidence_path,
+        recovery_authorization_path,
+    )
+    if recovery_digest is None:
+        if any(value is not None for value in recovery_inputs):
+            raise ResolutionError(
+                "ordinary source evidence rejects Exceptional Recovery authority"
+            )
+        return
+    if (
+        not isinstance(delivery_issue, int)
+        or isinstance(delivery_issue, bool)
+        or delivery_issue < 1
+        or recovery_evidence_path is None
+        or recovery_authorization_path is None
+    ):
+        raise ResolutionError(
+            "Recovery-bound source evidence requires canonical Recovery authority"
+        )
+    try:
+        recovery_evidence = json.loads(
+            recovery_evidence_path.read_text(encoding="utf-8"),
+            parse_constant=_reject_nonfinite_json_constant,
+            object_pairs_hook=_reject_duplicate_json_object,
+        )
+        recovery_authorization = recovery_authorization_path.read_bytes()
+        eligibility_evidence = json.loads(
+            eligibility.canonical_payload,
+            parse_constant=_reject_nonfinite_json_constant,
+            object_pairs_hook=_reject_duplicate_json_object,
+        )
+        verified = lifecycle_orchestration.verify_exceptional_recovery_authority(
+            recovery_evidence,
+            orchestration_authorization=recovery_authorization,
+            reviewed_state_evidence=reviewed.payload,
+            eligibility_evidence=eligibility_evidence,
+            repository_root=repository_root,
+            repository=repository,
+            delivery_issue=delivery_issue,
+            pull_request=pull_request,
+            resulting_head_sha=resulting_head_sha,
+        )
+    except (
+        OSError,
+        ValueError,
+        lifecycle_orchestration.LifecycleOrchestrationError,
+    ) as exc:
+        raise ResolutionError(
+            "Recovery-bound source evidence has invalid Recovery authority"
+        ) from exc
+    if verified.recovery_digest != recovery_digest:
+        raise ResolutionError(
+            "Recovery-bound source evidence has substituted Recovery authority"
+        )
 
 
 def load_final_feedback_boundary(
@@ -2434,6 +2543,9 @@ def resolve_threads(
     validation_evidence_path: Path | str | None = None,
     eligibility_evidence_path: Path | str | None = None,
     integration_evidence_path: Path | str | None = None,
+    exceptional_recovery_delivery_issue: int | None = None,
+    exceptional_recovery_evidence_path: Path | str | None = None,
+    exceptional_recovery_authorization_path: Path | str | None = None,
     **caller_constructed_authorization: Any,
 ) -> dict[str, Any]:
     """Resolve threads only after proving the complete local evidence chain."""
@@ -2482,6 +2594,26 @@ def resolve_threads(
         reviewed.state_digest,
         thread_ids,
         authenticated_evidence_digest=validation.eligibility_evidence_digest,
+    )
+    verify_recovery_bound_source_authority(
+        validation,
+        reviewed,
+        eligibility,
+        repository_root=Path(repository_root),
+        repository=repository,
+        delivery_issue=exceptional_recovery_delivery_issue,
+        pull_request=number,
+        resulting_head_sha=expected_head,
+        recovery_evidence_path=(
+            Path(exceptional_recovery_evidence_path)
+            if exceptional_recovery_evidence_path is not None
+            else None
+        ),
+        recovery_authorization_path=(
+            Path(exceptional_recovery_authorization_path)
+            if exceptional_recovery_authorization_path is not None
+            else None
+        ),
     )
     expected_targets = reviewed.targets
     reviewed_state_digest = reviewed.state_digest
@@ -2759,6 +2891,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--eligibility-evidence")
     parser.add_argument("--integration-evidence")
     parser.add_argument("--delivery-issue", type=int)
+    parser.add_argument("--exceptional-recovery-evidence")
+    parser.add_argument("--exceptional-recovery-authorization")
     parser.add_argument("--late-disposition-evidence")
     parser.add_argument("--late-disposition-signature")
     parser.add_argument("--late-classification-evidence")
@@ -2781,7 +2915,6 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
                 "expected reviewed state digest must be a SHA-256 digest"
             )
         late_values = (
-            arguments.delivery_issue,
             arguments.late_disposition_evidence,
             arguments.late_disposition_signature,
             arguments.late_classification_evidence,
@@ -2789,11 +2922,17 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             arguments.final_eligibility_evidence,
         )
         if any(value is not None for value in late_values):
-            if arguments.integration_evidence is not None:
+            if (
+                arguments.integration_evidence is not None
+                or arguments.exceptional_recovery_evidence is not None
+                or arguments.exceptional_recovery_authorization is not None
+            ):
                 raise ResolutionError(
-                    "late disposition rejects integration-only evidence"
+                    "late disposition rejects unrelated authority evidence"
                 )
-            if not all(value is not None for value in late_values):
+            if arguments.delivery_issue is None or not all(
+                value is not None for value in late_values
+            ):
                 raise ResolutionError(
                     "late disposition requires delivery issue, final eligibility "
                     "evidence, classification evidence/signature, and disposition "
@@ -2807,6 +2946,22 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             raise ResolutionError(
                 "commit-bound resolution requires eligibility evidence"
             )
+        else:
+            recovery_values = (
+                arguments.delivery_issue,
+                arguments.exceptional_recovery_evidence,
+                arguments.exceptional_recovery_authorization,
+            )
+            if any(value is not None for value in recovery_values):
+                if arguments.integration_evidence is not None:
+                    raise ResolutionError(
+                        "Ready integration rejects Exceptional Recovery authority"
+                    )
+                if not all(value is not None for value in recovery_values):
+                    raise ResolutionError(
+                        "Exceptional Recovery authority requires delivery issue, "
+                        "Recovery evidence, and signed authorization"
+                    )
     except ResolutionError as exc:
         parser.error(str(exc))
     return arguments
@@ -2859,6 +3014,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
                 validation_evidence_path=arguments.validation_evidence,
                 eligibility_evidence_path=arguments.eligibility_evidence,
+                **(
+                    {
+                        "exceptional_recovery_delivery_issue": (
+                            arguments.delivery_issue
+                        ),
+                        "exceptional_recovery_evidence_path": (
+                            arguments.exceptional_recovery_evidence
+                        ),
+                        "exceptional_recovery_authorization_path": (
+                            arguments.exceptional_recovery_authorization
+                        ),
+                    }
+                    if arguments.exceptional_recovery_evidence is not None
+                    else {}
+                ),
                 **(
                     {"integration_evidence_path": arguments.integration_evidence}
                     if arguments.integration_evidence is not None

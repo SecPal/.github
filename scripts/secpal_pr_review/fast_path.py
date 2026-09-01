@@ -901,8 +901,9 @@ class StableFeedbackState:
         self.repository = _require_string(self.repository, "repository")
         if not REPOSITORY.fullmatch(self.repository):
             raise SecurityBlocker("repository identity is invalid")
-        if not isinstance(self.pull_request_number, int) or self.pull_request_number < 1:
-            raise SecurityBlocker("pull request identity is invalid")
+        self.pull_request_number = _require_positive_integer(
+            self.pull_request_number, "pull request identity"
+        )
         self.head_sha = _require_oid(self.head_sha, "stable feedback head")
         self.base_ref = _require_string(self.base_ref, "stable feedback base")
         self.base_sha = _require_oid(self.base_sha, "stable feedback base SHA")
@@ -953,6 +954,114 @@ class StableFeedbackState:
             "feedback_digest": self.feedback_digest,
             "state_digest": self.state_digest,
         }
+
+
+def verify_reviewed_state_evidence(value: Any) -> StableFeedbackState:
+    """Verify one complete closed reviewed-state document."""
+
+    if not isinstance(value, dict):
+        raise SecurityBlocker("reviewed-state evidence is malformed")
+    reviewed = StableFeedbackState.from_payload(value)
+    if value != reviewed.to_dict():
+        raise SecurityBlocker("reviewed-state evidence is invalid or stale")
+    return reviewed
+
+
+def normalize_resolution_eligibility_evidence(
+    value: Any,
+    *,
+    repository: str,
+    reviewed_state: StableFeedbackState,
+) -> dict[str, Any]:
+    """Normalize the existing closed resolution-eligibility evidence."""
+
+    expected_keys = {
+        "schema_version",
+        "repository",
+        "pull_request_number",
+        "reviewed_head_sha",
+        "reviewed_state_digest",
+        "eligible_threads",
+    }
+    threads = value.get("eligible_threads") if isinstance(value, dict) else None
+    if (
+        not isinstance(value, dict)
+        or set(value) != expected_keys
+        or value.get("schema_version") != "1.1"
+        or value.get("repository") != repository
+        or reviewed_state.repository != repository
+        or value.get("pull_request_number") != reviewed_state.pull_request_number
+        or isinstance(value.get("pull_request_number"), bool)
+        or value.get("reviewed_head_sha") != reviewed_state.head_sha
+        or value.get("reviewed_state_digest") != reviewed_state.state_digest
+        or not isinstance(threads, list)
+    ):
+        raise SecurityBlocker(
+            "resolution eligibility evidence is invalid or stale"
+        )
+    reviewed_threads = {
+        item.get("node_id"): item
+        for item in reviewed_state.feedback.get("threads", [])
+        if isinstance(item, dict)
+    }
+    observed_thread_ids: list[str] = []
+    for item in threads:
+        if not isinstance(item, dict) or set(item) != {
+            "thread_id",
+            "classification",
+            "disposition",
+            "finding_ids",
+            "evidence_digest",
+            "follow_up",
+        }:
+            raise SecurityBlocker(
+                "resolution eligibility evidence thread is malformed"
+            )
+        thread_id = item.get("thread_id")
+        classification = item.get("classification")
+        disposition = item.get("disposition")
+        finding_ids = item.get("finding_ids")
+        reviewed_thread = reviewed_threads.get(thread_id)
+        if (
+            not isinstance(thread_id, str)
+            or not re.fullmatch(r"PRRT_[A-Za-z0-9_-]+", thread_id)
+            or not isinstance(classification, str)
+            or disposition
+            not in CLASSIFICATION_DISPOSITIONS.get(
+                classification, frozenset()
+            )
+            or not isinstance(finding_ids, list)
+            or not finding_ids
+            or any(
+                not isinstance(finding_id, str)
+                or not IDENTITY.fullmatch(finding_id)
+                or SECRET_VALUE.search(finding_id)
+                for finding_id in finding_ids
+            )
+            or len(finding_ids) != len(set(finding_ids))
+            or not isinstance(item.get("evidence_digest"), str)
+            or not DIGEST.fullmatch(item["evidence_digest"])
+            or not isinstance(reviewed_thread, dict)
+            or reviewed_thread.get("is_resolved") is not False
+        ):
+            raise SecurityBlocker(
+                "resolution eligibility evidence thread is ineligible"
+            )
+        if disposition == "TRACKED_AS_FOLLOW_UP":
+            try:
+                follow_up.parse_follow_up(item.get("follow_up"))
+            except follow_up.FollowUpError as exc:
+                raise SecurityBlocker(str(exc)) from exc
+        elif item.get("follow_up") is not None:
+            raise SecurityBlocker(
+                "only tracked out-of-scope eligibility may carry follow-up identity"
+            )
+        observed_thread_ids.append(thread_id)
+    if len(observed_thread_ids) != len(set(observed_thread_ids)):
+        raise SecurityBlocker(
+            "resolution eligibility evidence contains duplicate threads"
+        )
+    return copy.deepcopy(value)
 
 
 @dataclass
