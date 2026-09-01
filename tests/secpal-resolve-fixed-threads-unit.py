@@ -1149,11 +1149,29 @@ class ResolveFixedThreadsTests(TestCase):
 
     def test_target_classification_rejects_non_boolean_outdated_state(self) -> None:
         thread_id = "PRRT_MALFORMED_OUTDATED_CLASSIFICATION"
-        comment = MODULE.ThreadCommentState(
+        reviewed_comment = MODULE.ThreadCommentState(
+            comment_id="PRRC_MALFORMED_OUTDATED_CLASSIFICATION",
+            database_id=None,
+            body_digest=MODULE._body_digest("Reject malformed metadata."),
+            reply_to_id=None,
+        )
+        current_comment = MODULE.ThreadCommentState(
             comment_id="PRRC_MALFORMED_OUTDATED_CLASSIFICATION",
             database_id=1,
             body_digest=MODULE._body_digest("Reject malformed metadata."),
             reply_to_id=None,
+        )
+        valid_reviewed = MODULE.ExpectedThreadState(
+            thread_id=thread_id,
+            is_resolved=False,
+            is_outdated=False,
+            comments=(reviewed_comment,),
+        )
+        self.assertEqual(
+            MODULE.validate_expected_targets(
+                (thread_id,), {thread_id: valid_reviewed}
+            ),
+            {thread_id: valid_reviewed},
         )
         for reviewed_outdated, current_outdated in (
             (False, None),
@@ -1167,13 +1185,13 @@ class ResolveFixedThreadsTests(TestCase):
                 thread_id=thread_id,
                 is_resolved=False,
                 is_outdated=reviewed_outdated,
-                comments=(comment,),
+                comments=(reviewed_comment,),
             )
             current = MODULE.ThreadState(
                 thread_id=thread_id,
                 is_resolved=False,
                 is_outdated=current_outdated,
-                comments=(comment,),
+                comments=(current_comment,),
             )
             with self.subTest(
                 reviewed_outdated=reviewed_outdated,
