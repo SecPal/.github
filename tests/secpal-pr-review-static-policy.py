@@ -536,6 +536,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "digest_json",
             "execute_resolution_batch",
             "follow_up",
+            "normalize_resolution_eligibility_evidence",
             "normalize_ready_integration_evidence",
             "normalize_ready_integration_prior_authority",
             "normalize_exceptional_recovery_evidence",

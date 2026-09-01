@@ -98,6 +98,23 @@ class VerifiedNativeGenesisAdmission:
     maintained_compatibility_anchor: bool = False
 
 
+@dataclass(frozen=True)
+class VerifiedLifecyclePublicationTransition:
+    """One exact historical publication successor in protected ancestry."""
+
+    predecessor: VerifiedLifecyclePublication
+    successor: VerifiedLifecyclePublication
+    event_id: str
+    event_digest: str
+    transition_kind: str
+    event_signer_identity: str
+    pull_request: int
+    predecessor_authority_digest: str
+    predecessor_head_sha: str
+    resulting_head_sha: str
+    initialization_evidence_digest: str
+
+
 def _trusted_executable(name: str) -> tuple[str, Any]:
     helper = authority._load_trusted_command_helper()
     if name not in {"git", "gh"}:
@@ -1331,4 +1348,114 @@ def verify_current_lifecycle_authority(
         publication_oid, document["publication_digest"], policy.publication_branch,
         document["journal_predecessor_oid"],
         document["predecessor_publication_oid"], lifecycle,
+    )
+
+
+def _verify_historical_lifecycle_transition(
+    repository: str,
+    delivery_issue: int,
+    predecessor_publication_oid: str,
+) -> VerifiedLifecyclePublicationTransition:
+    """Verify one exact historical successor through protected journal ancestry."""
+
+    repository = authority._require_repository(repository)
+    delivery_issue = authority._require_positive_int(
+        delivery_issue, "delivery issue"
+    )
+    predecessor_publication_oid = authority._require_oid(
+        predecessor_publication_oid, "predecessor publication"
+    )
+    policy = authority._load_lifecycle_trust_policy(repository)
+    _verify_live_protection(policy)
+    with _isolated_repository(policy, write=False) as (root, credential_environment):
+        tip = _observe_remote_current_once(
+            root,
+            policy.publication_remote_url,
+            policy.publication_branch,
+            credential_environment=credential_environment,
+        )
+        if tip is None:
+            raise LifecyclePublicationError(
+                "current lifecycle publication is unavailable"
+            )
+        entries, _, _ = _walk_journal(root, tip, policy.publication_branch)
+
+    delivery_entries = [
+        item
+        for item in entries
+        if item[1]["repository"] == repository
+        and item[1]["delivery_issue"] == delivery_issue
+    ]
+    positions = [
+        index
+        for index, item in enumerate(delivery_entries)
+        if item[0] == predecessor_publication_oid
+    ]
+    if len(positions) != 1 or positions[0] + 1 >= len(delivery_entries):
+        raise LifecyclePublicationError(
+            "historical lifecycle predecessor has no unique published successor"
+        )
+    predecessor_oid, predecessor_document, predecessor_lifecycle = delivery_entries[
+        positions[0]
+    ]
+    successor_oid, successor_document, successor_lifecycle = delivery_entries[
+        positions[0] + 1
+    ]
+    if successor_document["predecessor_publication_oid"] != predecessor_oid:
+        raise LifecyclePublicationError(
+            "historical lifecycle successor is not directly bound to predecessor"
+        )
+    bundle = _lifecycle_bundle(successor_document)
+    events = bundle.get("transition_authorizations")
+    if not isinstance(events, list) or not events or not isinstance(events[-1], dict):
+        raise LifecyclePublicationError(
+            "historical lifecycle successor transition is unavailable"
+        )
+    event = events[-1]
+    predecessor = VerifiedLifecyclePublication(
+        predecessor_oid,
+        predecessor_document["publication_digest"],
+        policy.publication_branch,
+        predecessor_document["journal_predecessor_oid"],
+        predecessor_document["predecessor_publication_oid"],
+        predecessor_lifecycle,
+    )
+    successor = VerifiedLifecyclePublication(
+        successor_oid,
+        successor_document["publication_digest"],
+        policy.publication_branch,
+        successor_document["journal_predecessor_oid"],
+        successor_document["predecessor_publication_oid"],
+        successor_lifecycle,
+    )
+    return VerifiedLifecyclePublicationTransition(
+        predecessor=predecessor,
+        successor=successor,
+        event_id=authority._require_identity(event.get("event_id"), "event identity"),
+        event_digest=authority._require_digest(
+            event.get("event_digest"), "event digest"
+        ),
+        transition_kind=authority._require_transition_kind(
+            event.get("transition_kind"), allow_genesis=False
+        ),
+        event_signer_identity=authority._require_identity(
+            event.get("signer_identity"), "event signer"
+        ),
+        pull_request=authority._require_positive_int(
+            event.get("pull_request"), "event pull request"
+        ),
+        predecessor_authority_digest=authority._require_digest(
+            event.get("predecessor_authority_digest"),
+            "predecessor authority digest",
+        ),
+        predecessor_head_sha=authority._require_oid(
+            event.get("predecessor_head_sha"), "predecessor head"
+        ),
+        resulting_head_sha=authority._require_oid(
+            event.get("resulting_head_sha"), "resulting head"
+        ),
+        initialization_evidence_digest=authority._require_digest(
+            event.get("initialization_evidence_digest"),
+            "initialization evidence",
+        ),
     )
