@@ -41,6 +41,15 @@ resolving outside the authoritative tree.
 is the sole executable ecosystem and path-pattern authority. Code, workflows,
 tests, and this document do not carry a second taxonomy.
 
+The catalog also owns bounded known-non-manifest dispositions. A disposition
+must bind an existing candidate rule, an exact path pattern, and a validated
+content kind. For example, `dependencies.spdx.json` is excluded from the
+unknown-manifest backstop only when it is structurally an SPDX JSON document.
+This is central guard-policy knowledge, not manifest coverage, an accepted
+exception, or repository-controlled policy. A consumer change therefore cannot
+self-exempt a candidate, and directory names such as `assets`, `generated`, or
+`build` grant no suppression.
+
 The current catalog was reviewed on 2026-09-02 against:
 
 - GitHub's [supported ecosystems reference](https://docs.github.com/en/code-security/reference/supply-chain-security/supported-ecosystems-and-repositories);
@@ -72,7 +81,9 @@ The future-support invariant has three independent fail-closed controls:
    or explicitly unavailable discovery authority.
 2. Bounded, high-confidence candidate rules report
    `UNCLASSIFIED_MANIFEST_CANDIDATE` when a dependency-like tracked file cannot
-   be classified safely.
+   be classified safely. Only a catalog-owned known-non-manifest disposition
+   with its required semantic match prevents that diagnostic; nearby names and
+   malformed content remain candidates.
 3. Every catalog has a fixed expiry. Runs after that date report
    `CATALOG_STALE` until a reviewer compares the catalog with current upstream
    sources, updates its provenance and rules, and sets a new bounded expiry.
