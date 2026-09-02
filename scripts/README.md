@@ -1001,10 +1001,11 @@ bash .github/setup-hooks.sh
 Pure verification and adaptation boundaries for exact OCI index/platform
 identity, authoritative Syft SPDX association, vendor-native Grype/Trivy
 evidence, database identity/freshness, trusted reviewed-VEX checkout bytes, and
-the versioned re-evaluation run envelope. It closes credentialed references to
-the authenticated caller's GHCR namespace and re-derives trusted policy output
-from raw evidence before issue mutation. External registry/scanner operations
-remain in the reusable workflow.
+the versioned re-evaluation run envelope. It rejects noncanonical credentialed
+repository paths outside the authenticated caller's exact GHCR namespace and
+re-derives trusted policy output plus complete required-operation health from
+raw evidence before issue mutation. External registry/scanner operations remain
+in the reusable workflow.
 
 ### `secpal-vulnerability-triage.py`
 
