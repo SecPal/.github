@@ -383,6 +383,7 @@ class ValidationEvidence:
     attestation: dict[str, Any] | None = None
     validation_receipt: dict[str, Any] | None = None
     integration_evidence: dict[str, Any] | None = None
+    registry_binding: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -527,29 +528,25 @@ def load_repository_limits(repository: str) -> RepositoryLimits:
 
 
 def _validation_registry_binding(entry: dict[str, Any]) -> dict[str, Any]:
-    focused_validation = entry["focused_validation"]
-    validation = [
-        command
-        for command in focused_validation
-        if command.get("execution_policy", "always") == "always"
-    ] + list(entry["required_local_validation"])
-    return {
-        "repository": entry["repository"],
-        "default_branch": entry["default_branch"],
-        "allowed_base_repositories": entry["allowed_base_repositories"],
-        "manual_gates": entry["manual_gates"],
-        "signature_policy": entry["signature_policy"],
-        "check_policy": entry["check_policy"],
-        "limits": {
-            key: entry[key] for key in ("maximum_api_calls", "maximum_items")
-        },
-        "validation": validation,
-        "focused_only_validation": [
-            command
-            for command in focused_validation
-            if command.get("execution_policy") == "focused-only"
-        ],
-    }
+    return fast_path.validation_registry_binding(entry)
+
+
+def _immutable_delivery_registry_binding(
+    repository_root: Path,
+    head_sha: str,
+    repository: str,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> dict[str, Any]:
+    try:
+        return fast_path.load_immutable_delivery_registry_binding(
+            repository_root=repository_root,
+            head_sha=head_sha,
+            repository=repository,
+            read_immutable_file=_read_immutable_delivery_registry_file,
+            reader_context=runner,
+        )
+    except fast_path.SecurityBlocker as exc:
+        raise ResolutionError(str(exc)) from exc
 
 
 def _run_gh(arguments: Sequence[str]) -> dict[str, Any]:
@@ -627,6 +624,20 @@ def _run_git(
             )
         )
     return completed
+
+
+def _read_immutable_delivery_registry_file(
+    repository_root: Path,
+    head_sha: str,
+    path: str,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> str | None:
+    result = runner(
+        repository_root,
+        ("show", f"{head_sha}:{path}"),
+        allow_failure=True,
+    )
+    return result.stdout if result.returncode == 0 else None
 
 
 def _remote_repository(value: str) -> str:
@@ -862,6 +873,8 @@ def load_validation_evidence(
     expected_head: str,
     reviewed: ReviewedState,
     integration_evidence_path: Path | None = None,
+    *,
+    repository_root: Path,
 ) -> ValidationEvidence:
     try:
         payload = json.loads(
@@ -873,8 +886,12 @@ def load_validation_evidence(
         raise ResolutionError(
             "validation evidence is unavailable or malformed"
         ) from exc
-    registry_binding = _validation_registry_binding(
-        _load_repository_entry(repository)
+    _load_repository_entry(repository)
+    registry_binding = _immutable_delivery_registry_binding(
+        repository_root,
+        expected_head,
+        repository,
+        _run_git,
     )
     if isinstance(payload, dict) and payload.get("kind") == "VALIDATION_RECEIPT":
         raise ResolutionError(
@@ -948,6 +965,7 @@ def load_validation_evidence(
             attestation=payload,
             validation_receipt=receipt,
             integration_evidence=integration_evidence,
+            registry_binding=registry_binding,
         )
     if integration_evidence_path is not None:
         raise ResolutionError(
@@ -1001,6 +1019,7 @@ def load_validation_evidence(
         eligibility_evidence_digest=eligibility_evidence_digest,
         attestation=payload,
         validation_receipt=receipt,
+        registry_binding=registry_binding,
     )
 
 
@@ -1091,6 +1110,16 @@ def verify_local_fix_commit(
         raise ResolutionError(
             "fix commit validation-receipt trailer does not match evidence"
         )
+    authenticated_registry_binding = _immutable_delivery_registry_binding(
+        root,
+        expected_head,
+        repository,
+        effective_runner,
+    )
+    if validation.registry_binding != authenticated_registry_binding:
+        raise ResolutionError(
+            "validation evidence registry differs from the immutable delivery"
+        )
     integration_trailer: str | None = None
     if validation.kind == "eligibility-bound-ready-integration":
         integration_output = effective_runner(
@@ -1146,9 +1175,7 @@ def verify_local_fix_commit(
         if validation.attestation is None:
             raise ResolutionError("validation evidence binding is incomplete")
         try:
-            registry_binding = _validation_registry_binding(
-                _load_repository_entry(repository)
-            )
+            registry_binding = authenticated_registry_binding
             stable_reviewed = fast_path.StableFeedbackState.from_payload(
                 reviewed.payload
             )
@@ -1179,9 +1206,7 @@ def verify_local_fix_commit(
             stable_reviewed = fast_path.StableFeedbackState.from_payload(
                 reviewed.payload
             )
-            registry_binding = _validation_registry_binding(
-                _load_repository_entry(repository)
-            )
+            registry_binding = authenticated_registry_binding
             fast_path.verify_eligibility_bound_ready_integration_attestation(
                 validation.attestation,
                 repository=repository,
@@ -1509,6 +1534,7 @@ def verify_recovery_bound_source_authority(
 
 def load_final_feedback_boundary(
     *,
+    repository_root: Path,
     repository: str,
     number: int,
     expected_head: str,
@@ -1529,6 +1555,7 @@ def load_final_feedback_boundary(
         repository,
         expected_head,
         reviewed,
+        repository_root=repository_root,
     )
     eligibility = load_eligibility_evidence(
         final_eligibility_evidence_path,
@@ -2014,6 +2041,7 @@ def create_late_classification_artifact(
     ):
         raise ResolutionError("late classification decision is unsupported")
     boundary = load_final_feedback_boundary(
+        repository_root=Path(repository_root),
         repository=repository,
         number=number,
         expected_head=expected_head,
@@ -2157,6 +2185,7 @@ def create_late_disposition_artifact(
     ):
         raise ResolutionError("late-disposition delivery identity is malformed")
     boundary = load_final_feedback_boundary(
+        repository_root=Path(repository_root),
         repository=repository,
         number=number,
         expected_head=expected_head,
@@ -2352,6 +2381,7 @@ def resolve_late_disposition_threads(
     ):
         raise ResolutionError("final reviewed-state digest is required")
     boundary = load_final_feedback_boundary(
+        repository_root=Path(repository_root),
         repository=repository,
         number=number,
         expected_head=expected_head,
@@ -2592,6 +2622,7 @@ def resolve_threads(
         expected_head,
         reviewed,
         Path(integration_evidence_path) if integration_evidence_path else None,
+        repository_root=Path(repository_root),
     )
     verify_local_fix_commit(
         Path(repository_root),

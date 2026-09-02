@@ -20,6 +20,9 @@ from typing import Any, Callable, TypeVar
 
 
 FOLLOW_UP_HELPER = Path(__file__).resolve().with_name("follow_up.py")
+DELIVERY_REGISTRY_PATH = (
+    ".agents/skills/secpal-pr-review/references/repositories.json"
+)
 
 
 def _load_follow_up_helper() -> Any:
@@ -53,6 +56,120 @@ REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SECRET_VALUE = re.compile(
     r"(?i)(?:github_pat_|gh[opsu]_|-----BEGIN [A-Z ]*PRIVATE KEY-----|authorization\s*:\s*bearer)"
 )
+
+
+def _reject_duplicate_json_object(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+
+def validation_registry_binding(entry: Any) -> dict[str, Any]:
+    """Derive the canonical validation binding from one registry entry."""
+
+    if not isinstance(entry, dict):
+        raise SecurityBlocker("delivery validation registry entry is invalid")
+    try:
+        focused_validation = entry["focused_validation"]
+        required_validation = entry["required_local_validation"]
+        if (
+            not isinstance(focused_validation, list)
+            or not isinstance(required_validation, list)
+            or any(not isinstance(command, dict) for command in focused_validation)
+            or any(not isinstance(command, dict) for command in required_validation)
+        ):
+            raise TypeError
+        validation = [
+            command
+            for command in focused_validation
+            if command.get("execution_policy", "always") == "always"
+        ] + required_validation
+        return {
+            "repository": entry["repository"],
+            "default_branch": entry["default_branch"],
+            "allowed_base_repositories": copy.deepcopy(
+                entry["allowed_base_repositories"]
+            ),
+            "manual_gates": copy.deepcopy(entry["manual_gates"]),
+            "signature_policy": copy.deepcopy(entry["signature_policy"]),
+            "check_policy": copy.deepcopy(entry["check_policy"]),
+            "limits": {
+                key: entry[key]
+                for key in ("maximum_api_calls", "maximum_items")
+            },
+            "validation": copy.deepcopy(validation),
+            "focused_only_validation": copy.deepcopy(
+                [
+                    command
+                    for command in focused_validation
+                    if command.get("execution_policy") == "focused-only"
+                ]
+            ),
+        }
+    except (KeyError, TypeError) as exc:
+        raise SecurityBlocker(
+            "delivery validation registry entry is invalid"
+        ) from exc
+
+
+def load_immutable_delivery_registry_binding(
+    *,
+    repository_root: Path,
+    head_sha: str,
+    repository: str,
+    read_immutable_file: Callable[[Path, str, str, Any], str | None],
+    reader_context: Any,
+) -> dict[str, Any]:
+    """Load validation policy from the exact immutable delivery commit."""
+
+    if (
+        not isinstance(repository_root, Path)
+        or not isinstance(head_sha, str)
+        or not OID.fullmatch(head_sha)
+        or not isinstance(repository, str)
+        or not REPOSITORY.fullmatch(repository)
+    ):
+        raise SecurityBlocker("immutable delivery registry identity is invalid")
+    raw = read_immutable_file(
+        repository_root,
+        head_sha.lower(),
+        DELIVERY_REGISTRY_PATH,
+        reader_context,
+    )
+    if not isinstance(raw, str):
+        raise SecurityBlocker("immutable delivery validation registry is unavailable")
+    try:
+        registry = json.loads(
+            raw,
+            parse_constant=lambda value: (_ for _ in ()).throw(
+                ValueError(f"non-finite JSON constant: {value}")
+            ),
+            object_pairs_hook=_reject_duplicate_json_object,
+        )
+        entries = registry["repositories"]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SecurityBlocker(
+            "immutable delivery validation registry is malformed"
+        ) from exc
+    matches = (
+        [
+            item
+            for item in entries
+            if isinstance(item, dict) and item.get("repository") == repository
+        ]
+        if isinstance(entries, list)
+        else []
+    )
+    if len(matches) != 1:
+        raise SecurityBlocker(
+            "immutable delivery validation registry identity is ambiguous"
+        )
+    return validation_registry_binding(matches[0])
 SUPPORTED_BATCH_CAPABILITIES = frozenset({"THREAD_RESOLUTION"})
 TRANSIENT_PULL_REQUEST_REACTION_CONTENTS = frozenset({"EYES"})
 SOURCE_KINDS = frozenset(

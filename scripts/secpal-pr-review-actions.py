@@ -4255,28 +4255,7 @@ def _command_mutation(arguments: argparse.Namespace) -> int:
 
 
 def _fast_registry_binding(entry: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "repository": entry["repository"],
-        "default_branch": entry["default_branch"],
-        "allowed_base_repositories": copy.deepcopy(
-            entry["allowed_base_repositories"]
-        ),
-        "manual_gates": copy.deepcopy(entry["manual_gates"]),
-        "signature_policy": copy.deepcopy(entry["signature_policy"]),
-        "check_policy": copy.deepcopy(entry["check_policy"]),
-        "limits": {
-            key: entry[key]
-            for key in ("maximum_api_calls", "maximum_items")
-        },
-        "validation": copy.deepcopy(list(_complete_validation_commands(entry))),
-        "focused_only_validation": copy.deepcopy(
-            [
-                command
-                for command in entry["focused_validation"]
-                if command.get("execution_policy") == "focused-only"
-            ]
-        ),
-    }
+    return fast_path.validation_registry_binding(entry)
 
 
 def _load_fast_state(path: str) -> Any:
@@ -5009,44 +4988,23 @@ def _verify_ready_integration_published_authority(
 def _prior_delivery_registry_binding(
     repository_root: Path, head: str, repository: str
 ) -> dict[str, Any]:
-    """Read validation policy from the immutable prior delivery commit."""
+    """Adapt the action-layer Git runner to the canonical immutable loader."""
 
-    result = _run_attestation_git(
-        repository_root,
-        [
-            "show",
-            f"{head}:.agents/skills/secpal-pr-review/references/repositories.json",
-        ],
-        allow_failure=True,
+    def read_immutable_file(
+        root: Path, commit: str, path: str, runner: Any
+    ) -> str | None:
+        result = runner(
+            root, ["show", f"{commit}:{path}"], allow_failure=True
+        )
+        return result.stdout if result.returncode == 0 else None
+
+    return fast_path.load_immutable_delivery_registry_binding(
+        repository_root=repository_root,
+        head_sha=head,
+        repository=repository,
+        read_immutable_file=read_immutable_file,
+        reader_context=_run_attestation_git,
     )
-    if result.returncode != 0:
-        raise fast_path.SecurityBlocker(
-            "prior delivery validation registry is unavailable"
-        )
-    try:
-        registry = json.loads(
-            result.stdout, object_pairs_hook=_reject_duplicate_json_object
-        )
-        entries = registry["repositories"]
-    except (KeyError, TypeError, json.JSONDecodeError, PlanError) as exc:
-        raise fast_path.SecurityBlocker(
-            "prior delivery validation registry is malformed"
-        ) from exc
-    matches = [
-        item
-        for item in entries
-        if isinstance(item, dict) and item.get("repository") == repository
-    ] if isinstance(entries, list) else []
-    if len(matches) != 1:
-        raise fast_path.SecurityBlocker(
-            "prior delivery validation registry identity is ambiguous"
-        )
-    try:
-        return _fast_registry_binding(matches[0])
-    except (KeyError, TypeError, RegistryError) as exc:
-        raise fast_path.SecurityBlocker(
-            "prior delivery validation registry entry is invalid"
-        ) from exc
 
 
 def _verify_ready_integration_prior_authority(

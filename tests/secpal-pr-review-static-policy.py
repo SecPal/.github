@@ -542,7 +542,9 @@ LOADED_MODULE_ATTRIBUTES = {
             "normalize_ready_integration_evidence",
             "normalize_ready_integration_prior_authority",
             "normalize_exceptional_recovery_evidence",
+            "load_immutable_delivery_registry_binding",
             "validate_manual_gate_evidence",
+            "validation_registry_binding",
             "verify_commit_signatures",
             "verify_validation_attestation",
         },
@@ -1065,6 +1067,8 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_read_authenticated_follow_up",
     "_resolve_trusted_markdown_node",
     "_load_repository_entry",
+    "_immutable_delivery_registry_binding",
+    "_read_immutable_delivery_registry_file",
     "_reject_nonfinite_json_constant",
     "_reject_duplicate_json_object",
     "_remote_repository",
@@ -1154,6 +1158,14 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
     DynamicImportCall(
         ("verify_local_fix_commit",),
         "_run_git",
+    ),
+    DynamicImportCall(
+        ("load_validation_evidence",),
+        "_run_git",
+    ),
+    DynamicImportCall(
+        ("_immutable_delivery_registry_binding",),
+        "_read_immutable_delivery_registry_file",
     ),
     DynamicImportCall(
         ("resolve_threads",),
