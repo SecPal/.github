@@ -151,12 +151,16 @@ validation and push hooks remain required. Hosted checks may be read only for a
 current explicit CI/readiness request, using one bounded current-state read with
 no polling, waiting, sleeping, or automatic repetition.
 
-For an exact technically non-blocking thread outside the authenticated final
-feedback boundary and observed on the unchanged delivery head,
+For an exact technically non-blocking target absent from authenticated final
+eligibility and observed on the unchanged delivery head,
 `secpal-create-late-classification.py` verifies the existing final delivery
-evidence and canonical final eligibility artifact, proves the thread absent
-from both final sets, captures only the named live thread, and
-authenticates the explicit classification decision. Then
+evidence and derives `REVIEWED_BUT_INELIGIBLE` or `ABSENT_FROM_BOTH` from
+authenticated final reviewed state. It accepts
+`INFORMATIONAL + NON_ACTIONABLE` for either origin; the existing
+`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` pair remains accepted
+only for `ABSENT_FROM_BOTH`. All require `technically_blocking=false`. The
+creator captures only the named live thread and authenticates the explicit
+classification decision. Then
 `secpal-create-late-disposition.py` verifies that decision, computes its digest
 internally, and creates a canonical detached SSH/OpenPGP-signed artifact without
 a delivery commit. The resolver consumes both signed artifacts through a
@@ -168,9 +172,9 @@ state, classification, disposition, technical-blocking flag, and guarded
 resolution action. It cannot select arbitrary threads or authorize any other
 GitHub mutation.
 
-This authenticated absence boundary is what “post-push” denotes in the
-resolution lifecycle. It does not use or claim a cryptographic GitHub
-wall-clock push-order proof.
+This authenticated reviewed-state/eligibility boundary is what “post-push”
+denotes in the resolution lifecycle. It does not use or claim a cryptographic
+GitHub wall-clock push-order proof.
 
 See [Simple PR Thread Resolution](../docs/simple-pr-thread-resolution.md) for
 the bounded safety contract and usage.

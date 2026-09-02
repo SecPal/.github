@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
-
 SCHEMA_VERSION = "1.0"
+INFORMATIONAL_SCHEMA_VERSION = "1.1"
 KIND = "LATE_FEEDBACK_DISPOSITION"
 SIGNATURE_NAMESPACE = "secpal-late-feedback-disposition-v1"
 CLASSIFICATION_KIND = "LATE_FEEDBACK_CLASSIFICATION"
@@ -29,6 +29,24 @@ CLASSIFICATION_PURPOSE = "AUTHORIZE_LATE_FEEDBACK_DISPOSITION"
 TECHNICAL_BLOCKERS = frozenset(
     {"P1", "P2", "SECURITY", "AUTHENTICATION", "INTEGRITY", "FAIL_OPEN"}
 )
+REVIEWED_BUT_INELIGIBLE = "REVIEWED_BUT_INELIGIBLE"
+ABSENT_FROM_BOTH = "ABSENT_FROM_BOTH"
+INVALID_DISPROVEN = (
+    "INVALID_FALSE_OR_MISLEADING",
+    "DISPROVEN_WITH_EVIDENCE",
+)
+INFORMATIONAL_NON_ACTIONABLE = ("INFORMATIONAL", "NON_ACTIONABLE")
+POST_FREEZE_DECISIONS = frozenset(
+    {INVALID_DISPROVEN, INFORMATIONAL_NON_ACTIONABLE}
+)
+POST_FREEZE_ORIGIN_DECISIONS = {
+    REVIEWED_BUT_INELIGIBLE: frozenset({INFORMATIONAL_NON_ACTIONABLE}),
+    ABSENT_FROM_BOTH: POST_FREEZE_DECISIONS,
+}
+SCHEMA_VERSION_DECISIONS = {
+    SCHEMA_VERSION: frozenset({INVALID_DISPROVEN}),
+    INFORMATIONAL_SCHEMA_VERSION: frozenset({INFORMATIONAL_NON_ACTIONABLE}),
+}
 MAXIMUM_ARTIFACT_BYTES = 64 * 1024
 MAXIMUM_SIGNATURE_BYTES = 32 * 1024
 OID = re.compile(r"^[0-9a-f]{40}$")
@@ -463,6 +481,16 @@ def _positive_integer(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
+def schema_version_for_decision(classification: str, disposition: str) -> str:
+    decision = (classification, disposition)
+    for schema_version, decisions in SCHEMA_VERSION_DECISIONS.items():
+        if decision in decisions:
+            return schema_version
+    raise LateDispositionError(
+        "late classification decision is not schema-authorized"
+    )
+
+
 def parse_classification_artifact(
     artifact_path: Path,
     signature_path: Path,
@@ -474,7 +502,6 @@ def parse_classification_artifact(
     head_sha: str,
     thread_id: str,
     signature_environment: dict[str, str] | None = None,
-    require_nonblocking_disposition: bool = True,
 ) -> ClassificationEvidence:
     canonical = verify_detached_signature(
         artifact_path,
@@ -503,7 +530,7 @@ def parse_classification_artifact(
     if (
         not isinstance(payload, dict)
         or set(payload) != expected_keys
-        or payload.get("schema_version") != SCHEMA_VERSION
+        or payload.get("schema_version") not in SCHEMA_VERSION_DECISIONS
         or payload.get("kind") != CLASSIFICATION_KIND
         or payload.get("repository") != repository
         or payload.get("delivery_issue_number") != delivery_issue_number
@@ -571,9 +598,9 @@ def parse_classification_artifact(
         or not isinstance(technically_blocking, bool)
     ):
         raise LateDispositionError("late classification thread binding is malformed")
-    if require_nonblocking_disposition and (
-        item.get("classification") != "INVALID_FALSE_OR_MISLEADING"
-        or item.get("disposition") != "DISPROVEN_WITH_EVIDENCE"
+    if (
+        (item.get("classification"), item.get("disposition"))
+        not in SCHEMA_VERSION_DECISIONS[payload["schema_version"]]
         or technically_blocking is not False
         or blockers
     ):
@@ -621,7 +648,6 @@ def parse_artifact(
     validation_attestation_digest: str,
     final_eligibility_evidence_digest: str,
     thread_ids: tuple[str, ...],
-    allowed_dispositions: dict[str, frozenset[str]],
     signature_environment: dict[str, str] | None = None,
 ) -> LateDispositionEvidence:
     canonical = verify_detached_signature(
@@ -657,7 +683,7 @@ def parse_artifact(
         raise LateDispositionError("late-disposition artifact shape is unsupported")
     declared_signer = payload.get("delivery_signer")
     if (
-        payload.get("schema_version") != SCHEMA_VERSION
+        payload.get("schema_version") not in SCHEMA_VERSION_DECISIONS
         or payload.get("kind") != KIND
         or payload.get("repository") != repository
         or payload.get("delivery_issue_number") != delivery_issue_number
@@ -717,8 +743,8 @@ def parse_artifact(
             or item["reply_count"] < 0
             or item.get("is_resolved") is not False
             or not isinstance(item.get("is_outdated"), bool)
-            or classification != "INVALID_FALSE_OR_MISLEADING"
-            or disposition not in allowed_dispositions.get(classification, frozenset())
+            or (classification, disposition)
+            not in SCHEMA_VERSION_DECISIONS[payload["schema_version"]]
             or item.get("technically_blocking") is not False
             or not isinstance(item.get("classification_evidence_digest"), str)
             or not DIGEST.fullmatch(item["classification_evidence_digest"])
