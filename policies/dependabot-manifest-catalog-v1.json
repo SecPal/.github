@@ -1,0 +1,163 @@
+{
+  "schema": "secpal-dependabot-manifest-catalog/v1",
+  "policy_version": "2026-09-02.1",
+  "reviewed_on": "2026-09-02",
+  "expires_on": "2026-12-01",
+  "upstream": {
+    "dependabot_core_commit": "eb6370bc47da4ab268ae36d2af8ccc27a3c98a4e",
+    "dependabot_core_repository": "https://github.com/dependabot/dependabot-core",
+    "dependabot_core_source_paths": [
+      "composer/lib/dependabot/composer/file_fetcher.rb",
+      "docker/lib/dependabot/docker/file_fetcher.rb",
+      "docker/lib/dependabot/docker_compose/file_fetcher.rb",
+      "github_actions/lib/dependabot/github_actions/file_fetcher.rb",
+      "gradle/lib/dependabot/gradle/file_fetcher.rb",
+      "npm_and_yarn/lib/dependabot/npm_and_yarn/file_fetcher.rb",
+      "opentofu/lib/dependabot/opentofu/file_fetcher.rb",
+      "pre_commit/lib/dependabot/pre_commit/file_fetcher.rb",
+      "python/lib/dependabot/python/file_fetcher.rb",
+      "terraform/lib/dependabot/terraform/file_fetcher.rb"
+    ],
+    "github_ecosystems_reference": "https://docs.github.com/en/code-security/reference/supply-chain-security/supported-ecosystems-and-repositories",
+    "github_options_reference": "https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference"
+  },
+  "supported_config_ecosystems": [
+    "bazel",
+    "bun",
+    "bundler",
+    "cargo",
+    "composer",
+    "conda",
+    "deno",
+    "devcontainers",
+    "docker",
+    "docker-compose",
+    "dotnet-sdk",
+    "elm",
+    "github-actions",
+    "gitsubmodule",
+    "gomod",
+    "gradle",
+    "helm",
+    "julia",
+    "maven",
+    "mix",
+    "nix",
+    "npm",
+    "nuget",
+    "opentofu",
+    "pip",
+    "pre-commit",
+    "pub",
+    "rust-toolchain",
+    "sbt",
+    "swift",
+    "terraform",
+    "uv",
+    "vcpkg"
+  ],
+  "ignored_path_prefixes": [
+    ".git/",
+    ".venv/",
+    "build/",
+    "coverage/",
+    "dist/",
+    "node_modules/",
+    "storage/",
+    "vendor/"
+  ],
+  "manifest_rules": [
+    {
+      "id": "github-actions-workflow",
+      "ecosystem": "github-actions",
+      "path_regex": "^\\.github/workflows/[^/]+\\.ya?ml$",
+      "coverage_directory": "root"
+    },
+    {
+      "id": "github-actions-composite",
+      "ecosystem": "github-actions",
+      "path_regex": "(^|/)action\\.ya?ml$",
+      "coverage_directory": "parent"
+    },
+    {
+      "id": "npm",
+      "ecosystem": "npm",
+      "path_regex": "(^|/)package\\.json$",
+      "coverage_directory": "parent"
+    },
+    {
+      "id": "composer",
+      "ecosystem": "composer",
+      "path_regex": "(^|/)composer\\.json$",
+      "coverage_directory": "parent"
+    },
+    {
+      "id": "pip",
+      "ecosystem": "pip",
+      "path_regex": "(^|/)(Pipfile|setup\\.py|setup\\.cfg|pyproject\\.toml|requirements([._-][^/]*)?\\.(txt|in))$",
+      "coverage_directory": "parent"
+    },
+    {
+      "id": "gradle",
+      "ecosystem": "gradle",
+      "path_regex": "(^|/)build\\.gradle(\\.kts)?$",
+      "coverage_directory": "parent"
+    },
+    {
+      "id": "pre-commit",
+      "ecosystem": "pre-commit",
+      "path_regex": "(^|/)\\.pre-commit(-config)?\\.ya?ml$",
+      "coverage_directory": "parent",
+      "case_insensitive": true
+    },
+    {
+      "id": "docker",
+      "ecosystem": "docker",
+      "path_regex": "(^|/)[^/]*(dockerfile|containerfile)[^/]*$",
+      "coverage_directory": "parent",
+      "case_insensitive": true
+    },
+    {
+      "id": "docker-compose",
+      "ecosystem": "docker-compose",
+      "path_regex": "(^|/)[^/]*(docker-)?compose(-[A-Za-z0-9_]+)?(\\.[A-Za-z0-9_-]+)?\\.ya?ml$",
+      "coverage_directory": "parent",
+      "case_insensitive": true
+    },
+    {
+      "id": "terraform",
+      "ecosystem": "terraform",
+      "path_regex": "(^|/)[^/]+\\.tf$",
+      "coverage_directory": "parent"
+    },
+    {
+      "id": "opentofu-tf",
+      "ecosystem": "opentofu",
+      "path_regex": "(^|/)[^/]+\\.tf$",
+      "coverage_directory": "parent"
+    },
+    {
+      "id": "opentofu-tofu",
+      "ecosystem": "opentofu",
+      "path_regex": "(^|/)[^/]+\\.tofu$",
+      "coverage_directory": "parent"
+    }
+  ],
+  "candidate_rules": [
+    {
+      "id": "dependency-named-file",
+      "path_regex": "(^|/)(deps|dependencies|dependency-manifest|package-manifest)([._-][^/]*)?$",
+      "case_insensitive": true
+    },
+    {
+      "id": "dependency-suffixed-data",
+      "path_regex": "(^|/)[^/]+\\.(deps|dependencies)\\.(json|toml|ya?ml)$",
+      "case_insensitive": true
+    },
+    {
+      "id": "future-build-manifest",
+      "path_regex": "(^|/)(build|modules?|packages?)\\.(json|toml|ya?ml)$",
+      "case_insensitive": true
+    }
+  ]
+}

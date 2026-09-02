@@ -343,6 +343,27 @@ Requirements: an authenticated `gh` CLI, Python 3, and `npm ci` so the
 present. The tool reads through `gh api graphql` only, performs no mutation, and
 persists no state.
 
+### `secpal-dependabot-manifest-coverage.mjs`
+
+Deterministically discovers tracked dependency manifests and validates either
+the shared `MANIFEST_COVERAGE` assertion or the separate `CADENCE_POLICY`
+assertion. Ecosystem knowledge and upstream provenance come exclusively from
+`policies/dependabot-manifest-catalog-v1.json`; exact reviewed repository
+exceptions and ambiguous-manifest classifications come from
+`.github/dependabot-manifest-exceptions.yml`.
+
+```bash
+node scripts/secpal-dependabot-manifest-coverage.mjs coverage \
+  --repository SecPal/example --format json
+node scripts/secpal-dependabot-manifest-coverage.mjs cadence \
+  --repository SecPal/example --format text
+```
+
+See
+[`docs/dependabot-manifest-coverage.md`](../docs/dependabot-manifest-coverage.md)
+for discovery, anti-drift, matching, exception, reporting, and reusable-workflow
+semantics.
+
 ### `secpal-pr-advisory.py`
 
 Reports #674 delivery-PR findings and, with `--enforce`, applies the #735 hard

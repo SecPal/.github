@@ -13,6 +13,15 @@ as `@main` into consumer repositories.
 
 ## Available Workflows
 
+### Dependabot manifest coverage
+
+`reusable-dependabot-manifest-coverage.yml` runs the shared, deterministic
+manifest-coverage and cadence-policy assertions as separate checks. Callers
+pin this workflow to a reviewed immutable commit and keep repository-local
+exceptions in `.github/dependabot-manifest-exceptions.yml`. See
+[`dependabot-manifest-coverage.md`](../../docs/dependabot-manifest-coverage.md)
+for the contract and invocation example.
+
 ### Released-artifact vulnerability re-evaluation
 
 `reusable-vulnerability-reevaluation.yml` verifies and re-evaluates one exact
