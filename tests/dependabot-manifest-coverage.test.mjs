@@ -462,22 +462,29 @@ test("unknown manifest candidates and stale knowledge fail closed", () => {
 });
 
 test("known SPDX dependency inventory is not a manifest candidate", () => {
+  const inventory = `${JSON.stringify({
+    SPDXID: "SPDXRef-DOCUMENT",
+    creationInfo: { created: "2026-09-02T00:00:00Z", creators: ["Tool: fixture"] },
+    dataLicense: "CC0-1.0",
+    documentNamespace: "https://spdx.example.test/documents/dependencies",
+    packages: [],
+    relationships: [],
+    spdxVersion: "SPDX-2.3",
+  })}\n`;
   const root = repository({
     ".github/dependabot.yml": "version: 2\nupdates: []\n",
-    "dependencies.spdx.json": `${JSON.stringify({
-      SPDXID: "SPDXRef-DOCUMENT",
-      creationInfo: { created: "2026-09-02T00:00:00Z", creators: ["Tool: fixture"] },
-      dataLicense: "CC0-1.0",
-      documentNamespace: "https://spdx.example.test/documents/dependencies",
-      packages: [],
-      relationships: [],
-      spdxVersion: "SPDX-2.3",
-    })}\n`,
+    "dependencies.spdx.json": inventory,
   });
   const { report } = run(root);
   assert.equal(report.status, "PASS");
   assert.deepEqual(report.manifests, []);
   assert.deepEqual(report.diagnostics, []);
+
+  const uppercase = repository({
+    ".github/dependabot.yml": "version: 2\nupdates: []\n",
+    "dependencies.SPDX.json": inventory,
+  });
+  assert.equal(run(uppercase).report.diagnostics[0].code, "UNCLASSIFIED_MANIFEST_CANDIDATE");
 });
 
 test("tracked manifest symlinks fail closed", () => {
@@ -1084,6 +1091,7 @@ test("catalog discovery dispositions and rule provenance are complete", () => {
     (policy) => delete policy.manifest_rules[0].source_paths,
     (policy) => delete policy.non_manifest_rules[0].content_kind,
     (policy) => (policy.non_manifest_rules[0].candidate_rule = "missing-candidate-rule"),
+    (policy) => (policy.non_manifest_rules[0].case_insensitive = "false"),
     (policy) => delete policy.behavior_provenance.cargo_workspace,
     (policy) => (policy.reviewed_on = "2026-99-99"),
   ]) {

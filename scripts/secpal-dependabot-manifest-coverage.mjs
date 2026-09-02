@@ -495,6 +495,7 @@ function loadPolicy(filename) {
         rule.authority === "secpal-reviewed-non-manifest" &&
         typeof rule.candidate_rule === "string" &&
         rule.content_kind === "spdx-json-document" &&
+        (!Object.hasOwn(rule, "case_insensitive") || typeof rule.case_insensitive === "boolean") &&
         typeof rule.justification === "string" &&
         rule.justification.length >= 40 &&
         rule.justification.length <= 500;
