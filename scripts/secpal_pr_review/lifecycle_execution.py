@@ -108,7 +108,6 @@ def classify_observed_state(
         return "COMPLETE"
     if github_at_predecessor and not current_at_predecessor:
         return "UNSAFE_REVERSE_PARTIAL"
-    raise LifecycleExecutionError("observed lifecycle execution state is unknown")
 
 
 def _validate_live_pull_request(
@@ -716,7 +715,6 @@ def _execute_lifecycle_transition(
             signer=signers.publication_signer,
         )
     except Exception:
-        published = None
         observed_current = current_reader(repository, delivery_issue)
         if _is_exact_predecessor(observed_current, authorization):
             return _result(
