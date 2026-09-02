@@ -532,18 +532,17 @@ def _validation_registry_binding(entry: dict[str, Any]) -> dict[str, Any]:
 
 
 def _immutable_delivery_registry_binding(
-    repository_root: Path,
     head_sha: str,
     repository: str,
-    runner: Callable[..., subprocess.CompletedProcess[str]],
+    registry_digest: str,
+    command_set_digest: str,
 ) -> dict[str, Any]:
     try:
         return fast_path.load_immutable_delivery_registry_binding(
-            repository_root=repository_root,
-            head_sha=head_sha,
             repository=repository,
-            read_immutable_file=_read_immutable_delivery_registry_file,
-            reader_context=runner,
+            delivery_head_sha=head_sha,
+            expected_registry_digest=registry_digest,
+            expected_command_set_digest=command_set_digest,
         )
     except fast_path.SecurityBlocker as exc:
         raise ResolutionError(str(exc)) from exc
@@ -624,20 +623,6 @@ def _run_git(
             )
         )
     return completed
-
-
-def _read_immutable_delivery_registry_file(
-    repository_root: Path,
-    head_sha: str,
-    path: str,
-    runner: Callable[..., subprocess.CompletedProcess[str]],
-) -> str | None:
-    result = runner(
-        repository_root,
-        ("show", f"{head_sha}:{path}"),
-        allow_failure=True,
-    )
-    return result.stdout if result.returncode == 0 else None
 
 
 def _remote_repository(value: str) -> str:
@@ -886,13 +871,6 @@ def load_validation_evidence(
         raise ResolutionError(
             "validation evidence is unavailable or malformed"
         ) from exc
-    _load_repository_entry(repository)
-    registry_binding = _immutable_delivery_registry_binding(
-        repository_root,
-        expected_head,
-        repository,
-        _run_git,
-    )
     if isinstance(payload, dict) and payload.get("kind") == "VALIDATION_RECEIPT":
         raise ResolutionError(
             "validation evidence requires an authenticated fix-commit "
@@ -900,6 +878,24 @@ def load_validation_evidence(
         )
     if not isinstance(payload, dict):
         raise ResolutionError("validation evidence is unavailable or malformed")
+    if payload.get("kind") in {
+        "READY_INTEGRATION_VALIDATION_ATTESTATION",
+        "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION",
+    } and (
+        payload.get("kind")
+        != "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"
+        or payload.get("schema_version") != "1.2"
+    ):
+        raise ResolutionError(
+            "historical Ready integration attestation is not resolution authority"
+        )
+    _load_repository_entry(repository)
+    registry_binding = _immutable_delivery_registry_binding(
+        expected_head,
+        repository,
+        payload.get("registry_digest", ""),
+        payload.get("command_set_digest", ""),
+    )
     if payload.get("kind") in {
         "READY_INTEGRATION_VALIDATION_ATTESTATION",
         "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION",
@@ -1111,10 +1107,18 @@ def verify_local_fix_commit(
             "fix commit validation-receipt trailer does not match evidence"
         )
     authenticated_registry_binding = _immutable_delivery_registry_binding(
-        root,
         expected_head,
         repository,
-        effective_runner,
+        (
+            validation.attestation.get("registry_digest", "")
+            if isinstance(validation.attestation, dict)
+            else ""
+        ),
+        (
+            validation.attestation.get("command_set_digest", "")
+            if isinstance(validation.attestation, dict)
+            else ""
+        ),
     )
     if validation.registry_binding != authenticated_registry_binding:
         raise ResolutionError(

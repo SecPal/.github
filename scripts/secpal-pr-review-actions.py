@@ -4896,24 +4896,18 @@ def _verify_ready_integration_published_authority(
 
 
 def _prior_delivery_registry_binding(
-    repository_root: Path, head: str, repository: str
+    head: str,
+    repository: str,
+    registry_digest: str,
+    command_set_digest: str,
 ) -> dict[str, Any]:
     """Adapt the action-layer Git runner to the canonical immutable loader."""
 
-    def read_immutable_file(
-        root: Path, commit: str, path: str, runner: Any
-    ) -> str | None:
-        result = runner(
-            root, ["show", f"{commit}:{path}"], allow_failure=True
-        )
-        return result.stdout if result.returncode == 0 else None
-
     return fast_path.load_immutable_delivery_registry_binding(
-        repository_root=repository_root,
-        head_sha=head,
         repository=repository,
-        read_immutable_file=read_immutable_file,
-        reader_context=_run_attestation_git,
+        delivery_head_sha=head,
+        expected_registry_digest=registry_digest,
+        expected_command_set_digest=command_set_digest,
     )
 
 
@@ -4971,7 +4965,10 @@ def _verify_ready_integration_prior_authority(
     ):
         raise fast_path.SecurityBlocker("prior delivery evidence identity changed")
     prior_binding = _prior_delivery_registry_binding(
-        repository_root, head, arguments.repo
+        head,
+        arguments.repo,
+        attestation.get("registry_digest", ""),
+        attestation.get("command_set_digest", ""),
     )
     expected_prior_receipt = fast_path.create_validation_receipt(
         repository=arguments.repo,

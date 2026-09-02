@@ -670,9 +670,11 @@ transition state. The helper independently verifies that
 ordinary delivery chain and a signed annotated authority tag whose trailer
 binds the manifest digest. The prior commit trailer, reconstructed ordinary
 receipt, final attestation, and prior-authority receipt identity must all agree.
-Receipt reconstruction uses the validation registry committed in the immutable
-prior delivery head, so a later independently delivered registry extension
-cannot invalidate authentic historical delivery evidence.
+Receipt reconstruction resolves the receipt-bound repository projection from
+immutable history in the installed central registry repository and validates it
+with the schema committed alongside that registry state. A target repository is
+not implicitly a registry source, and a later independently delivered registry
+extension cannot invalidate authentic historical delivery evidence.
 It also consumes the maintained #750/#752 publication verifier and requires the
 protected journal's current entry for the delivery to match the manifest's
 publication object, publication digest, persistent lifecycle identity, current

@@ -28,6 +28,7 @@ if SPEC is None or SPEC.loader is None:
 MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
+REAL_SUBPROCESS_RUN = subprocess.run
 
 from secpal_work_graph import acceptance_criteria as work_graph_acceptance_criteria  # noqa: E402
 from secpal_work_graph import github as work_graph_github  # noqa: E402
@@ -144,27 +145,29 @@ class FakeGit:
 
 
 def _current_registry_git(
-    _repository_root: Path,
+    repository_root: Path,
     arguments: Sequence[str],
     *,
     allow_failure: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    del allow_failure
-    call = tuple(arguments)
-    if (
-        len(call) == 2
-        and call[0] == "show"
-        and call[1].endswith(
-            f":{MODULE.fast_path.DELIVERY_REGISTRY_PATH}"
-        )
-    ):
-        return subprocess.CompletedProcess(
-            call,
-            0,
-            MODULE.REGISTRY_PATH.read_text(encoding="utf-8"),
-            "",
-        )
-    raise AssertionError(f"unexpected registry git call: {call}")
+    if repository_root != ROOT:
+        raise AssertionError(f"unexpected central registry root: {repository_root}")
+    return REAL_SUBPROCESS_RUN(
+        ["git", *arguments],
+        cwd=repository_root,
+        check=not allow_failure,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _current_registry_git_result(
+    arguments: list[str], *, allow_failure: bool = False
+) -> tuple[int, str]:
+    result = _current_registry_git(
+        ROOT, arguments, allow_failure=allow_failure
+    )
+    return result.returncode, result.stdout
 
 
 def load_validation_evidence(*args: Any, **kwargs: Any) -> Any:
@@ -1137,6 +1140,15 @@ def run_late_classification_origin_fixture(
 
 
 class ResolveFixedThreadsTests(TestCase):
+    def setUp(self) -> None:
+        central_git = mock.patch.object(
+            MODULE.fast_path,
+            "_central_git_result",
+            side_effect=_current_registry_git_result,
+        )
+        central_git.start()
+        self.addCleanup(central_git.stop)
+
     def test_lifecycle_helper_import_ignores_repository_root_shadow(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -6181,7 +6193,7 @@ class ResolveFixedThreadsTests(TestCase):
             attestation["attestation_digest"],
         )
 
-    def test_historical_attestation_uses_registry_from_delivery_commit(self) -> None:
+    def test_historical_attestation_uses_bound_central_registry_history(self) -> None:
         thread_id = "PRRT_HISTORICAL_REGISTRY"
         current_registry = json.loads(
             MODULE.REGISTRY_PATH.read_text(encoding="utf-8")
@@ -6390,7 +6402,8 @@ class ResolveFixedThreadsTests(TestCase):
                 json.dumps(substituted_attestation), encoding="utf-8"
             )
             with self.assertRaisesRegex(
-                MODULE.ResolutionError, "validation evidence is invalid or stale"
+                MODULE.ResolutionError,
+                "immutable delivery validation registry binding is unavailable",
             ):
                 load_validation_evidence(
                     evidence_path,
@@ -6414,7 +6427,8 @@ class ResolveFixedThreadsTests(TestCase):
                 json.dumps(digest_substitution), encoding="utf-8"
             )
             with self.assertRaisesRegex(
-                MODULE.ResolutionError, "validation evidence is invalid or stale"
+                MODULE.ResolutionError,
+                "immutable delivery validation registry binding is unavailable",
             ):
                 load_validation_evidence(
                     evidence_path,
@@ -6424,107 +6438,86 @@ class ResolveFixedThreadsTests(TestCase):
                     repository_root=repository_root,
                 )
 
-            evidence_path.write_text(json.dumps(attestation), encoding="utf-8")
-            subprocess.run(
-                ["git", "rm", "-q", MODULE.fast_path.DELIVERY_REGISTRY_PATH],
-                cwd=repository_root,
-                check=True,
-            )
-            subprocess.run(
-                ["git", "commit", "-q", "-m", "missing registry"],
-                cwd=repository_root,
-                check=True,
-            )
-            missing_registry_head = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=repository_root,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
-            with self.assertRaisesRegex(
-                MODULE.ResolutionError,
-                "immutable delivery validation registry is unavailable",
-            ):
-                load_validation_evidence(
-                    evidence_path,
-                    "SecPal/.github",
-                    missing_registry_head,
-                    reviewed,
-                    repository_root=repository_root,
-                )
-
-            registry_path.parent.mkdir(parents=True)
-            registry_path.write_text('{"repositories":[', encoding="utf-8")
-            subprocess.run(
-                ["git", "add", "."], cwd=repository_root, check=True
-            )
-            subprocess.run(
-                ["git", "commit", "-q", "-m", "invalid registry"],
-                cwd=repository_root,
-                check=True,
-            )
-            invalid_registry_head = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=repository_root,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
-            with self.assertRaisesRegex(
-                MODULE.ResolutionError,
-                "immutable delivery validation registry is malformed",
-            ):
-                load_validation_evidence(
-                    evidence_path,
-                    "SecPal/.github",
-                    invalid_registry_head,
-                    reviewed,
-                    repository_root=repository_root,
-                )
-
-            invalid_entry_registry = copy.deepcopy(historical_registry)
-            invalid_entry = next(
-                entry
-                for entry in invalid_entry_registry["repositories"]
-                if entry["repository"] == "SecPal/.github"
-            )
-            invalid_entry.pop("focused_validation")
-            registry_path.write_text(
-                json.dumps(invalid_entry_registry), encoding="utf-8"
-            )
-            subprocess.run(
-                ["git", "add", "."], cwd=repository_root, check=True
-            )
-            subprocess.run(
-                ["git", "commit", "-q", "-m", "invalid registry entry"],
-                cwd=repository_root,
-                check=True,
-            )
-            invalid_entry_head = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=repository_root,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
-            with self.assertRaisesRegex(
-                MODULE.ResolutionError,
-                "immutable delivery validation registry is invalid",
-            ):
-                load_validation_evidence(
-                    evidence_path,
-                    "SecPal/.github",
-                    invalid_entry_head,
-                    reviewed,
-                    repository_root=repository_root,
-                )
-
         self.assertEqual(validation.validation_receipt, receipt)
         self.assertEqual(validation.attestation, attestation)
 
     def test_immutable_registry_rejects_invalid_maintained_structure(self) -> None:
-        current = json.loads(MODULE.REGISTRY_PATH.read_text(encoding="utf-8"))
+        historical_head = "e78db9eeb0973d1f5853c4abfafa26e6cc8ab289"
+        historical = json.loads(
+            REAL_SUBPROCESS_RUN(
+                [
+                    "git",
+                    "show",
+                    f"{historical_head}:{MODULE.fast_path.DELIVERY_REGISTRY_PATH}",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+        )
+        historical_schema = REAL_SUBPROCESS_RUN(
+            [
+                "git",
+                "show",
+                f"{historical_head}:"
+                f"{MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH}",
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+
+        def load(registry_raw: str, schema_raw: str) -> None:
+            head = "a" * 40
+
+            def central_git_result(
+                arguments: list[str], *, allow_failure: bool = False
+            ) -> tuple[int, str]:
+                del allow_failure
+                call = tuple(arguments)
+                if call == ("remote", "get-url", "origin"):
+                    result = (0, "https://github.com/SecPal/.github.git\n")
+                elif call == ("rev-parse", "HEAD"):
+                    result = (0, f"{head}\n")
+                elif call == ("cat-file", "-e", f"{head}^{{commit}}"):
+                    result = (0, "")
+                elif call == ("merge-base", "--is-ancestor", head, head):
+                    result = (0, "")
+                elif call == (
+                    "log",
+                    "--format=%H",
+                    head,
+                    "--",
+                    MODULE.fast_path.DELIVERY_REGISTRY_PATH,
+                ):
+                    result = (0, f"{head}\n")
+                elif call == (
+                    "show",
+                    f"{head}:{MODULE.fast_path.DELIVERY_REGISTRY_PATH}",
+                ):
+                    result = (0, registry_raw)
+                elif call == (
+                    "show",
+                    f"{head}:{MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH}",
+                ):
+                    result = (0, schema_raw)
+                else:
+                    raise AssertionError(call)
+                return result
+
+            with mock.patch.object(
+                MODULE.fast_path,
+                "_central_git_result",
+                side_effect=central_git_result,
+            ):
+                MODULE.fast_path.load_immutable_delivery_registry_binding(
+                    repository="SecPal/.github",
+                    delivery_head_sha=head,
+                    expected_registry_digest="0" * 64,
+                    expected_command_set_digest="0" * 64,
+                )
 
         def entry(registry: dict[str, Any]) -> dict[str, Any]:
             return next(
@@ -6552,20 +6545,150 @@ class ResolveFixedThreadsTests(TestCase):
             "empty validation set": lambda registry: entry(registry).update(
                 focused_validation=[], required_local_validation=[], manual_gates=[]
             ),
+            "duplicate repository": lambda registry: registry[
+                "repositories"
+            ].append(copy.deepcopy(registry["repositories"][0])),
         }
         for name, mutate in cases.items():
             with self.subTest(name=name):
-                registry = copy.deepcopy(current)
+                registry = copy.deepcopy(historical)
                 mutate(registry)
-                raw = json.dumps(registry)
                 with self.assertRaises(MODULE.fast_path.SecurityBlocker):
-                    MODULE.fast_path.load_immutable_delivery_registry_binding(
-                        repository_root=ROOT,
-                        head_sha="a" * 40,
-                        repository="SecPal/.github",
-                        read_immutable_file=lambda *_arguments: raw,
-                        reader_context=None,
-                    )
+                    load(json.dumps(registry), historical_schema)
+
+        for name, registry_raw, schema_raw in (
+            ("malformed registry", '{"repositories":[', historical_schema),
+            ("malformed schema", json.dumps(historical), '{"$defs":'),
+        ):
+            with self.subTest(name=name), self.assertRaises(
+                MODULE.fast_path.SecurityBlocker
+            ):
+                load(registry_raw, schema_raw)
+
+    def test_immutable_registry_source_is_not_caller_selectable(self) -> None:
+        parameters = MODULE.fast_path.load_immutable_delivery_registry_binding.__annotations__
+        for prohibited in (
+            "repository_root",
+            "registry_repository",
+            "registry_head",
+            "registry_path",
+            "registry_blob",
+            "registry_schema",
+            "run_central_git",
+        ):
+            self.assertNotIn(prohibited, parameters)
+
+        def wrong_origin(
+            arguments: list[str], *, allow_failure: bool = False
+        ) -> tuple[int, str]:
+            del allow_failure
+            self.assertEqual(tuple(arguments), ("remote", "get-url", "origin"))
+            return 0, "https://github.com/SecPal/api.git\n"
+
+        with (
+            mock.patch.object(
+                MODULE.fast_path,
+                "_central_git_result",
+                side_effect=wrong_origin,
+            ),
+            self.assertRaisesRegex(
+                MODULE.fast_path.SecurityBlocker,
+                "central registry repository identity mismatch",
+            ),
+        ):
+            MODULE.fast_path.load_immutable_delivery_registry_binding(
+                repository="SecPal/api",
+                delivery_head_sha="a" * 40,
+                expected_registry_digest="0" * 64,
+                expected_command_set_digest="0" * 64,
+            )
+
+        head = "a" * 40
+
+        def missing_registry(
+            arguments: list[str], *, allow_failure: bool = False
+        ) -> tuple[int, str]:
+            del allow_failure
+            call = tuple(arguments)
+            responses = {
+                ("remote", "get-url", "origin"): (
+                    0,
+                    "https://github.com/SecPal/.github.git\n",
+                ),
+                ("rev-parse", "HEAD"): (0, f"{head}\n"),
+                ("cat-file", "-e", f"{head}^{{commit}}"): (0, ""),
+                ("merge-base", "--is-ancestor", head, head): (0, ""),
+                (
+                    "log",
+                    "--format=%H",
+                    head,
+                    "--",
+                    MODULE.fast_path.DELIVERY_REGISTRY_PATH,
+                ): (0, f"{head}\n"),
+                (
+                    "show",
+                    f"{head}:{MODULE.fast_path.DELIVERY_REGISTRY_PATH}",
+                ): (1, ""),
+                (
+                    "show",
+                    f"{head}:{MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH}",
+                ): (0, "{}"),
+            }
+            return responses[call]
+
+        with (
+            mock.patch.object(
+                MODULE.fast_path,
+                "_central_git_result",
+                side_effect=missing_registry,
+            ),
+            self.assertRaisesRegex(
+                MODULE.fast_path.SecurityBlocker,
+                "immutable delivery validation registry is unavailable",
+            ),
+        ):
+            MODULE.fast_path.load_immutable_delivery_registry_binding(
+                repository="SecPal/.github",
+                delivery_head_sha=head,
+                expected_registry_digest="0" * 64,
+                expected_command_set_digest="0" * 64,
+            )
+
+    def test_immutable_registry_uses_historical_schema_from_central_history(
+        self,
+    ) -> None:
+        historical_head = "e78db9eeb0973d1f5853c4abfafa26e6cc8ab289"
+
+        binding = MODULE.fast_path.load_immutable_delivery_registry_binding(
+            repository="SecPal/.github",
+            delivery_head_sha=historical_head,
+            expected_registry_digest=(
+                "38629c17e2397bfc1df44e5fa65fc176326f47fdf9dbfee98d1de52ecd093340"
+            ),
+            expected_command_set_digest=(
+                "15d370f613fb13d39bcf5136ffb4ebae298eb78e0acfaf18635253571f9ff12a"
+            ),
+        )
+
+        self.assertEqual(binding["repository"], "SecPal/.github")
+        self.assertEqual(
+            MODULE.fast_path.digest_json(binding),
+            "38629c17e2397bfc1df44e5fa65fc176326f47fdf9dbfee98d1de52ecd093340",
+        )
+
+    def test_cross_repository_registry_uses_central_history(self) -> None:
+        binding = MODULE.fast_path.load_immutable_delivery_registry_binding(
+            repository="SecPal/api",
+            delivery_head_sha="a" * 40,
+            expected_registry_digest=(
+                "0284e90a0d918f7baeb2d496d75cf1326858d7e0626c1bd8b72e05f2de2dc0ff"
+            ),
+            expected_command_set_digest=(
+                "d3f0d9498954210c1676533210e6bc34ed95468c3fe1db3454098ed7454e4227"
+            ),
+        )
+
+        self.assertEqual(binding["repository"], "SecPal/api")
 
     def test_attestation_rejects_forged_receipt_and_missing_manual_gates(
         self,

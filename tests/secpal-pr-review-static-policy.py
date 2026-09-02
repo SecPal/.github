@@ -128,6 +128,26 @@ EVIDENCE_CALLS = (
     ),
 )
 
+FAST_PATH_CALLS = (
+    ProcessCall(
+        None,
+        "_central_git_result",
+        "executable",
+        "arguments",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("cwd", "CENTRAL_REGISTRY_ROOT"),
+            ("encoding", "'utf-8'"),
+            ("env", "evidence.command_environment('git')"),
+            ("errors", "'replace'"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("text", "True"),
+            ("timeout", "30"),
+        ),
+    ),
+)
+
 RESOLVER_CALLS = (
     ProcessCall(
         None,
@@ -209,7 +229,7 @@ LATE_DISPOSITION_CALLS = (
 EXPECTED_CALLS = {
     "secpal-pr-review.py": EVIDENCE_CALLS,
     "secpal-pr-review-actions.py": ACTION_CALLS,
-    "fast_path.py": (),
+    "fast_path.py": FAST_PATH_CALLS,
     "follow_up.py": (),
     "secpal-resolve-fixed-threads.py": RESOLVER_CALLS,
     "late_disposition.py": LATE_DISPOSITION_CALLS,
@@ -326,6 +346,7 @@ ALLOWED_IMPORTS = {
         "import json",
         "import os",
         "import re",
+        "import subprocess",
         "import sys",
         "import tempfile",
         "from dataclasses import dataclass, field",
@@ -465,6 +486,7 @@ DIRECT_MODULE_ATTRIBUTES = {
     },
     "fast_path.py": {
         "importlib": {"util"},
+        "subprocess": {"DEVNULL", "TimeoutExpired", "run"},
         "sys": {"modules"},
         "tempfile": {"mkstemp"},
     },
@@ -559,7 +581,10 @@ LOADED_MODULE_ATTRIBUTES = {
     },
     "fast_path.py": {
         "evidence": {
+            "CommandPolicyError",
             "ContractError",
+            "command_environment",
+            "resolve_trusted_executable",
             "validate_against_authoritative_schema",
             "validate_config",
         },
@@ -1106,7 +1131,6 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_resolve_trusted_markdown_node",
     "_load_repository_entry",
     "_immutable_delivery_registry_binding",
-    "_read_immutable_delivery_registry_file",
     "_reject_nonfinite_json_constant",
     "_reject_duplicate_json_object",
     "_remote_repository",
@@ -1200,10 +1224,6 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
     DynamicImportCall(
         ("load_validation_evidence",),
         "_run_git",
-    ),
-    DynamicImportCall(
-        ("_immutable_delivery_registry_binding",),
-        "_read_immutable_delivery_registry_file",
     ),
     DynamicImportCall(
         ("resolve_threads",),

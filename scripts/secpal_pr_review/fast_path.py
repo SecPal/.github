@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import tempfile
 import importlib.util
 import sys
@@ -21,13 +22,18 @@ from typing import Any, Callable, TypeVar
 
 FOLLOW_UP_HELPER = Path(__file__).resolve().with_name("follow_up.py")
 EVIDENCE_HELPER = Path(__file__).resolve().parents[1] / "secpal-pr-review.py"
+CENTRAL_REGISTRY_ROOT = Path(__file__).resolve().parents[2]
+CENTRAL_REGISTRY_REPOSITORY = "SecPal/.github"
 DELIVERY_REGISTRY_PATH = (
     ".agents/skills/secpal-pr-review/references/repositories.json"
 )
-DELIVERY_REGISTRY_SCHEMA_PATH = (
-    Path(__file__).resolve().parents[2]
-    / ".agents/skills/secpal-pr-review/references/repositories.schema.json"
+DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH = (
+    ".agents/skills/secpal-pr-review/references/repositories.schema.json"
 )
+DELIVERY_REGISTRY_SCHEMA_PATH = (
+    CENTRAL_REGISTRY_ROOT / DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH
+)
+SUPPORTED_REGISTRY_SCHEMA_VERSIONS = frozenset({"1.0"})
 REGISTRY_CONFIGURATION_KEYS = (
     "repository",
     "default_branch",
@@ -214,19 +220,44 @@ def validate_registry_command(command: Any) -> None:
         raise SecurityBlocker("validation command purpose is required")
 
 
-def validate_repository_registry_structure(registry: Any) -> dict[str, Any]:
+def validate_repository_registry_structure(
+    registry: Any, *, authoritative_schema_raw: str | None = None
+) -> dict[str, Any]:
     """Validate registry structure shared by current and immutable evidence."""
 
     if not isinstance(registry, dict):
         raise SecurityBlocker("repository registry must be a JSON object")
     structural_registry = copy.deepcopy(registry)
-    structural_registry.pop("fixed_thread_resolution", None)
+    if structural_registry.get("schema_version") not in (
+        SUPPORTED_REGISTRY_SCHEMA_VERSIONS
+    ):
+        raise SecurityBlocker("repository registry schema version is unsupported")
     try:
-        evidence.validate_against_authoritative_schema(
-            structural_registry,
-            DELIVERY_REGISTRY_SCHEMA_PATH,
-            "workflow_registry",
-        )
+        if authoritative_schema_raw is None:
+            evidence.validate_against_authoritative_schema(
+                structural_registry,
+                DELIVERY_REGISTRY_SCHEMA_PATH,
+                "workflow_registry",
+            )
+        else:
+            descriptor, schema_path = tempfile.mkstemp(
+                prefix="secpal-evidence-registry-schema-", suffix=".json"
+            )
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    handle.write(authoritative_schema_raw)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                evidence.validate_against_authoritative_schema(
+                    structural_registry,
+                    Path(schema_path),
+                    "workflow_registry",
+                )
+            finally:
+                try:
+                    os.unlink(schema_path)
+                except FileNotFoundError:
+                    pass
     except evidence.ContractError as exc:
         raise SecurityBlocker(str(exc)) from exc
     repositories: set[str] = set()
@@ -319,34 +350,11 @@ def validation_registry_binding(entry: Any) -> dict[str, Any]:
         ) from exc
 
 
-def load_immutable_delivery_registry_binding(
-    *,
-    repository_root: Path,
-    head_sha: str,
-    repository: str,
-    read_immutable_file: Callable[[Path, str, str, Any], str | None],
-    reader_context: Any,
-) -> dict[str, Any]:
-    """Load validation policy from the exact immutable delivery commit."""
-
-    if (
-        not isinstance(repository_root, Path)
-        or not isinstance(head_sha, str)
-        or not OID.fullmatch(head_sha)
-        or not isinstance(repository, str)
-        or not REPOSITORY.fullmatch(repository)
-    ):
-        raise SecurityBlocker("immutable delivery registry identity is invalid")
-    raw = read_immutable_file(
-        repository_root,
-        head_sha.lower(),
-        DELIVERY_REGISTRY_PATH,
-        reader_context,
-    )
+def _parse_registry_json(raw: Any, label: str) -> Any:
     if not isinstance(raw, str):
-        raise SecurityBlocker("immutable delivery validation registry is unavailable")
+        raise SecurityBlocker(f"{label} is unavailable")
     try:
-        registry = json.loads(
+        return json.loads(
             raw,
             parse_constant=lambda value: (_ for _ in ()).throw(
                 ValueError(f"non-finite JSON constant: {value}")
@@ -354,11 +362,62 @@ def load_immutable_delivery_registry_binding(
             object_pairs_hook=_reject_duplicate_json_object,
         )
     except (KeyError, TypeError, ValueError) as exc:
-        raise SecurityBlocker(
-            "immutable delivery validation registry is malformed"
-        ) from exc
+        raise SecurityBlocker(f"{label} is malformed") from exc
+
+
+def _central_git_result(
+    arguments: list[str],
+    *,
+    allow_failure: bool = False,
+) -> tuple[int, str]:
     try:
-        registry = validate_repository_registry_structure(registry)
+        executable = evidence.resolve_trusted_executable("git")
+        result = subprocess.run(
+            [executable, *arguments],
+            cwd=CENTRAL_REGISTRY_ROOT,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=evidence.command_environment("git"),
+            timeout=30,
+        )
+    except evidence.CommandPolicyError as exc:
+        raise SecurityBlocker("trusted central registry Git is unavailable") from exc
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SecurityBlocker("central registry Git read is unavailable") from exc
+    if result.returncode != 0 and not allow_failure:
+        raise SecurityBlocker("central registry Git read failed")
+    return result.returncode, result.stdout
+
+
+def _central_remote_repository(value: str) -> str | None:
+    match = re.fullmatch(
+        r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+        r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?",
+        value.strip(),
+    )
+    return match.group(1) if match is not None else None
+
+
+def _validated_historical_registry_binding(
+    *,
+    registry_raw: str,
+    schema_raw: str,
+    repository: str,
+) -> dict[str, Any]:
+    registry = _parse_registry_json(
+        registry_raw, "immutable delivery validation registry"
+    )
+    _parse_registry_json(
+        schema_raw, "immutable delivery validation registry schema"
+    )
+    try:
+        registry = validate_repository_registry_structure(
+            registry, authoritative_schema_raw=schema_raw
+        )
         entries = registry["repositories"]
     except SecurityBlocker as exc:
         raise SecurityBlocker(
@@ -378,6 +437,115 @@ def load_immutable_delivery_registry_binding(
             "immutable delivery validation registry identity is ambiguous"
         )
     return validation_registry_binding(matches[0])
+
+
+def load_immutable_delivery_registry_binding(
+    *,
+    repository: str,
+    delivery_head_sha: str,
+    expected_registry_digest: str,
+    expected_command_set_digest: str,
+) -> dict[str, Any]:
+    """Derive an evidence-time binding from authenticated central history."""
+
+    if (
+        not isinstance(delivery_head_sha, str)
+        or not OID.fullmatch(delivery_head_sha)
+        or not isinstance(repository, str)
+        or not REPOSITORY.fullmatch(repository)
+        or not isinstance(expected_registry_digest, str)
+        or not DIGEST.fullmatch(expected_registry_digest)
+        or not isinstance(expected_command_set_digest, str)
+        or not DIGEST.fullmatch(expected_command_set_digest)
+    ):
+        raise SecurityBlocker("immutable delivery registry identity is invalid")
+
+    _, origin = _central_git_result(["remote", "get-url", "origin"])
+    if _central_remote_repository(origin) != CENTRAL_REGISTRY_REPOSITORY:
+        raise SecurityBlocker("central registry repository identity mismatch")
+    _, central_head = _central_git_result(["rev-parse", "HEAD"])
+    central_head = central_head.strip().lower()
+    if not OID.fullmatch(central_head):
+        raise SecurityBlocker("central registry history identity is malformed")
+
+    exact_central_delivery = False
+    candidates: list[str] = []
+    normalized_delivery_head = delivery_head_sha.lower()
+    if repository == CENTRAL_REGISTRY_REPOSITORY:
+        object_status, _ = _central_git_result(
+            ["cat-file", "-e", f"{normalized_delivery_head}^{{commit}}"],
+            allow_failure=True,
+        )
+        if object_status == 0:
+            ancestry_status, _ = _central_git_result(
+                [
+                    "merge-base",
+                    "--is-ancestor",
+                    normalized_delivery_head,
+                    central_head,
+                ],
+                allow_failure=True,
+            )
+            if ancestry_status not in {0, 1}:
+                raise SecurityBlocker("central registry ancestry is unavailable")
+            if ancestry_status == 0:
+                exact_central_delivery = True
+                candidates.append(normalized_delivery_head)
+
+    _, history = _central_git_result(
+        ["log", "--format=%H", central_head, "--", DELIVERY_REGISTRY_PATH],
+    )
+    history_commits = [item.lower() for item in history.splitlines() if item]
+    if (
+        not history_commits
+        or any(not OID.fullmatch(item) for item in history_commits)
+        or len(history_commits) != len(set(history_commits))
+    ):
+        raise SecurityBlocker("central registry history is malformed")
+    candidates.extend(item for item in history_commits if item not in candidates)
+
+    for candidate in candidates:
+        registry_status, registry_raw = _central_git_result(
+            ["show", f"{candidate}:{DELIVERY_REGISTRY_PATH}"],
+            allow_failure=True,
+        )
+        schema_status, schema_raw = _central_git_result(
+            ["show", f"{candidate}:{DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH}"],
+            allow_failure=True,
+        )
+        if registry_status != 0 or schema_status != 0:
+            if exact_central_delivery and candidate == normalized_delivery_head:
+                raise SecurityBlocker(
+                    "immutable delivery validation registry is unavailable"
+                )
+            continue
+        try:
+            binding = _validated_historical_registry_binding(
+                registry_raw=registry_raw,
+                schema_raw=schema_raw,
+                repository=repository,
+            )
+        except SecurityBlocker:
+            if exact_central_delivery and candidate == normalized_delivery_head:
+                raise
+            continue
+        binding_matches = (
+            digest_json(binding) == expected_registry_digest
+            and digest_json(binding["validation"])
+            == expected_command_set_digest
+        )
+        if exact_central_delivery and candidate == normalized_delivery_head:
+            if not binding_matches:
+                raise SecurityBlocker(
+                    "immutable delivery validation registry binding changed"
+                )
+            return binding
+        if binding_matches:
+            return binding
+
+    raise SecurityBlocker(
+        "immutable delivery validation registry binding is unavailable"
+    )
 SUPPORTED_BATCH_CAPABILITIES = frozenset({"THREAD_RESOLUTION"})
 TRANSIENT_PULL_REQUEST_REACTION_CONTENTS = frozenset({"EYES"})
 SOURCE_KINDS = frozenset(
