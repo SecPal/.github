@@ -47,6 +47,28 @@ function run(root, assertion = "coverage", extra = []) {
   return { code: result.status, report: JSON.parse(result.stdout) };
 }
 
+function runText(root, assertion = "coverage", extra = []) {
+  const result = spawnSync(
+    "node",
+    [
+      VALIDATOR,
+      assertion,
+      "--root",
+      root,
+      "--repository",
+      "SecPal/example",
+      "--as-of",
+      "2026-09-02",
+      "--format",
+      "text",
+      ...extra,
+    ],
+    { encoding: "utf8" }
+  );
+  assert.equal(result.signal, null, result.stderr);
+  return result;
+}
+
 function trustedPolicy(files) {
   return repository(files);
 }
@@ -251,6 +273,17 @@ updates:
     "app/package.json": "{}\n",
   });
   assert.equal(run(duplicate).report.diagnostics[0].code, "DUPLICATE_CONFIGURATION");
+});
+
+test("text output preserves malformed-input diagnostics", () => {
+  const root = repository({
+    ".github/dependabot.yml": "version: 2\nupdates: [\n",
+  });
+  const result = runText(root);
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /MANIFEST_COVERAGE FAIL SecPal\/example policy=-/);
+  assert.match(result.stdout, /MALFORMED_YAML/);
+  assert.doesNotMatch(result.stderr, /TypeError|at textReport/);
 });
 
 test("overlapping directory entries are ambiguous for the actual manifest", () => {
@@ -631,6 +664,90 @@ updates:
   assert.ok(report.manifests.every((item) => item.coverage_directory === "/"));
 });
 
+test("npm workspace globs match complete relative paths at exact depth", () => {
+  for (const [workspace, directMember, deepNonMember] of [
+    ["*", "a/package.json", "a/b/package.json"],
+    ["packages/*", "packages/app/package.json", "packages/deep/app/package.json"],
+  ]) {
+    const root = repository({
+      ".github/dependabot.yml": `version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    ${DAILY}
+`,
+      "package.json": `${JSON.stringify({ workspaces: [workspace] })}\n`,
+      [directMember]: '{"name":"direct"}\n',
+      [deepNonMember]: '{"name":"deep"}\n',
+    });
+    const { report } = run(root);
+    const manifests = Object.fromEntries(
+      report.manifests.map((manifest) => [manifest.manifest_path, manifest])
+    );
+    assert.equal(manifests[directMember].coverage_directory, "/", workspace);
+    assert.equal(manifests[directMember].status, "COVERED", workspace);
+    assert.equal(
+      manifests[deepNonMember].coverage_directory,
+      `/${path.posix.dirname(deepNonMember)}`,
+      workspace
+    );
+    assert.equal(manifests[deepNonMember].status, "UNCOVERED", workspace);
+  }
+});
+
+test("Cargo workspace members inherit only their declared workspace root", () => {
+  const root = repository({
+    ".github/dependabot.yml": `version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    ${DAILY}
+`,
+    "Cargo.toml": `[workspace]
+members = ["crates/*"]
+exclude = ["crates/excluded"]
+`,
+    "crates/app/Cargo.toml": "[package]\nname='app'\nversion='1.0.0'\n",
+    "crates/excluded/Cargo.toml": "[package]\nname='excluded'\nversion='1.0.0'\n",
+    "other/nested/Cargo.toml": "[package]\nname='other'\nversion='1.0.0'\n",
+  });
+  const { report } = run(root);
+  const manifests = Object.fromEntries(
+    report.manifests.map((manifest) => [manifest.manifest_path, manifest])
+  );
+  assert.equal(manifests["crates/app/Cargo.toml"].coverage_directory, "/");
+  assert.equal(manifests["crates/app/Cargo.toml"].status, "COVERED");
+  assert.equal(manifests["crates/excluded/Cargo.toml"].coverage_directory, "/crates/excluded");
+  assert.equal(manifests["crates/excluded/Cargo.toml"].status, "UNCOVERED");
+  assert.equal(manifests["other/nested/Cargo.toml"].coverage_directory, "/other/nested");
+  assert.equal(manifests["other/nested/Cargo.toml"].status, "UNCOVERED");
+});
+
+test("Cargo workspace ownership supports nested roots and explicit workspace paths", () => {
+  const root = repository({
+    ".github/dependabot.yml": `version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /apps
+    ${DAILY}
+`,
+    "apps/Cargo.toml": `[workspace]
+members = ["crates/*"]
+`,
+    "apps/crates/member/Cargo.toml": "[package]\nname='member'\nversion='1.0.0'\n",
+    "apps/explicit/Cargo.toml": "[package]\nname='explicit'\nversion='1.0.0'\nworkspace='..'\n",
+    "apps/other/Cargo.toml": "[package]\nname='other'\nversion='1.0.0'\n",
+  });
+  const { report } = run(root);
+  const manifests = Object.fromEntries(
+    report.manifests.map((manifest) => [manifest.manifest_path, manifest])
+  );
+  assert.equal(manifests["apps/crates/member/Cargo.toml"].coverage_directory, "/apps");
+  assert.equal(manifests["apps/explicit/Cargo.toml"].coverage_directory, "/apps");
+  assert.equal(manifests["apps/other/Cargo.toml"].coverage_directory, "/apps/other");
+  assert.equal(manifests["apps/other/Cargo.toml"].status, "UNCOVERED");
+});
+
 test("ordinary generic data files are not manifest candidates", () => {
   const root = repository({
     ".github/dependabot.yml": "version: 2\nupdates: []\n",
@@ -690,6 +807,69 @@ updates:
 
   const contradictory = run(tofu, "coverage", ["--trusted-policy-root", baseline]).report;
   assert.ok(contradictory.diagnostics.some((item) => item.code === "CONTRADICTORY_CLASSIFICATION"));
+});
+
+test("root Terraform modules use the single protected directory slash representation", () => {
+  const root = repository({
+    ".github/dependabot.yml": `version: 2
+updates:
+  - package-ecosystem: terraform
+    directory: /
+    ${DAILY}
+`,
+    "main.tf": "terraform {}\n",
+  });
+  const baseline = trustedPolicy({
+    ".github/dependabot-manifest-exceptions.yml": `version: 1
+classifications:
+  - directory: /
+    ecosystem: terraform
+    reason: Protected history assigns the root module to Terraform.
+    reviewed-by: "@SecPal/maintainers"
+    reviewed-on: "2026-09-02"
+`,
+  });
+  assert.equal(run(root, "coverage", ["--trusted-policy-root", baseline]).report.status, "PASS");
+  assert.ok(
+    run(root).report.diagnostics.some(
+      (diagnostic) => diagnostic.code === "AMBIGUOUS_MANIFEST_CLASSIFICATION"
+    )
+  );
+
+  const proposed = repository({
+    ".github/dependabot.yml": "version: 2\nupdates: []\n",
+    ".github/dependabot-manifest-exceptions.yml": `version: 1
+classifications:
+  - directory: /
+    ecosystem: terraform
+    reason: Subject-only root classification must not become authority.
+    reviewed-by: "@SecPal/maintainers"
+    reviewed-on: "2026-09-02"
+`,
+    "main.tf": "terraform {}\n",
+  });
+  assert.ok(
+    run(proposed).report.diagnostics.some(
+      (diagnostic) => diagnostic.code === "UNTRUSTED_POLICY_INPUT"
+    )
+  );
+
+  for (const alias of [".", ""]) {
+    const invalidBaseline = trustedPolicy({
+      ".github/dependabot-manifest-exceptions.yml": `version: 1
+classifications:
+  - directory: "${alias}"
+    ecosystem: terraform
+    reason: Alternate root representations must remain invalid.
+    reviewed-by: "@SecPal/maintainers"
+    reviewed-on: "2026-09-02"
+`,
+    });
+    assert.equal(
+      run(root, "coverage", ["--trusted-policy-root", invalidBaseline]).report.diagnostics[0].code,
+      "PATH_ERROR"
+    );
+  }
 });
 
 test('documented directories ["**/*"] syntax covers nested manifests', () => {
@@ -819,6 +999,28 @@ updates:
   );
 });
 
+test("generic pip text requires at least one dependency record", () => {
+  const root = repository({
+    ".github/dependabot.yml": `version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /python
+    ${DAILY}
+`,
+    "python/blank.txt": "\n",
+    "python/comments.txt": "# documentation only\n",
+    "python/options.in": "--index-url https://example.test/simple\n",
+    "python/dependencies.txt":
+      "# application dependency\n--index-url https://example.test/simple\nrequests==2.32.5\n",
+    "python/constraints.txt": "urllib3>=2.5.0\n",
+  });
+  const { report } = run(root);
+  assert.deepEqual(
+    report.manifests.map((manifest) => manifest.manifest_path),
+    ["python/constraints.txt", "python/dependencies.txt"]
+  );
+});
+
 test("multi-ecosystem entries require non-empty patterns", () => {
   const root = repository({
     ".github/dependabot.yml": `version: 2
@@ -843,6 +1045,7 @@ test("catalog discovery dispositions and rule provenance are complete", () => {
   for (const mutate of [
     (policy) => delete policy.discovery_dispositions[policy.supported_config_ecosystems[0]],
     (policy) => delete policy.manifest_rules[0].source_paths,
+    (policy) => delete policy.behavior_provenance.cargo_workspace,
     (policy) => (policy.reviewed_on = "2026-99-99"),
   ]) {
     const policy = structuredClone(original);

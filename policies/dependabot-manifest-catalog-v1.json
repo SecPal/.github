@@ -83,6 +83,7 @@
     "vcpkg"
   ],
   "behavior_provenance": {
+    "cargo_workspace": ["cargo/lib/dependabot/cargo/file_fetcher.rb"],
     "exclude_paths": ["common/lib/dependabot/file_filtering.rb"]
   },
   "discovery_dispositions": {
@@ -262,6 +263,7 @@
       "ecosystem": "cargo",
       "path_regex": "(^|/)Cargo\\.toml$",
       "coverage_directory": "parent",
+      "ownership": "cargo-package",
       "source_paths": ["cargo/lib/dependabot/cargo/file_fetcher.rb"]
     },
     {

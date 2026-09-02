@@ -9,6 +9,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import * as yaml from "js-yaml";
+import { parse as parseToml } from "smol-toml";
 
 const SCRIPT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_POLICY = path.join(SCRIPT_ROOT, "policies", "dependabot-manifest-catalog-v1.json");
@@ -412,10 +413,14 @@ function loadPolicy(filename) {
   const provenance = new Set(policy.upstream.dependabot_core_source_paths);
   object(policy.behavior_provenance, "policy.behavior_provenance");
   if (
-    Object.keys(policy.behavior_provenance).sort().join("\0") !== "exclude_paths" ||
-    !Array.isArray(policy.behavior_provenance.exclude_paths) ||
-    !policy.behavior_provenance.exclude_paths.length ||
-    policy.behavior_provenance.exclude_paths.some((source) => !provenance.has(source))
+    Object.keys(policy.behavior_provenance).sort().join("\0") !==
+      "cargo_workspace\0exclude_paths" ||
+    Object.values(policy.behavior_provenance).some(
+      (sources) =>
+        !Array.isArray(sources) ||
+        !sources.length ||
+        sources.some((source) => !provenance.has(source))
+    )
   )
     throw new ContractError("POLICY_ERROR", "behavior provenance is invalid or incomplete");
   for (const [ecosystem, disposition] of Object.entries(policy.discovery_dispositions)) {
@@ -582,7 +587,8 @@ function loadExceptions(root, relative, policy, asOf) {
     const label = `${relative}.classifications[${index}]`;
     const entry = reviewRecord(candidate, label, asOf, new Set(["directory", "ecosystem"]));
     closedKeys(entry, CLASSIFICATION_KEYS, label);
-    const directory = normalizeManifest(entry.directory, `${label}.directory`);
+    const directory =
+      entry.directory === "/" ? "" : normalizeManifest(entry.directory, `${label}.directory`);
     if (!new Set(["opentofu", "terraform"]).has(entry.ecosystem))
       throw new ContractError(
         "SCHEMA_ERROR",
@@ -663,15 +669,17 @@ function contentMatches(root, manifestPath, kind) {
   if (source === null) return false;
   if (kind === "python-requirements") {
     if (/requirements/i.test(path.posix.basename(manifestPath))) return true;
-    return source.split(/\r?\n/).every((line) => {
+    let hasDependency = false;
+    for (const line of source.split(/\r?\n/)) {
       const value = line.trim();
-      return (
-        value === "" ||
-        value.startsWith("#") ||
-        value.startsWith("-") ||
-        /^[A-Za-z0-9_.-]+(?:\[[^\]]+\])?\s*(?:[<>=!~]=?|===)\s*\S+/.test(value)
-      );
-    });
+      if (value === "" || value.startsWith("#") || value.startsWith("-")) continue;
+      if (/^[A-Za-z0-9_.-]+(?:\[[^\]]+\])?\s*(?:[<>=!~]=?|===)\s*\S+/.test(value)) {
+        hasDependency = true;
+        continue;
+      }
+      return false;
+    }
+    return hasDependency;
   }
   if (kind === "kubernetes-resource") {
     try {
@@ -704,6 +712,24 @@ function workspacePatterns(value) {
   return [];
 }
 
+function normalizedWorkspacePattern(pattern) {
+  if (typeof pattern !== "string" || pattern === "" || pattern.startsWith("/")) return null;
+  const normalized = path.posix.normalize(pattern).replace(/^\.\//, "").replace(/\/$/, "");
+  if (
+    normalized === "." ||
+    normalized === ".." ||
+    normalized.startsWith("../") ||
+    normalized.includes("\\")
+  )
+    return null;
+  return normalized;
+}
+
+function matchesWorkspacePattern(pattern, relative) {
+  const normalized = normalizedWorkspacePattern(pattern);
+  return normalized !== null && globRegex(normalized).test(relative);
+}
+
 function javascriptOwnership(root, manifestPath, tracked) {
   const manifestDirectory =
     path.posix.dirname(manifestPath) === "." ? "" : path.posix.dirname(manifestPath);
@@ -720,7 +746,11 @@ function javascriptOwnership(root, manifestPath, tracked) {
     if (!relative || relative.startsWith("..")) continue;
     try {
       const document = JSON.parse(readTrackedText(root, candidate));
-      if (workspacePatterns(document.workspaces).some((pattern) => matchesGlob(pattern, relative)))
+      if (
+        workspacePatterns(document.workspaces).some((pattern) =>
+          matchesWorkspacePattern(pattern, relative)
+        )
+      )
         selected = candidate;
     } catch (error) {
       if (error instanceof ContractError) throw error;
@@ -745,6 +775,76 @@ function javascriptOwnership(root, manifestPath, tracked) {
     // Dependabot will surface malformed package.json; discovery still retains it as npm data.
   }
   return { coverageDirectory: parentDirectory(selected), ecosystem };
+}
+
+function cargoDocument(root, manifestPath) {
+  try {
+    return parseToml(readTrackedText(root, manifestPath));
+  } catch (error) {
+    if (error instanceof ContractError) throw error;
+    return null;
+  }
+}
+
+function cargoWorkspacePatterns(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function matchesCargoWorkspacePattern(pattern, relative) {
+  const normalized = normalizedWorkspacePattern(pattern);
+  return normalized !== null && globRegex(normalized).test(relative);
+}
+
+function isCargoWorkspaceExcluded(pattern, relative) {
+  return normalizedWorkspacePattern(pattern) === relative;
+}
+
+function cargoOwnership(root, manifestPath, tracked) {
+  const manifestDirectory =
+    path.posix.dirname(manifestPath) === "." ? "" : path.posix.dirname(manifestPath);
+  const trackedSet = new Set(tracked);
+  const manifest = cargoDocument(root, manifestPath);
+  const explicitWorkspace = manifest?.package?.workspace;
+  if (typeof explicitWorkspace === "string") {
+    const workspaceDirectory = path.posix.normalize(
+      path.posix.join(manifestDirectory, explicitWorkspace)
+    );
+    const workspaceManifest = path.posix.join(
+      workspaceDirectory === "." ? "" : workspaceDirectory,
+      "Cargo.toml"
+    );
+    if (
+      workspaceDirectory !== ".." &&
+      !workspaceDirectory.startsWith("../") &&
+      trackedSet.has(workspaceManifest) &&
+      cargoDocument(root, workspaceManifest)?.workspace
+    )
+      return parentDirectory(workspaceManifest);
+  }
+
+  let selected = null;
+  for (const candidate of tracked.filter((item) => item.endsWith("Cargo.toml"))) {
+    if (candidate === manifestPath) continue;
+    const candidateDirectory =
+      path.posix.dirname(candidate) === "." ? "" : path.posix.dirname(candidate);
+    if (candidateDirectory && !manifestDirectory.startsWith(`${candidateDirectory}/`)) continue;
+    const relative = path.posix.relative(candidateDirectory || ".", manifestDirectory || ".");
+    if (!relative || relative.startsWith("..")) continue;
+    const workspace = cargoDocument(root, candidate)?.workspace;
+    if (!workspace || typeof workspace !== "object" || Array.isArray(workspace)) continue;
+    const members = cargoWorkspacePatterns(workspace.members);
+    const excluded = [
+      ...cargoWorkspacePatterns(workspace.exclude),
+      ...cargoWorkspacePatterns(workspace.excluded_paths),
+    ];
+    if (
+      members.some((pattern) => matchesCargoWorkspacePattern(pattern, relative)) &&
+      !excluded.some((pattern) => isCargoWorkspaceExcluded(pattern, relative)) &&
+      (selected === null || candidateDirectory.length > selected.directory.length)
+    )
+      selected = { directory: candidateDirectory, manifest: candidate };
+  }
+  return selected ? parentDirectory(selected.manifest) : parentDirectory(manifestPath);
 }
 
 function discover(root, policy, reviewed) {
@@ -818,6 +918,8 @@ function discover(root, policy, reviewed) {
       const directory = path.posix.dirname(manifestPath);
       const uvLock = path.posix.join(directory === "." ? "" : directory, "uv.lock");
       ecosystem = trackedSet.has(uvLock) ? "uv" : "pip";
+    } else if (ownershipRule?.ownership === "cargo-package") {
+      coverageDirectory = cargoOwnership(root, manifestPath, tracked);
     }
     const rule = matchingRules.find((item) => item.ecosystem === ecosystem);
     manifests.push({
@@ -1327,7 +1429,7 @@ function report(options, policy, assertion, items, inputDiagnostics, itemName = 
 
 function textReport(value) {
   const lines = [
-    `${value.assertion} ${value.status} ${value.repository} policy=${value.catalog.policy_version}`,
+    `${value.assertion} ${value.status} ${value.repository} policy=${value.catalog?.policy_version ?? "-"}`,
   ];
   for (const diagnostic of value.diagnostics) {
     lines.push(

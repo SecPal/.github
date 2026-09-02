@@ -83,8 +83,8 @@ exception cannot classify it. Generic files such as `build.yaml`,
 `packages.json`, and `modules.toml` are not candidates without dependency
 evidence. Ambiguous infrastructure files fail closed at module scope. A module
 containing `.tofu` selects OpenTofu; a `.tf`-only module needs one protected
-directory classification, and contradictory per-directory ownership is
-rejected.
+directory classification (`directory: /` is the sole representation for the
+repository root), and contradictory per-directory ownership is rejected.
 
 ## Coverage semantics
 
@@ -110,12 +110,14 @@ not authorization evidence.
 
 GitHub Actions workflows in `.github/workflows` derive `/`, matching
 Dependabot's documented root special case. Ecosystem-specific ownership is
-applied where pinned fetchers require it: an npm workspace member derives the
-matched workspace root, and Terraform/OpenTofu ownership applies to the whole
-effective module directory. Other primary manifests derive their direct parent
-directory. Therefore npm coverage for `/tools` cannot cover an unrelated
-`frontend/package.json`, while npm coverage for `/` does cover a declared root
-workspace member.
+applied where pinned fetchers require it: npm and Cargo workspace members derive
+their matched workspace root, while excluded or undeclared nested manifests keep
+independent ownership. Workspace patterns match complete paths relative to the
+candidate root rather than arbitrary basenames. Terraform/OpenTofu ownership
+applies to the whole effective module directory. Other primary manifests derive
+their direct parent directory. Therefore npm coverage for `/tools` cannot cover
+an unrelated `frontend/package.json`, while npm or Cargo coverage for `/` covers
+a declared root workspace member.
 
 Dependabot Core recognizes names containing `Dockerfile` or `Containerfile`
 under its `docker` package ecosystem. The SecPal catalog preserves that exact

@@ -34,7 +34,7 @@ validate_applicability() {
 workflow_path=".github/workflows/codeql.yml"
 validate_applicability "$REPO_ROOT" "$workflow_path"
 
-fixture="$(mktemp -d)"
+fixture="$(mktemp -d "${TMPDIR:-/tmp}/codeql-applicability.XXXXXX")"
 trap 'rm -rf "$fixture"' EXIT
 git init --quiet "$fixture"
 mkdir -p "$fixture/.github/workflows" "$fixture/tests"
