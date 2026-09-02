@@ -230,7 +230,7 @@ field or `TRACKED_AS_FOLLOW_UP`; tracked follow-up resolution requires version
 
 Commit-bound eligibility remains the normal remediation path. A distinct
 resolution-only path exists only for exact technically non-blocking feedback
-outside the authenticated final feedback boundary and observed on the unchanged
+absent from authenticated final eligibility and observed on the unchanged
 final delivery head. It does not extend the
 delivery lifecycle, rerun validation, consume an unrestricted review or
 remediation cycle, change the delivery tree, create a commit or push, inspect
@@ -240,9 +240,13 @@ The path first verifies the complete final reviewed state, canonical final
 eligibility artifact, validation receipt, final attestation, local final tree
 and head, receipt trailer, accepted commit signature, and exact origin. The
 eligibility digest must match the receipt and attestation, every eligible thread
-must exist in the reviewed snapshot, and the proposed late thread must be absent
-from both final sets. Classification creation, disposition creation, and
-resolution independently re-establish this origin predicate. It derives the
+must exist in the reviewed snapshot, and the proposed target must be absent
+from final eligibility. Membership in authenticated final reviewed state
+derives `REVIEWED_BUT_INELIGIBLE`; absence from it derives
+`ABSENT_FROM_BOTH`. A caller cannot select the origin, and original eligibility
+is never replaced or amended. Classification creation, disposition creation,
+and resolution independently re-establish the origin and its closed decision
+policy. It derives the
 delivery signer fingerprint from
 that cryptographic verification. It then captures only the one explicitly
 named live thread and signs the canonical
@@ -257,10 +261,14 @@ artifact is never its trust root. Artifact and signature outputs must be in the
 private session area outside the delivery repository, so creating the evidence
 cannot alter that worktree or tree.
 
-The initial supported authorization is exactly
-`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` with
-`technically_blocking=false`. Classification is independently established and
-recorded in separately signed exact evidence; no comment-text heuristic exists.
+The closed authorization is exactly
+`INFORMATIONAL + NON_ACTIONABLE + technically_blocking=false` for either
+derived origin. Existing
+`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE +
+technically_blocking=false` remains authorized only for
+`ABSENT_FROM_BOTH`. No other classification, disposition, technical blocker,
+or caller-selected origin is accepted. Classification is independently
+established and recorded in signed exact evidence; no text heuristic exists.
 The signed artifact
 binds the repository, delivery issue, PR, unchanged final head and tree, final
 receipt/attestation/eligibility digests, signer, exact thread, top-level comment
@@ -270,8 +278,8 @@ and exact resolution action. It never selects threads by query or pattern.
 
 “Post-push” is lifecycle shorthand for this authenticated boundary. No GitHub
 wall-clock push-order proof is used or claimed: authority comes from exact
-absence in the authenticated final reviewed-state and commit-bound eligibility
-artifacts while the delivery head remains unchanged.
+authenticated reviewed-state membership or absence, commit-bound eligibility
+absence, and the unchanged delivery head.
 
 Create authenticated classification evidence, then detached disposition
 evidence:

@@ -5,6 +5,44 @@
   "title": "SecPal authenticated post-push late-feedback disposition",
   "type": "object",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": { "schema_version": { "const": "1.0" } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "properties": {
+          "threads": {
+            "items": {
+              "properties": {
+                "classification": { "const": "INVALID_FALSE_OR_MISLEADING" },
+                "disposition": { "const": "DISPROVEN_WITH_EVIDENCE" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "schema_version": { "const": "1.1" } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "properties": {
+          "threads": {
+            "items": {
+              "properties": {
+                "classification": { "const": "INFORMATIONAL" },
+                "disposition": { "const": "NON_ACTIONABLE" }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "required": [
     "schema_version",
     "kind",
@@ -21,7 +59,7 @@
     "threads"
   ],
   "properties": {
-    "schema_version": { "const": "1.0" },
+    "schema_version": { "enum": ["1.0", "1.1"] },
     "kind": { "const": "LATE_FEEDBACK_DISPOSITION" },
     "repository": {
       "type": "string",
@@ -68,6 +106,22 @@
     "thread": {
       "type": "object",
       "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "classification": { "const": "INVALID_FALSE_OR_MISLEADING" },
+            "disposition": { "const": "DISPROVEN_WITH_EVIDENCE" }
+          },
+          "required": ["classification", "disposition"]
+        },
+        {
+          "properties": {
+            "classification": { "const": "INFORMATIONAL" },
+            "disposition": { "const": "NON_ACTIONABLE" }
+          },
+          "required": ["classification", "disposition"]
+        }
+      ],
       "required": [
         "thread_id",
         "top_level_comment_node_id",
@@ -98,8 +152,8 @@
         "reply_count": { "type": "integer", "minimum": 0 },
         "is_resolved": { "const": false },
         "is_outdated": { "type": "boolean" },
-        "classification": { "const": "INVALID_FALSE_OR_MISLEADING" },
-        "disposition": { "const": "DISPROVEN_WITH_EVIDENCE" },
+        "classification": { "enum": ["INVALID_FALSE_OR_MISLEADING", "INFORMATIONAL"] },
+        "disposition": { "enum": ["DISPROVEN_WITH_EVIDENCE", "NON_ACTIONABLE"] },
         "technically_blocking": { "const": false },
         "classification_evidence_digest": { "$ref": "#/$defs/digest" },
         "authorized_action": { "const": "RESOLVE_REVIEW_THREAD" }

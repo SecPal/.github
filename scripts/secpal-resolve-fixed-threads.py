@@ -1552,17 +1552,30 @@ def load_final_feedback_boundary(
     return FinalFeedbackBoundary(reviewed, validation, eligibility)
 
 
-def require_late_target_origin(
+def derive_post_freeze_origin(
     boundary: FinalFeedbackBoundary,
     thread_id: str,
-) -> None:
+) -> str:
     if thread_id in boundary.eligibility.thread_ids:
         raise ResolutionError(
             f"late target already has commit-bound eligibility: {thread_id}"
         )
     if thread_id in boundary.reviewed.thread_ids:
+        return late_disposition.REVIEWED_BUT_INELIGIBLE
+    return late_disposition.ABSENT_FROM_BOTH
+
+
+def require_post_freeze_decision(
+    origin: str,
+    classification: str,
+    disposition: str,
+) -> None:
+    decision = (classification, disposition)
+    if decision not in late_disposition.POST_FREEZE_ORIGIN_DECISIONS.get(
+        origin, frozenset()
+    ):
         raise ResolutionError(
-            f"late target is present in authenticated final reviewed state: {thread_id}"
+            f"late classification decision is unsupported for origin {origin}"
         )
 
 
@@ -2009,8 +2022,10 @@ def create_late_classification_artifact(
     ):
         raise ResolutionError("late classification risk facts are malformed")
     blockers = tuple(sorted(supplied_blockers))
-    if classification != "INVALID_FALSE_OR_MISLEADING" or disposition != (
-        "DISPROVEN_WITH_EVIDENCE"
+    if (
+        (classification, disposition) not in late_disposition.POST_FREEZE_DECISIONS
+        or technically_blocking
+        or blockers
     ):
         raise ResolutionError("late classification decision is unsupported")
     boundary = load_final_feedback_boundary(
@@ -2022,7 +2037,8 @@ def create_late_classification_artifact(
         final_validation_evidence_path=Path(final_validation_evidence_path),
         final_eligibility_evidence_path=Path(final_eligibility_evidence_path),
     )
-    require_late_target_origin(boundary, thread_id)
+    origin = derive_post_freeze_origin(boundary, thread_id)
+    require_post_freeze_decision(origin, classification, disposition)
     root = Path(repository_root)
     try:
         resolved_root = root.resolve(strict=True)
@@ -2061,7 +2077,9 @@ def create_late_classification_artifact(
         )
     reply_digest, reply_count = _reply_state_digest(target.thread)
     artifact = {
-        "schema_version": late_disposition.SCHEMA_VERSION,
+        "schema_version": late_disposition.schema_version_for_decision(
+            classification, disposition
+        ),
         "kind": late_disposition.CLASSIFICATION_KIND,
         "repository": repository,
         "delivery_issue_number": delivery_issue_number,
@@ -2116,6 +2134,7 @@ def create_late_classification_artifact(
         "signature_format": signer.signature_format,
         "signer_fingerprint": signer.fingerprint,
         "thread_id": thread_id,
+        "origin": origin,
         "finding_id": finding_id,
         "finding_evidence_digest": finding_evidence_digest,
         "classification": classification,
@@ -2211,7 +2230,7 @@ def create_late_disposition_artifact(
     )
     if not isinstance(thread_id, str) or not THREAD_ID.fullmatch(thread_id):
         raise ResolutionError("late classification thread binding is malformed")
-    require_late_target_origin(boundary, thread_id)
+    origin = derive_post_freeze_origin(boundary, thread_id)
     try:
         classification = late_disposition.parse_classification_artifact(
             Path(classification_evidence_path),
@@ -2225,6 +2244,11 @@ def create_late_disposition_artifact(
         )
     except late_disposition.LateDispositionError as exc:
         raise ResolutionError(str(exc)) from exc
+    require_post_freeze_decision(
+        origin,
+        classification.thread.classification,
+        classification.thread.disposition,
+    )
     thread_ids = (thread_id,)
     limits = load_repository_limits(repository)
     budget = InvocationBudget(
@@ -2259,7 +2283,10 @@ def create_late_disposition_artifact(
         }
     ]
     artifact = {
-        "schema_version": late_disposition.SCHEMA_VERSION,
+        "schema_version": late_disposition.schema_version_for_decision(
+            authorization.classification,
+            authorization.disposition,
+        ),
         "kind": late_disposition.KIND,
         "repository": repository,
         "delivery_issue_number": delivery_issue_number,
@@ -2304,6 +2331,7 @@ def create_late_disposition_artifact(
         "signer_fingerprint": signer.fingerprint,
         "thread_ids": list(thread_ids),
         "authorized_action": "RESOLVE_EXACT_REVIEW_THREADS",
+        "origin": origin,
         "delivery_tree_changed": False,
         "lifecycle_consumption": {
             "unrestricted_reviews": 0,
@@ -2360,7 +2388,7 @@ def resolve_late_disposition_threads(
         final_validation_evidence_path=Path(final_validation_evidence_path),
         final_eligibility_evidence_path=Path(final_eligibility_evidence_path),
     )
-    require_late_target_origin(boundary, thread_ids[0])
+    origin = derive_post_freeze_origin(boundary, thread_ids[0])
     signer = verify_local_fix_commit(
         Path(repository_root),
         repository,
@@ -2385,7 +2413,6 @@ def resolve_late_disposition_threads(
                 boundary.validation.eligibility_evidence_digest
             ),
             thread_ids=thread_ids,
-            allowed_dispositions=ELIGIBLE_DISPOSITIONS,
         )
     except late_disposition.LateDispositionError as exc:
         raise ResolutionError(str(exc)) from exc
@@ -2402,6 +2429,11 @@ def resolve_late_disposition_threads(
         )
     except late_disposition.LateDispositionError as exc:
         raise ResolutionError(str(exc)) from exc
+    require_post_freeze_decision(
+        origin,
+        classification.thread.classification,
+        classification.thread.disposition,
+    )
     if authorization.threads != (classification.thread,):
         raise ResolutionError(
             "late disposition does not match authenticated classification evidence"
@@ -2500,6 +2532,7 @@ def resolve_late_disposition_threads(
                     "validation_evidence_digest": boundary.validation.evidence_digest,
                     "late_disposition_evidence_digest": authorization.artifact_digest,
                     "eligibility_path": "authenticated_late_disposition",
+                    "origin": origin,
                     "mode": "apply",
                     "status": "failed",
                     "already_resolved": already_resolved,
@@ -2527,6 +2560,7 @@ def resolve_late_disposition_threads(
         "validation_evidence_digest": boundary.validation.evidence_digest,
         "late_disposition_evidence_digest": authorization.artifact_digest,
         "eligibility_path": "authenticated_late_disposition",
+        "origin": origin,
         "mode": "apply" if apply else "dry-run",
         "status": "success",
         "already_resolved": already_resolved,

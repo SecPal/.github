@@ -148,21 +148,39 @@ merge-readiness inspection.
 ### Authenticated post-final-push late disposition
 
 Commit-bound eligibility above remains unchanged and is the normal remediation
-path. One additional resolution-only path exists for an exact thread outside
-the authenticated final feedback boundary and observed on the unchanged final
-delivery head. It accepts only
-`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` with
-`technically_blocking=false`; classification is explicit independent review
-judgment and is never inferred from text.
+path. One additional resolution-only path exists for an exact thread absent
+from authenticated final eligibility and observed on the unchanged final
+delivery head. Its origin is derived rather than supplied: either the target is
+present in authenticated final reviewed state but absent from final
+eligibility (`REVIEWED_BUT_INELIGIBLE`), or it is absent from both
+(`ABSENT_FROM_BOTH`). A target present in final eligibility is rejected; the
+path never replaces or amends original eligibility.
+
+The closed authorization is
+`INFORMATIONAL + NON_ACTIONABLE + technically_blocking=false` for either
+derived origin. Existing
+`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE +
+technically_blocking=false` authority remains unchanged and is accepted only
+for `ABSENT_FROM_BOTH`. No other classification, disposition, technical
+blocker, or caller-selected origin is accepted. Classification is explicit
+independent review judgment and is never inferred from text.
+
+Historical schema `1.0` remains restricted to the original
+`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` semantics. New
+`INFORMATIONAL + NON_ACTIONABLE` artifacts use schema `1.1`. The signed schema
+version selects one exact pair, so formerly rejected `1.0` bytes do not acquire
+new authority; unknown versions and cross-version pair substitution fail closed.
 
 This path first independently verifies the existing complete final reviewed
 state, the canonical final eligibility artifact authenticated by the receipt
 and attestation, signed receipt trailer, final tree, exact head and origin, and
 accepted local commit signature. Every final-eligibility thread must exist in
-the final reviewed state. The proposed late target must be absent from both
-authenticated sets before classification authority is created, and the same
-origin predicate is independently re-established by disposition creation and
-resolution. The verified signature's
+the final reviewed state. The proposed target must be absent from final
+eligibility; authenticated membership in final reviewed state derives
+`REVIEWED_BUT_INELIGIBLE`, while authenticated absence from it derives
+`ABSENT_FROM_BOTH`. Classification creation, disposition creation, and
+resolution independently re-establish the origin and its closed decision
+policy. The verified signature's
 actual format and fingerprint establish the only signer trust anchor. A strict
 canonical `late-classification.schema.json` document first authenticates the
 exact independently established decision, stable finding ID, finding-evidence
@@ -196,11 +214,11 @@ path consumes zero unrestricted reviews, remediation cycles, commits, pushes,
 and Ready transitions. It has no CI, review-request, label, issue, source,
 readiness, merge, or generic conversation authority.
 
-“Post-final-push” is lifecycle shorthand for feedback outside this
-authenticated final-feedback boundary. This evidence proves canonical snapshot
-and eligibility absence under the unchanged final head; it does not claim that
-GitHub wall-clock creation time is cryptographically ordered after a branch
-push.
+“Post-final-push” is lifecycle shorthand for this authenticated disposition
+boundary. This evidence proves the exact target's reviewed-state membership or
+absence and its eligibility absence under the unchanged final head; it does not
+claim that GitHub wall-clock creation time is cryptographically ordered after
+a branch push.
 
 ## Normal fast-path state machine
 
