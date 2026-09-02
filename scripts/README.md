@@ -1001,15 +1001,18 @@ bash .github/setup-hooks.sh
 Pure verification and adaptation boundaries for exact OCI index/platform
 identity, authoritative Syft SPDX association, vendor-native Grype/Trivy
 evidence, database identity/freshness, trusted reviewed-VEX checkout bytes, and
-the versioned re-evaluation run envelope. External registry/scanner operations
+the versioned re-evaluation run envelope. It closes credentialed references to
+the authenticated caller's GHCR namespace and re-derives trusted policy output
+from raw evidence before issue mutation. External registry/scanner operations
 remain in the reusable workflow.
 
 ### `secpal-vulnerability-triage.py`
 
-Validates the run envelope and existing normalized policy result, then plans or
-delivers caller-scoped deterministic GitHub issue updates. It searches every
-lookup key, fails closed on ambiguous matches, and maintains stable stale-health
-alerts without reimplementing vulnerability policy.
+Validates the run envelope and normalized policy result, then plans or delivers
+caller-scoped deterministic GitHub issue updates. It searches every exact-subject
+lookup key, fails closed on ambiguous matches, reconciles healthy inverse
+transitions, and maintains stable stale-health alerts without reimplementing
+vulnerability policy.
 
 When adding new scripts:
 

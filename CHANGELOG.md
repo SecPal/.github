@@ -21,6 +21,11 @@ Log of notable changes to SecPal organization defaults (newest first).
   deterministic caller-scoped finding and stale-health triage
 - keep scanner/evaluation jobs read-only and isolate issue mutation without any
   artifact rebuild, retag, deployment, or production mutation
+- close GitHub-token registry access to the authenticated caller's GHCR
+  namespace, share only ephemeral native client credentials, and independently
+  re-derive policy before issue mutation
+- reconcile exact-subject current-state findings after healthy evidence and
+  prove historical scanner replay with pinned binaries and controlled databases
 
 ## 2026-09-01 - Authenticate Exact Pre-Enrollment State Adoption
 
