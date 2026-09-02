@@ -6510,7 +6510,7 @@ class ResolveFixedThreadsTests(TestCase):
             ).stdout.strip()
             with self.assertRaisesRegex(
                 MODULE.ResolutionError,
-                "delivery validation registry entry is invalid",
+                "immutable delivery validation registry is invalid",
             ):
                 load_validation_evidence(
                     evidence_path,
@@ -6522,6 +6522,50 @@ class ResolveFixedThreadsTests(TestCase):
 
         self.assertEqual(validation.validation_receipt, receipt)
         self.assertEqual(validation.attestation, attestation)
+
+    def test_immutable_registry_rejects_invalid_maintained_structure(self) -> None:
+        current = json.loads(MODULE.REGISTRY_PATH.read_text(encoding="utf-8"))
+
+        def entry(registry: dict[str, Any]) -> dict[str, Any]:
+            return next(
+                item
+                for item in registry["repositories"]
+                if item["repository"] == "SecPal/.github"
+            )
+
+        cases: dict[str, Any] = {
+            "unknown schema": lambda registry: registry.__setitem__(
+                "schema_version", "999"
+            ),
+            "invalid default branch": lambda registry: entry(registry).__setitem__(
+                "default_branch", 7
+            ),
+            "empty allowed bases": lambda registry: entry(registry).__setitem__(
+                "allowed_base_repositories", []
+            ),
+            "invalid signature policy": lambda registry: entry(
+                registry
+            ).__setitem__("signature_policy", {}),
+            "invalid check policy": lambda registry: entry(registry).__setitem__(
+                "check_policy", {}
+            ),
+            "empty validation set": lambda registry: entry(registry).update(
+                focused_validation=[], required_local_validation=[], manual_gates=[]
+            ),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(name=name):
+                registry = copy.deepcopy(current)
+                mutate(registry)
+                raw = json.dumps(registry)
+                with self.assertRaises(MODULE.fast_path.SecurityBlocker):
+                    MODULE.fast_path.load_immutable_delivery_registry_binding(
+                        repository_root=ROOT,
+                        head_sha="a" * 40,
+                        repository="SecPal/.github",
+                        read_immutable_file=lambda *_arguments: raw,
+                        reader_context=None,
+                    )
 
     def test_attestation_rejects_forged_receipt_and_missing_manual_gates(
         self,

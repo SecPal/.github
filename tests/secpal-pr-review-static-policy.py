@@ -542,9 +542,13 @@ LOADED_MODULE_ATTRIBUTES = {
             "normalize_ready_integration_evidence",
             "normalize_ready_integration_prior_authority",
             "normalize_exceptional_recovery_evidence",
+            "PROHIBITED_REGISTRY_OPERATIONS",
+            "REGISTRY_CONFIGURATION_KEYS",
             "load_immutable_delivery_registry_binding",
             "validate_manual_gate_evidence",
             "validation_registry_binding",
+            "validate_registry_command",
+            "validate_repository_registry_structure",
             "verify_commit_signatures",
             "verify_validation_attestation",
         },
@@ -554,6 +558,11 @@ LOADED_MODULE_ATTRIBUTES = {
         },
     },
     "fast_path.py": {
+        "evidence": {
+            "ContractError",
+            "validate_against_authoritative_schema",
+            "validate_config",
+        },
         "follow_up": {
             "FollowUpError",
             "parse_follow_up",
@@ -713,6 +722,19 @@ DYNAMIC_IMPORT_CALLS = {
         ),
     },
     "fast_path.py": {
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "importlib.util.spec_from_file_location("
+            "'secpal_pr_review_evidence_shared', EVIDENCE_HELPER)",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "spec.loader.exec_module(module)",
+        ),
         DynamicImportCall(
             ("_load_follow_up_helper",),
             "importlib.util.spec_from_file_location("
@@ -901,6 +923,10 @@ SAFE_GETATTR_CALLS = {
     },
     "fast_path.py": {
         DynamicImportCall(
+            ("_load_evidence_helper",),
+            "getattr(loaded, '__file__', None)",
+        ),
+        DynamicImportCall(
             ("_load_follow_up_helper",),
             "getattr(loaded, '__file__', None)",
         ),
@@ -965,6 +991,14 @@ SAFE_SYS_MODULES_CALLS = {
     },
     "fast_path.py": {
         DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules.get('secpal_pr_review_evidence_shared')",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules.pop(spec.name, None)",
+        ),
+        DynamicImportCall(
             ("_load_follow_up_helper",),
             "sys.modules.get('secpal_pr_review.follow_up')",
         ),
@@ -1028,6 +1062,10 @@ SAFE_SYS_MODULES_STORES = {
         ),
     },
     "fast_path.py": {
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules[spec.name]",
+        ),
         DynamicImportCall(
             ("_load_follow_up_helper",),
             "sys.modules[spec.name]",

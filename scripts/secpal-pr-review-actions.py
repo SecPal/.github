@@ -101,6 +101,7 @@ def _load_fast_path_helper() -> Any:
 
 fast_path = _load_fast_path_helper()
 follow_up = fast_path.follow_up
+PROHIBITED_OPERATION_KINDS = tuple(fast_path.PROHIBITED_REGISTRY_OPERATIONS)
 
 
 def _load_lifecycle_publication_helpers() -> tuple[Any, Any]:
@@ -194,18 +195,6 @@ MUTATION_KINDS_BY_STATE = {
     },
     "RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE": {"THREAD_RESOLUTION"},
 }
-PROHIBITED_OPERATION_KINDS = (
-    "REVIEW_REQUEST",
-    "READY_TRANSITION",
-    "LABEL",
-    "ISSUE",
-    "REVIEW_SUBMISSION",
-    "MERGE",
-    "AUTO_MERGE",
-    "COMMENT_DELETE",
-    "REVIEW_DISMISSAL",
-    "BRANCH_WRITE",
-)
 SESSION_LIMITS = {
     "remediation_cycles": 2,
     "state_captures": 3,
@@ -214,19 +203,6 @@ SESSION_LIMITS = {
     "fast_forward_pushes": 2,
     "evidence_replies": 10,
 }
-P21_CONFIGURATION_KEYS = (
-    "repository",
-    "default_branch",
-    "allowed_base_repositories",
-    "reviewer_identities",
-    "signature_policy",
-    "check_policy",
-    "maximum_api_calls",
-    "maximum_items",
-    "maximum_threads",
-    "maximum_comments",
-    "maximum_reactions",
-)
 RESOLVABLE_DISPOSITIONS = {
     "CORRECTED_AND_VERIFIED",
     "PROVEN_EXISTING_FIX",
@@ -286,11 +262,6 @@ STATUS_REPLY = re.compile(
 SECRET_VALUE = fast_path.SECRET_VALUE
 OID_PATTERN = re.compile(r"^[0-9a-fA-F]{40,64}$")
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-SAFE_COMMAND_NAME = re.compile(r"^(?:[A-Za-z0-9_.+-]+|\./[A-Za-z0-9_./+-]+)$")
-SAFE_PACKAGE_SCRIPT_NAME = re.compile(r"^[A-Za-z0-9_.:+-]+$")
-DESTRUCTIVE_COMMANDS = {"rm", "rmdir", "shred", "mkfs", "dd", "sudo", "git-clean"}
-DIRECT_VALIDATION_EXECUTABLES = {"composer", "node", "npm", "python3", "reuse"}
-COMPOSER_VALIDATION_SCRIPTS = {"analyse", "ci:check", "test"}
 DISPOSITION_POLICY = {
     "VALID_ACTIONABLE": {"PENDING", "CORRECTED_AND_VERIFIED", "PROVEN_EXISTING_FIX"},
     "INVALID_FALSE_OR_MISLEADING": {"DISPROVEN_WITH_EVIDENCE"},
@@ -1097,91 +1068,30 @@ def validate_plan(
     return copy.deepcopy(plan)
 
 
-def _validate_command(command: dict[str, Any]) -> None:
-    argv = command.get("argv")
-    if not isinstance(argv, list) or not argv or any(not isinstance(item, str) or not item for item in argv):
-        raise RegistryError("validation command argv must be a non-empty argument array")
-    executable = Path(argv[0]).name
-    executable_path = Path(argv[0])
-    if (
-        not SAFE_COMMAND_NAME.fullmatch(argv[0])
-        or executable_path.is_absolute()
-        or ".." in executable_path.parts
-    ):
-        raise RegistryError("validation command executable must stay repository-relative")
-    if executable in DESTRUCTIVE_COMMANDS or any(
-        item in {"--force", "--delete", "--hard", "deploy", "migrate:fresh"}
-        or item.startswith(("deploy:", "publish:"))
-        for item in argv[1:]
-    ):
-        raise RegistryError("destructive validation command is prohibited")
-    if not argv[0].startswith("./") and executable not in DIRECT_VALIDATION_EXECUTABLES:
-        raise RegistryError("validation command must use a trusted direct executable")
-    if executable == "python3" and not (
-        len(argv) >= 4 and argv[1:3] == ["-m", "unittest"]
-    ):
-        raise RegistryError("registry python commands must invoke unittest")
-    if executable == "node" and argv != ["node", "--test"]:
-        raise RegistryError("registry node commands must invoke the checked-in test suite")
-    if executable == "npm" and not (
-        len(argv) == 3
-        and argv[1] == "run"
-        and SAFE_PACKAGE_SCRIPT_NAME.fullmatch(argv[2])
-    ):
-        raise RegistryError("registry npm commands must name one checked-in package script")
-    if executable == "composer" and not (
-        len(argv) == 2 and argv[1] in COMPOSER_VALIDATION_SCRIPTS
-    ):
-        raise RegistryError("registry composer commands must name one approved project script")
-    if executable == "reuse" and argv != ["reuse", "lint"]:
-        raise RegistryError("registry reuse commands must invoke lint")
-    working_directory = command.get("working_directory")
-    if not isinstance(working_directory, str) or not working_directory or Path(working_directory).is_absolute() or ".." in Path(working_directory).parts:
-        raise RegistryError("validation working directory must stay repository-relative")
-    if not isinstance(command.get("purpose"), str) or not command["purpose"].strip():
-        raise RegistryError("validation command purpose is required")
-
-
 def validate_registry(registry: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(registry, dict):
         raise RegistryError("repository registry must be a JSON object")
     _validate_schema(registry, REGISTRY_SCHEMA_PATH, "workflow_registry", RegistryError)
-    repositories: set[str] = set()
-    for entry in registry["repositories"]:
-        repository = entry["repository"]
-        if not REPOSITORY_PATTERN.fullmatch(repository):
-            raise RegistryError(f"invalid repository identity: {repository}")
-        if repository in repositories:
-            raise RegistryError(f"duplicate repository registry entry: {repository}")
-        repositories.add(repository)
-        p21_configuration = _package_21_configuration(entry)
-        try:
-            evidence.validate_config(p21_configuration)
-        except evidence.ContractError as exc:
-            raise RegistryError(f"invalid Package 2.1 configuration for {repository}: {exc}") from exc
-        for command in (*entry["focused_validation"], *entry["required_local_validation"]):
-            _validate_command(command)
-        if any(
-            command.get("execution_policy") == "focused-only"
-            for command in entry["required_local_validation"]
-        ):
-            raise RegistryError(
-                "required local validation cannot use focused-only execution"
-            )
-        if not entry["required_local_validation"] and not entry["manual_gates"]:
-            raise RegistryError("incomplete validation requires an explicit manual gate")
-        if set(entry["unsupported_operations"]) != set(PROHIBITED_OPERATION_KINDS):
-            raise RegistryError("unsupported operations must retain every prohibited capability")
-    return copy.deepcopy(registry)
+    try:
+        return fast_path.validate_repository_registry_structure(registry)
+    except fast_path.SecurityBlocker as exc:
+        raise RegistryError(str(exc)) from exc
 
 
 def _package_21_configuration(entry: dict[str, Any]) -> dict[str, Any]:
     configuration = {
         key: copy.deepcopy(entry[key])
-        for key in P21_CONFIGURATION_KEYS
+        for key in fast_path.REGISTRY_CONFIGURATION_KEYS
     }
     configuration["schema_version"] = "1.0"
     return configuration
+
+
+def _validate_command(command: dict[str, Any]) -> None:
+    try:
+        fast_path.validate_registry_command(command)
+    except fast_path.SecurityBlocker as exc:
+        raise RegistryError(str(exc)) from exc
 
 
 def load_registry(path: str | None = None) -> dict[str, Any]:
