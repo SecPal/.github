@@ -73,6 +73,8 @@ jobs:
 
       - name: Run finite lifecycle-orchestration unit tests
         run: python3 -m unittest tests/secpal-lifecycle-orchestration-unit.py
+      - name: Run authenticated Ready/Draft lifecycle execution tests
+        run: python3 -m unittest tests/secpal-lifecycle-execution-contract-unit.py
 
       - name: Run finite skill policy tests
         run: bash tests/secpal-pr-review-skill-policy.sh

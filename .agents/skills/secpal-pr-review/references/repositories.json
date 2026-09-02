@@ -75,6 +75,16 @@
             "python3",
             "-m",
             "unittest",
+            "tests/secpal-lifecycle-execution-contract-unit.py"
+          ],
+          "working_directory": ".",
+          "purpose": "Run authenticated Ready/Draft lifecycle execution tests"
+        },
+        {
+          "argv": [
+            "python3",
+            "-m",
+            "unittest",
             "tests/secpal-exceptional-recovery-authority-unit.py"
           ],
           "working_directory": ".",

@@ -9,6 +9,20 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-02 - Execute Authenticated Ready/Draft Transitions
+
+**Added:**
+
+- compose authenticated lifecycle decisions with exact GitHub Ready/Draft
+  mutation, protected-journal successor publication, and final convergence
+  verification
+- recover progress exclusively from live GitHub and authenticated CURRENT state,
+  allowing publication-only continuation without replaying an applied GitHub
+  mutation
+- fail closed on drift, replay, reverse partial state, and ambiguous writes
+  while preserving one-use authorization, lifecycle counters, histories, and
+  Ready monotonicity
+
 ## 2026-09-02 - Re-evaluate Exact Released OCI Artifacts
 
 **Added:**

@@ -843,6 +843,8 @@ grep -Fq 'python3 -m unittest tests/secpal-resolve-fixed-threads-unit.py' "$QUAL
   || fail 'simple resolver unit tests are not enforced in CI'
 grep -Fq 'python3 -m unittest tests/secpal-lifecycle-orchestration-unit.py' "$QUALITY_WORKFLOW" \
   || fail 'finite lifecycle-orchestration unit tests are not enforced in CI'
+grep -Fq 'python3 -m unittest tests/secpal-lifecycle-execution-contract-unit.py' "$QUALITY_WORKFLOW" \
+  || fail 'lifecycle execution unit tests are not enforced in CI'
 grep -Fq 'bash tests/secpal-pr-review-skill-policy.sh' "$QUALITY_WORKFLOW" \
   || fail 'skill policy tests are not enforced in CI'
 grep -Fq 'bash tests/secpal-pr-review-skill-integration.sh' "$QUALITY_WORKFLOW" \
@@ -853,6 +855,8 @@ grep -Fq 'tests/secpal-resolve-fixed-threads-unit.py' "$REGISTRY" \
   || fail 'simple resolver unit tests are not registered'
 grep -Fq 'tests/secpal-lifecycle-orchestration-unit.py' "$REGISTRY" \
   || fail 'finite lifecycle-orchestration unit tests are not registered'
+grep -Fq 'tests/secpal-lifecycle-execution-contract-unit.py' "$REGISTRY" \
+  || fail 'lifecycle execution unit tests are not registered'
 
 protected_paths=(
   "$REPO_ROOT"/.github/workflows/*-review-memory.yml
@@ -1018,6 +1022,7 @@ assert [
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-authority-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-publication-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-orchestration-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-lifecycle-execution-contract-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-exceptional-recovery-authority-unit.py"],
     ["./tests/secpal-pr-review-skill-policy.sh"],
     ["./tests/secpal-pr-review-skill-integration.sh"],
