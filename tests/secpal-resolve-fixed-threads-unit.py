@@ -762,6 +762,8 @@ def late_disposition_payload(
     repository: str = "SecPal/api",
     signer_format: str = "ssh",
     signer_fingerprint: str = "SHA256:fixtureDeliverySigner",
+    classification: str = "INVALID_FALSE_OR_MISLEADING",
+    disposition: str = "DISPROVEN_WITH_EVIDENCE",
 ) -> dict[str, Any]:
     reply_state = [
         {
@@ -773,7 +775,9 @@ def late_disposition_payload(
         for node_id, database_id, reply_body, reply_to_id in (replies or [])
     ]
     return {
-        "schema_version": "1.0",
+        "schema_version": MODULE.late_disposition.schema_version_for_decision(
+            classification, disposition
+        ),
         "kind": "LATE_FEEDBACK_DISPOSITION",
         "repository": repository,
         "delivery_issue_number": delivery_issue,
@@ -802,8 +806,8 @@ def late_disposition_payload(
                 "reply_count": len(reply_state),
                 "is_resolved": False,
                 "is_outdated": False,
-                "classification": "INVALID_FALSE_OR_MISLEADING",
-                "disposition": "DISPROVEN_WITH_EVIDENCE",
+                "classification": classification,
+                "disposition": disposition,
                 "technically_blocking": False,
                 "classification_evidence_digest": "d" * 64,
                 "authorized_action": "RESOLVE_REVIEW_THREAD",
@@ -898,6 +902,8 @@ def run_late_resolution_fixture(
     final_eligibility_thread_ids: Sequence[str] | None = None,
     apply: bool = True,
     signature_error: Exception | None = None,
+    classification: str = "INVALID_FALSE_OR_MISLEADING",
+    disposition: str = "DISPROVEN_WITH_EVIDENCE",
 ) -> tuple[dict[str, Any], FakeGh, FakeGit]:
     root = Path(directory)
     reviewed, attestation, _eligibility, git = (
@@ -908,9 +914,14 @@ def run_late_resolution_fixture(
         )
     )
     body = "The reported recovery behavior is not present."
-    artifact = late_disposition_payload(attestation, body=body)
+    artifact = late_disposition_payload(
+        attestation,
+        body=body,
+        classification=classification,
+        disposition=disposition,
+    )
     classification = {
-        "schema_version": "1.0",
+        "schema_version": artifact["schema_version"],
         "kind": "LATE_FEEDBACK_CLASSIFICATION",
         "repository": "SecPal/api",
         "delivery_issue_number": 724,
@@ -1007,9 +1018,13 @@ def run_late_classification_origin_fixture(
     *,
     reviewed_thread_id: str,
     eligibility_thread_ids: Sequence[str],
+    technically_blocking: bool = False,
+    technical_blockers: Sequence[str] = (),
     target_thread_id: str = "PRRT_LATE_ORIGIN_TARGET",
     target_database_id: Any = 1001,
     artifact_signer: mock.Mock | None = None,
+    classification: str = "INVALID_FALSE_OR_MISLEADING",
+    disposition: str = "DISPROVEN_WITH_EVIDENCE",
 ) -> tuple[dict[str, Any], mock.Mock]:
     root = Path(directory)
     delivery = root / "delivery"
@@ -1081,10 +1096,10 @@ def run_late_classification_origin_fixture(
             thread_id=target_thread_id,
             finding_id="LF-LATE-ORIGIN",
             finding_evidence_digest=hashlib.sha256(body.encode()).hexdigest(),
-            classification="INVALID_FALSE_OR_MISLEADING",
-            disposition="DISPROVEN_WITH_EVIDENCE",
-            technically_blocking=False,
-            technical_blockers=(),
+            classification=classification,
+            disposition=disposition,
+            technically_blocking=technically_blocking,
+            technical_blockers=technical_blockers,
             output_path=output / "classification.json",
             signature_output_path=output / "classification.sig",
         )
@@ -1992,19 +2007,20 @@ class ResolveFixedThreadsTests(TestCase):
                     )
                 signer.assert_not_called()
 
-    def test_cycle2_late_origin_rejects_preexisting_thread_omitted_from_eligibility(
+    def test_post_freeze_accepts_reviewed_but_ineligible_informational_decision(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(
-                MODULE.ResolutionError,
-                "present in authenticated final reviewed state",
-            ):
-                run_late_classification_origin_fixture(
-                    directory,
-                    reviewed_thread_id="PRRT_LATE_ORIGIN_TARGET",
-                    eligibility_thread_ids=(),
-                )
+            result, signer = run_late_classification_origin_fixture(
+                directory,
+                reviewed_thread_id="PRRT_LATE_ORIGIN_TARGET",
+                eligibility_thread_ids=(),
+                classification="INFORMATIONAL",
+                disposition="NON_ACTIONABLE",
+            )
+        self.assertEqual(result["status"], "LATE_CLASSIFICATION_AUTHENTICATED")
+        self.assertEqual(result["origin"], "REVIEWED_BUT_INELIGIBLE")
+        signer.assert_called_once()
 
     def test_cycle2_late_origin_rejects_commit_bound_eligible_thread(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2044,13 +2060,123 @@ class ResolveFixedThreadsTests(TestCase):
         self.assertEqual(result["status"], "LATE_CLASSIFICATION_AUTHENTICATED")
         signer.assert_called_once()
 
+    def test_post_freeze_accepts_absent_informational_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result, signer = run_late_classification_origin_fixture(
+                directory,
+                reviewed_thread_id="PRRT_FINAL_KNOWN",
+                eligibility_thread_ids=(),
+                classification="INFORMATIONAL",
+                disposition="NON_ACTIONABLE",
+            )
+        self.assertEqual(result["origin"], "ABSENT_FROM_BOTH")
+        signer.assert_called_once()
+
+    def test_post_freeze_decision_authority_is_closed_and_origin_derived(
+        self,
+    ) -> None:
+        invalid = (
+            "INVALID_FALSE_OR_MISLEADING",
+            "DISPROVEN_WITH_EVIDENCE",
+        )
+        informational = ("INFORMATIONAL", "NON_ACTIONABLE")
+        self.assertEqual(
+            MODULE.late_disposition.POST_FREEZE_DECISIONS,
+            frozenset({invalid, informational}),
+        )
+        self.assertEqual(
+            MODULE.late_disposition.POST_FREEZE_ORIGIN_DECISIONS,
+            {
+                "REVIEWED_BUT_INELIGIBLE": frozenset({informational}),
+                "ABSENT_FROM_BOTH": frozenset({invalid, informational}),
+            },
+        )
+        self.assertEqual(
+            MODULE.late_disposition.SCHEMA_VERSION_DECISIONS,
+            {
+                "1.0": frozenset({invalid}),
+                "1.1": frozenset({informational}),
+            },
+        )
+        self.assertEqual(
+            MODULE.late_disposition.schema_version_for_decision(*invalid),
+            "1.0",
+        )
+        self.assertEqual(
+            MODULE.late_disposition.schema_version_for_decision(*informational),
+            "1.1",
+        )
+
+        self.assertNotIn(
+            "NON_BLOCKING",
+            {
+                value
+                for decision in MODULE.late_disposition.POST_FREEZE_DECISIONS
+                for value in decision
+            },
+        )
+
+    def test_post_freeze_rejects_arbitrary_decisions_before_signing(self) -> None:
+        decisions = (
+            ("VALID_ACTIONABLE", "CORRECTED_AND_VERIFIED"),
+            ("INFORMATIONAL", "PENDING"),
+            ("ARBITRARY", "NON_ACTIONABLE"),
+        )
+        for classification, disposition in decisions:
+            signer = mock.Mock()
+            with (
+                self.subTest(
+                    classification=classification,
+                    disposition=disposition,
+                ),
+                tempfile.TemporaryDirectory() as directory,
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "decision is unsupported",
+                ),
+            ):
+                run_late_classification_origin_fixture(
+                    directory,
+                    reviewed_thread_id="PRRT_FINAL_KNOWN",
+                    eligibility_thread_ids=(),
+                    classification=classification,
+                    disposition=disposition,
+                    artifact_signer=signer,
+                )
+            signer.assert_not_called()
+
+    def test_post_freeze_rejects_all_technical_blockers_before_signing(
+        self,
+    ) -> None:
+        for blocker in sorted(MODULE.late_disposition.TECHNICAL_BLOCKERS):
+            signer = mock.Mock()
+            with (
+                self.subTest(blocker=blocker),
+                tempfile.TemporaryDirectory() as directory,
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "decision is unsupported",
+                ),
+            ):
+                run_late_classification_origin_fixture(
+                    directory,
+                    reviewed_thread_id="PRRT_FINAL_KNOWN",
+                    eligibility_thread_ids=(),
+                    classification="INFORMATIONAL",
+                    disposition="NON_ACTIONABLE",
+                    technically_blocking=True,
+                    technical_blockers=(blocker,),
+                    artifact_signer=signer,
+                )
+            signer.assert_not_called()
+
     def test_cycle2_disposition_reverifies_authenticated_final_origin(self) -> None:
         cases = (
             (
                 "pre-existing",
                 "PRRT_LATE_NON_BLOCKING",
                 (),
-                "present in authenticated final reviewed state",
+                "unsupported for origin REVIEWED_BUT_INELIGIBLE",
             ),
             (
                 "commit-bound",
@@ -2093,6 +2219,16 @@ class ResolveFixedThreadsTests(TestCase):
                 )
                 with (
                     mock.patch.object(MODULE, "_run_git", git),
+                    mock.patch.object(
+                        MODULE.late_disposition,
+                        "parse_classification_artifact",
+                        return_value=mock.Mock(
+                            thread=mock.Mock(
+                                classification="INVALID_FALSE_OR_MISLEADING",
+                                disposition="DISPROVEN_WITH_EVIDENCE",
+                            )
+                        ),
+                    ),
                     self.assertRaisesRegex(MODULE.ResolutionError, error),
                 ):
                     MODULE.create_late_disposition_artifact(
@@ -2117,7 +2253,7 @@ class ResolveFixedThreadsTests(TestCase):
                 "pre-existing",
                 "PRRT_LATE_NON_BLOCKING",
                 (),
-                "present in authenticated final reviewed state",
+                "unsupported for origin REVIEWED_BUT_INELIGIBLE",
             ),
             (
                 "commit-bound",
@@ -2465,6 +2601,50 @@ class ResolveFixedThreadsTests(TestCase):
         self.assertEqual(result["pending"], ["PRRT_LATE_NON_BLOCKING"])
         self.assertEqual(len(github.calls), 1)
 
+    def test_post_freeze_informational_resolution_accepts_both_derived_origins(
+        self,
+    ) -> None:
+        cases = (
+            ("PRRT_LATE_NON_BLOCKING", "REVIEWED_BUT_INELIGIBLE"),
+            ("PRRT_FINAL_KNOWN", "ABSENT_FROM_BOTH"),
+        )
+        for reviewed_thread, expected_origin in cases:
+            with (
+                self.subTest(origin=expected_origin),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                result, github, _git = run_late_resolution_fixture(
+                    directory,
+                    apply=False,
+                    final_reviewed_thread_id=reviewed_thread,
+                    final_eligibility_thread_ids=(),
+                    classification="INFORMATIONAL",
+                    disposition="NON_ACTIONABLE",
+                )
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["origin"], expected_origin)
+            self.assertEqual(len(github.calls), 1)
+
+    def test_post_freeze_v1_disposition_cannot_gain_informational_meaning(
+        self,
+    ) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "late-disposition thread is ineligible",
+            ),
+        ):
+            run_late_resolution_fixture(
+                directory,
+                apply=False,
+                classification="INFORMATIONAL",
+                disposition="NON_ACTIONABLE",
+                artifact_mutator=lambda value: value.update(
+                    {"schema_version": "1.0"}
+                ),
+            )
+
     def test_post_push_late_feedback_deadlock_requires_detached_authority(
         self,
     ) -> None:
@@ -2556,7 +2736,9 @@ class ResolveFixedThreadsTests(TestCase):
             root = Path(directory)
             reviewed, attestation, _eligibility, git = (
                 write_authenticated_resolution_inputs(
-                    directory, ["PRRT_FINAL_KNOWN"]
+                    directory,
+                    ["PRRT_LATE_NON_BLOCKING"],
+                    eligibility_thread_ids=(),
                 )
             )
             signing_key = Path(key_directory) / "signing-key"
@@ -2605,8 +2787,8 @@ class ResolveFixedThreadsTests(TestCase):
                         reply_count=0,
                         is_resolved=False,
                         is_outdated=False,
-                        classification="INVALID_FALSE_OR_MISLEADING",
-                        disposition="DISPROVEN_WITH_EVIDENCE",
+                        classification="INFORMATIONAL",
+                        disposition="NON_ACTIONABLE",
                         technically_blocking=False,
                         classification_evidence_digest="d" * 64,
                     ),
@@ -2663,8 +2845,8 @@ class ResolveFixedThreadsTests(TestCase):
                         thread_id="PRRT_LATE_NON_BLOCKING",
                         finding_id="LF-LATE-1",
                         finding_evidence_digest="c" * 64,
-                        classification="INVALID_FALSE_OR_MISLEADING",
-                        disposition="DISPROVEN_WITH_EVIDENCE",
+                        classification="INFORMATIONAL",
+                        disposition="NON_ACTIONABLE",
                         technically_blocking=False,
                         technical_blockers=(),
                         output_path=classification_path,
@@ -2694,6 +2876,14 @@ class ResolveFixedThreadsTests(TestCase):
             self.assertEqual(
                 classification_result["status"],
                 "LATE_CLASSIFICATION_AUTHENTICATED",
+            )
+            self.assertEqual(
+                classification_result["origin"],
+                "REVIEWED_BUT_INELIGIBLE",
+            )
+            self.assertEqual(
+                result["origin"],
+                "REVIEWED_BUT_INELIGIBLE",
             )
             self.assertEqual(
                 classification_artifact["thread"]["technical_blockers"], []
@@ -2863,15 +3053,58 @@ class ResolveFixedThreadsTests(TestCase):
                         artifact_mutator=mutation,
                     )
 
-    def test_late_disposition_runtime_payload_matches_canonical_schema(self) -> None:
+    def test_post_freeze_runtime_payloads_match_canonical_schemas(self) -> None:
         reviewed = reviewed_state_payload("PRRT_FINAL_KNOWN", [])
         attestation = validation_attestation_payload(reviewed)
-        MODULE.evidence.validate_against_authoritative_schema(
-            late_disposition_payload(attestation),
-            ROOT
-            / ".agents/skills/secpal-pr-review/references/late-disposition.schema.json",
-            "late-disposition evidence",
+        decisions = (
+            ("INVALID_FALSE_OR_MISLEADING", "DISPROVEN_WITH_EVIDENCE"),
+            ("INFORMATIONAL", "NON_ACTIONABLE"),
         )
+        for classification, disposition in decisions:
+            late_payload = late_disposition_payload(
+                attestation,
+                classification=classification,
+                disposition=disposition,
+            )
+            classification_thread = {
+                key: value
+                for key, value in late_payload["threads"][0].items()
+                if key
+                not in {"classification_evidence_digest", "authorized_action"}
+            }
+            classification_thread["technical_blockers"] = []
+            classification_payload = {
+                "schema_version": late_payload["schema_version"],
+                "kind": "LATE_FEEDBACK_CLASSIFICATION",
+                "repository": "SecPal/api",
+                "delivery_issue_number": 724,
+                "pull_request_number": 123,
+                "head_sha": attestation["head_sha"],
+                "delivery_signer": {
+                    "format": "ssh",
+                    "fingerprint": "SHA256:fixtureDeliverySigner",
+                },
+                "authorized_purpose": "AUTHORIZE_LATE_FEEDBACK_DISPOSITION",
+                "finding_id": "LF-LATE-SCHEMA",
+                "finding_evidence_digest": "c" * 64,
+                "thread": classification_thread,
+            }
+            with self.subTest(
+                classification=classification,
+                disposition=disposition,
+            ):
+                MODULE.evidence.validate_against_authoritative_schema(
+                    classification_payload,
+                    ROOT
+                    / ".agents/skills/secpal-pr-review/references/late-classification.schema.json",
+                    "late classification evidence",
+                )
+                MODULE.evidence.validate_against_authoritative_schema(
+                    late_payload,
+                    ROOT
+                    / ".agents/skills/secpal-pr-review/references/late-disposition.schema.json",
+                    "late-disposition evidence",
+                )
 
     def test_late_disposition_alternate_valid_signer_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3332,6 +3565,27 @@ class ResolveFixedThreadsTests(TestCase):
                 evidence.evidence_digest,
                 hashlib.sha256(artifact.read_bytes()).hexdigest(),
             )
+            informational_payload = copy.deepcopy(payload)
+            informational_payload["thread"]["classification"] = "INFORMATIONAL"
+            informational_payload["thread"]["disposition"] = "NON_ACTIONABLE"
+            sign(informational_payload, key, signer)
+            with self.assertRaisesRegex(
+                MODULE.late_disposition.LateDispositionError,
+                "not resolution-eligible",
+            ):
+                parse()
+            informational_payload["schema_version"] = "1.1"
+            sign(informational_payload, key, signer)
+            informational_evidence = parse()
+            self.assertEqual(
+                informational_evidence.thread.classification,
+                "INFORMATIONAL",
+            )
+            self.assertEqual(
+                informational_evidence.thread.disposition,
+                "NON_ACTIONABLE",
+            )
+
             exact_live = MODULE.ThreadState(
                 thread_id="PRRT_exactLateFinding",
                 is_resolved=False,
