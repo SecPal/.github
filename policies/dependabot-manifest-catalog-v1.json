@@ -1,22 +1,48 @@
 {
   "schema": "secpal-dependabot-manifest-catalog/v1",
-  "policy_version": "2026-09-02.1",
+  "policy_version": "2026-09-02.2",
   "reviewed_on": "2026-09-02",
   "expires_on": "2026-12-01",
   "upstream": {
     "dependabot_core_commit": "eb6370bc47da4ab268ae36d2af8ccc27a3c98a4e",
     "dependabot_core_repository": "https://github.com/dependabot/dependabot-core",
     "dependabot_core_source_paths": [
+      "bazel/lib/dependabot/bazel/file_fetcher.rb",
+      "bun/lib/dependabot/bun/file_fetcher.rb",
+      "bundler/lib/dependabot/bundler/file_fetcher.rb",
+      "cargo/lib/dependabot/cargo/file_fetcher.rb",
+      "common/lib/dependabot/file_filtering.rb",
       "composer/lib/dependabot/composer/file_fetcher.rb",
+      "conda/lib/dependabot/conda/file_fetcher.rb",
+      "deno/lib/dependabot/deno/file_fetcher.rb",
+      "devcontainers/lib/dependabot/devcontainers/file_fetcher.rb",
       "docker/lib/dependabot/docker/file_fetcher.rb",
       "docker/lib/dependabot/docker_compose/file_fetcher.rb",
+      "docker/lib/dependabot/shared/shared_file_fetcher.rb",
+      "dotnet_sdk/lib/dependabot/dotnet_sdk/file_fetcher.rb",
+      "elm/lib/dependabot/elm/file_fetcher.rb",
+      "git_submodules/lib/dependabot/git_submodules/file_fetcher.rb",
       "github_actions/lib/dependabot/github_actions/file_fetcher.rb",
+      "go_modules/lib/dependabot/go_modules/file_fetcher.rb",
       "gradle/lib/dependabot/gradle/file_fetcher.rb",
+      "helm/lib/dependabot/helm/file_fetcher.rb",
+      "hex/lib/dependabot/hex/file_fetcher.rb",
+      "julia/lib/dependabot/julia/file_fetcher.rb",
+      "maven/lib/dependabot/maven/file_fetcher.rb",
+      "nix/lib/dependabot/nix/file_fetcher.rb",
       "npm_and_yarn/lib/dependabot/npm_and_yarn/file_fetcher.rb",
+      "nuget/helpers/lib/NuGetUpdater/NuGetUpdater.Core/Discover/DiscoveryWorker.cs",
       "opentofu/lib/dependabot/opentofu/file_fetcher.rb",
       "pre_commit/lib/dependabot/pre_commit/file_fetcher.rb",
+      "pub/lib/dependabot/pub/file_fetcher.rb",
       "python/lib/dependabot/python/file_fetcher.rb",
-      "terraform/lib/dependabot/terraform/file_fetcher.rb"
+      "python/lib/dependabot/python/shared_file_fetcher.rb",
+      "rust_toolchain/lib/dependabot/rust_toolchain/file_fetcher.rb",
+      "sbt/lib/dependabot/sbt/file_fetcher.rb",
+      "swift/lib/dependabot/swift/file_fetcher.rb",
+      "terraform/lib/dependabot/terraform/file_fetcher.rb",
+      "uv/lib/dependabot/uv/file_fetcher.rb",
+      "vcpkg/lib/dependabot/vcpkg/file_fetcher.rb"
     ],
     "github_ecosystems_reference": "https://docs.github.com/en/code-security/reference/supply-chain-security/supported-ecosystems-and-repositories",
     "github_options_reference": "https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference"
@@ -56,108 +82,433 @@
     "uv",
     "vcpkg"
   ],
-  "ignored_path_prefixes": [
-    ".git/",
-    ".venv/",
-    "build/",
-    "coverage/",
-    "dist/",
-    "node_modules/",
-    "storage/",
-    "vendor/"
-  ],
+  "behavior_provenance": {
+    "exclude_paths": ["common/lib/dependabot/file_filtering.rb"]
+  },
+  "discovery_dispositions": {
+    "bazel": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["bazel/lib/dependabot/bazel/file_fetcher.rb"]
+    },
+    "bun": {
+      "mode": "SHARED_DISCOVERY_RULE",
+      "source_paths": ["bun/lib/dependabot/bun/file_fetcher.rb"]
+    },
+    "bundler": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["bundler/lib/dependabot/bundler/file_fetcher.rb"]
+    },
+    "cargo": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["cargo/lib/dependabot/cargo/file_fetcher.rb"]
+    },
+    "composer": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["composer/lib/dependabot/composer/file_fetcher.rb"]
+    },
+    "conda": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["conda/lib/dependabot/conda/file_fetcher.rb"]
+    },
+    "deno": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["deno/lib/dependabot/deno/file_fetcher.rb"]
+    },
+    "devcontainers": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["devcontainers/lib/dependabot/devcontainers/file_fetcher.rb"]
+    },
+    "docker": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": [
+        "docker/lib/dependabot/docker/file_fetcher.rb",
+        "docker/lib/dependabot/shared/shared_file_fetcher.rb"
+      ]
+    },
+    "docker-compose": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["docker/lib/dependabot/docker_compose/file_fetcher.rb"]
+    },
+    "dotnet-sdk": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["dotnet_sdk/lib/dependabot/dotnet_sdk/file_fetcher.rb"]
+    },
+    "elm": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["elm/lib/dependabot/elm/file_fetcher.rb"]
+    },
+    "github-actions": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["github_actions/lib/dependabot/github_actions/file_fetcher.rb"]
+    },
+    "gitsubmodule": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["git_submodules/lib/dependabot/git_submodules/file_fetcher.rb"]
+    },
+    "gomod": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["go_modules/lib/dependabot/go_modules/file_fetcher.rb"]
+    },
+    "gradle": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["gradle/lib/dependabot/gradle/file_fetcher.rb"]
+    },
+    "helm": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["helm/lib/dependabot/helm/file_fetcher.rb"]
+    },
+    "julia": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["julia/lib/dependabot/julia/file_fetcher.rb"]
+    },
+    "maven": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["maven/lib/dependabot/maven/file_fetcher.rb"]
+    },
+    "mix": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["hex/lib/dependabot/hex/file_fetcher.rb"]
+    },
+    "nix": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["nix/lib/dependabot/nix/file_fetcher.rb"]
+    },
+    "npm": {
+      "mode": "SHARED_DISCOVERY_RULE",
+      "source_paths": ["npm_and_yarn/lib/dependabot/npm_and_yarn/file_fetcher.rb"]
+    },
+    "nuget": {
+      "mode": "EXPLICIT_NOT_DISCOVERABLE_WITH_JUSTIFICATION",
+      "justification": "The pinned native NuGet discovery supports solution and project workspace ownership that this bounded guard does not emulate; exact native entry-point names remain fail-closed candidates.",
+      "source_paths": [
+        "nuget/helpers/lib/NuGetUpdater/NuGetUpdater.Core/Discover/DiscoveryWorker.cs"
+      ]
+    },
+    "opentofu": {
+      "mode": "SHARED_DISCOVERY_RULE",
+      "source_paths": ["opentofu/lib/dependabot/opentofu/file_fetcher.rb"]
+    },
+    "pip": {
+      "mode": "SHARED_DISCOVERY_RULE",
+      "source_paths": [
+        "python/lib/dependabot/python/file_fetcher.rb",
+        "python/lib/dependabot/python/shared_file_fetcher.rb"
+      ]
+    },
+    "pre-commit": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["pre_commit/lib/dependabot/pre_commit/file_fetcher.rb"]
+    },
+    "pub": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["pub/lib/dependabot/pub/file_fetcher.rb"]
+    },
+    "rust-toolchain": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["rust_toolchain/lib/dependabot/rust_toolchain/file_fetcher.rb"]
+    },
+    "sbt": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["sbt/lib/dependabot/sbt/file_fetcher.rb"]
+    },
+    "swift": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["swift/lib/dependabot/swift/file_fetcher.rb"]
+    },
+    "terraform": {
+      "mode": "SHARED_DISCOVERY_RULE",
+      "source_paths": ["terraform/lib/dependabot/terraform/file_fetcher.rb"]
+    },
+    "uv": {
+      "mode": "SHARED_DISCOVERY_RULE",
+      "source_paths": [
+        "uv/lib/dependabot/uv/file_fetcher.rb",
+        "python/lib/dependabot/python/shared_file_fetcher.rb"
+      ]
+    },
+    "vcpkg": {
+      "mode": "DIRECT_MANIFEST_RULES",
+      "source_paths": ["vcpkg/lib/dependabot/vcpkg/file_fetcher.rb"]
+    }
+  },
   "manifest_rules": [
     {
-      "id": "github-actions-workflow",
-      "ecosystem": "github-actions",
-      "path_regex": "^\\.github/workflows/[^/]+\\.ya?ml$",
-      "coverage_directory": "root"
+      "id": "bazel",
+      "ecosystem": "bazel",
+      "path_regex": "(^|/)(WORKSPACE|WORKSPACE\\.bazel|[^/]*MODULE\\.bazel)$",
+      "coverage_directory": "parent",
+      "source_paths": ["bazel/lib/dependabot/bazel/file_fetcher.rb"]
     },
     {
-      "id": "github-actions-composite",
-      "ecosystem": "github-actions",
-      "path_regex": "(^|/)action\\.ya?ml$",
-      "coverage_directory": "parent"
-    },
-    {
-      "id": "npm",
+      "id": "javascript-package",
       "ecosystem": "npm",
       "path_regex": "(^|/)package\\.json$",
-      "coverage_directory": "parent"
+      "coverage_directory": "parent",
+      "ownership": "javascript-package",
+      "source_paths": [
+        "bun/lib/dependabot/bun/file_fetcher.rb",
+        "npm_and_yarn/lib/dependabot/npm_and_yarn/file_fetcher.rb"
+      ]
+    },
+    {
+      "id": "bundler",
+      "ecosystem": "bundler",
+      "path_regex": "(^|/)(Gemfile|gems\\.rb|[^/]+\\.gemspec)$",
+      "coverage_directory": "parent",
+      "source_paths": ["bundler/lib/dependabot/bundler/file_fetcher.rb"]
+    },
+    {
+      "id": "cargo",
+      "ecosystem": "cargo",
+      "path_regex": "(^|/)Cargo\\.toml$",
+      "coverage_directory": "parent",
+      "source_paths": ["cargo/lib/dependabot/cargo/file_fetcher.rb"]
     },
     {
       "id": "composer",
       "ecosystem": "composer",
       "path_regex": "(^|/)composer\\.json$",
-      "coverage_directory": "parent"
-    },
-    {
-      "id": "pip",
-      "ecosystem": "pip",
-      "path_regex": "(^|/)(Pipfile|setup\\.py|setup\\.cfg|pyproject\\.toml|requirements([._-][^/]*)?\\.(txt|in))$",
-      "coverage_directory": "parent"
-    },
-    {
-      "id": "gradle",
-      "ecosystem": "gradle",
-      "path_regex": "(^|/)build\\.gradle(\\.kts)?$",
-      "coverage_directory": "parent"
-    },
-    {
-      "id": "pre-commit",
-      "ecosystem": "pre-commit",
-      "path_regex": "(^|/)\\.pre-commit(-config)?\\.ya?ml$",
       "coverage_directory": "parent",
-      "case_insensitive": true
+      "source_paths": ["composer/lib/dependabot/composer/file_fetcher.rb"]
     },
     {
-      "id": "docker",
+      "id": "conda",
+      "ecosystem": "conda",
+      "path_regex": "(^|/)environment\\.ya?ml$",
+      "coverage_directory": "parent",
+      "source_paths": ["conda/lib/dependabot/conda/file_fetcher.rb"]
+    },
+    {
+      "id": "deno",
+      "ecosystem": "deno",
+      "path_regex": "(^|/)deno\\.jsonc?$",
+      "coverage_directory": "parent",
+      "source_paths": ["deno/lib/dependabot/deno/file_fetcher.rb"]
+    },
+    {
+      "id": "devcontainers",
+      "ecosystem": "devcontainers",
+      "path_regex": "(^|/)(\\.devcontainer\\.json|\\.devcontainer(?:/[^/]+)?/devcontainer\\.json)$",
+      "coverage_directory": "devcontainer-root",
+      "source_paths": ["devcontainers/lib/dependabot/devcontainers/file_fetcher.rb"]
+    },
+    {
+      "id": "dockerfile",
       "ecosystem": "docker",
       "path_regex": "(^|/)[^/]*(dockerfile|containerfile)[^/]*$",
       "coverage_directory": "parent",
-      "case_insensitive": true
+      "case_insensitive": true,
+      "source_paths": ["docker/lib/dependabot/docker/file_fetcher.rb"]
+    },
+    {
+      "id": "docker-kubernetes",
+      "ecosystem": "docker",
+      "path_regex": "(^|/)[^.][^/]*\\.ya?ml$",
+      "coverage_directory": "parent",
+      "content_kind": "kubernetes-resource",
+      "case_insensitive": true,
+      "source_paths": ["docker/lib/dependabot/shared/shared_file_fetcher.rb"]
     },
     {
       "id": "docker-compose",
       "ecosystem": "docker-compose",
       "path_regex": "(^|/)[^/]*(docker-)?compose(-[A-Za-z0-9_]+)?(\\.[A-Za-z0-9_-]+)?\\.ya?ml$",
       "coverage_directory": "parent",
-      "case_insensitive": true
+      "case_insensitive": true,
+      "source_paths": ["docker/lib/dependabot/docker_compose/file_fetcher.rb"]
     },
     {
-      "id": "terraform",
+      "id": "dotnet-sdk",
+      "ecosystem": "dotnet-sdk",
+      "path_regex": "(^|/)global\\.json$",
+      "coverage_directory": "parent",
+      "source_paths": ["dotnet_sdk/lib/dependabot/dotnet_sdk/file_fetcher.rb"]
+    },
+    {
+      "id": "elm",
+      "ecosystem": "elm",
+      "path_regex": "(^|/)elm\\.json$",
+      "coverage_directory": "parent",
+      "source_paths": ["elm/lib/dependabot/elm/file_fetcher.rb"]
+    },
+    {
+      "id": "github-actions-workflow",
+      "ecosystem": "github-actions",
+      "path_regex": "^\\.github/workflows/[^/]+\\.ya?ml$",
+      "coverage_directory": "root",
+      "source_paths": ["github_actions/lib/dependabot/github_actions/file_fetcher.rb"]
+    },
+    {
+      "id": "github-actions-composite",
+      "ecosystem": "github-actions",
+      "path_regex": "(^|/)action\\.ya?ml$",
+      "coverage_directory": "parent",
+      "source_paths": ["github_actions/lib/dependabot/github_actions/file_fetcher.rb"]
+    },
+    {
+      "id": "gitsubmodule",
+      "ecosystem": "gitsubmodule",
+      "path_regex": "(^|/)\\.gitmodules$",
+      "coverage_directory": "parent",
+      "source_paths": ["git_submodules/lib/dependabot/git_submodules/file_fetcher.rb"]
+    },
+    {
+      "id": "gomod",
+      "ecosystem": "gomod",
+      "path_regex": "(^|/)(go\\.mod|go\\.work)$",
+      "coverage_directory": "parent",
+      "source_paths": ["go_modules/lib/dependabot/go_modules/file_fetcher.rb"]
+    },
+    {
+      "id": "gradle",
+      "ecosystem": "gradle",
+      "path_regex": "(^|/)[^/]*build\\.gradle(\\.kts)?$",
+      "coverage_directory": "parent",
+      "source_paths": ["gradle/lib/dependabot/gradle/file_fetcher.rb"]
+    },
+    {
+      "id": "helm",
+      "ecosystem": "helm",
+      "path_regex": "(^|/)Chart\\.yaml$",
+      "coverage_directory": "parent",
+      "source_paths": ["helm/lib/dependabot/helm/file_fetcher.rb"]
+    },
+    {
+      "id": "julia",
+      "ecosystem": "julia",
+      "path_regex": "(^|/)(Julia)?Project\\.toml$",
+      "coverage_directory": "parent",
+      "case_insensitive": true,
+      "source_paths": ["julia/lib/dependabot/julia/file_fetcher.rb"]
+    },
+    {
+      "id": "maven",
+      "ecosystem": "maven",
+      "path_regex": "(^|/)pom\\.xml$",
+      "coverage_directory": "parent",
+      "source_paths": ["maven/lib/dependabot/maven/file_fetcher.rb"]
+    },
+    {
+      "id": "mix",
+      "ecosystem": "mix",
+      "path_regex": "(^|/)mix\\.exs$",
+      "coverage_directory": "parent",
+      "source_paths": ["hex/lib/dependabot/hex/file_fetcher.rb"]
+    },
+    {
+      "id": "nix",
+      "ecosystem": "nix",
+      "path_regex": "(^|/)flake\\.nix$",
+      "coverage_directory": "parent",
+      "companion": "flake.lock",
+      "source_paths": ["nix/lib/dependabot/nix/file_fetcher.rb"]
+    },
+    {
+      "id": "python",
+      "ecosystem": "pip",
+      "path_regex": "(^|/)(Pipfile|setup\\.py|setup\\.cfg|pyproject\\.toml|requirements)$",
+      "coverage_directory": "parent",
+      "ownership": "python-package",
+      "source_paths": [
+        "python/lib/dependabot/python/file_fetcher.rb",
+        "python/lib/dependabot/python/shared_file_fetcher.rb",
+        "uv/lib/dependabot/uv/file_fetcher.rb"
+      ]
+    },
+    {
+      "id": "python-requirements",
+      "ecosystem": "pip",
+      "path_regex": "(^|/)[^/]+\\.(txt|in)$",
+      "coverage_directory": "parent",
+      "ownership": "python-package",
+      "content_kind": "python-requirements",
+      "source_paths": [
+        "python/lib/dependabot/python/shared_file_fetcher.rb",
+        "uv/lib/dependabot/uv/file_fetcher.rb"
+      ]
+    },
+    {
+      "id": "pre-commit",
+      "ecosystem": "pre-commit",
+      "path_regex": "(^|/)[^/]*\\.pre-commit(-config)?\\.ya?ml$",
+      "coverage_directory": "parent",
+      "case_insensitive": true,
+      "source_paths": ["pre_commit/lib/dependabot/pre_commit/file_fetcher.rb"]
+    },
+    {
+      "id": "pub",
+      "ecosystem": "pub",
+      "path_regex": "(^|/)pubspec\\.yaml$",
+      "coverage_directory": "parent",
+      "source_paths": ["pub/lib/dependabot/pub/file_fetcher.rb"]
+    },
+    {
+      "id": "rust-toolchain",
+      "ecosystem": "rust-toolchain",
+      "path_regex": "(^|/)rust-toolchain(\\.toml)?$",
+      "coverage_directory": "parent",
+      "source_paths": ["rust_toolchain/lib/dependabot/rust_toolchain/file_fetcher.rb"]
+    },
+    {
+      "id": "sbt",
+      "ecosystem": "sbt",
+      "path_regex": "(^|/)[^/]*build\\.sbt$",
+      "coverage_directory": "parent",
+      "source_paths": ["sbt/lib/dependabot/sbt/file_fetcher.rb"]
+    },
+    {
+      "id": "swift",
+      "ecosystem": "swift",
+      "path_regex": "(^|/)Package\\.swift$",
+      "coverage_directory": "parent",
+      "source_paths": ["swift/lib/dependabot/swift/file_fetcher.rb"]
+    },
+    {
+      "id": "swift-xcode",
+      "ecosystem": "swift",
+      "path_regex": "(^|/)[^/]+\\.(xcodeproj|xcworkspace)/.+/Package\\.resolved$",
+      "coverage_directory": "swift-root",
+      "source_paths": ["swift/lib/dependabot/swift/file_fetcher.rb"]
+    },
+    {
+      "id": "terraform-opentofu-module",
       "ecosystem": "terraform",
-      "path_regex": "(^|/)[^/]+\\.tf$",
-      "coverage_directory": "parent"
+      "path_regex": "(^|/)[^/]+\\.(tf|tofu)$|(^|/)terragrunt(?:-[^/]+)?\\.hcl$",
+      "coverage_directory": "parent",
+      "ownership": "terraform-module",
+      "source_paths": [
+        "terraform/lib/dependabot/terraform/file_fetcher.rb",
+        "opentofu/lib/dependabot/opentofu/file_fetcher.rb"
+      ]
     },
     {
-      "id": "opentofu-tf",
-      "ecosystem": "opentofu",
-      "path_regex": "(^|/)[^/]+\\.tf$",
-      "coverage_directory": "parent"
-    },
-    {
-      "id": "opentofu-tofu",
-      "ecosystem": "opentofu",
-      "path_regex": "(^|/)[^/]+\\.tofu$",
-      "coverage_directory": "parent"
+      "id": "vcpkg",
+      "ecosystem": "vcpkg",
+      "path_regex": "(^|/)(vcpkg\\.json|vcpkg-configuration\\.json)$",
+      "coverage_directory": "parent",
+      "source_paths": ["vcpkg/lib/dependabot/vcpkg/file_fetcher.rb"]
     }
   ],
   "candidate_rules": [
     {
       "id": "dependency-named-file",
       "path_regex": "(^|/)(deps|dependencies|dependency-manifest|package-manifest)([._-][^/]*)?$",
-      "case_insensitive": true
+      "case_insensitive": true,
+      "authority": "secpal-review-backstop"
     },
     {
       "id": "dependency-suffixed-data",
       "path_regex": "(^|/)[^/]+\\.(deps|dependencies)\\.(json|toml|ya?ml)$",
-      "case_insensitive": true
+      "case_insensitive": true,
+      "authority": "secpal-review-backstop"
     },
     {
-      "id": "future-build-manifest",
-      "path_regex": "(^|/)(build|modules?|packages?)\\.(json|toml|ya?ml)$",
-      "case_insensitive": true
+      "id": "native-nuget-manifest",
+      "path_regex": "(^|/)([^/]+\\.(sln|slnx|proj|csproj|fsproj|vbproj))$",
+      "case_insensitive": true,
+      "source_paths": [
+        "nuget/helpers/lib/NuGetUpdater/NuGetUpdater.Core/Discover/DiscoveryWorker.cs"
+      ]
     }
   ]
 }

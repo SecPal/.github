@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-name: "CodeQL Applicability Guardrail"
+name: CodeQL
 
 on:
   push:
@@ -13,25 +13,32 @@ on:
     # Run at 2:00 AM UTC daily (3:00 AM CET/4:00 AM CEST in Berlin)
     - cron: "0 2 * * *"
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   codeql:
     name: CodeQL
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Verify CodeQL applicability
-        run: |
-          # Delegate detection to the test script so the glob list stays in one place.
-          if bash tests/codeql-applicability.sh; then
-            echo "No tracked CodeQL-supported source files detected. CodeQL is not applicable to this repository."
-          else
-            echo "Tracked JavaScript/TypeScript files were detected." >&2
-            echo "Restore a real CodeQL workflow before merging supported source files into this repository." >&2
-            exit 1
-          fi
+        run: bash tests/codeql-applicability.sh
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          languages: javascript-typescript
+          queries: +security-extended,security-and-quality
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          category: /language:javascript-typescript

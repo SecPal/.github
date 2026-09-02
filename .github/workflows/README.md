@@ -18,7 +18,9 @@ as `@main` into consumer repositories.
 `reusable-dependabot-manifest-coverage.yml` runs the shared, deterministic
 manifest-coverage and cadence-policy assertions as separate checks. Callers
 pin this workflow to a reviewed immutable commit and keep repository-local
-exceptions in `.github/dependabot-manifest-exceptions.yml`. See
+policy in `.github/dependabot-manifest-exceptions.yml`. The coverage job accepts
+that policy only from a separate protected-default-branch checkout; policy
+newly proposed in the subject revision cannot authorize itself. See
 [`dependabot-manifest-coverage.md`](../../docs/dependabot-manifest-coverage.md)
 for the contract and invocation example.
 

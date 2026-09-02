@@ -48,11 +48,19 @@ const UPDATE_KEYS = new Set([
 ]);
 const SCHEDULE_KEYS = new Set(["cronjob", "day", "interval", "time", "timezone"]);
 const EXCEPTION_KEYS = new Set(["ecosystem", "manifest", "reason", "reviewed-by", "reviewed-on"]);
+const CLASSIFICATION_KEYS = new Set([
+  "directory",
+  "ecosystem",
+  "reason",
+  "reviewed-by",
+  "reviewed-on",
+]);
 const REVIEW_KEYS = new Set(["reason", "reviewed-by", "reviewed-on"]);
 const POLICY_KEYS = new Set([
+  "behavior_provenance",
   "candidate_rules",
+  "discovery_dispositions",
   "expires_on",
-  "ignored_path_prefixes",
   "manifest_rules",
   "policy_version",
   "reviewed_on",
@@ -62,12 +70,23 @@ const POLICY_KEYS = new Set([
 ]);
 const MANIFEST_RULE_KEYS = new Set([
   "case_insensitive",
+  "companion",
+  "content_kind",
   "coverage_directory",
   "ecosystem",
   "id",
+  "ownership",
   "path_regex",
+  "source_paths",
 ]);
-const CANDIDATE_RULE_KEYS = new Set(["case_insensitive", "id", "path_regex"]);
+const CANDIDATE_RULE_KEYS = new Set([
+  "authority",
+  "case_insensitive",
+  "id",
+  "path_regex",
+  "source_paths",
+]);
+const DISCOVERY_DISPOSITION_KEYS = new Set(["justification", "mode", "source_paths"]);
 const UPSTREAM_KEYS = new Set([
   "dependabot_core_commit",
   "dependabot_core_repository",
@@ -102,20 +121,24 @@ function parseArguments(argv) {
     assertion,
     asOf: new Date().toISOString().slice(0, 10),
     config: DEFAULT_CONFIG,
+    defaultBranch: process.env.GITHUB_DEFAULT_BRANCH || null,
     exceptions: DEFAULT_EXCEPTIONS,
     format: "text",
     policy: DEFAULT_POLICY,
     repository: process.env.GITHUB_REPOSITORY || "local/repository",
     root: process.cwd(),
+    trustedPolicyRoot: null,
   };
   const names = new Map([
     ["--as-of", "asOf"],
     ["--config", "config"],
+    ["--default-branch", "defaultBranch"],
     ["--exceptions", "exceptions"],
     ["--format", "format"],
     ["--policy", "policy"],
     ["--repository", "repository"],
     ["--root", "root"],
+    ["--trusted-policy-root", "trustedPolicyRoot"],
   ]);
   for (let index = 0; index < rest.length; index += 2) {
     const name = names.get(rest[index]);
@@ -127,16 +150,27 @@ function parseArguments(argv) {
   if (!new Set(["json", "text"]).has(options.format)) {
     throw new ContractError("INVALID_ARGUMENT", "format must be json or text");
   }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(options.asOf)) {
-    throw new ContractError("INVALID_ARGUMENT", "as-of must be YYYY-MM-DD");
-  }
+  parseDate(options.asOf, "as-of", "INVALID_ARGUMENT");
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(options.repository)) {
     throw new ContractError("INVALID_ARGUMENT", "repository must be owner/name");
   }
   options.config = normalizeManifest(options.config, "config path");
   options.exceptions = normalizeManifest(options.exceptions, "exceptions path");
   options.root = path.resolve(options.root);
+  if (options.trustedPolicyRoot)
+    options.trustedPolicyRoot = path.resolve(options.trustedPolicyRoot);
+  if (options.defaultBranch !== null && !/^[A-Za-z0-9._/-]+$/.test(options.defaultBranch))
+    throw new ContractError("INVALID_ARGUMENT", "default-branch is invalid");
   return options;
+}
+
+function parseDate(value, label, code = "SCHEMA_ERROR") {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value))
+    throw new ContractError(code, `${label} must be a real YYYY-MM-DD date`);
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(parsed.valueOf()) || parsed.toISOString().slice(0, 10) !== value)
+    throw new ContractError(code, `${label} must be a real YYYY-MM-DD date`);
+  return value;
 }
 
 function object(value, label) {
@@ -215,8 +249,15 @@ function normalizeManifest(value, label = "manifest path", allowLiteralGlobChara
 }
 
 function normalizeDirectory(value, label, allowGlob) {
-  if (typeof value !== "string" || !value.startsWith("/") || value.includes("\\")) {
-    throw new ContractError("PATH_ERROR", `${label} must start with / and use POSIX separators`);
+  if (
+    typeof value !== "string" ||
+    (!value.startsWith("/") && !(allowGlob && value.includes("*"))) ||
+    value.includes("\\")
+  ) {
+    throw new ContractError(
+      "PATH_ERROR",
+      `${label} must be an absolute directory or documented directories glob`
+    );
   }
   if (!allowGlob && /[*?\[]/.test(value)) {
     throw new ContractError("PATH_ERROR", `${label} does not support globs`);
@@ -228,19 +269,14 @@ function normalizeDirectory(value, label, allowGlob) {
     throw new ContractError("PATH_ERROR", `${label} must not have a trailing slash`);
   }
   const plain = value.replaceAll("**", "x").replaceAll("*", "x");
-  if (
-    value !== "/" &&
-    plain
-      .slice(1)
-      .split("/")
-      .some((part) => part === "." || part === ".." || part === "")
-  ) {
+  const segments = plain.replace(/^\//, "").split("/");
+  if (value !== "/" && segments.some((part) => part === "." || part === ".." || part === "")) {
     throw new ContractError("PATH_ERROR", `${label} is ambiguous: ${value}`);
   }
   return value;
 }
 
-function reviewRecord(value, label, extraKeys = new Set()) {
+function reviewRecord(value, label, asOf, extraKeys = new Set()) {
   const entry = object(value, label);
   closedKeys(entry, new Set([...REVIEW_KEYS, ...extraKeys]), label);
   if (
@@ -261,9 +297,9 @@ function reviewRecord(value, label, extraKeys = new Set()) {
       `${label}.reviewed-by must be an exact GitHub user or team`
     );
   }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(entry["reviewed-on"] || "")) {
-    throw new ContractError("SCHEMA_ERROR", `${label}.reviewed-on must be YYYY-MM-DD`);
-  }
+  parseDate(entry["reviewed-on"], `${label}.reviewed-on`);
+  if (entry["reviewed-on"] > asOf)
+    throw new ContractError("SCHEMA_ERROR", `${label}.reviewed-on must not be in the future`);
   return entry;
 }
 
@@ -280,11 +316,12 @@ function loadPolicy(filename) {
     throw new ContractError("POLICY_ERROR", "unsupported policy schema");
   }
   for (const key of [
+    "behavior_provenance",
+    "discovery_dispositions",
     "policy_version",
     "reviewed_on",
     "expires_on",
     "supported_config_ecosystems",
-    "ignored_path_prefixes",
     "manifest_rules",
     "upstream",
     "candidate_rules",
@@ -305,11 +342,13 @@ function loadPolicy(filename) {
   ) {
     throw new ContractError("POLICY_ERROR", "upstream Dependabot Core provenance is invalid");
   }
-  if (
-    !/^\d{4}-\d{2}-\d{2}$/.test(policy.reviewed_on) ||
-    !/^\d{4}-\d{2}-\d{2}$/.test(policy.expires_on) ||
-    policy.expires_on <= policy.reviewed_on
-  ) {
+  try {
+    parseDate(policy.reviewed_on, "policy.reviewed_on", "POLICY_ERROR");
+    parseDate(policy.expires_on, "policy.expires_on", "POLICY_ERROR");
+  } catch (error) {
+    throw error;
+  }
+  if (policy.expires_on <= policy.reviewed_on) {
     throw new ContractError("POLICY_ERROR", "policy review and expiry dates are invalid");
   }
   if (
@@ -320,13 +359,43 @@ function loadPolicy(filename) {
   ) {
     throw new ContractError("POLICY_ERROR", "supported_config_ecosystems is invalid");
   }
+  object(policy.discovery_dispositions, "policy.discovery_dispositions");
   if (
-    !Array.isArray(policy.ignored_path_prefixes) ||
-    policy.ignored_path_prefixes.some(
-      (value) => typeof value !== "string" || value.startsWith("/") || !value.endsWith("/")
+    Object.keys(policy.discovery_dispositions).sort().join("\0") !==
+    [...policy.supported_config_ecosystems].sort().join("\0")
+  )
+    throw new ContractError(
+      "POLICY_ERROR",
+      "every supported ecosystem must have exactly one discovery disposition"
+    );
+  const provenance = new Set(policy.upstream.dependabot_core_source_paths);
+  object(policy.behavior_provenance, "policy.behavior_provenance");
+  if (
+    Object.keys(policy.behavior_provenance).sort().join("\0") !== "exclude_paths" ||
+    !Array.isArray(policy.behavior_provenance.exclude_paths) ||
+    !policy.behavior_provenance.exclude_paths.length ||
+    policy.behavior_provenance.exclude_paths.some((source) => !provenance.has(source))
+  )
+    throw new ContractError("POLICY_ERROR", "behavior provenance is invalid or incomplete");
+  for (const [ecosystem, disposition] of Object.entries(policy.discovery_dispositions)) {
+    object(disposition, `policy.discovery_dispositions.${ecosystem}`);
+    closedKeys(
+      disposition,
+      DISCOVERY_DISPOSITION_KEYS,
+      `policy.discovery_dispositions.${ecosystem}`
+    );
+    if (
+      !new Set([
+        "DIRECT_MANIFEST_RULES",
+        "SHARED_DISCOVERY_RULE",
+        "EXPLICIT_NOT_DISCOVERABLE_WITH_JUSTIFICATION",
+      ]).has(disposition.mode) ||
+      !Array.isArray(disposition.source_paths) ||
+      disposition.source_paths.some((source) => !provenance.has(source)) ||
+      (disposition.mode === "EXPLICIT_NOT_DISCOVERABLE_WITH_JUSTIFICATION" &&
+        (typeof disposition.justification !== "string" || disposition.justification.length < 40))
     )
-  ) {
-    throw new ContractError("POLICY_ERROR", "ignored_path_prefixes is invalid");
+      throw new ContractError("POLICY_ERROR", `invalid discovery disposition for ${ecosystem}`);
   }
   const ids = new Set();
   for (const [kind, rules] of [
@@ -348,10 +417,19 @@ function loadPolicy(filename) {
         typeof rule.path_regex !== "string" ||
         (kind === "manifest" &&
           (!policy.supported_config_ecosystems.includes(rule.ecosystem) ||
-            !new Set(["parent", "root"]).has(rule.coverage_directory)))
+            !new Set(["devcontainer-root", "parent", "root", "swift-root"]).has(
+              rule.coverage_directory
+            )))
       ) {
         throw new ContractError("POLICY_ERROR", `invalid rule ${rule.id}`);
       }
+      const validSources =
+        Array.isArray(rule.source_paths) &&
+        rule.source_paths.length &&
+        rule.source_paths.every((source) => provenance.has(source));
+      const policyBackstop = kind === "candidate" && rule.authority === "secpal-review-backstop";
+      if (!validSources && !policyBackstop)
+        throw new ContractError("POLICY_ERROR", `${kind} rule ${rule.id} lacks valid authority`);
       try {
         rule.compiled = new RegExp(rule.path_regex, rule.case_insensitive ? "i" : "");
       } catch (error) {
@@ -359,6 +437,31 @@ function loadPolicy(filename) {
       }
     }
   }
+  for (const ecosystem of policy.supported_config_ecosystems) {
+    const disposition = policy.discovery_dispositions[ecosystem];
+    if (
+      disposition.mode !== "EXPLICIT_NOT_DISCOVERABLE_WITH_JUSTIFICATION" &&
+      !policy.manifest_rules.some(
+        (rule) =>
+          rule.ecosystem === ecosystem ||
+          (rule.ownership === "javascript-package" && ecosystem === "bun") ||
+          (rule.ownership === "python-package" && ecosystem === "uv") ||
+          (rule.ownership === "terraform-module" && ecosystem === "opentofu")
+      )
+    )
+      throw new ContractError("POLICY_ERROR", `${ecosystem} lacks executable discovery`);
+  }
+  const usedSources = new Set([
+    ...Object.values(policy.discovery_dispositions).flatMap((item) => item.source_paths),
+    ...Object.values(policy.behavior_provenance).flat(),
+    ...policy.manifest_rules.flatMap((rule) => rule.source_paths),
+    ...policy.candidate_rules.flatMap((rule) => rule.source_paths || []),
+  ]);
+  if (
+    [...usedSources].sort().join("\0") !==
+    [...policy.upstream.dependabot_core_source_paths].sort().join("\0")
+  )
+    throw new ContractError("POLICY_ERROR", "upstream provenance contains unused sources");
   return policy;
 }
 
@@ -398,7 +501,26 @@ function parentDirectory(manifest) {
   return parent === "." ? "/" : `/${parent}`;
 }
 
-function loadExceptions(root, relative, policy) {
+function specialCoverageDirectory(manifestPath, mode) {
+  if (mode === "devcontainer-root") {
+    const segments = manifestPath.split("/");
+    const marker = segments.findIndex(
+      (segment) => segment === ".devcontainer" || segment === ".devcontainer.json"
+    );
+    if (marker < 0) return parentDirectory(manifestPath);
+    return marker === 0 ? "/" : `/${segments.slice(0, marker).join("/")}`;
+  }
+  if (mode === "swift-root") {
+    const segments = manifestPath.split("/");
+    const marker = segments.findIndex(
+      (segment) => segment.endsWith(".xcodeproj") || segment.endsWith(".xcworkspace")
+    );
+    return marker <= 0 ? "/" : `/${segments.slice(0, marker).join("/")}`;
+  }
+  return null;
+}
+
+function loadExceptions(root, relative, policy, asOf) {
   const raw = yamlFile(root, relative, false);
   if (raw === null)
     return { classifications: new Map(), exceptions: new Map(), noApplicable: null };
@@ -412,16 +534,30 @@ function loadExceptions(root, relative, policy) {
   if (document.version !== 1)
     throw new ContractError("SCHEMA_ERROR", `${relative}.version must be 1`);
   const result = { classifications: new Map(), exceptions: new Map(), noApplicable: null };
-  for (const [field, target] of [
-    ["classifications", result.classifications],
-    ["manifest-exceptions", result.exceptions],
-  ]) {
+  const classifications = document.classifications || [];
+  if (!Array.isArray(classifications))
+    throw new ContractError("SCHEMA_ERROR", `${relative}.classifications must be an array`);
+  classifications.forEach((candidate, index) => {
+    const label = `${relative}.classifications[${index}]`;
+    const entry = reviewRecord(candidate, label, asOf, new Set(["directory", "ecosystem"]));
+    closedKeys(entry, CLASSIFICATION_KEYS, label);
+    const directory = normalizeManifest(entry.directory, `${label}.directory`);
+    if (!new Set(["opentofu", "terraform"]).has(entry.ecosystem))
+      throw new ContractError(
+        "SCHEMA_ERROR",
+        `${label}.ecosystem must select terraform or opentofu module ownership`
+      );
+    if (result.classifications.has(directory))
+      throw new ContractError("SCHEMA_ERROR", `${label} duplicates module ${directory}`);
+    result.classifications.set(directory, entry);
+  });
+  for (const [field, target] of [["manifest-exceptions", result.exceptions]]) {
     const entries = document[field] || [];
     if (!Array.isArray(entries))
       throw new ContractError("SCHEMA_ERROR", `${relative}.${field} must be an array`);
     entries.forEach((candidate, index) => {
       const label = `${relative}.${field}[${index}]`;
-      const entry = reviewRecord(candidate, label, new Set(["ecosystem", "manifest"]));
+      const entry = reviewRecord(candidate, label, asOf, new Set(["ecosystem", "manifest"]));
       closedKeys(entry, EXCEPTION_KEYS, label);
       const manifest = normalizeManifest(entry.manifest, `${label}.manifest`);
       if (
@@ -445,23 +581,159 @@ function loadExceptions(root, relative, policy) {
   if (document["no-applicable-manifest"] !== undefined) {
     result.noApplicable = reviewRecord(
       document["no-applicable-manifest"],
-      `${relative}.no-applicable-manifest`
+      `${relative}.no-applicable-manifest`,
+      asOf
     );
   }
   return result;
 }
 
+function loadReviewPolicy(options, policy) {
+  const subject = loadExceptions(options.root, options.exceptions, policy, options.asOf);
+  if (!options.trustedPolicyRoot) {
+    return {
+      classifications: new Map(),
+      exceptions: new Map(),
+      noApplicable: null,
+      diagnostics: [],
+      proposed: subject,
+    };
+  }
+  const trusted = loadExceptions(
+    options.trustedPolicyRoot,
+    options.exceptions,
+    policy,
+    options.asOf
+  );
+  trusted.diagnostics = [];
+  trusted.proposed = subject;
+  return trusted;
+}
+
+function readTrackedText(root, relative, maximumBytes = 2 * 1024 * 1024) {
+  const absolute = path.join(root, relative);
+  const stat = lstatSync(absolute);
+  if (!stat.isFile() || stat.isSymbolicLink()) return null;
+  if (stat.size > maximumBytes)
+    throw new ContractError("FILE_ERROR", `${relative} exceeds ${maximumBytes} bytes`);
+  const content = readFileSync(absolute, "utf8");
+  return content.includes("\uFFFD") ? null : content;
+}
+
+function contentMatches(root, manifestPath, kind) {
+  if (!kind) return true;
+  const source = readTrackedText(root, manifestPath);
+  if (source === null) return false;
+  if (kind === "python-requirements") {
+    if (/requirements/i.test(path.posix.basename(manifestPath))) return true;
+    return source.split(/\r?\n/).every((line) => {
+      const value = line.trim();
+      return (
+        value === "" ||
+        value.startsWith("#") ||
+        value.startsWith("-") ||
+        /^[A-Za-z0-9_.-]+(?:\[[^\]]+\])?\s*(?:[<>=!~]=?|===)\s*\S+/.test(value)
+      );
+    });
+  }
+  if (kind === "kubernetes-resource") {
+    try {
+      let matched = false;
+      yaml.loadAll(
+        source.replace(/^\uFEFF/, ""),
+        (document) => {
+          if (
+            document &&
+            typeof document === "object" &&
+            !Array.isArray(document) &&
+            Object.hasOwn(document, "apiVersion") &&
+            Object.hasOwn(document, "kind")
+          )
+            matched = true;
+        },
+        { schema: yaml.JSON_SCHEMA }
+      );
+      return matched;
+    } catch {
+      return false;
+    }
+  }
+  throw new ContractError("POLICY_ERROR", `unsupported content matcher ${kind}`);
+}
+
+function workspacePatterns(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object" && Array.isArray(value.packages)) return value.packages;
+  return [];
+}
+
+function javascriptOwnership(root, manifestPath, tracked) {
+  const manifestDirectory =
+    path.posix.dirname(manifestPath) === "." ? "" : path.posix.dirname(manifestPath);
+  let selected = manifestPath;
+  for (const candidate of tracked.filter((item) => item.endsWith("package.json"))) {
+    const candidateDirectory =
+      path.posix.dirname(candidate) === "." ? "" : path.posix.dirname(candidate);
+    if (
+      candidate === manifestPath ||
+      (candidateDirectory && !manifestDirectory.startsWith(`${candidateDirectory}/`))
+    )
+      continue;
+    const relative = path.posix.relative(candidateDirectory || ".", manifestDirectory || ".");
+    if (!relative || relative.startsWith("..")) continue;
+    try {
+      const document = JSON.parse(readTrackedText(root, candidate));
+      if (workspacePatterns(document.workspaces).some((pattern) => matchesGlob(pattern, relative)))
+        selected = candidate;
+    } catch (error) {
+      if (error instanceof ContractError) throw error;
+      continue;
+    }
+  }
+  const selectedDirectory =
+    path.posix.dirname(selected) === "." ? "" : path.posix.dirname(selected);
+  const files = new Set(tracked);
+  let ecosystem = "npm";
+  try {
+    const document = JSON.parse(readTrackedText(root, selected));
+    const manager = typeof document.packageManager === "string" ? document.packageManager : "";
+    if (
+      manager.startsWith("bun@") ||
+      files.has(path.posix.join(selectedDirectory, "bun.lock")) ||
+      files.has(path.posix.join(selectedDirectory, "bun.lockb"))
+    )
+      ecosystem = "bun";
+  } catch (error) {
+    if (error instanceof ContractError) throw error;
+    // Dependabot will surface malformed package.json; discovery still retains it as npm data.
+  }
+  return { coverageDirectory: parentDirectory(selected), ecosystem };
+}
+
 function discover(root, policy, reviewed) {
   const manifests = [];
-  const diagnostics = [];
-  for (const manifestPath of trackedFiles(root)) {
-    if (policy.ignored_path_prefixes.some((prefix) => manifestPath.startsWith(prefix))) continue;
-    const matchingRules = policy.manifest_rules.filter((rule) => rule.compiled.test(manifestPath));
+  const diagnostics = [...(reviewed.diagnostics || [])];
+  const tracked = trackedFiles(root);
+  const trackedSet = new Set(tracked);
+  const terraformModules = new Map();
+  for (const manifestPath of tracked) {
+    const pathRules = policy.manifest_rules.filter((rule) => rule.compiled.test(manifestPath));
     const candidateRules = policy.candidate_rules.filter((rule) =>
       rule.compiled.test(manifestPath)
     );
-    if (!matchingRules.length && !candidateRules.length) continue;
-    const stat = lstatSync(path.join(root, manifestPath));
+    if (!pathRules.length && !candidateRules.length) continue;
+    let stat;
+    try {
+      stat = lstatSync(path.join(root, manifestPath));
+    } catch (error) {
+      diagnostics.push({
+        code: "MISSING_TRACKED_FILE",
+        expected_ecosystem: null,
+        manifest_path: manifestPath,
+        reason: `tracked manifest candidate is unavailable in the worktree: ${error.code || "error"}`,
+      });
+      continue;
+    }
     if (stat.isSymbolicLink()) {
       diagnostics.push({
         code: "UNSAFE_SYMLINK",
@@ -472,7 +744,14 @@ function discover(root, policy, reviewed) {
       continue;
     }
     if (!stat.isFile()) continue;
+    const matchingRules = pathRules.filter(
+      (rule) =>
+        contentMatches(root, manifestPath, rule.content_kind) &&
+        (!rule.companion ||
+          trackedSet.has(path.posix.join(path.posix.dirname(manifestPath), rule.companion)))
+    );
     if (!matchingRules.length) {
+      if (!candidateRules.length) continue;
       diagnostics.push({
         candidate_rules: candidateRules.map((rule) => rule.id).sort(),
         code: "UNCLASSIFIED_MANIFEST_CANDIDATE",
@@ -482,29 +761,72 @@ function discover(root, policy, reviewed) {
       });
       continue;
     }
-    let ecosystems = [...new Set(matchingRules.map((rule) => rule.ecosystem))].sort();
-    if (ecosystems.length > 1) {
-      const selections = ecosystems.filter((ecosystem) =>
-        reviewed.classifications.has(`${manifestPath}\0${ecosystem}`)
-      );
-      if (selections.length !== 1) {
-        diagnostics.push({
-          code: "AMBIGUOUS_MANIFEST_CLASSIFICATION",
-          expected_ecosystem: ecosystems.join("|"),
-          manifest_path: manifestPath,
-          reason: "exact reviewed classification must select one matching ecosystem",
-        });
-        continue;
-      }
-      ecosystems = selections;
+    const ownershipRule = matchingRules.find((rule) => rule.ownership);
+    if (ownershipRule?.ownership === "terraform-module") {
+      const directory =
+        path.posix.dirname(manifestPath) === "." ? "" : path.posix.dirname(manifestPath);
+      if (!terraformModules.has(directory)) terraformModules.set(directory, []);
+      terraformModules.get(directory).push(manifestPath);
+      continue;
     }
-    const ecosystem = ecosystems[0];
+    const primaryRule = matchingRules.find((item) => !item.content_kind) || matchingRules[0];
+    let ecosystem = primaryRule.ecosystem;
+    let coverageDirectory =
+      primaryRule.coverage_directory === "root" ? "/" : parentDirectory(manifestPath);
+    if (ownershipRule?.ownership === "javascript-package") {
+      const ownership = javascriptOwnership(root, manifestPath, tracked);
+      ecosystem = ownership.ecosystem;
+      coverageDirectory = ownership.coverageDirectory;
+    } else if (ownershipRule?.ownership === "python-package") {
+      const directory = path.posix.dirname(manifestPath);
+      const uvLock = path.posix.join(directory === "." ? "" : directory, "uv.lock");
+      ecosystem = trackedSet.has(uvLock) ? "uv" : "pip";
+    }
     const rule = matchingRules.find((item) => item.ecosystem === ecosystem);
     manifests.push({
-      coverage_directory: rule.coverage_directory === "root" ? "/" : parentDirectory(manifestPath),
+      coverage_directory:
+        specialCoverageDirectory(manifestPath, rule?.coverage_directory) ?? coverageDirectory,
       expected_ecosystem: ecosystem,
       manifest_path: manifestPath,
     });
+  }
+  for (const [directory, moduleFiles] of [...terraformModules.entries()].sort()) {
+    const classification = reviewed.classifications.get(directory);
+    const proposedClassification = reviewed.proposed?.classifications.get(directory);
+    const hasTofu = moduleFiles.some((manifest) => manifest.endsWith(".tofu"));
+    let ecosystem = hasTofu ? "opentofu" : classification?.ecosystem;
+    if (hasTofu && classification && classification.ecosystem !== "opentofu") {
+      diagnostics.push({
+        code: "CONTRADICTORY_CLASSIFICATION",
+        expected_ecosystem: "opentofu",
+        manifest_path: moduleFiles[0],
+        reason: `module ${directory || "."} contains .tofu but protected policy selects terraform`,
+      });
+      continue;
+    }
+    if (!ecosystem) {
+      if (proposedClassification)
+        diagnostics.push({
+          code: "UNTRUSTED_POLICY_INPUT",
+          expected_ecosystem: proposedClassification.ecosystem,
+          manifest_path: moduleFiles[0],
+          reason: `subject classification for ${directory || "."} is not protected-history authority`,
+        });
+      diagnostics.push({
+        code: "AMBIGUOUS_MANIFEST_CLASSIFICATION",
+        expected_ecosystem: "opentofu|terraform",
+        manifest_path: moduleFiles[0],
+        reason: `protected module classification must select one ecosystem for ${directory || "."}`,
+      });
+      continue;
+    }
+    for (const manifestPath of moduleFiles.sort()) {
+      manifests.push({
+        coverage_directory: parentDirectory(manifestPath),
+        expected_ecosystem: ecosystem,
+        manifest_path: manifestPath,
+      });
+    }
   }
   manifests.sort(
     (left, right) =>
@@ -522,7 +844,10 @@ function globRegex(pattern) {
   let expression = "^";
   for (let index = 0; index < pattern.length; index += 1) {
     const character = pattern[index];
-    if (character === "*" && pattern[index + 1] === "*") {
+    if (character === "*" && pattern[index + 1] === "*" && pattern[index + 2] === "/") {
+      expression += "(?:.*/)?";
+      index += 2;
+    } else if (character === "*" && pattern[index + 1] === "*") {
       expression += ".*";
       index += 1;
     } else if (character === "*") expression += "[^/]*";
@@ -532,8 +857,20 @@ function globRegex(pattern) {
 }
 
 function matchesGlob(pattern, value) {
-  if (!pattern.includes("/")) return globRegex(pattern).test(path.posix.basename(value));
-  return globRegex(pattern).test(value);
+  const normalizedPattern = pattern.replace(/^\//, "").replace(/\/$/, "");
+  const normalizedValue = value.replace(/^\//, "").replace(/\/$/, "");
+  if (!normalizedPattern.includes("/"))
+    return globRegex(normalizedPattern).test(path.posix.basename(normalizedValue));
+  return globRegex(normalizedPattern).test(normalizedValue);
+}
+
+function validExcludePattern(value) {
+  if (typeof value !== "string" || value === "" || value.startsWith("/") || value.includes("\\"))
+    return false;
+  const normalized = value.endsWith("/") ? value.slice(0, -1) : value;
+  return !normalized
+    .split("/")
+    .some((segment) => segment === "." || segment === ".." || segment === "");
 }
 
 function parseConfig(root, relative, policy) {
@@ -566,10 +903,26 @@ function parseConfig(root, relative, policy) {
     object(group, `${selected}.multi-ecosystem-groups.${name}`);
     closedKeys(
       group,
-      new Set(["assignees", "commit-message", "labels", "milestone", "schedule"]),
+      new Set([
+        "assignees",
+        "commit-message",
+        "labels",
+        "milestone",
+        "pull-request-branch-name",
+        "schedule",
+        "target-branch",
+      ]),
       `${selected}.multi-ecosystem-groups.${name}`
     );
     validateSchedule(group.schedule, `${selected}.multi-ecosystem-groups.${name}.schedule`, false);
+    if (
+      group["target-branch"] !== undefined &&
+      (typeof group["target-branch"] !== "string" || group["target-branch"] === "")
+    )
+      throw new ContractError(
+        "CONFIG_SCHEMA_ERROR",
+        `${selected}.multi-ecosystem-groups.${name}.target-branch must be a string`
+      );
   }
   const entries = config.updates.map((candidate, index) => {
     const label = `updates[${index}]`;
@@ -616,8 +969,26 @@ function parseConfig(root, relative, policy) {
         `${selected}.${label}.multi-ecosystem-group is undefined`
       );
     }
+    if (
+      groupName !== undefined &&
+      (!Array.isArray(entry.patterns) ||
+        !entry.patterns.length ||
+        entry.patterns.some((value) => typeof value !== "string" || value === ""))
+    )
+      throw new ContractError(
+        "CONFIG_SCHEMA_ERROR",
+        `${selected}.${label}.patterns must be a non-empty array for multi-ecosystem-group`
+      );
+    if (groupName !== undefined && entry["target-branch"] !== undefined)
+      throw new ContractError(
+        "CONFIG_SCHEMA_ERROR",
+        `${selected}.${label}.target-branch must be configured on the multi-ecosystem group`
+      );
     validateSchedule(entry.schedule, `${selected}.${label}.schedule`, Boolean(groupName));
-    if (entry["target-branch"] !== undefined && typeof entry["target-branch"] !== "string") {
+    if (
+      entry["target-branch"] !== undefined &&
+      (typeof entry["target-branch"] !== "string" || entry["target-branch"] === "")
+    ) {
       throw new ContractError(
         "CONFIG_SCHEMA_ERROR",
         `${selected}.${label}.target-branch must be a string`
@@ -626,7 +997,7 @@ function parseConfig(root, relative, policy) {
     if (
       entry["exclude-paths"] !== undefined &&
       (!Array.isArray(entry["exclude-paths"]) ||
-        entry["exclude-paths"].some((value) => typeof value !== "string" || value.startsWith("/")))
+        entry["exclude-paths"].some((value) => !validExcludePattern(value)))
     ) {
       throw new ContractError(
         "CONFIG_SCHEMA_ERROR",
@@ -640,7 +1011,9 @@ function parseConfig(root, relative, policy) {
       index,
       schedule: groupName ? groups[groupName].schedule : entry.schedule,
       scopes,
-      targetBranch: entry["target-branch"] || null,
+      targetBranch: groupName
+        ? groups[groupName]["target-branch"] || null
+        : entry["target-branch"] || null,
     };
   });
   const identities = new Set();
@@ -684,7 +1057,17 @@ function relativeToDirectory(manifest, directory) {
 
 function excluded(entry, manifest, actualDirectory) {
   const relative = relativeToDirectory(manifest, actualDirectory);
-  return relative !== null && entry.excludes.some((pattern) => matchesGlob(pattern, relative));
+  return (
+    relative !== null &&
+    entry.excludes.some((pattern) => {
+      const normalized = pattern.replace(/^\//, "").replace(/\/$/, "");
+      return (
+        relative === normalized ||
+        relative.startsWith(`${normalized}/`) ||
+        matchesGlob(normalized, relative)
+      );
+    })
+  );
 }
 
 function coverageReport(options, policy, config, reviewed, discovery) {
@@ -706,7 +1089,7 @@ function coverageReport(options, policy, config, reviewed, discovery) {
           const label = entryLabel(entry, scope);
           candidates.push(label);
           if (
-            !entry.targetBranch &&
+            (!entry.targetBranch || entry.targetBranch === options.defaultBranch) &&
             !excluded(entry, manifest.manifest_path, manifest.coverage_directory)
           )
             matches.push(label);
@@ -716,6 +1099,9 @@ function coverageReport(options, policy, config, reviewed, discovery) {
     considered.sort();
     matches.sort();
     const exception = reviewed.exceptions.get(
+      `${manifest.manifest_path}\0${manifest.expected_ecosystem}`
+    );
+    const proposedException = reviewed.proposed?.exceptions.get(
       `${manifest.manifest_path}\0${manifest.expected_ecosystem}`
     );
     let status;
@@ -728,7 +1114,7 @@ function coverageReport(options, policy, config, reviewed, discovery) {
       reason = "multiple Dependabot entries match the same manifest";
     } else if (exception) {
       status = "EXCEPTED";
-      reason = `reviewed exact exception in ${options.exceptions}`;
+      reason = `protected-history exact exception in ${options.exceptions}`;
     } else {
       status = "UNCOVERED";
       const sameEcosystem = config.entries.some(
@@ -748,6 +1134,15 @@ function coverageReport(options, policy, config, reviewed, discovery) {
       else if (sameDirectory)
         reason = "manifest directory is configured only for an unrelated ecosystem";
       else reason = "no Dependabot entry has the expected ecosystem and directory";
+      if (proposedException)
+        diagnostics.push({
+          accepted_exception_mechanism: `${options.exceptions}: protected-history manifest-exceptions[] (exact path + ecosystem)`,
+          code: "UNTRUSTED_POLICY_INPUT",
+          expected_ecosystem: manifest.expected_ecosystem,
+          manifest_path: manifest.manifest_path,
+          matched_configuration: [],
+          reason: "subject-authored exception cannot exempt the same unprotected revision",
+        });
     }
     const item = {
       ...manifest,
@@ -758,7 +1153,7 @@ function coverageReport(options, policy, config, reviewed, discovery) {
     manifests.push(item);
     if (!new Set(["COVERED", "EXCEPTED"]).has(status)) {
       diagnostics.push({
-        accepted_exception_mechanism: `${options.exceptions}: manifest-exceptions[] (exact path + ecosystem + review metadata)`,
+        accepted_exception_mechanism: `${options.exceptions}: protected-history manifest-exceptions[] (exact path + ecosystem)`,
         code: status === "AMBIGUOUS" ? "AMBIGUOUS_COVERAGE" : "UNCOVERED_MANIFEST",
         considered_configuration: considered,
         expected_ecosystem: manifest.expected_ecosystem,
@@ -777,6 +1172,20 @@ function coverageReport(options, policy, config, reviewed, discovery) {
       matched_configuration: [],
       reason:
         "repository-level exception cannot hide a discovered or unclassified manifest candidate",
+    });
+  }
+  if (
+    reviewed.proposed?.noApplicable &&
+    !reviewed.noApplicable &&
+    (discovery.manifests.length || discovery.diagnostics.length)
+  ) {
+    diagnostics.push({
+      accepted_exception_mechanism: `${options.exceptions}: protected-history no-applicable-manifest`,
+      code: "INVALID_NO_APPLICABLE_MANIFEST_EXCEPTION",
+      expected_ecosystem: null,
+      manifest_path: null,
+      matched_configuration: [],
+      reason: "subject no-applicable-manifest assertion conflicts with discovered repository state",
     });
   }
   return report(options, policy, "MANIFEST_COVERAGE", manifests, diagnostics);
@@ -823,7 +1232,7 @@ function report(options, policy, assertion, items, inputDiagnostics, itemName = 
   const diagnostics = inputDiagnostics.map((diagnostic) => ({
     accepted_exception_mechanism:
       diagnostic.accepted_exception_mechanism ??
-      `${options.exceptions}: exact reviewed records only`,
+      `${options.exceptions}: exact protected-history records only`,
     expected_ecosystem: diagnostic.expected_ecosystem ?? null,
     manifest_path: diagnostic.manifest_path ?? null,
     matched_configuration: diagnostic.matched_configuration ?? [],
@@ -839,6 +1248,16 @@ function report(options, policy, assertion, items, inputDiagnostics, itemName = 
       manifest_path: null,
       matched_configuration: [],
       reason: `catalog expired on ${policy.expires_on}`,
+      repository: options.repository,
+    });
+  if (options.asOf < policy.reviewed_on)
+    diagnostics.push({
+      accepted_exception_mechanism: "none; evaluate on or after the catalog review date",
+      code: "CATALOG_NOT_YET_REVIEWED",
+      expected_ecosystem: null,
+      manifest_path: null,
+      matched_configuration: [],
+      reason: `catalog was reviewed on ${policy.reviewed_on}`,
       repository: options.repository,
     });
   diagnostics.sort(
@@ -913,8 +1332,17 @@ try {
   options = parseArguments(process.argv.slice(2));
   const policy = loadPolicy(options.policy);
   const config = parseConfig(options.root, options.config, policy);
+  if (
+    options.assertion === "coverage" &&
+    config.entries.some((entry) => entry.targetBranch) &&
+    !options.defaultBranch
+  )
+    throw new ContractError(
+      "DEFAULT_BRANCH_AUTHORITY_REQUIRED",
+      "target-branch coverage requires an authenticated repository default branch"
+    );
   if (options.assertion === "coverage") {
-    const reviewed = loadExceptions(options.root, options.exceptions, policy);
+    const reviewed = loadReviewPolicy(options, policy);
     const discovery = discover(options.root, policy, reviewed);
     output = coverageReport(options, policy, config, reviewed, discovery);
   } else output = cadenceReport(options, policy, config);

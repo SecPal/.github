@@ -29,11 +29,13 @@ code.
 ## Discovery and catalog authority
 
 Discovery uses `git ls-files -z`, so only version-controlled source state is
-authoritative. Generated, untracked output is absent by construction. The
-catalog also excludes tracked paths under defined cache, vendor, and build
-trees. Repository-relative paths must already be normalized POSIX paths.
-Manifest candidates that are symbolic links fail closed rather than resolving
-outside the authoritative tree.
+authoritative. Generated, untracked output is absent by construction. A
+tracked manifest is never suppressed merely because a directory is named
+`build`, `vendor`, `dist`, or another conventional output name. A genuinely
+generated tracked manifest needs the same exact protected-history exception as
+any other manifest. Repository-relative paths must already be normalized POSIX
+paths. Manifest candidates that are symbolic links fail closed rather than
+resolving outside the authoritative tree.
 
 [`policies/dependabot-manifest-catalog-v1.json`](../policies/dependabot-manifest-catalog-v1.json)
 is the sole executable ecosystem and path-pattern authority. Code, workflows,
@@ -45,34 +47,44 @@ The current catalog was reviewed on 2026-09-02 against:
 - GitHub's [Dependabot options reference](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference);
 - Dependabot Core commit
   [`eb6370bc47da4ab268ae36d2af8ccc27a3c98a4e`](https://github.com/dependabot/dependabot-core/tree/eb6370bc47da4ab268ae36d2af8ccc27a3c98a4e),
-  specifically the relevant `file_fetcher.rb` implementations for Docker,
-  Docker Compose, GitHub Actions, npm, Composer, Python, Gradle, pre-commit,
-  Terraform, and OpenTofu.
+  specifically the cataloged file-fetcher and shared behavior sources.
 
 The catalog's `upstream.dependabot_core_source_paths` array records every exact
-file-fetcher path inspected at that commit; catalog refreshes update this list
-alongside the commit identity.
+source inspected at that commit. Every executable manifest rule carries its
+own `source_paths` binding, and every supported configuration ecosystem has one
+machine-checked discovery disposition. A catalog is invalid if an ecosystem
+lacks a disposition, an executable rule lacks provenance, or a provenance path
+is not in the catalog authority set. Shared matching behavior such as
+`exclude-paths` is bound separately through `behavior_provenance`, and unused
+source claims are rejected. NuGet is explicitly marked as not directly
+discoverable without reproducing its native solution/project workspace model;
+high-confidence native NuGet entry points fail as unclassified candidates
+instead of disappearing.
 
 Consumer runs use this immutable snapshot. They do not download mutable
 documentation or code.
 
 ## Anti-silent-drift behavior
 
-The future-support invariant has two independent fail-closed controls:
+The future-support invariant has three independent fail-closed controls:
 
-1. Broad, versioned candidate rules report
+1. Catalog loading proves that every supported ecosystem has direct, shared,
+   or explicitly unavailable discovery authority.
+2. Bounded, high-confidence candidate rules report
    `UNCLASSIFIED_MANIFEST_CANDIDATE` when a dependency-like tracked file cannot
    be classified safely.
-2. Every catalog has a fixed expiry. Runs after that date report
+3. Every catalog has a fixed expiry. Runs after that date report
    `CATALOG_STALE` until a reviewer compares the catalog with current upstream
    sources, updates its provenance and rules, and sets a new bounded expiry.
 
 This makes unknown support bounded rather than silently accepted forever. A
-candidate must be classified in the central catalog or removed; a repository
-exception cannot classify it. Ambiguous files also fail closed. In particular,
-`.tf` is supported by both Terraform and OpenTofu and therefore needs an exact
-reviewed classification in the repository exception file. A `.tofu` manifest
-classifies directly as OpenTofu.
+candidate must be classified in the central catalog or removed; a manifest
+exception cannot classify it. Generic files such as `build.yaml`,
+`packages.json`, and `modules.toml` are not candidates without dependency
+evidence. Ambiguous infrastructure files fail closed at module scope. A module
+containing `.tofu` selects OpenTofu; a `.tf`-only module needs one protected
+directory classification, and contradictory per-directory ownership is
+rejected.
 
 ## Coverage semantics
 
@@ -83,16 +95,27 @@ unknown ecosystems, invalid `directory` or `directories` values, and ambiguous
 overlap for a discovered manifest.
 
 Coverage requires both the expected `package-ecosystem` and the manifest's
-Dependabot directory. A `directory` is an exact manifest directory, not a
-filesystem prefix. `directories` supports deterministic `*` and `**` glob
-matching. An entry targeting another branch or excluding the manifest does not
-cover the checked source tree.
+effective Dependabot directory. A `directory` is an exact update root, not a
+filesystem prefix. `directories` supports GitHub's documented `*` and `**`
+forms, including `"**/*"` without a leading slash. `exclude-paths` uses
+Dependabot's file, directory-prefix, single-segment, and recursive matching,
+relative to the effective update directory. An excluded manifest is not
+covered.
+
+An absent `target-branch` means the authenticated repository default branch.
+An explicit `target-branch` covers the checked state only when it equals that
+same default branch. The reusable workflow obtains this value from GitHub's
+repository event context; the local CLI value is an explicit simulation input,
+not authorization evidence.
 
 GitHub Actions workflows in `.github/workflows` derive `/`, matching
-Dependabot's documented root special case. Other manifests derive their direct
-parent directory. Therefore npm coverage for `/tools` cannot cover
-`frontend/package.json`, and an entry for `/` cannot cover that nested npm
-manifest merely because `/` is its filesystem ancestor.
+Dependabot's documented root special case. Ecosystem-specific ownership is
+applied where pinned fetchers require it: an npm workspace member derives the
+matched workspace root, and Terraform/OpenTofu ownership applies to the whole
+effective module directory. Other primary manifests derive their direct parent
+directory. Therefore npm coverage for `/tools` cannot cover an unrelated
+`frontend/package.json`, while npm coverage for `/` does cover a declared root
+workspace member.
 
 Dependabot Core recognizes names containing `Dockerfile` or `Containerfile`
 under its `docker` package ecosystem. The SecPal catalog preserves that exact
@@ -107,15 +130,15 @@ change SecPal's Podman, Buildah, or OCI architecture.
 
 ## Reviewed exceptions and classifications
 
-Repository-local review data lives in
+Repository-local policy data lives in
 `.github/dependabot-manifest-exceptions.yml`:
 
 ```yaml
 version: 1
 classifications:
-  - manifest: infrastructure/main.tf
+  - directory: infrastructure
     ecosystem: opentofu
-    reason: OpenTofu owns this reviewed HCL module.
+    reason: Protected history assigns this complete module to OpenTofu.
     reviewed-by: "@SecPal/maintainers"
     reviewed-on: "2026-09-02"
 manifest-exceptions:
@@ -126,11 +149,22 @@ manifest-exceptions:
     reviewed-on: "2026-09-02"
 ```
 
-Every record binds an exact normalized manifest path, one catalog ecosystem, a
-bounded reason, reviewer identity, and review date. Wildcards, parent traversal,
-duplicate records, and unknown ecosystems are invalid. A classification only
-resolves a catalog-proven ambiguity; it cannot introduce an arbitrary ecosystem
-for an otherwise unknown candidate.
+Manifest exceptions bind an exact normalized path, one catalog ecosystem, a
+bounded reason, reviewer identity, and real non-future review date. Module
+classifications bind one exact normalized directory and either Terraform or
+OpenTofu. Wildcards, parent traversal, duplicate records, and unknown
+ecosystems are invalid.
+
+The metadata strings do not authenticate their own review. Hosted enforcement
+loads usable policy only from a separate checkout of the protected default
+branch. Policy newly proposed in the subject change cannot exempt that same
+change; an attempted self-exemption is reported as `UNTRUSTED_POLICY_INPUT`.
+This permits a policy-only staging change to pass before the protected policy
+is needed. The repository's protected merge history supplies the review
+authority; `reviewed-by` and `reviewed-on` remain auditable metadata within that
+authority. Local execution must pass `--trusted-policy-root` to model such a
+baseline. Without it, a local subject policy is parsed fail-closed but never
+grants an exception.
 
 The optional `no-applicable-manifest` record has only reason and review
 metadata. It is accepted solely when discovery finds neither an applicable
@@ -158,7 +192,8 @@ Run the assertions locally with:
 
 ```bash
 node scripts/secpal-dependabot-manifest-coverage.mjs coverage \
-  --repository SecPal/example --format json
+  --repository SecPal/example --default-branch main \
+  --trusted-policy-root /path/to/protected-baseline --format json
 node scripts/secpal-dependabot-manifest-coverage.mjs cadence \
   --repository SecPal/example --format json
 ```
@@ -188,7 +223,10 @@ The subject repository is checked out only as data. A second checkout derives
 the governance repository and revision from the called workflow's
 `job.workflow_repository` and `job.workflow_sha`. The engine, catalog, lockfile,
 and parser dependencies always come from that immutable called-workflow
-revision; a caller cannot replace them with scripts from its own checkout.
+revision; a caller cannot replace them with scripts from its own checkout. A
+third data-only checkout obtains exception/classification authority from the
+repository default branch. GitHub supplies both the repository identity and
+default-branch identity; neither is a caller workflow input.
 
 ## Non-goals
 

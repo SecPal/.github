@@ -31,6 +31,13 @@ jobs:
           path: .secpal-governance
           persist-credentials: false
 
+      - name: Checkout protected exception authority
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .secpal-policy
+          persist-credentials: false
+
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -41,11 +48,15 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Validate manifest coverage
+        env:
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: >-
           node .secpal-governance/scripts/secpal-dependabot-manifest-coverage.mjs
           coverage
           --root "$GITHUB_WORKSPACE/.secpal-subject"
           --repository "$GITHUB_REPOSITORY"
+          --default-branch "$GITHUB_DEFAULT_BRANCH"
+          --trusted-policy-root "$GITHUB_WORKSPACE/.secpal-policy"
           --format text
 
   cadence-policy:
@@ -79,9 +90,12 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Validate cadence policy independently
+        env:
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: >-
           node .secpal-governance/scripts/secpal-dependabot-manifest-coverage.mjs
           cadence
           --root "$GITHUB_WORKSPACE/.secpal-subject"
           --repository "$GITHUB_REPOSITORY"
+          --default-branch "$GITHUB_DEFAULT_BRANCH"
           --format text

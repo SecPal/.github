@@ -348,13 +348,14 @@ persists no state.
 Deterministically discovers tracked dependency manifests and validates either
 the shared `MANIFEST_COVERAGE` assertion or the separate `CADENCE_POLICY`
 assertion. Ecosystem knowledge and upstream provenance come exclusively from
-`policies/dependabot-manifest-catalog-v1.json`; exact reviewed repository
-exceptions and ambiguous-manifest classifications come from
-`.github/dependabot-manifest-exceptions.yml`.
+`policies/dependabot-manifest-catalog-v1.json`. Exact repository exceptions and
+module classifications are usable only from a separately supplied trusted
+protected-history root; subject-branch review strings are never authority.
 
 ```bash
 node scripts/secpal-dependabot-manifest-coverage.mjs coverage \
-  --repository SecPal/example --format json
+  --repository SecPal/example --default-branch main \
+  --trusted-policy-root /path/to/protected-baseline --format json
 node scripts/secpal-dependabot-manifest-coverage.mjs cadence \
   --repository SecPal/example --format text
 ```

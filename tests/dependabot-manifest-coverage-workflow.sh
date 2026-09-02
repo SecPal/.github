@@ -30,6 +30,29 @@ if [ "$(grep -Fc 'path: .secpal-subject' "$workflow")" -ne 2 ]; then
   exit 1
 fi
 
+if [ "$(grep -Fc 'path: .secpal-policy' "$workflow")" -ne 1 ]; then
+  echo "Coverage must load review policy from one protected-history checkout." >&2
+  exit 1
+fi
+
+# shellcheck disable=SC2016
+if ! grep -Fq 'ref: ${{ github.event.repository.default_branch }}' "$workflow"; then
+  echo "Protected-history policy must come from the authenticated default branch." >&2
+  exit 1
+fi
+
+# shellcheck disable=SC2016
+if ! grep -Fq -- '--trusted-policy-root "$GITHUB_WORKSPACE/.secpal-policy"' "$workflow"; then
+  echo "Coverage must bind exception authority to the protected-history checkout." >&2
+  exit 1
+fi
+
+# shellcheck disable=SC2016
+if [ "$(grep -Fc -- '--default-branch "$GITHUB_DEFAULT_BRANCH"' "$workflow")" -ne 2 ]; then
+  echo "Both assertions must bind target-branch semantics to authenticated repository context." >&2
+  exit 1
+fi
+
 # shellcheck disable=SC2016
 if [ "$(grep -Fc -- '--root "$GITHUB_WORKSPACE/.secpal-subject"' "$workflow")" -ne 2 ]; then
   echo "Both assertions must inspect only the isolated subject checkout." >&2

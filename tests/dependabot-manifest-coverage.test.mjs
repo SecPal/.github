@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const VALIDATOR = path.join(ROOT, "scripts", "secpal-dependabot-manifest-coverage.mjs");
+const CATALOG = path.join(ROOT, "policies", "dependabot-manifest-catalog-v1.json");
 
 function repository(files) {
   const root = mkdtempSync(path.join(tmpdir(), "dependabot-coverage-"));
@@ -44,6 +45,10 @@ function run(root, assertion = "coverage", extra = []) {
   );
   assert.equal(result.signal, null, result.stderr);
   return { code: result.status, report: JSON.parse(result.stdout) };
+}
+
+function trustedPolicy(files) {
+  return repository(files);
 }
 
 const DAILY = `schedule:
@@ -131,15 +136,6 @@ updates:
     directory: /compose
     ${DAILY}
 `,
-    ".github/dependabot-manifest-exceptions.yml": `version: 1
-classifications:
-  - manifest: terraform/main.tf
-    ecosystem: terraform
-    reason: Terraform owns this reviewed HCL module.
-    reviewed-by: "@SecPal/maintainers"
-    reviewed-on: "2026-09-02"
-manifest-exceptions: []
-`,
     ".pre-commit-config.yaml": "repos: []\n",
     "android/build.gradle.kts": "plugins {}\n",
     "compose/docker-compose.prod.yaml": "services: {}\n",
@@ -153,7 +149,18 @@ manifest-exceptions: []
     "tofu/main.tofu": "terraform {}\n",
     "web/package.json": "{}\n",
   });
-  const { code, report } = run(root);
+  const baseline = trustedPolicy({
+    ".github/dependabot-manifest-exceptions.yml": `version: 1
+classifications:
+  - directory: terraform
+    ecosystem: terraform
+    reason: Protected history assigns this complete module to Terraform.
+    reviewed-by: "@SecPal/maintainers"
+    reviewed-on: "2026-09-02"
+manifest-exceptions: []
+`,
+  });
+  const { code, report } = run(root, "coverage", ["--trusted-policy-root", baseline]);
   assert.equal(code, 0);
   assert.equal(report.status, "PASS");
   assert.equal(report.manifests.length, 13);
@@ -280,6 +287,9 @@ updates:
 test("an exact reviewed manifest exception succeeds", () => {
   const root = repository({
     ".github/dependabot.yml": "version: 2\nupdates: []\n",
+    "app/package.json": "{}\n",
+  });
+  const baseline = trustedPolicy({
     ".github/dependabot-manifest-exceptions.yml": `version: 1
 manifest-exceptions:
   - manifest: app/package.json
@@ -288,9 +298,11 @@ manifest-exceptions:
     reviewed-by: "@SecPal/maintainers"
     reviewed-on: "2026-09-02"
 `,
-    "app/package.json": "{}\n",
   });
-  assert.equal(run(root).report.manifests[0].status, "EXCEPTED");
+  assert.equal(
+    run(root, "coverage", ["--trusted-policy-root", baseline]).report.manifests[0].status,
+    "EXCEPTED"
+  );
 });
 
 for (const [name, manifest, ecosystem] of [
@@ -334,16 +346,18 @@ manifest-exceptions:
 test("no-applicable-manifest cannot hide a discovered manifest", () => {
   const root = repository({
     ".github/dependabot.yml": "version: 2\nupdates: []\n",
+    "package.json": "{}\n",
+  });
+  const baseline = trustedPolicy({
     ".github/dependabot-manifest-exceptions.yml": `version: 1
 no-applicable-manifest:
   reason: This repository is asserted to contain no dependency manifests.
   reviewed-by: "@SecPal/maintainers"
   reviewed-on: "2026-09-02"
 `,
-    "package.json": "{}\n",
   });
   assert.ok(
-    run(root).report.diagnostics.some(
+    run(root, "coverage", ["--trusted-policy-root", baseline]).report.diagnostics.some(
       (item) => item.code === "INVALID_NO_APPLICABLE_MANIFEST_EXCEPTION"
     )
   );
@@ -352,15 +366,17 @@ no-applicable-manifest:
 test("no-applicable-manifest succeeds only when discovery proves absence", () => {
   const root = repository({
     ".github/dependabot.yml": "version: 2\nupdates: []\n",
+    "README.md": "# Information only\n",
+  });
+  const baseline = trustedPolicy({
     ".github/dependabot-manifest-exceptions.yml": `version: 1
 no-applicable-manifest:
   reason: This information-only repository has no applicable manifests.
   reviewed-by: "@SecPal/maintainers"
   reviewed-on: "2026-09-02"
 `,
-    "README.md": "# Information only\n",
   });
-  assert.equal(run(root).report.status, "PASS");
+  assert.equal(run(root, "coverage", ["--trusted-policy-root", baseline]).report.status, "PASS");
 });
 
 test("untracked exception input cannot affect the result", () => {
@@ -390,6 +406,8 @@ test("unknown manifest candidates and stale knowledge fail closed", () => {
   assert.equal(run(root).report.diagnostics[0].code, "UNCLASSIFIED_MANIFEST_CANDIDATE");
   const stale = run(root, "coverage", ["--as-of", "2026-12-02"]);
   assert.ok(stale.report.diagnostics.some((item) => item.code === "CATALOG_STALE"));
+  const premature = run(root, "coverage", ["--as-of", "2026-09-01"]);
+  assert.ok(premature.report.diagnostics.some((item) => item.code === "CATALOG_NOT_YET_REVIEWED"));
 });
 
 test("tracked manifest symlinks fail closed", () => {
@@ -433,6 +451,298 @@ updates:
   const first = run(root).report;
   const second = run(root).report;
   assert.equal(JSON.stringify(first), JSON.stringify(second));
+});
+
+test("known supported manifests never disappear from discovery", () => {
+  for (const [manifest, content, ecosystem] of [
+    ["rust/Cargo.toml", "[package]\nname='example'\nversion='1.0.0'\n", "cargo"],
+    ["go/go.mod", "module example.test/project\n\ngo 1.24\n", "gomod"],
+    ["ruby/Gemfile", "source 'https://rubygems.org'\n", "bundler"],
+    ["java/pom.xml", "<project/>\n", "maven"],
+    ["python/constraints.txt", "requests==2.32.5\n", "pip"],
+  ]) {
+    const root = repository({
+      ".github/dependabot.yml": "version: 2\nupdates: []\n",
+      [manifest]: content,
+    });
+    const { report } = run(root);
+    assert.equal(report.manifests.length, 1, manifest);
+    assert.equal(report.manifests[0].expected_ecosystem, ecosystem, manifest);
+    assert.equal(report.manifests[0].status, "UNCOVERED", manifest);
+  }
+});
+
+test("tracked projects in generic build and vendor directories remain visible", () => {
+  const root = repository({
+    ".github/dependabot.yml": "version: 2\nupdates: []\n",
+    "build/package.json": "{}\n",
+    "vendor/package.json": "{}\n",
+  });
+  const { report } = run(root);
+  assert.deepEqual(
+    report.manifests.map((item) => item.manifest_path),
+    ["build/package.json", "vendor/package.json"]
+  );
+  assert.ok(report.manifests.every((item) => item.status === "UNCOVERED"));
+});
+
+test("subject-authored review metadata cannot authorize its own exception", () => {
+  const root = repository({
+    ".github/dependabot.yml": "version: 2\nupdates: []\n",
+    ".github/dependabot-manifest-exceptions.yml": `version: 1
+manifest-exceptions:
+  - manifest: app/package.json
+    ecosystem: npm
+    reason: This self-declared exception has no protected-history authority.
+    reviewed-by: "@SecPal/maintainers"
+    reviewed-on: "2026-09-02"
+`,
+    "app/package.json": "{}\n",
+  });
+  const { report } = run(root);
+  assert.equal(report.manifests[0].status, "UNCOVERED");
+  assert.ok(report.diagnostics.some((item) => item.code === "UNTRUSTED_POLICY_INPUT"));
+});
+
+test("unused policy can be staged for protected-history review", () => {
+  const root = repository({
+    ".github/dependabot.yml": "version: 2\nupdates: []\n",
+    ".github/dependabot-manifest-exceptions.yml": `version: 1
+manifest-exceptions:
+  - manifest: future/package.json
+    ecosystem: npm
+    reason: This exact policy is staged before the future manifest exists.
+    reviewed-by: "@SecPal/maintainers"
+    reviewed-on: "2026-09-02"
+`,
+  });
+  assert.equal(run(root).report.status, "PASS");
+});
+
+test("protected-history exception authority is accepted exactly", () => {
+  const root = repository({
+    ".github/dependabot.yml": "version: 2\nupdates: []\n",
+    "app/package.json": "{}\n",
+  });
+  const baseline = trustedPolicy({
+    ".github/dependabot-manifest-exceptions.yml": `version: 1
+manifest-exceptions:
+  - manifest: app/package.json
+    ecosystem: npm
+    reason: Protected history records this exact temporary exception.
+    reviewed-by: "@SecPal/maintainers"
+    reviewed-on: "2026-09-02"
+`,
+  });
+  const { report } = run(root, "coverage", ["--trusted-policy-root", baseline]);
+  assert.equal(report.manifests[0].status, "EXCEPTED");
+});
+
+test("review and catalog dates are real and not in the future", () => {
+  for (const reviewedOn of ["2026-99-99", "2099-12-31"]) {
+    const root = repository({
+      ".github/dependabot.yml": "version: 2\nupdates: []\n",
+      "app/package.json": "{}\n",
+    });
+    const baseline = trustedPolicy({
+      ".github/dependabot-manifest-exceptions.yml": `version: 1
+manifest-exceptions:
+  - manifest: app/package.json
+    ecosystem: npm
+    reason: Invalid review dates must not become trusted policy evidence.
+    reviewed-by: "@SecPal/maintainers"
+    reviewed-on: "${reviewedOn}"
+`,
+    });
+    assert.equal(
+      run(root, "coverage", ["--trusted-policy-root", baseline]).report.diagnostics[0].code,
+      "SCHEMA_ERROR"
+    );
+  }
+});
+
+test("target-branch is equivalent only when it names the trusted default branch", () => {
+  for (const [target, expected] of [
+    [null, "PASS"],
+    ["main", "PASS"],
+    ["release", "FAIL"],
+  ]) {
+    const targetLine = target ? `    target-branch: ${target}\n` : "";
+    const root = repository({
+      ".github/dependabot.yml": `version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+${targetLine}    ${DAILY}
+`,
+      "package.json": "{}\n",
+    });
+    assert.equal(
+      run(root, "coverage", ["--default-branch", "main"]).report.status,
+      expected,
+      String(target)
+    );
+  }
+});
+
+test("exclude-paths follow Dependabot file and directory semantics", () => {
+  for (const [pattern, manifest, directory, extraFiles = {}] of [
+    [".github/workflows", ".github/workflows/quality.yml", "/"],
+    ["package.json", "package.json", "/"],
+    ["*.json", "packages/app/package.json", "/packages/app"],
+    [
+      "packages/**",
+      "packages/deep/app/package.json",
+      "/",
+      { "package.json": '{"workspaces":["packages/**"]}\n' },
+    ],
+  ]) {
+    const root = repository({
+      ".github/dependabot.yml": `version: 2
+updates:
+  - package-ecosystem: ${manifest.includes("workflows") ? "github-actions" : "npm"}
+    directory: ${directory}
+    exclude-paths: ["${pattern}"]
+    ${DAILY}
+`,
+      [manifest]: manifest.endsWith("package.json") ? "{}\n" : "jobs: {}\n",
+      ...extraFiles,
+    });
+    const { report } = run(root);
+    const item = report.manifests.find((candidate) => candidate.manifest_path === manifest);
+    assert.equal(item.status, "UNCOVERED", pattern);
+    assert.match(item.reason, /excludes this manifest/);
+  }
+});
+
+test("npm workspace members inherit the configured workspace root", () => {
+  const root = repository({
+    ".github/dependabot.yml": `version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    ${DAILY}
+`,
+    "package.json": '{"workspaces":["packages/*"]}\n',
+    "packages/app/package.json": '{"name":"app"}\n',
+  });
+  const { report } = run(root);
+  assert.equal(report.status, "PASS");
+  assert.ok(report.manifests.every((item) => item.coverage_directory === "/"));
+});
+
+test("ordinary generic data files are not manifest candidates", () => {
+  const root = repository({
+    ".github/dependabot.yml": "version: 2\nupdates: []\n",
+    "build.yaml": "steps: []\n",
+    "modules.toml": "title='documentation'\n",
+    "packages.json": "[]\n",
+  });
+  assert.equal(run(root).report.status, "PASS");
+});
+
+test("Terraform and OpenTofu ownership is selected once per module", () => {
+  const terraform = repository({
+    ".github/dependabot.yml": `version: 2
+updates:
+  - package-ecosystem: terraform
+    directory: /infra
+    ${DAILY}
+`,
+    "infra/main.tf": "terraform {}\n",
+    "infra/versions.tf": "terraform {}\n",
+  });
+  const baseline = trustedPolicy({
+    ".github/dependabot-manifest-exceptions.yml": `version: 1
+classifications:
+  - directory: infra
+    ecosystem: terraform
+    reason: Protected history assigns this complete module to Terraform.
+    reviewed-by: "@SecPal/maintainers"
+    reviewed-on: "2026-09-02"
+`,
+  });
+  const terraformReport = run(terraform, "coverage", ["--trusted-policy-root", baseline]).report;
+  assert.equal(terraformReport.status, "PASS");
+  assert.ok(terraformReport.manifests.every((item) => item.expected_ecosystem === "terraform"));
+
+  const tofu = repository({
+    ".github/dependabot.yml": `version: 2
+updates:
+  - package-ecosystem: opentofu
+    directory: /infra
+    ${DAILY}
+`,
+    "infra/main.tf": "terraform {}\n",
+    "infra/main.tofu": "terraform {}\n",
+  });
+  assert.equal(run(tofu).report.status, "PASS");
+
+  const ambiguous = repository({
+    ".github/dependabot.yml": "version: 2\nupdates: []\n",
+    "infra/main.tf": "terraform {}\n",
+  });
+  assert.ok(
+    run(ambiguous).report.diagnostics.some(
+      (item) => item.code === "AMBIGUOUS_MANIFEST_CLASSIFICATION"
+    )
+  );
+
+  const contradictory = run(tofu, "coverage", ["--trusted-policy-root", baseline]).report;
+  assert.ok(contradictory.diagnostics.some((item) => item.code === "CONTRADICTORY_CLASSIFICATION"));
+});
+
+test('documented directories ["**/*"] syntax covers nested manifests', () => {
+  const root = repository({
+    ".github/dependabot.yml": `version: 2
+updates:
+  - package-ecosystem: npm
+    directories: ["**/*"]
+    ${DAILY}
+`,
+    "packages/app/package.json": "{}\n",
+  });
+  assert.equal(run(root).report.status, "PASS");
+});
+
+test("multi-ecosystem entries require non-empty patterns", () => {
+  const root = repository({
+    ".github/dependabot.yml": `version: 2
+multi-ecosystem-groups:
+  infrastructure:
+    schedule:
+      interval: daily
+      time: "04:00"
+      timezone: Europe/Berlin
+updates:
+  - package-ecosystem: docker
+    directory: /
+    multi-ecosystem-group: infrastructure
+`,
+    Dockerfile: "FROM alpine:3.22\n",
+  });
+  assert.equal(run(root).report.diagnostics[0].code, "CONFIG_SCHEMA_ERROR");
+});
+
+test("catalog discovery dispositions and rule provenance are complete", () => {
+  const original = JSON.parse(readFileSync(CATALOG, "utf8"));
+  for (const mutate of [
+    (policy) => delete policy.discovery_dispositions[policy.supported_config_ecosystems[0]],
+    (policy) => delete policy.manifest_rules[0].source_paths,
+    (policy) => (policy.reviewed_on = "2026-99-99"),
+  ]) {
+    const policy = structuredClone(original);
+    mutate(policy);
+    const root = repository({
+      ".github/dependabot.yml": "version: 2\nupdates: []\n",
+      "policy.json": `${JSON.stringify(policy)}\n`,
+    });
+    assert.equal(
+      run(root, "coverage", ["--policy", path.join(root, "policy.json")]).report.diagnostics[0]
+        .code,
+      "POLICY_ERROR"
+    );
+  }
 });
 
 for (const [name, schedule, status] of [
