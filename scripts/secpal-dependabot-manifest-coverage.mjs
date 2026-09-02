@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 import { execFileSync } from "node:child_process";
-import { lstatSync, readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -196,22 +196,60 @@ function compareText(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
+function readSecureRegularFile(
+  absolute,
+  label,
+  maximumBytes,
+  { optional = false, code = "FILE_ERROR" } = {}
+) {
+  let descriptor;
+  try {
+    descriptor = openSync(
+      absolute,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
+    );
+  } catch (error) {
+    if (optional && error.code === "ENOENT") return null;
+    throw new ContractError(code, `cannot read ${label}: ${error.message}`);
+  }
+
+  try {
+    const stat = fstatSync(descriptor);
+    if (!stat.isFile()) throw new ContractError(code, `${label} must be a regular file`);
+    if (stat.size > maximumBytes)
+      throw new ContractError(code, `${label} exceeds ${maximumBytes} bytes`);
+
+    const chunks = [];
+    let total = 0;
+    while (true) {
+      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, maximumBytes - total + 1));
+      const length = readSync(descriptor, chunk, 0, chunk.length, null);
+      if (length === 0) break;
+      total += length;
+      if (total > maximumBytes)
+        throw new ContractError(code, `${label} exceeds ${maximumBytes} bytes`);
+      chunks.push(chunk.subarray(0, length));
+    }
+    return Buffer.concat(chunks, total);
+  } catch (error) {
+    if (error instanceof ContractError) throw error;
+    throw new ContractError(code, `cannot read ${label}: ${error.message}`);
+  } finally {
+    try {
+      closeSync(descriptor);
+    } catch (error) {
+      throw new ContractError(code, `cannot close ${label}: ${error.message}`);
+    }
+  }
+}
+
 function yamlFile(root, relative, required = false) {
   const absolute = path.join(root, relative);
-  let source;
-  try {
-    const stat = lstatSync(absolute);
-    if (!stat.isFile() || stat.isSymbolicLink()) {
-      throw new ContractError("FILE_ERROR", `${relative} must be a regular file`);
-    }
-    source = readFileSync(absolute, "utf8");
-  } catch (error) {
-    if (!required && error.code === "ENOENT") return null;
-    throw new ContractError("FILE_ERROR", `cannot read ${relative}: ${error.message}`);
-  }
-  if (Buffer.byteLength(source) > 1024 * 1024) {
-    throw new ContractError("FILE_ERROR", `${relative} exceeds 1 MiB`);
-  }
+  const bytes = readSecureRegularFile(absolute, relative, 1024 * 1024, {
+    optional: !required,
+  });
+  if (bytes === null) return null;
+  const source = bytes.toString("utf8");
   try {
     return yaml.load(source, {
       filename: relative,
@@ -306,7 +344,10 @@ function reviewRecord(value, label, asOf, extraKeys = new Set()) {
 function loadPolicy(filename) {
   let policy;
   try {
-    policy = JSON.parse(readFileSync(filename, "utf8"));
+    const source = readSecureRegularFile(filename, "policy", 1024 * 1024, {
+      code: "POLICY_ERROR",
+    });
+    policy = JSON.parse(source.toString("utf8"));
   } catch (error) {
     throw new ContractError("POLICY_ERROR", `cannot load policy: ${error.message}`);
   }
@@ -612,11 +653,7 @@ function loadReviewPolicy(options, policy) {
 
 function readTrackedText(root, relative, maximumBytes = 2 * 1024 * 1024) {
   const absolute = path.join(root, relative);
-  const stat = lstatSync(absolute);
-  if (!stat.isFile() || stat.isSymbolicLink()) return null;
-  if (stat.size > maximumBytes)
-    throw new ContractError("FILE_ERROR", `${relative} exceeds ${maximumBytes} bytes`);
-  const content = readFileSync(absolute, "utf8");
+  const content = readSecureRegularFile(absolute, relative, maximumBytes).toString("utf8");
   return content.includes("\uFFFD") ? null : content;
 }
 
@@ -864,6 +901,12 @@ function matchesGlob(pattern, value) {
   return globRegex(normalizedPattern).test(normalizedValue);
 }
 
+function matchesDirectoryScope(pattern, directory) {
+  const normalizedPattern = pattern.replace(/^\//, "").replace(/\/$/, "");
+  const normalizedDirectory = directory.replace(/^\//, "").replace(/\/$/, "");
+  return globRegex(normalizedPattern).test(normalizedDirectory);
+}
+
 function validExcludePattern(value) {
   if (typeof value !== "string" || value === "" || value.startsWith("/") || value.includes("\\"))
     return false;
@@ -1080,7 +1123,7 @@ function coverageReport(options, policy, config, reviewed, discovery) {
     for (const entry of config.entries) {
       for (const scope of entry.scopes) {
         const scopeMatches = scope.includes("*")
-          ? matchesGlob(scope, manifest.coverage_directory)
+          ? matchesDirectoryScope(scope, manifest.coverage_directory)
           : scope === manifest.coverage_directory;
         if (entry.ecosystem === manifest.expected_ecosystem || scopeMatches) {
           considered.push(entryLabel(entry, scope));
@@ -1124,7 +1167,7 @@ function coverageReport(options, policy, config, reviewed, discovery) {
         entry.scopes.some(
           (scope) =>
             scope === manifest.coverage_directory ||
-            (scope.includes("*") && matchesGlob(scope, manifest.coverage_directory))
+            (scope.includes("*") && matchesDirectoryScope(scope, manifest.coverage_directory))
         )
       );
       if (candidates.length)

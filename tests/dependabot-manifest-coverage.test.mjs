@@ -700,9 +700,123 @@ updates:
     directories: ["**/*"]
     ${DAILY}
 `,
+    "package.json": "{}\n",
     "packages/app/package.json": "{}\n",
+    "packages/deep/app/package.json": "{}\n",
   });
   assert.equal(run(root).report.status, "PASS");
+});
+
+test("directory scope globs preserve root anchors and segment depth", () => {
+  const root = repository({
+    ".github/dependabot.yml": `version: 2
+updates:
+  - package-ecosystem: composer
+    directories: ["/lib-*"]
+    ${DAILY}
+  - package-ecosystem: npm
+    directories: ["/packages/*"]
+    ${DAILY}
+  - package-ecosystem: cargo
+    directories: ["/crates/**"]
+    ${DAILY}
+`,
+    "apps/lib-tools/composer.json": "{}\n",
+    "crates/one/Cargo.toml": "[package]\nname='one'\nversion='1.0.0'\n",
+    "crates/one/nested/Cargo.toml": "[package]\nname='nested'\nversion='1.0.0'\n",
+    "lib-app/composer.json": "{}\n",
+    "lib-tools/composer.json": "{}\n",
+    "nested/lib-app/composer.json": "{}\n",
+    "packages/app/package.json": "{}\n",
+    "packages/deep/app/package.json": "{}\n",
+  });
+  const { report } = run(root);
+  const status = Object.fromEntries(
+    report.manifests.map((manifest) => [manifest.manifest_path, manifest.status])
+  );
+  assert.equal(status["lib-app/composer.json"], "COVERED");
+  assert.equal(status["lib-tools/composer.json"], "COVERED");
+  assert.equal(status["nested/lib-app/composer.json"], "UNCOVERED");
+  assert.equal(status["apps/lib-tools/composer.json"], "UNCOVERED");
+  assert.equal(status["packages/app/package.json"], "COVERED");
+  assert.equal(status["packages/deep/app/package.json"], "UNCOVERED");
+  assert.equal(status["crates/one/Cargo.toml"], "COVERED");
+  assert.equal(status["crates/one/nested/Cargo.toml"], "COVERED");
+
+  const recursive = repository({
+    ".github/dependabot.yml": `version: 2
+updates:
+  - package-ecosystem: npm
+    directories: ["/packages/**"]
+    ${DAILY}
+`,
+    "packages/app/package.json": "{}\n",
+    "packages/deep/app/package.json": "{}\n",
+  });
+  assert.equal(run(recursive).report.status, "PASS");
+});
+
+test("secure readers bind validation and reads to one file descriptor", () => {
+  const source = readFileSync(VALIDATOR, "utf8");
+  assert.match(source, /constants\.O_RDONLY \| constants\.O_NOFOLLOW \| constants\.O_NONBLOCK/);
+  assert.match(source, /fstatSync\(descriptor\)/);
+  assert.match(source, /readSync\(descriptor,/);
+  assert.doesNotMatch(source, /readFileSync\(absolute/);
+
+  const optional = repository({ README: "no Dependabot configuration\n" });
+  assert.equal(run(optional).report.status, "PASS");
+
+  const missingPolicy = path.join(optional, "missing-policy.json");
+  assert.equal(
+    run(optional, "coverage", ["--policy", missingPolicy]).report.diagnostics[0].code,
+    "POLICY_ERROR"
+  );
+
+  const symlinked = repository({
+    ".github/dependabot-source.yml": "version: 2\nupdates: []\n",
+  });
+  symlinkSync("dependabot-source.yml", path.join(symlinked, ".github/dependabot.yml"));
+  execFileSync("git", ["-C", symlinked, "add", ".github/dependabot.yml"]);
+  assert.equal(run(symlinked).report.diagnostics[0].code, "FILE_ERROR");
+
+  const nonRegular = repository({
+    ".github/dependabot.yml/placeholder": "tracked directory entry\n",
+  });
+  assert.equal(run(nonRegular).report.diagnostics[0].code, "FILE_ERROR");
+
+  const oversizedYaml = repository({
+    ".github/dependabot.yml": `#${"x".repeat(1024 * 1024)}\n`,
+  });
+  assert.equal(run(oversizedYaml).report.diagnostics[0].code, "FILE_ERROR");
+
+  const oversizedTrackedText = repository({
+    ".github/dependabot.yml": "version: 2\nupdates: []\n",
+    "package.json": `{"padding":"${"x".repeat(2 * 1024 * 1024)}"}\n`,
+  });
+  assert.equal(run(oversizedTrackedText).report.diagnostics[0].code, "FILE_ERROR");
+});
+
+test("secure tracked reads retain content-qualified discovery", () => {
+  const root = repository({
+    ".github/dependabot.yml": `version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /deploy
+    ${DAILY}
+  - package-ecosystem: pip
+    directory: /python
+    ${DAILY}
+`,
+    "deploy/config.yaml": "title: ordinary data\n",
+    "deploy/deployment.yaml": "apiVersion: apps/v1\nkind: Deployment\n",
+    "python/constraints.txt": "requests==2.32.5\n",
+  });
+  const { report } = run(root);
+  assert.equal(report.status, "PASS");
+  assert.deepEqual(
+    report.manifests.map((manifest) => manifest.manifest_path),
+    ["deploy/deployment.yaml", "python/constraints.txt"]
+  );
 });
 
 test("multi-ecosystem entries require non-empty patterns", () => {
