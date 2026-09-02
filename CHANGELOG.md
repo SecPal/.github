@@ -9,6 +9,27 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-02 - Re-evaluate Exact Released OCI Artifacts
+
+**Added:**
+
+- add one reusable, immutable-SHA-pinned workflow contract for recurring and
+  manual exact-digest Grype and Trivy re-evaluation
+- verify publisher-attested OCI index/platform identity and authoritative Syft
+  SPDX association before fresh-database scanning
+- retain bounded raw, adapted, normalized, and operation-health evidence with
+  deterministic caller-scoped finding and stale-health triage
+- keep scanner/evaluation jobs read-only and isolate issue mutation without any
+  artifact rebuild, retag, deployment, or production mutation
+- close GitHub-token registry access to the authenticated caller's GHCR
+  namespace, share only ephemeral native client credentials, and independently
+  re-derive policy before issue mutation
+- reconcile exact-subject current-state findings after healthy evidence and
+  prove historical scanner replay with pinned binaries and controlled databases
+- bind reviewed-VEX declared provenance and file enumeration to the authenticated
+  checkout, preserve historical alias correlation, and normalize the complete
+  pinned Grype severity taxonomy without weakening fail-closed evidence
+
 ## 2026-09-01 - Authenticate Exact Pre-Enrollment State Adoption
 
 **Added:**

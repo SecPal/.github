@@ -146,6 +146,12 @@ jobs:
       - name: Run vulnerability-policy contract tests
         run: python3 tests/secpal-vulnerability-policy-unit.py
 
+      - name: Run released-artifact re-evaluation contract tests
+        run: python3 tests/secpal-vulnerability-reevaluation-unit.py
+
+      - name: Replay pinned scanners with frozen vulnerability data
+        run: python3 tests/secpal-vulnerability-scanner-replay.py
+
   prettier:
     name: Check Code Formatting
     runs-on: ubuntu-latest
