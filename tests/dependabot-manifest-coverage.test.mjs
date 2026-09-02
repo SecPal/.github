@@ -435,12 +435,49 @@ test("unknown manifest candidates and stale knowledge fail closed", () => {
   const root = repository({
     ".github/dependabot.yml": "version: 2\nupdates: []\n",
     "dependencies.future": "future-package == 1\n",
+    "dependencies.notspdx.json": "{}\n",
+    "dependencies.spdx.json": "{}\n",
+    "dependencies.txt": "dependency inventory without a requirement record\n",
+    "dependencies.yaml": "inventory: []\n",
+    "dependency-manifest.future": "future-package == 1\n",
   });
-  assert.equal(run(root).report.diagnostics[0].code, "UNCLASSIFIED_MANIFEST_CANDIDATE");
+  const candidates = run(root).report.diagnostics.filter(
+    (item) => item.code === "UNCLASSIFIED_MANIFEST_CANDIDATE"
+  );
+  assert.deepEqual(
+    candidates.map((item) => item.manifest_path),
+    [
+      "dependencies.future",
+      "dependencies.notspdx.json",
+      "dependencies.spdx.json",
+      "dependencies.txt",
+      "dependencies.yaml",
+      "dependency-manifest.future",
+    ]
+  );
   const stale = run(root, "coverage", ["--as-of", "2026-12-02"]);
   assert.ok(stale.report.diagnostics.some((item) => item.code === "CATALOG_STALE"));
   const premature = run(root, "coverage", ["--as-of", "2026-09-01"]);
   assert.ok(premature.report.diagnostics.some((item) => item.code === "CATALOG_NOT_YET_REVIEWED"));
+});
+
+test("known SPDX dependency inventory is not a manifest candidate", () => {
+  const root = repository({
+    ".github/dependabot.yml": "version: 2\nupdates: []\n",
+    "dependencies.spdx.json": `${JSON.stringify({
+      SPDXID: "SPDXRef-DOCUMENT",
+      creationInfo: { created: "2026-09-02T00:00:00Z", creators: ["Tool: fixture"] },
+      dataLicense: "CC0-1.0",
+      documentNamespace: "https://spdx.example.test/documents/dependencies",
+      packages: [],
+      relationships: [],
+      spdxVersion: "SPDX-2.3",
+    })}\n`,
+  });
+  const { report } = run(root);
+  assert.equal(report.status, "PASS");
+  assert.deepEqual(report.manifests, []);
+  assert.deepEqual(report.diagnostics, []);
 });
 
 test("tracked manifest symlinks fail closed", () => {
@@ -1045,6 +1082,8 @@ test("catalog discovery dispositions and rule provenance are complete", () => {
   for (const mutate of [
     (policy) => delete policy.discovery_dispositions[policy.supported_config_ecosystems[0]],
     (policy) => delete policy.manifest_rules[0].source_paths,
+    (policy) => delete policy.non_manifest_rules[0].content_kind,
+    (policy) => (policy.non_manifest_rules[0].candidate_rule = "missing-candidate-rule"),
     (policy) => delete policy.behavior_provenance.cargo_workspace,
     (policy) => (policy.reviewed_on = "2026-99-99"),
   ]) {

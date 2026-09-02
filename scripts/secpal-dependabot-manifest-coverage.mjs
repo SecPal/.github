@@ -63,6 +63,7 @@ const POLICY_KEYS = new Set([
   "discovery_dispositions",
   "expires_on",
   "manifest_rules",
+  "non_manifest_rules",
   "policy_version",
   "reviewed_on",
   "schema",
@@ -86,6 +87,15 @@ const CANDIDATE_RULE_KEYS = new Set([
   "id",
   "path_regex",
   "source_paths",
+]);
+const NON_MANIFEST_RULE_KEYS = new Set([
+  "authority",
+  "candidate_rule",
+  "case_insensitive",
+  "content_kind",
+  "id",
+  "justification",
+  "path_regex",
 ]);
 const DISCOVERY_DISPOSITION_KEYS = new Set(["justification", "mode", "source_paths"]);
 const UPSTREAM_KEYS = new Set([
@@ -365,6 +375,7 @@ function loadPolicy(filename) {
     "expires_on",
     "supported_config_ecosystems",
     "manifest_rules",
+    "non_manifest_rules",
     "upstream",
     "candidate_rules",
   ]) {
@@ -447,13 +458,18 @@ function loadPolicy(filename) {
   for (const [kind, rules] of [
     ["manifest", policy.manifest_rules],
     ["candidate", policy.candidate_rules],
+    ["non-manifest", policy.non_manifest_rules],
   ]) {
-    if (!Array.isArray(rules))
+    if (!Array.isArray(rules) || (kind === "non-manifest" && !rules.length))
       throw new ContractError("POLICY_ERROR", `${kind}_rules must be an array`);
     for (const rule of rules) {
       closedKeys(
         rule,
-        kind === "manifest" ? MANIFEST_RULE_KEYS : CANDIDATE_RULE_KEYS,
+        kind === "manifest"
+          ? MANIFEST_RULE_KEYS
+          : kind === "candidate"
+            ? CANDIDATE_RULE_KEYS
+            : NON_MANIFEST_RULE_KEYS,
         `policy.${kind}_rules`
       );
       if (!rule.id || ids.has(rule.id))
@@ -474,7 +490,15 @@ function loadPolicy(filename) {
         rule.source_paths.length &&
         rule.source_paths.every((source) => provenance.has(source));
       const policyBackstop = kind === "candidate" && rule.authority === "secpal-review-backstop";
-      if (!validSources && !policyBackstop)
+      const policyNonManifest =
+        kind === "non-manifest" &&
+        rule.authority === "secpal-reviewed-non-manifest" &&
+        typeof rule.candidate_rule === "string" &&
+        rule.content_kind === "spdx-json-document" &&
+        typeof rule.justification === "string" &&
+        rule.justification.length >= 40 &&
+        rule.justification.length <= 500;
+      if (!validSources && !policyBackstop && !policyNonManifest)
         throw new ContractError("POLICY_ERROR", `${kind} rule ${rule.id} lacks valid authority`);
       try {
         rule.compiled = new RegExp(rule.path_regex, rule.case_insensitive ? "i" : "");
@@ -482,6 +506,14 @@ function loadPolicy(filename) {
         throw new ContractError("POLICY_ERROR", `invalid rule ${rule.id}: ${error.message}`);
       }
     }
+  }
+  const candidateRuleIds = new Set(policy.candidate_rules.map((rule) => rule.id));
+  for (const rule of policy.non_manifest_rules) {
+    if (!candidateRuleIds.has(rule.candidate_rule))
+      throw new ContractError(
+        "POLICY_ERROR",
+        `non-manifest rule ${rule.id} references unknown candidate rule ${rule.candidate_rule}`
+      );
   }
   for (const ecosystem of policy.supported_config_ecosystems) {
     const disposition = policy.discovery_dispositions[ecosystem];
@@ -703,6 +735,28 @@ function contentMatches(root, manifestPath, kind) {
       return false;
     }
   }
+  if (kind === "spdx-json-document") {
+    try {
+      const document = JSON.parse(source);
+      return (
+        document &&
+        typeof document === "object" &&
+        !Array.isArray(document) &&
+        document.spdxVersion === "SPDX-2.3" &&
+        document.SPDXID === "SPDXRef-DOCUMENT" &&
+        document.dataLicense === "CC0-1.0" &&
+        typeof document.documentNamespace === "string" &&
+        document.documentNamespace.length > 0 &&
+        document.creationInfo &&
+        typeof document.creationInfo === "object" &&
+        !Array.isArray(document.creationInfo) &&
+        Array.isArray(document.packages) &&
+        Array.isArray(document.relationships)
+      );
+    } catch {
+      return false;
+    }
+  }
   throw new ContractError("POLICY_ERROR", `unsupported content matcher ${kind}`);
 }
 
@@ -858,7 +912,12 @@ function discover(root, policy, reviewed) {
     const candidateRules = policy.candidate_rules.filter((rule) =>
       rule.compiled.test(manifestPath)
     );
-    if (!pathRules.length && !candidateRules.length) continue;
+    const nonManifestRules = policy.non_manifest_rules.filter(
+      (rule) =>
+        candidateRules.some((candidate) => candidate.id === rule.candidate_rule) &&
+        rule.compiled.test(manifestPath)
+    );
+    if (!pathRules.length && !candidateRules.length && !nonManifestRules.length) continue;
     let stat;
     try {
       stat = lstatSync(path.join(root, manifestPath));
@@ -889,6 +948,8 @@ function discover(root, policy, reviewed) {
     );
     if (!matchingRules.length) {
       if (!candidateRules.length) continue;
+      if (nonManifestRules.some((rule) => contentMatches(root, manifestPath, rule.content_kind)))
+        continue;
       diagnostics.push({
         candidate_rules: candidateRules.map((rule) => rule.id).sort(),
         code: "UNCLASSIFIED_MANIFEST_CANDIDATE",
