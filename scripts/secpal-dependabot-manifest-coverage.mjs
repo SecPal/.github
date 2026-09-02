@@ -455,13 +455,13 @@ function loadPolicy(filename) {
       throw new ContractError("POLICY_ERROR", `invalid discovery disposition for ${ecosystem}`);
   }
   const ids = new Set();
-  for (const [kind, rules] of [
-    ["manifest", policy.manifest_rules],
-    ["candidate", policy.candidate_rules],
-    ["non-manifest", policy.non_manifest_rules],
+  for (const [kind, propertyKey, rules] of [
+    ["manifest", "manifest_rules", policy.manifest_rules],
+    ["candidate", "candidate_rules", policy.candidate_rules],
+    ["non-manifest", "non_manifest_rules", policy.non_manifest_rules],
   ]) {
     if (!Array.isArray(rules) || (kind === "non-manifest" && !rules.length))
-      throw new ContractError("POLICY_ERROR", `${kind}_rules must be an array`);
+      throw new ContractError("POLICY_ERROR", `${propertyKey} must be an array`);
     for (const rule of rules) {
       closedKeys(
         rule,
@@ -470,7 +470,7 @@ function loadPolicy(filename) {
           : kind === "candidate"
             ? CANDIDATE_RULE_KEYS
             : NON_MANIFEST_RULE_KEYS,
-        `policy.${kind}_rules`
+        `policy.${propertyKey}`
       );
       if (!rule.id || ids.has(rule.id))
         throw new ContractError("POLICY_ERROR", `invalid duplicate rule id ${rule.id}`);
@@ -500,11 +500,17 @@ function loadPolicy(filename) {
         rule.justification.length >= 40 &&
         rule.justification.length <= 500;
       if (!validSources && !policyBackstop && !policyNonManifest)
-        throw new ContractError("POLICY_ERROR", `${kind} rule ${rule.id} lacks valid authority`);
+        throw new ContractError(
+          "POLICY_ERROR",
+          `policy.${propertyKey} rule ${rule.id} lacks valid authority`
+        );
       try {
         rule.compiled = new RegExp(rule.path_regex, rule.case_insensitive ? "i" : "");
       } catch (error) {
-        throw new ContractError("POLICY_ERROR", `invalid rule ${rule.id}: ${error.message}`);
+        throw new ContractError(
+          "POLICY_ERROR",
+          `invalid policy.${propertyKey} rule ${rule.id}: ${error.message}`
+        );
       }
     }
   }
@@ -513,7 +519,7 @@ function loadPolicy(filename) {
     if (!candidateRuleIds.has(rule.candidate_rule))
       throw new ContractError(
         "POLICY_ERROR",
-        `non-manifest rule ${rule.id} references unknown candidate rule ${rule.candidate_rule}`
+        `policy.non_manifest_rules rule ${rule.id} references unknown candidate rule ${rule.candidate_rule}`
       );
   }
   for (const ecosystem of policy.supported_config_ecosystems) {
@@ -739,20 +745,48 @@ function contentMatches(root, manifestPath, kind) {
   if (kind === "spdx-json-document") {
     try {
       const document = JSON.parse(source);
+      const plainObject = (value) => value && typeof value === "object" && !Array.isArray(value);
+      const nonEmptyString = (value) => typeof value === "string" && value.trim().length > 0;
+      const validUtcTimestamp = (value) => {
+        const match =
+          /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.\d+)?Z$/.exec(value);
+        if (!match) return false;
+        const parsed = new Date(value);
+        return (
+          !Number.isNaN(parsed.valueOf()) &&
+          parsed.getUTCFullYear() === Number(match[1]) &&
+          parsed.getUTCMonth() + 1 === Number(match[2]) &&
+          parsed.getUTCDate() === Number(match[3])
+        );
+      };
       return (
-        document &&
-        typeof document === "object" &&
-        !Array.isArray(document) &&
+        plainObject(document) &&
         document.spdxVersion === "SPDX-2.3" &&
         document.SPDXID === "SPDXRef-DOCUMENT" &&
         document.dataLicense === "CC0-1.0" &&
-        typeof document.documentNamespace === "string" &&
-        document.documentNamespace.length > 0 &&
-        document.creationInfo &&
-        typeof document.creationInfo === "object" &&
-        !Array.isArray(document.creationInfo) &&
+        nonEmptyString(document.name) &&
+        nonEmptyString(document.documentNamespace) &&
+        plainObject(document.creationInfo) &&
+        validUtcTimestamp(document.creationInfo.created) &&
+        Array.isArray(document.creationInfo.creators) &&
+        document.creationInfo.creators.length > 0 &&
+        document.creationInfo.creators.every(nonEmptyString) &&
         Array.isArray(document.packages) &&
-        Array.isArray(document.relationships)
+        document.packages.every(
+          (item) =>
+            plainObject(item) &&
+            nonEmptyString(item.SPDXID) &&
+            nonEmptyString(item.name) &&
+            nonEmptyString(item.downloadLocation)
+        ) &&
+        Array.isArray(document.relationships) &&
+        document.relationships.every(
+          (item) =>
+            plainObject(item) &&
+            nonEmptyString(item.spdxElementId) &&
+            nonEmptyString(item.relationshipType) &&
+            nonEmptyString(item.relatedSpdxElement)
+        )
       );
     } catch {
       return false;

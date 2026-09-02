@@ -462,15 +462,29 @@ test("unknown manifest candidates and stale knowledge fail closed", () => {
 });
 
 test("known SPDX dependency inventory is not a manifest candidate", () => {
-  const inventory = `${JSON.stringify({
+  const inventoryDocument = {
     SPDXID: "SPDXRef-DOCUMENT",
     creationInfo: { created: "2026-09-02T00:00:00Z", creators: ["Tool: fixture"] },
     dataLicense: "CC0-1.0",
     documentNamespace: "https://spdx.example.test/documents/dependencies",
-    packages: [],
-    relationships: [],
+    name: "Dependency inventory",
+    packages: [
+      {
+        SPDXID: "SPDXRef-Package-example",
+        downloadLocation: "NOASSERTION",
+        name: "example",
+      },
+    ],
+    relationships: [
+      {
+        relatedSpdxElement: "SPDXRef-Package-example",
+        relationshipType: "DESCRIBES",
+        spdxElementId: "SPDXRef-DOCUMENT",
+      },
+    ],
     spdxVersion: "SPDX-2.3",
-  })}\n`;
+  };
+  const inventory = `${JSON.stringify(inventoryDocument)}\n`;
   const root = repository({
     ".github/dependabot.yml": "version: 2\nupdates: []\n",
     "dependencies.spdx.json": inventory,
@@ -485,6 +499,26 @@ test("known SPDX dependency inventory is not a manifest candidate", () => {
     "dependencies.SPDX.json": inventory,
   });
   assert.equal(run(uppercase).report.diagnostics[0].code, "UNCLASSIFIED_MANIFEST_CANDIDATE");
+
+  for (const mutate of [
+    (document) => delete document.name,
+    (document) => (document.creationInfo = {}),
+    (document) => delete document.creationInfo.created,
+    (document) => (document.creationInfo.created = "2026-02-30T00:00:00Z"),
+    (document) => delete document.creationInfo.creators,
+    (document) => (document.creationInfo.creators = [" "]),
+    (document) => (document.packages = [{}]),
+    (document) => delete document.packages[0].downloadLocation,
+    (document) => (document.relationships = [{}]),
+  ]) {
+    const malformedDocument = structuredClone(inventoryDocument);
+    mutate(malformedDocument);
+    const malformed = repository({
+      ".github/dependabot.yml": "version: 2\nupdates: []\n",
+      "dependencies.spdx.json": `${JSON.stringify(malformedDocument)}\n`,
+    });
+    assert.equal(run(malformed).report.diagnostics[0].code, "UNCLASSIFIED_MANIFEST_CANDIDATE");
+  }
 });
 
 test("tracked manifest symlinks fail closed", () => {
@@ -1107,6 +1141,20 @@ test("catalog discovery dispositions and rule provenance are complete", () => {
       "POLICY_ERROR"
     );
   }
+
+  const malformedNonManifestRule = structuredClone(original);
+  delete malformedNonManifestRule.non_manifest_rules[0].content_kind;
+  const malformedRoot = repository({
+    ".github/dependabot.yml": "version: 2\nupdates: []\n",
+    "policy.json": `${JSON.stringify(malformedNonManifestRule)}\n`,
+  });
+  const diagnostic = run(malformedRoot, "coverage", [
+    "--policy",
+    path.join(malformedRoot, "policy.json"),
+  ]).report.diagnostics[0];
+  assert.equal(diagnostic.code, "POLICY_ERROR");
+  assert.match(diagnostic.reason, /policy\.non_manifest_rules/);
+  assert.doesNotMatch(diagnostic.reason, /non-manifest_rules/);
 });
 
 for (const [name, schedule, status] of [
