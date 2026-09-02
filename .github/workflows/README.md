@@ -13,6 +13,16 @@ as `@main` into consumer repositories.
 
 ## Available Workflows
 
+### Released-artifact vulnerability re-evaluation
+
+`reusable-vulnerability-reevaluation.yml` verifies and re-evaluates one exact
+OCI index/platform subject with pinned Grype and Trivy, fresh vulnerability
+data, authoritative Syft SPDX association, central policy, bounded evidence,
+and caller-scoped deterministic triage. See
+[`released-artifact-vulnerability-reevaluation.md`](../../docs/released-artifact-vulnerability-reevaluation.md)
+for exact inputs, permissions, daily/manual caller examples, evidence output,
+and fail-closed semantics.
+
 ### Core Workflows
 
 #### `reusable-reuse.yml`
