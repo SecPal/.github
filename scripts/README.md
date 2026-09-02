@@ -1004,16 +1004,20 @@ evidence, database identity/freshness, trusted reviewed-VEX checkout bytes, and
 the versioned re-evaluation run envelope. It rejects noncanonical credentialed
 repository paths outside the authenticated caller's exact GHCR namespace and
 re-derives trusted policy output plus complete required-operation health from
-raw evidence before issue mutation. External registry/scanner operations remain
-in the reusable workflow.
+raw evidence before issue mutation. Its `list-vex` command provides the single
+fail-closed regular-file enumeration used by every reviewed-VEX workflow path;
+`verify-vex` binds declared repository, ancestor commit, document path, bytes,
+and digest to the authenticated checkout. External registry/scanner operations
+remain in the reusable workflow.
 
 ### `secpal-vulnerability-triage.py`
 
 Validates the run envelope and normalized policy result, then plans or delivers
 caller-scoped deterministic GitHub issue updates. It searches every exact-subject
-lookup key, fails closed on ambiguous matches, reconciles healthy inverse
-transitions, and maintains stable stale-health alerts without reimplementing
-vulnerability policy.
+lookup key, retains authenticated historical alias keys on unique updates, fails
+closed on ambiguous matches, reconciles healthy inverse transitions, and
+maintains stable stale-health alerts without reimplementing vulnerability
+policy.
 
 When adding new scripts:
 

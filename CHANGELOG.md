@@ -26,6 +26,9 @@ Log of notable changes to SecPal organization defaults (newest first).
   re-derive policy before issue mutation
 - reconcile exact-subject current-state findings after healthy evidence and
   prove historical scanner replay with pinned binaries and controlled databases
+- bind reviewed-VEX declared provenance and file enumeration to the authenticated
+  checkout, preserve historical alias correlation, and normalize the complete
+  pinned Grype severity taxonomy without weakening fail-closed evidence
 
 ## 2026-09-01 - Authenticate Exact Pre-Enrollment State Adoption
 
