@@ -1,6 +1,6 @@
 {
   "schema": "secpal-dependabot-manifest-catalog/v1",
-  "policy_version": "2026-09-02.2",
+  "policy_version": "2026-09-02.3",
   "reviewed_on": "2026-09-02",
   "expires_on": "2026-12-01",
   "upstream": {
@@ -511,6 +511,17 @@
       "source_paths": [
         "nuget/helpers/lib/NuGetUpdater/NuGetUpdater.Core/Discover/DiscoveryWorker.cs"
       ]
+    }
+  ],
+  "non_manifest_rules": [
+    {
+      "id": "spdx-dependency-inventory",
+      "path_regex": "(^|/)dependencies\\.spdx\\.json$",
+      "case_insensitive": false,
+      "content_kind": "spdx-json-document",
+      "candidate_rule": "dependency-named-file",
+      "authority": "secpal-reviewed-non-manifest",
+      "justification": "Prevents a known SPDX dependency inventory from entering the unknown-manifest backstop."
     }
   ]
 }
