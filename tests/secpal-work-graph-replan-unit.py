@@ -480,6 +480,24 @@ class PlanningTests(TestCase):
         self.assertFalse(any(step.kind == "ADD_BLOCKED_BY" for step in plan.steps))
         self.assertEqual(plan.steps[1].arguments["after"], key(2))
 
+    def test_obsolete_dependency_removal_plans_the_exact_existing_edge(self):
+        request = {
+            "current_issue": key(2),
+            "finding": finding("IN_CONTRACT_DEFECT", technically_blocking=True),
+            "operation": {
+                "kind": "REMOVE_OBSOLETE_DEPENDENCY",
+                "blocker": key(3),
+                "contract_no_longer_requires_blocker": True,
+            },
+        }
+
+        plan = replanning.build_plan(self.snapshot, request, actor="alice")
+
+        self.assertEqual(
+            [(step.kind, dict(step.arguments)) for step in plan.steps],
+            [("REMOVE_BLOCKED_BY", {"blocked": key(2), "blocker": key(3)})],
+        )
+
     def test_post_freeze_follow_up_is_owned_without_a_technical_dependency(self):
         request = {
             "current_issue": key(2),
