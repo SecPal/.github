@@ -120,6 +120,10 @@ def _load_plan_snapshot(
                 mutation_targets.update(
                     endpoint for endpoint in placement if isinstance(endpoint, str)
                 )
+    elif operation.get("kind") == "REMOVE_OBSOLETE_DEPENDENCY":
+        blocker = operation.get("blocker")
+        if isinstance(blocker, str):
+            mutation_targets.add(blocker)
     base, canonical_scope = github.load_snapshot(
         adapter,
         scope,

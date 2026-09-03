@@ -1105,7 +1105,11 @@ def validate_request(request: Mapping[str, Any]) -> Classification:
     operation = request.get("operation")
     if not isinstance(operation, Mapping):
         raise PlanError("operation must be an object")
-    if operation.get("kind") != classification.action:
+    removal_intent = (
+        classification.name == "IN_CONTRACT_DEFECT"
+        and operation.get("kind") == "REMOVE_OBSOLETE_DEPENDENCY"
+    )
+    if operation.get("kind") != classification.action and not removal_intent:
         if classification.name == "IN_CONTRACT_DEFECT":
             raise PlanError("an in-contract defect must stay in the current contract")
         raise PlanError(
@@ -1305,7 +1309,33 @@ def build_plan(snapshot: Snapshot, request: Mapping[str, Any], *, actor: str) ->
     plan_owner = owner
     steps: list[Step] = []
 
-    if classification.action in {"KEEP_IN_CURRENT_CONTRACT", "REJECT_WITH_EVIDENCE"}:
+    if (
+        classification.name == "IN_CONTRACT_DEFECT"
+        and operation.get("kind") == "REMOVE_OBSOLETE_DEPENDENCY"
+    ):
+        _exact_operation(
+            operation,
+            {"kind", "blocker", "contract_no_longer_requires_blocker"},
+        )
+        if operation.get("contract_no_longer_requires_blocker") is not True:
+            raise PlanError("obsolete dependency removal requires explicit contract judgment")
+        blocker = operation.get("blocker")
+        if not isinstance(blocker, str):
+            raise PlanError("obsolete dependency removal blocker must be repository-qualified")
+        try:
+            parse_node_key(blocker)
+        except ValueError as exc:
+            raise PlanError(
+                "obsolete dependency removal blocker must be repository-qualified"
+            ) from exc
+        prerequisite = snapshot.get(blocker)
+        if prerequisite is None or not prerequisite.resolved:
+            raise PlanError("obsolete dependency removal prerequisite is absent")
+        if blocker not in current.blocked_by:
+            raise PlanError("obsolete dependency removal edge is absent")
+        validate_dependency_endpoints(snapshot, {current_key, blocker})
+        steps.append(_step("REMOVE_BLOCKED_BY", blocked=current_key, blocker=blocker))
+    elif classification.action in {"KEEP_IN_CURRENT_CONTRACT", "REJECT_WITH_EVIDENCE"}:
         _exact_operation(operation, {"kind"})
     elif classification.action in {"CREATE_OWNED_SIBLING", "CREATE_OWNED_FOLLOWUP"}:
         owner_node = snapshot.get(owner) if owner else None

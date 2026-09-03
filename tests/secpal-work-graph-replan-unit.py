@@ -498,6 +498,162 @@ class PlanningTests(TestCase):
             [("REMOVE_BLOCKED_BY", {"blocked": key(2), "blocker": key(3)})],
         )
 
+    def test_obsolete_dependency_removal_changes_only_the_planned_edge(self):
+        request = {
+            "current_issue": key(2),
+            "finding": finding("IN_CONTRACT_DEFECT", technically_blocking=True),
+            "operation": {
+                "kind": "REMOVE_OBSOLETE_DEPENDENCY",
+                "blocker": key(3),
+                "contract_no_longer_requires_blocker": True,
+            },
+        }
+        plan = replanning.build_plan(self.snapshot, request, actor="alice")
+        after = graph(
+            node(1, children=(key(2), key(9))),
+            node(2, parent=key(1), blocking=(key(8),)),
+            node(3),
+            node(8, blocked_by=(key(2),)),
+            node(9, parent=key(1)),
+        )
+
+        replanning.verify_applied(plan, after, {})
+        replanning.verify_unchanged_relationships(plan, self.snapshot, after, {})
+
+    def test_obsolete_dependency_removal_requires_exact_observable_edge(self):
+        request = {
+            "current_issue": key(2),
+            "finding": finding("IN_CONTRACT_DEFECT", technically_blocking=True),
+            "operation": {
+                "kind": "REMOVE_OBSOLETE_DEPENDENCY",
+                "blocker": key(3),
+                "contract_no_longer_requires_blocker": True,
+            },
+        }
+        cases = {
+            "edge_absent": graph(
+                node(1, children=(key(2), key(9))),
+                node(2, parent=key(1), blocking=(key(8),)),
+                node(3),
+                node(8, blocked_by=(key(2),)),
+                node(9, parent=key(1)),
+            ),
+            "forward_incomplete": graph(
+                node(1, children=(key(2), key(9))),
+                node(2, parent=key(1), blocked_by=(key(3),), blocking=(key(8),), dependencies_observable=False),
+                node(3, blocking=(key(2),)),
+                node(8, blocked_by=(key(2),)),
+                node(9, parent=key(1)),
+            ),
+            "reverse_incomplete": graph(
+                node(1, children=(key(2), key(9))),
+                node(2, parent=key(1), blocked_by=(key(3),), blocking=(key(8),)),
+                node(3, blocking=(key(2),), blocking_observable=False),
+                node(8, blocked_by=(key(2),)),
+                node(9, parent=key(1)),
+            ),
+            "reverse_count_inconsistent": graph(
+                node(1, children=(key(2), key(9))),
+                node(2, parent=key(1), blocked_by=(key(3),), blocking=(key(8),)),
+                node(3, blocking=(key(2),), blocking_count=2),
+                node(8, blocked_by=(key(2),)),
+                node(9, parent=key(1)),
+            ),
+        }
+
+        for label, snapshot in cases.items():
+            with self.subTest(label=label), self.assertRaises(replanning.PlanError):
+                replanning.build_plan(snapshot, request, actor="alice")
+
+    def test_obsolete_dependency_removal_requires_explicit_current_contract_judgment(self):
+        base = {
+            "current_issue": key(2),
+            "finding": finding("IN_CONTRACT_DEFECT", technically_blocking=True),
+            "operation": {
+                "kind": "REMOVE_OBSOLETE_DEPENDENCY",
+                "blocker": key(3),
+            },
+        }
+        for value in (None, False):
+            request = json.loads(json.dumps(base))
+            if value is not None:
+                request["operation"]["contract_no_longer_requires_blocker"] = value
+            with self.subTest(value=value), self.assertRaises(replanning.PlanError):
+                replanning.build_plan(self.snapshot, request, actor="alice")
+
+    def test_other_classifications_and_bare_current_contract_intent_cannot_remove_dependency(self):
+        removal = {
+            "current_issue": key(2),
+            "finding": finding("MISSING_PREREQUISITE", technically_blocking=True),
+            "operation": {
+                "kind": "REMOVE_OBSOLETE_DEPENDENCY",
+                "blocker": key(3),
+                "contract_no_longer_requires_blocker": True,
+            },
+        }
+        with self.assertRaises(replanning.PlanError):
+            replanning.build_plan(self.snapshot, removal, actor="alice")
+        bare = replanning.build_plan(
+            self.snapshot,
+            {
+                "current_issue": key(2),
+                "finding": finding("IN_CONTRACT_DEFECT", technically_blocking=True),
+                "operation": {"kind": "KEEP_IN_CURRENT_CONTRACT"},
+            },
+            actor="alice",
+        )
+        self.assertEqual(bare.steps, ())
+
+    def test_obsolete_dependency_recovery_accepts_only_the_exact_removed_edge(self):
+        before = graph(
+            node(1, children=(key(2),)),
+            node(2, parent=key(1), blocked_by=(key(3), key(4))),
+            node(3, blocking=(key(2),)),
+            node(4, blocking=(key(2),)),
+        )
+        request = {
+            "current_issue": key(2),
+            "finding": finding("IN_CONTRACT_DEFECT", technically_blocking=True),
+            "operation": {
+                "kind": "REMOVE_OBSOLETE_DEPENDENCY",
+                "blocker": key(3),
+                "contract_no_longer_requires_blocker": True,
+            },
+        }
+        plan = replanning.build_plan(before, request, actor="alice")
+        exact_after = graph(
+            node(1, children=(key(2),)),
+            node(2, parent=key(1), blocked_by=(key(4),)),
+            node(3),
+            node(4, blocking=(key(2),)),
+        )
+        substituted_after = graph(
+            node(1, children=(key(2),)),
+            node(2, parent=key(1), blocked_by=(key(3),)),
+            node(3, blocking=(key(2),)),
+            node(4),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            journal = replanning.RecoveryJournal(
+                Path(directory) / "operation.json", plan, FakeRecoverySigner()
+            )
+            journal.start(before)
+            journal.begin_step(0)
+            journal.complete_step(0, None)
+
+            recovered, baseline, aliases, next_step = replanning.recover_plan(
+                plan.to_dict(), exact_after, actor="alice", recovery=journal
+            )
+
+            self.assertEqual(recovered, plan)
+            self.assertEqual(baseline, before)
+            self.assertEqual(aliases, {})
+            self.assertEqual(next_step, 1)
+            with self.assertRaisesRegex(replanning.StalePlanError, "prefix"):
+                replanning.recover_plan(
+                    plan.to_dict(), substituted_after, actor="alice", recovery=journal
+                )
+
     def test_post_freeze_follow_up_is_owned_without_a_technical_dependency(self):
         request = {
             "current_issue": key(2),
@@ -926,6 +1082,38 @@ class MutationBoundaryTests(TestCase):
         self.assertEqual(create_input["parentIssueId"], "ISSUE_1")
         self.assertNotIn("replaceParent", create_input)
         self.assertEqual(create_input["body"], request["operation"]["issue"]["body"])
+
+    def test_writer_reuses_the_exact_dependency_removal_mutation(self):
+        snapshot = graph(
+            node(1, children=(key(2),)),
+            node(2, parent=key(1), blocked_by=(key(3),)),
+            node(3, blocking=(key(2),)),
+        )
+        request = {
+            "current_issue": key(2),
+            "finding": finding("IN_CONTRACT_DEFECT", technically_blocking=True),
+            "operation": {
+                "kind": "REMOVE_OBSOLETE_DEPENDENCY",
+                "blocker": key(3),
+                "contract_no_longer_requires_blocker": True,
+            },
+        }
+        plan = replanning.build_plan(snapshot, request, actor="alice")
+        adapter = self.FakeAdapter()
+
+        self.apply_with_recovery(plan, snapshot, adapter)
+
+        mutations = [call for call in adapter.calls if call[0].lstrip().startswith("mutation")]
+        self.assertEqual(len(mutations), 1)
+        self.assertIn("mutation ReplanRemoveBlockedBy", mutations[0][0])
+        self.assertEqual(
+            mutations[0][1]["input"],
+            {
+                "issueId": "ISSUE_2",
+                "blockingIssueId": "ISSUE_3",
+                "clientMutationId": f"secpal-replan-{replanning.plan_digest(plan)[:16]}-1",
+            },
+        )
 
     def test_client_mutation_ids_bind_the_exact_finite_plan(self):
         snapshot = graph(

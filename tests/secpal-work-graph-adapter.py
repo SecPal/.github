@@ -259,6 +259,40 @@ class SnapshotLoadingTests(AdapterTestCase):
             ["ADD_BLOCKED_BY", "ADD_BLOCKED_BY", "REMOVE_BLOCKED_BY"],
         )
 
+    def test_replanning_upgrades_the_exact_obsolete_dependency_endpoint(self):
+        current = f"{REPO}#2"
+        external = f"{OTHER_REPO}#44"
+        script = {
+            f"WorkGraphIssue:{REPO}#1:": issue_payload(1, sub_issues=(current,)),
+            f"WorkGraphIssue:{REPO}#2:": issue_payload(
+                2, parent=f"{REPO}#1", blocked_by=(external,)
+            ),
+            f"WorkGraphIssue:{OTHER_REPO}#44:": issue_payload(
+                44, repository=OTHER_REPO, blocking=(current,)
+            ),
+        }
+        request = {
+            "current_issue": current,
+            "finding": {
+                "classification": "IN_CONTRACT_DEFECT",
+                "technically_blocking": True,
+                "mechanically_blocking": True,
+                "timing": "BEFORE_FREEZE",
+                "risk": ["P2"],
+            },
+            "operation": {
+                "kind": "REMOVE_OBSOLETE_DEPENDENCY",
+                "blocker": external,
+                "contract_no_longer_requires_blocker": True,
+            },
+        }
+
+        snapshot, _ = replan_cli._load_plan_snapshot(self.adapter(script), request)
+        plan = replanning.build_plan(snapshot, request, actor="alice")
+
+        self.assertTrue(snapshot.require(external).blocking_observable)
+        self.assertEqual(plan.steps[0].kind, "REMOVE_BLOCKED_BY")
+
     def test_replanning_retains_endpoint_observability_after_rewiring(self):
         current = f"{REPO}#2"
         prerequisite = f"{REPO}#3"
