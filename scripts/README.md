@@ -235,9 +235,13 @@ The lifecycle-authority suite is an unconditional registered validation command.
 Authenticates only the exact immutable PR #812 implementation source maintained
 for #810's first Ready-executor bootstrap. Accepted-main policy fixes the source
 head, tree, parent, receipt, final attestation, signer, implementation path,
-entrypoint, and purpose. The verifier fetches that object into a private detached
-tree, independently reuses the ordinary receipt/final-attestation verifier, and
-keeps candidate imports inside that tree. Source admission alone performs no
+entrypoint, purpose, and source PR base repository/ref. Live provider reads emit
+a representation which is purely normalized before a separate pure admission
+step. Evidence files use the maintained bounded regular-file reader. The
+verifier fetches that object into a private detached tree, independently reuses
+the ordinary receipt/final-attestation verifier, and keeps candidate imports
+inside that tree. Its child launcher reports only closed diagnostic identities;
+it never exposes child stderr or exception text. Source admission alone performs no
 GitHub mutation, lifecycle publication, CURRENT change, genesis operation, or
 work-graph mutation; the admitted executor still requires #810's separate signed
 one-use lifecycle-transition authorization.

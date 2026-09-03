@@ -959,7 +959,8 @@ assert publication_policy["bootstrap_source_admissions"] == [{
     "purpose": "FIRST_READY_EXECUTOR_BOOTSTRAP",
     "source_pr_state": "OPEN",
     "source_pr_draft": True,
-    "admission_digest": "6677f8b1a21530f647e1115c0bec53bd48e7074b9633389ffeda96ed253f1dc7",
+    "source_base_ref": "main",
+    "admission_digest": "dde958066ab287feefdc88e9bf2e92aa3b6df390d7c713be3486f719da9956b4",
 }]
 assert publication_policy["historical_compatibility_publications"] == [
     {

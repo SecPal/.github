@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -381,7 +382,7 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
             "number": PR,
             "state": "open",
             "draft": True,
-            "base": {"repo": {"full_name": REPOSITORY}},
+            "base": {"ref": "main", "repo": {"full_name": REPOSITORY}},
             "head": {"repo": {"full_name": REPOSITORY}, "sha": HEAD},
         }
         commit = {
@@ -404,7 +405,7 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
         with mock.patch.object(
             source.publication, "_run_gh", side_effect=results((pull, commit))
         ):
-            source._observe_github(self.policy)
+            source._authenticate_live_github_source(self.policy)
         mutations = (
             ("wrong repository", lambda p, _c: p["head"]["repo"].update(full_name="Other/repo")),
             ("wrong PR", lambda p, _c: p.update(number=811)),
@@ -428,7 +429,213 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
                     source.BootstrapSourceAdmissionError, "binding changed"
                 ),
             ):
-                source._observe_github(self.policy)
+                source._authenticate_live_github_source(self.policy)
+
+    def test_github_observation_normalization_and_admission_are_separate(self) -> None:
+        pull = {
+            "number": PR,
+            "state": "open",
+            "draft": True,
+            "base": {
+                "ref": "release",
+                "repo": {"full_name": REPOSITORY},
+            },
+            "head": {"repo": {"full_name": REPOSITORY}, "sha": HEAD},
+        }
+        commit = {
+            "sha": HEAD,
+            "parents": [{"sha": PARENT}],
+            "commit": {
+                "tree": {"sha": TREE},
+                "verification": {"verified": True, "reason": "valid"},
+            },
+        }
+        results = [
+            subprocess.CompletedProcess([], 0, json.dumps(value).encode(), b"")
+            for value in (pull, commit)
+        ]
+        with mock.patch.object(source.publication, "_run_gh", side_effect=results):
+            observation = source._observe_github(self.policy)
+
+        self.assertIsInstance(observation, source.GitHubSourceObservation)
+        self.assertNotIn("_run_gh", inspect.getsource(source._normalize_github_observation))
+        self.assertNotIn("_run_gh", inspect.getsource(source._admit_github_source))
+        facts = source._normalize_github_observation(observation)
+        self.assertEqual(facts.base_ref, "release")
+        with self.assertRaisesRegex(
+            source.BootstrapSourceAdmissionError, "binding changed"
+        ):
+            source._admit_github_source(facts, self.policy)
+
+    def test_retargeted_source_pr_is_rejected_with_unchanged_source_identity(self) -> None:
+        pull = {
+            "number": PR,
+            "state": "open",
+            "draft": True,
+            "base": {
+                "ref": "release",
+                "repo": {"full_name": REPOSITORY},
+            },
+            "head": {"repo": {"full_name": REPOSITORY}, "sha": HEAD},
+        }
+        commit = {
+            "sha": HEAD,
+            "parents": [{"sha": PARENT}],
+            "commit": {
+                "tree": {"sha": TREE},
+                "verification": {"verified": True, "reason": "valid"},
+            },
+        }
+        results = [
+            subprocess.CompletedProcess([], 0, json.dumps(value).encode(), b"")
+            for value in (pull, commit)
+        ]
+        with (
+            mock.patch.object(source.publication, "_run_gh", side_effect=results),
+            self.assertRaisesRegex(
+                source.BootstrapSourceAdmissionError, "binding changed"
+            ),
+        ):
+            source._authenticate_live_github_source(self.policy)
+
+    def test_distinct_child_failures_retain_closed_diagnostic_identity(self) -> None:
+        identities = source._EXECUTION_DIAGNOSTIC_IDENTITIES
+        for identity in identities:
+            completed = subprocess.CompletedProcess(
+                [],
+                70,
+                json.dumps(
+                    {"status": "REJECTED", "diagnostic_identity": identity}
+                ).encode(),
+                b"secret child detail must not escape",
+            )
+            with (
+                self.subTest(identity=identity),
+                mock.patch.object(source, "_trusted_python", return_value="/usr/bin/python3"),
+                mock.patch.object(
+                    source.authority,
+                    "_load_trusted_command_helper",
+                    return_value=SimpleNamespace(
+                        command_environment=lambda _name: {},
+                        TRUSTED_COMMAND_PATH="/usr/bin",
+                    ),
+                ),
+                mock.patch.object(subprocess, "run", return_value=completed),
+                self.assertRaises(source.BootstrapSourceAdmissionError) as raised,
+            ):
+                source._execute_entrypoint(Path("/exact/source"), b"authorization")
+            self.assertEqual(raised.exception.diagnostic_identity, identity)
+            self.assertNotIn("secret child detail", str(raised.exception))
+        self.assertEqual(
+            source.BootstrapSourceAdmissionError("admission failed").diagnostic_identity,
+            source.SOURCE_ADMISSION_FAILURE,
+        )
+        for identity in identities:
+            self.assertIn(identity, source._LAUNCHER)
+        with self.assertRaises(source.BootstrapSourceAdmissionError) as raised:
+            source._execute_entrypoint(Path("/exact/source"), b"")
+        self.assertEqual(
+            raised.exception.diagnostic_identity,
+            "AUTHORIZATION_ORCHESTRATION_FAILURE",
+        )
+
+    def test_malformed_child_failure_uses_closed_unexpected_identity(self) -> None:
+        completed = subprocess.CompletedProcess(
+            [], 70, b"attacker-controlled output", b"secret stderr"
+        )
+        with (
+            mock.patch.object(source, "_trusted_python", return_value="/usr/bin/python3"),
+            mock.patch.object(
+                source.authority,
+                "_load_trusted_command_helper",
+                return_value=SimpleNamespace(
+                    command_environment=lambda _name: {},
+                    TRUSTED_COMMAND_PATH="/usr/bin",
+                ),
+            ),
+            mock.patch.object(subprocess, "run", return_value=completed),
+            self.assertRaises(source.BootstrapSourceAdmissionError) as raised,
+        ):
+            source._execute_entrypoint(Path("/exact/source"), b"authorization")
+        self.assertEqual(
+            raised.exception.diagnostic_identity,
+            "UNEXPECTED_CLOSED_CHILD_FAILURE",
+        )
+        self.assertNotIn("attacker-controlled", str(raised.exception))
+        self.assertNotIn("secret stderr", str(raised.exception))
+
+    def test_real_isolated_launcher_classifies_every_closed_failure_boundary(self) -> None:
+        cases = {
+            "lifecycle execution authorization is invalid":
+                "AUTHORIZATION_ORCHESTRATION_FAILURE",
+            "CURRENT changed before GitHub mutation":
+                "CURRENT_OBSERVATION_VERIFICATION_FAILURE",
+            "live GitHub pull-request observation is unavailable":
+                "GITHUB_OBSERVATION_FAILURE",
+            "GitHub mutation read-back is unsafe":
+                "GITHUB_MUTATION_READBACK_FAILURE",
+            "maintained lifecycle signing failed":
+                "SIGNING_SUCCESSOR_DERIVATION_FAILURE",
+            "publication response differs from verified state":
+                "LIFECYCLE_PUBLICATION_FAILURE",
+            "final GitHub/CURRENT convergence is not exact":
+                "FINAL_CONVERGENCE_FAILURE",
+            "unclassified internal failure":
+                "UNEXPECTED_CLOSED_CHILD_FAILURE",
+        }
+        for message, identity in cases.items():
+            with self.subTest(identity=identity), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                package = root / "scripts" / "secpal_pr_review"
+                package.mkdir(parents=True)
+                (root / "scripts" / "__init__.py").write_text("", encoding="utf-8")
+                (package / "__init__.py").write_text("", encoding="utf-8")
+                (package / "lifecycle_execution.py").write_text(
+                    "def execute_lifecycle_transition(repository, issue, authorization):\n"
+                    f"    raise ValueError({message!r})\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaises(source.BootstrapSourceAdmissionError) as raised:
+                    source._execute_entrypoint(root, b"authorization")
+                self.assertEqual(raised.exception.diagnostic_identity, identity)
+                self.assertNotIn(message, str(raised.exception))
+
+    def test_oversized_evidence_is_rejected_by_bounded_regular_file_read(self) -> None:
+        filenames = (
+            "reviewed-state.json",
+            "validation-receipt.json",
+            "final-attestation.json",
+        )
+        for oversized_filename in filenames:
+            with self.subTest(filename=oversized_filename), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                for filename in filenames:
+                    (root / filename).write_bytes(b"{}")
+                oversized = root / oversized_filename
+                with oversized.open("wb") as handle:
+                    handle.truncate(source.MAXIMUM_EVIDENCE_BYTES + 1)
+                with self.assertRaisesRegex(
+                    source.BootstrapSourceAdmissionError, "size is invalid"
+                ):
+                    source._read_evidence(root)
+        self.assertNotIn("read_bytes", inspect.getsource(source._read_evidence))
+
+    def test_empty_and_symlinked_evidence_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for filename in (
+                "reviewed-state.json",
+                "validation-receipt.json",
+                "final-attestation.json",
+            ):
+                (root / filename).write_bytes(b"{}")
+            (root / "reviewed-state.json").write_bytes(b"")
+            with self.assertRaises(source.BootstrapSourceAdmissionError):
+                source._read_evidence(root)
+            (root / "reviewed-state.json").unlink()
+            (root / "reviewed-state.json").symlink_to(root / "validation-receipt.json")
+            with self.assertRaises(source.BootstrapSourceAdmissionError):
+                source._read_evidence(root)
 
     def test_execution_uses_fixed_isolated_import_boundary(self) -> None:
         completed = subprocess.CompletedProcess([], 0, b'{"status":"COMPLETE"}\n', b"")
@@ -534,7 +741,7 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
         verified = self._authenticate()
         with (
             mock.patch.object(source, "_read_evidence", return_value=({}, {}, {})),
-            mock.patch.object(source, "_observe_github"),
+            mock.patch.object(source, "_authenticate_live_github_source"),
             mock.patch.object(source, "_isolated_source_repository", isolated),
             mock.patch.object(
                 source, "_authenticate_materialized_source", return_value=verified
@@ -556,7 +763,7 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
         verified = self._authenticate()
         with (
             mock.patch.object(source, "_read_evidence", return_value=({}, {}, {})),
-            mock.patch.object(source, "_observe_github"),
+            mock.patch.object(source, "_authenticate_live_github_source"),
             mock.patch.object(source, "_isolated_source_repository", isolated),
             mock.patch.object(
                 source, "_authenticate_materialized_source", return_value=verified
@@ -584,6 +791,11 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
         self.assertEqual(len(self.trust.bootstrap_source_admissions), 1)
         admission = self.trust.bootstrap_source_admissions[0]
         self.assertEqual((admission.delivery_issue, admission.pull_request), (810, 812))
+        self.assertEqual(admission.source_base_ref, "main")
+        self.assertEqual(
+            admission.admission_digest,
+            "dde958066ab287feefdc88e9bf2e92aa3b6df390d7c713be3486f719da9956b4",
+        )
         self.assertNotIn(787, (admission.delivery_issue, admission.pull_request))
 
     def test_no_generic_branch_execution_trust_exists(self) -> None:

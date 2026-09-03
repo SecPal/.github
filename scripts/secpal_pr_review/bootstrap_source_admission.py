@@ -23,6 +23,7 @@ import tempfile
 from typing import Any, Iterator, Mapping
 
 from . import fast_path
+from . import late_disposition
 from . import lifecycle_authority as authority
 from . import lifecycle_publication as publication
 
@@ -36,36 +37,109 @@ _ADMISSION_HELPER = Path(__file__).resolve().parents[1] / "secpal-pr-review-acti
 _OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _VERIFIED_SOURCE = object()
+MAXIMUM_EVIDENCE_BYTES = late_disposition.MAXIMUM_ARTIFACT_BYTES
+SOURCE_ADMISSION_FAILURE = "SOURCE_ADMISSION_FAILURE"
+_EXECUTION_DIAGNOSTIC_IDENTITIES = frozenset(
+    {
+        "AUTHORIZATION_ORCHESTRATION_FAILURE",
+        "CURRENT_OBSERVATION_VERIFICATION_FAILURE",
+        "GITHUB_OBSERVATION_FAILURE",
+        "GITHUB_MUTATION_READBACK_FAILURE",
+        "SIGNING_SUCCESSOR_DERIVATION_FAILURE",
+        "LIFECYCLE_PUBLICATION_FAILURE",
+        "FINAL_CONVERGENCE_FAILURE",
+        "UNEXPECTED_CLOSED_CHILD_FAILURE",
+    }
+)
 _LAUNCHER = r"""
 import dataclasses
 import json
 from pathlib import Path
 import sys
 
-source_root = Path(sys.argv[1]).resolve(strict=True)
-stdlib = [value for value in sys.path if value and "site-packages" not in value]
-sys.path[:] = [str(source_root), *stdlib]
-from scripts.secpal_pr_review import lifecycle_execution
+def diagnostic_identity(error):
+    message = str(error)
+    if "convergence" in message:
+        return "FINAL_CONVERGENCE_FAILURE"
+    if "authorization" in message or "orchestration" in message:
+        return "AUTHORIZATION_ORCHESTRATION_FAILURE"
+    if "CURRENT" in message:
+        return "CURRENT_OBSERVATION_VERIFICATION_FAILURE"
+    if "observation" in message and "GitHub" in message:
+        return "GITHUB_OBSERVATION_FAILURE"
+    if "GitHub" in message:
+        return "GITHUB_MUTATION_READBACK_FAILURE"
+    if "sign" in message or "successor" in message or "derived" in message:
+        return "SIGNING_SUCCESSOR_DERIVATION_FAILURE"
+    if "publication" in message or "published" in message:
+        return "LIFECYCLE_PUBLICATION_FAILURE"
+    return "UNEXPECTED_CLOSED_CHILD_FAILURE"
 
-expected = source_root / "scripts/secpal_pr_review/lifecycle_execution.py"
-if Path(lifecycle_execution.__file__).resolve(strict=True) != expected:
-    raise RuntimeError("admitted lifecycle executor import was substituted")
-for name, module in tuple(sys.modules.items()):
-    if name.startswith("scripts.secpal_pr_review"):
-        location = getattr(module, "__file__", None)
-        if location is not None and source_root not in Path(location).resolve(strict=True).parents:
-            raise RuntimeError("admitted sibling import escaped the authenticated tree")
-authorization = sys.stdin.buffer.read()
-result = lifecycle_execution.execute_lifecycle_transition(
-    "SecPal/.github", 810, authorization
-)
-payload = dataclasses.asdict(result) if dataclasses.is_dataclass(result) else result
-sys.stdout.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
+try:
+    source_root = Path(sys.argv[1]).resolve(strict=True)
+    stdlib = [value for value in sys.path if value and "site-packages" not in value]
+    sys.path[:] = [str(source_root), *stdlib]
+    from scripts.secpal_pr_review import lifecycle_execution
+
+    expected = source_root / "scripts/secpal_pr_review/lifecycle_execution.py"
+    if Path(lifecycle_execution.__file__).resolve(strict=True) != expected:
+        raise RuntimeError("admitted lifecycle executor import was substituted")
+    for name, module in tuple(sys.modules.items()):
+        if name.startswith("scripts.secpal_pr_review"):
+            location = getattr(module, "__file__", None)
+            if location is not None and source_root not in Path(location).resolve(strict=True).parents:
+                raise RuntimeError("admitted sibling import escaped the authenticated tree")
+    authorization = sys.stdin.buffer.read()
+    result = lifecycle_execution.execute_lifecycle_transition(
+        "SecPal/.github", 810, authorization
+    )
+except Exception as error:
+    payload = {
+        "diagnostic_identity": diagnostic_identity(error),
+        "status": "REJECTED",
+    }
+    sys.stdout.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
+    raise SystemExit(70)
+else:
+    payload = dataclasses.asdict(result) if dataclasses.is_dataclass(result) else result
+    sys.stdout.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
 """
 
 
 class BootstrapSourceAdmissionError(ValueError):
     """The exact maintained implementation source cannot be authenticated."""
+
+    def __init__(
+        self, message: str, *, diagnostic_identity: str = SOURCE_ADMISSION_FAILURE
+    ) -> None:
+        super().__init__(message)
+        self.diagnostic_identity = diagnostic_identity
+
+
+@dataclass(frozen=True)
+class GitHubSourceObservation:
+    """Provider representation captured without deciding policy conformance."""
+
+    pull_request_json: bytes
+    commit_json: bytes
+
+
+@dataclass(frozen=True)
+class GitHubSourceFacts:
+    """Canonical source facts produced by pure representation normalization."""
+
+    base_repository: str
+    base_ref: str
+    head_repository: str
+    pull_request: int
+    state: str
+    draft: bool
+    head_sha: str
+    commit_sha: str
+    tree_sha: str
+    parent_shas: tuple[str, ...]
+    github_verified: bool
+    github_verification_reason: str
 
 
 @dataclass(frozen=True)
@@ -178,13 +252,12 @@ def _read_evidence(directory: Path | str) -> tuple[dict[str, Any], ...]:
         ("validation-receipt.json", "validation receipt"),
         ("final-attestation.json", "final attestation"),
     ):
-        path = root / filename
         try:
-            if path.is_symlink() or not path.is_file():
-                raise OSError
-            raw = path.read_bytes()
-        except OSError as exc:
-            raise BootstrapSourceAdmissionError(f"{label} is unavailable") from exc
+            raw = late_disposition._read_bounded_regular_file(
+                root / filename, label, MAXIMUM_EVIDENCE_BYTES
+            )
+        except late_disposition.LateDispositionError as exc:
+            raise BootstrapSourceAdmissionError(str(exc)) from exc
         values.append(_closed_json(raw, label))
     return tuple(values)
 
@@ -256,7 +329,11 @@ def _verify_commit_signature(
         )
 
 
-def _observe_github(policy: authority.BootstrapSourceAdmissionPolicy) -> None:
+def _observe_github(
+    policy: authority.BootstrapSourceAdmissionPolicy,
+) -> GitHubSourceObservation:
+    """Capture the exact provider representations without admitting them."""
+
     pr_result = publication._run_gh(
         ["api", "--hostname", "github.com", f"repos/{policy.repository}/pulls/{policy.pull_request}"]
     )
@@ -265,32 +342,105 @@ def _observe_github(policy: authority.BootstrapSourceAdmissionPolicy) -> None:
     )
     if pr_result.returncode != 0 or commit_result.returncode != 0:
         raise BootstrapSourceAdmissionError("source GitHub authority is unavailable")
+    return GitHubSourceObservation(
+        pull_request_json=bytes(pr_result.stdout),
+        commit_json=bytes(commit_result.stdout),
+    )
+
+
+def _normalize_github_observation(
+    observation: GitHubSourceObservation,
+) -> GitHubSourceFacts:
+    """Purely normalize a bounded GitHub representation into canonical facts."""
+
+    if not isinstance(observation, GitHubSourceObservation):
+        raise BootstrapSourceAdmissionError("source GitHub authority is malformed")
     try:
-        pull = json.loads(pr_result.stdout, object_pairs_hook=publication._reject_duplicate_pairs)
-        commit = json.loads(commit_result.stdout, object_pairs_hook=publication._reject_duplicate_pairs)
+        pull = json.loads(
+            observation.pull_request_json,
+            object_pairs_hook=publication._reject_duplicate_pairs,
+        )
+        commit = json.loads(
+            observation.commit_json,
+            object_pairs_hook=publication._reject_duplicate_pairs,
+        )
+        facts = GitHubSourceFacts(
+            base_repository=authority._require_repository(
+                pull["base"]["repo"]["full_name"]
+            ),
+            base_ref=pull["base"]["ref"],
+            head_repository=authority._require_repository(
+                pull["head"]["repo"]["full_name"]
+            ),
+            pull_request=authority._require_positive_int(
+                pull["number"], "source pull request"
+            ),
+            state=pull["state"].upper(),
+            draft=pull["draft"],
+            head_sha=authority._require_oid(pull["head"]["sha"], "source head"),
+            commit_sha=authority._require_oid(commit["sha"], "source commit"),
+            tree_sha=authority._require_oid(
+                commit["commit"]["tree"]["sha"], "source tree"
+            ),
+            parent_shas=tuple(
+                authority._require_oid(item["sha"], "source parent")
+                for item in commit["parents"]
+            ),
+            github_verified=commit["commit"]["verification"]["verified"],
+            github_verification_reason=commit["commit"]["verification"]["reason"],
+        )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise BootstrapSourceAdmissionError("source GitHub authority is malformed") from exc
-    try:
-        valid = (
-            pull["base"]["repo"]["full_name"] == policy.repository
-            and pull["head"]["repo"]["full_name"] == policy.repository
-            and pull["number"] == policy.pull_request
-            and pull["state"].upper() == policy.source_pr_state
-            and pull["draft"] is policy.source_pr_draft
-            and pull["head"]["sha"] == policy.source_head_sha
-            and commit["sha"] == policy.source_head_sha
-            and commit["commit"]["tree"]["sha"] == policy.source_tree_sha
-            and [item["sha"] for item in commit["parents"]]
-            == [policy.source_parent_sha]
-            and commit["commit"]["verification"]["verified"] is True
-            and commit["commit"]["verification"]["reason"] == "valid"
-        )
-    except (AttributeError, KeyError, TypeError):
-        valid = False
+    except (AttributeError, KeyError, TypeError, authority.LifecycleAuthorityError) as exc:
+        raise BootstrapSourceAdmissionError("source GitHub authority is malformed") from exc
+    if (
+        not isinstance(facts.base_ref, str)
+        or not facts.base_ref
+        or facts.base_ref != facts.base_ref.strip()
+        or not isinstance(facts.state, str)
+        or type(facts.draft) is not bool
+        or not isinstance(facts.github_verification_reason, str)
+        or type(facts.github_verified) is not bool
+    ):
+        raise BootstrapSourceAdmissionError("source GitHub authority is malformed")
+    return facts
+
+
+def _admit_github_source(
+    facts: GitHubSourceFacts,
+    policy: authority.BootstrapSourceAdmissionPolicy,
+) -> None:
+    """Purely admit canonical facts against one exact maintained policy."""
+
+    valid = (
+        isinstance(facts, GitHubSourceFacts)
+        and facts.base_repository == policy.repository
+        and facts.base_ref == policy.source_base_ref
+        and facts.head_repository == policy.repository
+        and facts.pull_request == policy.pull_request
+        and facts.state == policy.source_pr_state
+        and facts.draft is policy.source_pr_draft
+        and facts.head_sha == policy.source_head_sha
+        and facts.commit_sha == policy.source_head_sha
+        and facts.tree_sha == policy.source_tree_sha
+        and facts.parent_shas == (policy.source_parent_sha,)
+        and facts.github_verified is True
+        and facts.github_verification_reason == "valid"
+    )
     if not valid:
         raise BootstrapSourceAdmissionError(
             "source GitHub repository, PR, object, or verification binding changed"
         )
+
+
+def _authenticate_live_github_source(
+    policy: authority.BootstrapSourceAdmissionPolicy,
+) -> None:
+    """Assemble observation, pure normalization, and pure admission."""
+
+    observation = _observe_github(policy)
+    facts = _normalize_github_observation(observation)
+    _admit_github_source(facts, policy)
 
 
 @contextmanager
@@ -468,7 +618,7 @@ def verify_first_ready_executor_source(
 
     trust, policy = _select_policy(repository, delivery_issue)
     evidence = _read_evidence(source_evidence_directory)
-    _observe_github(policy)
+    _authenticate_live_github_source(policy)
     with _isolated_source_repository(trust, policy) as root:
         verified = _authenticate_materialized_source(root, trust, policy, evidence)
         _verify_materialized_tree(root, policy)
@@ -525,7 +675,10 @@ def _execute_entrypoint(root: Path, serialized_authorization: bytes | str) -> Ma
         else serialized_authorization
     )
     if not isinstance(authorization, bytes) or not authorization:
-        raise BootstrapSourceAdmissionError("lifecycle authorization is required")
+        raise BootstrapSourceAdmissionError(
+            "lifecycle authorization is required: AUTHORIZATION_ORCHESTRATION_FAILURE",
+            diagnostic_identity="AUTHORIZATION_ORCHESTRATION_FAILURE",
+        )
     helper = authority._load_trusted_command_helper()
     environment = _closed_launcher_environment(helper)
     try:
@@ -540,15 +693,38 @@ def _execute_entrypoint(root: Path, serialized_authorization: bytes | str) -> Ma
             env=environment,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        raise BootstrapSourceAdmissionError("admitted entrypoint execution failed") from exc
+        raise BootstrapSourceAdmissionError(
+            "admitted entrypoint execution failed: UNEXPECTED_CLOSED_CHILD_FAILURE",
+            diagnostic_identity="UNEXPECTED_CLOSED_CHILD_FAILURE",
+        ) from exc
     if result.returncode != 0:
-        raise BootstrapSourceAdmissionError("admitted lifecycle executor rejected the operation")
+        identity = "UNEXPECTED_CLOSED_CHILD_FAILURE"
+        try:
+            failure = _closed_json(result.stdout, "admitted executor failure")
+            if (
+                set(failure) == {"diagnostic_identity", "status"}
+                and failure["status"] == "REJECTED"
+                and failure["diagnostic_identity"] in _EXECUTION_DIAGNOSTIC_IDENTITIES
+            ):
+                identity = failure["diagnostic_identity"]
+        except BootstrapSourceAdmissionError:
+            pass
+        raise BootstrapSourceAdmissionError(
+            f"admitted lifecycle executor failed: {identity}",
+            diagnostic_identity=identity,
+        )
     try:
         payload = json.loads(result.stdout, object_pairs_hook=publication._reject_duplicate_pairs)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise BootstrapSourceAdmissionError("admitted executor result is malformed") from exc
+        raise BootstrapSourceAdmissionError(
+            "admitted executor result is malformed: UNEXPECTED_CLOSED_CHILD_FAILURE",
+            diagnostic_identity="UNEXPECTED_CLOSED_CHILD_FAILURE",
+        ) from exc
     if not isinstance(payload, dict):
-        raise BootstrapSourceAdmissionError("admitted executor result is malformed")
+        raise BootstrapSourceAdmissionError(
+            "admitted executor result is malformed: UNEXPECTED_CLOSED_CHILD_FAILURE",
+            diagnostic_identity="UNEXPECTED_CLOSED_CHILD_FAILURE",
+        )
     return copy.deepcopy(payload)
 
 
@@ -563,7 +739,7 @@ def execute_first_ready_executor_bootstrap(
 
     trust, policy = _select_policy(repository, delivery_issue)
     evidence = _read_evidence(source_evidence_directory)
-    _observe_github(policy)
+    _authenticate_live_github_source(policy)
     with _isolated_source_repository(trust, policy) as root:
         verified = _authenticate_materialized_source(root, trust, policy, evidence)
         if not is_verified_bootstrap_source(verified):

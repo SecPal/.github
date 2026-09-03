@@ -223,6 +223,7 @@ class BootstrapSourceAdmissionPolicy:
     purpose: str
     source_pr_state: str
     source_pr_draft: bool
+    source_base_ref: str
     admission_digest: str
 
 
@@ -973,7 +974,7 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
             "source_tree_sha", "source_parent_sha",
             "validation_receipt_digest", "final_attestation_digest",
             "source_signer_identity", "implementation_path", "entrypoint",
-            "purpose", "source_pr_state", "source_pr_draft",
+            "purpose", "source_pr_state", "source_pr_draft", "source_base_ref",
             "admission_digest",
         }
     )
@@ -1004,6 +1005,7 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
             or item["purpose"] != "FIRST_READY_EXECUTOR_BOOTSTRAP"
             or item["source_pr_state"] != "OPEN"
             or item["source_pr_draft"] is not True
+            or item["source_base_ref"] != "main"
             or admission_digest != digest_json(unsigned)
             or identity in source_identities
             or admission_digest in source_digests
@@ -1036,6 +1038,7 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
                 purpose=item["purpose"],
                 source_pr_state=item["source_pr_state"],
                 source_pr_draft=item["source_pr_draft"],
+                source_base_ref=item["source_base_ref"],
                 admission_digest=admission_digest,
             )
         )

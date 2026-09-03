@@ -305,6 +305,7 @@
               "purpose",
               "source_pr_state",
               "source_pr_draft",
+              "source_base_ref",
               "admission_digest"
             ],
             "properties": {
@@ -325,6 +326,7 @@
               "purpose": { "const": "FIRST_READY_EXECUTOR_BOOTSTRAP" },
               "source_pr_state": { "const": "OPEN" },
               "source_pr_draft": { "const": true },
+              "source_base_ref": { "const": "main" },
               "admission_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
             }
           }
