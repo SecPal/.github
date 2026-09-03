@@ -1546,7 +1546,9 @@ def _validate_simulated_plan(
                 blocking=tuple(blocking),
                 blocking_count=len(blocking),
             )
-            affected.update((blocked, blocker))
+            affected.add(blocked)
+            if step.kind == "ADD_BLOCKED_BY":
+                affected.add(blocker)
 
         simulated = Snapshot(nodes)
         roots = set(affected)

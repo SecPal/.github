@@ -293,6 +293,121 @@ class SnapshotLoadingTests(AdapterTestCase):
         self.assertTrue(snapshot.require(external).blocking_observable)
         self.assertEqual(plan.steps[0].kind, "REMOVE_BLOCKED_BY")
 
+    def test_obsolete_dependency_rejects_malformed_blocker_before_target_read(self):
+        current = f"{REPO}#2"
+        script = {
+            f"WorkGraphIssue:{REPO}#2:": issue_payload(2),
+        }
+        for blocker in (
+            "not-an-issue",
+            "https://github.com/SecPal/api/issues/44",
+            " SecPal/api#44",
+            "SecPal/api#0",
+            "SecPal/api#044",
+            True,
+        ):
+            request = {
+                "current_issue": current,
+                "finding": {
+                    "classification": "IN_CONTRACT_DEFECT",
+                    "technically_blocking": True,
+                    "mechanically_blocking": True,
+                    "timing": "BEFORE_FREEZE",
+                    "risk": ["P2"],
+                },
+                "operation": {
+                    "kind": "REMOVE_OBSOLETE_DEPENDENCY",
+                    "blocker": blocker,
+                    "contract_no_longer_requires_blocker": True,
+                },
+            }
+            self.log_path.write_text("", encoding="utf-8")
+
+            with self.subTest(blocker=blocker), self.assertRaises(replanning.PlanError):
+                replan_cli._load_plan_snapshot(self.adapter(script), request)
+
+            requested_issues = [
+                json.loads(call["body"])["variables"]
+                for call in self.calls()
+            ]
+            self.assertEqual(requested_issues, [])
+
+    def test_external_obsolete_blocker_remains_observable_through_postcondition(self):
+        current = f"{REPO}#2"
+        external = f"{OTHER_REPO}#44"
+        external_child = f"{OTHER_REPO}#45"
+        request = {
+            "current_issue": current,
+            "finding": {
+                "classification": "IN_CONTRACT_DEFECT",
+                "technically_blocking": True,
+                "mechanically_blocking": True,
+                "timing": "BEFORE_FREEZE",
+                "risk": ["P2"],
+            },
+            "operation": {
+                "kind": "REMOVE_OBSOLETE_DEPENDENCY",
+                "blocker": external,
+                "contract_no_longer_requires_blocker": True,
+            },
+        }
+        before_script = {
+            f"WorkGraphIssue:{REPO}#1:": issue_payload(1, sub_issues=(current,)),
+            f"WorkGraphIssue:{REPO}#2:": issue_payload(
+                2, parent=f"{REPO}#1", blocked_by=(external,)
+            ),
+            f"WorkGraphIssue:{OTHER_REPO}#44:": issue_payload(
+                44,
+                repository=OTHER_REPO,
+                sub_issues=(external_child,),
+                blocking=(current,),
+            ),
+        }
+        after_script = {
+            f"WorkGraphIssue:{REPO}#1:": issue_payload(1, sub_issues=(current,)),
+            f"WorkGraphIssue:{REPO}#2:": issue_payload(2, parent=f"{REPO}#1"),
+            f"WorkGraphIssue:{OTHER_REPO}#44:": issue_payload(
+                44,
+                repository=OTHER_REPO,
+                sub_issues=(external_child,),
+            ),
+        }
+        drifted_script = {
+            **after_script,
+            f"WorkGraphIssue:{OTHER_REPO}#44:": issue_payload(
+                44,
+                repository=OTHER_REPO,
+                sub_issues=(f"{OTHER_REPO}#46",),
+            ),
+        }
+
+        before, _ = replan_cli._load_plan_snapshot(self.adapter(before_script), request)
+        plan = replanning.build_plan(before, request, actor="alice")
+        writer = replanning.RecordingWriter()
+        aliases = replanning.apply_plan(
+            plan,
+            before,
+            actor="alice",
+            writer=writer,
+        )
+        after, _ = replan_cli._load_plan_snapshot(self.adapter(after_script), request)
+
+        replanning.verify_applied(plan, after, aliases)
+        replanning.verify_unchanged_relationships(plan, before, after, aliases)
+        blocker = after.require(external)
+        self.assertTrue(blocker.children_observable)
+        self.assertTrue(blocker.dependencies_observable)
+        self.assertTrue(blocker.blocking_observable)
+        self.assertEqual(blocker.children, (external_child,))
+        self.assertEqual(writer.calls, list(plan.steps))
+
+        drifted, _ = replan_cli._load_plan_snapshot(self.adapter(drifted_script), request)
+        with self.assertRaisesRegex(
+            replanning.PlanError,
+            "unplanned child relationship",
+        ):
+            replanning.verify_unchanged_relationships(plan, before, drifted, aliases)
+
     def test_replanning_retains_endpoint_observability_after_rewiring(self):
         current = f"{REPO}#2"
         prerequisite = f"{REPO}#3"

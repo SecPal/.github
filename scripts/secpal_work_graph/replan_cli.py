@@ -94,6 +94,21 @@ def _merge_snapshots(*snapshots: Snapshot) -> Snapshot:
 def _load_plan_snapshot(
     adapter: github.GitHubReadAdapter, request: Mapping[str, Any]
 ) -> tuple[Snapshot, str]:
+    raw_operation = request.get("operation")
+    operation = raw_operation if isinstance(raw_operation, Mapping) else {}
+    removal_blocker = None
+    if operation.get("kind") == "REMOVE_OBSOLETE_DEPENDENCY":
+        removal_blocker = operation.get("blocker")
+        if not isinstance(removal_blocker, str):
+            raise replanning.PlanError(
+                "obsolete dependency removal blocker must be repository-qualified"
+            )
+        try:
+            parse_node_key(removal_blocker)
+        except ValueError as exc:
+            raise replanning.PlanError(
+                "obsolete dependency removal blocker must be repository-qualified"
+            ) from exc
     current_key = str(request["current_issue"])
     initial, canonical_current = github.load_snapshot(
         adapter, current_key, include_reverse_dependencies=True
@@ -102,8 +117,6 @@ def _load_plan_snapshot(
     if canonical_current != current_key:
         raise replanning.PlanError("current issue reference is not canonical")
     scope = current.parent or canonical_current
-    raw_operation = request.get("operation")
-    operation = raw_operation if isinstance(raw_operation, Mapping) else {}
     mutation_targets = {current_key}
     if operation.get("kind") == "INSERT_PREREQUISITE":
         moved = operation.get("move_current_blockers")
@@ -121,9 +134,7 @@ def _load_plan_snapshot(
                     endpoint for endpoint in placement if isinstance(endpoint, str)
                 )
     elif operation.get("kind") == "REMOVE_OBSOLETE_DEPENDENCY":
-        blocker = operation.get("blocker")
-        if isinstance(blocker, str):
-            mutation_targets.add(blocker)
+        mutation_targets.add(removal_blocker)
     base, canonical_scope = github.load_snapshot(
         adapter,
         scope,
