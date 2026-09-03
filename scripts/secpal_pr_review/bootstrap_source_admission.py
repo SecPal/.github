@@ -488,6 +488,36 @@ def _trusted_python() -> str:
     raise BootstrapSourceAdmissionError("trusted Python executable is unavailable")
 
 
+def _closed_launcher_environment(helper: Any) -> dict[str, str]:
+    """Build the child environment before loader or Python startup can run.
+
+    Python isolation flags and launcher provenance checks begin only after the
+    operating-system loader has accepted this mapping, so this must begin from
+    an empty dictionary rather than filtering inherited process state.
+    """
+
+    base = helper.command_environment("gh")
+    if not isinstance(base, Mapping):
+        raise BootstrapSourceAdmissionError("trusted launcher environment is invalid")
+    environment = {
+        "PATH": helper.TRUSTED_COMMAND_PATH,
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PAGER": "cat",
+        "GH_PAGER": "cat",
+        "GH_HOST": "github.com",
+    }
+    for key in ("HOME", "GH_CONFIG_DIR", "GH_TOKEN", "GITHUB_TOKEN"):
+        value = base.get(key)
+        if value is not None:
+            if not isinstance(value, str):
+                raise BootstrapSourceAdmissionError(
+                    "trusted launcher environment value is invalid"
+                )
+            environment[key] = value
+    return environment
+
+
 def _execute_entrypoint(root: Path, serialized_authorization: bytes | str) -> Mapping[str, Any]:
     authorization = (
         serialized_authorization.encode("utf-8")
@@ -497,10 +527,7 @@ def _execute_entrypoint(root: Path, serialized_authorization: bytes | str) -> Ma
     if not isinstance(authorization, bytes) or not authorization:
         raise BootstrapSourceAdmissionError("lifecycle authorization is required")
     helper = authority._load_trusted_command_helper()
-    environment = helper.command_environment("gh")
-    for key in tuple(environment):
-        if key.startswith("PYTHON"):
-            environment.pop(key)
+    environment = _closed_launcher_environment(helper)
     try:
         result = subprocess.run(
             [_trusted_python(), "-I", "-S", "-c", _LAUNCHER, str(root)],

@@ -256,6 +256,9 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
             "ref",
             "command",
             "shell",
+            "environment",
+            "executable",
+            "python",
         ):
             self.assertNotIn(forbidden, parameters)
 
@@ -438,7 +441,8 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
                     command_environment=lambda _name: {
                         "PATH": "/usr/bin",
                         "PYTHONPATH": "/attacker",
-                    }
+                    },
+                    TRUSTED_COMMAND_PATH="/usr/bin",
                 ),
             ),
             mock.patch.object(subprocess, "run", return_value=completed) as runner,
@@ -449,8 +453,61 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
         self.assertEqual(arguments[:4], ["/usr/bin/python3", "-I", "-S", "-c"])
         self.assertEqual(arguments[-1], "/exact/source")
         self.assertNotIn("PYTHONPATH", runner.call_args.kwargs["env"])
+        for key in ("HOME", "GH_CONFIG_DIR", "GH_TOKEN", "GITHUB_TOKEN"):
+            self.assertNotIn(key, runner.call_args.kwargs["env"])
         self.assertNotIn("shell", runner.call_args.kwargs)
         self.assertIn("admitted sibling import escaped", source._LAUNCHER)
+
+    def test_execution_child_environment_excludes_hostile_parent_state(self) -> None:
+        completed = subprocess.CompletedProcess([], 0, b'{"status":"COMPLETE"}\n', b"")
+        parent_environment = {
+            "PATH": "/usr/bin:/bin",
+            "HOME": "/operator-home",
+            "GH_CONFIG_DIR": "/operator-gh-config",
+            "GH_TOKEN": "test-token",
+            "GITHUB_TOKEN": "test-github-token",
+            "LD_PRELOAD": "/attacker/preload.so",
+            "LD_LIBRARY_PATH": "/attacker/lib",
+            "DYLD_INSERT_LIBRARIES": "/attacker/inject.dylib",
+            "DYLD_LIBRARY_PATH": "/attacker/dylibs",
+            "PYTHONPATH": "/attacker/python",
+            "PYTHONHOME": "/attacker/home",
+            "SECPAL_UNEXPECTED_PARENT_ENV": "attacker-controlled",
+        }
+        with (
+            mock.patch.object(source, "_trusted_python", return_value="/usr/bin/python3"),
+            mock.patch.object(
+                source.authority,
+                "_load_trusted_command_helper",
+                return_value=SimpleNamespace(
+                    command_environment=lambda _name: dict(parent_environment),
+                    TRUSTED_COMMAND_PATH="/usr/bin:/bin",
+                ),
+            ),
+            mock.patch.object(subprocess, "run", return_value=completed) as runner,
+        ):
+            source._execute_entrypoint(Path("/exact/source"), b"authorization")
+        environment = runner.call_args.kwargs["env"]
+        for key in (
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "DYLD_INSERT_LIBRARIES",
+            "DYLD_LIBRARY_PATH",
+            "PYTHONPATH",
+            "PYTHONHOME",
+            "SECPAL_UNEXPECTED_PARENT_ENV",
+        ):
+            self.assertNotIn(key, environment)
+        self.assertEqual(environment["PATH"], "/usr/bin:/bin")
+        self.assertEqual(environment["LANG"], "C.UTF-8")
+        self.assertEqual(environment["LC_ALL"], "C.UTF-8")
+        self.assertEqual(environment["PAGER"], "cat")
+        self.assertEqual(environment["GH_PAGER"], "cat")
+        self.assertEqual(environment["GH_HOST"], "github.com")
+        self.assertEqual(environment["HOME"], "/operator-home")
+        self.assertEqual(environment["GH_CONFIG_DIR"], "/operator-gh-config")
+        self.assertEqual(environment["GH_TOKEN"], "test-token")
+        self.assertEqual(environment["GITHUB_TOKEN"], "test-github-token")
 
     def test_source_admission_alone_has_no_mutation_or_lifecycle_authority(self) -> None:
         verified = self._authenticate()
