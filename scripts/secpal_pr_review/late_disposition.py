@@ -21,6 +21,7 @@ from typing import Any, Sequence
 
 
 SCHEMA_VERSION = "1.0"
+ABSENCE_SCHEMA_VERSION = "1.1"
 KIND = "LATE_FEEDBACK_DISPOSITION"
 SIGNATURE_NAMESPACE = "secpal-late-feedback-disposition-v1"
 CLASSIFICATION_KIND = "LATE_FEEDBACK_CLASSIFICATION"
@@ -619,9 +620,10 @@ def parse_artifact(
     validated_tree_sha: str,
     validation_receipt_digest: str,
     validation_attestation_digest: str,
-    final_eligibility_evidence_digest: str,
+    final_eligibility_evidence_digest: str | None,
     thread_ids: tuple[str, ...],
     allowed_dispositions: dict[str, frozenset[str]],
+    final_eligibility_absence_recovery_digest: str | None = None,
     signature_environment: dict[str, str] | None = None,
 ) -> LateDispositionEvidence:
     canonical = verify_detached_signature(
@@ -638,7 +640,7 @@ def parse_artifact(
         )
     except (TypeError, ValueError) as exc:
         raise LateDispositionError("late-disposition artifact is malformed") from exc
-    expected_keys = {
+    common_keys = {
         "schema_version",
         "kind",
         "repository",
@@ -648,17 +650,34 @@ def parse_artifact(
         "validated_tree_sha",
         "validation_receipt_digest",
         "validation_attestation_digest",
-        "final_eligibility_evidence_digest",
         "delivery_signer",
         "authorized_action",
         "threads",
     }
-    if not isinstance(payload, dict) or set(payload) != expected_keys:
+    manifest_mode = (
+        isinstance(payload, dict)
+        and payload.get("schema_version") == SCHEMA_VERSION
+        and set(payload) == common_keys | {"final_eligibility_evidence_digest"}
+        and isinstance(final_eligibility_evidence_digest, str)
+        and DIGEST.fullmatch(final_eligibility_evidence_digest)
+        and final_eligibility_absence_recovery_digest is None
+    )
+    absence_mode = (
+        isinstance(payload, dict)
+        and payload.get("schema_version") == ABSENCE_SCHEMA_VERSION
+        and set(payload)
+        == common_keys
+        | {
+            "final_eligibility_status",
+            "final_eligibility_absence_recovery_digest",
+        }
+        and final_eligibility_evidence_digest is None
+    )
+    if not manifest_mode and not absence_mode:
         raise LateDispositionError("late-disposition artifact shape is unsupported")
     declared_signer = payload.get("delivery_signer")
     if (
-        payload.get("schema_version") != SCHEMA_VERSION
-        or payload.get("kind") != KIND
+        payload.get("kind") != KIND
         or payload.get("repository") != repository
         or payload.get("delivery_issue_number") != delivery_issue_number
         or payload.get("pull_request_number") != pull_request_number
@@ -666,8 +685,22 @@ def parse_artifact(
         or payload.get("validated_tree_sha") != validated_tree_sha.lower()
         or payload.get("validation_receipt_digest") != validation_receipt_digest
         or payload.get("validation_attestation_digest") != validation_attestation_digest
-        or payload.get("final_eligibility_evidence_digest")
-        != final_eligibility_evidence_digest
+        or (
+            manifest_mode
+            and payload.get("final_eligibility_evidence_digest")
+            != final_eligibility_evidence_digest
+        )
+        or (
+            absence_mode
+            and (
+                payload.get("final_eligibility_status")
+                != "NO_ELIGIBILITY_WAS_AUTHENTICATED_AT_FINAL_VALIDATION"
+                or payload.get("final_eligibility_absence_recovery_digest")
+                != final_eligibility_absence_recovery_digest
+                or not isinstance(final_eligibility_absence_recovery_digest, str)
+                or not DIGEST.fullmatch(final_eligibility_absence_recovery_digest)
+            )
+        )
         or payload.get("authorized_action") != "RESOLVE_EXACT_REVIEW_THREADS"
         or not isinstance(declared_signer, dict)
         or set(declared_signer) != {"format", "fingerprint"}

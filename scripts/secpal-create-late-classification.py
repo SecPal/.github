@@ -54,7 +54,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--final-reviewed-state", required=True)
     parser.add_argument("--expected-final-reviewed-state-digest", required=True)
     parser.add_argument("--final-validation-evidence", required=True)
-    parser.add_argument("--final-eligibility-evidence", required=True)
+    parser.add_argument("--final-eligibility-evidence")
     parser.add_argument("--thread-id", required=True)
     parser.add_argument("--finding-id", required=True)
     parser.add_argument("--finding-evidence-digest", required=True)

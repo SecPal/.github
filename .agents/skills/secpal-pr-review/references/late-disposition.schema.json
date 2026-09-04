@@ -15,13 +15,12 @@
     "validated_tree_sha",
     "validation_receipt_digest",
     "validation_attestation_digest",
-    "final_eligibility_evidence_digest",
     "delivery_signer",
     "authorized_action",
     "threads"
   ],
   "properties": {
-    "schema_version": { "const": "1.0" },
+    "schema_version": { "enum": ["1.0", "1.1"] },
     "kind": { "const": "LATE_FEEDBACK_DISPOSITION" },
     "repository": {
       "type": "string",
@@ -34,6 +33,10 @@
     "validation_receipt_digest": { "$ref": "#/$defs/digest" },
     "validation_attestation_digest": { "$ref": "#/$defs/digest" },
     "final_eligibility_evidence_digest": { "$ref": "#/$defs/digest" },
+    "final_eligibility_status": {
+      "const": "NO_ELIGIBILITY_WAS_AUTHENTICATED_AT_FINAL_VALIDATION"
+    },
+    "final_eligibility_absence_recovery_digest": { "$ref": "#/$defs/digest" },
     "delivery_signer": { "$ref": "#/$defs/signer" },
     "authorized_action": { "const": "RESOLVE_EXACT_REVIEW_THREADS" },
     "threads": {
@@ -44,6 +47,23 @@
       "items": { "$ref": "#/$defs/thread" }
     }
   },
+  "oneOf": [
+    {
+      "properties": { "schema_version": { "const": "1.0" } },
+      "required": ["final_eligibility_evidence_digest"],
+      "not": {
+        "anyOf": [
+          { "required": ["final_eligibility_status"] },
+          { "required": ["final_eligibility_absence_recovery_digest"] }
+        ]
+      }
+    },
+    {
+      "properties": { "schema_version": { "const": "1.1" } },
+      "required": ["final_eligibility_status", "final_eligibility_absence_recovery_digest"],
+      "not": { "required": ["final_eligibility_evidence_digest"] }
+    }
+  ],
   "$defs": {
     "oid": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
