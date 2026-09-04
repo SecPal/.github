@@ -22,6 +22,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 - fail closed on drift, replay, reverse partial state, and ambiguous writes
   while preserving one-use authorization, lifecycle counters, histories, and
   Ready monotonicity
+- derive successors for exact-state-adopted lifecycles with the maintained
+  adoption-aware validator so authenticated observation history remains valid
 
 ## 2026-09-02 - Re-evaluate Exact Released OCI Artifacts
 

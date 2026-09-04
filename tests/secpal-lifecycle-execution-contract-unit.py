@@ -15,6 +15,7 @@ and Ready-integration suites in addition to the focused characterization here.
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 import hashlib
 import inspect
 from pathlib import Path
@@ -362,6 +363,36 @@ class LifecycleExecutionTests(TestCase):
         self.assertEqual(first.github_write_attempts, 0)
         self.assertEqual(len(harness.github_writes), 0)
 
+    def test_signing_failure_after_github_write_resumes_without_github_replay(self) -> None:
+        harness = self.draft_harness()
+        auth = authorization_for(harness, "DRAFT_TO_READY")
+
+        with self.assertRaisesRegex(RuntimeError, "signing unavailable"):
+            execution._execute_lifecycle_transition(
+                REPOSITORY,
+                ISSUE,
+                auth,
+                current_reader=harness.current_reader,
+                historical_reader=harness.historical_reader,
+                github_reader=harness.github_reader,
+                github_writer=harness.github_writer,
+                publisher=harness.publisher,
+                signing_authority_provider=lambda *_args: (_ for _ in ()).throw(
+                    RuntimeError("signing unavailable")
+                ),
+            )
+
+        self.assertFalse(harness.github.draft)
+        self.assertEqual(harness.current, harness.predecessor)
+        self.assertEqual(len(harness.github_writes), 1)
+        self.assertEqual(len(harness.publication_writes), 0)
+
+        result = harness.execute(auth)
+
+        self.assertEqual(result.status, "COMPLETE")
+        self.assertEqual(len(harness.github_writes), 1)
+        self.assertEqual(len(harness.publication_writes), 1)
+
     def test_case_5_completed_replay_is_zero_write_idempotent(self) -> None:
         harness = self.draft_harness()
         auth = authorization_for(harness, "DRAFT_TO_READY")
@@ -481,6 +512,37 @@ class LifecycleExecutionTests(TestCase):
         ):
             self.assertEqual(after[field], before[field])
         self.assertEqual(len(after["ready_history"]), len(before["ready_history"]) + 1)
+
+    def test_adopted_ready_history_uses_adoption_aware_successor_derivation(self) -> None:
+        lifecycle = self.ready_harness().predecessor.lifecycle
+        observed = {
+            "sequence": 1,
+            "kind": "DRAFT_TO_READY_OBSERVED",
+            "observed_at": "2026-08-02T00:00:00Z",
+            "head_sha": lifecycle.head_sha,
+            "reviewed_head_sha": None,
+        }
+        state = copy.deepcopy(lifecycle.state)
+        state["ready_history"] = [
+            {
+                "sequence": 1,
+                "transition_kind": "DRAFT_TO_READY",
+                "observation_digest": authority.digest_json(observed),
+            }
+        ]
+        adopted = replace(
+            lifecycle,
+            state=state,
+            historical_proof_mode=authority.EXACT_ADOPTION_PROOF_MODE,
+        )
+
+        successor = execution._derive_transition_state(
+            adopted, "READY_TO_DRAFT", "f" * 64
+        )
+
+        self.assertTrue(successor["draft"])
+        self.assertFalse(successor["ready"])
+        self.assertEqual(successor["ready_history"][:-1], state["ready_history"])
 
     def test_case_20_later_ready_preserves_exhausted_counters_and_history(self) -> None:
         chain = Chain()

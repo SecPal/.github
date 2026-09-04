@@ -222,11 +222,10 @@ def _validate_transition_delta(
             verifier=orchestration._verify_user_authorization,
             verified_item=verified_authorization,
         )
-        predecessor_state = authority._validate_state(
-            copy.deepcopy(predecessor.lifecycle.state)
-        )
-        successor_state = authority.derive_state(
-            predecessor_state, transition.transition_kind, transition.event_digest
+        successor_state = _derive_transition_state(
+            predecessor.lifecycle,
+            transition.transition_kind,
+            transition.event_digest,
         )
     except (authority.LifecycleAuthorityError, orchestration.LifecycleOrchestrationError) as exc:
         raise LifecycleExecutionError("published transition authority is invalid") from exc
@@ -386,10 +385,8 @@ def _append_successor_evidence(
         )
     except authority.LifecycleAuthorityError as exc:
         raise LifecycleExecutionError("exact lifecycle successor could not be derived") from exc
-    expected_state = authority.derive_state(
-        predecessor.lifecycle.state,
-        authorization["operation"],
-        event["event_digest"],
+    expected_state = _derive_transition_state(
+        predecessor.lifecycle, authorization["operation"], event["event_digest"]
     )
     if (
         successor.repository != predecessor.lifecycle.repository
@@ -403,6 +400,26 @@ def _append_successor_evidence(
     ):
         raise LifecycleExecutionError("derived lifecycle successor changed preserved state")
     return successor_raw
+
+
+def _derive_transition_state(
+    lifecycle: authority.VerifiedLifecycleAuthority,
+    transition_kind: str,
+    event_digest: str,
+) -> dict[str, Any]:
+    adopted = (
+        lifecycle.historical_proof_mode == authority.EXACT_ADOPTION_PROOF_MODE
+    )
+    state = authority._validate_state(
+        copy.deepcopy(lifecycle.state),
+        allow_adopted_observations=adopted,
+    )
+    return authority._derive_state(
+        state,
+        transition_kind,
+        event_digest,
+        allow_adopted_observations=adopted,
+    )
 
 
 def _single_role_identity(identities: frozenset[str], label: str) -> str:
