@@ -1,9 +1,10 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Authenticate and execute the exact first Ready-executor implementation.
+"""Authenticate exact implementation sources admitted by accepted-main policy.
 
-This boundary admits implementation bytes only.  Lifecycle orchestration and
-the signed one-use transition authorization remain the sole mutation authority.
+The #810 subtype retains its exact isolated execution boundary.  Byte-only
+subtypes expose no entrypoint or execution mechanism.  Lifecycle orchestration
+and signed one-use transition authorization remain the sole mutation authority.
 """
 
 from __future__ import annotations
@@ -33,6 +34,10 @@ ADMISSION_SUBTYPE = "FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE"
 PURPOSE = "FIRST_READY_EXECUTOR_BOOTSTRAP"
 IMPLEMENTATION_PATH = "scripts/secpal_pr_review/lifecycle_execution.py"
 ENTRYPOINT = "execute_lifecycle_transition"
+EVIDENCE_HELPER_ADMISSION_SUBTYPE = "PR_REVIEW_EVIDENCE_HELPER_SOURCE"
+EVIDENCE_HELPER_PURPOSE = "PR_REVIEW_EVIDENCE_HELPER_SOURCE_ADMISSION"
+EVIDENCE_HELPER_IMPLEMENTATION_PATH = "scripts/secpal-pr-review.py"
+ACCEPTED_MAIN_POLICY_SOURCE = "ACCEPTED_MAIN_REPOSITORY_REGISTRY"
 _ADMISSION_HELPER = Path(__file__).resolve().parents[1] / "secpal-pr-review-actions.py"
 _OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
@@ -212,8 +217,9 @@ class VerifiedBootstrapSource:
     signer_identity: str
     implementation_path: str
     implementation_blob_oid: str
-    entrypoint: str
+    entrypoint: str | None
     purpose: str
+    policy_source: str | None
     admission_digest: str
     _verification_seal: object
 
@@ -252,7 +258,11 @@ def _load_actions_helper() -> Any:
 
 
 def _select_policy(
-    repository: str, delivery_issue: int
+    repository: str,
+    delivery_issue: int,
+    *,
+    subtype: str = ADMISSION_SUBTYPE,
+    purpose: str = PURPOSE,
 ) -> tuple[authority.LifecycleTrustPolicy, authority.BootstrapSourceAdmissionPolicy]:
     try:
         repository = authority._require_repository(repository)
@@ -267,7 +277,8 @@ def _select_policy(
         for item in trust.bootstrap_source_admissions
         if item.repository == repository
         and item.delivery_issue == delivery_issue
-        and item.purpose == PURPOSE
+        and item.subtype == subtype
+        and item.purpose == purpose
     ]
     if len(matches) != 1:
         raise BootstrapSourceAdmissionError(
@@ -621,6 +632,19 @@ def _implementation_blob(root: Path, policy: authority.BootstrapSourceAdmissionP
         or not _OID.fullmatch(fields[2])
     ):
         raise BootstrapSourceAdmissionError("admitted implementation path is not a regular blob")
+    if policy.subtype == EVIDENCE_HELPER_ADMISSION_SUBTYPE:
+        if (
+            policy.entrypoint is not None
+            or policy.implementation_path != EVIDENCE_HELPER_IMPLEMENTATION_PATH
+            or policy.policy_source != ACCEPTED_MAIN_POLICY_SOURCE
+            or fields[2] != policy.implementation_blob_oid
+        ):
+            raise BootstrapSourceAdmissionError(
+                "admitted byte-source path or blob differs from accepted-main policy"
+            )
+        return fields[2]
+    if policy.subtype != ADMISSION_SUBTYPE or policy.implementation_blob_oid is not None:
+        raise BootstrapSourceAdmissionError("source-admission subtype is not executable")
     raw = _git(root, ["cat-file", "blob", fields[2]]).stdout
     try:
         tree = ast.parse(raw, filename=policy.implementation_path)
@@ -722,6 +746,7 @@ def _authenticate_materialized_source(
         implementation_blob_oid=blob,
         entrypoint=policy.entrypoint,
         purpose=policy.purpose,
+        policy_source=policy.policy_source,
         admission_digest=policy.admission_digest,
         _verification_seal=_VERIFIED_SOURCE,
     )
@@ -736,6 +761,28 @@ def verify_first_ready_executor_source(
     """Authenticate the exact source without authorizing or performing mutation."""
 
     trust, policy = _select_policy(repository, delivery_issue)
+    evidence = _read_evidence(source_evidence_directory)
+    _authenticate_live_github_source(policy)
+    with _isolated_source_repository(trust, policy) as root:
+        verified = _authenticate_materialized_source(root, trust, policy, evidence)
+        _verify_materialized_tree(root, policy)
+        return verified
+
+
+def verify_pr_review_evidence_helper_source(
+    repository: str,
+    delivery_issue: int,
+    *,
+    source_evidence_directory: Path | str,
+) -> VerifiedBootstrapSource:
+    """Authenticate the exact admitted PR-review helper bytes without execution."""
+
+    trust, policy = _select_policy(
+        repository,
+        delivery_issue,
+        subtype=EVIDENCE_HELPER_ADMISSION_SUBTYPE,
+        purpose=EVIDENCE_HELPER_PURPOSE,
+    )
     evidence = _read_evidence(source_evidence_directory)
     _authenticate_live_github_source(policy)
     with _isolated_source_repository(trust, policy) as root:
