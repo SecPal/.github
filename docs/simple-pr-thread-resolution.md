@@ -245,9 +245,11 @@ thread must be absent from both final sets.
 
 One accepted-main exact recovery record for `SecPal/.github` issue #810 and
 PR #821 permits the alternative
-`AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE` mode. It is selected only when
-`--final-eligibility-evidence` is omitted and binds the exact final head, tree,
-zero-thread reviewed-state digest, receipt, attestation, and delivery signer.
+`AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE` mode. The complete detached late
+classification/disposition tuple selects late mode. Within that mode, absence
+is selected only when `--final-eligibility-evidence` is omitted and binds the
+exact final head, tree, zero-thread reviewed-state digest, receipt, attestation,
+and delivery signer. Final eligibility evidence outside late mode is rejected.
 The verified receipt and attestation must both omit
 `eligibility_evidence_digest`; null, malformed, present-but-invalid, or a
 missing artifact for a present digest is not absence. No eligibility manifest

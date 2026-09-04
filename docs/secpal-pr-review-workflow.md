@@ -573,10 +573,12 @@ resolved thread.
 Detached late disposition has one narrower alternative final boundary for the
 exact `SecPal/.github` #810 / PR #821 delivery. Accepted-main policy may prove
 that its authenticated zero-thread final reviewed state and final
-receipt/attestation omitted eligibility authentication. In that case only,
-omitting the final eligibility path yields a typed authenticated absence; it
-does not yield or recreate an eligibility manifest. Present, null, malformed,
-or stale eligibility evidence fails and never selects this mode.
+receipt/attestation omitted eligibility authentication. The complete detached
+late-authority tuple selects late mode. In that mode only, omitting the final
+eligibility path yields a typed authenticated absence; it does not yield or
+recreate an eligibility manifest. A supplied path selects manifest verification;
+present, null, malformed, or stale eligibility evidence fails and never selects
+absence mode. Final eligibility evidence outside late mode is rejected.
 
 The schema-bound `resolve-batch --apply` path remains available only when the
 current user instruction explicitly requests readiness or merge evaluation. In

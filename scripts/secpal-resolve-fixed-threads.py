@@ -3354,6 +3354,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
                 raise ResolutionError(
                     "commit-bound and late-disposition eligibility are mutually exclusive"
                 )
+        elif arguments.final_eligibility_evidence is not None:
+            raise ResolutionError(
+                "final eligibility evidence is valid only for late disposition"
+            )
         elif arguments.eligibility_evidence is None:
             raise ResolutionError(
                 "commit-bound resolution requires eligibility evidence"

@@ -7178,6 +7178,271 @@ class ResolveFixedThreadsTests(TestCase):
                 ]
             )
 
+    def test_cli_partitions_commit_bound_manifest_and_absence_modes(self) -> None:
+        base = [
+            "--repo",
+            "SecPal/api",
+            "--pr",
+            "123",
+            "--repo-root",
+            "/delivery",
+            "--expected-head",
+            "a" * 40,
+            "--reviewed-state",
+            "reviewed.json",
+            "--expected-reviewed-state-digest",
+            "b" * 64,
+            "--validation-evidence",
+            "attestation.json",
+            "--thread-id",
+            "PRRT_exampleOne",
+        ]
+        ordinary = [*base, "--eligibility-evidence", "eligibility.json"]
+        late = [
+            *base,
+            "--delivery-issue",
+            "724",
+            "--late-classification-evidence",
+            "classification.json",
+            "--late-classification-signature",
+            "classification.sig",
+            "--late-disposition-evidence",
+            "disposition.json",
+            "--late-disposition-signature",
+            "disposition.sig",
+        ]
+
+        for label, arguments in (
+            (
+                "ordinary and final eligibility",
+                [
+                    *ordinary,
+                    "--final-eligibility-evidence",
+                    "final-eligibility.json",
+                ],
+            ),
+            (
+                "final eligibility alone",
+                [
+                    *base,
+                    "--final-eligibility-evidence",
+                    "final-eligibility.json",
+                ],
+            ),
+        ):
+            error = StringIO()
+            with self.subTest(label=label), redirect_stderr(error):
+                with self.assertRaises(SystemExit):
+                    MODULE.parse_args(arguments)
+                self.assertIn(
+                    "final eligibility evidence is valid only for late disposition",
+                    error.getvalue(),
+                )
+
+        commit_bound = MODULE.parse_args(ordinary)
+        self.assertEqual(commit_bound.eligibility_evidence, "eligibility.json")
+        manifest = MODULE.parse_args(
+            [
+                *late,
+                "--final-eligibility-evidence",
+                "final-eligibility.json",
+            ]
+        )
+        self.assertEqual(
+            manifest.final_eligibility_evidence,
+            "final-eligibility.json",
+        )
+        absence = MODULE.parse_args(late)
+        self.assertIsNone(absence.final_eligibility_evidence)
+
+        rejected = (
+            (
+                "ordinary delivery issue without Exceptional Recovery",
+                [*ordinary, "--delivery-issue", "790"],
+            ),
+            (
+                "partial late tuple with final eligibility",
+                [
+                    *base,
+                    "--late-classification-evidence",
+                    "classification.json",
+                    "--final-eligibility-evidence",
+                    "final-eligibility.json",
+                ],
+            ),
+            (
+                "late tuple with ordinary eligibility",
+                [*late, "--eligibility-evidence", "eligibility.json"],
+            ),
+            (
+                "late tuple with integration evidence",
+                [*late, "--integration-evidence", "integration.json"],
+            ),
+            (
+                "late tuple with Exceptional Recovery",
+                [
+                    *late,
+                    "--exceptional-recovery-evidence",
+                    "recovery.json",
+                    "--exceptional-recovery-authorization",
+                    "authorization.json",
+                ],
+            ),
+        )
+        for label, arguments in rejected:
+            with self.subTest(label=label), redirect_stderr(StringIO()):
+                with self.assertRaises(SystemExit):
+                    MODULE.parse_args(arguments)
+
+        exceptional = MODULE.parse_args(
+            [
+                *ordinary,
+                "--delivery-issue",
+                "790",
+                "--exceptional-recovery-evidence",
+                "recovery.json",
+                "--exceptional-recovery-authorization",
+                "authorization.json",
+            ]
+        )
+        self.assertEqual(exceptional.delivery_issue, 790)
+        integration = MODULE.parse_args(
+            [*ordinary, "--integration-evidence", "integration.json"]
+        )
+        self.assertEqual(integration.integration_evidence, "integration.json")
+
+    def test_cli_forwards_every_accepted_security_evidence_option(self) -> None:
+        base = [
+            "--repo",
+            "SecPal/api",
+            "--pr",
+            "123",
+            "--repo-root",
+            "/delivery",
+            "--expected-head",
+            "a" * 40,
+            "--reviewed-state",
+            "reviewed.json",
+            "--expected-reviewed-state-digest",
+            "b" * 64,
+            "--validation-evidence",
+            "attestation.json",
+            "--thread-id",
+            "PRRT_exampleOne",
+        ]
+        late = [
+            *base,
+            "--delivery-issue",
+            "724",
+            "--late-classification-evidence",
+            "classification.json",
+            "--late-classification-signature",
+            "classification.sig",
+            "--late-disposition-evidence",
+            "disposition.json",
+            "--late-disposition-signature",
+            "disposition.sig",
+        ]
+        report = {"status": "success"}
+
+        ordinary_invocations = (
+            (
+                [*base, "--eligibility-evidence", "eligibility.json"],
+                {
+                    "eligibility_evidence_path": "eligibility.json",
+                },
+            ),
+            (
+                [
+                    *base,
+                    "--eligibility-evidence",
+                    "eligibility.json",
+                    "--integration-evidence",
+                    "integration.json",
+                ],
+                {
+                    "eligibility_evidence_path": "eligibility.json",
+                    "integration_evidence_path": "integration.json",
+                },
+            ),
+            (
+                [
+                    *base,
+                    "--eligibility-evidence",
+                    "eligibility.json",
+                    "--delivery-issue",
+                    "790",
+                    "--exceptional-recovery-evidence",
+                    "recovery.json",
+                    "--exceptional-recovery-authorization",
+                    "authorization.json",
+                ],
+                {
+                    "eligibility_evidence_path": "eligibility.json",
+                    "exceptional_recovery_delivery_issue": 790,
+                    "exceptional_recovery_evidence_path": "recovery.json",
+                    "exceptional_recovery_authorization_path": (
+                        "authorization.json"
+                    ),
+                },
+            ),
+        )
+        for arguments, expected in ordinary_invocations:
+            with (
+                self.subTest(arguments=arguments),
+                mock.patch.object(
+                    MODULE,
+                    "resolve_threads",
+                    return_value=report,
+                ) as resolver,
+                mock.patch.object(
+                    MODULE,
+                    "resolve_late_disposition_threads",
+                ) as late_resolver,
+                redirect_stdout(StringIO()),
+            ):
+                self.assertEqual(MODULE.main(arguments), 0)
+                late_resolver.assert_not_called()
+                called = resolver.call_args.kwargs
+                for key, value in expected.items():
+                    self.assertEqual(called[key], value)
+
+        for final_eligibility in ("final-eligibility.json", None):
+            arguments = list(late)
+            if final_eligibility is not None:
+                arguments.extend(
+                    ["--final-eligibility-evidence", final_eligibility]
+                )
+            with (
+                self.subTest(final_eligibility=final_eligibility),
+                mock.patch.object(MODULE, "resolve_threads") as ordinary,
+                mock.patch.object(
+                    MODULE,
+                    "resolve_late_disposition_threads",
+                    return_value=report,
+                ) as resolver,
+                redirect_stdout(StringIO()),
+            ):
+                self.assertEqual(MODULE.main(arguments), 0)
+                ordinary.assert_not_called()
+                resolver.assert_called_once_with(
+                    "SecPal/api",
+                    724,
+                    123,
+                    "a" * 40,
+                    ("PRRT_exampleOne",),
+                    apply=False,
+                    repository_root="/delivery",
+                    final_reviewed_state_path="reviewed.json",
+                    expected_final_reviewed_state_digest="b" * 64,
+                    final_validation_evidence_path="attestation.json",
+                    final_eligibility_evidence_path=final_eligibility,
+                    late_classification_evidence_path="classification.json",
+                    late_classification_signature_path="classification.sig",
+                    late_disposition_evidence_path="disposition.json",
+                    late_disposition_signature_path="disposition.sig",
+                )
+
     def test_recovery_authority_cli_requires_exact_closed_input_set(self) -> None:
         arguments = [
             "--repo",

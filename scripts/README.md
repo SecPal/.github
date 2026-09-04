@@ -81,13 +81,15 @@ but are not thread-resolution authority.
 
 The late-feedback boundary also supports one exact accepted-main
 `AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE` recovery for `SecPal/.github`
-issue #810 / PR #821. Omitting the final eligibility path selects that policy record;
-the verifier then requires the exact zero-thread reviewed state, final head and
-tree, receipt and attestation digests, delivery signer, and actual omission of
-`eligibility_evidence_digest` from both reconstructed receipt and attestation.
-It creates no eligibility manifest. A supplied final eligibility path always
-uses the ordinary manifest verifier, so malformed, stale, or missing supplied
-evidence cannot downgrade to absence recovery.
+issue #810 / PR #821. The complete detached late-authority tuple selects late
+mode. Within that mode, omitting the final eligibility path selects that policy
+record; the verifier then requires the exact zero-thread reviewed state, final
+head and tree, receipt and attestation digests, delivery signer, and actual
+omission of `eligibility_evidence_digest` from both reconstructed receipt and
+attestation. It creates no eligibility manifest. A supplied final eligibility
+path always uses the ordinary manifest verifier, so malformed, stale, or missing
+supplied evidence cannot downgrade to absence recovery. Final eligibility
+evidence outside late mode is rejected.
 
 Parent 1 additionally requires a closed prior-authority manifest authenticated
 by a signed annotated tag and independently verified ordinary receipt, final
