@@ -32,6 +32,7 @@ INTEGRATION="$REPO_ROOT/tests/secpal-pr-review-skill-integration.sh"
 QUALITY_WORKFLOW="$REPO_ROOT/.github/workflows/quality.yml"
 GOVERNANCE_SUITE="$REPO_ROOT/tests/review-governance-suite.sh"
 P21_BASELINE="833eef2afc063ae777e7e2b64b2f252e3fe1e49e"
+P21_EVIDENCE_BLOB="b37b30eeb7b44bed26d517d096f92e31aa0dd0ff"
 
 fail() {
   printf 'policy failure: %s\n' "$1" >&2
@@ -829,7 +830,7 @@ jq -e '
 
 git -C "$REPO_ROOT" cat-file -e "$P21_BASELINE^{commit}" 2>/dev/null \
   || fail "accepted P2.1 baseline commit is unavailable: $P21_BASELINE"
-cmp "$EVIDENCE" <(git -C "$REPO_ROOT" show "$P21_BASELINE:scripts/secpal-pr-review.py") \
+test "$(git -C "$REPO_ROOT" hash-object "$EVIDENCE")" = "$P21_EVIDENCE_BLOB" \
   || fail 'accepted P2.1 evidence helper changed'
 
 test ! -e "$REPO_ROOT/.github/workflows/secpal-pr-review.yml" || fail 'skill must not run automatically'

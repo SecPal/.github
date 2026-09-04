@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-04 - Complete Guarded Branch-Protection Evidence
+
+**Changed:**
+
+- capture the complete classic branch-protection state through the existing
+  guarded read-only readiness path
+- preserve repository rulesets as a separate authenticated evidence source and
+  fail closed when required classic-protection evidence is inaccessible or
+  incomplete
+
 ## 2026-09-02 - Re-evaluate Exact Released OCI Artifacts
 
 **Added:**

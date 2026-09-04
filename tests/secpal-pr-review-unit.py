@@ -2288,6 +2288,21 @@ class SecurityAndOutputTests(unittest.TestCase):
             },
         )
 
+    def test_omitted_empty_review_actor_collections_normalize_exactly(self) -> None:
+        response = classic_protection_response()
+        reviews = response["required_pull_request_reviews"]
+        reviews.pop("dismissal_restrictions")
+        reviews.pop("bypass_pull_request_allowances")
+        normalized = review.normalize_classic_branch_protection(response)
+        self.assertEqual(
+            normalized["required_pull_request_reviews"]["dismissal_restrictions"],
+            {"users": [], "teams": [], "apps": []},
+        )
+        self.assertEqual(
+            normalized["required_pull_request_reviews"]["bypass_pull_request_allowances"],
+            {"users": [], "teams": [], "apps": []},
+        )
+
     def test_incomplete_or_malformed_classic_protection_fails_closed(self) -> None:
         response = classic_protection_response()
         for mutation in (

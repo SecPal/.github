@@ -2422,8 +2422,6 @@ def normalize_classic_branch_protection(value: Any) -> dict[str, Any]:
             "dismiss_stale_reviews",
             "require_code_owner_reviews",
             "require_last_push_approval",
-            "dismissal_restrictions",
-            "bypass_pull_request_allowances",
         }
         if not isinstance(raw_reviews, dict) or not review_keys <= raw_reviews.keys():
             raise BlockedError(
@@ -2458,10 +2456,16 @@ def normalize_classic_branch_protection(value: Any) -> dict[str, Any]:
             "required_approving_review_count": approval_count,
             **review_booleans,
             "dismissal_restrictions": _classic_actor_identities(
-                raw_reviews["dismissal_restrictions"], "dismissal restrictions"
+                raw_reviews.get(
+                    "dismissal_restrictions", {"users": [], "teams": [], "apps": []}
+                ),
+                "dismissal restrictions",
             ),
             "bypass_pull_request_allowances": _classic_actor_identities(
-                raw_reviews["bypass_pull_request_allowances"], "review bypass allowances"
+                raw_reviews.get(
+                    "bypass_pull_request_allowances", {"users": [], "teams": [], "apps": []}
+                ),
+                "review bypass allowances",
             ),
         }
 
