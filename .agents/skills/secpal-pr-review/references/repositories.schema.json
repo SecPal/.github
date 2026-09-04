@@ -327,7 +327,87 @@
               "source_pr_state": { "const": "OPEN" },
               "source_pr_draft": { "const": true },
               "source_base_ref": { "const": "main" },
-              "admission_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+              "admission_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "evidence_loss_recovery": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "schema_version",
+                  "kind",
+                  "historical_evidence_status",
+                  "source_admission_digest",
+                  "recovery_validation",
+                  "technical_security_gate",
+                  "recovery_digest"
+                ],
+                "properties": {
+                  "schema_version": { "const": "1.0" },
+                  "kind": { "const": "BOOTSTRAP_SOURCE_EVIDENCE_LOSS_RECOVERY" },
+                  "historical_evidence_status": {
+                    "const": "HISTORICAL_EVIDENCE_UNAVAILABLE_BUT_EXACT_RECOVERY_AUTHORIZED"
+                  },
+                  "source_admission_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                  "recovery_validation": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "source_head_sha",
+                      "source_tree_sha",
+                      "command_set_digest",
+                      "result",
+                      "validation_digest"
+                    ],
+                    "properties": {
+                      "kind": { "const": "EXACT_BOOTSTRAP_SOURCE_RECOVERY_VALIDATION" },
+                      "source_head_sha": {
+                        "type": "string",
+                        "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+                      },
+                      "source_tree_sha": {
+                        "type": "string",
+                        "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+                      },
+                      "command_set_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                      "result": { "const": "PASSED" },
+                      "validation_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                    }
+                  },
+                  "technical_security_gate": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "source_head_sha",
+                      "source_tree_sha",
+                      "review_scope",
+                      "resolved_review_thread_count",
+                      "conversation_comment_count",
+                      "review_decision",
+                      "result",
+                      "gate_digest"
+                    ],
+                    "properties": {
+                      "kind": { "const": "BOOTSTRAP_SOURCE_RECOVERY_TECHNICAL_SECURITY_GATE" },
+                      "source_head_sha": {
+                        "type": "string",
+                        "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+                      },
+                      "source_tree_sha": {
+                        "type": "string",
+                        "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+                      },
+                      "review_scope": { "const": "EXACT_IMMUTABLE_BOOTSTRAP_EXECUTOR" },
+                      "resolved_review_thread_count": { "const": 2 },
+                      "conversation_comment_count": { "const": 0 },
+                      "review_decision": { "const": "NONE" },
+                      "result": { "const": "NO_OPEN_TECHNICAL_OR_SECURITY_FINDINGS" },
+                      "gate_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                    }
+                  },
+                  "recovery_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                }
+              }
             }
           }
         },

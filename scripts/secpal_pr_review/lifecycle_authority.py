@@ -203,6 +203,46 @@ class BootstrapGenesisRepair:
 
 
 @dataclass(frozen=True)
+class BootstrapSourceRecoveryValidation:
+    """Accepted result of one exact immutable-source recovery validation."""
+
+    kind: str
+    source_head_sha: str
+    source_tree_sha: str
+    command_set_digest: str
+    result: str
+    validation_digest: str
+
+
+@dataclass(frozen=True)
+class BootstrapSourceRecoveryTechnicalSecurityGate:
+    """Accepted bounded technical/security assessment of one exact source."""
+
+    kind: str
+    source_head_sha: str
+    source_tree_sha: str
+    review_scope: str
+    resolved_review_thread_count: int
+    conversation_comment_count: int
+    review_decision: str
+    result: str
+    gate_digest: str
+
+
+@dataclass(frozen=True)
+class BootstrapSourceEvidenceLossRecovery:
+    """One accepted-main authority for unavailable historical source evidence."""
+
+    schema_version: str
+    kind: str
+    historical_evidence_status: str
+    source_admission_digest: str
+    recovery_validation: BootstrapSourceRecoveryValidation
+    technical_security_gate: BootstrapSourceRecoveryTechnicalSecurityGate
+    recovery_digest: str
+
+
+@dataclass(frozen=True)
 class BootstrapSourceAdmissionPolicy:
     """One exact implementation source admitted by accepted-main policy."""
 
@@ -225,6 +265,7 @@ class BootstrapSourceAdmissionPolicy:
     source_pr_draft: bool
     source_base_ref: str
     admission_digest: str
+    evidence_loss_recovery: BootstrapSourceEvidenceLossRecovery | None = None
 
 
 @dataclass(frozen=True)
@@ -978,6 +1019,7 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
             "admission_digest",
         }
     )
+    source_recovery_field = "evidence_loss_recovery"
     raw_sources = policy["bootstrap_source_admissions"]
     if not isinstance(raw_sources, list):
         raise LifecycleAuthorityError("bootstrap source-admission policy is invalid")
@@ -985,7 +1027,12 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
     source_identities: set[tuple[int, int, str]] = set()
     source_digests: set[str] = set()
     for value in raw_sources:
-        item = _require_closed(value, source_fields, "bootstrap source admission")
+        if not isinstance(value, dict) or frozenset(value) not in {
+            source_fields,
+            source_fields | {source_recovery_field},
+        }:
+            raise LifecycleAuthorityError("bootstrap source admission is not closed")
+        item = copy.deepcopy(value)
         unsigned = {key: copy.deepcopy(item[key]) for key in source_fields - {"admission_digest"}}
         repository_identity = _require_repository(item["repository"])
         delivery_issue = _require_positive_int(item["delivery_issue"], "source delivery issue")
@@ -1015,6 +1062,152 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
             )
         source_identities.add(identity)
         source_digests.add(admission_digest)
+        recovery = None
+        if source_recovery_field in item:
+            recovery_fields = frozenset(
+                {
+                    "schema_version",
+                    "kind",
+                    "historical_evidence_status",
+                    "source_admission_digest",
+                    "recovery_validation",
+                    "technical_security_gate",
+                    "recovery_digest",
+                }
+            )
+            raw_recovery = _require_closed(
+                item[source_recovery_field],
+                recovery_fields,
+                "bootstrap source evidence-loss recovery",
+            )
+            validation_fields = frozenset(
+                {
+                    "kind",
+                    "source_head_sha",
+                    "source_tree_sha",
+                    "command_set_digest",
+                    "result",
+                    "validation_digest",
+                }
+            )
+            raw_validation = _require_closed(
+                raw_recovery["recovery_validation"],
+                validation_fields,
+                "bootstrap source recovery validation",
+            )
+            gate_fields = frozenset(
+                {
+                    "kind",
+                    "source_head_sha",
+                    "source_tree_sha",
+                    "review_scope",
+                    "resolved_review_thread_count",
+                    "conversation_comment_count",
+                    "review_decision",
+                    "result",
+                    "gate_digest",
+                }
+            )
+            raw_gate = _require_closed(
+                raw_recovery["technical_security_gate"],
+                gate_fields,
+                "bootstrap source recovery technical/security gate",
+            )
+            validation_digest = _require_digest(
+                raw_validation["validation_digest"], "source recovery validation"
+            )
+            gate_digest = _require_digest(
+                raw_gate["gate_digest"], "source recovery technical/security gate"
+            )
+            recovery_digest = _require_digest(
+                raw_recovery["recovery_digest"], "source evidence-loss recovery"
+            )
+            if (
+                raw_recovery["schema_version"] != SCHEMA_VERSION
+                or raw_recovery["kind"]
+                != "BOOTSTRAP_SOURCE_EVIDENCE_LOSS_RECOVERY"
+                or raw_recovery["historical_evidence_status"]
+                != "HISTORICAL_EVIDENCE_UNAVAILABLE_BUT_EXACT_RECOVERY_AUTHORIZED"
+                or raw_recovery["source_admission_digest"] != admission_digest
+                or raw_validation["kind"]
+                != "EXACT_BOOTSTRAP_SOURCE_RECOVERY_VALIDATION"
+                or raw_validation["source_head_sha"] != head
+                or raw_validation["source_tree_sha"] != item["source_tree_sha"]
+                or raw_validation["result"] != "PASSED"
+                or validation_digest
+                != digest_json(
+                    {
+                        key: copy.deepcopy(value)
+                        for key, value in raw_validation.items()
+                        if key != "validation_digest"
+                    }
+                )
+                or raw_gate["kind"]
+                != "BOOTSTRAP_SOURCE_RECOVERY_TECHNICAL_SECURITY_GATE"
+                or raw_gate["source_head_sha"] != head
+                or raw_gate["source_tree_sha"] != item["source_tree_sha"]
+                or raw_gate["review_scope"]
+                != "EXACT_IMMUTABLE_BOOTSTRAP_EXECUTOR"
+                or raw_gate["resolved_review_thread_count"] != 2
+                or raw_gate["conversation_comment_count"] != 0
+                or raw_gate["review_decision"] != "NONE"
+                or raw_gate["result"]
+                != "NO_OPEN_TECHNICAL_OR_SECURITY_FINDINGS"
+                or gate_digest
+                != digest_json(
+                    {
+                        key: copy.deepcopy(value)
+                        for key, value in raw_gate.items()
+                        if key != "gate_digest"
+                    }
+                )
+                or recovery_digest
+                != digest_json(
+                    {
+                        key: copy.deepcopy(value)
+                        for key, value in raw_recovery.items()
+                        if key != "recovery_digest"
+                    }
+                )
+            ):
+                raise LifecycleAuthorityError(
+                    "bootstrap source evidence-loss recovery is invalid"
+                )
+            recovery = BootstrapSourceEvidenceLossRecovery(
+                schema_version=raw_recovery["schema_version"],
+                kind=raw_recovery["kind"],
+                historical_evidence_status=raw_recovery[
+                    "historical_evidence_status"
+                ],
+                source_admission_digest=raw_recovery["source_admission_digest"],
+                recovery_validation=BootstrapSourceRecoveryValidation(
+                    kind=raw_validation["kind"],
+                    source_head_sha=raw_validation["source_head_sha"],
+                    source_tree_sha=raw_validation["source_tree_sha"],
+                    command_set_digest=_require_digest(
+                        raw_validation["command_set_digest"],
+                        "source recovery validation command set",
+                    ),
+                    result=raw_validation["result"],
+                    validation_digest=validation_digest,
+                ),
+                technical_security_gate=BootstrapSourceRecoveryTechnicalSecurityGate(
+                    kind=raw_gate["kind"],
+                    source_head_sha=raw_gate["source_head_sha"],
+                    source_tree_sha=raw_gate["source_tree_sha"],
+                    review_scope=raw_gate["review_scope"],
+                    resolved_review_thread_count=raw_gate[
+                        "resolved_review_thread_count"
+                    ],
+                    conversation_comment_count=raw_gate[
+                        "conversation_comment_count"
+                    ],
+                    review_decision=raw_gate["review_decision"],
+                    result=raw_gate["result"],
+                    gate_digest=gate_digest,
+                ),
+                recovery_digest=recovery_digest,
+            )
         source_admissions.append(
             BootstrapSourceAdmissionPolicy(
                 schema_version=item["schema_version"],
@@ -1040,6 +1233,7 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
                 source_pr_draft=item["source_pr_draft"],
                 source_base_ref=item["source_base_ref"],
                 admission_digest=admission_digest,
+                evidence_loss_recovery=recovery,
             )
         )
     compatibility_fields = frozenset(

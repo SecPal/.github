@@ -961,6 +961,44 @@ assert publication_policy["bootstrap_source_admissions"] == [{
     "source_pr_draft": True,
     "source_base_ref": "main",
     "admission_digest": "dde958066ab287feefdc88e9bf2e92aa3b6df390d7c713be3486f719da9956b4",
+    "evidence_loss_recovery": {
+        "schema_version": "1.0",
+        "kind": "BOOTSTRAP_SOURCE_EVIDENCE_LOSS_RECOVERY",
+        "historical_evidence_status": (
+            "HISTORICAL_EVIDENCE_UNAVAILABLE_BUT_EXACT_RECOVERY_AUTHORIZED"
+        ),
+        "source_admission_digest": (
+            "dde958066ab287feefdc88e9bf2e92aa3b6df390d7c713be3486f719da9956b4"
+        ),
+        "recovery_validation": {
+            "kind": "EXACT_BOOTSTRAP_SOURCE_RECOVERY_VALIDATION",
+            "source_head_sha": "a668f6642ffcc76bcbea7fa6b69c5d6198ef5868",
+            "source_tree_sha": "13987395e5bdbeb586effb08e6a6f0ed5082a383",
+            "command_set_digest": (
+                "efa8f75050280fda50129a5861d139898c9c6350a28eeb3cd73e9c03d5fcd550"
+            ),
+            "result": "PASSED",
+            "validation_digest": (
+                "fd5f4c5ed116c38b9dec715e186cc54aacfe2a6c3da3a441e3c48a99e4722fa4"
+            ),
+        },
+        "technical_security_gate": {
+            "kind": "BOOTSTRAP_SOURCE_RECOVERY_TECHNICAL_SECURITY_GATE",
+            "source_head_sha": "a668f6642ffcc76bcbea7fa6b69c5d6198ef5868",
+            "source_tree_sha": "13987395e5bdbeb586effb08e6a6f0ed5082a383",
+            "review_scope": "EXACT_IMMUTABLE_BOOTSTRAP_EXECUTOR",
+            "resolved_review_thread_count": 2,
+            "conversation_comment_count": 0,
+            "review_decision": "NONE",
+            "result": "NO_OPEN_TECHNICAL_OR_SECURITY_FINDINGS",
+            "gate_digest": (
+                "34418f56a959aff2b94ff98ff96844bac429b616271185e71c515614ad86deec"
+            ),
+        },
+        "recovery_digest": (
+            "e6386fde4c98d23d6c2bd143585ee308c8549a39d1a99da45be9519b19fa52aa"
+        ),
+    },
 }]
 assert publication_policy["historical_compatibility_publications"] == [
     {
