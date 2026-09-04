@@ -55,6 +55,7 @@ EVIDENCE_HELPER_PURPOSE = "PR_REVIEW_EVIDENCE_HELPER_SOURCE_ADMISSION"
 EVIDENCE_HELPER_ADMISSION_DIGEST = (
     "7c5cf40666c233bb45bea4349414fd6fd9c48cfffe6f6571bf5637c2660ef25d"
 )
+PROTECTED_MAIN_HEAD = "a5a7b0704645659a5db7df820b2d448de3859560"
 
 
 class BootstrapSourceAdmissionContractTests(unittest.TestCase):
@@ -891,11 +892,11 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
 
 class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.trust, self.policy = source._select_policy(
-            REPOSITORY,
-            EVIDENCE_HELPER_ISSUE,
-            subtype=EVIDENCE_HELPER_SUBTYPE,
-            purpose=EVIDENCE_HELPER_PURPOSE,
+        self.trust = source.authority._load_lifecycle_trust_policy(REPOSITORY)
+        self.policy = next(
+            item
+            for item in self.trust.bootstrap_source_admissions
+            if item.subtype == EVIDENCE_HELPER_SUBTYPE
         )
         self.reviewed = fast_path.StableFeedbackState(
             repository=REPOSITORY,
@@ -917,6 +918,40 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
             "manual_gate_evidence": [],
             "validation_receipt_digest": EVIDENCE_HELPER_RECEIPT,
         }
+
+    def _protected_main_observation(
+        self,
+        *,
+        repository: str = REPOSITORY,
+        default_branch: str = "main",
+        head_sha: str = PROTECTED_MAIN_HEAD,
+    ) -> source.ProtectedMainObservation:
+        return source.ProtectedMainObservation(
+            repository_json=json.dumps(
+                {
+                    "data": {
+                        "repository": {
+                            "nameWithOwner": repository,
+                            "defaultBranchRef": {
+                                "name": default_branch,
+                                "target": {"oid": head_sha},
+                            },
+                        }
+                    }
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+
+    def _protected_main_registry(self) -> bytes:
+        return subprocess.check_output(
+            [
+                "git",
+                "show",
+                f"{PROTECTED_MAIN_HEAD}:{source.PROTECTED_MAIN_REGISTRY_PATH}",
+            ]
+        )
 
     def _verified_validation(self, policy=None):
         policy = policy or self.policy
@@ -988,12 +1023,14 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
             )
 
     def test_exact_byte_only_policy_is_independently_maintained(self) -> None:
-        _trust, policy = source._select_policy(
-            REPOSITORY,
-            EVIDENCE_HELPER_ISSUE,
-            subtype=EVIDENCE_HELPER_SUBTYPE,
-            purpose=EVIDENCE_HELPER_PURPOSE,
-        )
+        with mock.patch.object(
+            source,
+            "_load_protected_main_trust_policy",
+            return_value=self.trust,
+        ):
+            _trust, policy = source._select_evidence_helper_policy(
+                REPOSITORY, EVIDENCE_HELPER_ISSUE
+            )
         self.assertEqual(
             (
                 policy.subtype,
@@ -1033,6 +1070,157 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
             ),
         )
 
+    def test_protected_main_observation_is_exact_and_closed(self) -> None:
+        payload = self._protected_main_observation().repository_json
+        completed = subprocess.CompletedProcess([], 0, payload, b"")
+        with mock.patch.object(
+            source.publication, "_run_gh", return_value=completed
+        ) as run_gh:
+            facts = source._normalize_protected_main(
+                source._observe_protected_main()
+            )
+        self.assertEqual(
+            (facts.repository, facts.default_branch, facts.head_sha),
+            (REPOSITORY, "main", PROTECTED_MAIN_HEAD),
+        )
+        arguments = run_gh.call_args.args[0]
+        self.assertEqual(arguments[:5], ["api", "--hostname", "github.com", "graphql", "-f"])
+        self.assertIn("owner=SecPal", arguments)
+        self.assertIn("name=.github", arguments)
+        with (
+            mock.patch.object(
+                source.publication,
+                "_run_gh",
+                return_value=subprocess.CompletedProcess([], 1, b"", b"unavailable"),
+            ),
+            self.assertRaisesRegex(
+                source.BootstrapSourceAdmissionError, "authority is unavailable"
+            ),
+        ):
+            source._observe_protected_main()
+        for observation in (
+            self._protected_main_observation(repository="Other/.github"),
+            self._protected_main_observation(default_branch="candidate"),
+            source.ProtectedMainObservation(repository_json=b"{}"),
+            source.ProtectedMainObservation(repository_json=b'{"data":{"repository":null}}'),
+        ):
+            with self.subTest(observation=observation), self.assertRaises(
+                source.BootstrapSourceAdmissionError
+            ):
+                source._normalize_protected_main(observation)
+
+    def test_protected_main_policy_uses_only_observed_immutable_registry(self) -> None:
+        registry_document = Path(
+            ".agents/skills/secpal-pr-review/references/repositories.json"
+        ).read_bytes()
+        with (
+            mock.patch.object(
+                source,
+                "_observe_protected_main",
+                return_value=self._protected_main_observation(),
+            ),
+            mock.patch.object(
+                source,
+                "_read_protected_main_registry",
+                return_value=registry_document,
+            ) as read_registry,
+        ):
+            trust = source._load_protected_main_trust_policy(REPOSITORY)
+        read_registry.assert_called_once_with(PROTECTED_MAIN_HEAD)
+        admission = next(
+            item
+            for item in trust.bootstrap_source_admissions
+            if item.subtype == EVIDENCE_HELPER_SUBTYPE
+        )
+        self.assertEqual(admission.implementation_blob_oid, EVIDENCE_HELPER_BLOB)
+        self.assertEqual(
+            set(inspect.signature(source._load_protected_main_trust_policy).parameters),
+            {"repository"},
+        )
+        self.assertEqual(
+            set(inspect.signature(source._read_protected_main_registry).parameters),
+            {"main_oid"},
+        )
+
+    def test_protected_main_admission_absence_and_malformed_registry_fail_closed(self) -> None:
+        for registry_document, message in (
+            (self._protected_main_registry(), "not uniquely maintained"),
+            (b"{}", "registry is invalid"),
+        ):
+            with (
+                self.subTest(message=message),
+                mock.patch.object(
+                    source,
+                    "_observe_protected_main",
+                    return_value=self._protected_main_observation(),
+                ),
+                mock.patch.object(
+                    source,
+                    "_read_protected_main_registry",
+                    return_value=registry_document,
+                ),
+                self.assertRaisesRegex(
+                    source.BootstrapSourceAdmissionError, message
+                ),
+            ):
+                source._select_evidence_helper_policy(
+                    REPOSITORY, EVIDENCE_HELPER_ISSUE
+                )
+
+    def test_protected_main_read_requires_exact_object_and_registry_blob(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            remote = Path(directory) / "remote"
+            remote.mkdir()
+            subprocess.run(["git", "init", "--quiet", str(remote)], check=True)
+            registry = remote / source.PROTECTED_MAIN_REGISTRY_PATH
+            registry.parent.mkdir(parents=True)
+            registry.write_bytes(
+                Path(
+                    ".agents/skills/secpal-pr-review/references/repositories.json"
+                ).read_bytes()
+            )
+            subprocess.run(["git", "-C", str(remote), "add", "."], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", str(remote),
+                    "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+                    "commit", "--quiet", "-m", "fixture",
+                ],
+                check=True,
+            )
+            head = subprocess.check_output(
+                ["git", "-C", str(remote), "rev-parse", "HEAD"], text=True
+            ).strip()
+            with mock.patch.object(
+                source, "PROTECTED_MAIN_REMOTE_URL", str(remote)
+            ):
+                self.assertEqual(
+                    source._read_protected_main_registry(head),
+                    registry.read_bytes(),
+                )
+                with self.assertRaises(source.BootstrapSourceAdmissionError):
+                    source._read_protected_main_registry("f" * 40)
+            registry.unlink()
+            subprocess.run(["git", "-C", str(remote), "add", "-u"], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", str(remote),
+                    "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+                    "commit", "--quiet", "-m", "missing registry",
+                ],
+                check=True,
+            )
+            missing = subprocess.check_output(
+                ["git", "-C", str(remote), "rev-parse", "HEAD"], text=True
+            ).strip()
+            with (
+                mock.patch.object(source, "PROTECTED_MAIN_REMOTE_URL", str(remote)),
+                self.assertRaisesRegex(
+                    source.BootstrapSourceAdmissionError, "registry is unavailable"
+                ),
+            ):
+                source._read_protected_main_registry(missing)
+
     def test_exact_byte_source_authenticates_without_execution_authority(self) -> None:
         verified = self._authenticate()
         self.assertTrue(source.is_verified_bootstrap_source(verified))
@@ -1050,6 +1238,7 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
         for forbidden in (
             "policy", "registry", "subtype", "purpose", "path", "blob",
             "signer", "entrypoint", "command", "authorization",
+            "main_oid", "accepted_main_oid", "registry_bytes", "policy_source",
         ):
             self.assertNotIn(forbidden, parameters)
         self.assertFalse(
@@ -1125,6 +1314,85 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
             source._implementation_blob(Path("/candidate"), self.policy)
         self.assertEqual(candidate_local_claimed_pin, changed_blob)
 
+    def test_candidate_local_recomputed_digest_cannot_nominate_authority(self) -> None:
+        registry_path = (
+            Path(__file__).resolve().parents[1]
+            / ".agents/skills/secpal-pr-review/references/repositories.json"
+        )
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        changed = json.loads(json.dumps(registry))
+        governance = next(
+            item for item in changed["repositories"]
+            if item["repository"] == REPOSITORY
+        )
+        admission = next(
+            item
+            for item in governance["lifecycle_authority_policy"][
+                "bootstrap_source_admissions"
+            ]
+            if item["subtype"] == EVIDENCE_HELPER_SUBTYPE
+        )
+        admission.update(
+            {
+                "delivery_issue": 999,
+                "pull_request": 998,
+                "source_head_sha": "1" * 40,
+                "source_tree_sha": "2" * 40,
+                "source_parent_sha": "3" * 40,
+                "validation_receipt_digest": "4" * 64,
+                "final_attestation_digest": "5" * 64,
+                "implementation_blob_oid": "6" * 40,
+            }
+        )
+        admission["admission_digest"] = source.authority.digest_json(
+            {
+                key: value
+                for key, value in admission.items()
+                if key != "admission_digest"
+            }
+        )
+
+        @contextmanager
+        def isolated(_trust, _policy):
+            yield Path("/candidate")
+
+        with tempfile.TemporaryDirectory() as directory:
+            candidate_registry = Path(directory) / "repositories.json"
+            candidate_registry.write_text(json.dumps(changed), encoding="utf-8")
+            with (
+                mock.patch.object(
+                    source.authority, "_TRUST_REGISTRY", candidate_registry
+                ),
+                mock.patch.object(
+                    source,
+                    "_observe_protected_main",
+                    return_value=self._protected_main_observation(),
+                ),
+                mock.patch.object(
+                    source,
+                    "_read_protected_main_registry",
+                    return_value=self._protected_main_registry(),
+                ),
+                mock.patch.object(source, "_read_evidence", return_value=({}, {}, {})),
+                mock.patch.object(source, "_authenticate_live_github_source"),
+                mock.patch.object(source, "_isolated_source_repository", isolated),
+                mock.patch.object(
+                    source,
+                    "_authenticate_materialized_source",
+                    return_value=object(),
+                ),
+                mock.patch.object(source, "_verify_materialized_tree"),
+                self.assertRaisesRegex(
+                    source.BootstrapSourceAdmissionError,
+                    "not uniquely maintained",
+                ),
+            ):
+                source.verify_pr_review_evidence_helper_source(
+                    REPOSITORY,
+                    999,
+                    source_evidence_directory="/candidate/evidence",
+                )
+
     def test_wrong_path_or_blob_is_rejected_by_byte_admission(self) -> None:
         for policy, record in (
             (
@@ -1154,8 +1422,8 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
         )
         with (
             mock.patch.object(
-                source.authority,
-                "_load_lifecycle_trust_policy",
+                source,
+                "_load_protected_main_trust_policy",
                 return_value=historical_only,
             ),
             mock.patch.object(source, "_read_evidence") as read_evidence,
@@ -1175,12 +1443,12 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
             with self.subTest(repository=repository, issue=issue), self.assertRaises(
                 source.BootstrapSourceAdmissionError
             ):
-                source._select_policy(
-                    repository,
-                    issue,
-                    subtype=EVIDENCE_HELPER_SUBTYPE,
-                    purpose=EVIDENCE_HELPER_PURPOSE,
-                )
+                with mock.patch.object(
+                    source,
+                    "_load_protected_main_trust_policy",
+                    return_value=self.trust,
+                ):
+                    source._select_evidence_helper_policy(repository, issue)
 
     def test_closed_policy_identity_version_purpose_and_digest_fail_closed(self) -> None:
         registry_path = (
@@ -1252,6 +1520,11 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
 
         verified = self._authenticate()
         with (
+            mock.patch.object(
+                source,
+                "_load_protected_main_trust_policy",
+                return_value=self.trust,
+            ),
             mock.patch.object(source, "_read_evidence", return_value=({}, {}, {})),
             mock.patch.object(source, "_authenticate_live_github_source"),
             mock.patch.object(source, "_isolated_source_repository", isolated),

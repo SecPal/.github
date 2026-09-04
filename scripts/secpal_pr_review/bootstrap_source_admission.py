@@ -38,6 +38,12 @@ EVIDENCE_HELPER_ADMISSION_SUBTYPE = "PR_REVIEW_EVIDENCE_HELPER_SOURCE"
 EVIDENCE_HELPER_PURPOSE = "PR_REVIEW_EVIDENCE_HELPER_SOURCE_ADMISSION"
 EVIDENCE_HELPER_IMPLEMENTATION_PATH = "scripts/secpal-pr-review.py"
 ACCEPTED_MAIN_POLICY_SOURCE = "ACCEPTED_MAIN_REPOSITORY_REGISTRY"
+PROTECTED_MAIN_REPOSITORY = "SecPal/.github"
+PROTECTED_MAIN_DEFAULT_BRANCH = "main"
+PROTECTED_MAIN_REMOTE_URL = "https://github.com/SecPal/.github.git"
+PROTECTED_MAIN_REGISTRY_PATH = (
+    ".agents/skills/secpal-pr-review/references/repositories.json"
+)
 _ADMISSION_HELPER = Path(__file__).resolve().parents[1] / "secpal-pr-review-actions.py"
 _OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
@@ -57,6 +63,12 @@ _EXECUTION_DIAGNOSTIC_IDENTITIES = frozenset(
     }
 )
 _DIAGNOSTIC_EXECUTOR_BLOB_OID = "4cfd9eb73a522224f9dfca4176d1aad386b81d50"
+_PROTECTED_MAIN_QUERY = """query($owner:String!,$name:String!){
+  repository(owner:$owner,name:$name){
+    nameWithOwner
+    defaultBranchRef{name target{... on Commit{oid}}}
+  }
+}"""
 _DIAGNOSTIC_RAISE_SITES = (
     (("classify_observed_state", 97), "AUTHORIZATION_ORCHESTRATION_FAILURE"),
     (("classify_observed_state", 99), "AUTHORIZATION_ORCHESTRATION_FAILURE"),
@@ -185,6 +197,22 @@ class GitHubSourceObservation:
 
 
 @dataclass(frozen=True)
+class ProtectedMainObservation:
+    """One provider representation of the registered default-branch tip."""
+
+    repository_json: bytes
+
+
+@dataclass(frozen=True)
+class ProtectedMainFacts:
+    """Canonical protected-main identity derived from one provider read."""
+
+    repository: str
+    default_branch: str
+    head_sha: str
+
+
+@dataclass(frozen=True)
 class GitHubSourceFacts:
     """Canonical source facts produced by pure representation normalization."""
 
@@ -257,21 +285,13 @@ def _load_actions_helper() -> Any:
     return module
 
 
-def _select_policy(
+def _select_policy_from_trust(
+    trust: authority.LifecycleTrustPolicy,
     repository: str,
     delivery_issue: int,
-    *,
-    subtype: str = ADMISSION_SUBTYPE,
-    purpose: str = PURPOSE,
+    subtype: str,
+    purpose: str,
 ) -> tuple[authority.LifecycleTrustPolicy, authority.BootstrapSourceAdmissionPolicy]:
-    try:
-        repository = authority._require_repository(repository)
-        delivery_issue = authority._require_positive_int(
-            delivery_issue, "bootstrap delivery issue"
-        )
-        trust = authority._load_lifecycle_trust_policy(repository)
-    except authority.LifecycleAuthorityError as exc:
-        raise BootstrapSourceAdmissionError(str(exc)) from exc
     matches = [
         item
         for item in trust.bootstrap_source_admissions
@@ -285,6 +305,24 @@ def _select_policy(
             "bootstrap source admission is not uniquely maintained"
         )
     return trust, matches[0]
+
+
+def _select_policy(
+    repository: str, delivery_issue: int
+) -> tuple[authority.LifecycleTrustPolicy, authority.BootstrapSourceAdmissionPolicy]:
+    """Select only the historical #810 policy from the installed registry."""
+
+    try:
+        repository = authority._require_repository(repository)
+        delivery_issue = authority._require_positive_int(
+            delivery_issue, "bootstrap delivery issue"
+        )
+        trust = authority._load_lifecycle_trust_policy(repository)
+    except authority.LifecycleAuthorityError as exc:
+        raise BootstrapSourceAdmissionError(str(exc)) from exc
+    return _select_policy_from_trust(
+        trust, repository, delivery_issue, ADMISSION_SUBTYPE, PURPOSE
+    )
 
 
 def _closed_json(value: bytes | str, label: str) -> dict[str, Any]:
@@ -345,6 +383,202 @@ def _git_text(root: Path, arguments: list[str]) -> str:
         return _git(root, arguments).stdout.decode("utf-8", "strict")
     except UnicodeDecodeError as exc:
         raise BootstrapSourceAdmissionError("immutable source Git output is malformed") from exc
+
+
+def _observe_protected_main() -> ProtectedMainObservation:
+    """Read the registered default-branch tip once through the trusted gh boundary."""
+
+    result = publication._run_gh(
+        [
+            "api",
+            "--hostname",
+            "github.com",
+            "graphql",
+            "-f",
+            f"query={_PROTECTED_MAIN_QUERY}",
+            "-f",
+            "owner=SecPal",
+            "-f",
+            "name=.github",
+        ]
+    )
+    if result.returncode != 0:
+        raise BootstrapSourceAdmissionError(
+            "protected-main GitHub authority is unavailable"
+        )
+    return ProtectedMainObservation(repository_json=bytes(result.stdout))
+
+
+def _normalize_protected_main(
+    observation: ProtectedMainObservation,
+) -> ProtectedMainFacts:
+    """Normalize one closed default-branch representation without admitting it."""
+
+    if not isinstance(observation, ProtectedMainObservation):
+        raise BootstrapSourceAdmissionError("protected-main authority is malformed")
+    try:
+        document = json.loads(
+            observation.repository_json,
+            object_pairs_hook=publication._reject_duplicate_pairs,
+        )
+        if not isinstance(document, dict) or set(document) != {"data"}:
+            raise BootstrapSourceAdmissionError("protected-main authority is malformed")
+        data = document["data"]
+        repository = data["repository"]
+        default_branch = repository["defaultBranchRef"]
+        target = default_branch["target"]
+        if (
+            not isinstance(data, dict)
+            or set(data) != {"repository"}
+            or not isinstance(repository, dict)
+            or set(repository) != {"nameWithOwner", "defaultBranchRef"}
+            or not isinstance(default_branch, dict)
+            or set(default_branch) != {"name", "target"}
+            or not isinstance(target, dict)
+            or set(target) != {"oid"}
+        ):
+            raise BootstrapSourceAdmissionError("protected-main authority is malformed")
+        facts = ProtectedMainFacts(
+            repository=authority._require_repository(repository["nameWithOwner"]),
+            default_branch=default_branch["name"],
+            head_sha=authority._require_oid(target["oid"], "protected-main head"),
+        )
+    except BootstrapSourceAdmissionError:
+        raise
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+        authority.LifecycleAuthorityError,
+        publication.LifecyclePublicationError,
+    ) as exc:
+        raise BootstrapSourceAdmissionError(
+            "protected-main authority is malformed"
+        ) from exc
+    if (
+        facts.repository != PROTECTED_MAIN_REPOSITORY
+        or facts.default_branch != PROTECTED_MAIN_DEFAULT_BRANCH
+    ):
+        raise BootstrapSourceAdmissionError(
+            "protected-main repository or default branch changed"
+        )
+    return facts
+
+
+def _read_protected_main_registry(main_oid: str) -> bytes:
+    """Read the registry blob from one independently observed immutable commit."""
+
+    try:
+        main_oid = authority._require_oid(main_oid, "protected-main head")
+    except authority.LifecycleAuthorityError as exc:
+        raise BootstrapSourceAdmissionError(str(exc)) from exc
+    with tempfile.TemporaryDirectory(
+        prefix="secpal-protected-main-policy-"
+    ) as directory:
+        root = Path(directory).resolve()
+        root.chmod(0o700)
+        _git(root, ["init", "--quiet"])
+        _git(root, ["remote", "add", "origin", PROTECTED_MAIN_REMOTE_URL])
+        _git(
+            root,
+            ["fetch", "--quiet", "--no-tags", "--depth=1", "origin", main_oid],
+        )
+        fetched = _git_text(root, ["rev-parse", "FETCH_HEAD"]).strip()
+        if fetched != main_oid:
+            raise BootstrapSourceAdmissionError(
+                "protected-main object substitution detected"
+            )
+        record = _git_text(
+            root,
+            [
+                "ls-tree",
+                "-z",
+                "--full-tree",
+                main_oid,
+                "--",
+                f":(literal){PROTECTED_MAIN_REGISTRY_PATH}",
+            ],
+        )
+        if not record.endswith("\x00") or record.count("\x00") != 1:
+            raise BootstrapSourceAdmissionError(
+                "protected-main repository registry is unavailable"
+            )
+        metadata, separator, path = record[:-1].partition("\t")
+        fields = metadata.split()
+        if (
+            separator != "\t"
+            or path != PROTECTED_MAIN_REGISTRY_PATH
+            or len(fields) != 3
+            or fields[0] not in {"100644", "100755"}
+            or fields[1] != "blob"
+            or not _OID.fullmatch(fields[2])
+        ):
+            raise BootstrapSourceAdmissionError(
+                "protected-main repository registry is not a regular blob"
+            )
+        raw = _git(root, ["cat-file", "blob", fields[2]]).stdout
+        if not raw or len(raw) > MAXIMUM_EVIDENCE_BYTES:
+            raise BootstrapSourceAdmissionError(
+                "protected-main repository registry has invalid size"
+            )
+        return bytes(raw)
+
+
+def _load_protected_main_trust_policy(
+    repository: str,
+) -> authority.LifecycleTrustPolicy:
+    """Load policy only from the independently observed immutable main object."""
+
+    try:
+        repository = authority._require_repository(repository)
+    except authority.LifecycleAuthorityError as exc:
+        raise BootstrapSourceAdmissionError(str(exc)) from exc
+    if repository != PROTECTED_MAIN_REPOSITORY:
+        raise BootstrapSourceAdmissionError(
+            "protected-main source admission has a fixed repository"
+        )
+    facts = _normalize_protected_main(_observe_protected_main())
+    if facts.repository != repository:
+        raise BootstrapSourceAdmissionError(
+            "protected-main repository observation changed"
+        )
+    registry_document = _read_protected_main_registry(facts.head_sha)
+    try:
+        trust = authority._parse_lifecycle_trust_policy(
+            registry_document, repository
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise BootstrapSourceAdmissionError(
+            "protected-main repository registry is invalid"
+        ) from exc
+    if trust.publication_remote_url != PROTECTED_MAIN_REMOTE_URL:
+        raise BootstrapSourceAdmissionError(
+            "protected-main source repository changed"
+        )
+    return trust
+
+
+def _select_evidence_helper_policy(
+    repository: str, delivery_issue: int
+) -> tuple[authority.LifecycleTrustPolicy, authority.BootstrapSourceAdmissionPolicy]:
+    """Select the byte-only admission solely from authenticated protected main."""
+
+    try:
+        repository = authority._require_repository(repository)
+        delivery_issue = authority._require_positive_int(
+            delivery_issue, "bootstrap delivery issue"
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise BootstrapSourceAdmissionError(str(exc)) from exc
+    trust = _load_protected_main_trust_policy(repository)
+    return _select_policy_from_trust(
+        trust,
+        repository,
+        delivery_issue,
+        EVIDENCE_HELPER_ADMISSION_SUBTYPE,
+        EVIDENCE_HELPER_PURPOSE,
+    )
 
 
 def _verify_materialized_tree(
@@ -777,12 +1011,7 @@ def verify_pr_review_evidence_helper_source(
 ) -> VerifiedBootstrapSource:
     """Authenticate the exact admitted PR-review helper bytes without execution."""
 
-    trust, policy = _select_policy(
-        repository,
-        delivery_issue,
-        subtype=EVIDENCE_HELPER_ADMISSION_SUBTYPE,
-        purpose=EVIDENCE_HELPER_PURPOSE,
-    )
+    trust, policy = _select_evidence_helper_policy(repository, delivery_issue)
     evidence = _read_evidence(source_evidence_directory)
     _authenticate_live_github_source(policy)
     with _isolated_source_repository(trust, policy) as root:

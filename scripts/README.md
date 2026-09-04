@@ -240,13 +240,22 @@ The closed `PR_REVIEW_EVIDENCE_HELPER_SOURCE` subtype instead admits only the
 exact PR #819 `scripts/secpal-pr-review.py` blob needed by #818. It has no
 entrypoint, launcher, import, or execution authority.
 
-Accepted-main policy fixes each source head, tree, sole parent, receipt, final
-attestation, signer, implementation path, bounded purpose, source PR base
-repository/ref, and canonical admission digest. The byte-only subtype also
-fixes the implementation blob and accepted-main repository-registry identity.
-A candidate-local registry entry, subtype, purpose, or blob claim is not this
-authority; changing the helper and a local pin together remains insufficient.
-Live provider reads emit a representation which is purely normalized before a
+For the byte-only subtype, the public verifier independently observes the
+current `SecPal/.github` registered default-branch tip from GitHub, requires
+that branch to be `main`, fetches that exact immutable commit by OID, and reads
+the repository registry blob from that commit. The closed lifecycle-policy
+parser then selects the exact admission. Neither the executing checkout nor a
+caller-supplied registry, ref, OID, policy, or policy-source string participates
+in that selection. Before this delivery merges, protected `main` lacks the
+exact PR #819 admission, so live verification fails closed as intended.
+
+That authenticated protected-main policy fixes each source head, tree, sole
+parent, receipt, final attestation, signer, implementation path, bounded
+purpose, source PR base repository/ref, and canonical admission digest. The
+byte-only subtype also fixes the implementation blob. A candidate-local
+registry entry with a correctly recomputed digest is not this authority;
+changing the helper and a local pin together remains insufficient. Live
+provider reads emit a representation which is purely normalized before a
 separate pure admission step. Evidence files use the maintained bounded
 regular-file reader, and the verifier fetches the exact object into a private
 detached tree before reusing the ordinary receipt/final-attestation verifier.

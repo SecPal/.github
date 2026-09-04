@@ -692,13 +692,15 @@ def _verify_delivery_initialization(
     return copy.deepcopy(initialization)
 
 
-def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
-    """Load lifecycle trust only from the installed maintained registry."""
+def _parse_lifecycle_trust_policy(
+    registry_document: bytes | str, repository: str
+) -> LifecycleTrustPolicy:
+    """Parse one repository policy from canonical closed registry bytes."""
 
     try:
-        registry = loads_closed_json(_TRUST_REGISTRY.read_bytes())
-    except OSError as exc:
-        raise LifecycleAuthorityError("maintained lifecycle trust registry is unavailable") from exc
+        registry = loads_closed_json(registry_document)
+    except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
+        raise LifecycleAuthorityError("maintained lifecycle trust registry is invalid") from exc
     if not isinstance(registry, dict) or registry.get("schema_version") != "1.0":
         raise LifecycleAuthorityError("maintained lifecycle trust registry is invalid")
     entries = registry.get("repositories")
@@ -1186,6 +1188,18 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
         signers=signers,
         initialization_anchors=tuple(anchors),
     )
+
+
+def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
+    """Load lifecycle trust only from the installed maintained registry."""
+
+    try:
+        registry_document = _TRUST_REGISTRY.read_bytes()
+    except OSError as exc:
+        raise LifecycleAuthorityError(
+            "maintained lifecycle trust registry is unavailable"
+        ) from exc
+    return _parse_lifecycle_trust_policy(registry_document, repository)
 
 
 def _load_delivery_signature_policy(repository: str) -> dict[str, Any]:
