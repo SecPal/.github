@@ -78,6 +78,7 @@ class VerifiedLifecyclePublication:
     journal_predecessor_oid: str | None
     predecessor_publication_oid: str | None
     lifecycle: authority.VerifiedLifecycleAuthority
+    serialized_lifecycle_evidence: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -1279,7 +1280,7 @@ def enroll_existing_lifecycle(
         )
     return VerifiedLifecyclePublication(
         object_oid, document["publication_digest"], policy.publication_branch,
-        tip, None, lifecycle,
+        tip, None, lifecycle, bundle_raw,
     )
 
 
@@ -1355,7 +1356,7 @@ def advance_current_terminal(
         )
     return VerifiedLifecyclePublication(
         object_oid, document["publication_digest"], policy.publication_branch,
-        tip, predecessor_oid, lifecycle,
+        tip, predecessor_oid, lifecycle, bundle_raw,
     )
 
 
@@ -1387,6 +1388,7 @@ def verify_current_lifecycle_authority(
         publication_oid, document["publication_digest"], policy.publication_branch,
         document["journal_predecessor_oid"],
         document["predecessor_publication_oid"], lifecycle,
+        canonical_json_bytes(document["lifecycle_evidence"]),
     )
 
 
@@ -1458,6 +1460,7 @@ def _verify_historical_lifecycle_transition(
         predecessor_document["journal_predecessor_oid"],
         predecessor_document["predecessor_publication_oid"],
         predecessor_lifecycle,
+        canonical_json_bytes(predecessor_document["lifecycle_evidence"]),
     )
     successor = VerifiedLifecyclePublication(
         successor_oid,
@@ -1466,6 +1469,7 @@ def _verify_historical_lifecycle_transition(
         successor_document["journal_predecessor_oid"],
         successor_document["predecessor_publication_oid"],
         successor_lifecycle,
+        canonical_json_bytes(successor_document["lifecycle_evidence"]),
     )
     return VerifiedLifecyclePublicationTransition(
         predecessor=predecessor,
