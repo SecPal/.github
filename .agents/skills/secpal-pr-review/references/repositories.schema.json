@@ -381,6 +381,7 @@
                       "source_head_sha",
                       "source_tree_sha",
                       "review_scope",
+                      "feedback_inventory_digest",
                       "resolved_review_thread_count",
                       "conversation_comment_count",
                       "review_decision",
@@ -398,6 +399,10 @@
                         "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
                       },
                       "review_scope": { "const": "EXACT_IMMUTABLE_BOOTSTRAP_EXECUTOR" },
+                      "feedback_inventory_digest": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
                       "resolved_review_thread_count": { "const": 2 },
                       "conversation_comment_count": { "const": 0 },
                       "review_decision": { "const": "NONE" },

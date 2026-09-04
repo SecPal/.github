@@ -98,23 +98,6 @@ _DIAGNOSTIC_RAISE_SITES = (
     (("_execute_lifecycle_transition", 744), "LIFECYCLE_PUBLICATION_FAILURE"),
     (("_execute_lifecycle_transition", 758), "FINAL_CONVERGENCE_FAILURE"),
 )
-_RECOVERY_REVIEW_QUERY = r"""
-query BootstrapSourceRecoveryReview($owner:String!, $name:String!, $number:Int!) {
-  repository(owner:$owner, name:$name) {
-    nameWithOwner
-    pullRequest(number:$number) {
-      number
-      reviewDecision
-      comments(first:100) { totalCount pageInfo { hasNextPage } }
-      reviewThreads(first:100) {
-        totalCount
-        pageInfo { hasNextPage }
-        nodes { isResolved }
-      }
-    }
-  }
-}
-"""
 _LAUNCHER_TEMPLATE = r"""
 import dataclasses
 import hashlib
@@ -224,7 +207,11 @@ class RecoveryReviewFacts:
 
     repository: str
     pull_request: int
+    head_sha: str
+    base_ref: str
+    state: str
     review_decision: str
+    feedback_inventory_digest: str
     conversation_comment_count: int
     review_thread_count: int
     resolved_review_thread_count: int
@@ -538,65 +525,72 @@ def _authenticate_live_github_source(
 def _observe_recovery_review_state(
     policy: authority.BootstrapSourceAdmissionPolicy,
 ) -> bytes:
-    owner, name = policy.repository.split("/", 1)
-    result = publication._run_gh(
-        [
-            "api",
-            "--hostname",
-            "github.com",
-            "graphql",
-            "-f",
-            f"query={_RECOVERY_REVIEW_QUERY}",
-            "-f",
-            f"owner={owner}",
-            "-f",
-            f"name={name}",
-            "-F",
-            f"number={policy.pull_request}",
-        ]
-    )
-    if result.returncode != 0:
+    actions = _load_actions_helper()
+    try:
+        registry = actions.load_registry(actions.REGISTRY_PATH)
+        entry = actions.select_repository(registry, policy.repository)
+        gateway = actions.FastPathGateway(Path(__file__).resolve().parents[2], entry)
+        observed = gateway.observe_stable_feedback(
+            policy.repository, policy.pull_request
+        )
+        return authority.canonical_json_bytes(
+            {
+                "repository": policy.repository,
+                "pull_request_number": policy.pull_request,
+                **observed,
+            }
+        )
+    except (
+        AttributeError,
+        OSError,
+        TypeError,
+        fast_path.RecoverableLocalError,
+        fast_path.SecurityBlocker,
+        fast_path.TransientReadFailure,
+        actions.RegistryError,
+    ) as exc:
         raise BootstrapSourceAdmissionError(
             "source recovery review authority is unavailable"
-        )
-    return bytes(result.stdout)
+        ) from exc
 
 
 def _normalize_recovery_review_state(raw: bytes) -> RecoveryReviewFacts:
     """Purely normalize the bounded recovery review representation."""
 
     try:
-        document = json.loads(raw, object_pairs_hook=publication._reject_duplicate_pairs)
-        if not isinstance(document, dict) or document.get("errors"):
+        document = _closed_json(raw, "source recovery review authority")
+        expected_fields = {
+            "repository",
+            "pull_request_number",
+            "head_sha",
+            "base_ref",
+            "base_sha",
+            "pr_state",
+            "review_decision",
+            "feedback",
+        }
+        if set(document) != expected_fields:
             raise BootstrapSourceAdmissionError(
                 "source recovery review authority is malformed"
             )
-        repository = document["data"]["repository"]
-        pull = repository["pullRequest"]
-        comments = pull["comments"]
-        threads = pull["reviewThreads"]
-        nodes = threads["nodes"]
-        if (
-            comments["pageInfo"]["hasNextPage"] is not False
-            or threads["pageInfo"]["hasNextPage"] is not False
-            or not isinstance(nodes, list)
-            or any(set(item) != {"isResolved"} for item in nodes)
-            or any(type(item["isResolved"]) is not bool for item in nodes)
-        ):
-            raise BootstrapSourceAdmissionError(
-                "source recovery review authority is incomplete"
-            )
-        review_decision = pull["reviewDecision"]
+        reviewed = fast_path.StableFeedbackState.from_payload(document)
+        review_decision = document["review_decision"]
+        feedback = reviewed.feedback
+        threads = feedback["threads"]
         facts = RecoveryReviewFacts(
-            repository=authority._require_repository(repository["nameWithOwner"]),
+            repository=reviewed.repository,
             pull_request=authority._require_positive_int(
-                pull["number"], "source recovery pull request"
+                reviewed.pull_request_number, "source recovery pull request"
             ),
+            head_sha=reviewed.head_sha,
+            base_ref=reviewed.base_ref,
+            state=reviewed.pr_state,
             review_decision="NONE" if review_decision is None else review_decision,
-            conversation_comment_count=comments["totalCount"],
-            review_thread_count=threads["totalCount"],
+            feedback_inventory_digest=reviewed.feedback_digest,
+            conversation_comment_count=len(feedback["conversation_comments"]),
+            review_thread_count=len(threads),
             resolved_review_thread_count=sum(
-                item["isResolved"] is True for item in nodes
+                item["is_resolved"] is True for item in threads
             ),
         )
     except BootstrapSourceAdmissionError:
@@ -606,19 +600,19 @@ def _normalize_recovery_review_state(raw: bytes) -> RecoveryReviewFacts:
         json.JSONDecodeError,
         KeyError,
         TypeError,
+        fast_path.SecurityBlocker,
         authority.LifecycleAuthorityError,
-        publication.LifecyclePublicationError,
     ) as exc:
         raise BootstrapSourceAdmissionError(
             "source recovery review authority is malformed"
         ) from exc
     if (
         not isinstance(facts.review_decision, str)
+        or not _DIGEST.fullmatch(facts.feedback_inventory_digest)
         or type(facts.conversation_comment_count) is not int
         or facts.conversation_comment_count < 0
         or type(facts.review_thread_count) is not int
         or facts.review_thread_count < 0
-        or facts.review_thread_count != len(nodes)
     ):
         raise BootstrapSourceAdmissionError(
             "source recovery review authority is malformed"
@@ -641,7 +635,11 @@ def _authenticate_live_recovery_review_state(
     if (
         facts.repository != policy.repository
         or facts.pull_request != policy.pull_request
+        or facts.head_sha != policy.source_head_sha
+        or facts.base_ref != policy.source_base_ref
+        or facts.state != policy.source_pr_state
         or facts.review_decision != gate.review_decision
+        or facts.feedback_inventory_digest != gate.feedback_inventory_digest
         or facts.conversation_comment_count != gate.conversation_comment_count
         or facts.review_thread_count != gate.resolved_review_thread_count
         or facts.resolved_review_thread_count

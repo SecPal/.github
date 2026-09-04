@@ -5683,22 +5683,25 @@ class ResolveFixedThreadsTests(TestCase):
         cases = {
             "thread": (
                 MODULE.RepositoryLimits(20, 6, 100),
-                [],
+                {first: [], second: []},
                 MODULE._consume_thread,
             ),
             "comment": (
                 MODULE.RepositoryLimits(20, 100, 6),
-                [("PRRC_root", "review body", None)],
+                {
+                    first: [("PRRC_firstRoot", "review body", None)],
+                    second: [("PRRC_secondRoot", "review body", None)],
+                },
                 MODULE._consume_comment,
             ),
         }
-        for label, (limits, comments, consume) in cases.items():
+        for label, (limits, comments_by_thread, consume) in cases.items():
             fake = FakeGh(
                 [
-                    target_response(first, comments=comments),
-                    target_response(second, comments=comments),
-                    target_response(first, comments=comments),
-                    target_response(first, comments=comments),
+                    target_response(first, comments=comments_by_thread[first]),
+                    target_response(second, comments=comments_by_thread[second]),
+                    target_response(first, comments=comments_by_thread[first]),
+                    target_response(first, comments=comments_by_thread[first]),
                     resolve_response(first),
                 ]
             )
@@ -5725,8 +5728,12 @@ class ResolveFixedThreadsTests(TestCase):
                     (first, second),
                     apply=True,
                     expected_targets={
-                        first: expected_thread_state(first, comments),
-                        second: expected_thread_state(second, comments),
+                        first: expected_thread_state(
+                            first, comments_by_thread[first]
+                        ),
+                        second: expected_thread_state(
+                            second, comments_by_thread[second]
+                        ),
                     },
                     eligibility_manifest=manifest,
                     follow_up_verifier=consume_follow_up_capacity,

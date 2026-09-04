@@ -222,6 +222,7 @@ class BootstrapSourceRecoveryTechnicalSecurityGate:
     source_head_sha: str
     source_tree_sha: str
     review_scope: str
+    feedback_inventory_digest: str
     resolved_review_thread_count: int
     conversation_comment_count: int
     review_decision: str
@@ -1101,6 +1102,7 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
                     "source_head_sha",
                     "source_tree_sha",
                     "review_scope",
+                    "feedback_inventory_digest",
                     "resolved_review_thread_count",
                     "conversation_comment_count",
                     "review_decision",
@@ -1118,6 +1120,10 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
             )
             gate_digest = _require_digest(
                 raw_gate["gate_digest"], "source recovery technical/security gate"
+            )
+            feedback_inventory_digest = _require_digest(
+                raw_gate["feedback_inventory_digest"],
+                "source recovery feedback inventory",
             )
             recovery_digest = _require_digest(
                 raw_recovery["recovery_digest"], "source evidence-loss recovery"
@@ -1196,6 +1202,7 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
                     source_head_sha=raw_gate["source_head_sha"],
                     source_tree_sha=raw_gate["source_tree_sha"],
                     review_scope=raw_gate["review_scope"],
+                    feedback_inventory_digest=feedback_inventory_digest,
                     resolved_review_thread_count=raw_gate[
                         "resolved_review_thread_count"
                     ],

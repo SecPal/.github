@@ -258,8 +258,15 @@ unchanged source-admission digest, and carries distinct exact-source recovery
 validation and technical/security-gate digests. The verifier re-authenticates
 the signed head, tree, sole parent, receipt trailer, signer, implementation blob,
 path, entrypoint, 40 diagnostic raise sites, non-self-admission property, live
-open Draft PR, `main` base, and unchanged bounded review state with no open
-thread or blocking review decision. It also reconstructs the immutable source's
+open Draft PR, `main` base, and the exact canonical stable-feedback inventory
+accepted by the recovery gate. That inventory digest covers review submissions
+and their commit association, conversation comments, review threads, ordered
+thread comments and replies, actors, body digests, reactions, and
+resolved/outdated state through the maintained bounded pagination and duplicate
+identity checks. A new `COMMENTED` review body or same-count feedback
+substitution therefore fails even when the aggregate review decision remains
+unchanged; blocking aggregate review decisions also continue to fail. It also
+reconstructs the immutable source's
 15-command registry only to authenticate the fresh recovery-validation command
 set. It does not synthesize, reconstruct, or claim byte identity for lost
 `reviewed-state.json`, `validation-receipt.json`, or `final-attestation.json`.
