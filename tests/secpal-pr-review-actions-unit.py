@@ -6502,38 +6502,58 @@ class FastPathTests(TestCase):
                 live_observation=None,
             )
 
-    def test_ready_integration_reconstructs_prior_policy_from_prior_commit(self) -> None:
-        registry = json.loads(actions.REGISTRY_PATH.read_text(encoding="utf-8"))
-        historical_binding = next(
-            item
-            for item in registry["repositories"]
-            if item["repository"] == "SecPal/.github"
-        )
-        historical_binding["focused_validation"] = historical_binding[
-            "focused_validation"
-        ][:4]
-        historical_validation_count = len(
-            historical_binding["focused_validation"]
-        ) + len(historical_binding["required_local_validation"])
-        registry_raw = json.dumps(registry)
+    def test_ready_integration_reconstructs_prior_policy_from_central_history(self) -> None:
+        historical_head = "e78db9eeb0973d1f5853c4abfafa26e6cc8ab289"
         with mock.patch.object(
-            actions,
-            "_run_attestation_git",
-            return_value=SimpleNamespace(returncode=0, stdout=registry_raw, stderr=""),
+            fast_path,
+            "_central_git_result",
+            wraps=fast_path._central_git_result,
         ) as git_read:
             binding = actions._prior_delivery_registry_binding(
-                REPO_ROOT, "a" * 40, "SecPal/.github"
+                historical_head,
+                "SecPal/.github",
+                "38629c17e2397bfc1df44e5fa65fc176326f47fdf9dbfee98d1de52ecd093340",
+                "15d370f613fb13d39bcf5136ffb4ebae298eb78e0acfaf18635253571f9ff12a",
             )
         self.assertEqual(binding["repository"], "SecPal/.github")
-        self.assertEqual(historical_validation_count, 10)
-        self.assertEqual(len(binding["validation"]), historical_validation_count)
         self.assertEqual(
-            git_read.call_args.args[1],
-            [
-                "show",
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:.agents/skills/"
-                "secpal-pr-review/references/repositories.json",
-            ],
+            fast_path.digest_json(binding),
+            "38629c17e2397bfc1df44e5fa65fc176326f47fdf9dbfee98d1de52ecd093340",
+        )
+        self.assertIn(
+            mock.call(
+                [
+                    "show",
+                    f"{historical_head}:{fast_path.DELIVERY_REGISTRY_PATH}",
+                ],
+                allow_failure=True,
+            ),
+            git_read.call_args_list,
+        )
+        self.assertIn(
+            mock.call(
+                [
+                    "show",
+                    f"{historical_head}:"
+                    f"{fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH}",
+                ],
+                allow_failure=True,
+            ),
+            git_read.call_args_list,
+        )
+
+    def test_ready_integration_cross_repository_uses_central_history(self) -> None:
+        binding = actions._prior_delivery_registry_binding(
+            "a" * 40,
+            "SecPal/api",
+            "0284e90a0d918f7baeb2d496d75cf1326858d7e0626c1bd8b72e05f2de2dc0ff",
+            "d3f0d9498954210c1676533210e6bc34ed95468c3fe1db3454098ed7454e4227",
+        )
+
+        self.assertEqual(binding["repository"], "SecPal/api")
+        self.assertEqual(
+            fast_path.digest_json(binding),
+            "0284e90a0d918f7baeb2d496d75cf1326858d7e0626c1bd8b72e05f2de2dc0ff",
         )
 
     def test_ready_integration_prior_authority_rejects_delivery_evidence_drift(

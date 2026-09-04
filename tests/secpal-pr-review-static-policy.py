@@ -128,6 +128,26 @@ EVIDENCE_CALLS = (
     ),
 )
 
+FAST_PATH_CALLS = (
+    ProcessCall(
+        None,
+        "_central_git_result",
+        "executable",
+        "arguments",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("cwd", "CENTRAL_REGISTRY_ROOT"),
+            ("encoding", "'utf-8'"),
+            ("env", "evidence.command_environment('git')"),
+            ("errors", "'replace'"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("text", "True"),
+            ("timeout", "30"),
+        ),
+    ),
+)
+
 RESOLVER_CALLS = (
     ProcessCall(
         None,
@@ -209,7 +229,7 @@ LATE_DISPOSITION_CALLS = (
 EXPECTED_CALLS = {
     "secpal-pr-review.py": EVIDENCE_CALLS,
     "secpal-pr-review-actions.py": ACTION_CALLS,
-    "fast_path.py": (),
+    "fast_path.py": FAST_PATH_CALLS,
     "follow_up.py": (),
     "secpal-resolve-fixed-threads.py": RESOLVER_CALLS,
     "late_disposition.py": LATE_DISPOSITION_CALLS,
@@ -326,6 +346,7 @@ ALLOWED_IMPORTS = {
         "import json",
         "import os",
         "import re",
+        "import subprocess",
         "import sys",
         "import tempfile",
         "from dataclasses import dataclass, field",
@@ -465,6 +486,7 @@ DIRECT_MODULE_ATTRIBUTES = {
     },
     "fast_path.py": {
         "importlib": {"util"},
+        "subprocess": {"DEVNULL", "TimeoutExpired", "run"},
         "sys": {"modules"},
         "tempfile": {"mkstemp"},
     },
@@ -542,7 +564,13 @@ LOADED_MODULE_ATTRIBUTES = {
             "normalize_ready_integration_evidence",
             "normalize_ready_integration_prior_authority",
             "normalize_exceptional_recovery_evidence",
+            "PROHIBITED_REGISTRY_OPERATIONS",
+            "REGISTRY_CONFIGURATION_KEYS",
+            "load_immutable_delivery_registry_binding",
             "validate_manual_gate_evidence",
+            "validation_registry_binding",
+            "validate_registry_command",
+            "validate_repository_registry_structure",
             "verify_commit_signatures",
             "verify_validation_attestation",
         },
@@ -552,6 +580,14 @@ LOADED_MODULE_ATTRIBUTES = {
         },
     },
     "fast_path.py": {
+        "evidence": {
+            "CommandPolicyError",
+            "ContractError",
+            "command_environment",
+            "resolve_trusted_executable",
+            "validate_against_authoritative_schema",
+            "validate_config",
+        },
         "follow_up": {
             "FollowUpError",
             "parse_follow_up",
@@ -711,6 +747,19 @@ DYNAMIC_IMPORT_CALLS = {
         ),
     },
     "fast_path.py": {
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "importlib.util.spec_from_file_location("
+            "'secpal_pr_review_evidence_shared', EVIDENCE_HELPER)",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "spec.loader.exec_module(module)",
+        ),
         DynamicImportCall(
             ("_load_follow_up_helper",),
             "importlib.util.spec_from_file_location("
@@ -899,6 +948,10 @@ SAFE_GETATTR_CALLS = {
     },
     "fast_path.py": {
         DynamicImportCall(
+            ("_load_evidence_helper",),
+            "getattr(loaded, '__file__', None)",
+        ),
+        DynamicImportCall(
             ("_load_follow_up_helper",),
             "getattr(loaded, '__file__', None)",
         ),
@@ -962,6 +1015,14 @@ SAFE_SYS_MODULES_CALLS = {
         ),
     },
     "fast_path.py": {
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules.get('secpal_pr_review_evidence_shared')",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules.pop(spec.name, None)",
+        ),
         DynamicImportCall(
             ("_load_follow_up_helper",),
             "sys.modules.get('secpal_pr_review.follow_up')",
@@ -1027,6 +1088,10 @@ SAFE_SYS_MODULES_STORES = {
     },
     "fast_path.py": {
         DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules[spec.name]",
+        ),
+        DynamicImportCall(
             ("_load_follow_up_helper",),
             "sys.modules[spec.name]",
         ),
@@ -1065,6 +1130,7 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_read_authenticated_follow_up",
     "_resolve_trusted_markdown_node",
     "_load_repository_entry",
+    "_immutable_delivery_registry_binding",
     "_reject_nonfinite_json_constant",
     "_reject_duplicate_json_object",
     "_remote_repository",
@@ -1153,6 +1219,10 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
     ),
     DynamicImportCall(
         ("verify_local_fix_commit",),
+        "_run_git",
+    ),
+    DynamicImportCall(
+        ("load_validation_evidence",),
         "_run_git",
     ),
     DynamicImportCall(

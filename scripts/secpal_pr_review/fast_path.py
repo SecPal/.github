@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import tempfile
 import importlib.util
 import sys
@@ -20,6 +21,57 @@ from typing import Any, Callable, TypeVar
 
 
 FOLLOW_UP_HELPER = Path(__file__).resolve().with_name("follow_up.py")
+EVIDENCE_HELPER = Path(__file__).resolve().parents[1] / "secpal-pr-review.py"
+CENTRAL_REGISTRY_ROOT = Path(__file__).resolve().parents[2]
+CENTRAL_REGISTRY_REPOSITORY = "SecPal/.github"
+DELIVERY_REGISTRY_PATH = (
+    ".agents/skills/secpal-pr-review/references/repositories.json"
+)
+DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH = (
+    ".agents/skills/secpal-pr-review/references/repositories.schema.json"
+)
+DELIVERY_REGISTRY_SCHEMA_PATH = (
+    CENTRAL_REGISTRY_ROOT / DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH
+)
+SUPPORTED_REGISTRY_SCHEMA_VERSIONS = frozenset({"1.0"})
+REGISTRY_CONFIGURATION_KEYS = (
+    "repository",
+    "default_branch",
+    "allowed_base_repositories",
+    "reviewer_identities",
+    "signature_policy",
+    "check_policy",
+    "maximum_api_calls",
+    "maximum_items",
+    "maximum_threads",
+    "maximum_comments",
+    "maximum_reactions",
+)
+PROHIBITED_REGISTRY_OPERATIONS = frozenset(
+    {
+        "REVIEW_REQUEST",
+        "READY_TRANSITION",
+        "LABEL",
+        "ISSUE",
+        "REVIEW_SUBMISSION",
+        "MERGE",
+        "AUTO_MERGE",
+        "COMMENT_DELETE",
+        "REVIEW_DISMISSAL",
+        "BRANCH_WRITE",
+    }
+)
+SAFE_VALIDATION_COMMAND_NAME = re.compile(
+    r"^(?:[A-Za-z0-9_.+-]+|\./[A-Za-z0-9_./+-]+)$"
+)
+SAFE_PACKAGE_SCRIPT_NAME = re.compile(r"^[A-Za-z0-9_.:+-]+$")
+DESTRUCTIVE_VALIDATION_COMMANDS = frozenset(
+    {"rm", "rmdir", "shred", "mkfs", "dd", "sudo", "git-clean"}
+)
+DIRECT_VALIDATION_EXECUTABLES = frozenset(
+    {"composer", "node", "npm", "python3", "reuse"}
+)
+COMPOSER_VALIDATION_SCRIPTS = frozenset({"analyse", "ci:check", "test"})
 
 
 def _load_follow_up_helper() -> Any:
@@ -42,7 +94,33 @@ def _load_follow_up_helper() -> Any:
     return module
 
 
+def _load_evidence_helper() -> Any:
+    loaded = sys.modules.get("secpal_pr_review_evidence_shared")
+    if loaded is not None:
+        loaded_path = getattr(loaded, "__file__", None)
+        if (
+            not isinstance(loaded_path, str)
+            or Path(loaded_path).resolve() != EVIDENCE_HELPER
+        ):
+            raise RuntimeError("Canonical evidence module has an unexpected path")
+        return loaded
+    spec = importlib.util.spec_from_file_location(
+        "secpal_pr_review_evidence_shared", EVIDENCE_HELPER
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load evidence helper: {EVIDENCE_HELPER}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
+    return module
+
+
 follow_up = _load_follow_up_helper()
+evidence = _load_evidence_helper()
 
 
 OID = re.compile(r"^[0-9a-fA-F]{40,64}$")
@@ -53,6 +131,421 @@ REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SECRET_VALUE = re.compile(
     r"(?i)(?:github_pat_|gh[opsu]_|-----BEGIN [A-Z ]*PRIVATE KEY-----|authorization\s*:\s*bearer)"
 )
+
+
+def _reject_duplicate_json_object(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+
+def validate_registry_command(command: Any) -> None:
+    """Validate one maintained direct validation command."""
+
+    argv = command.get("argv") if isinstance(command, dict) else None
+    if (
+        not isinstance(argv, list)
+        or not argv
+        or any(not isinstance(item, str) or not item for item in argv)
+    ):
+        raise SecurityBlocker(
+            "validation command argv must be a non-empty argument array"
+        )
+    executable = Path(argv[0]).name
+    executable_path = Path(argv[0])
+    if (
+        not SAFE_VALIDATION_COMMAND_NAME.fullmatch(argv[0])
+        or executable_path.is_absolute()
+        or ".." in executable_path.parts
+    ):
+        raise SecurityBlocker(
+            "validation command executable must stay repository-relative"
+        )
+    if executable in DESTRUCTIVE_VALIDATION_COMMANDS or any(
+        item in {"--force", "--delete", "--hard", "deploy", "migrate:fresh"}
+        or item.startswith(("deploy:", "publish:"))
+        for item in argv[1:]
+    ):
+        raise SecurityBlocker("destructive validation command is prohibited")
+    if (
+        not argv[0].startswith("./")
+        and executable not in DIRECT_VALIDATION_EXECUTABLES
+    ):
+        raise SecurityBlocker(
+            "validation command must use a trusted direct executable"
+        )
+    if executable == "python3" and not (
+        len(argv) >= 4 and argv[1:3] == ["-m", "unittest"]
+    ):
+        raise SecurityBlocker("registry python commands must invoke unittest")
+    if executable == "node" and argv != ["node", "--test"]:
+        raise SecurityBlocker(
+            "registry node commands must invoke the checked-in test suite"
+        )
+    if executable == "npm" and not (
+        len(argv) == 3
+        and argv[1] == "run"
+        and SAFE_PACKAGE_SCRIPT_NAME.fullmatch(argv[2])
+    ):
+        raise SecurityBlocker(
+            "registry npm commands must name one checked-in package script"
+        )
+    if executable == "composer" and not (
+        len(argv) == 2 and argv[1] in COMPOSER_VALIDATION_SCRIPTS
+    ):
+        raise SecurityBlocker(
+            "registry composer commands must name one approved project script"
+        )
+    if executable == "reuse" and argv != ["reuse", "lint"]:
+        raise SecurityBlocker("registry reuse commands must invoke lint")
+    working_directory = command.get("working_directory")
+    if (
+        not isinstance(working_directory, str)
+        or not working_directory
+        or Path(working_directory).is_absolute()
+        or ".." in Path(working_directory).parts
+    ):
+        raise SecurityBlocker(
+            "validation working directory must stay repository-relative"
+        )
+    if (
+        not isinstance(command.get("purpose"), str)
+        or not command["purpose"].strip()
+    ):
+        raise SecurityBlocker("validation command purpose is required")
+
+
+def validate_repository_registry_structure(
+    registry: Any, *, authoritative_schema_raw: str | None = None
+) -> dict[str, Any]:
+    """Validate registry structure shared by current and immutable evidence."""
+
+    if not isinstance(registry, dict):
+        raise SecurityBlocker("repository registry must be a JSON object")
+    structural_registry = copy.deepcopy(registry)
+    if structural_registry.get("schema_version") not in (
+        SUPPORTED_REGISTRY_SCHEMA_VERSIONS
+    ):
+        raise SecurityBlocker("repository registry schema version is unsupported")
+    try:
+        if authoritative_schema_raw is None:
+            evidence.validate_against_authoritative_schema(
+                structural_registry,
+                DELIVERY_REGISTRY_SCHEMA_PATH,
+                "workflow_registry",
+            )
+        else:
+            descriptor, schema_path = tempfile.mkstemp(
+                prefix="secpal-evidence-registry-schema-", suffix=".json"
+            )
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    handle.write(authoritative_schema_raw)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                evidence.validate_against_authoritative_schema(
+                    structural_registry,
+                    Path(schema_path),
+                    "workflow_registry",
+                )
+            finally:
+                try:
+                    os.unlink(schema_path)
+                except FileNotFoundError:
+                    pass
+    except evidence.ContractError as exc:
+        raise SecurityBlocker(str(exc)) from exc
+    repositories: set[str] = set()
+    for entry in structural_registry["repositories"]:
+        repository = entry["repository"]
+        if repository in repositories:
+            raise SecurityBlocker(
+                f"duplicate repository registry entry: {repository}"
+            )
+        repositories.add(repository)
+        configuration = {
+            key: copy.deepcopy(entry[key])
+            for key in REGISTRY_CONFIGURATION_KEYS
+        }
+        configuration["schema_version"] = "1.0"
+        try:
+            evidence.validate_config(configuration)
+        except evidence.ContractError as exc:
+            raise SecurityBlocker(
+                f"invalid Package 2.1 configuration for {repository}: {exc}"
+            ) from exc
+        for command in (
+            *entry["focused_validation"],
+            *entry["required_local_validation"],
+        ):
+            validate_registry_command(command)
+        if any(
+            command.get("execution_policy") == "focused-only"
+            for command in entry["required_local_validation"]
+        ):
+            raise SecurityBlocker(
+                "required local validation cannot use focused-only execution"
+            )
+        if not entry["required_local_validation"] and not entry["manual_gates"]:
+            raise SecurityBlocker(
+                "incomplete validation requires an explicit manual gate"
+            )
+        if set(entry["unsupported_operations"]) != PROHIBITED_REGISTRY_OPERATIONS:
+            raise SecurityBlocker(
+                "unsupported operations must retain every prohibited capability"
+            )
+    return copy.deepcopy(registry)
+
+
+def validation_registry_binding(entry: Any) -> dict[str, Any]:
+    """Derive the canonical validation binding from one registry entry."""
+
+    if not isinstance(entry, dict):
+        raise SecurityBlocker("delivery validation registry entry is invalid")
+    try:
+        focused_validation = entry["focused_validation"]
+        required_validation = entry["required_local_validation"]
+        if (
+            not isinstance(focused_validation, list)
+            or not isinstance(required_validation, list)
+            or any(not isinstance(command, dict) for command in focused_validation)
+            or any(not isinstance(command, dict) for command in required_validation)
+        ):
+            raise TypeError
+        validation = [
+            command
+            for command in focused_validation
+            if command.get("execution_policy", "always") == "always"
+        ] + required_validation
+        return {
+            "repository": entry["repository"],
+            "default_branch": entry["default_branch"],
+            "allowed_base_repositories": copy.deepcopy(
+                entry["allowed_base_repositories"]
+            ),
+            "manual_gates": copy.deepcopy(entry["manual_gates"]),
+            "signature_policy": copy.deepcopy(entry["signature_policy"]),
+            "check_policy": copy.deepcopy(entry["check_policy"]),
+            "limits": {
+                key: entry[key]
+                for key in ("maximum_api_calls", "maximum_items")
+            },
+            "validation": copy.deepcopy(validation),
+            "focused_only_validation": copy.deepcopy(
+                [
+                    command
+                    for command in focused_validation
+                    if command.get("execution_policy") == "focused-only"
+                ]
+            ),
+        }
+    except (KeyError, TypeError) as exc:
+        raise SecurityBlocker(
+            "delivery validation registry entry is invalid"
+        ) from exc
+
+
+def _parse_registry_json(raw: Any, label: str) -> Any:
+    if not isinstance(raw, str):
+        raise SecurityBlocker(f"{label} is unavailable")
+    try:
+        return json.loads(
+            raw,
+            parse_constant=lambda value: (_ for _ in ()).throw(
+                ValueError(f"non-finite JSON constant: {value}")
+            ),
+            object_pairs_hook=_reject_duplicate_json_object,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SecurityBlocker(f"{label} is malformed") from exc
+
+
+def _central_git_result(
+    arguments: list[str],
+    *,
+    allow_failure: bool = False,
+) -> tuple[int, str]:
+    try:
+        executable = evidence.resolve_trusted_executable("git")
+        result = subprocess.run(
+            [executable, *arguments],
+            cwd=CENTRAL_REGISTRY_ROOT,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=evidence.command_environment("git"),
+            timeout=30,
+        )
+    except evidence.CommandPolicyError as exc:
+        raise SecurityBlocker("trusted central registry Git is unavailable") from exc
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SecurityBlocker("central registry Git read is unavailable") from exc
+    if result.returncode != 0 and not allow_failure:
+        raise SecurityBlocker("central registry Git read failed")
+    return result.returncode, result.stdout
+
+
+def _central_remote_repository(value: str) -> str | None:
+    match = re.fullmatch(
+        r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+        r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?",
+        value.strip(),
+    )
+    return match.group(1) if match is not None else None
+
+
+def _validated_historical_registry_binding(
+    *,
+    registry_raw: str,
+    schema_raw: str,
+    repository: str,
+) -> dict[str, Any]:
+    registry = _parse_registry_json(
+        registry_raw, "immutable delivery validation registry"
+    )
+    _parse_registry_json(
+        schema_raw, "immutable delivery validation registry schema"
+    )
+    try:
+        registry = validate_repository_registry_structure(
+            registry, authoritative_schema_raw=schema_raw
+        )
+        entries = registry["repositories"]
+    except SecurityBlocker as exc:
+        raise SecurityBlocker(
+            "immutable delivery validation registry is invalid"
+        ) from exc
+    matches = (
+        [
+            item
+            for item in entries
+            if isinstance(item, dict) and item.get("repository") == repository
+        ]
+        if isinstance(entries, list)
+        else []
+    )
+    if len(matches) != 1:
+        raise SecurityBlocker(
+            "immutable delivery validation registry identity is ambiguous"
+        )
+    return validation_registry_binding(matches[0])
+
+
+def load_immutable_delivery_registry_binding(
+    *,
+    repository: str,
+    delivery_head_sha: str,
+    expected_registry_digest: str,
+    expected_command_set_digest: str,
+) -> dict[str, Any]:
+    """Derive an evidence-time binding from authenticated central history."""
+
+    if (
+        not isinstance(delivery_head_sha, str)
+        or not OID.fullmatch(delivery_head_sha)
+        or not isinstance(repository, str)
+        or not REPOSITORY.fullmatch(repository)
+        or not isinstance(expected_registry_digest, str)
+        or not DIGEST.fullmatch(expected_registry_digest)
+        or not isinstance(expected_command_set_digest, str)
+        or not DIGEST.fullmatch(expected_command_set_digest)
+    ):
+        raise SecurityBlocker("immutable delivery registry identity is invalid")
+
+    _, origin = _central_git_result(["remote", "get-url", "origin"])
+    if _central_remote_repository(origin) != CENTRAL_REGISTRY_REPOSITORY:
+        raise SecurityBlocker("central registry repository identity mismatch")
+    _, central_head = _central_git_result(["rev-parse", "HEAD"])
+    central_head = central_head.strip().lower()
+    if not OID.fullmatch(central_head):
+        raise SecurityBlocker("central registry history identity is malformed")
+
+    exact_central_delivery = False
+    candidates: list[str] = []
+    normalized_delivery_head = delivery_head_sha.lower()
+    if repository == CENTRAL_REGISTRY_REPOSITORY:
+        object_status, _ = _central_git_result(
+            ["cat-file", "-e", f"{normalized_delivery_head}^{{commit}}"],
+            allow_failure=True,
+        )
+        if object_status == 0:
+            ancestry_status, _ = _central_git_result(
+                [
+                    "merge-base",
+                    "--is-ancestor",
+                    normalized_delivery_head,
+                    central_head,
+                ],
+                allow_failure=True,
+            )
+            if ancestry_status not in {0, 1}:
+                raise SecurityBlocker("central registry ancestry is unavailable")
+            if ancestry_status == 0:
+                exact_central_delivery = True
+                candidates.append(normalized_delivery_head)
+
+    _, history = _central_git_result(
+        ["log", "--format=%H", central_head, "--", DELIVERY_REGISTRY_PATH],
+    )
+    history_commits = [item.lower() for item in history.splitlines() if item]
+    if (
+        not history_commits
+        or any(not OID.fullmatch(item) for item in history_commits)
+        or len(history_commits) != len(set(history_commits))
+    ):
+        raise SecurityBlocker("central registry history is malformed")
+    candidates.extend(item for item in history_commits if item not in candidates)
+
+    for candidate in candidates:
+        registry_status, registry_raw = _central_git_result(
+            ["show", f"{candidate}:{DELIVERY_REGISTRY_PATH}"],
+            allow_failure=True,
+        )
+        schema_status, schema_raw = _central_git_result(
+            ["show", f"{candidate}:{DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH}"],
+            allow_failure=True,
+        )
+        if registry_status != 0 or schema_status != 0:
+            if exact_central_delivery and candidate == normalized_delivery_head:
+                raise SecurityBlocker(
+                    "immutable delivery validation registry is unavailable"
+                )
+            continue
+        try:
+            binding = _validated_historical_registry_binding(
+                registry_raw=registry_raw,
+                schema_raw=schema_raw,
+                repository=repository,
+            )
+        except SecurityBlocker:
+            if exact_central_delivery and candidate == normalized_delivery_head:
+                raise
+            continue
+        binding_matches = (
+            digest_json(binding) == expected_registry_digest
+            and digest_json(binding["validation"])
+            == expected_command_set_digest
+        )
+        if exact_central_delivery and candidate == normalized_delivery_head:
+            if not binding_matches:
+                raise SecurityBlocker(
+                    "immutable delivery validation registry binding changed"
+                )
+            return binding
+        if binding_matches:
+            return binding
+
+    raise SecurityBlocker(
+        "immutable delivery validation registry binding is unavailable"
+    )
 SUPPORTED_BATCH_CAPABILITIES = frozenset({"THREAD_RESOLUTION"})
 TRANSIENT_PULL_REQUEST_REACTION_CONTENTS = frozenset({"EYES"})
 SOURCE_KINDS = frozenset(
