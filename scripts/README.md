@@ -79,6 +79,16 @@ attestation bind the same eligibility digest. Historical version-1.1
 integration attestations remain valid for their original integration purpose
 but are not thread-resolution authority.
 
+The late-feedback boundary also supports one exact accepted-main
+`AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE` recovery for `SecPal/.github`
+issue #810 / PR #821. Omitting the final eligibility path selects that policy record;
+the verifier then requires the exact zero-thread reviewed state, final head and
+tree, receipt and attestation digests, delivery signer, and actual omission of
+`eligibility_evidence_digest` from both reconstructed receipt and attestation.
+It creates no eligibility manifest. A supplied final eligibility path always
+uses the ordinary manifest verifier, so malformed, stale, or missing supplied
+evidence cannot downgrade to absence recovery.
+
 Parent 1 additionally requires a closed prior-authority manifest authenticated
 by a signed annotated tag and independently verified ordinary receipt, final
 attestation, tree, and signer. The receipt identities must agree end to end.

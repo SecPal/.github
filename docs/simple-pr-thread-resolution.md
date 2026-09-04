@@ -236,13 +236,26 @@ delivery lifecycle, rerun validation, consume an unrestricted review or
 remediation cycle, change the delivery tree, create a commit or push, inspect
 CI, request review, mark Ready, or imply merge readiness.
 
-The path first verifies the complete final reviewed state, canonical final
-eligibility artifact, validation receipt, final attestation, local final tree
-and head, receipt trailer, accepted commit signature, and exact origin. The
-eligibility digest must match the receipt and attestation, every eligible thread
-must exist in the reviewed snapshot, and the proposed late thread must be absent
-from both final sets. Classification creation, disposition creation, and
-resolution independently re-establish this origin predicate. It derives the
+The path first verifies a typed final-feedback boundary, validation receipt,
+final attestation, local final tree and head, receipt trailer, accepted commit
+signature, and exact origin. Normally that boundary contains the canonical final
+eligibility artifact: its digest must match the receipt and attestation, every
+eligible thread must exist in the reviewed snapshot, and the proposed late
+thread must be absent from both final sets.
+
+One accepted-main exact recovery record for `SecPal/.github` issue #810 and
+PR #821 permits the alternative
+`AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE` mode. It is selected only when
+`--final-eligibility-evidence` is omitted and binds the exact final head, tree,
+zero-thread reviewed-state digest, receipt, attestation, and delivery signer.
+The verified receipt and attestation must both omit
+`eligibility_evidence_digest`; null, malformed, present-but-invalid, or a
+missing artifact for a present digest is not absence. No eligibility manifest
+is created or recovered. A supplied eligibility path always takes the ordinary
+manifest path and never falls back to absence recovery.
+
+Classification creation, disposition creation, and resolution independently
+re-establish the selected origin predicate. The verifier derives the
 delivery signer fingerprint from
 that cryptographic verification. It then captures only the one explicitly
 named live thread and signs the canonical
@@ -263,7 +276,8 @@ The initial supported authorization is exactly
 recorded in separately signed exact evidence; no comment-text heuristic exists.
 The signed artifact
 binds the repository, delivery issue, PR, unchanged final head and tree, final
-receipt/attestation/eligibility digests, signer, exact thread, top-level comment
+receipt/attestation and either the authenticated eligibility digest or exact
+absence-recovery digest, signer, exact thread, top-level comment
 node and database identities, finding-body digest, reply-state digest and
 count, resolved/outdated states, classification evidence digest, disposition,
 and exact resolution action. It never selects threads by query or pattern.
@@ -332,6 +346,10 @@ python3 scripts/secpal-resolve-fixed-threads.py \
   --thread-id PRRT_example \
   --apply
 ```
+
+For the exact accepted absence-recovery delivery only, omit
+`--final-eligibility-evidence` from all three commands. There is no replacement
+caller input: accepted-main policy selects and verifies the recovery.
 
 Commit-bound `--eligibility-evidence` and detached
 `--late-disposition-evidence` are mutually exclusive. Missing, non-canonical,
