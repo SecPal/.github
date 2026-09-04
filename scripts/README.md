@@ -246,8 +246,13 @@ that branch to be `main`, fetches that exact immutable commit by OID, and reads
 the repository registry blob from that commit. The closed lifecycle-policy
 parser then selects the exact admission. Neither the executing checkout nor a
 caller-supplied registry, ref, OID, policy, or policy-source string participates
-in that selection. Before this delivery merges, protected `main` lacks the
-exact PR #819 admission, so live verification fails closed as intended.
+in that selection. Every GitHub and Git command before byte authentication uses
+a closed private bootstrap boundary that resolves only `gh` and `git` from the
+maintained trusted directories without importing the candidate helper. It
+captures stdout and stderr incrementally under the maintained evidence-size
+limit, terminates and reaps an overflowing or timed-out child, and rejects all
+partial output. Before this delivery merges, protected `main` lacks the exact
+PR #819 admission, so live verification fails closed as intended.
 
 That authenticated protected-main policy fixes each source head, tree, sole
 parent, receipt, final attestation, signer, implementation path, bounded

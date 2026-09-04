@@ -18,9 +18,11 @@ import json
 import os
 from pathlib import Path
 import re
+import selectors
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, Iterator, Mapping
 
 from . import fast_path
@@ -49,6 +51,24 @@ _OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _VERIFIED_SOURCE = object()
 MAXIMUM_EVIDENCE_BYTES = late_disposition.MAXIMUM_ARTIFACT_BYTES
+_BOOTSTRAP_COMMAND_TIMEOUT_SECONDS = 30
+_BOOTSTRAP_COMMAND_DIRECTORIES = (
+    Path("/usr/bin"),
+    Path("/bin"),
+    Path("/usr/local/bin"),
+    Path("/opt/homebrew/bin"),
+    Path("/opt/local/bin"),
+)
+_BOOTSTRAP_COMMAND_PATH = os.pathsep.join(
+    str(path) for path in _BOOTSTRAP_COMMAND_DIRECTORIES
+)
+_BOOTSTRAP_GIT_CONFIG = (
+    ("core.fsmonitor", "false"),
+    ("gpg.program", "gpg"),
+    ("gpg.openpgp.program", "gpg"),
+    ("gpg.ssh.program", "ssh-keygen"),
+    ("gpg.x509.program", "gpgsm"),
+)
 SOURCE_ADMISSION_FAILURE = "SOURCE_ADMISSION_FAILURE"
 _EXECUTION_DIAGNOSTIC_IDENTITIES = frozenset(
     {
@@ -366,13 +386,244 @@ def _read_evidence(directory: Path | str) -> tuple[dict[str, Any], ...]:
     return tuple(values)
 
 
+def _resolve_bootstrap_executable(name: str) -> str:
+    """Resolve the two pre-authentication tools without importing candidate code."""
+
+    if name not in {"git", "gh"}:
+        raise BootstrapSourceAdmissionError(
+            "bootstrap source-admission executable is not allowlisted"
+        )
+    for directory in _BOOTSTRAP_COMMAND_DIRECTORIES:
+        candidate = directory / name
+        try:
+            resolved = candidate.resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if resolved.is_file() and os.access(resolved, os.X_OK):
+            return str(resolved)
+    raise BootstrapSourceAdmissionError(
+        "bootstrap source-admission executable is unavailable"
+    )
+
+
+def _bootstrap_command_environment(name: str, root: Path | None) -> dict[str, str]:
+    if name not in {"git", "gh"}:
+        raise BootstrapSourceAdmissionError(
+            "bootstrap source-admission executable is not allowlisted"
+        )
+    environment = {
+        "PATH": _BOOTSTRAP_COMMAND_PATH,
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PAGER": "cat",
+    }
+    if name == "gh":
+        environment.update({"GH_PAGER": "cat", "GH_HOST": "github.com"})
+        for key in ("HOME", "GH_CONFIG_DIR", "GH_TOKEN", "GITHUB_TOKEN"):
+            value = os.environ.get(key)
+            if value is not None:
+                environment[key] = value
+        return environment
+    if root is None:
+        raise BootstrapSourceAdmissionError(
+            "bootstrap Git repository root is unavailable"
+        )
+    environment.update(
+        {
+            "HOME": str(root),
+            "GIT_PAGER": "cat",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_SYSTEM": os.devnull,
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_CONFIG_COUNT": str(len(_BOOTSTRAP_GIT_CONFIG)),
+        }
+    )
+    for index, (key, value) in enumerate(_BOOTSTRAP_GIT_CONFIG):
+        environment[f"GIT_CONFIG_KEY_{index}"] = key
+        environment[f"GIT_CONFIG_VALUE_{index}"] = value
+    return environment
+
+
+def _stop_bootstrap_child(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is None:
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            process.wait()
+    else:
+        process.wait()
+
+
+def _run_bootstrap_command(
+    name: str,
+    arguments: list[str],
+    *,
+    root: Path | None = None,
+    input_bytes: bytes | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run one closed command while bounding both output streams during capture."""
+
+    executable = _resolve_bootstrap_executable(name)
+    if not isinstance(arguments, list) or not all(
+        isinstance(value, str) for value in arguments
+    ):
+        raise BootstrapSourceAdmissionError(
+            "bootstrap source-admission command is malformed"
+        )
+    if input_bytes is not None and (
+        not isinstance(input_bytes, bytes) or len(input_bytes) > MAXIMUM_EVIDENCE_BYTES
+    ):
+        raise BootstrapSourceAdmissionError(
+            "bootstrap source-admission input has invalid size"
+        )
+    command = [executable]
+    if name == "git":
+        if root is None:
+            raise BootstrapSourceAdmissionError(
+                "bootstrap Git repository root is unavailable"
+            )
+        try:
+            root = root.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise BootstrapSourceAdmissionError(
+                "bootstrap Git repository root is unavailable"
+            ) from exc
+        command.extend(["-C", str(root)])
+    command.extend(arguments)
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=None,
+            env=_bootstrap_command_environment(name, root),
+        )
+    except OSError as exc:
+        raise BootstrapSourceAdmissionError(
+            "bootstrap source-admission command failed"
+        ) from exc
+    selector = selectors.DefaultSelector()
+    stdout: list[bytes] = []
+    stderr: list[bytes] = []
+    sizes = {"stdout": 0, "stderr": 0}
+    pending_input = memoryview(input_bytes or b"")
+    try:
+        assert process.stdout is not None and process.stderr is not None
+        for label, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ, label)
+        if process.stdin is not None:
+            os.set_blocking(process.stdin.fileno(), False)
+            if pending_input:
+                selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
+            else:
+                process.stdin.close()
+        deadline = time.monotonic() + _BOOTSTRAP_COMMAND_TIMEOUT_SECONDS
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _stop_bootstrap_child(process)
+                raise BootstrapSourceAdmissionError(
+                    "bootstrap source-admission command timed out"
+                )
+            events = selector.select(min(remaining, 0.1))
+            if not events and process.poll() is not None:
+                if process.stdin is not None and not process.stdin.closed:
+                    try:
+                        selector.unregister(process.stdin)
+                    except KeyError:
+                        pass
+                    process.stdin.close()
+                events = [
+                    (key, selectors.EVENT_READ)
+                    for key in tuple(selector.get_map().values())
+                    if key.data != "stdin"
+                ]
+            for key, _mask in events:
+                stream = key.fileobj
+                label = key.data
+                if label == "stdin":
+                    try:
+                        written = os.write(stream.fileno(), pending_input)
+                    except BlockingIOError:
+                        continue
+                    except BrokenPipeError:
+                        written = len(pending_input)
+                    pending_input = pending_input[written:]
+                    if not pending_input:
+                        selector.unregister(stream)
+                        stream.close()
+                    continue
+                remaining_capacity = MAXIMUM_EVIDENCE_BYTES - sizes[label]
+                try:
+                    chunk = os.read(stream.fileno(), min(65536, remaining_capacity + 1))
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(stream)
+                    stream.close()
+                    continue
+                if len(chunk) > remaining_capacity:
+                    _stop_bootstrap_child(process)
+                    raise BootstrapSourceAdmissionError(
+                        "bootstrap source-admission output limit exceeded"
+                    )
+                sizes[label] += len(chunk)
+                (stdout if label == "stdout" else stderr).append(chunk)
+        try:
+            returncode = process.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired as exc:
+            _stop_bootstrap_child(process)
+            raise BootstrapSourceAdmissionError(
+                "bootstrap source-admission command timed out"
+            ) from exc
+        return subprocess.CompletedProcess(
+            command, returncode, b"".join(stdout), b"".join(stderr)
+        )
+    finally:
+        selector.close()
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
+        if process.poll() is None:
+            _stop_bootstrap_child(process)
+
+
+def _run_bootstrap_git(
+    root: Path,
+    arguments: list[str],
+    *,
+    input_bytes: bytes | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    return _run_bootstrap_command(
+        "git", arguments, root=root, input_bytes=input_bytes
+    )
+
+
+def _run_bootstrap_gh(arguments: list[str]) -> subprocess.CompletedProcess[bytes]:
+    return _run_bootstrap_command("gh", arguments)
+
+
 def _git(
     root: Path,
     arguments: list[str],
     *,
     input_bytes: bytes | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
-    result = publication._run_git(root, arguments, input_bytes=input_bytes)
+    result = _run_bootstrap_git(root, arguments, input_bytes=input_bytes)
     if result.returncode != 0:
         raise BootstrapSourceAdmissionError("immutable source Git operation failed")
     return result
@@ -388,7 +639,7 @@ def _git_text(root: Path, arguments: list[str]) -> str:
 def _observe_protected_main() -> ProtectedMainObservation:
     """Read the registered default-branch tip once through the trusted gh boundary."""
 
-    result = publication._run_gh(
+    result = _run_bootstrap_gh(
         [
             "api",
             "--hostname",
@@ -614,7 +865,7 @@ def _verify_commit_signature(
     policy: authority.BootstrapSourceAdmissionPolicy,
 ) -> None:
     allowed = _allowed_signers(root, trust, policy.source_signer_identity)
-    result = publication._run_git(
+    result = _run_bootstrap_git(
         root,
         [
             "-c", f"gpg.ssh.allowedSignersFile={allowed}",
@@ -634,10 +885,10 @@ def _observe_github(
 ) -> GitHubSourceObservation:
     """Capture the exact provider representations without admitting them."""
 
-    pr_result = publication._run_gh(
+    pr_result = _run_bootstrap_gh(
         ["api", "--hostname", "github.com", f"repos/{policy.repository}/pulls/{policy.pull_request}"]
     )
-    commit_result = publication._run_gh(
+    commit_result = _run_bootstrap_gh(
         ["api", "--hostname", "github.com", f"repos/{policy.repository}/commits/{policy.source_head_sha}"]
     )
     if pr_result.returncode != 0 or commit_result.returncode != 0:
@@ -892,7 +1143,7 @@ def _implementation_blob(root: Path, policy: authority.BootstrapSourceAdmissionP
     if len(definitions) != 1:
         raise BootstrapSourceAdmissionError("admitted entrypoint is absent or ambiguous")
     _verify_diagnostic_raise_site_agreement(raw, fields[2])
-    self_admission = publication._run_git(
+    self_admission = _run_bootstrap_git(
         root,
         ["cat-file", "-e", f"{policy.source_tree_sha}:scripts/secpal_pr_review/bootstrap_source_admission.py"],
     )

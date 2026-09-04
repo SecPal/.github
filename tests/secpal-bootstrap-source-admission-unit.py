@@ -255,7 +255,7 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
                 completed = subprocess.CompletedProcess([], returncode, b"", output)
                 with (
                     mock.patch.object(source, "_allowed_signers", return_value=Path("/allowed")),
-                    mock.patch.object(source.publication, "_run_git", return_value=completed),
+                    mock.patch.object(source, "_run_bootstrap_git", return_value=completed),
                     self.assertRaisesRegex(
                         source.BootstrapSourceAdmissionError,
                         "signature or maintained signer",
@@ -358,7 +358,7 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
                 return_value=subprocess.CompletedProcess([], 0, blob, b""),
             ),
             mock.patch.object(source, "_verify_diagnostic_raise_site_agreement"),
-            mock.patch.object(source.publication, "_run_git", return_value=absent),
+            mock.patch.object(source, "_run_bootstrap_git", return_value=absent),
         ):
             self.assertEqual(
                 source._implementation_blob(Path("/fixture"), self.policy), BLOB
@@ -375,7 +375,7 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
                     "_git",
                     return_value=subprocess.CompletedProcess([], 0, malformed, b""),
                 ),
-                mock.patch.object(source.publication, "_run_git", return_value=absent),
+                mock.patch.object(source, "_run_bootstrap_git", return_value=absent),
                 self.assertRaisesRegex(
                     source.BootstrapSourceAdmissionError, "entrypoint"
                 ),
@@ -394,7 +394,7 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
                 return_value=subprocess.CompletedProcess([], 0, blob, b""),
             ),
             mock.patch.object(source, "_verify_diagnostic_raise_site_agreement"),
-            mock.patch.object(source.publication, "_run_git", return_value=present),
+            mock.patch.object(source, "_run_bootstrap_git", return_value=present),
             self.assertRaisesRegex(
                 source.BootstrapSourceAdmissionError, "cannot self-admit"
             ),
@@ -427,7 +427,7 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
             ]
 
         with mock.patch.object(
-            source.publication, "_run_gh", side_effect=results((pull, commit))
+            source, "_run_bootstrap_gh", side_effect=results((pull, commit))
         ):
             source._authenticate_live_github_source(self.policy)
         mutations = (
@@ -445,8 +445,8 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
             with (
                 self.subTest(label=label),
                 mock.patch.object(
-                    source.publication,
-                    "_run_gh",
+                    source,
+                    "_run_bootstrap_gh",
                     side_effect=results((changed_pull, changed_commit)),
                 ),
                 self.assertRaisesRegex(
@@ -478,7 +478,7 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
             subprocess.CompletedProcess([], 0, json.dumps(value).encode(), b"")
             for value in (pull, commit)
         ]
-        with mock.patch.object(source.publication, "_run_gh", side_effect=results):
+        with mock.patch.object(source, "_run_bootstrap_gh", side_effect=results):
             observation = source._observe_github(self.policy)
 
         self.assertIsInstance(observation, source.GitHubSourceObservation)
@@ -515,7 +515,7 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
             for value in (pull, commit)
         ]
         with (
-            mock.patch.object(source.publication, "_run_gh", side_effect=results),
+            mock.patch.object(source, "_run_bootstrap_gh", side_effect=results),
             self.assertRaisesRegex(
                 source.BootstrapSourceAdmissionError, "binding changed"
             ),
@@ -1074,7 +1074,7 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
         payload = self._protected_main_observation().repository_json
         completed = subprocess.CompletedProcess([], 0, payload, b"")
         with mock.patch.object(
-            source.publication, "_run_gh", return_value=completed
+            source, "_run_bootstrap_gh", return_value=completed
         ) as run_gh:
             facts = source._normalize_protected_main(
                 source._observe_protected_main()
@@ -1089,8 +1089,8 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
         self.assertIn("name=.github", arguments)
         with (
             mock.patch.object(
-                source.publication,
-                "_run_gh",
+                source,
+                "_run_bootstrap_gh",
                 return_value=subprocess.CompletedProcess([], 1, b"", b"unavailable"),
             ),
             self.assertRaisesRegex(
@@ -1108,6 +1108,243 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
                 source.BootstrapSourceAdmissionError
             ):
                 source._normalize_protected_main(observation)
+
+    def test_bootstrap_capture_rejects_oversized_stdout_and_stderr(self) -> None:
+        for stream in ("stdout", "stderr"):
+            processes = []
+            popen = source.subprocess.Popen
+
+            def record_process(*arguments, **keywords):
+                process = popen(*arguments, **keywords)
+                processes.append(process)
+                return process
+
+            code = (
+                "import sys; "
+                f"sys.{stream}.buffer.write(b'x' * "
+                f"({source.MAXIMUM_EVIDENCE_BYTES} + 1)); "
+                f"sys.{stream}.flush()"
+            )
+            with (
+                self.subTest(stream=stream),
+                mock.patch.object(
+                    source,
+                    "_resolve_bootstrap_executable",
+                    return_value=sys.executable,
+                    create=True,
+                ),
+                mock.patch.object(
+                    source.subprocess, "Popen", side_effect=record_process
+                ),
+                self.assertRaisesRegex(
+                    source.BootstrapSourceAdmissionError,
+                    "output limit",
+                ),
+            ):
+                source._run_bootstrap_command("gh", ["-c", code])
+            self.assertEqual(len(processes), 1)
+            self.assertIsNotNone(processes[0].poll())
+
+    def test_bootstrap_capture_is_small_bounded_concurrent_and_timeout_closed(
+        self,
+    ) -> None:
+        with mock.patch.object(
+            source,
+            "_resolve_bootstrap_executable",
+            return_value=sys.executable,
+        ):
+            completed = source._run_bootstrap_command(
+                "gh",
+                [
+                    "-c",
+                    "import sys; "
+                    "sys.stdout.buffer.write(b'o' * 32768); "
+                    "sys.stderr.buffer.write(b'e' * 32768)",
+                ],
+            )
+            self.assertEqual(completed.returncode, 0)
+            self.assertEqual(completed.stdout, b"o" * 32768)
+            self.assertEqual(completed.stderr, b"e" * 32768)
+            with (
+                mock.patch.object(
+                    source, "_BOOTSTRAP_COMMAND_TIMEOUT_SECONDS", 0.05
+                ),
+                self.assertRaisesRegex(
+                    source.BootstrapSourceAdmissionError, "timed out"
+                ),
+            ):
+                source._run_bootstrap_command(
+                    "gh", ["-c", "import time; time.sleep(1)"]
+                )
+
+    def test_bootstrap_resolution_ignores_ambient_path_and_is_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fake = Path(directory) / "git"
+            fake.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+            fake.chmod(0o700)
+            with mock.patch.dict(source.os.environ, {"PATH": directory}):
+                resolved = source._resolve_bootstrap_executable("git")
+            self.assertNotEqual(Path(resolved), fake)
+        with self.assertRaisesRegex(
+            source.BootstrapSourceAdmissionError, "not allowlisted"
+        ):
+            source._resolve_bootstrap_executable("python3")
+
+        with tempfile.TemporaryDirectory() as directory:
+            unavailable = Path(directory)
+            (unavailable / "git").mkdir()
+            with (
+                mock.patch.object(
+                    source, "_BOOTSTRAP_COMMAND_DIRECTORIES", (unavailable,)
+                ),
+                self.assertRaisesRegex(
+                    source.BootstrapSourceAdmissionError, "unavailable"
+                ),
+            ):
+                source._resolve_bootstrap_executable("git")
+
+    def test_bootstrap_environments_are_closed_and_git_never_imports_helper(
+        self,
+    ) -> None:
+        hostile = {
+            "PATH": "/candidate/bin",
+            "PYTHONPATH": "/candidate/python",
+            "LD_PRELOAD": "/candidate/loader",
+            "DYLD_INSERT_LIBRARIES": "/candidate/dyld",
+            "GIT_DIR": "/candidate/git",
+            "GH_TOKEN": "test-token",
+        }
+        with mock.patch.dict(source.os.environ, hostile, clear=True):
+            gh_environment = source._bootstrap_command_environment("gh", None)
+            self.assertEqual(gh_environment["PATH"], source._BOOTSTRAP_COMMAND_PATH)
+            self.assertEqual(gh_environment["GH_TOKEN"], "test-token")
+            for key in (
+                "PYTHONPATH", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "GIT_DIR"
+            ):
+                self.assertNotIn(key, gh_environment)
+
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                git_environment = source._bootstrap_command_environment("git", root)
+                self.assertEqual(git_environment["HOME"], str(root))
+                self.assertEqual(
+                    git_environment["PATH"], source._BOOTSTRAP_COMMAND_PATH
+                )
+                for key in hostile:
+                    if key not in {"PATH"}:
+                        self.assertNotIn(key, git_environment)
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(
+                source.authority,
+                "_load_trusted_command_helper",
+                side_effect=AssertionError("candidate helper executed"),
+            ) as poisoned_helper,
+        ):
+            root = Path(directory)
+            source._run_bootstrap_git(root, ["init", "--quiet"])
+        poisoned_helper.assert_not_called()
+
+    def test_oversized_provider_output_never_reaches_json_normalization(self) -> None:
+        normalize = mock.Mock()
+        with tempfile.TemporaryDirectory() as directory:
+            fake_gh = Path(directory) / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/python3\n"
+                "import sys\n"
+                "sys.stdout.buffer.write(b'{' + b'x' * 65536)\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(0o700)
+            with (
+                mock.patch.object(
+                    source,
+                    "_resolve_bootstrap_executable",
+                    return_value=str(fake_gh),
+                ),
+                mock.patch.object(source, "_normalize_protected_main", normalize),
+                self.assertRaisesRegex(
+                    source.BootstrapSourceAdmissionError, "output limit"
+                ),
+            ):
+                source._load_protected_main_trust_policy(REPOSITORY)
+        normalize.assert_not_called()
+
+    def test_pre_authentication_command_boundary_never_imports_candidate_helper(
+        self,
+    ) -> None:
+        payload = self._protected_main_observation().repository_json
+
+        @contextmanager
+        def isolated(_trust, _policy):
+            yield Path("/authenticated-source")
+
+        verified = self._authenticate()
+        with tempfile.TemporaryDirectory() as directory:
+            fake_gh = Path(directory) / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/python3\n"
+                "import sys\n"
+                f"sys.stdout.buffer.write({payload!r})\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(0o700)
+            with (
+                mock.patch.object(
+                    source,
+                    "_resolve_bootstrap_executable",
+                    return_value=str(fake_gh),
+                    create=True,
+                ),
+                mock.patch.object(
+                    source.authority,
+                    "_load_trusted_command_helper",
+                    side_effect=AssertionError(
+                        "unauthenticated checkout helper executed"
+                    ),
+                ) as poisoned_helper,
+                mock.patch.object(
+                    source,
+                    "_read_protected_main_registry",
+                    return_value=Path(
+                        ".agents/skills/secpal-pr-review/references/repositories.json"
+                    ).read_bytes(),
+                ),
+                mock.patch.object(
+                    source, "_read_evidence", return_value=({}, {}, {})
+                ),
+                mock.patch.object(source, "_authenticate_live_github_source"),
+                mock.patch.object(
+                    source, "_isolated_source_repository", isolated
+                ),
+                mock.patch.object(
+                    source,
+                    "_authenticate_materialized_source",
+                    return_value=verified,
+                ),
+                mock.patch.object(source, "_verify_materialized_tree"),
+            ):
+                result = source.verify_pr_review_evidence_helper_source(
+                    REPOSITORY,
+                    EVIDENCE_HELPER_ISSUE,
+                    source_evidence_directory="/candidate/evidence",
+                )
+        self.assertIs(result, verified)
+        poisoned_helper.assert_not_called()
+
+        for function in (
+            source._git,
+            source._verify_commit_signature,
+            source._observe_github,
+            source._observe_protected_main,
+            source._isolated_source_repository,
+            source._implementation_blob,
+        ):
+            with self.subTest(function=function.__name__):
+                implementation = inspect.getsource(function)
+                self.assertNotIn("publication._run_git", implementation)
+                self.assertNotIn("publication._run_gh", implementation)
 
     def test_protected_main_policy_uses_only_observed_immutable_registry(self) -> None:
         registry_document = Path(
