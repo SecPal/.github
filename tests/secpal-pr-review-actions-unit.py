@@ -1907,8 +1907,14 @@ class MutationTests(TestCase):
             "repos/SecPal/.github/branches/main/protection/required_status_checks",
             "--method", "GET",
         ]
+        full_protection = [
+            "gh", "api", "--hostname", "github.com",
+            "repos/SecPal/.github/branches/release%2Fstable/protection",
+            "--method", "GET",
+        ]
         actions._validate_action_command(rules)
         actions._validate_action_command(protection)
+        actions._validate_action_command(full_protection)
         add_reaction = actions._graphql_arguments(
             actions.ADD_REACTION_MUTATION,
             {"subjectId": "REVIEW_1", "content": "THUMBS_UP"},
@@ -1936,6 +1942,12 @@ class MutationTests(TestCase):
             [*checks_query, "-f", "extra=value"],
             [*rules, "--paginate"],
             [*reply[:7], "-F", *reply[8:]],
+            [*full_protection[:5], "--method", "POST"],
+            [*full_protection[:5], "--method", "PATCH"],
+            [*full_protection[:5], "--method", "PUT"],
+            [*full_protection[:5], "--method", "DELETE"],
+            [*full_protection[:4], "repos/SecPal/.github/branches/main/protection/admins", "--method", "GET"],
+            ["gh", "api", "--hostname", "example.com", *full_protection[4:]],
         ):
             with self.subTest(arguments=unsafe), self.assertRaises(actions.MutationBlocked):
                 actions._validate_action_command(unsafe)
@@ -1990,12 +2002,8 @@ class MutationTests(TestCase):
                             },
                         }
                     ]
-                if endpoint.endswith("/protection/required_status_checks"):
-                    return {
-                        "strict": True,
-                        "contexts": ["tests"],
-                        "checks": [{"context": "tests", "app_id": 1}],
-                    }
+                if endpoint.endswith("/protection"):
+                    return p21.classic_protection_response()
                 variables = {
                     assignment.split("=", 1)[0]: assignment.split("=", 1)[1]
                     for assignment in arguments[8::2]
@@ -5000,6 +5008,8 @@ class FakeFastGateway:
         return {
             "checks": copy.deepcopy(self.checks),
             "required_specs": copy.deepcopy(self.required_specs),
+            "ruleset_evidence": [],
+            "classic_branch_protection_evidence": p21.classic_protection(),
             "strict_base_required": False,
         }
 
@@ -9350,7 +9360,13 @@ class FastPathTests(TestCase):
                     }
                 ]
             if arguments[4].startswith("repos/"):
-                return {"strict": False, "contexts": [], "checks": []}
+                response = p21.classic_protection_response()
+                response["required_status_checks"] = {
+                    "strict": False,
+                    "contexts": [],
+                    "checks": [],
+                }
+                return response
             return check_payload
 
         runner = SimpleNamespace(run=mock.Mock(side_effect=run))
@@ -9371,8 +9387,55 @@ class FastPathTests(TestCase):
         )
         self.assertEqual([item["name"] for item in result["checks"]], ["tests", "legacy"])
         self.assertEqual(runner.run.call_count, 3)
+        self.assertEqual(
+            result["classic_branch_protection_evidence"],
+            actions.evidence.normalize_classic_branch_protection(
+                p21.classic_protection_response()
+                | {
+                    "required_status_checks": {
+                        "strict": False,
+                        "contexts": [],
+                        "checks": [],
+                    }
+                }
+            ),
+        )
+        self.assertEqual(len(result["ruleset_evidence"]), 1)
         for call in runner.run.call_args_list:
             actions._validate_action_command(call.args[0])
+
+    def test_inaccessible_or_partial_full_protection_blocks_fast_readiness(self) -> None:
+        for mode in ("forbidden", "not_found", "partial"):
+            with self.subTest(mode=mode):
+                def run(arguments: list[str]) -> Any:
+                    endpoint = arguments[4]
+                    if "/rules/branches/" in endpoint:
+                        return []
+                    if endpoint.endswith("/protection"):
+                        if mode == "partial":
+                            return {"required_status_checks": None}
+                        status = 403 if mode == "forbidden" else 404
+                        raise actions.ActionCommandFailure(
+                            arguments, status, "", f"HTTP {status}"
+                        )
+                    raise AssertionError("check evidence must not be read after protection failure")
+
+                gateway = actions.FastPathGateway(
+                    REPO_ROOT,
+                    registry_entry("SecPal/.github"),
+                    github=SimpleNamespace(
+                        runner=SimpleNamespace(run=mock.Mock(side_effect=run))
+                    ),
+                )
+                expected = (
+                    fast_path.SecurityBlocker
+                    if mode == "partial"
+                    else fast_path.TransientReadFailure
+                )
+                with self.assertRaises(expected):
+                    gateway.read_required_checks(
+                        fast_request(fast_feedback()), fast_registry()
+                    )
 
     def test_fast_preflight_queries_the_signature_signer_as_a_user(self) -> None:
         signer_selection = actions.FAST_PATH_PREFLIGHT_QUERY.split("signer {", 1)[1]
@@ -9410,6 +9473,31 @@ class FastPathTests(TestCase):
                 gateway = FakeFastGateway(reviewed)
                 gateway.checks[0]["status"] = status
                 with self.assertRaisesRegex(fast_path.SecurityBlocker, "required check"):
+                    self.execute(reviewed, gateway)
+                self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
+
+    def test_missing_or_ambiguous_classic_protection_blocks_before_first_write(self) -> None:
+        for mode in ("missing", "ambiguous"):
+            with self.subTest(mode=mode):
+                reviewed = fast_feedback()
+                gateway = FakeFastGateway(reviewed)
+                original = gateway.read_required_checks
+
+                def incomplete(request_value: Any, registry_value: dict[str, Any]) -> dict[str, Any]:
+                    result = original(request_value, registry_value)
+                    if mode == "missing":
+                        result.pop("classic_branch_protection_evidence")
+                    else:
+                        shared: list[Any] = []
+                        result["ruleset_evidence"] = shared
+                        result["classic_branch_protection_evidence"] = shared
+                    return result
+
+                gateway.read_required_checks = incomplete
+                with self.assertRaisesRegex(
+                    fast_path.SecurityBlocker,
+                    "classic branch-protection|ambiguous",
+                ):
                     self.execute(reviewed, gateway)
                 self.assertFalse(any(kind == "WRITE" for kind, _ in gateway.calls))
 

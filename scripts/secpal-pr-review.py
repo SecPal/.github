@@ -21,7 +21,7 @@ from datetime import datetime
 from functools import cache
 from pathlib import Path
 from typing import Any, Callable, Iterable
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 
 SCHEMA_VERSION = "1.0"
@@ -203,6 +203,69 @@ def redact_diagnostic(value: str) -> str:
     return cleaned[:1000]
 
 
+def _valid_repository_identity(repository: str) -> bool:
+    if not REPOSITORY_PATTERN.fullmatch(repository):
+        return False
+    return all(part not in {".", ".."} for part in repository.split("/", 1))
+
+
+def _valid_encoded_branch_ref(encoded_ref: str) -> bool:
+    if not encoded_ref or re.search(r"%(?![0-9A-F]{2})", encoded_ref):
+        return False
+    try:
+        branch_ref = unquote(encoded_ref, errors="strict")
+    except UnicodeDecodeError:
+        return False
+    if quote(branch_ref, safe="") != encoded_ref:
+        return False
+    return not (
+        not branch_ref
+        or branch_ref in {"@", ".", ".."}
+        or branch_ref.startswith(("/", "-"))
+        or branch_ref.endswith(("/", "."))
+        or "//" in branch_ref
+        or ".." in branch_ref
+        or "@{" in branch_ref
+        or any(
+            character in branch_ref
+            for character in (" ", "~", "^", ":", "?", "*", "[", "\\")
+        )
+        or any(ord(character) < 32 or ord(character) == 127 for character in branch_ref)
+        or any(part.startswith(".") or part.endswith(".lock") for part in branch_ref.split("/"))
+    )
+
+
+def read_only_rest_endpoint_kind(endpoint: str) -> str | None:
+    """Classify one canonical, repository/ref-bound GitHub REST read."""
+
+    repository = r"(?P<repository>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)"
+    encoded_ref = r"(?P<encoded_ref>[A-Za-z0-9._~%-]+)"
+    patterns = (
+        (
+            "rulesets",
+            rf"repos/{repository}/rules/branches/{encoded_ref}"
+            rf"\?per_page={CAPTURE_PAGE_SIZE}&page=[1-9][0-9]*",
+        ),
+        (
+            "required_status_checks",
+            rf"repos/{repository}/branches/{encoded_ref}/protection/required_status_checks",
+        ),
+        (
+            "classic_branch_protection",
+            rf"repos/{repository}/branches/{encoded_ref}/protection",
+        ),
+    )
+    for kind, pattern in patterns:
+        match = re.fullmatch(pattern, endpoint)
+        if (
+            match is not None
+            and _valid_repository_identity(match.group("repository"))
+            and _valid_encoded_branch_ref(match.group("encoded_ref"))
+        ):
+            return kind
+    return None
+
+
 def validate_external_command(arguments: list[str]) -> None:
     if not arguments:
         raise CommandPolicyError("Empty external command")
@@ -282,17 +345,8 @@ def validate_external_command(arguments: list[str]) -> None:
         return
     if len(arguments) != 7 or arguments[4:6] != ["--method", "GET"]:
         raise CommandPolicyError("REST requests must use the exact explicit GET command shape")
-    repository = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
-    encoded_ref = r"[A-Za-z0-9._~%-]+"
     endpoint = arguments[6]
-    allowed_endpoint = re.fullmatch(
-        rf"repos/{repository}/rules/branches/{encoded_ref}\?per_page={CAPTURE_PAGE_SIZE}&page=[1-9][0-9]*",
-        endpoint,
-    ) or re.fullmatch(
-        rf"repos/{repository}/branches/{encoded_ref}/protection/required_status_checks",
-        endpoint,
-    )
-    if not allowed_endpoint:
+    if read_only_rest_endpoint_kind(endpoint) is None:
         raise CommandPolicyError("REST endpoint is not exactly read-only allowlisted")
 
 
@@ -542,7 +596,7 @@ def classify_api_failure(message: str) -> BlockedError:
 
 
 def validate_repository_name(repository: str) -> tuple[str, str]:
-    if not REPOSITORY_PATTERN.fullmatch(repository):
+    if not _valid_repository_identity(repository):
         raise ContractError("Repository must be exactly OWNER/REPO")
     owner, name = repository.split("/", 1)
     return owner, name
@@ -1488,6 +1542,12 @@ def validate_snapshot(snapshot: dict[str, Any]) -> None:
         raise ContractError("An authoritative snapshot cannot contain a blocker")
     if not snapshot["applicable_rules"].get("evidence_complete"):
         raise ContractError("Applicable-rule evidence is incomplete")
+    try:
+        validate_normalized_classic_branch_protection(
+            snapshot["applicable_rules"].get("branch_protection")
+        )
+    except BlockedError as exc:
+        raise ContractError(f"Invalid classic branch-protection evidence: {exc.message}") from exc
     required_check_evidence = snapshot["required_check_evidence"]
     if required_check_evidence.get("unknown_reasons"):
         raise ContractError("Complete required-check evidence cannot contain unknown reasons")
@@ -2173,6 +2233,341 @@ def evaluate_checks(
         "sources": sorted(sources if sources is not None else ["branch_protection", "rulesets"]),
         "unknown_reasons": [],
     }
+
+
+CLASSIC_BRANCH_PROTECTION_KEYS = {
+    "required_status_checks_enabled",
+    "strict",
+    "contexts",
+    "checks",
+    "required_pull_request_reviews",
+    "required_conversation_resolution",
+    "required_signatures",
+    "required_linear_history",
+    "allow_force_pushes",
+    "allow_deletions",
+    "enforce_admins",
+}
+
+
+def empty_classic_branch_protection() -> dict[str, Any]:
+    return {
+        "required_status_checks_enabled": False,
+        "strict": False,
+        "contexts": [],
+        "checks": [],
+        "required_pull_request_reviews": {
+            "enabled": False,
+            "required_approving_review_count": 0,
+            "dismiss_stale_reviews": False,
+            "require_code_owner_reviews": False,
+            "require_last_push_approval": False,
+            "dismissal_restrictions": {"users": [], "teams": [], "apps": []},
+            "bypass_pull_request_allowances": {"users": [], "teams": [], "apps": []},
+        },
+        "required_conversation_resolution": False,
+        "required_signatures": False,
+        "required_linear_history": False,
+        "allow_force_pushes": False,
+        "allow_deletions": False,
+        "enforce_admins": False,
+    }
+
+
+def _enabled_classic_feature(value: Any, label: str) -> bool:
+    if not isinstance(value, dict) or not isinstance(value.get("enabled"), bool):
+        raise BlockedError(
+            BLOCKED_INCOMPLETE,
+            f"Classic branch-protection {label} evidence is malformed",
+            "branch_protection",
+            None,
+        )
+    return value["enabled"]
+
+
+def _classic_actor_identities(value: Any, label: str) -> dict[str, list[str]]:
+    if not isinstance(value, dict):
+        raise BlockedError(
+            BLOCKED_INCOMPLETE,
+            f"Classic branch-protection {label} evidence is malformed",
+            "branch_protection",
+            None,
+        )
+    result: dict[str, list[str]] = {}
+    for key, identity_key in (("users", "login"), ("teams", "slug"), ("apps", "slug")):
+        entries = value.get(key)
+        if not isinstance(entries, list) or any(
+            not isinstance(item, dict)
+            or not isinstance(item.get(identity_key), str)
+            or not item[identity_key]
+            for item in entries
+        ):
+            raise BlockedError(
+                BLOCKED_INCOMPLETE,
+                f"Classic branch-protection {label} identities are malformed",
+                "branch_protection",
+                None,
+            )
+        identities = [item[identity_key] for item in entries]
+        if len(identities) != len(set(identities)):
+            raise BlockedError(
+                BLOCKED_INCOMPLETE,
+                f"Classic branch-protection {label} identities are ambiguous",
+                "branch_protection",
+                None,
+            )
+        result[key] = sorted(identities)
+    return result
+
+
+def normalize_classic_branch_protection(value: Any) -> dict[str, Any]:
+    """Project the complete classic protection facts used by readiness policy."""
+
+    required = {
+        "required_status_checks",
+        "required_pull_request_reviews",
+        "required_signatures",
+        "enforce_admins",
+        "required_linear_history",
+        "allow_force_pushes",
+        "allow_deletions",
+        "required_conversation_resolution",
+    }
+    if not isinstance(value, dict) or not required <= value.keys():
+        raise BlockedError(
+            BLOCKED_INCOMPLETE,
+            "Classic branch-protection response is incomplete",
+            "branch_protection",
+            None,
+        )
+
+    raw_checks = value["required_status_checks"]
+    if raw_checks is None:
+        empty = empty_classic_branch_protection()
+        required_status_checks_enabled = empty["required_status_checks_enabled"]
+        strict = empty["strict"]
+        contexts = empty["contexts"]
+        checks = empty["checks"]
+    else:
+        if not isinstance(raw_checks, dict):
+            raise BlockedError(
+                BLOCKED_INCOMPLETE,
+                "Classic branch-protection required checks are malformed",
+                "branch_protection",
+                None,
+            )
+        strict = raw_checks.get("strict")
+        contexts = raw_checks.get("contexts")
+        raw_app_checks = raw_checks.get("checks")
+        if (
+            not isinstance(strict, bool)
+            or not isinstance(contexts, list)
+            or any(not isinstance(item, str) or not item for item in contexts)
+            or len(contexts) != len(set(contexts))
+            or not isinstance(raw_app_checks, list)
+        ):
+            raise BlockedError(
+                BLOCKED_INCOMPLETE,
+                "Classic branch-protection required checks are malformed",
+                "branch_protection",
+                None,
+            )
+        checks = []
+        for item in raw_app_checks:
+            context = item.get("context") if isinstance(item, dict) else None
+            app_id = item.get("app_id") if isinstance(item, dict) else None
+            if app_id == -1:
+                app_id = None
+            if (
+                not isinstance(context, str)
+                or not context
+                or (
+                    app_id is not None
+                    and (isinstance(app_id, bool) or not isinstance(app_id, int) or app_id < 1)
+                )
+            ):
+                raise BlockedError(
+                    BLOCKED_INCOMPLETE,
+                    "Classic branch-protection required check identity is malformed",
+                    "branch_protection",
+                    None,
+                )
+            checks.append({"context": context, "app_id": app_id})
+        check_identities = [(item["context"], item["app_id"]) for item in checks]
+        if len(check_identities) != len(set(check_identities)):
+            raise BlockedError(
+                BLOCKED_INCOMPLETE,
+                "Classic branch-protection required checks are ambiguous",
+                "branch_protection",
+                None,
+            )
+        required_status_checks_enabled = True
+        contexts = sorted(contexts)
+        checks = sorted(checks, key=lambda item: (item["context"], item["app_id"] or 0))
+
+    raw_reviews = value["required_pull_request_reviews"]
+    if raw_reviews is None:
+        reviews = {
+            "enabled": False,
+            "required_approving_review_count": 0,
+            "dismiss_stale_reviews": False,
+            "require_code_owner_reviews": False,
+            "require_last_push_approval": False,
+            "dismissal_restrictions": {"users": [], "teams": [], "apps": []},
+            "bypass_pull_request_allowances": {"users": [], "teams": [], "apps": []},
+        }
+    else:
+        review_keys = {
+            "required_approving_review_count",
+            "dismiss_stale_reviews",
+            "require_code_owner_reviews",
+            "require_last_push_approval",
+            "dismissal_restrictions",
+            "bypass_pull_request_allowances",
+        }
+        if not isinstance(raw_reviews, dict) or not review_keys <= raw_reviews.keys():
+            raise BlockedError(
+                BLOCKED_INCOMPLETE,
+                "Classic branch-protection review requirements are incomplete",
+                "branch_protection",
+                None,
+            )
+        approval_count = raw_reviews["required_approving_review_count"]
+        review_booleans = {
+            key: raw_reviews[key]
+            for key in (
+                "dismiss_stale_reviews",
+                "require_code_owner_reviews",
+                "require_last_push_approval",
+            )
+        }
+        if (
+            isinstance(approval_count, bool)
+            or not isinstance(approval_count, int)
+            or not 0 <= approval_count <= 6
+            or any(not isinstance(item, bool) for item in review_booleans.values())
+        ):
+            raise BlockedError(
+                BLOCKED_INCOMPLETE,
+                "Classic branch-protection review requirements are malformed",
+                "branch_protection",
+                None,
+            )
+        reviews = {
+            "enabled": True,
+            "required_approving_review_count": approval_count,
+            **review_booleans,
+            "dismissal_restrictions": _classic_actor_identities(
+                raw_reviews["dismissal_restrictions"], "dismissal restrictions"
+            ),
+            "bypass_pull_request_allowances": _classic_actor_identities(
+                raw_reviews["bypass_pull_request_allowances"], "review bypass allowances"
+            ),
+        }
+
+    return {
+        "required_status_checks_enabled": required_status_checks_enabled,
+        "strict": strict,
+        "contexts": contexts,
+        "checks": checks,
+        "required_pull_request_reviews": reviews,
+        "required_conversation_resolution": _enabled_classic_feature(
+            value["required_conversation_resolution"], "conversation resolution"
+        ),
+        "required_signatures": _enabled_classic_feature(
+            value["required_signatures"], "signed commits"
+        ),
+        "required_linear_history": _enabled_classic_feature(
+            value["required_linear_history"], "linear history"
+        ),
+        "allow_force_pushes": _enabled_classic_feature(
+            value["allow_force_pushes"], "force pushes"
+        ),
+        "allow_deletions": _enabled_classic_feature(value["allow_deletions"], "deletions"),
+        "enforce_admins": _enabled_classic_feature(value["enforce_admins"], "admin enforcement"),
+    }
+
+
+def validate_normalized_classic_branch_protection(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != CLASSIC_BRANCH_PROTECTION_KEYS:
+        raise BlockedError(
+            BLOCKED_INCOMPLETE,
+            "Normalized classic branch-protection evidence is incomplete or ambiguous",
+            "branch_protection",
+            None,
+        )
+    reviews = value.get("required_pull_request_reviews")
+    if (
+        not isinstance(reviews, dict)
+        or not isinstance(reviews.get("enabled"), bool)
+        or not isinstance(value.get("required_status_checks_enabled"), bool)
+    ):
+        raise BlockedError(
+            BLOCKED_INCOMPLETE,
+            "Normalized classic branch-protection review evidence is incomplete",
+            "branch_protection",
+            None,
+        )
+
+    def raw_identities(identities: Any) -> dict[str, list[dict[str, str]]]:
+        if not isinstance(identities, dict) or set(identities) != {"users", "teams", "apps"}:
+            raise ValueError
+        result: dict[str, list[dict[str, str]]] = {}
+        for key, identity_key in (("users", "login"), ("teams", "slug"), ("apps", "slug")):
+            items = identities[key]
+            if not isinstance(items, list):
+                raise ValueError
+            result[key] = [{identity_key: item} for item in items]
+        return result
+
+    try:
+        raw_reviews = None
+        if reviews["enabled"] is not False:
+            raw_reviews = {
+                key: reviews[key]
+                for key in (
+                    "required_approving_review_count",
+                    "dismiss_stale_reviews",
+                    "require_code_owner_reviews",
+                    "require_last_push_approval",
+                )
+            }
+            raw_reviews["dismissal_restrictions"] = raw_identities(
+                reviews["dismissal_restrictions"]
+            )
+            raw_reviews["bypass_pull_request_allowances"] = raw_identities(
+                reviews["bypass_pull_request_allowances"]
+            )
+        raw_checks = None
+        if value["required_status_checks_enabled"] is not False:
+            raw_checks = {
+                "strict": value["strict"],
+                "contexts": value["contexts"],
+                "checks": value["checks"],
+            }
+        reconstructed = {
+            "required_status_checks": raw_checks,
+            "required_pull_request_reviews": raw_reviews,
+            "required_conversation_resolution": {
+                "enabled": value["required_conversation_resolution"]
+            },
+            "required_signatures": {"enabled": value["required_signatures"]},
+            "required_linear_history": {"enabled": value["required_linear_history"]},
+            "allow_force_pushes": {"enabled": value["allow_force_pushes"]},
+            "allow_deletions": {"enabled": value["allow_deletions"]},
+            "enforce_admins": {"enabled": value["enforce_admins"]},
+        }
+        normalized = normalize_classic_branch_protection(reconstructed)
+    except (KeyError, TypeError, ValueError):
+        normalized = None
+    if normalized != value:
+        raise BlockedError(
+            BLOCKED_INCOMPLETE,
+            "Normalized classic branch-protection evidence is malformed or ambiguous",
+            "branch_protection",
+            None,
+        )
+    return copy.deepcopy(normalized)
 
 
 def require_rule_evidence(
@@ -3832,20 +4227,7 @@ def _normalize_applicable_rules(rulesets: list[Any], branch_protection: dict[str
             )
         else:
             normalized_rules.append({"type": str(rule.get("type") or "unknown")})
-    normalized_branch = {
-        "strict": branch_protection.get("strict"),
-        "contexts": sorted(
-            value for value in branch_protection.get("contexts", []) if isinstance(value, str)
-        ),
-        "checks": sorted(
-            [
-                {"context": item.get("context"), "app_id": item.get("app_id")}
-                for item in branch_protection.get("checks", [])
-                if isinstance(item, dict) and isinstance(item.get("context"), str)
-            ],
-            key=lambda item: (item["context"], item["app_id"] or 0),
-        ),
-    }
+    normalized_branch = validate_normalized_classic_branch_protection(branch_protection)
     return {
         "rulesets": sorted(normalized_rules, key=lambda item: json.dumps(item, sort_keys=True)),
         "branch_protection": normalized_branch,
@@ -3861,7 +4243,7 @@ def _capture_rules(
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
     encoded_ref = quote(base_ref, safe="")
     rulesets: list[Any] = []
-    branch_protection: dict[str, Any] = {}
+    branch_protection = empty_classic_branch_protection()
     sources: list[str] = []
     if policy["require_ruleset_evidence"]:
         connection = f"rulesets{connection_suffix}"
@@ -3887,17 +4269,10 @@ def _capture_rules(
         sources.append("rulesets")
     if policy["require_branch_protection_evidence"]:
         connection = f"branch_protection{connection_suffix}"
-        protection_endpoint = (
-            f"repos/{client.owner}/{client.name}/branches/{encoded_ref}/protection/required_status_checks"
+        protection_endpoint = f"repos/{client.owner}/{client.name}/branches/{encoded_ref}/protection"
+        branch_protection = normalize_classic_branch_protection(
+            client.rest(protection_endpoint, connection)
         )
-        branch_protection = client.rest(protection_endpoint, connection)
-        if not isinstance(branch_protection, dict):
-            raise BlockedError(
-                BLOCKED_INCOMPLETE,
-                "Branch-protection response is not an object",
-                connection,
-                None,
-            )
         client.budget.add_items(1, connection, None)
         client.budget.record_connection(connection, 1, 1)
         sources.append("branch_protection")

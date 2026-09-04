@@ -2258,6 +2258,21 @@ def _verify_required_checks(
                 )
 
 
+def _verify_policy_evidence(check_evidence: Any, policy: Any) -> None:
+    """Require independently typed ruleset and classic-protection evidence."""
+
+    if not isinstance(check_evidence, dict) or not isinstance(policy, dict):
+        raise SecurityBlocker("required policy evidence is malformed")
+    rulesets = check_evidence.get("ruleset_evidence")
+    classic = check_evidence.get("classic_branch_protection_evidence")
+    if rulesets is classic:
+        raise SecurityBlocker("ruleset and classic branch-protection evidence are ambiguous")
+    if policy.get("require_ruleset_evidence") is True and not isinstance(rulesets, list):
+        raise SecurityBlocker("independent ruleset evidence is missing")
+    if policy.get("require_branch_protection_evidence") is True and not isinstance(classic, dict):
+        raise SecurityBlocker("complete classic branch-protection evidence is missing")
+
+
 T = TypeVar("T")
 
 
@@ -2382,6 +2397,7 @@ def execute_resolution_batch(
     )
     if not isinstance(check_evidence, dict):
         raise SecurityBlocker("required check evidence is malformed")
+    _verify_policy_evidence(check_evidence, check_policy)
     _verify_required_checks(
         check_evidence.get("checks"),
         check_evidence.get("required_specs"),
