@@ -1077,6 +1077,7 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_run_gh",
     "_run_git",
     "_parse_eligibility_payload",
+    "_require_valid_final_feedback_boundary",
     "_tracked_follow_ups_from_payload",
     "_tracked_follow_up_disposition_report",
     "_validation_registry_binding",
@@ -1156,6 +1157,14 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
     ),
     DynamicImportCall(
         ("_parse_eligibility_payload",),
+        "_reject_duplicate_json_object",
+    ),
+    DynamicImportCall(
+        ("_require_valid_final_feedback_boundary",),
+        "_reject_nonfinite_json_constant",
+    ),
+    DynamicImportCall(
+        ("_require_valid_final_feedback_boundary",),
         "_reject_duplicate_json_object",
     ),
     DynamicImportCall(

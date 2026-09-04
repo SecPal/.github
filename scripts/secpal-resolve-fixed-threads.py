@@ -1630,6 +1630,131 @@ def load_eligibility_evidence(
     )
 
 
+def _require_valid_final_feedback_boundary(
+    boundary: FinalFeedbackBoundary,
+) -> None:
+    """Fail closed unless the verified final-boundary evidence shape is exact."""
+
+    if (
+        type(boundary) is not FinalFeedbackBoundary
+        or type(boundary.reviewed) is not ReviewedState
+        or type(boundary.validation) is not ValidationEvidence
+        or not isinstance(boundary.reviewed.payload, dict)
+        or not isinstance(boundary.reviewed.thread_ids, frozenset)
+        or not isinstance(boundary.reviewed.head_sha, str)
+        or not OID.fullmatch(boundary.reviewed.head_sha)
+        or not isinstance(boundary.reviewed.state_digest, str)
+        or not DIGEST.fullmatch(boundary.reviewed.state_digest)
+        or not isinstance(boundary.reviewed.feedback_digest, str)
+        or not DIGEST.fullmatch(boundary.reviewed.feedback_digest)
+        or not isinstance(boundary.validation.attestation, dict)
+        or not isinstance(boundary.validation.validation_receipt, dict)
+        or not isinstance(boundary.validation.evidence_digest, str)
+        or not DIGEST.fullmatch(boundary.validation.evidence_digest)
+        or not isinstance(boundary.validation.validated_tree_sha, str)
+        or not OID.fullmatch(boundary.validation.validated_tree_sha)
+        or not isinstance(boundary.validation.validation_receipt_digest, str)
+        or not DIGEST.fullmatch(boundary.validation.validation_receipt_digest)
+    ):
+        raise ResolutionError("authenticated final feedback boundary is malformed")
+
+    if boundary.eligibility_mode is (
+        FinalEligibilityMode.AUTHENTICATED_ELIGIBILITY_MANIFEST
+    ):
+        eligibility = boundary.eligibility
+        if (
+            type(eligibility) is not EligibilityEvidence
+            or boundary.eligibility_absence is not None
+            or boundary.validation.final_eligibility_absence is not None
+            or boundary.validation.kind != "attestation"
+            or not isinstance(
+                boundary.validation.eligibility_evidence_digest,
+                str,
+            )
+            or not DIGEST.fullmatch(
+                boundary.validation.eligibility_evidence_digest
+            )
+            or not isinstance(eligibility.evidence_digest, str)
+            or not DIGEST.fullmatch(eligibility.evidence_digest)
+            or boundary.validation.eligibility_evidence_digest
+            != eligibility.evidence_digest
+            or not isinstance(eligibility.canonical_payload, bytes)
+            or hashlib.sha256(eligibility.canonical_payload).hexdigest()
+            != eligibility.evidence_digest
+            or not isinstance(eligibility.thread_ids, tuple)
+        ):
+            raise ResolutionError(
+                "authenticated final eligibility manifest boundary is invalid"
+            )
+        repository = boundary.reviewed.payload.get("repository")
+        number = boundary.reviewed.payload.get("pull_request_number")
+        if (
+            not isinstance(repository, str)
+            or not REPOSITORY.fullmatch(repository)
+            or not isinstance(number, int)
+            or isinstance(number, bool)
+            or number < 1
+        ):
+            raise ResolutionError(
+                "authenticated final eligibility manifest boundary is invalid"
+            )
+        try:
+            manifest_payload = json.loads(
+                eligibility.canonical_payload,
+                parse_constant=_reject_nonfinite_json_constant,
+                object_pairs_hook=_reject_duplicate_json_object,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ResolutionError(
+                "authenticated final eligibility manifest boundary is invalid"
+            ) from exc
+        if _canonical_json_bytes(manifest_payload) != eligibility.canonical_payload:
+            raise ResolutionError(
+                "authenticated final eligibility manifest boundary is invalid"
+            )
+        parsed = _parse_eligibility_payload(
+            eligibility.canonical_payload,
+            repository=repository,
+            number=number,
+            reviewed_state_digest=boundary.reviewed.state_digest,
+            expected_thread_ids=eligibility.thread_ids,
+            reviewed_head_sha=boundary.reviewed.head_sha,
+        )
+        if not set(parsed.thread_ids).issubset(boundary.reviewed.thread_ids):
+            raise ResolutionError(
+                "authenticated final eligibility manifest boundary is invalid"
+            )
+        return
+
+    if boundary.eligibility_mode is (
+        FinalEligibilityMode.AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE
+    ):
+        absence = boundary.eligibility_absence
+        if (
+            boundary.eligibility is not None
+            or type(absence) is not FinalEligibilityAbsence
+            or absence._verification_seal
+            is not _VERIFIED_FINAL_ELIGIBILITY_ABSENCE
+            or not isinstance(absence.recovery_digest, str)
+            or not DIGEST.fullmatch(absence.recovery_digest)
+            or absence.status
+            != "NO_ELIGIBILITY_WAS_AUTHENTICATED_AT_FINAL_VALIDATION"
+            or type(absence.final_delivery_signer)
+            is not late_disposition.SignerIdentity
+            or boundary.validation.kind
+            != "final-eligibility-absence-attestation"
+            or boundary.validation.eligibility_evidence_digest is not None
+            or boundary.validation.final_eligibility_absence is not absence
+            or boundary.reviewed.thread_ids != frozenset()
+        ):
+            raise ResolutionError(
+                "authenticated final eligibility absence boundary is invalid"
+            )
+        return
+
+    raise ResolutionError("final eligibility mode is unsupported")
+
+
 def verify_recovery_bound_source_authority(
     validation: ValidationEvidence,
     reviewed: ReviewedState,
@@ -1753,13 +1878,15 @@ def load_final_feedback_boundary(
                 "final eligibility references a thread absent from final reviewed state: "
                 f"{missing[0]}"
             )
-        return FinalFeedbackBoundary(
+        boundary = FinalFeedbackBoundary(
             reviewed,
             validation,
             FinalEligibilityMode.AUTHENTICATED_ELIGIBILITY_MANIFEST,
             eligibility,
             None,
         )
+        _require_valid_final_feedback_boundary(boundary)
+        return boundary
     entry = _load_repository_entry(repository)
     absence = _load_final_eligibility_absence(
         entry,
@@ -1775,19 +1902,22 @@ def load_final_feedback_boundary(
         reviewed,
         final_eligibility_absence=absence,
     )
-    return FinalFeedbackBoundary(
+    boundary = FinalFeedbackBoundary(
         reviewed,
         validation,
         FinalEligibilityMode.AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE,
         None,
         absence,
     )
+    _require_valid_final_feedback_boundary(boundary)
+    return boundary
 
 
 def require_late_target_origin(
     boundary: FinalFeedbackBoundary,
     thread_id: str,
 ) -> None:
+    _require_valid_final_feedback_boundary(boundary)
     if boundary.eligibility is not None and thread_id in boundary.eligibility.thread_ids:
         raise ResolutionError(
             f"late target already has commit-bound eligibility: {thread_id}"
@@ -1795,18 +1925,6 @@ def require_late_target_origin(
     if thread_id in boundary.reviewed.thread_ids:
         raise ResolutionError(
             f"late target is present in authenticated final reviewed state: {thread_id}"
-        )
-    if boundary.eligibility_mode == (
-        FinalEligibilityMode.AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE
-    ) and (
-        boundary.reviewed.thread_ids
-        or boundary.eligibility is not None
-        or not isinstance(boundary.eligibility_absence, FinalEligibilityAbsence)
-        or boundary.eligibility_absence._verification_seal
-        is not _VERIFIED_FINAL_ELIGIBILITY_ABSENCE
-    ):
-        raise ResolutionError(
-            "authenticated final eligibility absence boundary is invalid"
         )
 
 
