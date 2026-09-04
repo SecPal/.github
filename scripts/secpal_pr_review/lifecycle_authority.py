@@ -203,6 +203,31 @@ class BootstrapGenesisRepair:
 
 
 @dataclass(frozen=True)
+class BootstrapSourceAdmissionPolicy:
+    """One exact implementation source admitted by accepted-main policy."""
+
+    schema_version: str
+    kind: str
+    subtype: str
+    repository: str
+    delivery_issue: int
+    pull_request: int
+    source_head_sha: str
+    source_tree_sha: str
+    source_parent_sha: str
+    validation_receipt_digest: str
+    final_attestation_digest: str
+    source_signer_identity: str
+    implementation_path: str
+    entrypoint: str
+    purpose: str
+    source_pr_state: str
+    source_pr_draft: bool
+    source_base_ref: str
+    admission_digest: str
+
+
+@dataclass(frozen=True)
 class HistoricalCompatibilityPublication:
     """One exact pre-admission native enrollment allowed by maintained policy."""
 
@@ -234,6 +259,7 @@ class LifecycleTrustPolicy:
     publication_ruleset_id: int = 0
     publication_required_rules: frozenset[str] = frozenset()
     bootstrap_genesis_repairs: tuple[BootstrapGenesisRepair, ...] = ()
+    bootstrap_source_admissions: tuple[BootstrapSourceAdmissionPolicy, ...] = ()
     historical_compatibility_publications: tuple[
         HistoricalCompatibilityPublication, ...
     ] = ()
@@ -699,6 +725,7 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
             "publication_ruleset_id",
             "publication_required_rules",
             "bootstrap_genesis_repairs",
+            "bootstrap_source_admissions",
             "historical_compatibility_publications",
             "delivery_initializations",
         }
@@ -940,6 +967,81 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
                 ),
             )
         )
+    source_fields = frozenset(
+        {
+            "schema_version", "kind", "subtype", "repository",
+            "delivery_issue", "pull_request", "source_head_sha",
+            "source_tree_sha", "source_parent_sha",
+            "validation_receipt_digest", "final_attestation_digest",
+            "source_signer_identity", "implementation_path", "entrypoint",
+            "purpose", "source_pr_state", "source_pr_draft", "source_base_ref",
+            "admission_digest",
+        }
+    )
+    raw_sources = policy["bootstrap_source_admissions"]
+    if not isinstance(raw_sources, list):
+        raise LifecycleAuthorityError("bootstrap source-admission policy is invalid")
+    source_admissions: list[BootstrapSourceAdmissionPolicy] = []
+    source_identities: set[tuple[int, int, str]] = set()
+    source_digests: set[str] = set()
+    for value in raw_sources:
+        item = _require_closed(value, source_fields, "bootstrap source admission")
+        unsigned = {key: copy.deepcopy(item[key]) for key in source_fields - {"admission_digest"}}
+        repository_identity = _require_repository(item["repository"])
+        delivery_issue = _require_positive_int(item["delivery_issue"], "source delivery issue")
+        pull_request = _require_positive_int(item["pull_request"], "source pull request")
+        head = _require_oid(item["source_head_sha"], "source head")
+        identity = (delivery_issue, pull_request, item["purpose"])
+        admission_digest = _require_digest(item["admission_digest"], "source admission")
+        if (
+            item["schema_version"] != SCHEMA_VERSION
+            or item["kind"] != "BOOTSTRAP_SOURCE_ADMISSION"
+            or item["subtype"] != "FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE"
+            or repository_identity != repository
+            or item["source_signer_identity"] not in signers
+            or item["implementation_path"]
+            != "scripts/secpal_pr_review/lifecycle_execution.py"
+            or item["entrypoint"] != "execute_lifecycle_transition"
+            or item["purpose"] != "FIRST_READY_EXECUTOR_BOOTSTRAP"
+            or item["source_pr_state"] != "OPEN"
+            or item["source_pr_draft"] is not True
+            or item["source_base_ref"] != "main"
+            or admission_digest != digest_json(unsigned)
+            or identity in source_identities
+            or admission_digest in source_digests
+        ):
+            raise LifecycleAuthorityError(
+                "bootstrap source admissions are ambiguous or mismatched"
+            )
+        source_identities.add(identity)
+        source_digests.add(admission_digest)
+        source_admissions.append(
+            BootstrapSourceAdmissionPolicy(
+                schema_version=item["schema_version"],
+                kind=item["kind"],
+                subtype=item["subtype"],
+                repository=repository_identity,
+                delivery_issue=delivery_issue,
+                pull_request=pull_request,
+                source_head_sha=head,
+                source_tree_sha=_require_oid(item["source_tree_sha"], "source tree"),
+                source_parent_sha=_require_oid(item["source_parent_sha"], "source parent"),
+                validation_receipt_digest=_require_digest(
+                    item["validation_receipt_digest"], "source validation receipt"
+                ),
+                final_attestation_digest=_require_digest(
+                    item["final_attestation_digest"], "source final attestation"
+                ),
+                source_signer_identity=item["source_signer_identity"],
+                implementation_path=item["implementation_path"],
+                entrypoint=item["entrypoint"],
+                purpose=item["purpose"],
+                source_pr_state=item["source_pr_state"],
+                source_pr_draft=item["source_pr_draft"],
+                source_base_ref=item["source_base_ref"],
+                admission_digest=admission_digest,
+            )
+        )
     compatibility_fields = frozenset(
         {
             "repository",
@@ -1042,6 +1144,7 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
         publication_ruleset_id=ruleset_id,
         publication_required_rules=frozenset(required_rules),
         bootstrap_genesis_repairs=tuple(repairs),
+        bootstrap_source_admissions=tuple(source_admissions),
         historical_compatibility_publications=tuple(
             compatibility_publications
         ),

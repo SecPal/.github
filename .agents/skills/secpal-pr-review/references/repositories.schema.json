@@ -171,6 +171,7 @@
         "publication_ruleset_id",
         "publication_required_rules",
         "bootstrap_genesis_repairs",
+        "bootstrap_source_admissions",
         "historical_compatibility_publications",
         "delivery_initializations"
       ],
@@ -278,6 +279,55 @@
                 "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
               },
               "enrollment_publication_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            }
+          }
+        },
+        "bootstrap_source_admissions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema_version",
+              "kind",
+              "subtype",
+              "repository",
+              "delivery_issue",
+              "pull_request",
+              "source_head_sha",
+              "source_tree_sha",
+              "source_parent_sha",
+              "validation_receipt_digest",
+              "final_attestation_digest",
+              "source_signer_identity",
+              "implementation_path",
+              "entrypoint",
+              "purpose",
+              "source_pr_state",
+              "source_pr_draft",
+              "source_base_ref",
+              "admission_digest"
+            ],
+            "properties": {
+              "schema_version": { "const": "1.0" },
+              "kind": { "const": "BOOTSTRAP_SOURCE_ADMISSION" },
+              "subtype": { "const": "FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE" },
+              "repository": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+              "delivery_issue": { "type": "integer", "minimum": 1 },
+              "pull_request": { "type": "integer", "minimum": 1 },
+              "source_head_sha": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
+              "source_tree_sha": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
+              "source_parent_sha": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
+              "validation_receipt_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "final_attestation_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "source_signer_identity": { "type": "string", "minLength": 1 },
+              "implementation_path": { "const": "scripts/secpal_pr_review/lifecycle_execution.py" },
+              "entrypoint": { "const": "execute_lifecycle_transition" },
+              "purpose": { "const": "FIRST_READY_EXECUTOR_BOOTSTRAP" },
+              "source_pr_state": { "const": "OPEN" },
+              "source_pr_draft": { "const": true },
+              "source_base_ref": { "const": "main" },
+              "admission_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
             }
           }
         },

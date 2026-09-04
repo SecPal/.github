@@ -941,6 +941,27 @@ assert publication_policy["bootstrap_genesis_repairs"] == [{
     "enrollment_publication_oid": "0bb379a9af38bb14a49c651104d31149bb6c7f18",
     "enrollment_publication_digest": "44fb6c570d4e875f2655e363bfe667107d69d37eedf62487bbf4551cf9288a9d",
 }]
+assert publication_policy["bootstrap_source_admissions"] == [{
+    "schema_version": "1.0",
+    "kind": "BOOTSTRAP_SOURCE_ADMISSION",
+    "subtype": "FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE",
+    "repository": "SecPal/.github",
+    "delivery_issue": 810,
+    "pull_request": 812,
+    "source_head_sha": "a668f6642ffcc76bcbea7fa6b69c5d6198ef5868",
+    "source_tree_sha": "13987395e5bdbeb586effb08e6a6f0ed5082a383",
+    "source_parent_sha": "6487001f57f6223f6502bacf953d9ad90d37a880",
+    "validation_receipt_digest": "83ef66b94d46d862b728a55ebb3affd4d8231ea70f8bf09c0c0aabcbdc7a63cc",
+    "final_attestation_digest": "a6ed34cbf05647e1c7cce4a9435e3f0f17e5d918f9e344763f6d8fbc9ac4e102",
+    "source_signer_identity": "aroviqen@secpal.app",
+    "implementation_path": "scripts/secpal_pr_review/lifecycle_execution.py",
+    "entrypoint": "execute_lifecycle_transition",
+    "purpose": "FIRST_READY_EXECUTOR_BOOTSTRAP",
+    "source_pr_state": "OPEN",
+    "source_pr_draft": True,
+    "source_base_ref": "main",
+    "admission_digest": "dde958066ab287feefdc88e9bf2e92aa3b6df390d7c713be3486f719da9956b4",
+}]
 assert publication_policy["historical_compatibility_publications"] == [
     {
         "repository": "SecPal/.github",
@@ -1016,6 +1037,7 @@ assert [
     ["python3", "-m", "unittest", "tests/secpal-resolve-fixed-threads-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-pr-review-actions-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-authority-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-bootstrap-source-admission-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-publication-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-orchestration-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-exceptional-recovery-authority-unit.py"],

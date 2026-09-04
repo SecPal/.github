@@ -230,6 +230,22 @@ fresh verified current-head evidence in the signed ordinary authority while the
 original adoption proof remains immutable.
 The lifecycle-authority suite is an unconditional registered validation command.
 
+### `secpal_pr_review/bootstrap_source_admission.py`
+
+Authenticates only the exact immutable PR #812 implementation source maintained
+for #810's first Ready-executor bootstrap. Accepted-main policy fixes the source
+head, tree, parent, receipt, final attestation, signer, implementation path,
+entrypoint, purpose, and source PR base repository/ref. Live provider reads emit
+a representation which is purely normalized before a separate pure admission
+step. Evidence files use the maintained bounded regular-file reader. The
+verifier fetches that object into a private detached tree, independently reuses
+the ordinary receipt/final-attestation verifier, and keeps candidate imports
+inside that tree. Its child launcher reports only closed diagnostic identities;
+it never exposes child stderr or exception text. Source admission alone performs no
+GitHub mutation, lifecycle publication, CURRENT change, genesis operation, or
+work-graph mutation; the admitted executor still requires #810's separate signed
+one-use lifecycle-transition authorization.
+
 ### `secpal_pr_review/lifecycle_orchestration.py`
 
 Authenticates the independently selected CURRENT lifecycle publication before
