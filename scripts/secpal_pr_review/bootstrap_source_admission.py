@@ -39,6 +39,10 @@ _DIGEST = re.compile(r"[0-9a-f]{64}")
 _VERIFIED_SOURCE = object()
 MAXIMUM_EVIDENCE_BYTES = late_disposition.MAXIMUM_ARTIFACT_BYTES
 SOURCE_ADMISSION_FAILURE = "SOURCE_ADMISSION_FAILURE"
+HISTORICAL_EVIDENCE_PRESENT = "HISTORICAL_EVIDENCE_PRESENT"
+HISTORICAL_EVIDENCE_RECOVERY = (
+    "HISTORICAL_EVIDENCE_UNAVAILABLE_BUT_EXACT_RECOVERY_AUTHORIZED"
+)
 _EXECUTION_DIAGNOSTIC_IDENTITIES = frozenset(
     {
         "AUTHORIZATION_ORCHESTRATION_FAILURE",
@@ -198,6 +202,22 @@ class GitHubSourceFacts:
 
 
 @dataclass(frozen=True)
+class RecoveryReviewFacts:
+    """Canonical bounded live review state for the exact recovery source."""
+
+    repository: str
+    pull_request: int
+    head_sha: str
+    base_ref: str
+    state: str
+    review_decision: str
+    feedback_inventory_digest: str
+    conversation_comment_count: int
+    review_thread_count: int
+    resolved_review_thread_count: int
+
+
+@dataclass(frozen=True)
 class VerifiedBootstrapSource:
     """Stable source facts exposed only after complete accepted-main checks."""
 
@@ -215,6 +235,10 @@ class VerifiedBootstrapSource:
     entrypoint: str
     purpose: str
     admission_digest: str
+    historical_evidence_status: str
+    recovery_authority_digest: str | None
+    recovery_validation_digest: str | None
+    recovery_technical_security_gate_digest: str | None
     _verification_seal: object
 
 
@@ -498,6 +522,134 @@ def _authenticate_live_github_source(
     _admit_github_source(facts, policy)
 
 
+def _observe_recovery_review_state(
+    policy: authority.BootstrapSourceAdmissionPolicy,
+) -> bytes:
+    actions = _load_actions_helper()
+    try:
+        registry = actions.load_registry(actions.REGISTRY_PATH)
+        entry = actions.select_repository(registry, policy.repository)
+        gateway = actions.FastPathGateway(Path(__file__).resolve().parents[2], entry)
+        observed = gateway.observe_stable_feedback(
+            policy.repository, policy.pull_request
+        )
+        return authority.canonical_json_bytes(
+            {
+                "repository": policy.repository,
+                "pull_request_number": policy.pull_request,
+                **observed,
+            }
+        )
+    except (
+        AttributeError,
+        OSError,
+        TypeError,
+        fast_path.RecoverableLocalError,
+        fast_path.SecurityBlocker,
+        fast_path.TransientReadFailure,
+        actions.RegistryError,
+    ) as exc:
+        raise BootstrapSourceAdmissionError(
+            "source recovery review authority is unavailable"
+        ) from exc
+
+
+def _normalize_recovery_review_state(raw: bytes) -> RecoveryReviewFacts:
+    """Purely normalize the bounded recovery review representation."""
+
+    try:
+        document = _closed_json(raw, "source recovery review authority")
+        expected_fields = {
+            "repository",
+            "pull_request_number",
+            "head_sha",
+            "base_ref",
+            "base_sha",
+            "pr_state",
+            "review_decision",
+            "feedback",
+        }
+        if set(document) != expected_fields:
+            raise BootstrapSourceAdmissionError(
+                "source recovery review authority is malformed"
+            )
+        reviewed = fast_path.StableFeedbackState.from_payload(document)
+        review_decision = document["review_decision"]
+        feedback = reviewed.feedback
+        threads = feedback["threads"]
+        facts = RecoveryReviewFacts(
+            repository=reviewed.repository,
+            pull_request=authority._require_positive_int(
+                reviewed.pull_request_number, "source recovery pull request"
+            ),
+            head_sha=reviewed.head_sha,
+            base_ref=reviewed.base_ref,
+            state=reviewed.pr_state,
+            review_decision="NONE" if review_decision is None else review_decision,
+            feedback_inventory_digest=reviewed.feedback_digest,
+            conversation_comment_count=len(feedback["conversation_comments"]),
+            review_thread_count=len(threads),
+            resolved_review_thread_count=sum(
+                item["is_resolved"] is True for item in threads
+            ),
+        )
+    except BootstrapSourceAdmissionError:
+        raise
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+        fast_path.SecurityBlocker,
+        authority.LifecycleAuthorityError,
+    ) as exc:
+        raise BootstrapSourceAdmissionError(
+            "source recovery review authority is malformed"
+        ) from exc
+    if (
+        not isinstance(facts.review_decision, str)
+        or not _DIGEST.fullmatch(facts.feedback_inventory_digest)
+        or type(facts.conversation_comment_count) is not int
+        or facts.conversation_comment_count < 0
+        or type(facts.review_thread_count) is not int
+        or facts.review_thread_count < 0
+    ):
+        raise BootstrapSourceAdmissionError(
+            "source recovery review authority is malformed"
+        )
+    return facts
+
+
+def _authenticate_live_recovery_review_state(
+    policy: authority.BootstrapSourceAdmissionPolicy,
+) -> None:
+    recovery = policy.evidence_loss_recovery
+    if recovery is None:
+        raise BootstrapSourceAdmissionError(
+            "accepted-main source evidence-loss recovery is absent"
+        )
+    facts = _normalize_recovery_review_state(
+        _observe_recovery_review_state(policy)
+    )
+    gate = recovery.technical_security_gate
+    if (
+        facts.repository != policy.repository
+        or facts.pull_request != policy.pull_request
+        or facts.head_sha != policy.source_head_sha
+        or facts.base_ref != policy.source_base_ref
+        or facts.state != policy.source_pr_state
+        or facts.review_decision != gate.review_decision
+        or facts.feedback_inventory_digest != gate.feedback_inventory_digest
+        or facts.conversation_comment_count != gate.conversation_comment_count
+        or facts.review_thread_count != gate.resolved_review_thread_count
+        or facts.resolved_review_thread_count
+        != gate.resolved_review_thread_count
+    ):
+        raise BootstrapSourceAdmissionError(
+            "source recovery review state changed or has an open finding"
+        )
+
+
 @contextmanager
 def _isolated_source_repository(
     trust: authority.LifecycleTrustPolicy,
@@ -649,17 +801,7 @@ def _authenticate_materialized_source(
     policy: authority.BootstrapSourceAdmissionPolicy,
     evidence_documents: tuple[dict[str, Any], ...],
 ) -> VerifiedBootstrapSource:
-    head = _git_text(root, ["rev-parse", "HEAD"]).strip()
-    tree = _git_text(root, ["rev-parse", f"{head}^{{tree}}"]).strip()
-    parents = _git_text(root, ["rev-list", "--parents", "-n", "1", head]).split()
-    if (
-        head != policy.source_head_sha
-        or tree != policy.source_tree_sha
-        or parents != [policy.source_head_sha, policy.source_parent_sha]
-    ):
-        raise BootstrapSourceAdmissionError("source head, tree, or parent changed")
-    _verify_commit_signature(root, trust, policy)
-    trailer = _exact_trailer(root, head)
+    head, tree, blob = _authenticate_exact_materialized_source(root, trust, policy)
     reviewed_raw, receipt, attestation = evidence_documents
     try:
         reviewed = fast_path.verify_reviewed_state_evidence(reviewed_raw)
@@ -690,7 +832,7 @@ def _authenticate_materialized_source(
             reviewed_state=reviewed,
             commit_parent_sha=policy.source_parent_sha,
             commit_tree_sha=tree,
-            commit_validation_receipt_digest=trailer,
+            commit_validation_receipt_digest=policy.validation_receipt_digest,
         )
     except (fast_path.SecurityBlocker, AttributeError, KeyError, TypeError) as exc:
         raise BootstrapSourceAdmissionError(
@@ -707,7 +849,50 @@ def _authenticate_materialized_source(
         raise BootstrapSourceAdmissionError(
             "source validation evidence does not match maintained admission"
         )
+    return _verified_bootstrap_source(
+        policy,
+        head=head,
+        tree=tree,
+        blob=blob,
+        historical_evidence_status=HISTORICAL_EVIDENCE_PRESENT,
+    )
+
+
+def _authenticate_exact_materialized_source(
+    root: Path,
+    trust: authority.LifecycleTrustPolicy,
+    policy: authority.BootstrapSourceAdmissionPolicy,
+) -> tuple[str, str, str]:
+    """Authenticate immutable provenance shared by both evidence modes."""
+
+    head = _git_text(root, ["rev-parse", "HEAD"]).strip()
+    tree = _git_text(root, ["rev-parse", f"{head}^{{tree}}"]).strip()
+    parents = _git_text(root, ["rev-list", "--parents", "-n", "1", head]).split()
+    if (
+        head != policy.source_head_sha
+        or tree != policy.source_tree_sha
+        or parents != [policy.source_head_sha, policy.source_parent_sha]
+    ):
+        raise BootstrapSourceAdmissionError("source head, tree, or parent changed")
+    _verify_commit_signature(root, trust, policy)
+    trailer = _exact_trailer(root, head)
+    if trailer != policy.validation_receipt_digest:
+        raise BootstrapSourceAdmissionError(
+            "source commit validation-receipt trailer changed"
+        )
     blob = _implementation_blob(root, policy)
+    return head, tree, blob
+
+
+def _verified_bootstrap_source(
+    policy: authority.BootstrapSourceAdmissionPolicy,
+    *,
+    head: str,
+    tree: str,
+    blob: str,
+    historical_evidence_status: str,
+    recovery: authority.BootstrapSourceEvidenceLossRecovery | None = None,
+) -> VerifiedBootstrapSource:
     return VerifiedBootstrapSource(
         repository=policy.repository,
         delivery_issue=policy.delivery_issue,
@@ -723,7 +908,65 @@ def _authenticate_materialized_source(
         entrypoint=policy.entrypoint,
         purpose=policy.purpose,
         admission_digest=policy.admission_digest,
+        historical_evidence_status=historical_evidence_status,
+        recovery_authority_digest=(
+            None if recovery is None else recovery.recovery_digest
+        ),
+        recovery_validation_digest=(
+            None if recovery is None else recovery.recovery_validation.validation_digest
+        ),
+        recovery_technical_security_gate_digest=(
+            None
+            if recovery is None
+            else recovery.technical_security_gate.gate_digest
+        ),
         _verification_seal=_VERIFIED_SOURCE,
+    )
+
+
+def _authenticate_recovered_materialized_source(
+    root: Path,
+    trust: authority.LifecycleTrustPolicy,
+    policy: authority.BootstrapSourceAdmissionPolicy,
+) -> VerifiedBootstrapSource:
+    """Authenticate one accepted recovery without reconstructing lost evidence."""
+
+    head, tree, blob = _authenticate_exact_materialized_source(root, trust, policy)
+    recovery = policy.evidence_loss_recovery
+    if recovery is None:
+        raise BootstrapSourceAdmissionError(
+            "accepted-main source evidence-loss recovery is absent"
+        )
+    try:
+        actions = _load_actions_helper()
+        binding = actions._prior_delivery_registry_binding(root, head, policy.repository)
+        command_set_digest = fast_path.digest_json(binding["validation"])
+    except (AttributeError, KeyError, TypeError, fast_path.SecurityBlocker) as exc:
+        raise BootstrapSourceAdmissionError(
+            "exact source recovery validation policy is unavailable"
+        ) from exc
+    if (
+        recovery.historical_evidence_status != HISTORICAL_EVIDENCE_RECOVERY
+        or recovery.source_admission_digest != policy.admission_digest
+        or recovery.recovery_validation.source_head_sha != head
+        or recovery.recovery_validation.source_tree_sha != tree
+        or recovery.recovery_validation.command_set_digest != command_set_digest
+        or recovery.recovery_validation.result != "PASSED"
+        or recovery.technical_security_gate.source_head_sha != head
+        or recovery.technical_security_gate.source_tree_sha != tree
+        or recovery.technical_security_gate.result
+        != "NO_OPEN_TECHNICAL_OR_SECURITY_FINDINGS"
+    ):
+        raise BootstrapSourceAdmissionError(
+            "accepted-main source evidence-loss recovery is invalid"
+        )
+    return _verified_bootstrap_source(
+        policy,
+        head=head,
+        tree=tree,
+        blob=blob,
+        historical_evidence_status=HISTORICAL_EVIDENCE_RECOVERY,
+        recovery=recovery,
     )
 
 
@@ -731,15 +974,25 @@ def verify_first_ready_executor_source(
     repository: str,
     delivery_issue: int,
     *,
-    source_evidence_directory: Path | str,
+    source_evidence_directory: Path | str | None = None,
 ) -> VerifiedBootstrapSource:
     """Authenticate the exact source without authorizing or performing mutation."""
 
     trust, policy = _select_policy(repository, delivery_issue)
-    evidence = _read_evidence(source_evidence_directory)
+    evidence = (
+        None
+        if source_evidence_directory is None
+        else _read_evidence(source_evidence_directory)
+    )
     _authenticate_live_github_source(policy)
+    if evidence is None:
+        _authenticate_live_recovery_review_state(policy)
     with _isolated_source_repository(trust, policy) as root:
-        verified = _authenticate_materialized_source(root, trust, policy, evidence)
+        verified = (
+            _authenticate_recovered_materialized_source(root, trust, policy)
+            if evidence is None
+            else _authenticate_materialized_source(root, trust, policy, evidence)
+        )
         _verify_materialized_tree(root, policy)
         return verified
 
@@ -852,15 +1105,25 @@ def execute_first_ready_executor_bootstrap(
     delivery_issue: int,
     serialized_authorization: bytes | str,
     *,
-    source_evidence_directory: Path | str,
+    source_evidence_directory: Path | str | None = None,
 ) -> Mapping[str, Any]:
     """Call only the admitted #812 entrypoint after independent source checks."""
 
     trust, policy = _select_policy(repository, delivery_issue)
-    evidence = _read_evidence(source_evidence_directory)
+    evidence = (
+        None
+        if source_evidence_directory is None
+        else _read_evidence(source_evidence_directory)
+    )
     _authenticate_live_github_source(policy)
+    if evidence is None:
+        _authenticate_live_recovery_review_state(policy)
     with _isolated_source_repository(trust, policy) as root:
-        verified = _authenticate_materialized_source(root, trust, policy, evidence)
+        verified = (
+            _authenticate_recovered_materialized_source(root, trust, policy)
+            if evidence is None
+            else _authenticate_materialized_source(root, trust, policy, evidence)
+        )
         if not is_verified_bootstrap_source(verified):
             raise BootstrapSourceAdmissionError("source admission verification was not retained")
         _verify_materialized_tree(root, policy)

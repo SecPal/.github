@@ -215,7 +215,34 @@
             "source_pr_state": "OPEN",
             "source_pr_draft": true,
             "source_base_ref": "main",
-            "admission_digest": "dde958066ab287feefdc88e9bf2e92aa3b6df390d7c713be3486f719da9956b4"
+            "admission_digest": "dde958066ab287feefdc88e9bf2e92aa3b6df390d7c713be3486f719da9956b4",
+            "evidence_loss_recovery": {
+              "schema_version": "1.0",
+              "kind": "BOOTSTRAP_SOURCE_EVIDENCE_LOSS_RECOVERY",
+              "historical_evidence_status": "HISTORICAL_EVIDENCE_UNAVAILABLE_BUT_EXACT_RECOVERY_AUTHORIZED",
+              "source_admission_digest": "dde958066ab287feefdc88e9bf2e92aa3b6df390d7c713be3486f719da9956b4",
+              "recovery_validation": {
+                "kind": "EXACT_BOOTSTRAP_SOURCE_RECOVERY_VALIDATION",
+                "source_head_sha": "a668f6642ffcc76bcbea7fa6b69c5d6198ef5868",
+                "source_tree_sha": "13987395e5bdbeb586effb08e6a6f0ed5082a383",
+                "command_set_digest": "efa8f75050280fda50129a5861d139898c9c6350a28eeb3cd73e9c03d5fcd550",
+                "result": "PASSED",
+                "validation_digest": "fd5f4c5ed116c38b9dec715e186cc54aacfe2a6c3da3a441e3c48a99e4722fa4"
+              },
+              "technical_security_gate": {
+                "kind": "BOOTSTRAP_SOURCE_RECOVERY_TECHNICAL_SECURITY_GATE",
+                "source_head_sha": "a668f6642ffcc76bcbea7fa6b69c5d6198ef5868",
+                "source_tree_sha": "13987395e5bdbeb586effb08e6a6f0ed5082a383",
+                "review_scope": "EXACT_IMMUTABLE_BOOTSTRAP_EXECUTOR",
+                "feedback_inventory_digest": "d2236120f769caa74d5da0435330c103a036dfe68a5e0f8274d43a3916ca8f2b",
+                "resolved_review_thread_count": 2,
+                "conversation_comment_count": 0,
+                "review_decision": "NONE",
+                "result": "NO_OPEN_TECHNICAL_OR_SECURITY_FINDINGS",
+                "gate_digest": "4f6a73e91475e8464c4583ac7818c57e5ce19953f54143a359e231ec3a9714b6"
+              },
+              "recovery_digest": "64beea5b886119b8578c01df152992df22f56fdabba80109d589060c40e6b37d"
+            }
           }
         ],
         "historical_compatibility_publications": [

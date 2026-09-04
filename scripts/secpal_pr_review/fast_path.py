@@ -861,6 +861,11 @@ def _feedback_projection(payload: dict[str, Any]) -> dict[str, Any]:
                     "reactions": _reactions(item.get("reactions", []), "thread comment"),
                 }
             )
+        comment_identities = [item["node_id"] for item in thread_comments]
+        if len(comment_identities) != len(set(comment_identities)):
+            raise SecurityBlocker(
+                f"review thread {thread_id} contains duplicate comment identities"
+            )
         threads.append(
             {
                 "node_id": thread_id,
@@ -884,6 +889,15 @@ def _feedback_projection(payload: dict[str, Any]) -> dict[str, Any]:
         identities = [item["node_id"] for item in items]
         if len(identities) != len(set(identities)):
             raise SecurityBlocker(f"stable feedback contains duplicate {label}")
+    comment_identities = [
+        item["node_id"] for item in projection["conversation_comments"]
+    ] + [
+        item["node_id"]
+        for thread in projection["threads"]
+        for item in thread["comments"]
+    ]
+    if len(comment_identities) != len(set(comment_identities)):
+        raise SecurityBlocker("stable feedback contains duplicate comment identities")
     return projection
 
 

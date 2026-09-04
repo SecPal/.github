@@ -2266,6 +2266,7 @@ class MutationTests(TestCase):
                         "id": "PR_1",
                         "headRefOid": p21.HEAD,
                         "state": "OPEN",
+                        "reviewDecision": "CHANGES_REQUESTED",
                         "reactions": copy.deepcopy(empty),
                         "reviews": copy.deepcopy(empty),
                         "comments": copy.deepcopy(empty),
@@ -2308,6 +2309,7 @@ class MutationTests(TestCase):
         runner = SimpleNamespace(run=lambda _arguments: copy.deepcopy(payload))
         github = actions.LiveGitHub(runner)
         current = github.read_current_feedback(plan())
+        self.assertEqual(current["review_decision"], "CHANGES_REQUESTED")
         self.assertEqual(
             current["feedback"]["threads"][0]["comments"][0]["reactions"][0][
                 "mutation_id"
@@ -2363,6 +2365,17 @@ class MutationTests(TestCase):
             "pageInfo": {"hasNextPage": False},
         }
         pages = iter((payload, changed_second_page))
+        github = actions.LiveGitHub(
+            SimpleNamespace(run=lambda _arguments: copy.deepcopy(next(pages)))
+        )
+        with self.assertRaisesRegex(actions.MutationBlocked, "changed during bounded pagination"):
+            github.read_current_feedback(plan())
+
+        changed_review_decision = copy.deepcopy(second_page)
+        changed_review_decision["data"]["repository"]["pullRequest"][
+            "reviewDecision"
+        ] = "APPROVED"
+        pages = iter((payload, changed_review_decision))
         github = actions.LiveGitHub(
             SimpleNamespace(run=lambda _arguments: copy.deepcopy(next(pages)))
         )
