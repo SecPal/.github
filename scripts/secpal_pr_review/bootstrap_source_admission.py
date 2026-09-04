@@ -51,37 +51,89 @@ _EXECUTION_DIAGNOSTIC_IDENTITIES = frozenset(
         "UNEXPECTED_CLOSED_CHILD_FAILURE",
     }
 )
-_LAUNCHER = r"""
+_DIAGNOSTIC_EXECUTOR_BLOB_OID = "4cfd9eb73a522224f9dfca4176d1aad386b81d50"
+_DIAGNOSTIC_RAISE_SITES = (
+    (("classify_observed_state", 97), "AUTHORIZATION_ORCHESTRATION_FAILURE"),
+    (("classify_observed_state", 99), "AUTHORIZATION_ORCHESTRATION_FAILURE"),
+    (("_validate_live_pull_request", 117), "GITHUB_OBSERVATION_FAILURE"),
+    (("_validate_live_pull_request", 125), "GITHUB_OBSERVATION_FAILURE"),
+    (("_validate_live_pull_request", 133), "GITHUB_OBSERVATION_FAILURE"),
+    (("_authenticate_predecessor_decision", 185), "AUTHORIZATION_ORCHESTRATION_FAILURE"),
+    (("_authenticate_predecessor_decision", 197), "AUTHORIZATION_ORCHESTRATION_FAILURE"),
+    (("_validate_transition_delta", 232), "CURRENT_OBSERVATION_VERIFICATION_FAILURE"),
+    (("_validate_transition_delta", 253), "CURRENT_OBSERVATION_VERIFICATION_FAILURE"),
+    (("_authenticate_target", 269), "CURRENT_OBSERVATION_VERIFICATION_FAILURE"),
+    (("_authenticate_target", 277), "CURRENT_OBSERVATION_VERIFICATION_FAILURE"),
+    (("_append_successor_evidence", 304), "CURRENT_OBSERVATION_VERIFICATION_FAILURE"),
+    (("_append_successor_evidence", 388), "SIGNING_SUCCESSOR_DERIVATION_FAILURE"),
+    (("_append_successor_evidence", 404), "SIGNING_SUCCESSOR_DERIVATION_FAILURE"),
+    (("_single_role_identity", 410), "SIGNING_SUCCESSOR_DERIVATION_FAILURE"),
+    (("_local_signer", 419), "SIGNING_SUCCESSOR_DERIVATION_FAILURE"),
+    (("sign", 447), "SIGNING_SUCCESSOR_DERIVATION_FAILURE"),
+    (("sign", 451), "SIGNING_SUCCESSOR_DERIVATION_FAILURE"),
+    (("sign", 453), "SIGNING_SUCCESSOR_DERIVATION_FAILURE"),
+    (("_production_signing_authorities", 469), "SIGNING_SUCCESSOR_DERIVATION_FAILURE"),
+    (("_production_signing_authorities", 480), "AUTHORIZATION_ORCHESTRATION_FAILURE"),
+    (("_read_live_github", 505), "GITHUB_OBSERVATION_FAILURE"),
+    (("_read_live_github", 511), "GITHUB_OBSERVATION_FAILURE"),
+    (("_read_live_github", 519), "GITHUB_OBSERVATION_FAILURE"),
+    (("_read_live_github", 529), "GITHUB_OBSERVATION_FAILURE"),
+    (("_write_live_github", 541), "GITHUB_MUTATION_READBACK_FAILURE"),
+    (("_execute_lifecycle_transition", 592), "AUTHORIZATION_ORCHESTRATION_FAILURE"),
+    (("_execute_lifecycle_transition", 597), "AUTHORIZATION_ORCHESTRATION_FAILURE"),
+    (("_execute_lifecycle_transition", 615), "CURRENT_OBSERVATION_VERIFICATION_FAILURE"),
+    (("_execute_lifecycle_transition", 629), "FINAL_CONVERGENCE_FAILURE"),
+    (("_execute_lifecycle_transition", 640), "CURRENT_OBSERVATION_VERIFICATION_FAILURE"),
+    (("_execute_lifecycle_transition", 652), "GITHUB_MUTATION_READBACK_FAILURE"),
+    (("_execute_lifecycle_transition", 661), "GITHUB_MUTATION_READBACK_FAILURE"),
+    (("_execute_lifecycle_transition", 678), "GITHUB_MUTATION_READBACK_FAILURE"),
+    (("_execute_lifecycle_transition", 682), "CURRENT_OBSERVATION_VERIFICATION_FAILURE"),
+    (("_execute_lifecycle_transition", 692), "GITHUB_MUTATION_READBACK_FAILURE"),
+    (("_execute_lifecycle_transition", 697), "CURRENT_OBSERVATION_VERIFICATION_FAILURE"),
+    (("_execute_lifecycle_transition", 707), "GITHUB_MUTATION_READBACK_FAILURE"),
+    (("_execute_lifecycle_transition", 744), "LIFECYCLE_PUBLICATION_FAILURE"),
+    (("_execute_lifecycle_transition", 758), "FINAL_CONVERGENCE_FAILURE"),
+)
+_LAUNCHER_TEMPLATE = r"""
 import dataclasses
+import hashlib
 import json
 from pathlib import Path
 import sys
 
-def diagnostic_identity(error):
-    message = str(error)
-    if "convergence" in message:
-        return "FINAL_CONVERGENCE_FAILURE"
-    if "authorization" in message or "orchestration" in message:
-        return "AUTHORIZATION_ORCHESTRATION_FAILURE"
-    if "CURRENT" in message:
-        return "CURRENT_OBSERVATION_VERIFICATION_FAILURE"
-    if "observation" in message and "GitHub" in message:
-        return "GITHUB_OBSERVATION_FAILURE"
-    if "GitHub" in message:
-        return "GITHUB_MUTATION_READBACK_FAILURE"
-    if "sign" in message or "successor" in message or "derived" in message:
-        return "SIGNING_SUCCESSOR_DERIVATION_FAILURE"
-    if "publication" in message or "published" in message:
-        return "LIFECYCLE_PUBLICATION_FAILURE"
+RAISE_SITES = __SECPAL_DIAGNOSTIC_RAISE_SITES__
+EXPECTED_BLOB = "4cfd9eb73a522224f9dfca4176d1aad386b81d50"
+
+def diagnostic_identity(error, lifecycle_execution, expected):
+    if (
+        lifecycle_execution is None
+        or type(error) is not lifecycle_execution.LifecycleExecutionError
+    ):
+        return "UNEXPECTED_CLOSED_CHILD_FAILURE"
+    traceback = error.__traceback__
+    executor_sites = []
+    while traceback is not None:
+        frame = traceback.tb_frame
+        if frame.f_code.co_filename == str(expected):
+            executor_sites.append((frame.f_code.co_name, traceback.tb_lineno))
+        traceback = traceback.tb_next
+    if executor_sites:
+        return RAISE_SITES.get(executor_sites[-1], "UNEXPECTED_CLOSED_CHILD_FAILURE")
     return "UNEXPECTED_CLOSED_CHILD_FAILURE"
 
+lifecycle_execution = None
+expected = None
 try:
     source_root = Path(sys.argv[1]).resolve(strict=True)
+    expected = source_root / "scripts/secpal_pr_review/lifecycle_execution.py"
+    raw = expected.read_bytes()
+    header = f"blob {len(raw)}\0".encode("ascii")
+    if hashlib.sha1(header + raw).hexdigest() != EXPECTED_BLOB:
+        raise RuntimeError("admitted lifecycle executor blob changed")
     stdlib = [value for value in sys.path if value and "site-packages" not in value]
     sys.path[:] = [str(source_root), *stdlib]
     from scripts.secpal_pr_review import lifecycle_execution
 
-    expected = source_root / "scripts/secpal_pr_review/lifecycle_execution.py"
     if Path(lifecycle_execution.__file__).resolve(strict=True) != expected:
         raise RuntimeError("admitted lifecycle executor import was substituted")
     for name, module in tuple(sys.modules.items()):
@@ -95,7 +147,7 @@ try:
     )
 except Exception as error:
     payload = {
-        "diagnostic_identity": diagnostic_identity(error),
+        "diagnostic_identity": diagnostic_identity(error, lifecycle_execution, expected),
         "status": "REJECTED",
     }
     sys.stdout.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
@@ -104,6 +156,9 @@ else:
     payload = dataclasses.asdict(result) if dataclasses.is_dataclass(result) else result
     sys.stdout.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
 """
+_LAUNCHER = _LAUNCHER_TEMPLATE.replace(
+    "__SECPAL_DIAGNOSTIC_RAISE_SITES__", repr(dict(_DIAGNOSTIC_RAISE_SITES))
+)
 
 
 class BootstrapSourceAdmissionError(ValueError):
@@ -485,6 +540,69 @@ def _exact_trailer(root: Path, head: str) -> str:
     return trailers[0]
 
 
+def _lifecycle_execution_raise_sites(raw: bytes) -> frozenset[tuple[str, int]]:
+    """Inventory exact explicit executor error sites without interpreting text."""
+
+    try:
+        tree = ast.parse(raw, filename=IMPLEMENTATION_PATH)
+    except (SyntaxError, ValueError) as exc:
+        raise BootstrapSourceAdmissionError(
+            "admitted implementation is invalid Python"
+        ) from exc
+    parents: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+    sites: set[tuple[str, int]] = set()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Raise)
+            and isinstance(node.exc, ast.Call)
+            and isinstance(node.exc.func, ast.Name)
+            and node.exc.func.id == "LifecycleExecutionError"
+        ):
+            continue
+        parent: ast.AST | None = node
+        while parent is not None and not isinstance(
+            parent, (ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
+            parent = parents.get(parent)
+        if parent is None:
+            raise BootstrapSourceAdmissionError(
+                "executor diagnostic raise site has no function identity"
+            )
+        site = (parent.name, node.lineno)
+        if site in sites:
+            raise BootstrapSourceAdmissionError(
+                "executor diagnostic raise-site identity is ambiguous"
+            )
+        sites.add(site)
+    return frozenset(sites)
+
+
+def _verify_diagnostic_raise_site_agreement(
+    raw: bytes, blob_oid: str
+) -> frozenset[tuple[str, int]]:
+    """Bind the closed diagnostic table to the exact admitted executor blob."""
+
+    expected = dict(_DIAGNOSTIC_RAISE_SITES)
+    if (
+        blob_oid != _DIAGNOSTIC_EXECUTOR_BLOB_OID
+        or len(expected) != len(_DIAGNOSTIC_RAISE_SITES)
+        or not expected
+        or not set(expected.values()).issubset(_EXECUTION_DIAGNOSTIC_IDENTITIES)
+    ):
+        raise BootstrapSourceAdmissionError(
+            "executor diagnostic agreement is not exact"
+        )
+    observed = _lifecycle_execution_raise_sites(raw)
+    if observed != frozenset(expected):
+        raise BootstrapSourceAdmissionError(
+            "executor diagnostic raise-site agreement changed"
+        )
+    return observed
+
+
 def _implementation_blob(root: Path, policy: authority.BootstrapSourceAdmissionPolicy) -> str:
     record = _git_text(
         root,
@@ -515,6 +633,7 @@ def _implementation_blob(root: Path, policy: authority.BootstrapSourceAdmissionP
     ]
     if len(definitions) != 1:
         raise BootstrapSourceAdmissionError("admitted entrypoint is absent or ambiguous")
+    _verify_diagnostic_raise_site_agreement(raw, fields[2])
     self_admission = publication._run_git(
         root,
         ["cat-file", "-e", f"{policy.source_tree_sha}:scripts/secpal_pr_review/bootstrap_source_admission.py"],

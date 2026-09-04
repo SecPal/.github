@@ -6,11 +6,13 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import replace
+import io
 import inspect
 import json
 from pathlib import Path
 import subprocess
 import sys
+import tarfile
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -335,6 +337,7 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
                 "_git",
                 return_value=subprocess.CompletedProcess([], 0, blob, b""),
             ),
+            mock.patch.object(source, "_verify_diagnostic_raise_site_agreement"),
             mock.patch.object(source.publication, "_run_git", return_value=absent),
         ):
             self.assertEqual(
@@ -370,6 +373,7 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
                 "_git",
                 return_value=subprocess.CompletedProcess([], 0, blob, b""),
             ),
+            mock.patch.object(source, "_verify_diagnostic_raise_site_agreement"),
             mock.patch.object(source.publication, "_run_git", return_value=present),
             self.assertRaisesRegex(
                 source.BootstrapSourceAdmissionError, "cannot self-admit"
@@ -564,41 +568,89 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
         self.assertNotIn("attacker-controlled", str(raised.exception))
         self.assertNotIn("secret stderr", str(raised.exception))
 
-    def test_real_isolated_launcher_classifies_every_closed_failure_boundary(self) -> None:
-        cases = {
-            "lifecycle execution authorization is invalid":
+    def test_exact_executor_raise_sites_have_exhaustive_diagnostic_agreement(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        raw = subprocess.run(
+            ["git", "cat-file", "blob", BLOB],
+            cwd=repository_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        ).stdout
+        sites = source._verify_diagnostic_raise_site_agreement(raw, BLOB)
+        mapping = dict(source._DIAGNOSTIC_RAISE_SITES)
+
+        self.assertEqual(len(sites), 40)
+        self.assertEqual(sites, frozenset(mapping))
+        exact_examples = {
+            ("_execute_lifecycle_transition", 592):
                 "AUTHORIZATION_ORCHESTRATION_FAILURE",
-            "CURRENT changed before GitHub mutation":
+            ("_execute_lifecycle_transition", 697):
                 "CURRENT_OBSERVATION_VERIFICATION_FAILURE",
-            "live GitHub pull-request observation is unavailable":
-                "GITHUB_OBSERVATION_FAILURE",
-            "GitHub mutation read-back is unsafe":
+            ("_read_live_github", 505): "GITHUB_OBSERVATION_FAILURE",
+            ("_execute_lifecycle_transition", 692):
                 "GITHUB_MUTATION_READBACK_FAILURE",
-            "maintained lifecycle signing failed":
+            ("_append_successor_evidence", 388):
                 "SIGNING_SUCCESSOR_DERIVATION_FAILURE",
-            "publication response differs from verified state":
+            ("_execute_lifecycle_transition", 744):
                 "LIFECYCLE_PUBLICATION_FAILURE",
-            "final GitHub/CURRENT convergence is not exact":
-                "FINAL_CONVERGENCE_FAILURE",
-            "unclassified internal failure":
-                "UNEXPECTED_CLOSED_CHILD_FAILURE",
+            ("_execute_lifecycle_transition", 758): "FINAL_CONVERGENCE_FAILURE",
+            ("_validate_live_pull_request", 125): "GITHUB_OBSERVATION_FAILURE",
+            ("_single_role_identity", 410):
+                "SIGNING_SUCCESSOR_DERIVATION_FAILURE",
         }
-        for message, identity in cases.items():
-            with self.subTest(identity=identity), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                package = root / "scripts" / "secpal_pr_review"
-                package.mkdir(parents=True)
-                (root / "scripts" / "__init__.py").write_text("", encoding="utf-8")
-                (package / "__init__.py").write_text("", encoding="utf-8")
-                (package / "lifecycle_execution.py").write_text(
-                    "def execute_lifecycle_transition(repository, issue, authorization):\n"
-                    f"    raise ValueError({message!r})\n",
-                    encoding="utf-8",
-                )
-                with self.assertRaises(source.BootstrapSourceAdmissionError) as raised:
-                    source._execute_entrypoint(root, b"authorization")
-                self.assertEqual(raised.exception.diagnostic_identity, identity)
-                self.assertNotIn(message, str(raised.exception))
+        for site, expected_identity in exact_examples.items():
+            self.assertEqual(mapping[site], expected_identity)
+        for expected_identity in source._EXECUTION_DIAGNOSTIC_IDENTITIES - {
+            "UNEXPECTED_CLOSED_CHILD_FAILURE"
+        }:
+            self.assertIn(expected_identity, mapping.values())
+        self.assertNotIn("str(error)", source._LAUNCHER)
+        with self.assertRaisesRegex(
+            source.BootstrapSourceAdmissionError, "agreement is not exact"
+        ):
+            source._verify_diagnostic_raise_site_agreement(raw, "0" * 40)
+
+    def test_real_isolated_launcher_uses_exact_traceback_site_and_hides_text(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        archived = subprocess.run(
+            ["git", "archive", HEAD],
+            cwd=repository_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        ).stdout
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with tarfile.open(fileobj=io.BytesIO(archived), mode="r:") as archive:
+                archive.extractall(root, filter="data")
+            with self.assertRaises(source.BootstrapSourceAdmissionError) as raised:
+                source._execute_entrypoint(root, b"not signed authorization")
+        self.assertEqual(
+            raised.exception.diagnostic_identity,
+            "AUTHORIZATION_ORCHESTRATION_FAILURE",
+        )
+        self.assertNotIn("authorization is invalid", str(raised.exception))
+
+    def test_substituted_executor_cannot_select_identity_by_message(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "scripts" / "secpal_pr_review"
+            package.mkdir(parents=True)
+            (root / "scripts" / "__init__.py").write_text("", encoding="utf-8")
+            (package / "__init__.py").write_text("", encoding="utf-8")
+            (package / "lifecycle_execution.py").write_text(
+                "def execute_lifecycle_transition(repository, issue, authorization):\n"
+                "    raise ValueError('publication response differs from verified CURRENT')\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(source.BootstrapSourceAdmissionError) as raised:
+                source._execute_entrypoint(root, b"authorization")
+        self.assertEqual(
+            raised.exception.diagnostic_identity,
+            "UNEXPECTED_CLOSED_CHILD_FAILURE",
+        )
+        self.assertNotIn("publication response", str(raised.exception))
 
     def test_oversized_evidence_is_rejected_by_bounded_regular_file_read(self) -> None:
         filenames = (
