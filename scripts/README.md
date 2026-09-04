@@ -232,19 +232,32 @@ The lifecycle-authority suite is an unconditional registered validation command.
 
 ### `secpal_pr_review/bootstrap_source_admission.py`
 
-Authenticates only the exact immutable PR #812 implementation source maintained
-for #810's first Ready-executor bootstrap. Accepted-main policy fixes the source
-head, tree, parent, receipt, final attestation, signer, implementation path,
-entrypoint, purpose, and source PR base repository/ref. Live provider reads emit
-a representation which is purely normalized before a separate pure admission
-step. Evidence files use the maintained bounded regular-file reader. The
-verifier fetches that object into a private detached tree, independently reuses
-the ordinary receipt/final-attestation verifier, and keeps candidate imports
-inside that tree. Its child launcher reports only closed diagnostic identities;
-it never exposes child stderr or exception text. Source admission alone performs no
-GitHub mutation, lifecycle publication, CURRENT change, genesis operation, or
-work-graph mutation; the admitted executor still requires #810's separate signed
-one-use lifecycle-transition authorization.
+Authenticates exact immutable implementation sources through one accepted-main
+`BOOTSTRAP_SOURCE_ADMISSION` family. The existing
+`FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE` subtype remains the exact PR #812 source
+for #810: it binds its entrypoint and retains its isolated execution boundary.
+The closed `PR_REVIEW_EVIDENCE_HELPER_SOURCE` subtype instead admits only the
+exact PR #819 `scripts/secpal-pr-review.py` blob needed by #818. It has no
+entrypoint, launcher, import, or execution authority.
+
+Accepted-main policy fixes each source head, tree, sole parent, receipt, final
+attestation, signer, implementation path, bounded purpose, source PR base
+repository/ref, and canonical admission digest. The byte-only subtype also
+fixes the implementation blob and accepted-main repository-registry identity.
+A candidate-local registry entry, subtype, purpose, or blob claim is not this
+authority; changing the helper and a local pin together remains insufficient.
+Live provider reads emit a representation which is purely normalized before a
+separate pure admission step. Evidence files use the maintained bounded
+regular-file reader, and the verifier fetches the exact object into a private
+detached tree before reusing the ordinary receipt/final-attestation verifier.
+
+Historical P2.1 remains rooted at commit
+`833eef2afc063ae777e7e2b64b2f252e3fe1e49e` and helper blob
+`c0e5dc15879010339cc08b6e2fbcb1ff51f4d4e2`; the #819 admission is only a
+bounded successor-source admission and does not reinterpret that history.
+Source admission alone performs no GitHub mutation, lifecycle publication,
+CURRENT change, genesis operation, or work-graph mutation. The #810 executor
+still requires its separate signed one-use lifecycle-transition authorization.
 
 ### `secpal_pr_review/lifecycle_orchestration.py`
 
