@@ -253,6 +253,7 @@ ready_exception_body="${exception_body/Passing proof after implementation: N\/A/
 passing_only_body="${empty_body/Passing proof after implementation: N\/A/Passing proof after implementation: schema validation passed.}"
 blank_body="${empty_body//N\/A/}"
 placeholder_exception_body="${exception_body/Validate-first exception reference: */Validate-first exception reference: REPLACE_WITH_VALIDATE_FIRST_REFERENCE}"
+evidence_heading='## TDD / Validate-First Evidence'
 
 for draft in true false; do
   assert_validation "$draft missing body" "$draft" 1 ''
@@ -266,6 +267,21 @@ for draft in true false; do
   assert_validation "$draft no executable change" "$draft" 0 "$docs_only_body"
   assert_validation "$draft complete fail-first" "$draft" 0 "$positive_body"
   assert_validation "$draft complete validate-first" "$draft" 0 "$ready_exception_body"
+  assert_validation "$draft heading mention is not a section" "$draft" 1 "${positive_body/"$evidence_heading"/Mention only: $evidence_heading}"
+  assert_validation "$draft evidence before empty section" "$draft" 1 "${positive_body/"$evidence_heading"/## Example}"$'\n\n## TDD / Validate-First Evidence'
+  assert_validation "$draft evidence after section ends" "$draft" 1 "${positive_body/"$evidence_heading"/$'## TDD / Validate-First Evidence\n\n## Example'}"
+  assert_validation "$draft commented example is not evidence" "$draft" 1 $'<!--\n'"$positive_body"$'\n-->'
+  for fence in '```' '~~~'; do
+    assert_validation "$draft fenced example is not evidence ($fence)" "$draft" 1 "$fence"$'markdown\n'"$positive_body"$'\n'"$fence"
+    assert_validation "$draft real evidence after fenced example ($fence)" "$draft" 0 "$fence"$'markdown\n'"$placeholder_body"$'\n'"$fence"$'\n'"$positive_body"
+  done
+  assert_validation "$draft real evidence after commented example" "$draft" 0 $'<!--\n'"$placeholder_body"$'\n-->\n'"$positive_body"
+  for placeholder in TODO TBD todo; do
+    assert_validation "$draft unfinished failing proof ($placeholder)" "$draft" 1 "${empty_body/Failing proof before implementation: N\/A/Failing proof before implementation: $placeholder}"
+    assert_validation "$draft unfinished passing proof ($placeholder)" "$draft" 1 "${early_body/Passing proof after implementation: N\/A/Passing proof after implementation: $placeholder}"
+    assert_validation "$draft unfinished exception ($placeholder)" "$draft" 1 "${empty_body/Validate-first exception reference: N\/A/Validate-first exception reference: $placeholder}"
+    assert_validation "$draft unfinished no-executable-change reason ($placeholder)" "$draft" 1 "${empty_body/No executable change reason: N\/A/No executable change reason: $placeholder}"
+  done
 done
 assert_validation 'Draft fail-first without passing proof' true 0 "$early_body"
 assert_validation 'Draft explicit validate-first without passing proof' true 0 "$exception_body"

@@ -15,7 +15,44 @@ require_body() {
 }
 
 require_section() {
-  if ! printf '%s\n' "$PR_BODY" | grep -Fq '## TDD / Validate-First Evidence'; then
+  EVIDENCE_SECTION="$(printf '%s\n' "$PR_BODY" | awk '
+    {
+      line = $0
+      sub(/\r$/, "", line)
+      if (fence != "") {
+        closing = line
+        sub(/^ ? ? ?/, "", closing)
+        if (substr(closing, 1, 1) == fence && match(closing, /^(```+|~~~+)/)) {
+          if (RLENGTH >= fence_length && substr(closing, RLENGTH + 1) ~ /^[[:space:]]*$/) {
+            fence = ""
+          }
+        }
+        next
+      }
+      if (comment) {
+        if (line ~ /-->/) comment = 0
+        next
+      }
+      if (line ~ /<!--/) {
+        if (line !~ /-->/) comment = 1
+        next
+      }
+      opening = line
+      sub(/^ ? ? ?/, "", opening)
+      if (match(opening, /^(```+|~~~+)/)) {
+        fence = substr(opening, 1, 1)
+        fence_length = RLENGTH
+        next
+      }
+      if (line ~ /^## TDD \/ Validate-First Evidence[[:space:]]*$/ && !section) {
+        section = 1
+      } else if (section && line ~ /^##?[[:space:]]/) {
+        exit
+      }
+      if (section) print line
+    }
+  ')"
+  if [ -z "$EVIDENCE_SECTION" ]; then
     echo 'TDD / Validate-First Evidence section is required.' >&2
     exit 1
   fi
@@ -24,7 +61,7 @@ require_section() {
 extract_field() {
   local label="$1"
 
-  printf '%s\n' "$PR_BODY" | sed -nE "s/^[*-][[:space:]]+${label}:[[:space:]]*(.*)$/\1/p" | head -n 1
+  printf '%s\n' "$EVIDENCE_SECTION" | sed -nE "s/^[*-][[:space:]]+${label}:[[:space:]]*(.*)$/\1/p" | head -n 1
 }
 
 normalize_value() {
@@ -51,7 +88,7 @@ is_empty_or_na() {
 is_placeholder() {
   local value="$1"
 
-  printf '%s\n' "$value" | grep -qE '^(REPLACE_WITH_(FAILING_PROOF|PASSING_PROOF|VALIDATE_FIRST_REFERENCE|NO_EXECUTABLE_CHANGE_REASON)|<[^<>]+>)$'
+  printf '%s\n' "$value" | grep -qiE '^(TODO|TBD|REPLACE_WITH_(FAILING_PROOF|PASSING_PROOF|VALIDATE_FIRST_REFERENCE|NO_EXECUTABLE_CHANGE_REASON)|<[^<>]+>)$'
 }
 
 main() {
