@@ -94,10 +94,11 @@ _PROTECTED_MAIN_QUERY = """query($owner:String!,$name:String!){
   }
 }"""
 _CURRENT_CANDIDATE_BLOB_QUERY = """query(
-  $owner:String!,$name:String!,$expression:String!
+  $owner:String!,$name:String!,$number:Int!,$expression:String!
 ){
   repository(owner:$owner,name:$name){
     nameWithOwner
+    pullRequest(number:$number){number headRefOid}
     object(expression:$expression){... on Blob{oid}}
   }
 }"""
@@ -1045,6 +1046,8 @@ def _observe_current_candidate_blob(
             f"owner={owner}",
             "-f",
             f"name={name}",
+            "-F",
+            f"number={policy.pull_request}",
             "-f",
             f"expression={current_head_sha}:{policy.implementation_path}",
         ]
@@ -1056,7 +1059,9 @@ def _observe_current_candidate_blob(
     return bytes(result.stdout)
 
 
-def _normalize_current_candidate_blob(raw: bytes, repository: str) -> str:
+def _normalize_current_candidate_blob(
+    raw: bytes, repository: str, pull_request: int
+) -> tuple[str, str]:
     """Purely normalize the exact current helper blob representation."""
 
     try:
@@ -1066,16 +1071,28 @@ def _normalize_current_candidate_blob(raw: bytes, repository: str) -> str:
             set(document) != {"data"}
             or set(document["data"]) != {"repository"}
             or not isinstance(observed_repository, dict)
-            or set(observed_repository) != {"nameWithOwner", "object"}
+            or set(observed_repository)
+            != {"nameWithOwner", "pullRequest", "object"}
             or observed_repository["nameWithOwner"] != repository
+            or not isinstance(observed_repository["pullRequest"], dict)
+            or set(observed_repository["pullRequest"])
+            != {"number", "headRefOid"}
+            or observed_repository["pullRequest"]["number"] != pull_request
             or not isinstance(observed_repository["object"], dict)
             or set(observed_repository["object"]) != {"oid"}
         ):
             raise BootstrapSourceAdmissionError(
                 "current candidate GitHub blob is malformed"
             )
-        return authority._require_oid(
-            observed_repository["object"]["oid"], "current candidate helper blob"
+        return (
+            authority._require_oid(
+                observed_repository["pullRequest"]["headRefOid"],
+                "current candidate head",
+            ),
+            authority._require_oid(
+                observed_repository["object"]["oid"],
+                "current candidate helper blob",
+            ),
         )
     except BootstrapSourceAdmissionError:
         raise
@@ -1086,17 +1103,21 @@ def _normalize_current_candidate_blob(raw: bytes, repository: str) -> str:
 
 
 def _admit_current_candidate_blob(
-    blob: str, policy: authority.BootstrapSourceAdmissionPolicy
+    current_head_sha: str,
+    expected_head_sha: str,
+    blob: str,
+    policy: authority.BootstrapSourceAdmissionPolicy,
 ) -> None:
     """Admit only exact helper-byte consumption by the current candidate."""
 
     if (
         policy.subtype != EVIDENCE_HELPER_ADMISSION_SUBTYPE
         or policy.implementation_path != EVIDENCE_HELPER_IMPLEMENTATION_PATH
+        or current_head_sha != expected_head_sha
         or blob != policy.implementation_blob_oid
     ):
         raise BootstrapSourceAdmissionError(
-            "current candidate helper bytes differ from immutable admission"
+            "current candidate head or helper bytes differ from immutable admission"
         )
 
 
@@ -1109,11 +1130,14 @@ def _authenticate_live_github_source(
     facts = _normalize_github_observation(observation)
     _admit_github_source(facts, policy)
     if policy.subtype == EVIDENCE_HELPER_ADMISSION_SUBTYPE:
-        blob = _normalize_current_candidate_blob(
+        current_head_sha, blob = _normalize_current_candidate_blob(
             _observe_current_candidate_blob(policy, facts.head_sha),
             policy.repository,
+            policy.pull_request,
         )
-        _admit_current_candidate_blob(blob, policy)
+        _admit_current_candidate_blob(
+            current_head_sha, facts.head_sha, blob, policy
+        )
 
 
 def _observe_recovery_review_state(

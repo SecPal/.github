@@ -314,8 +314,10 @@ commit, tree, parent, signature, validation
 evidence, path, and blob remain immutable after a lawful PR-head advance. The
 live PR independently retains its repository, number, base, state, and Draft
 binding, while one bounded current-head blob observation proves that the
-candidate still consumes the exact admitted helper bytes. The mutable current
-PR head is never treated as the immutable admitted source identity.
+candidate still consumes the exact admitted helper bytes. That observation
+atomically re-reads the PR head with the blob selected at the initially
+authenticated head, so concurrent advancement fails closed. The mutable
+current PR head is never treated as the immutable admitted source identity.
 
 Both source paths return a sealed `VerifiedBootstrapSource` with an explicit
 historical evidence status. The #812-only evidence-loss recovery does not apply

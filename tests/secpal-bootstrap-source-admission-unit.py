@@ -2071,6 +2071,10 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
             "data": {
                 "repository": {
                     "nameWithOwner": REPOSITORY,
+                    "pullRequest": {
+                        "number": EVIDENCE_HELPER_PR,
+                        "headRefOid": EVIDENCE_HELPER_CURRENT_HEAD,
+                    },
                     "object": {"oid": EVIDENCE_HELPER_BLOB},
                 }
             }
@@ -2087,15 +2091,45 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
         ) as run_gh:
             source._authenticate_live_github_source(self.policy)
 
+        self.assertEqual(run_gh.call_count, 3)
+        candidate_call = run_gh.call_args.args[0]
         self.assertIn(
             EVIDENCE_HELPER_CURRENT_HEAD,
-            run_gh.call_args_list[2].args[0][-1],
+            candidate_call[-1],
         )
         self.assertTrue(
-            run_gh.call_args_list[2].args[0][-1].endswith(
-                f":{EVIDENCE_HELPER_PATH}"
-            )
+            candidate_call[-1].endswith(f":{EVIDENCE_HELPER_PATH}")
         )
+
+    def test_current_candidate_head_drift_during_blob_read_fails_closed(self) -> None:
+        raw = json.dumps(
+            {
+                "data": {
+                    "repository": {
+                        "nameWithOwner": REPOSITORY,
+                        "pullRequest": {
+                            "number": EVIDENCE_HELPER_PR,
+                            "headRefOid": "7" * 40,
+                        },
+                        "object": {"oid": EVIDENCE_HELPER_BLOB},
+                    }
+                }
+            }
+        ).encode("utf-8")
+        current_head, blob = source._normalize_current_candidate_blob(
+            raw, REPOSITORY, EVIDENCE_HELPER_PR
+        )
+
+        with self.assertRaisesRegex(
+            source.BootstrapSourceAdmissionError,
+            "current candidate head or helper bytes differ",
+        ):
+            source._admit_current_candidate_blob(
+                current_head,
+                EVIDENCE_HELPER_CURRENT_HEAD,
+                blob,
+                self.policy,
+            )
 
     def test_current_candidate_helper_substitution_fails_closed(self) -> None:
         raw = json.dumps(
@@ -2103,18 +2137,29 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
                 "data": {
                     "repository": {
                         "nameWithOwner": REPOSITORY,
+                        "pullRequest": {
+                            "number": EVIDENCE_HELPER_PR,
+                            "headRefOid": EVIDENCE_HELPER_CURRENT_HEAD,
+                        },
                         "object": {"oid": "8" * 40},
                     }
                 }
             }
         ).encode("utf-8")
-        blob = source._normalize_current_candidate_blob(raw, REPOSITORY)
+        current_head, blob = source._normalize_current_candidate_blob(
+            raw, REPOSITORY, EVIDENCE_HELPER_PR
+        )
 
         with self.assertRaisesRegex(
             source.BootstrapSourceAdmissionError,
-            "current candidate helper bytes differ",
+            "current candidate head or helper bytes differ",
         ):
-            source._admit_current_candidate_blob(blob, self.policy)
+            source._admit_current_candidate_blob(
+                current_head,
+                EVIDENCE_HELPER_CURRENT_HEAD,
+                blob,
+                self.policy,
+            )
 
     def test_current_candidate_blob_representation_fails_closed(self) -> None:
         cases = (
@@ -2124,6 +2169,10 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
                 "data": {
                     "repository": {
                         "nameWithOwner": "Other/repo",
+                        "pullRequest": {
+                            "number": EVIDENCE_HELPER_PR,
+                            "headRefOid": EVIDENCE_HELPER_CURRENT_HEAD,
+                        },
                         "object": {"oid": EVIDENCE_HELPER_BLOB},
                     }
                 }
@@ -2132,6 +2181,10 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
                 "data": {
                     "repository": {
                         "nameWithOwner": REPOSITORY,
+                        "pullRequest": {
+                            "number": EVIDENCE_HELPER_PR,
+                            "headRefOid": EVIDENCE_HELPER_CURRENT_HEAD,
+                        },
                         "object": None,
                     }
                 }
@@ -2140,6 +2193,10 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
                 "data": {
                     "repository": {
                         "nameWithOwner": REPOSITORY,
+                        "pullRequest": {
+                            "number": EVIDENCE_HELPER_PR,
+                            "headRefOid": EVIDENCE_HELPER_CURRENT_HEAD,
+                        },
                         "object": {
                             "oid": EVIDENCE_HELPER_BLOB,
                             "unexpected": True,
@@ -2153,7 +2210,9 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
                 source.BootstrapSourceAdmissionError
             ):
                 source._normalize_current_candidate_blob(
-                    json.dumps(document).encode("utf-8"), REPOSITORY
+                    json.dumps(document).encode("utf-8"),
+                    REPOSITORY,
+                    EVIDENCE_HELPER_PR,
                 )
 
     def test_wrong_pr_head_tree_parent_receipt_and_attestation_fail_closed(self) -> None:
