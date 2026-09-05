@@ -277,6 +277,50 @@ coincidentally matching body and writer. The post-merge installer compares the
 absolute canonical link text directly and does not depend on GNU-specific
 `readlink` options.
 
+## Authenticated Ready/Draft execution
+
+`scripts/secpal_pr_review/lifecycle_execution.py` is the maintained execution
+boundary for the two existing user-authorized `DRAFT_TO_READY` and
+`READY_TO_DRAFT` decisions. It accepts only the repository, delivery issue, and
+canonical signed lifecycle-orchestration authorization. It derives the PR,
+head, operation, predecessor publication, lifecycle authority, signer, scope,
+and intended successor from those authenticated authorities rather than caller
+assertions.
+
+This module owns bounded side-effect composition and final convergence because
+orchestration intentionally owns policy decisions without mutation, lifecycle
+authority owns state derivation, and lifecycle publication owns the protected
+journal and CURRENT. Putting execution into any of those modules would combine
+independent responsibilities. The executor therefore reuses all three and the
+existing trusted `gh` executable/environment boundary; it adds no lifecycle
+state machine, transition, journal, signer role, or persisted transaction state.
+`NEW_PERMANENT_CONCEPT=NO`.
+
+The closed observation cases are:
+
+1. GitHub and CURRENT at the exact predecessor: mutate GitHub once.
+2. GitHub at the target and CURRENT at the exact predecessor: publish the exact
+   successor without replaying GitHub.
+3. Both at the exact target: authenticate the historical transition and return
+   success with zero writes.
+4. CURRENT at the target and GitHub at the predecessor: fail closed.
+
+All other states fail closed. A write is ordered
+`GitHub mutation -> live target read-back -> exact CURRENT CAS publication ->
+independent CURRENT read-back -> final GitHub/CURRENT convergence`. Immediately
+before each write the executor reauthenticates the exact live PR, head, OPEN
+state, CURRENT predecessor, signed authorization, and orchestration decision.
+
+The GitHub write is the fixed non-interactive `gh pr ready` or
+`gh pr ready --undo` form with an exact repository and PR. No executable, host,
+GraphQL document, state assertion, or retry option is caller-controlled. Any
+ambiguous GitHub result receives one live read: target continues, predecessor
+stops incomplete, and anything else fails closed. Any ambiguous publication
+receives one CURRENT read: the exact successor is complete, the exact
+predecessor is publication-pending and resumable, and anything else fails.
+Fresh invocation reconstructs progress solely from live GitHub and protected
+CURRENT; it never creates another execution journal or transaction record.
+
 ## Finite execution
 
 The default forward spine is:
@@ -570,6 +614,16 @@ already-resolved report, it requires two more equal
 complete target projections; every mutation response must confirm the exact
 resolved thread.
 
+Detached late disposition has one narrower alternative final boundary for the
+exact `SecPal/.github` #810 / PR #821 delivery. Accepted-main policy may prove
+that its authenticated zero-thread final reviewed state and final
+receipt/attestation omitted eligibility authentication. The complete detached
+late-authority tuple selects late mode. In that mode only, omitting the final
+eligibility path yields a typed authenticated absence; it does not yield or
+recreate an eligibility manifest. A supplied path selects manifest verification;
+present, null, malformed, or stale eligibility evidence fails and never selects
+absence mode. Final eligibility evidence outside late mode is rejected.
+
 The schema-bound `resolve-batch --apply` path remains available only when the
 current user instruction explicitly requests readiness or merge evaluation. In
 that path, volatile readiness performs at most one bounded current-state read.
@@ -664,10 +718,15 @@ one canonical detached-signed `late-classification.schema.json` artifact for
 exactly one named thread, then creates one canonical
 `late-disposition.schema.json` artifact for that same thread.
 Creation first verifies the unchanged final delivery head, tree,
-receipt trailer, attestation, canonical final eligibility artifact, origin, and
-accepted commit signature. It proves the named thread absent from both the
-complete authenticated final reviewed state and eligibility set, verifies that
-every eligible thread belongs to the reviewed state, derives the actual
+receipt trailer, attestation, typed final-eligibility boundary, origin, and
+accepted commit signature. That boundary is either the canonical manifest or
+the maintained exact authenticated-absence record; a supplied invalid manifest
+never falls back to absence. It proves the named thread absent from final
+eligibility and derives its origin from authenticated final reviewed state:
+`REVIEWED_BUT_INELIGIBLE` when present there, or `ABSENT_FROM_BOTH` when
+absent. A target already in final eligibility is rejected, and original
+eligibility is never replaced. It verifies that every eligible thread belongs
+to the reviewed state and derives the actual
 delivery signer fingerprint, reads that named thread twice, and signs the
 classification with that same OS-account identity. The disposition creator
 verifies the classification signature and exact live binding and computes its
@@ -676,9 +735,13 @@ The resolver independently repeats the final-delivery verification, verifies
 both canonical artifacts and detached signatures against the derived signer,
 and compares exact live head, thread, top-level comment node/database identity,
 body digest, reply state, resolved/outdated state, classification, disposition,
-technical-blocking flag, and guarded action before resolving. This path is only
-`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` with
-`technically_blocking=false`; it consumes no review/remediation counter and has
+technical-blocking flag, and guarded action before resolving. The closed path
+accepts `INFORMATIONAL + NON_ACTIONABLE + technically_blocking=false` for
+either origin. Existing
+`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE +
+technically_blocking=false` remains accepted only for `ABSENT_FROM_BOTH`.
+No caller-selected origin, other classification or disposition, or technical
+blocker is accepted. The path consumes no review/remediation counter and has
 no commit, push, Ready, CI, issue, label, review, or merge capability.
 The same origin predicate is independently re-established by disposition
 creation and resolution. “Post-final-push” names this lifecycle boundary; it

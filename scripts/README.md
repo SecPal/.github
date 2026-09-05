@@ -79,6 +79,24 @@ attestation bind the same eligibility digest. Historical version-1.1
 integration attestations remain valid for their original integration purpose
 but are not thread-resolution authority.
 
+The late-feedback boundary also supports one exact accepted-main
+`AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE` recovery for `SecPal/.github`
+issue #810 / PR #821. The complete detached late-authority tuple selects late
+mode. Within that mode, omitting the final eligibility path selects that policy
+record; the verifier then requires the exact zero-thread reviewed state, final
+head and tree, receipt and attestation digests, delivery signer, and actual
+omission of `eligibility_evidence_digest` from both reconstructed receipt and
+attestation. It creates no eligibility manifest. A supplied final eligibility
+path always uses the ordinary manifest verifier, so malformed, stale, or missing
+supplied evidence cannot downgrade to absence recovery. Final eligibility
+evidence outside late mode is rejected.
+
+Classification schemas `1.0` and `1.1` select the invalid/disproven and
+informational/non-actionable decisions respectively. Disposition schemas bind
+both decision and evidence mode: `1.0`/`1.2` are manifest-backed invalid/info,
+while `1.1`/`1.3` are authenticated-absence invalid/info. Cross-wrapping those
+semantic pairs is rejected.
+
 Parent 1 additionally requires a closed prior-authority manifest authenticated
 by a signed annotated tag and independently verified ordinary receipt, final
 attestation, tree, and signer. The receipt identities must agree end to end.
@@ -151,15 +169,23 @@ validation and push hooks remain required. Hosted checks may be read only for a
 current explicit CI/readiness request, using one bounded current-state read with
 no polling, waiting, sleeping, or automatic repetition.
 
-For an exact technically non-blocking thread outside the authenticated final
-feedback boundary and observed on the unchanged delivery head,
+For an exact technically non-blocking target absent from authenticated final
+eligibility and observed on the unchanged delivery head,
 `secpal-create-late-classification.py` verifies the existing final delivery
-evidence and canonical final eligibility artifact, proves the thread absent
-from both final sets, captures only the named live thread, and
-authenticates the explicit classification decision. Then
+evidence and derives `REVIEWED_BUT_INELIGIBLE` or `ABSENT_FROM_BOTH` from
+authenticated final reviewed state. It accepts
+`INFORMATIONAL + NON_ACTIONABLE` for either origin; the existing
+`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` pair remains accepted
+only for `ABSENT_FROM_BOTH`. All require `technically_blocking=false`. The
+creator captures only the named live thread and authenticates the explicit
+classification decision. Then
 `secpal-create-late-disposition.py` verifies that decision, computes its digest
 internally, and creates a canonical detached SSH/OpenPGP-signed artifact without
-a delivery commit. The resolver consumes both signed artifacts through a
+a delivery commit. Ordinary final-delivery evidence remains the default. A
+canonical eligibility-bound Ready-integration source is supplied to both
+creators and the resolver with `--integration-evidence`; all three route it
+through the maintained integration-specific verifier, and authenticated
+attestation shape selects the evidence family. The resolver consumes both signed artifacts through a
 separate explicit eligibility path,
 requires the actual detached signer to match the verified final delivery
 signer, and binds the delivery issue, PR, unchanged head/tree, receipt and
@@ -168,9 +194,9 @@ state, classification, disposition, technical-blocking flag, and guarded
 resolution action. It cannot select arbitrary threads or authorize any other
 GitHub mutation.
 
-This authenticated absence boundary is what “post-push” denotes in the
-resolution lifecycle. It does not use or claim a cryptographic GitHub
-wall-clock push-order proof.
+This authenticated reviewed-state/eligibility boundary is what “post-push”
+denotes in the resolution lifecycle. It does not use or claim a cryptographic
+GitHub wall-clock push-order proof.
 
 See [Simple PR Thread Resolution](../docs/simple-pr-thread-resolution.md) for
 the bounded safety contract and usage.
@@ -229,6 +255,72 @@ normalization derives history provenance. Later head-changing successors bind
 fresh verified current-head evidence in the signed ordinary authority while the
 original adoption proof remains immutable.
 The lifecycle-authority suite is an unconditional registered validation command.
+
+### `secpal_pr_review/bootstrap_source_admission.py`
+
+Authenticates exact immutable implementation sources through one accepted-main
+`BOOTSTRAP_SOURCE_ADMISSION` family. Its executable
+`FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE` subtype is the exact PR #812 source
+maintained for #810's first Ready-executor bootstrap. Accepted-main policy fixes the source
+head, tree, parent, receipt, final attestation, signer, implementation path,
+entrypoint, purpose, and source PR base repository/ref. Live provider reads emit
+a representation which is purely normalized before a separate pure admission
+step. Evidence files use the maintained bounded regular-file reader. The
+verifier fetches that object into a private detached tree, independently reuses
+the ordinary receipt/final-attestation verifier, and keeps candidate imports
+inside that tree. Its child launcher reports only closed diagnostic identities;
+it never exposes child stderr or exception text.
+
+The ordinary executable-source path is unchanged: when a historical evidence
+directory is supplied, reviewed state, the byte-semantic receipt reconstructed
+from the immutable delivery registry, and the final attestation must all verify.
+Invalid supplied evidence fails immediately and never falls back. The historical
+receipt reconstruction used by Ready integration remains integration-only and
+does not admit this ordinary source.
+
+For the exact #810 / PR #812 source only, an absent evidence directory selects
+one closed `BOOTSTRAP_SOURCE_EVIDENCE_LOSS_RECOVERY` sub-record in the existing
+accepted-main `bootstrap_source_admissions` policy. It states
+`HISTORICAL_EVIDENCE_UNAVAILABLE_BUT_EXACT_RECOVERY_AUTHORIZED`, binds the
+unchanged source-admission digest, and carries distinct exact-source recovery
+validation and technical/security-gate digests. The verifier re-authenticates
+the signed head, tree, sole parent, receipt trailer, signer, implementation blob,
+path, entrypoint, 40 diagnostic raise sites, non-self-admission property, live
+open Draft PR, `main` base, and the exact canonical stable-feedback inventory
+accepted by the recovery gate. That inventory digest covers review submissions
+and their commit association, conversation comments, review threads, ordered
+thread comments and replies, actors, body digests, reactions, and
+resolved/outdated state through the maintained bounded pagination and duplicate
+identity checks. A new `COMMENTED` review body or same-count feedback
+substitution therefore fails even when the aggregate review decision remains
+unchanged; blocking aggregate review decisions also continue to fail. It also
+reconstructs the immutable source's
+15-command registry only to authenticate the fresh recovery-validation command
+set. It does not synthesize, reconstruct, or claim byte identity for lost
+`reviewed-state.json`, `validation-receipt.json`, or `final-attestation.json`.
+The maintained historical receipt and final-attestation digests remain
+provenance facts, not claims that the unavailable raw artifacts were freshly
+verified.
+
+The closed `PR_REVIEW_EVIDENCE_HELPER_SOURCE` subtype admits only the exact PR
+PR #819 `scripts/secpal-pr-review.py` blob needed by #818. It has no entrypoint,
+launcher, import, or execution authority. The public verifier selects this
+admission only from the exact protected-main registry object, through a closed
+independent `gh`/`git` boundary with concurrent bounded stdout/stderr capture,
+timeout/overflow termination and reap, and rejection of partial output. A
+candidate-local registry or caller-selected executable, path, ref, OID, policy,
+or policy-source value cannot establish the admission. Before this integration
+candidate merges, protected `main` does not yet contain that exact #819
+admission.
+
+Both source paths return a sealed `VerifiedBootstrapSource` with an explicit
+historical evidence status. The #812-only evidence-loss recovery does not apply
+to the byte-only #819 subtype. Historical P2.1 remains rooted at commit
+`833eef2afc063ae777e7e2b64b2f252e3fe1e49e` and helper blob
+`c0e5dc15879010339cc08b6e2fbcb1ff51f4d4e2`. Source admission alone performs no
+GitHub mutation, lifecycle publication, CURRENT change, genesis operation, or
+work-graph mutation; the admitted executor still requires #810's separate
+signed one-use lifecycle-transition authorization.
 
 ### `secpal_pr_review/lifecycle_orchestration.py`
 

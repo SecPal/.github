@@ -46,12 +46,21 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--final-reviewed-state", required=True)
     parser.add_argument("--expected-final-reviewed-state-digest", required=True)
     parser.add_argument("--final-validation-evidence", required=True)
-    parser.add_argument("--final-eligibility-evidence", required=True)
+    parser.add_argument("--final-eligibility-evidence")
+    parser.add_argument("--integration-evidence")
     parser.add_argument("--classification-evidence", required=True)
     parser.add_argument("--classification-signature", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--signature-output", required=True)
-    return parser.parse_args(argv)
+    arguments = parser.parse_args(argv)
+    if (
+        arguments.integration_evidence is not None
+        and arguments.final_eligibility_evidence is None
+    ):
+        parser.error(
+            "--integration-evidence requires --final-eligibility-evidence"
+        )
+    return arguments
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -75,6 +84,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             classification_signature_path=arguments.classification_signature,
             output_path=arguments.output,
             signature_output_path=arguments.signature_output,
+            integration_evidence_path=arguments.integration_evidence,
         )
     except resolver.ResolutionError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

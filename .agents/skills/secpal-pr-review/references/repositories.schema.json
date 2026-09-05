@@ -71,6 +71,185 @@
         "readiness_authorization": { "const": "SEPARATE_EXPLICIT_WORKFLOW" }
       }
     },
+    "firstReadyExecutorBootstrapSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "subtype",
+        "repository",
+        "delivery_issue",
+        "pull_request",
+        "source_head_sha",
+        "source_tree_sha",
+        "source_parent_sha",
+        "validation_receipt_digest",
+        "final_attestation_digest",
+        "source_signer_identity",
+        "implementation_path",
+        "entrypoint",
+        "purpose",
+        "source_pr_state",
+        "source_pr_draft",
+        "source_base_ref",
+        "admission_digest"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "kind": { "const": "BOOTSTRAP_SOURCE_ADMISSION" },
+        "subtype": { "const": "FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE" },
+        "repository": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+        "delivery_issue": { "type": "integer", "minimum": 1 },
+        "pull_request": { "type": "integer", "minimum": 1 },
+        "source_head_sha": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
+        "source_tree_sha": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
+        "source_parent_sha": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
+        "validation_receipt_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "final_attestation_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "source_signer_identity": { "type": "string", "minLength": 1 },
+        "implementation_path": { "const": "scripts/secpal_pr_review/lifecycle_execution.py" },
+        "entrypoint": { "const": "execute_lifecycle_transition" },
+        "purpose": { "const": "FIRST_READY_EXECUTOR_BOOTSTRAP" },
+        "source_pr_state": { "const": "OPEN" },
+        "source_pr_draft": { "const": true },
+        "source_base_ref": { "const": "main" },
+        "admission_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "evidence_loss_recovery": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schema_version",
+            "kind",
+            "historical_evidence_status",
+            "source_admission_digest",
+            "recovery_validation",
+            "technical_security_gate",
+            "recovery_digest"
+          ],
+          "properties": {
+            "schema_version": { "const": "1.0" },
+            "kind": { "const": "BOOTSTRAP_SOURCE_EVIDENCE_LOSS_RECOVERY" },
+            "historical_evidence_status": {
+              "const": "HISTORICAL_EVIDENCE_UNAVAILABLE_BUT_EXACT_RECOVERY_AUTHORIZED"
+            },
+            "source_admission_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "recovery_validation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "source_head_sha",
+                "source_tree_sha",
+                "command_set_digest",
+                "result",
+                "validation_digest"
+              ],
+              "properties": {
+                "kind": { "const": "EXACT_BOOTSTRAP_SOURCE_RECOVERY_VALIDATION" },
+                "source_head_sha": {
+                  "type": "string",
+                  "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+                },
+                "source_tree_sha": {
+                  "type": "string",
+                  "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+                },
+                "command_set_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "result": { "const": "PASSED" },
+                "validation_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+              }
+            },
+            "technical_security_gate": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "source_head_sha",
+                "source_tree_sha",
+                "review_scope",
+                "feedback_inventory_digest",
+                "resolved_review_thread_count",
+                "conversation_comment_count",
+                "review_decision",
+                "result",
+                "gate_digest"
+              ],
+              "properties": {
+                "kind": { "const": "BOOTSTRAP_SOURCE_RECOVERY_TECHNICAL_SECURITY_GATE" },
+                "source_head_sha": {
+                  "type": "string",
+                  "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+                },
+                "source_tree_sha": {
+                  "type": "string",
+                  "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+                },
+                "review_scope": { "const": "EXACT_IMMUTABLE_BOOTSTRAP_EXECUTOR" },
+                "feedback_inventory_digest": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "resolved_review_thread_count": { "const": 2 },
+                "conversation_comment_count": { "const": 0 },
+                "review_decision": { "const": "NONE" },
+                "result": { "const": "NO_OPEN_TECHNICAL_OR_SECURITY_FINDINGS" },
+                "gate_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+              }
+            },
+            "recovery_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        }
+      }
+    },
+    "prReviewEvidenceHelperSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "subtype",
+        "repository",
+        "delivery_issue",
+        "pull_request",
+        "source_head_sha",
+        "source_tree_sha",
+        "source_parent_sha",
+        "validation_receipt_digest",
+        "final_attestation_digest",
+        "source_signer_identity",
+        "implementation_path",
+        "implementation_blob_oid",
+        "purpose",
+        "source_pr_state",
+        "source_pr_draft",
+        "source_base_ref",
+        "policy_source",
+        "admission_digest"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "kind": { "const": "BOOTSTRAP_SOURCE_ADMISSION" },
+        "subtype": { "const": "PR_REVIEW_EVIDENCE_HELPER_SOURCE" },
+        "repository": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+        "delivery_issue": { "type": "integer", "minimum": 1 },
+        "pull_request": { "type": "integer", "minimum": 1 },
+        "source_head_sha": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
+        "source_tree_sha": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
+        "source_parent_sha": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
+        "validation_receipt_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "final_attestation_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "source_signer_identity": { "type": "string", "minLength": 1 },
+        "implementation_path": { "const": "scripts/secpal-pr-review.py" },
+        "implementation_blob_oid": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
+        "purpose": { "const": "PR_REVIEW_EVIDENCE_HELPER_SOURCE_ADMISSION" },
+        "source_pr_state": { "const": "OPEN" },
+        "source_pr_draft": { "const": true },
+        "source_base_ref": { "const": "main" },
+        "policy_source": { "const": "ACCEPTED_MAIN_REPOSITORY_REGISTRY" },
+        "admission_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
     "repository": {
       "type": "object",
       "additionalProperties": false,
@@ -107,6 +286,10 @@
         },
         "focused_validation": { "type": "array", "items": { "$ref": "#/$defs/command" } },
         "required_local_validation": { "type": "array", "items": { "$ref": "#/$defs/command" } },
+        "final_eligibility_absence_recoveries": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/final_eligibility_absence_recovery" }
+        },
         "signature_policy": { "type": "object" },
         "lifecycle_authority_policy": {
           "$ref": "#/$defs/lifecycle_authority_policy"
@@ -154,6 +337,50 @@
         "execution_policy": { "enum": ["always", "focused-only"] }
       }
     },
+    "final_eligibility_absence_recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "repository",
+        "delivery_issue",
+        "pull_request",
+        "final_head_sha",
+        "final_tree_sha",
+        "final_reviewed_state_digest",
+        "final_validation_receipt_digest",
+        "final_attestation_digest",
+        "final_delivery_signer",
+        "expected_final_reviewed_thread_count",
+        "expected_final_eligibility_status",
+        "recovery_digest"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "kind": { "const": "FINAL_ELIGIBILITY_ABSENCE_RECOVERY" },
+        "repository": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+        "delivery_issue": { "type": "integer", "minimum": 1 },
+        "pull_request": { "type": "integer", "minimum": 1 },
+        "final_head_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "final_tree_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "final_reviewed_state_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "final_validation_receipt_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "final_attestation_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "final_delivery_signer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["format", "fingerprint"],
+          "properties": {
+            "format": { "enum": ["ssh", "openpgp"] },
+            "fingerprint": { "type": "string", "minLength": 1 }
+          }
+        },
+        "expected_final_reviewed_thread_count": { "const": 0 },
+        "expected_final_eligibility_status": { "const": "ABSENT_NOT_AUTHENTICATED" },
+        "recovery_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
     "lifecycle_authority_policy": {
       "type": "object",
       "additionalProperties": false,
@@ -171,6 +398,7 @@
         "publication_ruleset_id",
         "publication_required_rules",
         "bootstrap_genesis_repairs",
+        "bootstrap_source_admissions",
         "historical_compatibility_publications",
         "delivery_initializations"
       ],
@@ -279,6 +507,15 @@
               },
               "enrollment_publication_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
             }
+          }
+        },
+        "bootstrap_source_admissions": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "$ref": "#/$defs/firstReadyExecutorBootstrapSource" },
+              { "$ref": "#/$defs/prReviewEvidenceHelperSource" }
+            ]
           }
         },
         "historical_compatibility_publications": {

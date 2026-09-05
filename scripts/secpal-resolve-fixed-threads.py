@@ -25,6 +25,7 @@ import stat
 import subprocess
 import sys
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -379,10 +380,11 @@ class ValidationEvidence:
     evidence_digest: str
     validated_tree_sha: str
     validation_receipt_digest: str
-    eligibility_evidence_digest: str
+    eligibility_evidence_digest: str | None
     attestation: dict[str, Any] | None = None
     validation_receipt: dict[str, Any] | None = None
     integration_evidence: dict[str, Any] | None = None
+    final_eligibility_absence: FinalEligibilityAbsence | None = None
 
 
 @dataclass(frozen=True)
@@ -398,11 +400,32 @@ class ParsedEligibility:
     thread_ids: tuple[str, ...]
 
 
+class FinalEligibilityMode(Enum):
+    AUTHENTICATED_ELIGIBILITY_MANIFEST = "AUTHENTICATED_ELIGIBILITY_MANIFEST"
+    AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE = (
+        "AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE"
+    )
+
+
+_VERIFIED_FINAL_ELIGIBILITY_ABSENCE = object()
+
+
+@dataclass(frozen=True)
+class FinalEligibilityAbsence:
+    recovery_digest: str
+    status: str
+    final_delivery_signer: late_disposition.SignerIdentity
+    _policy_record: dict[str, Any]
+    _verification_seal: object
+
+
 @dataclass(frozen=True)
 class FinalFeedbackBoundary:
     reviewed: ReviewedState
     validation: ValidationEvidence
-    eligibility: EligibilityEvidence
+    eligibility_mode: FinalEligibilityMode
+    eligibility: EligibilityEvidence | None
+    eligibility_absence: FinalEligibilityAbsence | None
 
 
 @dataclass(frozen=True)
@@ -550,6 +573,114 @@ def _validation_registry_binding(entry: dict[str, Any]) -> dict[str, Any]:
             if command.get("execution_policy") == "focused-only"
         ],
     }
+
+
+def _load_final_eligibility_absence(
+    entry: dict[str, Any],
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    final_head_sha: str,
+) -> FinalEligibilityAbsence:
+    records = entry.get("final_eligibility_absence_recoveries", [])
+    if not isinstance(records, list):
+        raise ResolutionError("final eligibility absence policy is malformed")
+    expected_keys = {
+        "schema_version",
+        "kind",
+        "repository",
+        "delivery_issue",
+        "pull_request",
+        "final_head_sha",
+        "final_tree_sha",
+        "final_reviewed_state_digest",
+        "final_validation_receipt_digest",
+        "final_attestation_digest",
+        "final_delivery_signer",
+        "expected_final_reviewed_thread_count",
+        "expected_final_eligibility_status",
+        "recovery_digest",
+    }
+    normalized: list[tuple[dict[str, Any], FinalEligibilityAbsence]] = []
+    identities: set[tuple[str, int, int, str]] = set()
+    for record in records:
+        signer = record.get("final_delivery_signer") if isinstance(record, dict) else None
+        fields = (
+            {key: value for key, value in record.items() if key != "recovery_digest"}
+            if isinstance(record, dict)
+            else None
+        )
+        if (
+            not isinstance(record, dict)
+            or set(record) != expected_keys
+            or record.get("schema_version") != "1.0"
+            or record.get("kind") != "FINAL_ELIGIBILITY_ABSENCE_RECOVERY"
+            or record.get("repository") != entry.get("repository")
+            or not isinstance(record.get("delivery_issue"), int)
+            or isinstance(record.get("delivery_issue"), bool)
+            or record["delivery_issue"] < 1
+            or not isinstance(record.get("pull_request"), int)
+            or isinstance(record.get("pull_request"), bool)
+            or record["pull_request"] < 1
+            or not isinstance(record.get("final_head_sha"), str)
+            or not OID.fullmatch(record["final_head_sha"])
+            or not isinstance(record.get("final_tree_sha"), str)
+            or not OID.fullmatch(record["final_tree_sha"])
+            or not isinstance(record.get("final_reviewed_state_digest"), str)
+            or not DIGEST.fullmatch(record["final_reviewed_state_digest"])
+            or not isinstance(record.get("final_validation_receipt_digest"), str)
+            or not DIGEST.fullmatch(record["final_validation_receipt_digest"])
+            or not isinstance(record.get("final_attestation_digest"), str)
+            or not DIGEST.fullmatch(record["final_attestation_digest"])
+            or not isinstance(signer, dict)
+            or set(signer) != {"format", "fingerprint"}
+            or signer.get("format") not in {"ssh", "openpgp"}
+            or not isinstance(signer.get("fingerprint"), str)
+            or not late_disposition.IDENTITY.fullmatch(signer["fingerprint"])
+            or record.get("expected_final_reviewed_thread_count") != 0
+            or record.get("expected_final_eligibility_status")
+            != "ABSENT_NOT_AUTHENTICATED"
+            or record.get("recovery_digest") != _digest_json(fields)
+        ):
+            raise ResolutionError("final eligibility absence policy is malformed")
+        identity = (
+            record["repository"],
+            record["delivery_issue"],
+            record["pull_request"],
+            record["final_head_sha"],
+        )
+        if identity in identities:
+            raise ResolutionError("final eligibility absence policy is ambiguous")
+        identities.add(identity)
+        normalized.append(
+            (
+                record,
+                FinalEligibilityAbsence(
+                    recovery_digest=record["recovery_digest"],
+                    status="NO_ELIGIBILITY_WAS_AUTHENTICATED_AT_FINAL_VALIDATION",
+                    final_delivery_signer=late_disposition.SignerIdentity(
+                        signer["format"], signer["fingerprint"]
+                    ),
+                    _policy_record=record,
+                    _verification_seal=_VERIFIED_FINAL_ELIGIBILITY_ABSENCE,
+                ),
+            )
+        )
+    matches = [
+        item
+        for item in normalized
+        if item[0]["repository"] == repository
+        and item[0]["delivery_issue"] == delivery_issue
+        and item[0]["pull_request"] == pull_request
+        and item[0]["final_head_sha"] == final_head_sha.lower()
+    ]
+    if len(matches) != 1:
+        raise ResolutionError(
+            "accepted final eligibility absence recovery is unavailable"
+        )
+    _record, authority = matches[0]
+    return authority
 
 
 def _run_gh(arguments: Sequence[str]) -> dict[str, Any]:
@@ -862,6 +993,8 @@ def load_validation_evidence(
     expected_head: str,
     reviewed: ReviewedState,
     integration_evidence_path: Path | None = None,
+    *,
+    final_eligibility_absence: FinalEligibilityAbsence | None = None,
 ) -> ValidationEvidence:
     try:
         payload = json.loads(
@@ -883,10 +1016,20 @@ def load_validation_evidence(
         )
     if not isinstance(payload, dict):
         raise ResolutionError("validation evidence is unavailable or malformed")
+    if final_eligibility_absence is not None and (
+        not isinstance(final_eligibility_absence, FinalEligibilityAbsence)
+        or final_eligibility_absence._verification_seal
+        is not _VERIFIED_FINAL_ELIGIBILITY_ABSENCE
+    ):
+        raise ResolutionError("final eligibility absence authority is invalid")
     if payload.get("kind") in {
         "READY_INTEGRATION_VALIDATION_ATTESTATION",
         "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION",
     }:
+        if final_eligibility_absence is not None:
+            raise ResolutionError(
+                "final eligibility absence recovery rejects Ready integration"
+            )
         if payload.get("kind") != (
             "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"
         ) or payload.get("schema_version") != "1.2":
@@ -953,11 +1096,22 @@ def load_validation_evidence(
         raise ResolutionError(
             "ordinary validation attestation rejects integration-only evidence"
         )
+    eligibility_present = "eligibility_evidence_digest" in payload
     eligibility_evidence_digest = payload.get("eligibility_evidence_digest")
-    if (
-        not isinstance(eligibility_evidence_digest, str)
-        or not DIGEST.fullmatch(eligibility_evidence_digest)
-    ):
+    if eligibility_present:
+        if (
+            not isinstance(eligibility_evidence_digest, str)
+            or not DIGEST.fullmatch(eligibility_evidence_digest)
+        ):
+            raise ResolutionError(
+                "validation evidence eligibility digest is missing or malformed"
+            )
+        if final_eligibility_absence is not None:
+            raise ResolutionError(
+                "final eligibility absence recovery rejects an authenticated "
+                "eligibility digest"
+            )
+    elif final_eligibility_absence is None:
         raise ResolutionError(
             "validation evidence eligibility digest is missing or malformed"
         )
@@ -993,14 +1147,33 @@ def load_validation_evidence(
                 "validation evidence does not match the fix commit"
             )
         raise ResolutionError("validation evidence is invalid or stale")
+    if final_eligibility_absence is not None:
+        record = final_eligibility_absence._policy_record
+        if (
+            reviewed.state_digest != record["final_reviewed_state_digest"]
+            or len(reviewed.thread_ids)
+            != record["expected_final_reviewed_thread_count"]
+            or payload["validated_tree_sha"] != record["final_tree_sha"]
+            or payload["validation_receipt_digest"]
+            != record["final_validation_receipt_digest"]
+            or payload["attestation_digest"] != record["final_attestation_digest"]
+        ):
+            raise ResolutionError(
+                "final eligibility absence recovery binding is invalid or stale"
+            )
     return ValidationEvidence(
-        kind="attestation",
+        kind=(
+            "final-eligibility-absence-attestation"
+            if final_eligibility_absence is not None
+            else "attestation"
+        ),
         evidence_digest=payload["attestation_digest"],
         validated_tree_sha=payload["validated_tree_sha"],
         validation_receipt_digest=payload["validation_receipt_digest"],
         eligibility_evidence_digest=eligibility_evidence_digest,
         attestation=payload,
         validation_receipt=receipt,
+        final_eligibility_absence=final_eligibility_absence,
     )
 
 
@@ -1018,15 +1191,28 @@ def verify_local_fix_commit(
     if (
         not isinstance(validation, ValidationEvidence)
         or validation.kind
-        not in {"attestation", "eligibility-bound-ready-integration"}
+        not in {
+            "attestation",
+            "eligibility-bound-ready-integration",
+            "final-eligibility-absence-attestation",
+        }
         or not isinstance(validation.evidence_digest, str)
         or not DIGEST.fullmatch(validation.evidence_digest)
         or not isinstance(validation.validated_tree_sha, str)
         or not OID.fullmatch(validation.validated_tree_sha)
         or not isinstance(validation.validation_receipt_digest, str)
         or not DIGEST.fullmatch(validation.validation_receipt_digest)
-        or not isinstance(validation.eligibility_evidence_digest, str)
-        or not DIGEST.fullmatch(validation.eligibility_evidence_digest)
+        or (
+            validation.kind == "final-eligibility-absence-attestation"
+            and validation.eligibility_evidence_digest is not None
+        )
+        or (
+            validation.kind != "final-eligibility-absence-attestation"
+            and (
+                not isinstance(validation.eligibility_evidence_digest, str)
+                or not DIGEST.fullmatch(validation.eligibility_evidence_digest)
+            )
+        )
     ):
         raise ResolutionError("validation evidence binding is invalid or stale")
     try:
@@ -1057,7 +1243,10 @@ def verify_local_fix_commit(
         root,
         ("rev-list", "--parents", "-n", "1", expected_head.lower()),
     ).stdout.split()
-    if validation.kind == "attestation":
+    if validation.kind in {
+        "attestation",
+        "final-eligibility-absence-attestation",
+    }:
         if ancestry != [expected_head.lower(), reviewed.head_sha]:
             raise ResolutionError(
                 "validated fix commit parent does not match reviewed head"
@@ -1142,7 +1331,10 @@ def verify_local_fix_commit(
         or local_signature.get("format") not in accepted_formats
     ):
         raise ResolutionError("fix commit local signature is not verified")
-    if validation.kind == "attestation":
+    if validation.kind in {
+        "attestation",
+        "final-eligibility-absence-attestation",
+    }:
         if validation.attestation is None:
             raise ResolutionError("validation evidence binding is incomplete")
         try:
@@ -1219,7 +1411,7 @@ def verify_local_fix_commit(
         except (KeyError, fast_path.SecurityBlocker) as exc:
             raise ResolutionError(str(exc)) from exc
     try:
-        return late_disposition.signer_from_git_verification(
+        signer = late_disposition.signer_from_git_verification(
             local_signature["format"],
             f"{verified.stdout}\n{verified.stderr}",
         )
@@ -1227,6 +1419,16 @@ def verify_local_fix_commit(
         if require_signer_identity:
             raise ResolutionError(str(exc)) from exc
         return None
+    absence = validation.final_eligibility_absence
+    if validation.kind == "final-eligibility-absence-attestation" and (
+        not isinstance(absence, FinalEligibilityAbsence)
+        or absence._verification_seal is not _VERIFIED_FINAL_ELIGIBILITY_ABSENCE
+        or signer != absence.final_delivery_signer
+    ):
+        raise ResolutionError(
+            "final eligibility absence recovery signer is invalid or stale"
+        )
+    return signer
 
 
 def verify_live_follow_up(
@@ -1428,6 +1630,143 @@ def load_eligibility_evidence(
     )
 
 
+def _require_valid_final_feedback_boundary(
+    boundary: FinalFeedbackBoundary,
+) -> None:
+    """Fail closed unless the verified final-boundary evidence shape is exact."""
+
+    if (
+        type(boundary) is not FinalFeedbackBoundary
+        or type(boundary.reviewed) is not ReviewedState
+        or type(boundary.validation) is not ValidationEvidence
+        or not isinstance(boundary.reviewed.payload, dict)
+        or not isinstance(boundary.reviewed.thread_ids, frozenset)
+        or not isinstance(boundary.reviewed.head_sha, str)
+        or not OID.fullmatch(boundary.reviewed.head_sha)
+        or not isinstance(boundary.reviewed.state_digest, str)
+        or not DIGEST.fullmatch(boundary.reviewed.state_digest)
+        or not isinstance(boundary.reviewed.feedback_digest, str)
+        or not DIGEST.fullmatch(boundary.reviewed.feedback_digest)
+        or not isinstance(boundary.validation.attestation, dict)
+        or not isinstance(boundary.validation.validation_receipt, dict)
+        or not isinstance(boundary.validation.evidence_digest, str)
+        or not DIGEST.fullmatch(boundary.validation.evidence_digest)
+        or not isinstance(boundary.validation.validated_tree_sha, str)
+        or not OID.fullmatch(boundary.validation.validated_tree_sha)
+        or not isinstance(boundary.validation.validation_receipt_digest, str)
+        or not DIGEST.fullmatch(boundary.validation.validation_receipt_digest)
+    ):
+        raise ResolutionError("authenticated final feedback boundary is malformed")
+
+    if boundary.eligibility_mode is (
+        FinalEligibilityMode.AUTHENTICATED_ELIGIBILITY_MANIFEST
+    ):
+        eligibility = boundary.eligibility
+        if (
+            type(eligibility) is not EligibilityEvidence
+            or boundary.eligibility_absence is not None
+            or boundary.validation.final_eligibility_absence is not None
+            or boundary.validation.kind
+            not in {"attestation", "eligibility-bound-ready-integration"}
+            or (
+                boundary.validation.kind == "attestation"
+                and boundary.validation.integration_evidence is not None
+            )
+            or (
+                boundary.validation.kind == "eligibility-bound-ready-integration"
+                and not isinstance(
+                    boundary.validation.integration_evidence,
+                    dict,
+                )
+            )
+            or not isinstance(
+                boundary.validation.eligibility_evidence_digest,
+                str,
+            )
+            or not DIGEST.fullmatch(
+                boundary.validation.eligibility_evidence_digest
+            )
+            or not isinstance(eligibility.evidence_digest, str)
+            or not DIGEST.fullmatch(eligibility.evidence_digest)
+            or boundary.validation.eligibility_evidence_digest
+            != eligibility.evidence_digest
+            or not isinstance(eligibility.canonical_payload, bytes)
+            or hashlib.sha256(eligibility.canonical_payload).hexdigest()
+            != eligibility.evidence_digest
+            or not isinstance(eligibility.thread_ids, tuple)
+        ):
+            raise ResolutionError(
+                "authenticated final eligibility manifest boundary is invalid"
+            )
+        repository = boundary.reviewed.payload.get("repository")
+        number = boundary.reviewed.payload.get("pull_request_number")
+        if (
+            not isinstance(repository, str)
+            or not REPOSITORY.fullmatch(repository)
+            or not isinstance(number, int)
+            or isinstance(number, bool)
+            or number < 1
+        ):
+            raise ResolutionError(
+                "authenticated final eligibility manifest boundary is invalid"
+            )
+        try:
+            manifest_payload = json.loads(
+                eligibility.canonical_payload,
+                parse_constant=_reject_nonfinite_json_constant,
+                object_pairs_hook=_reject_duplicate_json_object,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ResolutionError(
+                "authenticated final eligibility manifest boundary is invalid"
+            ) from exc
+        if _canonical_json_bytes(manifest_payload) != eligibility.canonical_payload:
+            raise ResolutionError(
+                "authenticated final eligibility manifest boundary is invalid"
+            )
+        parsed = _parse_eligibility_payload(
+            eligibility.canonical_payload,
+            repository=repository,
+            number=number,
+            reviewed_state_digest=boundary.reviewed.state_digest,
+            expected_thread_ids=eligibility.thread_ids,
+            reviewed_head_sha=boundary.reviewed.head_sha,
+        )
+        if not set(parsed.thread_ids).issubset(boundary.reviewed.thread_ids):
+            raise ResolutionError(
+                "authenticated final eligibility manifest boundary is invalid"
+            )
+        return
+
+    if boundary.eligibility_mode is (
+        FinalEligibilityMode.AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE
+    ):
+        absence = boundary.eligibility_absence
+        if (
+            boundary.eligibility is not None
+            or type(absence) is not FinalEligibilityAbsence
+            or absence._verification_seal
+            is not _VERIFIED_FINAL_ELIGIBILITY_ABSENCE
+            or not isinstance(absence.recovery_digest, str)
+            or not DIGEST.fullmatch(absence.recovery_digest)
+            or absence.status
+            != "NO_ELIGIBILITY_WAS_AUTHENTICATED_AT_FINAL_VALIDATION"
+            or type(absence.final_delivery_signer)
+            is not late_disposition.SignerIdentity
+            or boundary.validation.kind
+            != "final-eligibility-absence-attestation"
+            or boundary.validation.eligibility_evidence_digest is not None
+            or boundary.validation.final_eligibility_absence is not absence
+            or boundary.reviewed.thread_ids != frozenset()
+        ):
+            raise ResolutionError(
+                "authenticated final eligibility absence boundary is invalid"
+            )
+        return
+
+    raise ResolutionError("final eligibility mode is unsupported")
+
+
 def verify_recovery_bound_source_authority(
     validation: ValidationEvidence,
     reviewed: ReviewedState,
@@ -1510,12 +1849,14 @@ def verify_recovery_bound_source_authority(
 def load_final_feedback_boundary(
     *,
     repository: str,
+    delivery_issue: int,
     number: int,
     expected_head: str,
     final_reviewed_state_path: Path,
     expected_final_reviewed_state_digest: str,
     final_validation_evidence_path: Path,
-    final_eligibility_evidence_path: Path,
+    final_eligibility_evidence_path: Path | None,
+    integration_evidence_path: Path | None = None,
 ) -> FinalFeedbackBoundary:
     reviewed = load_reviewed_state(
         final_reviewed_state_path,
@@ -1524,45 +1865,119 @@ def load_final_feedback_boundary(
         expected_final_reviewed_state_digest,
         (),
     )
+    if final_eligibility_evidence_path is not None:
+        validation = load_validation_evidence(
+            final_validation_evidence_path,
+            repository,
+            expected_head,
+            reviewed,
+            integration_evidence_path,
+        )
+        if (
+            validation.kind == "eligibility-bound-ready-integration"
+            and (
+                not isinstance(validation.integration_evidence, dict)
+                or validation.integration_evidence.get("delivery_issue_number")
+                != delivery_issue
+            )
+        ):
+            raise ResolutionError(
+                "integration validation evidence delivery issue is invalid or stale"
+            )
+        eligibility = load_eligibility_evidence(
+            final_eligibility_evidence_path,
+            repository,
+            number,
+            reviewed.head_sha,
+            reviewed.state_digest,
+            None,
+            authenticated_evidence_digest=validation.eligibility_evidence_digest,
+        )
+        missing = tuple(
+            thread_id
+            for thread_id in eligibility.thread_ids
+            if thread_id not in reviewed.thread_ids
+        )
+        if missing:
+            raise ResolutionError(
+                "final eligibility references a thread absent from final reviewed state: "
+                f"{missing[0]}"
+            )
+        boundary = FinalFeedbackBoundary(
+            reviewed,
+            validation,
+            FinalEligibilityMode.AUTHENTICATED_ELIGIBILITY_MANIFEST,
+            eligibility,
+            None,
+        )
+        _require_valid_final_feedback_boundary(boundary)
+        return boundary
+    entry = _load_repository_entry(repository)
+    absence = _load_final_eligibility_absence(
+        entry,
+        repository=repository,
+        delivery_issue=delivery_issue,
+        pull_request=number,
+        final_head_sha=expected_head,
+    )
     validation = load_validation_evidence(
         final_validation_evidence_path,
         repository,
         expected_head,
         reviewed,
+        integration_evidence_path,
+        final_eligibility_absence=absence,
     )
-    eligibility = load_eligibility_evidence(
-        final_eligibility_evidence_path,
-        repository,
-        number,
-        reviewed.head_sha,
-        reviewed.state_digest,
+    boundary = FinalFeedbackBoundary(
+        reviewed,
+        validation,
+        FinalEligibilityMode.AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE,
         None,
-        authenticated_evidence_digest=validation.eligibility_evidence_digest,
+        absence,
     )
-    missing = tuple(
-        thread_id
-        for thread_id in eligibility.thread_ids
-        if thread_id not in reviewed.thread_ids
-    )
-    if missing:
+    _require_valid_final_feedback_boundary(boundary)
+    return boundary
+
+
+def derive_post_freeze_origin(
+    boundary: FinalFeedbackBoundary,
+    thread_id: str,
+) -> str:
+    _require_valid_final_feedback_boundary(boundary)
+    if boundary.eligibility is not None and thread_id in boundary.eligibility.thread_ids:
         raise ResolutionError(
-            "final eligibility references a thread absent from final reviewed state: "
-            f"{missing[0]}"
+            f"late target already has commit-bound eligibility: {thread_id}"
         )
-    return FinalFeedbackBoundary(reviewed, validation, eligibility)
+    if thread_id in boundary.reviewed.thread_ids:
+        return late_disposition.REVIEWED_BUT_INELIGIBLE
+    return late_disposition.ABSENT_FROM_BOTH
 
 
 def require_late_target_origin(
     boundary: FinalFeedbackBoundary,
     thread_id: str,
 ) -> None:
-    if thread_id in boundary.eligibility.thread_ids:
-        raise ResolutionError(
-            f"late target already has commit-bound eligibility: {thread_id}"
-        )
-    if thread_id in boundary.reviewed.thread_ids:
+    """Retain the accepted invalid/disproven absent-target compatibility guard."""
+
+    if derive_post_freeze_origin(boundary, thread_id) != (
+        late_disposition.ABSENT_FROM_BOTH
+    ):
         raise ResolutionError(
             f"late target is present in authenticated final reviewed state: {thread_id}"
+        )
+
+
+def require_post_freeze_decision(
+    origin: str,
+    classification: str,
+    disposition: str,
+) -> None:
+    decision = (classification, disposition)
+    if decision not in late_disposition.POST_FREEZE_ORIGIN_DECISIONS.get(
+        origin, frozenset()
+    ):
+        raise ResolutionError(
+            f"late classification decision is unsupported for origin {origin}"
         )
 
 
@@ -1968,7 +2383,7 @@ def create_late_classification_artifact(
     final_reviewed_state_path: Path | str,
     expected_final_reviewed_state_digest: str,
     final_validation_evidence_path: Path | str,
-    final_eligibility_evidence_path: Path | str,
+    final_eligibility_evidence_path: Path | str | None,
     thread_id: str,
     finding_id: str,
     finding_evidence_digest: str,
@@ -1978,6 +2393,7 @@ def create_late_classification_artifact(
     technical_blockers: Sequence[str],
     output_path: Path | str,
     signature_output_path: Path | str,
+    integration_evidence_path: Path | str | None = None,
 ) -> dict[str, Any]:
     if (
         not REPOSITORY.fullmatch(repository)
@@ -2009,20 +2425,33 @@ def create_late_classification_artifact(
     ):
         raise ResolutionError("late classification risk facts are malformed")
     blockers = tuple(sorted(supplied_blockers))
-    if classification != "INVALID_FALSE_OR_MISLEADING" or disposition != (
-        "DISPROVEN_WITH_EVIDENCE"
+    if (
+        (classification, disposition) not in late_disposition.POST_FREEZE_DECISIONS
+        or technically_blocking
+        or blockers
     ):
         raise ResolutionError("late classification decision is unsupported")
     boundary = load_final_feedback_boundary(
         repository=repository,
+        delivery_issue=delivery_issue_number,
         number=number,
         expected_head=expected_head,
         final_reviewed_state_path=Path(final_reviewed_state_path),
         expected_final_reviewed_state_digest=expected_final_reviewed_state_digest,
         final_validation_evidence_path=Path(final_validation_evidence_path),
-        final_eligibility_evidence_path=Path(final_eligibility_evidence_path),
+        final_eligibility_evidence_path=(
+            Path(final_eligibility_evidence_path)
+            if final_eligibility_evidence_path is not None
+            else None
+        ),
+        integration_evidence_path=(
+            Path(integration_evidence_path)
+            if integration_evidence_path is not None
+            else None
+        ),
     )
-    require_late_target_origin(boundary, thread_id)
+    origin = derive_post_freeze_origin(boundary, thread_id)
+    require_post_freeze_decision(origin, classification, disposition)
     root = Path(repository_root)
     try:
         resolved_root = root.resolve(strict=True)
@@ -2061,7 +2490,9 @@ def create_late_classification_artifact(
         )
     reply_digest, reply_count = _reply_state_digest(target.thread)
     artifact = {
-        "schema_version": late_disposition.SCHEMA_VERSION,
+        "schema_version": late_disposition.schema_version_for_decision(
+            classification, disposition
+        ),
         "kind": late_disposition.CLASSIFICATION_KIND,
         "repository": repository,
         "delivery_issue_number": delivery_issue_number,
@@ -2116,6 +2547,7 @@ def create_late_classification_artifact(
         "signature_format": signer.signature_format,
         "signer_fingerprint": signer.fingerprint,
         "thread_id": thread_id,
+        "origin": origin,
         "finding_id": finding_id,
         "finding_evidence_digest": finding_evidence_digest,
         "classification": classification,
@@ -2135,11 +2567,12 @@ def create_late_disposition_artifact(
     final_reviewed_state_path: Path | str,
     expected_final_reviewed_state_digest: str,
     final_validation_evidence_path: Path | str,
-    final_eligibility_evidence_path: Path | str,
+    final_eligibility_evidence_path: Path | str | None,
     classification_evidence_path: Path | str,
     classification_signature_path: Path | str,
     output_path: Path | str,
     signature_output_path: Path | str,
+    integration_evidence_path: Path | str | None = None,
 ) -> dict[str, Any]:
     if not REPOSITORY.fullmatch(repository):
         raise ResolutionError("repository must use owner/name format")
@@ -2158,12 +2591,22 @@ def create_late_disposition_artifact(
         raise ResolutionError("late-disposition delivery identity is malformed")
     boundary = load_final_feedback_boundary(
         repository=repository,
+        delivery_issue=delivery_issue_number,
         number=number,
         expected_head=expected_head,
         final_reviewed_state_path=Path(final_reviewed_state_path),
         expected_final_reviewed_state_digest=expected_final_reviewed_state_digest,
         final_validation_evidence_path=Path(final_validation_evidence_path),
-        final_eligibility_evidence_path=Path(final_eligibility_evidence_path),
+        final_eligibility_evidence_path=(
+            Path(final_eligibility_evidence_path)
+            if final_eligibility_evidence_path is not None
+            else None
+        ),
+        integration_evidence_path=(
+            Path(integration_evidence_path)
+            if integration_evidence_path is not None
+            else None
+        ),
     )
     root = Path(repository_root)
     try:
@@ -2211,7 +2654,7 @@ def create_late_disposition_artifact(
     )
     if not isinstance(thread_id, str) or not THREAD_ID.fullmatch(thread_id):
         raise ResolutionError("late classification thread binding is malformed")
-    require_late_target_origin(boundary, thread_id)
+    origin = derive_post_freeze_origin(boundary, thread_id)
     try:
         classification = late_disposition.parse_classification_artifact(
             Path(classification_evidence_path),
@@ -2225,6 +2668,11 @@ def create_late_disposition_artifact(
         )
     except late_disposition.LateDispositionError as exc:
         raise ResolutionError(str(exc)) from exc
+    require_post_freeze_decision(
+        origin,
+        classification.thread.classification,
+        classification.thread.disposition,
+    )
     thread_ids = (thread_id,)
     limits = load_repository_limits(repository)
     budget = InvocationBudget(
@@ -2258,8 +2706,30 @@ def create_late_disposition_artifact(
             "authorized_action": "RESOLVE_REVIEW_THREAD",
         }
     ]
+    absence = boundary.eligibility_absence
+    eligibility_binding = (
+        {
+            "final_eligibility_status": absence.status,
+            "final_eligibility_absence_recovery_digest": absence.recovery_digest,
+        }
+        if boundary.eligibility_mode
+        == FinalEligibilityMode.AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE
+        and isinstance(absence, FinalEligibilityAbsence)
+        else {
+            "final_eligibility_evidence_digest": (
+                boundary.validation.eligibility_evidence_digest
+            )
+        }
+    )
     artifact = {
-        "schema_version": late_disposition.SCHEMA_VERSION,
+        "schema_version": late_disposition.disposition_schema_version_for_decision(
+            authorization.classification,
+            authorization.disposition,
+            final_eligibility_absent=(
+                boundary.eligibility_mode
+                == FinalEligibilityMode.AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE
+            ),
+        ),
         "kind": late_disposition.KIND,
         "repository": repository,
         "delivery_issue_number": delivery_issue_number,
@@ -2268,9 +2738,7 @@ def create_late_disposition_artifact(
         "validated_tree_sha": boundary.validation.validated_tree_sha,
         "validation_receipt_digest": boundary.validation.validation_receipt_digest,
         "validation_attestation_digest": boundary.validation.evidence_digest,
-        "final_eligibility_evidence_digest": (
-            boundary.validation.eligibility_evidence_digest
-        ),
+        **eligibility_binding,
         "delivery_signer": {
             "format": signer.signature_format,
             "fingerprint": signer.fingerprint,
@@ -2304,6 +2772,7 @@ def create_late_disposition_artifact(
         "signer_fingerprint": signer.fingerprint,
         "thread_ids": list(thread_ids),
         "authorized_action": "RESOLVE_EXACT_REVIEW_THREADS",
+        "origin": origin,
         "delivery_tree_changed": False,
         "lifecycle_consumption": {
             "unrestricted_reviews": 0,
@@ -2327,11 +2796,12 @@ def resolve_late_disposition_threads(
     final_reviewed_state_path: Path | str,
     expected_final_reviewed_state_digest: str,
     final_validation_evidence_path: Path | str,
-    final_eligibility_evidence_path: Path | str,
+    final_eligibility_evidence_path: Path | str | None,
     late_classification_evidence_path: Path | str,
     late_classification_signature_path: Path | str,
     late_disposition_evidence_path: Path | str,
     late_disposition_signature_path: Path | str,
+    integration_evidence_path: Path | str | None = None,
 ) -> dict[str, Any]:
     """Resolve only exact late threads authenticated independently of Git history."""
 
@@ -2353,14 +2823,24 @@ def resolve_late_disposition_threads(
         raise ResolutionError("final reviewed-state digest is required")
     boundary = load_final_feedback_boundary(
         repository=repository,
+        delivery_issue=delivery_issue_number,
         number=number,
         expected_head=expected_head,
         final_reviewed_state_path=Path(final_reviewed_state_path),
         expected_final_reviewed_state_digest=expected_final_reviewed_state_digest,
         final_validation_evidence_path=Path(final_validation_evidence_path),
-        final_eligibility_evidence_path=Path(final_eligibility_evidence_path),
+        final_eligibility_evidence_path=(
+            Path(final_eligibility_evidence_path)
+            if final_eligibility_evidence_path is not None
+            else None
+        ),
+        integration_evidence_path=(
+            Path(integration_evidence_path)
+            if integration_evidence_path is not None
+            else None
+        ),
     )
-    require_late_target_origin(boundary, thread_ids[0])
+    origin = derive_post_freeze_origin(boundary, thread_ids[0])
     signer = verify_local_fix_commit(
         Path(repository_root),
         repository,
@@ -2384,8 +2864,12 @@ def resolve_late_disposition_threads(
             final_eligibility_evidence_digest=(
                 boundary.validation.eligibility_evidence_digest
             ),
+            final_eligibility_absence_recovery_digest=(
+                boundary.eligibility_absence.recovery_digest
+                if boundary.eligibility_absence is not None
+                else None
+            ),
             thread_ids=thread_ids,
-            allowed_dispositions=ELIGIBLE_DISPOSITIONS,
         )
     except late_disposition.LateDispositionError as exc:
         raise ResolutionError(str(exc)) from exc
@@ -2402,6 +2886,11 @@ def resolve_late_disposition_threads(
         )
     except late_disposition.LateDispositionError as exc:
         raise ResolutionError(str(exc)) from exc
+    require_post_freeze_decision(
+        origin,
+        classification.thread.classification,
+        classification.thread.disposition,
+    )
     if authorization.threads != (classification.thread,):
         raise ResolutionError(
             "late disposition does not match authenticated classification evidence"
@@ -2500,6 +2989,7 @@ def resolve_late_disposition_threads(
                     "validation_evidence_digest": boundary.validation.evidence_digest,
                     "late_disposition_evidence_digest": authorization.artifact_digest,
                     "eligibility_path": "authenticated_late_disposition",
+                    "origin": origin,
                     "mode": "apply",
                     "status": "failed",
                     "already_resolved": already_resolved,
@@ -2527,6 +3017,7 @@ def resolve_late_disposition_threads(
         "validation_evidence_digest": boundary.validation.evidence_digest,
         "late_disposition_evidence_digest": authorization.artifact_digest,
         "eligibility_path": "authenticated_late_disposition",
+        "origin": origin,
         "mode": "apply" if apply else "dry-run",
         "status": "success",
         "already_resolved": already_resolved,
@@ -2933,12 +3424,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             arguments.late_disposition_signature,
             arguments.late_classification_evidence,
             arguments.late_classification_signature,
-            arguments.final_eligibility_evidence,
         )
         if any(value is not None for value in late_values):
             if (
-                arguments.integration_evidence is not None
-                or arguments.exceptional_recovery_evidence is not None
+                arguments.exceptional_recovery_evidence is not None
                 or arguments.exceptional_recovery_authorization is not None
             ):
                 raise ResolutionError(
@@ -2948,14 +3437,24 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
                 value is not None for value in late_values
             ):
                 raise ResolutionError(
-                    "late disposition requires delivery issue, final eligibility "
-                    "evidence, classification evidence/signature, and disposition "
-                    "evidence/signature"
+                    "late disposition requires delivery issue, classification "
+                    "evidence/signature, and disposition evidence/signature"
                 )
             if arguments.eligibility_evidence is not None:
                 raise ResolutionError(
                     "commit-bound and late-disposition eligibility are mutually exclusive"
                 )
+            if (
+                arguments.integration_evidence is not None
+                and arguments.final_eligibility_evidence is None
+            ):
+                raise ResolutionError(
+                    "Ready integration late disposition requires final eligibility evidence"
+                )
+        elif arguments.final_eligibility_evidence is not None:
+            raise ResolutionError(
+                "final eligibility evidence is valid only for late disposition"
+            )
         elif arguments.eligibility_evidence is None:
             raise ResolutionError(
                 "commit-bound resolution requires eligibility evidence"
@@ -3012,6 +3511,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
                 late_disposition_signature_path=(
                     arguments.late_disposition_signature
+                ),
+                **(
+                    {"integration_evidence_path": arguments.integration_evidence}
+                    if arguments.integration_evidence is not None
+                    else {}
                 ),
             )
         else:
