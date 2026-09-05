@@ -31,6 +31,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 - preserve repository rulesets as a separate authenticated evidence source and
   fail closed when required classic-protection evidence is inaccessible or
   incomplete
+- authenticate the changed readiness helper through its exact protected-main
+  source admission instead of a branch-local current-source pin
 
 ## 2026-09-02 - Execute Authenticated Ready/Draft Transitions
 
