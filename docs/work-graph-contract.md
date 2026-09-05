@@ -270,7 +270,9 @@ preferred narrative order, or a wish to avoid merge conflicts.
   successor. Closing something as superseded is therefore never a way to satisfy
   a dependency by wording.
 - Removing an unsatisfied edge is allowed only after confirming that the
-  dependent node's contract no longer needs that output.
+  dependent node's contract no longer needs that output. That confirmation is
+  the judgment governed by section 7.1's Prerequisite Necessity rule; it is not
+  another resolver input or derived state.
 
 ### 3.3 Sibling Order
 
@@ -539,7 +541,7 @@ Two obligations always hold, and neither has a materiality threshold:
 
 - An unsatisfied acceptance criterion of the current leaf MUST be resolved or
   replanned. It is never deferred silently.
-- A prerequisite the leaf actually needs MUST be tracked under section 7.1.
+- A prerequisite proven necessary under section 7.1 MUST be tracked there.
 
 Everything else discovered along the way becomes a node only when it clears the
 materiality threshold in section 7.5. A finding below that threshold is
@@ -578,11 +580,65 @@ implementation steps would be ceremony, not control.
 
 ### 7.1 Missing Prerequisite
 
-First decide whether the discovered work is a separate contract at all. Work that
-is genuinely part of the current contract, not independently deliverable, and in
-need of no acceptance criteria of its own stays in the current leaf under the
-scope rules of section 5.1. Everything else is an independent contract, and the
-next question is whether an issue for it already exists.
+#### Prerequisite Necessity
+
+A missing capability is not yet a missing prerequisite, a mechanical blocker is
+not a new responsibility, an invocation boundary is not a contract, and an
+environment evidence failure is not a prerequisite. Before an executor creates
+or attaches a prerequisite because of a discovered gap, the executor MUST make
+and record a judgment establishing all of the following:
+
+1. The current contract actually requires the proposed prerequisite's merged
+   output.
+2. The output cannot lawfully remain in the current delivery as implementation,
+   remediation, integration, or another already-authorized operation.
+3. No accepted existing authority already permits the technically truthful
+   result.
+4. The blocker is not merely workflow, readiness, CI, or metadata state; another
+   bounded invocation or invocation boundary; or normal current-head evidence
+   refresh.
+5. The blocker is not merely missing or stale local or environment evidence that
+   can be restored or reacquired without changing the contract.
+6. The proposed node is the canonical owner: no other existing issue already owns
+   the independently required output.
+7. The current delivery genuinely cannot lawfully produce or absorb that output.
+
+Only after this proof may the finding be classified as
+`MISSING_PREREQUISITE`; the existing insertion rules below then apply. An
+ordinary in-contract defect stays in the current delivery. A legitimate
+prerequisite remains valid where a candidate cannot safely create or select the
+authority that it must itself consume, so an independent trust or authority
+boundary must exist first. This rule MUST NOT weaken security, privacy,
+correctness, immutable evidence, source independence, or fail-closed trust
+boundaries.
+
+A corrective prerequisite reaching another obstacle does not by itself prove a
+second corrective prerequisite. Another prerequisite requires a distinct,
+independently necessary contract or invariant. Without one, the executor MUST
+reconsider the decomposition and keep the work in the already-owning delivery
+where lawful; no prerequisite depth or recursion state is derived or counted.
+
+A historical classification or disposition is evidence, not permanent
+architecture authority. It MUST NOT by itself force a new permanent authority,
+graph node, recovery path, or evidence family when current technical truth is
+already lawfully representable through current accepted authority. Reclassification
+MUST NOT be used to downgrade a genuine security, correctness, integrity,
+authentication, or fail-closed blocker. Current technical truth together with
+current accepted authority governs, not preservation of an obsolete label.
+
+Prerequisite necessity MUST be re-evaluated after a relevant accepted authority
+extension, merged prerequisite or generalization, technical reclassification,
+contract reconciliation, or newly available normal integration path. If the
+dependent contract no longer needs the target output, remove the obsolete native
+dependency first. Only then, and separately, close unnecessary target work as
+`not planned` or `duplicate` where applicable. Such closure never satisfies a
+still-existing dependency; section 3.2's native satisfaction rule remains
+unchanged.
+
+After necessity is proven, decide whether the independently required contract
+already has an issue. Work that is genuinely part of the current contract, not
+independently deliverable, and in need of no acceptance criteria of its own stays
+in the current leaf under the scope rules of section 5.1.
 
 **The prerequisite already exists.** Add the native dependency from the current
 leaf to that issue, leave its ownership and hierarchy exactly as they are, and
@@ -678,7 +734,8 @@ observation, an insignificant warning, a stylistic preference, and a concern
 already covered elsewhere are all mentioned in the pull request at most.
 
 Two exceptions sit above the threshold by definition and are always tracked: an
-unresolved acceptance-criteria gap, and a prerequisite the work actually needs.
+unresolved acceptance-criteria gap, and a prerequisite proven necessary under
+section 7.1.
 
 ## 8. Precedence Between Scope And Evidence
 
@@ -721,9 +778,10 @@ close. Use exactly one of these classifications, in priority order:
    whether discovered before or after the current evidence freeze. After the
    pull request merged, the same defect becomes its own leaf instead (section
    5.2).
-2. `MISSING_PREREQUISITE` — the finding cannot be resolved without work that
-   does not exist yet. Create or attach the prerequisite under section 7.1 and
-   block the current leaf with the exact native dependency.
+2. `MISSING_PREREQUISITE` — only after the Prerequisite Necessity proof in
+   section 7.1 establishes an independently required output may this
+   classification apply. Then create or attach the prerequisite under that
+   section and block the current leaf with the exact native dependency.
 3. `NEW_RESPONSIBILITY` — the finding is real but outside the current contract.
    Create the canonical owned sibling or child under section 7.2 before scope
    expands; the current leaf still closes.
