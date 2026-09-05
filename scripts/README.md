@@ -181,7 +181,11 @@ creator captures only the named live thread and authenticates the explicit
 classification decision. Then
 `secpal-create-late-disposition.py` verifies that decision, computes its digest
 internally, and creates a canonical detached SSH/OpenPGP-signed artifact without
-a delivery commit. The resolver consumes both signed artifacts through a
+a delivery commit. Ordinary final-delivery evidence remains the default. A
+canonical eligibility-bound Ready-integration source is supplied to both
+creators and the resolver with `--integration-evidence`; all three route it
+through the maintained integration-specific verifier, and authenticated
+attestation shape selects the evidence family. The resolver consumes both signed artifacts through a
 separate explicit eligibility path,
 requires the actual detached signer to match the verified final delivery
 signer, and binds the delivery issue, PR, unchanged head/tree, receipt and
