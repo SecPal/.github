@@ -20,6 +20,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 - verify every produced signature against accepted policy credential material
   before returning a production signer to existing lifecycle constructors
 
+## 2026-09-05 - Replace the Exact Review-Helper Source Admission
+
+**Changed:**
+
+- replace the single active #818 review-helper source admission with the exact
+  validated Cycle-2 successor commit and helper blob
+- bind the byte-only source policy to PR #819's live Ready state while keeping
+  the executable bootstrap source Draft-only and candidate self-admission
+  impossible
+
 ## 2026-09-05 - Preserve Pre-Enrollment Review Consumption
 
 **Changed:**

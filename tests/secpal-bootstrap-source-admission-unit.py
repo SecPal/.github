@@ -41,22 +41,23 @@ RECOVERY_FEEDBACK_DIGEST = "d2236120f769caa74d5da0435330c103a036dfe68a5e0f8274d4
 
 EVIDENCE_HELPER_ISSUE = 818
 EVIDENCE_HELPER_PR = 819
-EVIDENCE_HELPER_HEAD = "eb3aebf226c3ca215e7021b00207cc996ab06c2e"
-EVIDENCE_HELPER_CURRENT_HEAD = "9c1dd1ee48dfd91e1e320853d2e5b995030e02b8"
-EVIDENCE_HELPER_TREE = "d7fca1ea61ea0b4cd78bf18f8555386633e013ea"
-EVIDENCE_HELPER_PARENT = "f8d58a3acd5d2b5c84824bf9ecba637e91665ee9"
+EVIDENCE_HELPER_HEAD = "e14f7668354763af5033f511097ddf990d6e8ef5"
+EVIDENCE_HELPER_CURRENT_HEAD = "b297745297b7aa98ba24ef05c011a7906a0a43d8"
+EVIDENCE_HELPER_TREE = "5065ce77573e9753249de055f6122f14362cbb30"
+EVIDENCE_HELPER_PARENT = "b297745297b7aa98ba24ef05c011a7906a0a43d8"
 EVIDENCE_HELPER_RECEIPT = (
-    "cc771a06ed843aa97120033acb079bcc8f5ea40ceeef79bf237f0f44bf2a3293"
+    "4a21e7f8b0f3a96bdecf78b97a55cf77c12b9fae7b012c32d3d19d2f1195801e"
 )
 EVIDENCE_HELPER_ATTESTATION = (
-    "84066ae060977f266754b54a09c665cc9c6ca9868d0bfaaa84c1b7cd7414fbec"
+    "6e17c6e1bb3a9a11538605206ef7b6dd6c8738d9f7dedc03ab1c913303cbd0fd"
 )
 EVIDENCE_HELPER_PATH = "scripts/secpal-pr-review.py"
-EVIDENCE_HELPER_BLOB = "b37b30eeb7b44bed26d517d096f92e31aa0dd0ff"
+EVIDENCE_HELPER_BLOB = "130e49df1c6e90c3db1b4286e74639f1d3fc1418"
+EVIDENCE_HELPER_OLD_BLOB = "b37b30eeb7b44bed26d517d096f92e31aa0dd0ff"
 EVIDENCE_HELPER_SUBTYPE = "PR_REVIEW_EVIDENCE_HELPER_SOURCE"
 EVIDENCE_HELPER_PURPOSE = "PR_REVIEW_EVIDENCE_HELPER_SOURCE_ADMISSION"
 EVIDENCE_HELPER_ADMISSION_DIGEST = (
-    "7c5cf40666c233bb45bea4349414fd6fd9c48cfffe6f6571bf5637c2660ef25d"
+    "38aa92b53d5289db44063ce4197687c18bb162c344aa37326ee2703013158418"
 )
 PROTECTED_MAIN_HEAD = "a5a7b0704645659a5db7df820b2d448de3859560"
 
@@ -1583,6 +1584,70 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
             ),
         )
 
+    def test_byte_source_ready_binding_is_exact_boolean(self) -> None:
+        registry_path = (
+            Path(__file__).resolve().parents[1]
+            / ".agents/skills/secpal-pr-review/references/repositories.json"
+        )
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        governance = next(
+            item
+            for item in registry["repositories"]
+            if item["repository"] == REPOSITORY
+        )
+        admission = next(
+            item
+            for item in governance["lifecycle_authority_policy"][
+                "bootstrap_source_admissions"
+            ]
+            if item["subtype"] == EVIDENCE_HELPER_SUBTYPE
+        )
+        for expected_draft in (False, True):
+            admission["source_pr_draft"] = expected_draft
+            admission["admission_digest"] = source.authority.digest_json(
+                {
+                    key: value
+                    for key, value in admission.items()
+                    if key != "admission_digest"
+                }
+            )
+
+            with (
+                self.subTest(expected_draft=expected_draft),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                candidate_registry = Path(directory) / "repositories.json"
+                candidate_registry.write_text(json.dumps(registry), encoding="utf-8")
+                with mock.patch.object(
+                    source.authority, "_TRUST_REGISTRY", candidate_registry
+                ):
+                    trust = source.authority._load_lifecycle_trust_policy(REPOSITORY)
+                exact_policy = next(
+                    item
+                    for item in trust.bootstrap_source_admissions
+                    if item.subtype == EVIDENCE_HELPER_SUBTYPE
+                )
+                self.assertIs(exact_policy.source_pr_draft, expected_draft)
+
+        admission["source_pr_draft"] = 0
+        admission["admission_digest"] = source.authority.digest_json(
+            {
+                key: value
+                for key, value in admission.items()
+                if key != "admission_digest"
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            candidate_registry = Path(directory) / "repositories.json"
+            candidate_registry.write_text(json.dumps(registry), encoding="utf-8")
+            with (
+                mock.patch.object(
+                    source.authority, "_TRUST_REGISTRY", candidate_registry
+                ),
+                self.assertRaises(source.authority.LifecycleAuthorityError),
+            ):
+                source.authority._load_lifecycle_trust_policy(REPOSITORY)
+
     def test_protected_main_observation_is_exact_and_closed(self) -> None:
         payload = self._protected_main_observation().repository_json
         completed = subprocess.CompletedProcess([], 0, payload, b"")
@@ -2002,7 +2067,7 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
             head_repository=REPOSITORY,
             pull_request=EVIDENCE_HELPER_PR,
             state="OPEN",
-            draft=True,
+            draft=False,
             head_sha=EVIDENCE_HELPER_HEAD,
             commit_sha=EVIDENCE_HELPER_HEAD,
             tree_sha=EVIDENCE_HELPER_TREE,
@@ -2017,7 +2082,7 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
             {"head_repository": "Other/repo"},
             {"pull_request": 820},
             {"state": "CLOSED"},
-            {"draft": False},
+            {"draft": True},
             {"commit_sha": "4" * 40},
             {"tree_sha": "5" * 40},
             {"parent_shas": ("6" * 40,)},
@@ -2037,7 +2102,7 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
             head_repository=REPOSITORY,
             pull_request=EVIDENCE_HELPER_PR,
             state="OPEN",
-            draft=True,
+            draft=False,
             head_sha=EVIDENCE_HELPER_CURRENT_HEAD,
             commit_sha=EVIDENCE_HELPER_HEAD,
             tree_sha=EVIDENCE_HELPER_TREE,
@@ -2052,7 +2117,7 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
         pull = {
             "number": EVIDENCE_HELPER_PR,
             "state": "open",
-            "draft": True,
+            "draft": False,
             "base": {"ref": "main", "repo": {"full_name": REPOSITORY}},
             "head": {
                 "repo": {"full_name": REPOSITORY},
@@ -2131,7 +2196,7 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
                 self.policy,
             )
 
-    def test_current_candidate_helper_substitution_fails_closed(self) -> None:
+    def test_live_old_candidate_helper_fails_under_successor_admission(self) -> None:
         raw = json.dumps(
             {
                 "data": {
@@ -2141,7 +2206,7 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
                             "number": EVIDENCE_HELPER_PR,
                             "headRefOid": EVIDENCE_HELPER_CURRENT_HEAD,
                         },
-                        "object": {"oid": "8" * 40},
+                        "object": {"oid": EVIDENCE_HELPER_OLD_BLOB},
                     }
                 }
             }
@@ -2326,6 +2391,38 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
                     999,
                     source_evidence_directory="/candidate/evidence",
                 )
+
+    def test_duplicate_active_delivery_admission_is_rejected(self) -> None:
+        registry_path = (
+            Path(__file__).resolve().parents[1]
+            / ".agents/skills/secpal-pr-review/references/repositories.json"
+        )
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        governance = next(
+            item
+            for item in registry["repositories"]
+            if item["repository"] == REPOSITORY
+        )
+        admissions = governance["lifecycle_authority_policy"][
+            "bootstrap_source_admissions"
+        ]
+        exact = next(
+            item
+            for item in admissions
+            if item["subtype"] == EVIDENCE_HELPER_SUBTYPE
+        )
+        admissions.append(json.loads(json.dumps(exact)))
+
+        with tempfile.TemporaryDirectory() as directory:
+            candidate_registry = Path(directory) / "repositories.json"
+            candidate_registry.write_text(json.dumps(registry), encoding="utf-8")
+            with (
+                mock.patch.object(
+                    source.authority, "_TRUST_REGISTRY", candidate_registry
+                ),
+                self.assertRaises(source.authority.LifecycleAuthorityError),
+            ):
+                source.authority._load_lifecycle_trust_policy(REPOSITORY)
 
     def test_wrong_path_or_blob_is_rejected_by_byte_admission(self) -> None:
         for policy, record in (
