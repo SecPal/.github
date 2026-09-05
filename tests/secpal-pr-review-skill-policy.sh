@@ -945,7 +945,7 @@ assert publication_policy["bootstrap_genesis_repairs"] == [{
     "enrollment_publication_oid": "0bb379a9af38bb14a49c651104d31149bb6c7f18",
     "enrollment_publication_digest": "44fb6c570d4e875f2655e363bfe667107d69d37eedf62487bbf4551cf9288a9d",
 }]
-assert publication_policy["bootstrap_source_admissions"] == [{
+assert publication_policy["bootstrap_source_admissions"][:2] == [{
     "schema_version": "1.0",
     "kind": "BOOTSTRAP_SOURCE_ADMISSION",
     "subtype": "FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE",
@@ -1028,12 +1028,31 @@ assert publication_policy["bootstrap_source_admissions"] == [{
     "policy_source": "ACCEPTED_MAIN_REPOSITORY_REGISTRY",
     "admission_digest": "7c5cf40666c233bb45bea4349414fd6fd9c48cfffe6f6571bf5637c2660ef25d",
 }]
+pre_enrollment_source = publication_policy["bootstrap_source_admissions"][2]
+assert set(pre_enrollment_source) == {
+    "schema_version", "kind", "subtype", "repository", "delivery_issue",
+    "pull_request", "source_head_sha", "source_tree_sha", "source_parent_sha",
+    "source_signer_identity", "signer_policy_identity", "implementation_path",
+    "implementation_blob_oid", "entrypoint", "command", "purpose",
+    "source_pr_state", "source_pr_draft", "source_base_ref", "policy_source",
+    "historical_evidence_status", "validation_registry_path",
+    "validation_command_set", "validation_command_set_digest",
+    "validation_results", "validation_result_digest", "admission_digest",
+}
+assert pre_enrollment_source["subtype"] == "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE"
+assert pre_enrollment_source["delivery_issue"] == 776
+assert pre_enrollment_source["pull_request"] == 779
+assert pre_enrollment_source["purpose"] == "PRE_ENROLLMENT_IMPLEMENTATION_BOOTSTRAP"
+assert pre_enrollment_source["command"] == "integrate-pre-enrollment-draft"
+assert pre_enrollment_source["policy_source"] == "ACCEPTED_MAIN_REPOSITORY_REGISTRY"
+assert pre_enrollment_source["historical_evidence_status"] == "HISTORICAL_EVIDENCE_UNAVAILABLE"
 source_variants = schema["$defs"]["lifecycle_authority_policy"]["properties"][
     "bootstrap_source_admissions"
 ]["items"]["oneOf"]
 assert source_variants == [
     {"$ref": "#/$defs/firstReadyExecutorBootstrapSource"},
     {"$ref": "#/$defs/prReviewEvidenceHelperSource"},
+    {"$ref": "#/$defs/preEnrollmentDraftIntegrationSource"},
 ]
 assert "entrypoint" in schema["$defs"]["firstReadyExecutorBootstrapSource"]["required"]
 assert "entrypoint" not in schema["$defs"]["prReviewEvidenceHelperSource"]["properties"]
