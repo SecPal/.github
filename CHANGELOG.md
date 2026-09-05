@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-05 - Authenticate Pre-Enrollment Bootstrap Source
+
+**Added:**
+
+- admit the exact immutable #776 / PR #779 implementation source through the
+  existing accepted-main bootstrap-source authority
+- verify both maintained source signatures and run one fixed bounded validation
+  command before permitting the exact pre-enrollment action entrypoint
+- preserve the historical evidence-loss limitation without granting lifecycle,
+  publication, Ready, push, merge, or arbitrary-source authority
+
 ## 2026-09-05 - Authenticate Immutable Helper Source After PR Advancement
 
 **Changed:**

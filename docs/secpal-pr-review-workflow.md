@@ -184,6 +184,11 @@ admission, and migration signer roles; the exact GitHub endpoint, publication
 branch, and live ruleset identity and required protections; static initialization
 roots; exact historical native compatibility-publication identities; and the
 one closed issue 736 bootstrap-repair identity.
+The same maintained bootstrap-source list contains one closed #776 / PR #779
+pre-enrollment implementation admission. It binds the immutable source chain,
+maintained signer policy, fixed action entrypoint/command, and accepted-main
+validation command/result digests. It creates no lifecycle, publication,
+CURRENT, Ready state, or candidate-tree authority; those remain downstream.
 New candidate heads, terminal digests, and current publication objects are not
 registered there. Dynamic events form one signed
 linear journal on `refs/heads/secpal-lifecycle-publications` outside delivery
