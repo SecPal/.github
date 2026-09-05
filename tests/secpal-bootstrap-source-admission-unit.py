@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import replace
+import hashlib
 import io
 import inspect
 import json
@@ -36,6 +37,7 @@ ATTESTATION = "a6ed34cbf05647e1c7cce4a9435e3f0f17e5d918f9e344763f6d8fbc9ac4e102"
 STALE_RECEIPT = "a09090603206134470b21f58224d6fd35c4a26f4cc87ca7936c068421d0e867f"
 STALE_ATTESTATION = "e585aab46ea8e30a28fd953d98711460d0e45818637cf68ab36e25e550b9e5e6"
 BLOB = "4cfd9eb73a522224f9dfca4176d1aad386b81d50"
+RECOVERY_FEEDBACK_DIGEST = "d2236120f769caa74d5da0435330c103a036dfe68a5e0f8274d43a3916ca8f2b"
 
 EVIDENCE_HELPER_ISSUE = 818
 EVIDENCE_HELPER_PR = 819
@@ -80,6 +82,77 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
             "attestation_digest": ATTESTATION,
             "manual_gate_evidence": [],
             "validation_receipt_digest": RECEIPT,
+        }
+
+    def _recovery_review_document(self) -> dict[str, object]:
+        actor = {
+            "database_id": 223894421,
+            "login": "github-code-quality",
+            "node_id": "BOT_kgDODVhblQ",
+        }
+        feedback = {
+            "pull_request_reactions": [],
+            "reviews": [
+                {
+                    "actor": actor,
+                    "body_digest": hashlib.sha256(b"").hexdigest(),
+                    "commit_oid": PARENT,
+                    "node_id": "PRR_kwDOQFR1MM8AAAABL7Ibaw",
+                    "reactions": [],
+                    "state": "COMMENTED",
+                }
+            ],
+            "conversation_comments": [],
+            "threads": [
+                {
+                    "comments": [
+                        {
+                            "actor": actor,
+                            "body_digest": "1671e9ff600d488e7f94d664c51058190e9238b014089e9585e34b6e91755a5b",
+                            "node_id": "PRRC_kwDOQFR1MM7pkv_s",
+                            "reactions": [],
+                            "reply_to_id": None,
+                        }
+                    ],
+                    "is_outdated": True,
+                    "is_resolved": True,
+                    "node_id": "PRRT_kwDOQFR1MM6erzK6",
+                },
+                {
+                    "comments": [
+                        {
+                            "actor": actor,
+                            "body_digest": "af1358df331afa7893179422cbc889373591d559da432d00586302f8386f8bd9",
+                            "node_id": "PRRC_kwDOQFR1MM7pkwAK",
+                            "reactions": [],
+                            "reply_to_id": None,
+                        }
+                    ],
+                    "is_outdated": True,
+                    "is_resolved": True,
+                    "node_id": "PRRT_kwDOQFR1MM6erzLQ",
+                },
+            ],
+        }
+        reviewed = fast_path.StableFeedbackState(
+            repository=REPOSITORY,
+            pull_request_number=PR,
+            head_sha=HEAD,
+            base_ref="main",
+            base_sha="7d36b28b8dc596e91ffb91eeb1ae1ffd2f19dc19",
+            pr_state="OPEN",
+            feedback=feedback,
+        )
+        self.assertEqual(reviewed.feedback_digest, RECOVERY_FEEDBACK_DIGEST)
+        return {
+            "repository": reviewed.repository,
+            "pull_request_number": reviewed.pull_request_number,
+            "head_sha": reviewed.head_sha,
+            "base_ref": reviewed.base_ref,
+            "base_sha": reviewed.base_sha,
+            "pr_state": reviewed.pr_state,
+            "review_decision": None,
+            "feedback": reviewed.feedback,
         }
 
     def _verified_validation(self, policy=None):
@@ -150,6 +223,33 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
                 ({}, receipt, attestation),
             )
 
+    def _recover(self, *, policy=None, command_set_digest=None):
+        policy = policy or self.policy
+        recovery = policy.evidence_loss_recovery
+        expected = (
+            None
+            if recovery is None
+            else recovery.recovery_validation.command_set_digest
+        )
+        command_set_digest = expected if command_set_digest is None else command_set_digest
+        actions = SimpleNamespace(
+            _prior_delivery_registry_binding=mock.Mock(return_value={"validation": []})
+        )
+        with (
+            mock.patch.object(
+                source,
+                "_authenticate_exact_materialized_source",
+                return_value=(policy.source_head_sha, policy.source_tree_sha, BLOB),
+            ),
+            mock.patch.object(source, "_load_actions_helper", return_value=actions),
+            mock.patch.object(
+                fast_path, "digest_json", return_value=command_set_digest
+            ),
+        ):
+            return source._authenticate_recovered_materialized_source(
+                Path("/fixture"), self.trust, policy
+            )
+
     def test_exact_admitted_source_metadata_verifies(self) -> None:
         verified = self._authenticate()
         self.assertTrue(source.is_verified_bootstrap_source(verified))
@@ -183,6 +283,162 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
                 source.PURPOSE,
             ),
         )
+        self.assertEqual(
+            verified.historical_evidence_status,
+            source.HISTORICAL_EVIDENCE_PRESENT,
+        )
+        self.assertIsNone(verified.recovery_authority_digest)
+        self.assertIsNone(verified.recovery_validation_digest)
+        self.assertIsNone(verified.recovery_technical_security_gate_digest)
+
+    def test_exact_recovery_has_distinct_accepted_authority_identities(self) -> None:
+        recovery = self.policy.evidence_loss_recovery
+        self.assertIsNotNone(recovery)
+        verified = self._recover()
+        self.assertTrue(source.is_verified_bootstrap_source(verified))
+        self.assertEqual(
+            verified.historical_evidence_status,
+            source.HISTORICAL_EVIDENCE_RECOVERY,
+        )
+        self.assertEqual(verified.validation_receipt_digest, RECEIPT)
+        self.assertEqual(verified.final_attestation_digest, ATTESTATION)
+        self.assertEqual(verified.recovery_authority_digest, recovery.recovery_digest)
+        self.assertEqual(
+            verified.recovery_validation_digest,
+            recovery.recovery_validation.validation_digest,
+        )
+        self.assertEqual(
+            verified.recovery_technical_security_gate_digest,
+            recovery.technical_security_gate.gate_digest,
+        )
+
+    def test_absent_recovery_policy_fails_closed(self) -> None:
+        policy = replace(self.policy, evidence_loss_recovery=None)
+        with self.assertRaisesRegex(
+            source.BootstrapSourceAdmissionError, "recovery is absent"
+        ):
+            self._recover(policy=policy)
+
+    def test_recovery_for_another_source_fails_closed(self) -> None:
+        recovery = self.policy.evidence_loss_recovery
+        self.assertIsNotNone(recovery)
+        for changed in (
+            replace(
+                recovery,
+                source_admission_digest="0" * 64,
+            ),
+            replace(
+                recovery,
+                recovery_validation=replace(
+                    recovery.recovery_validation, source_head_sha="1" * 40
+                ),
+            ),
+            replace(
+                recovery,
+                technical_security_gate=replace(
+                    recovery.technical_security_gate, source_tree_sha="2" * 40
+                ),
+            ),
+        ):
+            with self.subTest(changed=changed):
+                policy = replace(self.policy, evidence_loss_recovery=changed)
+                with self.assertRaisesRegex(
+                    source.BootstrapSourceAdmissionError, "recovery is invalid"
+                ):
+                    self._recover(policy=policy)
+
+    def test_failed_recovery_validation_or_security_gate_fails_closed(self) -> None:
+        recovery = self.policy.evidence_loss_recovery
+        self.assertIsNotNone(recovery)
+        cases = (
+            replace(
+                recovery,
+                recovery_validation=replace(
+                    recovery.recovery_validation, result="FAILED"
+                ),
+            ),
+            replace(
+                recovery,
+                technical_security_gate=replace(
+                    recovery.technical_security_gate, result="OPEN_FINDING"
+                ),
+            ),
+        )
+        for changed in cases:
+            with self.subTest(changed=changed):
+                policy = replace(self.policy, evidence_loss_recovery=changed)
+                with self.assertRaisesRegex(
+                    source.BootstrapSourceAdmissionError, "recovery is invalid"
+                ):
+                    self._recover(policy=policy)
+
+    def test_recovery_validation_rejects_historical_command_set_drift(self) -> None:
+        with self.assertRaisesRegex(
+            source.BootstrapSourceAdmissionError, "recovery is invalid"
+        ):
+            self._recover(command_set_digest="3" * 64)
+
+    def test_malformed_or_cross_source_recovery_registry_fails_closed(self) -> None:
+        registry_path = source.authority._TRUST_REGISTRY
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+
+        def recovery(document):
+            repository = next(
+                item
+                for item in document["repositories"]
+                if item["repository"] == REPOSITORY
+            )
+            return repository["lifecycle_authority_policy"][
+                "bootstrap_source_admissions"
+            ][0]["evidence_loss_recovery"]
+
+        mutations = (
+            lambda item: item.update(untrusted_extra=True),
+            lambda item: item.update(kind="GENERIC_RECOVERY"),
+            lambda item: item.update(source_admission_digest="4" * 64),
+            lambda item: item["recovery_validation"].update(
+                source_head_sha="5" * 40
+            ),
+            lambda item: item["technical_security_gate"].update(
+                feedback_inventory_digest="6" * 64
+            ),
+        )
+        for mutate in mutations:
+            changed = json.loads(json.dumps(registry))
+            mutate(recovery(changed))
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "repositories.json"
+                path.write_text(json.dumps(changed), encoding="utf-8")
+                with (
+                    self.subTest(mutate=mutate),
+                    mock.patch.object(source.authority, "_TRUST_REGISTRY", path),
+                    self.assertRaises(source.authority.LifecycleAuthorityError),
+                ):
+                    source.authority._load_lifecycle_trust_policy(REPOSITORY)
+
+    def test_changed_receipt_trailer_fails_before_evidence_mode_selection(self) -> None:
+        def git_text(_root, arguments):
+            if arguments == ["rev-parse", "HEAD"]:
+                return HEAD + "\n"
+            if arguments == ["rev-parse", f"{HEAD}^{{tree}}"]:
+                return TREE + "\n"
+            if arguments[:3] == ["rev-list", "--parents", "-n"]:
+                return f"{HEAD} {PARENT}\n"
+            raise AssertionError(arguments)
+
+        with (
+            mock.patch.object(source, "_git_text", side_effect=git_text),
+            mock.patch.object(source, "_verify_commit_signature"),
+            mock.patch.object(source, "_exact_trailer", return_value="6" * 64),
+            mock.patch.object(source, "_implementation_blob") as implementation,
+            self.assertRaisesRegex(
+                source.BootstrapSourceAdmissionError, "trailer changed"
+            ),
+        ):
+            source._authenticate_exact_materialized_source(
+                Path("/fixture"), self.trust, self.policy
+            )
+        implementation.assert_not_called()
 
     def test_wrong_repository_issue_and_cross_delivery_replay_fail(self) -> None:
         for repository, issue in (
@@ -282,6 +538,11 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
             "environment",
             "executable",
             "python",
+            "recovery",
+            "recovery_document",
+            "validation_result",
+            "technical_security_gate",
+            "feedback_inventory_digest",
         ):
             self.assertNotIn(forbidden, parameters)
 
@@ -827,6 +1088,210 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
         self.assertIs(result, verified)
         execute.assert_not_called()
 
+    def test_absent_historical_evidence_uses_only_accepted_recovery(self) -> None:
+        @contextmanager
+        def isolated(_trust, _policy):
+            yield Path("/fixture")
+
+        verified = self._authenticate()
+        with (
+            mock.patch.object(source, "_authenticate_live_github_source"),
+            mock.patch.object(source, "_authenticate_live_recovery_review_state"),
+            mock.patch.object(source, "_isolated_source_repository", isolated),
+            mock.patch.object(
+                source,
+                "_authenticate_recovered_materialized_source",
+                create=True,
+                return_value=verified,
+            ) as recover,
+            mock.patch.object(source, "_verify_materialized_tree"),
+            mock.patch.object(source, "_read_evidence") as read_evidence,
+        ):
+            result = source.verify_first_ready_executor_source(REPOSITORY, ISSUE)
+        self.assertIs(result, verified)
+        recover.assert_called_once_with(Path("/fixture"), self.trust, self.policy)
+        read_evidence.assert_not_called()
+
+    def test_recovery_live_review_state_is_exact_and_has_no_open_thread(self) -> None:
+        document = self._recovery_review_document()
+        raw = source.authority.canonical_json_bytes(document)
+        with mock.patch.object(
+            source, "_observe_recovery_review_state", return_value=raw
+        ):
+            source._authenticate_live_recovery_review_state(self.policy)
+
+        changed_cases = (
+            lambda value: value.update(review_decision="CHANGES_REQUESTED"),
+            lambda value: value.update(head_sha="1" * 40),
+            lambda value: value.update(base_ref="other"),
+            lambda value: value.update(pr_state="CLOSED"),
+            lambda value: value["feedback"]["threads"][0].update(
+                is_resolved=False
+            ),
+        )
+        for mutate in changed_cases:
+            changed = json.loads(json.dumps(document))
+            mutate(changed)
+            with (
+                self.subTest(mutate=mutate),
+                mock.patch.object(
+                    source,
+                    "_observe_recovery_review_state",
+                    return_value=source.authority.canonical_json_bytes(changed),
+                ),
+                self.assertRaises(source.BootstrapSourceAdmissionError),
+            ):
+                source._authenticate_live_recovery_review_state(self.policy)
+
+    def test_recovery_rejects_new_commented_review_body(self) -> None:
+        document = self._recovery_review_document()
+        document["feedback"]["reviews"].append(
+            {
+                "node_id": "PRR_new_substantive_review",
+                "state": "COMMENTED",
+                "body_digest": hashlib.sha256(
+                    b"Security finding: do not execute."
+                ).hexdigest(),
+                "actor": {
+                    "login": "security-reviewer",
+                    "node_id": "USER_security_reviewer",
+                    "database_id": 82,
+                },
+                "commit_oid": HEAD,
+                "reactions": [],
+            }
+        )
+        with (
+            mock.patch.object(
+                source,
+                "_observe_recovery_review_state",
+                return_value=source.authority.canonical_json_bytes(document),
+            ),
+            self.assertRaises(source.BootstrapSourceAdmissionError),
+        ):
+            source._authenticate_live_recovery_review_state(self.policy)
+
+    def test_recovery_rejects_same_count_thread_identity_substitution(self) -> None:
+        document = self._recovery_review_document()
+        replacement = document["feedback"]["threads"][0]
+        replacement["node_id"] = "PRRT_replacement"
+        replacement["comments"][0]["node_id"] = "PRRC_replacement"
+        replacement["comments"][0]["body_digest"] = "7" * 64
+        with (
+            mock.patch.object(
+                source,
+                "_observe_recovery_review_state",
+                return_value=source.authority.canonical_json_bytes(document),
+            ),
+            self.assertRaises(source.BootstrapSourceAdmissionError),
+        ):
+            source._authenticate_live_recovery_review_state(self.policy)
+
+    def test_recovery_rejects_same_count_review_identity_content_or_head_drift(self) -> None:
+        mutations = (
+            lambda review: review.update(node_id="PRR_replacement"),
+            lambda review: review.update(body_digest="8" * 64),
+            lambda review: review["actor"].update(login="replacement-reviewer"),
+            lambda review: review.update(commit_oid=HEAD),
+        )
+        for mutate in mutations:
+            document = self._recovery_review_document()
+            mutate(document["feedback"]["reviews"][0])
+            with (
+                self.subTest(mutate=mutate),
+                mock.patch.object(
+                    source,
+                    "_observe_recovery_review_state",
+                    return_value=source.authority.canonical_json_bytes(document),
+                ),
+                self.assertRaises(source.BootstrapSourceAdmissionError),
+            ):
+                source._authenticate_live_recovery_review_state(self.policy)
+
+    def test_recovery_rejects_new_conversation_comment(self) -> None:
+        document = self._recovery_review_document()
+        document["feedback"]["conversation_comments"].append(
+            {
+                "node_id": "IC_new_finding",
+                "body_digest": "9" * 64,
+                "actor": {
+                    "login": "security-reviewer",
+                    "node_id": "USER_security_reviewer",
+                    "database_id": 82,
+                },
+                "updated_at": "2026-09-04T10:00:00Z",
+                "reactions": [],
+            }
+        )
+        with (
+            mock.patch.object(
+                source,
+                "_observe_recovery_review_state",
+                return_value=source.authority.canonical_json_bytes(document),
+            ),
+            self.assertRaises(source.BootstrapSourceAdmissionError),
+        ):
+            source._authenticate_live_recovery_review_state(self.policy)
+
+    def test_recovery_rejects_duplicate_feedback_identities(self) -> None:
+        mutations = (
+            lambda feedback: feedback["reviews"].append(
+                dict(feedback["reviews"][0])
+            ),
+            lambda feedback: feedback["threads"].append(
+                dict(feedback["threads"][0])
+            ),
+            lambda feedback: feedback["threads"][0]["comments"].append(
+                dict(feedback["threads"][0]["comments"][0])
+            ),
+            lambda feedback: feedback["conversation_comments"].append(
+                {
+                    "node_id": feedback["threads"][0]["comments"][0]["node_id"],
+                    "body_digest": "9" * 64,
+                    "actor": feedback["threads"][0]["comments"][0]["actor"],
+                    "updated_at": "2026-09-04T10:00:00Z",
+                    "reactions": [],
+                }
+            ),
+        )
+        for mutate in mutations:
+            document = self._recovery_review_document()
+            mutate(document["feedback"])
+            with (
+                self.subTest(mutate=mutate),
+                mock.patch.object(
+                    source,
+                    "_observe_recovery_review_state",
+                    return_value=source.authority.canonical_json_bytes(document),
+                ),
+                self.assertRaises(source.BootstrapSourceAdmissionError),
+            ):
+                source._authenticate_live_recovery_review_state(self.policy)
+
+    def test_invalid_ordinary_evidence_never_falls_back_to_recovery(self) -> None:
+        with (
+            mock.patch.object(
+                source,
+                "_read_evidence",
+                side_effect=source.BootstrapSourceAdmissionError(
+                    "source validation evidence is invalid"
+                ),
+            ),
+            mock.patch.object(
+                source, "_authenticate_recovered_materialized_source"
+            ) as recover,
+            self.assertRaisesRegex(
+                source.BootstrapSourceAdmissionError,
+                "source validation evidence is invalid",
+            ),
+        ):
+            source.verify_first_ready_executor_source(
+                REPOSITORY,
+                ISSUE,
+                source_evidence_directory="/supplied-invalid-evidence",
+            )
+        recover.assert_not_called()
+
     def test_only_verified_source_can_reach_exact_entrypoint(self) -> None:
         @contextmanager
         def isolated(_trust, _policy):
@@ -854,6 +1319,53 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
         self.assertEqual(result, {"status": "COMPLETE"})
         execute.assert_called_once_with(
             Path("/fixture"), b"separately-signed-one-use-authorization"
+        )
+
+    def test_recovery_precedes_and_does_not_expand_lifecycle_authorization(self) -> None:
+        @contextmanager
+        def isolated(_trust, _policy):
+            yield Path("/fixture")
+
+        verified = self._recover()
+        authorization = b"separately-signed-one-use-authorization"
+        calls: list[str] = []
+
+        def authenticate_review(_policy):
+            calls.append("feedback")
+
+        def authenticate_source(_root, _trust, _policy):
+            calls.append("source")
+            return verified
+
+        def execute(_root, serialized):
+            calls.append("executor")
+            self.assertIs(serialized, authorization)
+            return {"status": "COMPLETE"}
+
+        with (
+            mock.patch.object(source, "_authenticate_live_github_source"),
+            mock.patch.object(
+                source,
+                "_authenticate_live_recovery_review_state",
+                side_effect=authenticate_review,
+            ),
+            mock.patch.object(source, "_isolated_source_repository", isolated),
+            mock.patch.object(
+                source,
+                "_authenticate_recovered_materialized_source",
+                side_effect=authenticate_source,
+            ),
+            mock.patch.object(source, "_verify_materialized_tree"),
+            mock.patch.object(source, "_execute_entrypoint", side_effect=execute),
+        ):
+            result = source.execute_first_ready_executor_bootstrap(
+                REPOSITORY, ISSUE, authorization
+            )
+        self.assertEqual(result, {"status": "COMPLETE"})
+        self.assertEqual(calls, ["feedback", "source", "executor"])
+        self.assertNotIn(
+            "recovery",
+            set(inspect.signature(source._execute_entrypoint).parameters),
         )
 
     def test_historical_genesis_repair_and_787_remain_separate(self) -> None:

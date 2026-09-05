@@ -80,6 +80,16 @@
             "python3",
             "-m",
             "unittest",
+            "tests/secpal-lifecycle-execution-contract-unit.py"
+          ],
+          "working_directory": ".",
+          "purpose": "Run authenticated Ready/Draft lifecycle execution tests"
+        },
+        {
+          "argv": [
+            "python3",
+            "-m",
+            "unittest",
             "tests/secpal-exceptional-recovery-authority-unit.py"
           ],
           "working_directory": ".",
@@ -126,6 +136,27 @@
           "argv": ["./scripts/preflight.sh", "--reuse-tracked-only"],
           "working_directory": ".",
           "purpose": "Validate REUSE metadata"
+        }
+      ],
+      "final_eligibility_absence_recoveries": [
+        {
+          "schema_version": "1.0",
+          "kind": "FINAL_ELIGIBILITY_ABSENCE_RECOVERY",
+          "repository": "SecPal/.github",
+          "delivery_issue": 810,
+          "pull_request": 821,
+          "final_head_sha": "3bd4dcd08c0c1b9852eeff487c0ecbc2102b02d9",
+          "final_tree_sha": "b26b43004b75340de5c761b00727202b6cd9e255",
+          "final_reviewed_state_digest": "8ab3d9eec9a831cdc0257c4835f264816079a1d5d57c02e4bf5700989b1a52ee",
+          "final_validation_receipt_digest": "8554874ecf0013d9e2f43ba3e060f3bf57987eac3caf142e05c49253a491b1aa",
+          "final_attestation_digest": "d9be593f444a9fa24ce301b236eaaf41776c0230b08cfcd0a2e23ac55f17e05e",
+          "final_delivery_signer": {
+            "format": "ssh",
+            "fingerprint": "SHA256:GCaB6jwhFkzWkmHek5dVQNgxEb1JiLMOyhmIAcd0Vsc"
+          },
+          "expected_final_reviewed_thread_count": 0,
+          "expected_final_eligibility_status": "ABSENT_NOT_AUTHENTICATED",
+          "recovery_digest": "7b63a0d43b3c9f0ddc41500aa12657af61342743e99b9201db634401694d3ccc"
         }
       ],
       "signature_policy": {
@@ -194,7 +225,34 @@
             "source_pr_state": "OPEN",
             "source_pr_draft": true,
             "source_base_ref": "main",
-            "admission_digest": "dde958066ab287feefdc88e9bf2e92aa3b6df390d7c713be3486f719da9956b4"
+            "admission_digest": "dde958066ab287feefdc88e9bf2e92aa3b6df390d7c713be3486f719da9956b4",
+            "evidence_loss_recovery": {
+              "schema_version": "1.0",
+              "kind": "BOOTSTRAP_SOURCE_EVIDENCE_LOSS_RECOVERY",
+              "historical_evidence_status": "HISTORICAL_EVIDENCE_UNAVAILABLE_BUT_EXACT_RECOVERY_AUTHORIZED",
+              "source_admission_digest": "dde958066ab287feefdc88e9bf2e92aa3b6df390d7c713be3486f719da9956b4",
+              "recovery_validation": {
+                "kind": "EXACT_BOOTSTRAP_SOURCE_RECOVERY_VALIDATION",
+                "source_head_sha": "a668f6642ffcc76bcbea7fa6b69c5d6198ef5868",
+                "source_tree_sha": "13987395e5bdbeb586effb08e6a6f0ed5082a383",
+                "command_set_digest": "efa8f75050280fda50129a5861d139898c9c6350a28eeb3cd73e9c03d5fcd550",
+                "result": "PASSED",
+                "validation_digest": "fd5f4c5ed116c38b9dec715e186cc54aacfe2a6c3da3a441e3c48a99e4722fa4"
+              },
+              "technical_security_gate": {
+                "kind": "BOOTSTRAP_SOURCE_RECOVERY_TECHNICAL_SECURITY_GATE",
+                "source_head_sha": "a668f6642ffcc76bcbea7fa6b69c5d6198ef5868",
+                "source_tree_sha": "13987395e5bdbeb586effb08e6a6f0ed5082a383",
+                "review_scope": "EXACT_IMMUTABLE_BOOTSTRAP_EXECUTOR",
+                "feedback_inventory_digest": "d2236120f769caa74d5da0435330c103a036dfe68a5e0f8274d43a3916ca8f2b",
+                "resolved_review_thread_count": 2,
+                "conversation_comment_count": 0,
+                "review_decision": "NONE",
+                "result": "NO_OPEN_TECHNICAL_OR_SECURITY_FINDINGS",
+                "gate_digest": "4f6a73e91475e8464c4583ac7818c57e5ce19953f54143a359e231ec3a9714b6"
+              },
+              "recovery_digest": "64beea5b886119b8578c01df152992df22f56fdabba80109d589060c40e6b37d"
+            }
           },
           {
             "schema_version": "1.0",

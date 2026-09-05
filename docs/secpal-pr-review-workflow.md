@@ -277,6 +277,50 @@ coincidentally matching body and writer. The post-merge installer compares the
 absolute canonical link text directly and does not depend on GNU-specific
 `readlink` options.
 
+## Authenticated Ready/Draft execution
+
+`scripts/secpal_pr_review/lifecycle_execution.py` is the maintained execution
+boundary for the two existing user-authorized `DRAFT_TO_READY` and
+`READY_TO_DRAFT` decisions. It accepts only the repository, delivery issue, and
+canonical signed lifecycle-orchestration authorization. It derives the PR,
+head, operation, predecessor publication, lifecycle authority, signer, scope,
+and intended successor from those authenticated authorities rather than caller
+assertions.
+
+This module owns bounded side-effect composition and final convergence because
+orchestration intentionally owns policy decisions without mutation, lifecycle
+authority owns state derivation, and lifecycle publication owns the protected
+journal and CURRENT. Putting execution into any of those modules would combine
+independent responsibilities. The executor therefore reuses all three and the
+existing trusted `gh` executable/environment boundary; it adds no lifecycle
+state machine, transition, journal, signer role, or persisted transaction state.
+`NEW_PERMANENT_CONCEPT=NO`.
+
+The closed observation cases are:
+
+1. GitHub and CURRENT at the exact predecessor: mutate GitHub once.
+2. GitHub at the target and CURRENT at the exact predecessor: publish the exact
+   successor without replaying GitHub.
+3. Both at the exact target: authenticate the historical transition and return
+   success with zero writes.
+4. CURRENT at the target and GitHub at the predecessor: fail closed.
+
+All other states fail closed. A write is ordered
+`GitHub mutation -> live target read-back -> exact CURRENT CAS publication ->
+independent CURRENT read-back -> final GitHub/CURRENT convergence`. Immediately
+before each write the executor reauthenticates the exact live PR, head, OPEN
+state, CURRENT predecessor, signed authorization, and orchestration decision.
+
+The GitHub write is the fixed non-interactive `gh pr ready` or
+`gh pr ready --undo` form with an exact repository and PR. No executable, host,
+GraphQL document, state assertion, or retry option is caller-controlled. Any
+ambiguous GitHub result receives one live read: target continues, predecessor
+stops incomplete, and anything else fails closed. Any ambiguous publication
+receives one CURRENT read: the exact successor is complete, the exact
+predecessor is publication-pending and resumable, and anything else fails.
+Fresh invocation reconstructs progress solely from live GitHub and protected
+CURRENT; it never creates another execution journal or transaction record.
+
 ## Finite execution
 
 The default forward spine is:
@@ -569,6 +613,16 @@ verification described above. Immediately before each mutation or successful
 already-resolved report, it requires two more equal
 complete target projections; every mutation response must confirm the exact
 resolved thread.
+
+Detached late disposition has one narrower alternative final boundary for the
+exact `SecPal/.github` #810 / PR #821 delivery. Accepted-main policy may prove
+that its authenticated zero-thread final reviewed state and final
+receipt/attestation omitted eligibility authentication. The complete detached
+late-authority tuple selects late mode. In that mode only, omitting the final
+eligibility path yields a typed authenticated absence; it does not yield or
+recreate an eligibility manifest. A supplied path selects manifest verification;
+present, null, malformed, or stale eligibility evidence fails and never selects
+absence mode. Final eligibility evidence outside late mode is rejected.
 
 The schema-bound `resolve-batch --apply` path remains available only when the
 current user instruction explicitly requests readiness or merge evaluation. In
