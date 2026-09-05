@@ -37,6 +37,22 @@ integration-resolution attestation and verifies its ordered two-parent
 topology, tree, receipt and integration trailers, signer, reviewed state, and
 eligibility digest through the integration-specific verifier. Never treat a
 historical integration attestation as an ordinary sole-parent attestation.
+When prior Ready evidence genuinely predates persistence, do not invent the
+missing reviewed-state, receipt, eligibility, or attestation bytes. First
+authenticate and publish the explicit one-use pre-persistence recovery through
+the maintained lifecycle-publication authority.
+Recovery safety facts carry no process-local authority. The maintained issuer
+selects the immutable protected-`main` registry and commands, captures the
+complete current feedback universe including resolved threads, executes that
+validation against the exact candidate, and signs the complete capture,
+source-complete technical decisions, policy/command identity, and receipt into
+the existing one-use recovery authorization. The accepted authorization signer
+and protected publication are the first trusted recovery boundaries. Raw caller
+policy, feedback snapshots, decisions, or claimed-success receipts are never
+recovery authority.
+Ready integration may then use the recovered version-1.2 prior-authority manifest with no historical companion
+files. Supplying any historical companion file selects no fallback: malformed,
+partial, or invalid ordinary evidence remains blocking.
 The command first reads every target completely and requires its current
 comment identities, body digests, and resolution state to match that reviewed
 state. It then performs two complete stable target rechecks of the open PR,

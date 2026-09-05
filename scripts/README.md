@@ -71,6 +71,30 @@ does not relax the ordinary sole-parent path, create or push an integration,
 change Ready state, read post-push checks, or authorize merge automation.
 Historical receipt reconstruction reads the registry blob from the immutable
 prior delivery commit rather than applying a later registry to older evidence.
+For an explicitly authorized unchanged Ready source whose pre-persistence
+package is proven unavailable, `issue_ready_source_recovery_authorization` is
+the only production trust-producing entrypoint. It reads registry and validation
+commands from one independently observed immutable protected-`main` commit,
+captures complete current feedback through the maintained bounded GitHub
+reader, includes resolved and unresolved review threads in the classification
+universe, runs that command set itself against the exact clean head/tree, and
+re-verifies the complete package before signing. Unsigned recovery facts are
+explicitly non-authoritative. The existing signed authorization binds the full
+capture, source-complete technical decisions, tooling policy and command
+identity, receipt, exact CURRENT lifecycle/publication, historical
+trailer/digest provenance, accepted commit signature, evidence-loss proof, and
+one bounded use. Callers cannot substitute a reviewed state, unsigned decision,
+registry, command set, or claimed-success receipt as recovery authority.
+`publish_ready_source_recovery` appends that signed authority to the existing
+protected lifecycle-publication journal with CAS and authenticated idempotency;
+`verify_current_ready_source_recovery` rejects it after CURRENT changes.
+
+The Ready-integration verifier consumes the resulting version-1.2
+`READY_INTEGRATION_PRIOR_AUTHORITY` without historical companion files. It
+still verifies the immutable commit and annotated authority tag and rejects any
+attempt to supply malformed historical evidence and fall back. These functions
+never synthesize historical bytes, create an integration candidate, add a
+lifecycle state, or mutate feedback.
 When exact thread resolution is required on the integration head,
 `attest-validation` may additionally consume the canonical eligibility
 artifact. That closed combination emits the version-1.2

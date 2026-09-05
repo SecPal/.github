@@ -772,6 +772,29 @@ registered default branch currently resolves to parent 2. The pull request's
 creation-time base OID is not a current-tip authority. Missing authority,
 live-ref drift, or an unavailable observation fails closed without retry.
 
+For a legitimate unchanged Ready source whose pre-persistence package is
+explicitly proven unavailable, version 1.2 of the same prior-authority manifest
+may select one protected `READY_SOURCE_RECOVERY_PUBLICATION`. It binds the exact
+repository, issue, PR, signed sole-parent head, tree, expected base, CURRENT
+lifecycle publication and complete Ready histories; historical receipt and
+attestation digests remain provenance facts only. Fresh complete feedback and
+validation safety digests plus a separately signed one-use authorization are
+mandatory. The recovery is an ancillary record in the existing protected
+lifecycle journal and never becomes a lifecycle transition or second journal.
+Unsigned recovery-safety facts have no authority. The maintained issuer derives
+the registry and exact command set from independently observed protected
+`main`, captures feedback through the complete bounded stable-feedback reader,
+treats resolved and unresolved threads alike, executes current-policy
+validation itself, and re-verifies the complete package immediately before
+signing. The existing purpose-bound recovery authorization binds the full
+capture, exact source-complete technical decisions, tooling-policy identity,
+command identity, and validation receipt. Its accepted signer and protected
+publication are the first trusted recovery boundaries. No caller-supplied
+snapshot, unsigned decision, policy, command set, or synthetic receipt is
+recovery authority.
+An invalid or partially supplied ordinary package cannot fall back to recovery,
+and recovery never represents historical artifact bytes as reconstructed.
+
 This integration topology consumes no unrestricted review or remediation cycle,
 does not create Cycle 3, requests no review, and preserves `Draft=false` and
 `Ready=true` without a transition. Unknown versions, ambiguous fields, generic

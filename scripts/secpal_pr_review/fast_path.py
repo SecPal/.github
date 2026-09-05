@@ -159,6 +159,17 @@ READY_INTEGRATION_PRIOR_AUTHORITY_KEYS = frozenset(
         "publication",
     }
 )
+READY_INTEGRATION_RECOVERED_PRIOR_AUTHORITY_KEYS = (
+    READY_INTEGRATION_PRIOR_AUTHORITY_KEYS | {"recovery_publication"}
+)
+READY_INTEGRATION_RECOVERY_PUBLICATION_KEYS = frozenset(
+    {
+        "object_oid", "publication_digest", "authorization_id",
+        "authorization_digest", "fresh_validation_receipt_digest",
+        "feedback_assessment_digest", "historical_evidence_loss_proof_digest",
+        "historical_bytes_reconstructed",
+    }
+)
 
 
 class SecurityBlocker(RuntimeError):
@@ -302,12 +313,22 @@ def _ready_integration_conflict_paths(value: Any) -> list[str]:
 def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
     """Normalize the separately signed authority for the prior Ready head."""
 
-    if not isinstance(value, dict) or set(value) != READY_INTEGRATION_PRIOR_AUTHORITY_KEYS:
+    if not isinstance(value, dict):
+        raise SecurityBlocker("Ready integration prior authority is malformed or ambiguous")
+    version = value.get("schema_version")
+    expected_keys = (
+        READY_INTEGRATION_PRIOR_AUTHORITY_KEYS
+        if version == "1.1"
+        else READY_INTEGRATION_RECOVERED_PRIOR_AUTHORITY_KEYS
+        if version == "1.2"
+        else frozenset()
+    )
+    if set(value) != expected_keys:
         raise SecurityBlocker("Ready integration prior authority is malformed or ambiguous")
     if any(SECRET_VALUE.search(item) for item in _all_strings(value)):
         raise SecurityBlocker("Ready integration prior authority contains secret-like text")
     if (
-        value.get("schema_version") != "1.1"
+        version not in {"1.1", "1.2"}
         or value.get("kind") != READY_INTEGRATION_PRIOR_AUTHORITY_KIND
     ):
         raise SecurityBlocker("Ready integration prior authority kind or version is unsupported")
@@ -378,8 +399,8 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         "publication_digest",
     }:
         raise SecurityBlocker("Ready integration lifecycle publication is malformed")
-    return {
-        "schema_version": "1.1",
+    normalized = {
+        "schema_version": version,
         "kind": READY_INTEGRATION_PRIOR_AUTHORITY_KIND,
         "repository": _require_string(value.get("repository"), "prior authority repository"),
         "delivery_issue_number": _require_positive_integer(value.get("delivery_issue_number"), "prior authority delivery issue"),
@@ -401,6 +422,47 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             ),
         },
     }
+    if version == "1.2":
+        recovery = value.get("recovery_publication")
+        if (
+            not isinstance(recovery, dict)
+            or set(recovery) != READY_INTEGRATION_RECOVERY_PUBLICATION_KEYS
+            or recovery.get("historical_bytes_reconstructed") is not False
+        ):
+            raise SecurityBlocker(
+                "Ready integration recovered prior authority is malformed"
+            )
+        normalized["recovery_publication"] = {
+            "object_oid": _require_oid(
+                recovery.get("object_oid"), "Ready recovery publication object"
+            ),
+            "publication_digest": _require_digest(
+                recovery.get("publication_digest"),
+                "Ready recovery publication",
+            ),
+            "authorization_id": _require_string(
+                recovery.get("authorization_id"),
+                "Ready recovery authorization identity",
+            ),
+            "authorization_digest": _require_digest(
+                recovery.get("authorization_digest"),
+                "Ready recovery authorization",
+            ),
+            "fresh_validation_receipt_digest": _require_digest(
+                recovery.get("fresh_validation_receipt_digest"),
+                "Ready recovery fresh validation receipt",
+            ),
+            "feedback_assessment_digest": _require_digest(
+                recovery.get("feedback_assessment_digest"),
+                "Ready recovery feedback assessment",
+            ),
+            "historical_evidence_loss_proof_digest": _require_digest(
+                recovery.get("historical_evidence_loss_proof_digest"),
+                "Ready recovery historical evidence-loss proof",
+            ),
+            "historical_bytes_reconstructed": False,
+        }
+    return normalized
 
 
 def normalize_ready_integration_evidence(
@@ -989,6 +1051,7 @@ class VerifiedValidationEvidence:
     final_attestation_digest: str
     source_validation_evidence_digest: str
     _verification_seal: object
+
 
 
 def is_verified_validation_evidence(value: Any) -> bool:
@@ -2000,6 +2063,8 @@ def verify_commit_signatures(
 
 def _classified_feedback_sources(
     reviewed_state: StableFeedbackState,
+    *,
+    include_resolved_threads: bool = False,
 ) -> dict[tuple[str, str], tuple[str, str | None]]:
     expected: dict[tuple[str, str], tuple[str, str | None]] = {}
 
@@ -2040,7 +2105,7 @@ def _classified_feedback_sources(
                 None,
             )
     for thread in reviewed_state.feedback["threads"]:
-        if thread["is_resolved"] is True:
+        if thread["is_resolved"] is True and not include_resolved_threads:
             continue
         for comment in thread["comments"]:
             add(
@@ -2057,6 +2122,283 @@ def _classified_feedback_sources(
                     thread["node_id"],
                 )
     return expected
+
+
+def derive_ready_source_recovery_safety_facts(
+    *,
+    tooling_authority_main: str,
+    repository: str,
+    pull_request_number: int,
+    head_sha: str,
+    tree_sha: str,
+    parent_shas: list[str] | tuple[str, ...],
+    expected_base_ref: str,
+    expected_base_sha: str,
+    reviewed_state: StableFeedbackState,
+    review_decision: str,
+    feedback_findings: Any,
+    fresh_validation_receipt: Any,
+    registry: dict[str, Any],
+    command_set: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Derive canonical unsigned facts; this result carries no authority."""
+
+    policy_head = _require_oid(tooling_authority_main, "recovery tooling authority")
+    reviewed = _require_reviewed_state_identity(repository, reviewed_state)
+    pr = _require_positive_integer(
+        pull_request_number, "Ready-source recovery pull request"
+    )
+    head = _require_oid(head_sha, "Ready-source recovery head")
+    tree = _require_oid(tree_sha, "Ready-source recovery tree")
+    parents = tuple(
+        _require_oid(item, "Ready-source recovery parent") for item in parent_shas
+    ) if isinstance(parent_shas, (list, tuple)) else ()
+    if len(parents) != 1:
+        raise SecurityBlocker(
+            "Ready-source recovery requires the exact sole-parent delivery topology"
+        )
+    base_ref = _require_string(
+        expected_base_ref, "Ready-source recovery target base"
+    )
+    base_sha = _require_oid(
+        expected_base_sha, "Ready-source recovery target base SHA"
+    )
+    if (
+        reviewed.pull_request_number != pr
+        or reviewed.head_sha != head
+        or reviewed.base_ref != base_ref
+        or reviewed.base_sha != base_sha
+        or reviewed.pr_state != "OPEN"
+    ):
+        raise SecurityBlocker(
+            "Ready-source recovery reviewed delivery identity changed"
+        )
+    if review_decision not in {"NONE", "APPROVED", "REVIEW_REQUIRED"}:
+        raise SecurityBlocker(
+            "Ready-source recovery has a blocking or ambiguous review decision"
+        )
+    if not isinstance(feedback_findings, list):
+        raise SecurityBlocker("Ready-source recovery feedback assessment is missing")
+    expected_sources = _classified_feedback_sources(
+        reviewed, include_resolved_threads=True
+    )
+    review_threads = {
+        item["node_id"]
+        for item in reviewed.feedback["threads"]
+    }
+    normalized_findings: list[dict[str, Any]] = []
+    classified_sources: set[tuple[str, str]] = set()
+    finding_ids: set[str] = set()
+    for item in feedback_findings:
+        fields = {
+            "finding_id", "thread_id", "sources", "classification",
+            "disposition", "evidence_digest", "technically_blocking",
+        }
+        if not isinstance(item, dict) or set(item) != fields:
+            raise SecurityBlocker(
+                "Ready-source recovery feedback finding is malformed"
+            )
+        finding_id = _require_string(
+            item["finding_id"], "Ready-source recovery finding identity"
+        )
+        if finding_id in finding_ids:
+            raise SecurityBlocker(
+                "Ready-source recovery repeats a feedback finding"
+            )
+        finding_ids.add(finding_id)
+        classification = item["classification"]
+        disposition = item["disposition"]
+        if (
+            classification not in CLASSIFICATION_DISPOSITIONS
+            or disposition not in CLASSIFICATION_DISPOSITIONS[classification]
+            or item["technically_blocking"] is not False
+        ):
+            raise SecurityBlocker(
+                "Ready-source recovery feedback is technically blocking or unclassified"
+            )
+        thread_id = item["thread_id"]
+        if thread_id is not None:
+            thread_id = _require_string(
+                thread_id, "Ready-source recovery thread identity"
+            )
+            if thread_id not in review_threads:
+                raise SecurityBlocker(
+                    "Ready-source recovery finding thread identity changed"
+                )
+        sources = item["sources"]
+        if not isinstance(sources, list) or not sources:
+            raise SecurityBlocker(
+                "Ready-source recovery finding requires feedback sources"
+            )
+        normalized_sources: list[dict[str, str]] = []
+        for source in sources:
+            if not isinstance(source, dict) or set(source) != {
+                "kind", "node_id", "digest"
+            }:
+                raise SecurityBlocker(
+                    "Ready-source recovery feedback source is malformed"
+                )
+            kind = source["kind"]
+            node_id = _require_string(
+                source["node_id"], "Ready-source recovery feedback source identity"
+            )
+            digest = _require_digest(
+                source["digest"], "Ready-source recovery feedback source"
+            )
+            key = (kind, node_id)
+            if (
+                kind not in SOURCE_KINDS
+                or key in classified_sources
+                or expected_sources.get(key) != (digest, thread_id)
+            ):
+                raise SecurityBlocker(
+                    "Ready-source recovery feedback source identity changed"
+                )
+            classified_sources.add(key)
+            normalized_sources.append(
+                {"kind": kind, "node_id": node_id, "digest": digest}
+            )
+        normalized_findings.append(
+            {
+                "finding_id": finding_id,
+                "thread_id": thread_id,
+                "sources": normalized_sources,
+                "classification": classification,
+                "disposition": disposition,
+                "evidence_digest": _require_digest(
+                    item["evidence_digest"],
+                    "Ready-source recovery finding evidence",
+                ),
+                "technically_blocking": False,
+            }
+        )
+    if classified_sources != set(expected_sources):
+        raise SecurityBlocker(
+            "Ready-source recovery feedback coverage is incomplete"
+        )
+    covered_threads = {
+        item["thread_id"] for item in normalized_findings
+        if item["thread_id"] is not None
+    }
+    if covered_threads != review_threads:
+        raise SecurityBlocker(
+            "Ready-source recovery review-thread inventory is ambiguous"
+        )
+    limits = registry.get("limits") if isinstance(registry, dict) else None
+    maximum_items = (
+        limits.get("maximum_items") if isinstance(limits, dict) else None
+    )
+    source_count = sum(len(item["sources"]) for item in normalized_findings)
+    if (
+        not isinstance(maximum_items, int)
+        or isinstance(maximum_items, bool)
+        or maximum_items < 1
+        or len(normalized_findings) + source_count > maximum_items
+    ):
+        raise SecurityBlocker("Ready-source recovery feedback evidence is oversized")
+    if not isinstance(fresh_validation_receipt, dict):
+        raise SecurityBlocker("Ready-source recovery validation receipt is missing")
+    if any(
+        field in fresh_validation_receipt
+        for field in (
+            "eligibility_evidence_digest", "integration_evidence_digest",
+            "exceptional_recovery_evidence_digest",
+        )
+    ):
+        raise SecurityBlocker(
+            "Ready-source recovery validation receipt claims unrelated authority"
+        )
+    expected_receipt = create_validation_receipt(
+        repository=repository,
+        head_sha=head,
+        validated_tree_sha=tree,
+        registry=registry,
+        command_set=command_set,
+        successful_result=True,
+        reviewed_state=reviewed,
+        manual_gate_evidence=fresh_validation_receipt.get(
+            "manual_gate_evidence"
+        ),
+    )
+    if fresh_validation_receipt != expected_receipt:
+        raise SecurityBlocker(
+            "Ready-source recovery validation receipt is invalid or stale"
+        )
+    assessment = {
+        "review_decision": review_decision,
+        "findings": normalized_findings,
+    }
+    facts = {
+        "schema_version": "1.0",
+        "kind": "SECPAL_READY_SOURCE_RECOVERY_SAFETY_FACTS",
+        "tooling_authority_main": policy_head,
+        "repository": repository,
+        "pull_request_number": pr,
+        "head_sha": head,
+        "tree_sha": tree,
+        "parent_shas": list(parents),
+        "expected_base_ref": base_ref,
+        "expected_base_sha": base_sha,
+        "reviewed_state": reviewed.to_dict(),
+        "review_decision": review_decision,
+        "feedback_findings": normalized_findings,
+        "policy_binding": copy.deepcopy(registry),
+        "command_set": copy.deepcopy(command_set),
+        "fresh_validation_receipt": copy.deepcopy(expected_receipt),
+        "reviewed_state_digest": reviewed.state_digest,
+        "reviewed_feedback_digest": reviewed.feedback_digest,
+        "feedback_assessment_digest": digest_json(assessment),
+        "fresh_validation_receipt_digest": expected_receipt["receipt_digest"],
+        "validation_execution_origin": "MAINTAINED_REGISTERED_EXECUTION",
+    }
+    return {**facts, "safety_facts_digest": digest_json(facts)}
+
+
+def verify_ready_source_recovery_safety_facts(value: Any) -> dict[str, Any]:
+    """Recompute complete unsigned facts before an authorization signs them."""
+
+    fields = {
+        "schema_version", "kind", "tooling_authority_main", "repository",
+        "pull_request_number", "head_sha", "tree_sha", "parent_shas",
+        "expected_base_ref", "expected_base_sha", "reviewed_state",
+        "review_decision", "feedback_findings", "policy_binding", "command_set",
+        "fresh_validation_receipt", "reviewed_state_digest",
+        "reviewed_feedback_digest", "feedback_assessment_digest",
+        "fresh_validation_receipt_digest", "validation_execution_origin",
+        "safety_facts_digest",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise SecurityBlocker("Ready-source recovery safety facts are malformed")
+    unsigned = {
+        key: copy.deepcopy(item) for key, item in value.items()
+        if key != "safety_facts_digest"
+    }
+    if value["safety_facts_digest"] != digest_json(unsigned):
+        raise SecurityBlocker("Ready-source recovery safety-facts digest mismatch")
+    if (
+        value["schema_version"] != "1.0"
+        or value["kind"] != "SECPAL_READY_SOURCE_RECOVERY_SAFETY_FACTS"
+        or value["validation_execution_origin"]
+        != "MAINTAINED_REGISTERED_EXECUTION"
+    ):
+        raise SecurityBlocker("Ready-source recovery safety-facts type is invalid")
+    reviewed = StableFeedbackState.from_payload(value["reviewed_state"])
+    derived = derive_ready_source_recovery_safety_facts(
+        tooling_authority_main=value["tooling_authority_main"],
+        repository=value["repository"],
+        pull_request_number=value["pull_request_number"],
+        head_sha=value["head_sha"], tree_sha=value["tree_sha"],
+        parent_shas=value["parent_shas"],
+        expected_base_ref=value["expected_base_ref"],
+        expected_base_sha=value["expected_base_sha"],
+        reviewed_state=reviewed, review_decision=value["review_decision"],
+        feedback_findings=value["feedback_findings"],
+        fresh_validation_receipt=value["fresh_validation_receipt"],
+        registry=value["policy_binding"], command_set=value["command_set"],
+    )
+    if derived != value:
+        raise SecurityBlocker("Ready-source recovery safety facts are inconsistent")
+    return derived
 
 
 def _verify_classified_findings(
