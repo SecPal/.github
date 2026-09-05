@@ -1006,7 +1006,37 @@ assert publication_policy["bootstrap_source_admissions"] == [{
             "64beea5b886119b8578c01df152992df22f56fdabba80109d589060c40e6b37d"
         ),
     },
+}, {
+    "schema_version": "1.0",
+    "kind": "BOOTSTRAP_SOURCE_ADMISSION",
+    "subtype": "PR_REVIEW_EVIDENCE_HELPER_SOURCE",
+    "repository": "SecPal/.github",
+    "delivery_issue": 818,
+    "pull_request": 819,
+    "source_head_sha": "eb3aebf226c3ca215e7021b00207cc996ab06c2e",
+    "source_tree_sha": "d7fca1ea61ea0b4cd78bf18f8555386633e013ea",
+    "source_parent_sha": "f8d58a3acd5d2b5c84824bf9ecba637e91665ee9",
+    "validation_receipt_digest": "cc771a06ed843aa97120033acb079bcc8f5ea40ceeef79bf237f0f44bf2a3293",
+    "final_attestation_digest": "84066ae060977f266754b54a09c665cc9c6ca9868d0bfaaa84c1b7cd7414fbec",
+    "source_signer_identity": "aroviqen@secpal.app",
+    "implementation_path": "scripts/secpal-pr-review.py",
+    "implementation_blob_oid": "b37b30eeb7b44bed26d517d096f92e31aa0dd0ff",
+    "purpose": "PR_REVIEW_EVIDENCE_HELPER_SOURCE_ADMISSION",
+    "source_pr_state": "OPEN",
+    "source_pr_draft": True,
+    "source_base_ref": "main",
+    "policy_source": "ACCEPTED_MAIN_REPOSITORY_REGISTRY",
+    "admission_digest": "7c5cf40666c233bb45bea4349414fd6fd9c48cfffe6f6571bf5637c2660ef25d",
 }]
+source_variants = schema["$defs"]["lifecycle_authority_policy"]["properties"][
+    "bootstrap_source_admissions"
+]["items"]["oneOf"]
+assert source_variants == [
+    {"$ref": "#/$defs/firstReadyExecutorBootstrapSource"},
+    {"$ref": "#/$defs/prReviewEvidenceHelperSource"},
+]
+assert "entrypoint" in schema["$defs"]["firstReadyExecutorBootstrapSource"]["required"]
+assert "entrypoint" not in schema["$defs"]["prReviewEvidenceHelperSource"]["properties"]
 assert publication_policy["historical_compatibility_publications"] == [
     {
         "repository": "SecPal/.github",

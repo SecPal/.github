@@ -260,11 +260,13 @@ class BootstrapSourceAdmissionPolicy:
     final_attestation_digest: str
     source_signer_identity: str
     implementation_path: str
-    entrypoint: str
+    implementation_blob_oid: str | None
+    entrypoint: str | None
     purpose: str
     source_pr_state: str
     source_pr_draft: bool
     source_base_ref: str
+    policy_source: str | None
     admission_digest: str
     evidence_loss_recovery: BootstrapSourceEvidenceLossRecovery | None = None
 
@@ -732,13 +734,15 @@ def _verify_delivery_initialization(
     return copy.deepcopy(initialization)
 
 
-def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
-    """Load lifecycle trust only from the installed maintained registry."""
+def _parse_lifecycle_trust_policy(
+    registry_document: bytes | str, repository: str
+) -> LifecycleTrustPolicy:
+    """Parse one repository policy from canonical closed registry bytes."""
 
     try:
-        registry = loads_closed_json(_TRUST_REGISTRY.read_bytes())
-    except OSError as exc:
-        raise LifecycleAuthorityError("maintained lifecycle trust registry is unavailable") from exc
+        registry = loads_closed_json(registry_document)
+    except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
+        raise LifecycleAuthorityError("maintained lifecycle trust registry is invalid") from exc
     if not isinstance(registry, dict) or registry.get("schema_version") != "1.0":
         raise LifecycleAuthorityError("maintained lifecycle trust registry is invalid")
     entries = registry.get("repositories")
@@ -1009,13 +1013,13 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
                 ),
             )
         )
-    source_fields = frozenset(
+    source_common_fields = frozenset(
         {
             "schema_version", "kind", "subtype", "repository",
             "delivery_issue", "pull_request", "source_head_sha",
             "source_tree_sha", "source_parent_sha",
             "validation_receipt_digest", "final_attestation_digest",
-            "source_signer_identity", "implementation_path", "entrypoint",
+            "source_signer_identity", "implementation_path",
             "purpose", "source_pr_state", "source_pr_draft", "source_base_ref",
             "admission_digest",
         }
@@ -1028,11 +1032,29 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
     source_identities: set[tuple[int, int, str]] = set()
     source_digests: set[str] = set()
     for value in raw_sources:
-        if not isinstance(value, dict) or frozenset(value) not in {
-            source_fields,
-            source_fields | {source_recovery_field},
-        }:
+        if not isinstance(value, dict):
+            raise LifecycleAuthorityError("bootstrap source admission is invalid")
+        subtype = value.get("subtype")
+        if subtype == "FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE":
+            source_fields = source_common_fields | {"entrypoint"}
+        elif subtype == "PR_REVIEW_EVIDENCE_HELPER_SOURCE":
+            source_fields = source_common_fields | {
+                "implementation_blob_oid", "policy_source"
+            }
+        else:
+            raise LifecycleAuthorityError("bootstrap source admission subtype is unknown")
+        allowed_fields = {source_fields}
+        if subtype == "FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE":
+            allowed_fields.add(source_fields | {source_recovery_field})
+        if frozenset(value) not in allowed_fields:
             raise LifecycleAuthorityError("bootstrap source admission is not closed")
+        if (
+            subtype == "PR_REVIEW_EVIDENCE_HELPER_SOURCE"
+            and source_recovery_field in value
+        ):
+            raise LifecycleAuthorityError(
+                "byte-only bootstrap source cannot claim evidence-loss recovery"
+            )
         item = copy.deepcopy(value)
         unsigned = {key: copy.deepcopy(item[key]) for key in source_fields - {"admission_digest"}}
         repository_identity = _require_repository(item["repository"])
@@ -1041,16 +1063,36 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
         head = _require_oid(item["source_head_sha"], "source head")
         identity = (delivery_issue, pull_request, item["purpose"])
         admission_digest = _require_digest(item["admission_digest"], "source admission")
+        executable_source = subtype == "FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE"
+        byte_source = subtype == "PR_REVIEW_EVIDENCE_HELPER_SOURCE"
+        implementation_blob = (
+            _require_oid(item["implementation_blob_oid"], "source implementation blob")
+            if byte_source else None
+        )
         if (
             item["schema_version"] != SCHEMA_VERSION
             or item["kind"] != "BOOTSTRAP_SOURCE_ADMISSION"
-            or item["subtype"] != "FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE"
             or repository_identity != repository
             or item["source_signer_identity"] not in signers
-            or item["implementation_path"]
-            != "scripts/secpal_pr_review/lifecycle_execution.py"
-            or item["entrypoint"] != "execute_lifecycle_transition"
-            or item["purpose"] != "FIRST_READY_EXECUTOR_BOOTSTRAP"
+            or (
+                executable_source
+                and (
+                    item["implementation_path"]
+                    != "scripts/secpal_pr_review/lifecycle_execution.py"
+                    or item["entrypoint"] != "execute_lifecycle_transition"
+                    or item["purpose"] != "FIRST_READY_EXECUTOR_BOOTSTRAP"
+                )
+            )
+            or (
+                byte_source
+                and (
+                    item["implementation_path"] != "scripts/secpal-pr-review.py"
+                    or item["purpose"]
+                    != "PR_REVIEW_EVIDENCE_HELPER_SOURCE_ADMISSION"
+                    or item["policy_source"]
+                    != "ACCEPTED_MAIN_REPOSITORY_REGISTRY"
+                )
+            )
             or item["source_pr_state"] != "OPEN"
             or item["source_pr_draft"] is not True
             or item["source_base_ref"] != "main"
@@ -1234,11 +1276,13 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
                 ),
                 source_signer_identity=item["source_signer_identity"],
                 implementation_path=item["implementation_path"],
-                entrypoint=item["entrypoint"],
+                implementation_blob_oid=implementation_blob,
+                entrypoint=item["entrypoint"] if executable_source else None,
                 purpose=item["purpose"],
                 source_pr_state=item["source_pr_state"],
                 source_pr_draft=item["source_pr_draft"],
                 source_base_ref=item["source_base_ref"],
+                policy_source=item["policy_source"] if byte_source else None,
                 admission_digest=admission_digest,
                 evidence_loss_recovery=recovery,
             )
@@ -1352,6 +1396,18 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
         signers=signers,
         initialization_anchors=tuple(anchors),
     )
+
+
+def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
+    """Load lifecycle trust only from the installed maintained registry."""
+
+    try:
+        registry_document = _TRUST_REGISTRY.read_bytes()
+    except OSError as exc:
+        raise LifecycleAuthorityError(
+            "maintained lifecycle trust registry is unavailable"
+        ) from exc
+    return _parse_lifecycle_trust_policy(registry_document, repository)
 
 
 def _load_delivery_signature_policy(repository: str) -> dict[str, Any]:

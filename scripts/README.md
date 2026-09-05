@@ -258,8 +258,10 @@ The lifecycle-authority suite is an unconditional registered validation command.
 
 ### `secpal_pr_review/bootstrap_source_admission.py`
 
-Authenticates only the exact immutable PR #812 implementation source maintained
-for #810's first Ready-executor bootstrap. Accepted-main policy fixes the source
+Authenticates exact immutable implementation sources through one accepted-main
+`BOOTSTRAP_SOURCE_ADMISSION` family. Its executable
+`FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE` subtype is the exact PR #812 source
+maintained for #810's first Ready-executor bootstrap. Accepted-main policy fixes the source
 head, tree, parent, receipt, final attestation, signer, implementation path,
 entrypoint, purpose, and source PR base repository/ref. Live provider reads emit
 a representation which is purely normalized before a separate pure admission
@@ -269,7 +271,7 @@ the ordinary receipt/final-attestation verifier, and keeps candidate imports
 inside that tree. Its child launcher reports only closed diagnostic identities;
 it never exposes child stderr or exception text.
 
-The ordinary sole-parent path is unchanged: when a historical evidence
+The ordinary executable-source path is unchanged: when a historical evidence
 directory is supplied, reviewed state, the byte-semantic receipt reconstructed
 from the immutable delivery registry, and the final attestation must all verify.
 Invalid supplied evidence fails immediately and never falls back. The historical
@@ -300,11 +302,25 @@ The maintained historical receipt and final-attestation digests remain
 provenance facts, not claims that the unavailable raw artifacts were freshly
 verified.
 
-Both paths return a sealed `VerifiedBootstrapSource` with an explicit historical
-evidence status. Source admission alone performs no GitHub mutation, lifecycle
-publication, CURRENT change, genesis operation, or work-graph mutation; the
-admitted executor still requires #810's separate signed one-use
-lifecycle-transition authorization.
+The closed `PR_REVIEW_EVIDENCE_HELPER_SOURCE` subtype admits only the exact PR
+PR #819 `scripts/secpal-pr-review.py` blob needed by #818. It has no entrypoint,
+launcher, import, or execution authority. The public verifier selects this
+admission only from the exact protected-main registry object, through a closed
+independent `gh`/`git` boundary with concurrent bounded stdout/stderr capture,
+timeout/overflow termination and reap, and rejection of partial output. A
+candidate-local registry or caller-selected executable, path, ref, OID, policy,
+or policy-source value cannot establish the admission. Before this integration
+candidate merges, protected `main` does not yet contain that exact #819
+admission.
+
+Both source paths return a sealed `VerifiedBootstrapSource` with an explicit
+historical evidence status. The #812-only evidence-loss recovery does not apply
+to the byte-only #819 subtype. Historical P2.1 remains rooted at commit
+`833eef2afc063ae777e7e2b64b2f252e3fe1e49e` and helper blob
+`c0e5dc15879010339cc08b6e2fbcb1ff51f4d4e2`. Source admission alone performs no
+GitHub mutation, lifecycle publication, CURRENT change, genesis operation, or
+work-graph mutation; the admitted executor still requires #810's separate
+signed one-use lifecycle-transition authorization.
 
 ### `secpal_pr_review/lifecycle_orchestration.py`
 
