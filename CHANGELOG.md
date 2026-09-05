@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-05 - Select Policy-Specific Lifecycle Credentials
+
+**Changed:**
+
+- select distinct lifecycle signing credentials from bounded OS-account Git
+  configuration only after installed policy selects the required signer role
+- preserve the routine global Git signing key as a compatible default while
+  forbidding it from overriding or replacing a distinct legacy-adoption mapping
+- verify every produced signature against accepted policy credential material
+  before returning a production signer to existing lifecycle constructors
+
 ## 2026-09-05 - Replace the Exact Review-Helper Source Admission
 
 **Changed:**

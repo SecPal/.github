@@ -367,6 +367,23 @@ continues to authenticate commit-bound eligibility and reports the resolution
 as `SAFELY_DISPOSITIONED_TRACKED`, never fixed, implemented, or completed. The
 orchestration suite is an unconditional registered validation command.
 
+### `secpal_pr_review/lifecycle_execution.py`
+
+Executes the maintained authenticated Ready/Draft transitions and supplies the
+local signer bridge used by lifecycle production paths. Signer identities come
+only from installed lifecycle policy. The OS account may add bounded global Git
+configuration values under `secpal.lifecycleSigningCredential`, each containing
+exactly a JSON `identity` and `credential` reference. The identity must already
+be selected by a policy role; the local mapping grants no authority.
+
+Explicit mappings override the compatible routine `user.signingkey` default.
+Distinct legacy-adoption signing has no routine-key fallback. SSH references
+must be normalized absolute paths, OpenPGP references must be full
+fingerprints, and every detached result is cryptographically verified against
+the accepted policy credential before becoming a `Signer` result. Selection
+keeps the existing closed non-interactive environment and does not use an SSH
+agent, inspect private-key contents, search for keys, or mutate Git config.
+
 ### `secpal_pr_review/lifecycle_publication.py`
 
 Publishes lifecycle authority on one protected, append-only global journal

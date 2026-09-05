@@ -334,6 +334,27 @@ predecessor is publication-pending and resumable, and anything else fails.
 Fresh invocation reconstructs progress solely from live GitHub and protected
 CURRENT; it never creates another execution journal or transaction record.
 
+Production lifecycle signing derives each required identity from the installed
+policy role. The OS account may map that already accepted identity to one local
+credential reference by adding a closed JSON value to the global Git key
+`secpal.lifecycleSigningCredential`, for example:
+
+```text
+{"credential":"/absolute/local/key","identity":"accepted-role@example.test"}
+```
+
+The mapping is only credential selection, never trust policy. Duplicate,
+malformed, relative SSH, unsupported-format, missing distinct-role, unusable,
+and policy-mismatched credentials fail closed. An explicit role mapping takes
+precedence over `user.signingkey`; the latter remains the compatible routine
+default only for ordinary transition, authority, publication, and genesis
+roles where those operations use the routine signer. Every produced signature
+is verified against the selected role's
+accepted policy credential before it is returned. The maintained legacy-
+adoption bridge exposes neither caller-selected identity nor key path and
+supplies the existing exact-state-adoption v2 admission, authorization, and
+proof constructors without changing their domains or payload authority.
+
 ## Finite execution
 
 The default forward spine is:
