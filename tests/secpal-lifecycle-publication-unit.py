@@ -218,29 +218,44 @@ def recovered_ready_chain(issue: int = ISSUE) -> Chain:
     return chain
 
 
-def exact_adoption_evidence() -> tuple[bytes, dict[str, Any]]:
-    history = [
-        {"sequence": 1, "kind": "PR_CREATED_DRAFT",
-         "observed_at": "2026-08-01T00:00:00Z", "head_sha": HEADS[0],
-         "reviewed_head_sha": None},
-        {"sequence": 2, "kind": "DRAFT_TO_READY_OBSERVED",
-         "observed_at": "2026-08-02T00:00:00Z", "head_sha": HEADS[0],
-         "reviewed_head_sha": None},
-        {"sequence": 3, "kind": "REVIEW_SUBMITTED",
-         "observed_at": "2026-08-03T00:00:00Z", "head_sha": HEADS[0],
-         "reviewed_head_sha": HEADS[0]},
-        {"sequence": 4, "kind": "REMEDIATION_HEAD_OBSERVED",
-         "observed_at": "2026-08-04T00:00:00Z", "head_sha": HEADS[1],
-         "reviewed_head_sha": None},
-        {"sequence": 5, "kind": "REMEDIATION_HEAD_OBSERVED",
-         "observed_at": "2026-08-05T00:00:00Z", "head_sha": HEADS[2],
-         "reviewed_head_sha": None},
-    ]
+def exact_adoption_evidence(
+    *, admit_review_budget: bool = False
+) -> tuple[bytes, dict[str, Any]]:
+    if admit_review_budget:
+        history = [
+            {"sequence": 1, "kind": "PR_CREATED_DRAFT",
+             "observed_at": "2026-08-01T00:00:00Z", "head_sha": HEADS[0],
+             "reviewed_head_sha": None},
+            {"sequence": 2, "kind": "REMEDIATION_HEAD_OBSERVED",
+             "observed_at": "2026-08-04T00:00:00Z", "head_sha": HEADS[2],
+             "reviewed_head_sha": None},
+        ]
+    else:
+        history = [
+            {"sequence": 1, "kind": "PR_CREATED_DRAFT",
+             "observed_at": "2026-08-01T00:00:00Z", "head_sha": HEADS[0],
+             "reviewed_head_sha": None},
+            {"sequence": 2, "kind": "DRAFT_TO_READY_OBSERVED",
+             "observed_at": "2026-08-02T00:00:00Z", "head_sha": HEADS[0],
+             "reviewed_head_sha": None},
+            {"sequence": 3, "kind": "REVIEW_SUBMITTED",
+             "observed_at": "2026-08-03T00:00:00Z", "head_sha": HEADS[0],
+             "reviewed_head_sha": HEADS[0]},
+            {"sequence": 4, "kind": "REMEDIATION_HEAD_OBSERVED",
+             "observed_at": "2026-08-04T00:00:00Z", "head_sha": HEADS[1],
+             "reviewed_head_sha": None},
+            {"sequence": 5, "kind": "REMEDIATION_HEAD_OBSERVED",
+             "observed_at": "2026-08-05T00:00:00Z", "head_sha": HEADS[2],
+             "reviewed_head_sha": None},
+        ]
     state = authority.initial_state()
     state.update(
-        unrestricted_review_count=1, remediation_cycle_count=2,
-        draft=False, ready=True, ready_transition_count=1,
-        ready_history=[{
+        unrestricted_review_count=1,
+        remediation_cycle_count=1 if admit_review_budget else 2,
+        draft=True if admit_review_budget else False,
+        ready=False if admit_review_budget else True,
+        ready_transition_count=0 if admit_review_budget else 1,
+        ready_history=[] if admit_review_budget else [{
             "sequence": 1, "transition_kind": "DRAFT_TO_READY",
             "observation_digest": authority.digest_json(history[1]),
         }],
@@ -253,15 +268,54 @@ def exact_adoption_evidence() -> tuple[bytes, dict[str, Any]]:
         "local_signature": {"verified": True, "state": "valid", "format": "ssh"},
         "github_verification": {"verified": True, "reason": "valid"},
     }
+    review_budget_admission = None
+    if admit_review_budget:
+        verified_commit = fast_path.verify_commit_signatures(
+            [commit],
+            {"accepted_formats": ["ssh"], "require_github_verified": True},
+        )[0]
+        review_budget_admission = (
+            authority.create_pre_enrollment_review_budget_consumption_admission(
+                admission_id="publication-review-budget-admission",
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                pull_request=PR,
+                head_sha=HEADS[2],
+                tree_sha=HEADS[3],
+                pull_request_state="OPEN",
+                commit_signature_evidence_digest=authority.digest_json(
+                    verified_commit
+                ),
+                validation_receipt_digest=validation.validation_receipt_digest,
+                source_validation_evidence_digest=(
+                    validation.source_validation_evidence_digest
+                ),
+                adoption_source_evidence_digest=(
+                    validation.final_attestation_digest
+                ),
+                observed_pre_enrollment_history=history,
+                intended_state=state,
+                adoption_timestamp="2026-08-06T00:00:00Z",
+                signer_identity=LEGACY_SIGNER,
+                signer=signer_for(LEGACY_SIGNER),
+            )
+        )
     with patch.object(
         authority, "_load_delivery_signature_policy",
         return_value={"accepted_formats": ["ssh"], "require_github_verified": True},
     ):
-        external = authority.authenticate_exact_state_adoption_external_evidence(
+        arguments = dict(
             repository=REPOSITORY, delivery_issue=ISSUE, pull_request=PR,
             head_sha=HEADS[2], tree_sha=HEADS[3], pull_request_state="OPEN",
             commit_signature_evidence=commit, validation_evidence=validation,
             observed_pre_enrollment_history=history, intended_state=state,
+        )
+        if review_budget_admission is not None:
+            arguments["review_budget_consumption_admission"] = (
+                review_budget_admission
+            )
+        external = authority.authenticate_exact_state_adoption_external_evidence(
+            **arguments
         )
     evidence = authority.create_exact_state_adoption_evidence(
         verified_external_evidence=external,
@@ -449,6 +503,9 @@ class LifecyclePublicationTests(TestCase):
             ).parameters,
         )
         serialized, proof = exact_adoption_evidence()
+        self.assertEqual(proof["schema_version"], authority.SCHEMA_VERSION)
+        self.assertEqual(proof["domain"], authority.EXACT_ADOPTION_PROOF_DOMAIN)
+        self.assertNotIn("review_budget_consumption_admission", proof)
         enrolled = publication.enroll_existing_lifecycle(
             serialized, signer_identity=SIGNER, signer=signer_for()
         )
@@ -619,6 +676,29 @@ class LifecyclePublicationTests(TestCase):
                         enrolled.lifecycle.source_validation_evidence_digest
                     ),
                 )
+
+    def test_review_budget_admission_enrolls_exact_finite_state_once(self) -> None:
+        serialized, proof = exact_adoption_evidence(admit_review_budget=True)
+        enrolled = publication.enroll_existing_lifecycle(
+            serialized, signer_identity=SIGNER, signer=signer_for()
+        )
+
+        self.assertEqual(proof["schema_version"], "2.0")
+        self.assertEqual(
+            enrolled.lifecycle.historical_proof_mode,
+            authority.EXACT_ADOPTION_PROOF_MODE,
+        )
+        self.assertEqual(enrolled.lifecycle.state["unrestricted_review_count"], 1)
+        self.assertEqual(enrolled.lifecycle.state["remediation_cycle_count"], 1)
+        self.assertIs(enrolled.lifecycle.state["draft"], True)
+        self.assertIs(enrolled.lifecycle.state["ready"], False)
+        self.assertEqual(enrolled.lifecycle.state["ready_transition_count"], 0)
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "already enrolled"
+        ):
+            publication.enroll_existing_lifecycle(
+                serialized, signer_identity=SIGNER, signer=signer_for()
+            )
 
     def test_exact_adoption_pr_rebound_requires_replacement_pr_evidence(self) -> None:
         serialized, proof = exact_adoption_evidence()

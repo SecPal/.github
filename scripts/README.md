@@ -254,6 +254,17 @@ evidence, signature admission authenticates the commit, and observation
 normalization derives history provenance. Later head-changing successors bind
 fresh verified current-head evidence in the signed ordinary authority while the
 original adoption proof remains immutable.
+
+Existing exact-adoption version 1 remains the provider-review mode. Version 2
+adds a closed, domain-separated
+`PRE_ENROLLMENT_REVIEW_BUDGET_CONSUMPTION_ADMISSION`, signed by the existing
+migration role, for zero-provider-review deliveries whose earlier normal review
+consumption was not persistently authenticated. The admission consumes exactly
+one finite review budget and binds one open delivery, head, tree, validation
+evidence set, provider chronology, intended state, and adoption timestamp. It
+does not claim a historical review result or add verdict/finding evidence.
+Mixed provider-review/admission inputs, replay into another context, resets,
+and using the admission to derive remediation or Ready state fail closed.
 The lifecycle-authority suite is an unconditional registered validation command.
 
 ### `secpal_pr_review/bootstrap_source_admission.py`
