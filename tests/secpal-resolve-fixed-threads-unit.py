@@ -4505,6 +4505,134 @@ class ResolveFixedThreadsTests(TestCase):
                     "late-disposition evidence",
                 )
 
+    def test_late_classification_malformed_decision_types_fail_closed(self) -> None:
+        signer = MODULE.late_disposition.SignerIdentity(
+            "ssh", "SHA256:fixtureDeliverySigner"
+        )
+        reviewed = reviewed_state_payload("PRRT_FINAL_KNOWN", [])
+        attestation = validation_attestation_payload(reviewed)
+        disposition = late_disposition_payload(attestation)
+        thread = {
+            key: value
+            for key, value in disposition["threads"][0].items()
+            if key not in {"classification_evidence_digest", "authorized_action"}
+        }
+        thread["technical_blockers"] = []
+        artifact = {
+            "schema_version": "1.0",
+            "kind": "LATE_FEEDBACK_CLASSIFICATION",
+            "repository": "SecPal/api",
+            "delivery_issue_number": 724,
+            "pull_request_number": 123,
+            "head_sha": attestation["head_sha"],
+            "delivery_signer": {
+                "format": "ssh",
+                "fingerprint": signer.fingerprint,
+            },
+            "authorized_purpose": "AUTHORIZE_LATE_FEEDBACK_DISPOSITION",
+            "finding_id": "LF-MALFORMED-TYPE",
+            "finding_evidence_digest": "c" * 64,
+            "thread": thread,
+        }
+        cases = (
+            ("schema_version", []),
+            ("schema_version", {}),
+            ("schema_version", 1),
+            ("schema_version", None),
+            ("classification", []),
+            ("classification", {}),
+            ("classification", 1),
+            ("classification", None),
+            ("disposition", []),
+            ("disposition", {}),
+            ("disposition", 1),
+            ("disposition", None),
+        )
+        for field, value in cases:
+            changed = copy.deepcopy(artifact)
+            target = changed if field == "schema_version" else changed["thread"]
+            target[field] = value
+            canonical = MODULE.late_disposition.canonical_json_bytes(changed)
+            with self.subTest(field=field, value=value), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                artifact_path = root / "classification.json"
+                signature_path = root / "classification.sig"
+                artifact_path.write_bytes(canonical)
+                signature_path.write_text("fixture", encoding="utf-8")
+                with mock.patch.object(
+                    MODULE.late_disposition,
+                    "verify_detached_signature",
+                    return_value=canonical,
+                ), self.assertRaises(MODULE.late_disposition.LateDispositionError):
+                    MODULE.late_disposition.parse_classification_artifact(
+                        artifact_path,
+                        signature_path,
+                        expected_signer=signer,
+                        repository="SecPal/api",
+                        delivery_issue_number=724,
+                        pull_request_number=123,
+                        head_sha=attestation["head_sha"],
+                        thread_id="PRRT_LATE_NON_BLOCKING",
+                    )
+
+    def test_late_disposition_malformed_decision_types_fail_closed(self) -> None:
+        signer = MODULE.late_disposition.SignerIdentity(
+            "ssh", "SHA256:fixtureDeliverySigner"
+        )
+        reviewed = reviewed_state_payload("PRRT_FINAL_KNOWN", [])
+        attestation = validation_attestation_payload(reviewed)
+        artifact = late_disposition_payload(attestation)
+        cases = (
+            ("schema_version", []),
+            ("schema_version", {}),
+            ("schema_version", 1),
+            ("schema_version", None),
+            ("classification", []),
+            ("classification", {}),
+            ("classification", 1),
+            ("classification", None),
+            ("disposition", []),
+            ("disposition", {}),
+            ("disposition", 1),
+            ("disposition", None),
+        )
+        for field, value in cases:
+            changed = copy.deepcopy(artifact)
+            target = changed if field == "schema_version" else changed["threads"][0]
+            target[field] = value
+            canonical = MODULE.late_disposition.canonical_json_bytes(changed)
+            with self.subTest(field=field, value=value), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                artifact_path = root / "disposition.json"
+                signature_path = root / "disposition.sig"
+                artifact_path.write_bytes(canonical)
+                signature_path.write_text("fixture", encoding="utf-8")
+                with mock.patch.object(
+                    MODULE.late_disposition,
+                    "verify_detached_signature",
+                    return_value=canonical,
+                ), self.assertRaises(MODULE.late_disposition.LateDispositionError):
+                    MODULE.late_disposition.parse_artifact(
+                        artifact_path,
+                        signature_path,
+                        expected_signer=signer,
+                        repository="SecPal/api",
+                        delivery_issue_number=724,
+                        pull_request_number=123,
+                        head_sha=attestation["head_sha"],
+                        validated_tree_sha=attestation["validated_tree_sha"],
+                        validation_receipt_digest=attestation[
+                            "validation_receipt_digest"
+                        ],
+                        validation_attestation_digest=attestation[
+                            "attestation_digest"
+                        ],
+                        final_eligibility_evidence_digest=attestation[
+                            "eligibility_evidence_digest"
+                        ],
+                        thread_ids=("PRRT_LATE_NON_BLOCKING",),
+                    )
+
     def test_late_disposition_alternate_valid_signer_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(
