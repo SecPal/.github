@@ -93,6 +93,15 @@ _PROTECTED_MAIN_QUERY = """query($owner:String!,$name:String!){
     defaultBranchRef{name target{... on Commit{oid}}}
   }
 }"""
+_CURRENT_CANDIDATE_BLOB_QUERY = """query(
+  $owner:String!,$name:String!,$number:Int!,$expression:String!
+){
+  repository(owner:$owner,name:$name){
+    nameWithOwner
+    pullRequest(number:$number){number headRefOid}
+    object(expression:$expression){... on Blob{oid}}
+  }
+}"""
 _DIAGNOSTIC_RAISE_SITES = (
     (("classify_observed_state", 97), "AUTHORIZATION_ORCHESTRATION_FAILURE"),
     (("classify_observed_state", 99), "AUTHORIZATION_ORCHESTRATION_FAILURE"),
@@ -985,8 +994,9 @@ def _admit_github_source(
     facts: GitHubSourceFacts,
     policy: authority.BootstrapSourceAdmissionPolicy,
 ) -> None:
-    """Purely admit canonical facts against one exact maintained policy."""
+    """Purely admit current PR identity and immutable source provenance."""
 
+    byte_source = policy.subtype == EVIDENCE_HELPER_ADMISSION_SUBTYPE
     valid = (
         isinstance(facts, GitHubSourceFacts)
         and facts.base_repository == policy.repository
@@ -995,7 +1005,7 @@ def _admit_github_source(
         and facts.pull_request == policy.pull_request
         and facts.state == policy.source_pr_state
         and facts.draft is policy.source_pr_draft
-        and facts.head_sha == policy.source_head_sha
+        and (byte_source or facts.head_sha == policy.source_head_sha)
         and facts.commit_sha == policy.source_head_sha
         and facts.tree_sha == policy.source_tree_sha
         and facts.parent_shas == (policy.source_parent_sha,)
@@ -1008,6 +1018,109 @@ def _admit_github_source(
         )
 
 
+def _observe_current_candidate_blob(
+    policy: authority.BootstrapSourceAdmissionPolicy, current_head_sha: str
+) -> bytes:
+    """Capture one current candidate blob without assigning source identity."""
+
+    try:
+        current_head_sha = authority._require_oid(
+            current_head_sha, "current candidate head"
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise BootstrapSourceAdmissionError(str(exc)) from exc
+    owner, separator, name = policy.repository.partition("/")
+    if separator != "/" or not owner or not name:
+        raise BootstrapSourceAdmissionError(
+            "current candidate repository identity is invalid"
+        )
+    result = _run_bootstrap_gh(
+        [
+            "api",
+            "--hostname",
+            "github.com",
+            "graphql",
+            "-f",
+            f"query={_CURRENT_CANDIDATE_BLOB_QUERY}",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"name={name}",
+            "-F",
+            f"number={policy.pull_request}",
+            "-f",
+            f"expression={current_head_sha}:{policy.implementation_path}",
+        ]
+    )
+    if result.returncode != 0:
+        raise BootstrapSourceAdmissionError(
+            "current candidate GitHub blob is unavailable"
+        )
+    return bytes(result.stdout)
+
+
+def _normalize_current_candidate_blob(
+    raw: bytes, repository: str, pull_request: int
+) -> tuple[str, str]:
+    """Purely normalize the exact current helper blob representation."""
+
+    try:
+        document = _closed_json(raw, "current candidate GitHub blob")
+        observed_repository = document["data"]["repository"]
+        if (
+            set(document) != {"data"}
+            or set(document["data"]) != {"repository"}
+            or not isinstance(observed_repository, dict)
+            or set(observed_repository)
+            != {"nameWithOwner", "pullRequest", "object"}
+            or observed_repository["nameWithOwner"] != repository
+            or not isinstance(observed_repository["pullRequest"], dict)
+            or set(observed_repository["pullRequest"])
+            != {"number", "headRefOid"}
+            or observed_repository["pullRequest"]["number"] != pull_request
+            or not isinstance(observed_repository["object"], dict)
+            or set(observed_repository["object"]) != {"oid"}
+        ):
+            raise BootstrapSourceAdmissionError(
+                "current candidate GitHub blob is malformed"
+            )
+        return (
+            authority._require_oid(
+                observed_repository["pullRequest"]["headRefOid"],
+                "current candidate head",
+            ),
+            authority._require_oid(
+                observed_repository["object"]["oid"],
+                "current candidate helper blob",
+            ),
+        )
+    except BootstrapSourceAdmissionError:
+        raise
+    except (KeyError, TypeError, authority.LifecycleAuthorityError) as exc:
+        raise BootstrapSourceAdmissionError(
+            "current candidate GitHub blob is malformed"
+        ) from exc
+
+
+def _admit_current_candidate_blob(
+    current_head_sha: str,
+    expected_head_sha: str,
+    blob: str,
+    policy: authority.BootstrapSourceAdmissionPolicy,
+) -> None:
+    """Admit only exact helper-byte consumption by the current candidate."""
+
+    if (
+        policy.subtype != EVIDENCE_HELPER_ADMISSION_SUBTYPE
+        or policy.implementation_path != EVIDENCE_HELPER_IMPLEMENTATION_PATH
+        or current_head_sha != expected_head_sha
+        or blob != policy.implementation_blob_oid
+    ):
+        raise BootstrapSourceAdmissionError(
+            "current candidate head or helper bytes differ from immutable admission"
+        )
+
+
 def _authenticate_live_github_source(
     policy: authority.BootstrapSourceAdmissionPolicy,
 ) -> None:
@@ -1016,6 +1129,15 @@ def _authenticate_live_github_source(
     observation = _observe_github(policy)
     facts = _normalize_github_observation(observation)
     _admit_github_source(facts, policy)
+    if policy.subtype == EVIDENCE_HELPER_ADMISSION_SUBTYPE:
+        current_head_sha, blob = _normalize_current_candidate_blob(
+            _observe_current_candidate_blob(policy, facts.head_sha),
+            policy.repository,
+            policy.pull_request,
+        )
+        _admit_current_candidate_blob(
+            current_head_sha, facts.head_sha, blob, policy
+        )
 
 
 def _observe_recovery_review_state(

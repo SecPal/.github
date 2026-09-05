@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-05 - Authenticate Immutable Helper Source After PR Advancement
+
+**Changed:**
+
+- preserve the exact historical `PR_REVIEW_EVIDENCE_HELPER_SOURCE` admission
+  after its owning pull request lawfully advances
+- authenticate live PR identity and exact current-candidate helper bytes in one
+  head-consistent observation, without weakening executable bootstrap source
+  contracts
+
 ## 2026-09-05 - Authenticate Post-Freeze Non-Actionable Disposition
 
 **Changed:**

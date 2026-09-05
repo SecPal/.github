@@ -42,6 +42,7 @@ RECOVERY_FEEDBACK_DIGEST = "d2236120f769caa74d5da0435330c103a036dfe68a5e0f8274d4
 EVIDENCE_HELPER_ISSUE = 818
 EVIDENCE_HELPER_PR = 819
 EVIDENCE_HELPER_HEAD = "eb3aebf226c3ca215e7021b00207cc996ab06c2e"
+EVIDENCE_HELPER_CURRENT_HEAD = "9c1dd1ee48dfd91e1e320853d2e5b995030e02b8"
 EVIDENCE_HELPER_TREE = "d7fca1ea61ea0b4cd78bf18f8555386633e013ea"
 EVIDENCE_HELPER_PARENT = "f8d58a3acd5d2b5c84824bf9ecba637e91665ee9"
 EVIDENCE_HELPER_RECEIPT = (
@@ -2017,7 +2018,6 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
             {"pull_request": 820},
             {"state": "CLOSED"},
             {"draft": False},
-            {"head_sha": "3" * 40},
             {"commit_sha": "4" * 40},
             {"tree_sha": "5" * 40},
             {"parent_shas": ("6" * 40,)},
@@ -2029,6 +2029,191 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
                 source.BootstrapSourceAdmissionError
             ):
                 source._admit_github_source(replace(facts, **mutation), self.policy)
+
+    def test_lawfully_advanced_pr_retains_immutable_byte_source_admission(self) -> None:
+        facts = source.GitHubSourceFacts(
+            base_repository=REPOSITORY,
+            base_ref="main",
+            head_repository=REPOSITORY,
+            pull_request=EVIDENCE_HELPER_PR,
+            state="OPEN",
+            draft=True,
+            head_sha=EVIDENCE_HELPER_CURRENT_HEAD,
+            commit_sha=EVIDENCE_HELPER_HEAD,
+            tree_sha=EVIDENCE_HELPER_TREE,
+            parent_shas=(EVIDENCE_HELPER_PARENT,),
+            github_verified=True,
+            github_verification_reason="valid",
+        )
+
+        source._admit_github_source(facts, self.policy)
+
+    def test_current_candidate_blob_is_authenticated_at_later_pr_head(self) -> None:
+        pull = {
+            "number": EVIDENCE_HELPER_PR,
+            "state": "open",
+            "draft": True,
+            "base": {"ref": "main", "repo": {"full_name": REPOSITORY}},
+            "head": {
+                "repo": {"full_name": REPOSITORY},
+                "sha": EVIDENCE_HELPER_CURRENT_HEAD,
+            },
+        }
+        commit = {
+            "sha": EVIDENCE_HELPER_HEAD,
+            "parents": [{"sha": EVIDENCE_HELPER_PARENT}],
+            "commit": {
+                "tree": {"sha": EVIDENCE_HELPER_TREE},
+                "verification": {"verified": True, "reason": "valid"},
+            },
+        }
+        candidate_blob = {
+            "data": {
+                "repository": {
+                    "nameWithOwner": REPOSITORY,
+                    "pullRequest": {
+                        "number": EVIDENCE_HELPER_PR,
+                        "headRefOid": EVIDENCE_HELPER_CURRENT_HEAD,
+                    },
+                    "object": {"oid": EVIDENCE_HELPER_BLOB},
+                }
+            }
+        }
+        results = [
+            subprocess.CompletedProcess(
+                [], 0, json.dumps(value).encode("utf-8"), b""
+            )
+            for value in (pull, commit, candidate_blob)
+        ]
+
+        with mock.patch.object(
+            source, "_run_bootstrap_gh", side_effect=results
+        ) as run_gh:
+            source._authenticate_live_github_source(self.policy)
+
+        self.assertEqual(run_gh.call_count, 3)
+        candidate_call = run_gh.call_args.args[0]
+        self.assertIn(
+            EVIDENCE_HELPER_CURRENT_HEAD,
+            candidate_call[-1],
+        )
+        self.assertTrue(
+            candidate_call[-1].endswith(f":{EVIDENCE_HELPER_PATH}")
+        )
+
+    def test_current_candidate_head_drift_during_blob_read_fails_closed(self) -> None:
+        raw = json.dumps(
+            {
+                "data": {
+                    "repository": {
+                        "nameWithOwner": REPOSITORY,
+                        "pullRequest": {
+                            "number": EVIDENCE_HELPER_PR,
+                            "headRefOid": "7" * 40,
+                        },
+                        "object": {"oid": EVIDENCE_HELPER_BLOB},
+                    }
+                }
+            }
+        ).encode("utf-8")
+        current_head, blob = source._normalize_current_candidate_blob(
+            raw, REPOSITORY, EVIDENCE_HELPER_PR
+        )
+
+        with self.assertRaisesRegex(
+            source.BootstrapSourceAdmissionError,
+            "current candidate head or helper bytes differ",
+        ):
+            source._admit_current_candidate_blob(
+                current_head,
+                EVIDENCE_HELPER_CURRENT_HEAD,
+                blob,
+                self.policy,
+            )
+
+    def test_current_candidate_helper_substitution_fails_closed(self) -> None:
+        raw = json.dumps(
+            {
+                "data": {
+                    "repository": {
+                        "nameWithOwner": REPOSITORY,
+                        "pullRequest": {
+                            "number": EVIDENCE_HELPER_PR,
+                            "headRefOid": EVIDENCE_HELPER_CURRENT_HEAD,
+                        },
+                        "object": {"oid": "8" * 40},
+                    }
+                }
+            }
+        ).encode("utf-8")
+        current_head, blob = source._normalize_current_candidate_blob(
+            raw, REPOSITORY, EVIDENCE_HELPER_PR
+        )
+
+        with self.assertRaisesRegex(
+            source.BootstrapSourceAdmissionError,
+            "current candidate head or helper bytes differ",
+        ):
+            source._admit_current_candidate_blob(
+                current_head,
+                EVIDENCE_HELPER_CURRENT_HEAD,
+                blob,
+                self.policy,
+            )
+
+    def test_current_candidate_blob_representation_fails_closed(self) -> None:
+        cases = (
+            {},
+            {"data": {"repository": None}},
+            {
+                "data": {
+                    "repository": {
+                        "nameWithOwner": "Other/repo",
+                        "pullRequest": {
+                            "number": EVIDENCE_HELPER_PR,
+                            "headRefOid": EVIDENCE_HELPER_CURRENT_HEAD,
+                        },
+                        "object": {"oid": EVIDENCE_HELPER_BLOB},
+                    }
+                }
+            },
+            {
+                "data": {
+                    "repository": {
+                        "nameWithOwner": REPOSITORY,
+                        "pullRequest": {
+                            "number": EVIDENCE_HELPER_PR,
+                            "headRefOid": EVIDENCE_HELPER_CURRENT_HEAD,
+                        },
+                        "object": None,
+                    }
+                }
+            },
+            {
+                "data": {
+                    "repository": {
+                        "nameWithOwner": REPOSITORY,
+                        "pullRequest": {
+                            "number": EVIDENCE_HELPER_PR,
+                            "headRefOid": EVIDENCE_HELPER_CURRENT_HEAD,
+                        },
+                        "object": {
+                            "oid": EVIDENCE_HELPER_BLOB,
+                            "unexpected": True,
+                        },
+                    }
+                }
+            },
+        )
+        for document in cases:
+            with self.subTest(document=document), self.assertRaises(
+                source.BootstrapSourceAdmissionError
+            ):
+                source._normalize_current_candidate_blob(
+                    json.dumps(document).encode("utf-8"),
+                    REPOSITORY,
+                    EVIDENCE_HELPER_PR,
+                )
 
     def test_wrong_pr_head_tree_parent_receipt_and_attestation_fail_closed(self) -> None:
         cases = (
