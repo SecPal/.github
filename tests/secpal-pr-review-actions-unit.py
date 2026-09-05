@@ -7,6 +7,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import importlib
+import inspect
 import importlib.util
 import io
 import json
@@ -7106,7 +7107,7 @@ class FastPathTests(TestCase):
             "registry": registry,
             "command_set": registry["validation"],
         }
-        verified = fast_path.verify_ready_source_recovery_safety(**arguments)
+        verified = fast_path._verify_ready_source_recovery_safety(**arguments)
         self.assertEqual(verified.head_sha, reviewed.head_sha)
 
         mutations = {
@@ -7135,7 +7136,168 @@ class FastPathTests(TestCase):
             with self.subTest(case=case), self.assertRaises(
                 fast_path.SecurityBlocker
             ):
-                fast_path.verify_ready_source_recovery_safety(**changed)
+                fast_path._verify_ready_source_recovery_safety(**changed)
+    def test_ready_source_recovery_safety_cannot_use_caller_policy_or_receipt(self) -> None:
+        parameters = inspect.signature(
+            actions.acquire_ready_source_recovery_safety
+        ).parameters
+        self.assertNotIn("reviewed_state", parameters)
+        self.assertNotIn("registry", parameters)
+        self.assertNotIn("command_set", parameters)
+        self.assertNotIn("fresh_validation_receipt", parameters)
+        self.assertFalse(
+            hasattr(fast_path, "verify_ready_source_recovery_safety")
+        )
+
+    def test_ready_source_recovery_safety_acquisition_owns_observation_and_execution(self) -> None:
+        reviewed = fast_feedback(thread_count=0)
+        observation = reviewed.to_dict()
+        observation["review_decision"] = "APPROVED"
+        entry = registry_entry(reviewed.repository)
+        entry["manual_gates"] = []
+        findings = [{
+            "finding_id": "review-summary",
+            "thread_id": None,
+            "sources": [{
+                "kind": "REVIEW",
+                "node_id": "REVIEW_1",
+                "digest": digest("review summary"),
+            }],
+            "classification": "INFORMATIONAL",
+            "disposition": "NON_ACTIONABLE",
+            "evidence_digest": "1" * 64,
+            "technically_blocking": False,
+        }]
+        policy_loader = mock.Mock(return_value=("f" * 40, entry))
+        gateway = mock.Mock()
+        gateway.observe_stable_feedback.return_value = observation
+        gateway_factory = mock.Mock(return_value=gateway)
+        validation_runner = mock.Mock(
+            return_value=actions.RegisteredValidationResult()
+        )
+        with (
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                side_effect=[
+                    (reviewed.head_sha, ""),
+                    (reviewed.head_sha, ""),
+                ],
+            ),
+            mock.patch.object(
+                actions,
+                "_run_attestation_git",
+                return_value=SimpleNamespace(stdout="a" * 40),
+            ),
+            mock.patch.object(
+                actions, "_validated_commit_parent", return_value="9" * 40
+            ),
+        ):
+            safety = actions._acquire_ready_source_recovery_safety(
+                repository=reviewed.repository,
+                pull_request_number=reviewed.pull_request_number,
+                expected_head_sha=reviewed.head_sha,
+                repository_root=REPO_ROOT,
+                feedback_findings=findings,
+                manual_gate_evidence=[],
+                _policy_loader=policy_loader,
+                _gateway_factory=gateway_factory,
+                _validation_runner=validation_runner,
+            )
+        self.assertEqual(safety.head_sha, reviewed.head_sha)
+        policy_loader.assert_called_once_with(reviewed.repository)
+        gateway.observe_stable_feedback.assert_called_once_with(
+            reviewed.repository, reviewed.pull_request_number
+        )
+        validation_runner.assert_called_once_with(entry, REPO_ROOT)
+
+
+    def test_ready_source_recovery_safety_requires_resolved_thread_disposition(self) -> None:
+        reviewed = fast_feedback(thread_count=1)
+        reviewed.feedback["threads"][0]["is_resolved"] = True
+        reviewed.refresh_digests()
+        registry = fast_registry()
+        receipt = fast_path.create_validation_receipt(
+            repository=reviewed.repository,
+            head_sha=reviewed.head_sha,
+            validated_tree_sha="a" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+        )
+        findings = [
+            {
+                "finding_id": "review-summary",
+                "thread_id": None,
+                "sources": [{
+                    "kind": "REVIEW",
+                    "node_id": "REVIEW_1",
+                    "digest": digest("review summary"),
+                }],
+                "classification": "INFORMATIONAL",
+                "disposition": "NON_ACTIONABLE",
+                "evidence_digest": "1" * 64,
+                "technically_blocking": False,
+            }
+        ]
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "feedback coverage is incomplete"
+        ):
+            fast_path._verify_ready_source_recovery_safety(
+                repository=reviewed.repository,
+                pull_request_number=reviewed.pull_request_number,
+                head_sha=reviewed.head_sha,
+                tree_sha="a" * 40,
+                parent_shas=["9" * 40],
+                expected_base_ref=reviewed.base_ref,
+                expected_base_sha=reviewed.base_sha,
+                reviewed_state=reviewed,
+                review_decision="APPROVED",
+                feedback_findings=findings,
+                fresh_validation_receipt=receipt,
+                registry=registry,
+                command_set=registry["validation"],
+            )
+        safe_findings = []
+        for index, ((kind, node_id), (source_digest, thread_id)) in enumerate(
+            fast_path._classified_feedback_sources(
+                reviewed, include_resolved_threads=True
+            ).items(),
+            1,
+        ):
+            safe_findings.append({
+                "finding_id": f"resolved-safe-{index}",
+                "thread_id": thread_id,
+                "sources": [{
+                    "kind": kind,
+                    "node_id": node_id,
+                    "digest": source_digest,
+                }],
+                "classification": "INFORMATIONAL",
+                "disposition": "NON_ACTIONABLE",
+                "evidence_digest": f"{index:x}".rjust(64, "0"),
+                "technically_blocking": False,
+            })
+        safe = fast_path._verify_ready_source_recovery_safety(
+            repository=reviewed.repository,
+            pull_request_number=reviewed.pull_request_number,
+            head_sha=reviewed.head_sha,
+            tree_sha="a" * 40,
+            parent_shas=["9" * 40],
+            expected_base_ref=reviewed.base_ref,
+            expected_base_sha=reviewed.base_sha,
+            reviewed_state=reviewed,
+            review_decision="APPROVED",
+            feedback_findings=safe_findings,
+            fresh_validation_receipt=receipt,
+            registry=registry,
+            command_set=registry["validation"],
+        )
+        self.assertEqual(safe.reviewed_feedback_digest, reviewed.feedback_digest)
+
+
     def test_ready_integration_binds_exact_adoption_source_evidence(self) -> None:
         reviewed = fast_feedback()
         raw_authority = ready_integration_prior_authority(reviewed)

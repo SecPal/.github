@@ -46,6 +46,12 @@ FAST_PATH_HELPER = REPOSITORY_ROOT / "scripts/secpal_pr_review/fast_path.py"
 LIFECYCLE_AUTHORITY_HELPER = (
     REPOSITORY_ROOT / "scripts/secpal_pr_review/lifecycle_authority.py"
 )
+LATE_DISPOSITION_HELPER = (
+    REPOSITORY_ROOT / "scripts/secpal_pr_review/late_disposition.py"
+)
+BOOTSTRAP_SOURCE_ADMISSION_HELPER = (
+    REPOSITORY_ROOT / "scripts/secpal_pr_review/bootstrap_source_admission.py"
+)
 LIFECYCLE_PUBLICATION_HELPER = (
     REPOSITORY_ROOT / "scripts/secpal_pr_review/lifecycle_publication.py"
 )
@@ -137,6 +143,46 @@ def _load_lifecycle_publication_helpers() -> tuple[Any, Any]:
             sys.modules.pop(module_name, None)
         raise
     return lifecycle_authority, lifecycle_publication
+
+
+def _load_protected_main_helper() -> Any:
+    """Load the accepted-main source admission module from this exact tree."""
+
+    package_name = "secpal_ready_recovery_policy"
+    package = types.ModuleType(package_name)
+    package.__path__ = [str(FAST_PATH_HELPER.parent)]
+    sys.modules[package_name] = package
+    sys.modules[f"{package_name}.fast_path"] = _load_fast_path_helper()
+
+    def load(name: str, path: Path) -> Any:
+        module_name = f"{package_name}.{name}"
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Cannot load maintained policy helper: {path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    loaded_names: list[str] = []
+    try:
+        load("late_disposition", LATE_DISPOSITION_HELPER)
+        loaded_names.append("late_disposition")
+        load("lifecycle_authority", LIFECYCLE_AUTHORITY_HELPER)
+        loaded_names.append("lifecycle_authority")
+        load("lifecycle_publication", LIFECYCLE_PUBLICATION_HELPER)
+        loaded_names.append("lifecycle_publication")
+        helper = load(
+            "bootstrap_source_admission", BOOTSTRAP_SOURCE_ADMISSION_HELPER
+        )
+        loaded_names.append("bootstrap_source_admission")
+        return helper
+    except BaseException:
+        for name in reversed(loaded_names):
+            sys.modules.pop(f"{package_name}.{name}", None)
+        sys.modules.pop(f"{package_name}.fast_path", None)
+        sys.modules.pop(package_name, None)
+        raise
 
 
 def _playwright_browsers_path(account_home: Path) -> Path:
@@ -4287,6 +4333,148 @@ def _fast_registry_binding(entry: dict[str, Any]) -> dict[str, Any]:
             ]
         ),
     }
+
+
+def _load_current_recovery_policy(
+    repository: str,
+) -> tuple[str, dict[str, Any]]:
+    """Derive validation policy from one immutable protected-main observation."""
+
+    helper = _load_protected_main_helper()
+    try:
+        facts = helper._normalize_protected_main(helper._observe_protected_main())
+        raw_registry = helper._read_protected_main_registry(facts.head_sha)
+        registry = json.loads(
+            raw_registry,
+            object_pairs_hook=_reject_duplicate_json_object,
+        )
+        entry = select_repository(registry, repository)
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RegistryError,
+        helper.BootstrapSourceAdmissionError,
+    ) as exc:
+        raise fast_path.SecurityBlocker(
+            "accepted protected-main recovery policy is unavailable"
+        ) from exc
+    return facts.head_sha, entry
+
+
+def _acquire_ready_source_recovery_safety(
+    *,
+    repository: str,
+    pull_request_number: int,
+    expected_head_sha: str,
+    repository_root: Path,
+    feedback_findings: Any,
+    manual_gate_evidence: Any,
+    _policy_loader: Any,
+    _gateway_factory: Any,
+    _validation_runner: Any,
+) -> Any:
+    """Test-seamed implementation; production fixes every observation boundary."""
+
+    root = repository_root.resolve(strict=True)
+    policy_head_sha, entry = _policy_loader(repository)
+    if not OID_PATTERN.fullmatch(policy_head_sha):
+        raise fast_path.SecurityBlocker(
+            "accepted protected-main policy identity is malformed"
+        )
+    binding = _fast_registry_binding(entry)
+    head, status = _attestation_local_state(root, repository)
+    if head != expected_head_sha or status:
+        raise fast_path.SecurityBlocker(
+            "Ready-source recovery requires the exact clean candidate"
+        )
+    tree = _run_attestation_git(
+        root, ["rev-parse", f"{head}^{{tree}}"]
+    ).stdout.strip()
+    if not OID_PATTERN.fullmatch(tree):
+        raise fast_path.SecurityBlocker(
+            "Ready-source recovery candidate tree is malformed"
+        )
+    parent = _validated_commit_parent(root, head)
+    gateway = _gateway_factory(root, entry)
+    observation = gateway.observe_stable_feedback(
+        repository, pull_request_number
+    )
+    review_decision = observation.get("review_decision")
+    reviewed = fast_path.StableFeedbackState.from_payload(
+        {
+            "repository": repository,
+            "pull_request_number": pull_request_number,
+            **observation,
+        }
+    )
+    if reviewed.head_sha != head:
+        raise fast_path.SecurityBlocker(
+            "Ready-source recovery feedback does not bind the candidate"
+        )
+    validation_result = _validation_runner(entry, root)
+    if not validation_result:
+        raise RegisteredValidationFailure(
+            "registered recovery-safety validation failed"
+        )
+    final_head, final_status = _attestation_local_state(root, repository)
+    final_tree = _run_attestation_git(
+        root, ["rev-parse", f"{final_head}^{{tree}}"]
+    ).stdout.strip()
+    if (
+        final_head != head
+        or final_tree != tree
+        or final_status
+    ):
+        raise fast_path.SecurityBlocker(
+            "Ready-source recovery candidate changed during validation"
+        )
+    receipt = _validation_receipt(
+        repository=repository,
+        head_sha=head,
+        tree_sha=tree,
+        binding=binding,
+        reviewed=reviewed,
+        manual_gate_evidence=manual_gate_evidence,
+    )
+    return fast_path._verify_ready_source_recovery_safety(
+        repository=repository,
+        pull_request_number=pull_request_number,
+        head_sha=head,
+        tree_sha=tree,
+        parent_shas=[parent],
+        expected_base_ref=reviewed.base_ref,
+        expected_base_sha=reviewed.base_sha,
+        reviewed_state=reviewed,
+        review_decision=review_decision,
+        feedback_findings=feedback_findings,
+        fresh_validation_receipt=receipt,
+        registry=binding,
+        command_set=binding["validation"],
+    )
+
+
+def acquire_ready_source_recovery_safety(
+    *,
+    repository: str,
+    pull_request_number: int,
+    expected_head_sha: str,
+    repository_root: Path,
+    feedback_findings: Any,
+    manual_gate_evidence: Any,
+) -> Any:
+    """Acquire and seal recovery safety through fixed maintained boundaries."""
+
+    return _acquire_ready_source_recovery_safety(
+        repository=repository,
+        pull_request_number=pull_request_number,
+        expected_head_sha=expected_head_sha,
+        repository_root=repository_root,
+        feedback_findings=feedback_findings,
+        manual_gate_evidence=manual_gate_evidence,
+        _policy_loader=_load_current_recovery_policy,
+        _gateway_factory=FastPathGateway,
+        _validation_runner=_run_registered_validations,
+    )
 
 
 def _load_fast_state(path: str) -> Any:

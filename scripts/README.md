@@ -72,12 +72,16 @@ change Ready state, read post-push checks, or authorize merge automation.
 Historical receipt reconstruction reads the registry blob from the immutable
 prior delivery commit rather than applying a later registry to older evidence.
 For an explicitly authorized unchanged Ready source whose pre-persistence
-package is proven unavailable, `verify_ready_source_recovery_safety` derives a
-sealed fresh safety summary from the exact open PR head/tree/base/topology,
-complete classified stable feedback, non-blocking review decision, and a fresh
-successful validation receipt. `create_ready_source_recovery_authorization`
-adds exact CURRENT lifecycle/publication, historical trailer/digest provenance,
-accepted commit-signature binding, evidence-loss proof, and one bounded use.
+package is proven unavailable, `acquire_ready_source_recovery_safety` is the
+only production seal-producing entrypoint. It reads registry and validation
+commands from one independently observed immutable protected-`main` commit,
+captures complete current feedback through the maintained bounded GitHub
+reader, includes resolved and unresolved review threads in the classification
+universe, and runs that command set itself against the exact clean head/tree.
+Callers cannot supply a reviewed state, registry, command set, or claimed-
+success receipt. `create_ready_source_recovery_authorization` adds exact
+CURRENT lifecycle/publication, historical trailer/digest provenance, accepted
+commit-signature binding, evidence-loss proof, and one bounded use.
 `publish_ready_source_recovery` appends that signed authority to the existing
 protected lifecycle-publication journal with CAS and authenticated idempotency;
 `verify_current_ready_source_recovery` rejects it after CURRENT changes.

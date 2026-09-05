@@ -2091,6 +2091,8 @@ def verify_commit_signatures(
 
 def _classified_feedback_sources(
     reviewed_state: StableFeedbackState,
+    *,
+    include_resolved_threads: bool = False,
 ) -> dict[tuple[str, str], tuple[str, str | None]]:
     expected: dict[tuple[str, str], tuple[str, str | None]] = {}
 
@@ -2131,7 +2133,7 @@ def _classified_feedback_sources(
                 None,
             )
     for thread in reviewed_state.feedback["threads"]:
-        if thread["is_resolved"] is True:
+        if thread["is_resolved"] is True and not include_resolved_threads:
             continue
         for comment in thread["comments"]:
             add(
@@ -2150,7 +2152,7 @@ def _classified_feedback_sources(
     return expected
 
 
-def verify_ready_source_recovery_safety(
+def _verify_ready_source_recovery_safety(
     *,
     repository: str,
     pull_request_number: int,
@@ -2166,7 +2168,7 @@ def verify_ready_source_recovery_safety(
     registry: dict[str, Any],
     command_set: list[dict[str, Any]],
 ) -> VerifiedReadySourceRecoverySafety:
-    """Authenticate fresh safety evidence without representing it as historical."""
+    """Seal facts acquired only by the maintained recovery-safety boundary."""
 
     reviewed = _require_reviewed_state_identity(repository, reviewed_state)
     pr = _require_positive_integer(
@@ -2203,11 +2205,12 @@ def verify_ready_source_recovery_safety(
         )
     if not isinstance(feedback_findings, list):
         raise SecurityBlocker("Ready-source recovery feedback assessment is missing")
-    expected_sources = _classified_feedback_sources(reviewed)
-    unresolved_threads = {
+    expected_sources = _classified_feedback_sources(
+        reviewed, include_resolved_threads=True
+    )
+    review_threads = {
         item["node_id"]
         for item in reviewed.feedback["threads"]
-        if item["is_resolved"] is False
     }
     normalized_findings: list[dict[str, Any]] = []
     classified_sources: set[tuple[str, str]] = set()
@@ -2244,7 +2247,7 @@ def verify_ready_source_recovery_safety(
             thread_id = _require_string(
                 thread_id, "Ready-source recovery thread identity"
             )
-            if thread_id not in unresolved_threads:
+            if thread_id not in review_threads:
                 raise SecurityBlocker(
                     "Ready-source recovery finding thread identity changed"
                 )
@@ -2303,9 +2306,9 @@ def verify_ready_source_recovery_safety(
         item["thread_id"] for item in normalized_findings
         if item["thread_id"] is not None
     }
-    if covered_threads != unresolved_threads:
+    if covered_threads != review_threads:
         raise SecurityBlocker(
-            "Ready-source recovery unresolved-thread inventory is ambiguous"
+            "Ready-source recovery review-thread inventory is ambiguous"
         )
     limits = registry.get("limits") if isinstance(registry, dict) else None
     maximum_items = (

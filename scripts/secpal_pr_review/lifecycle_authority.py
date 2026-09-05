@@ -2668,8 +2668,19 @@ def authenticate_exact_state_adoption_external_evidence(
     )
 
 
-def _ready_source_recovery_state(value: Mapping[str, Any]) -> dict[str, Any]:
-    state = _validate_state(dict(value))
+def _ready_source_recovery_state(
+    value: Mapping[str, Any], *, historical_proof_mode: str
+) -> dict[str, Any]:
+    if historical_proof_mode not in {
+        NATIVE_PROOF_MODE,
+        LEGACY_PROOF_MODE,
+        EXACT_ADOPTION_PROOF_MODE,
+    }:
+        raise LifecycleAuthorityError("Ready-source recovery proof mode is invalid")
+    state = _validate_state(
+        dict(value),
+        allow_adopted_observations=historical_proof_mode == EXACT_ADOPTION_PROOF_MODE,
+    )
     if (
         state["unrestricted_review_count"] != 1
         or not 0 <= state["remediation_cycle_count"] <= 2
@@ -2739,7 +2750,10 @@ def create_ready_source_recovery_authorization(
         raise LifecycleAuthorityError("current lifecycle authority is not verified")
     if not is_verified_ready_source_recovery_safety(safety_evidence):
         raise LifecycleAuthorityError("Ready-source recovery safety is not verified")
-    state = _ready_source_recovery_state(current_lifecycle.state)
+    state = _ready_source_recovery_state(
+        current_lifecycle.state,
+        historical_proof_mode=current_lifecycle.historical_proof_mode,
+    )
     if (
         current_lifecycle.repository != safety_evidence.repository
         or current_lifecycle.pull_request != safety_evidence.pull_request_number
@@ -2870,7 +2884,10 @@ def verify_ready_source_recovery_authorization(
         READY_SOURCE_RECOVERY_AUTHORIZATION_FIELDS,
         "Ready-source recovery authorization",
     )
-    state = _ready_source_recovery_state(item["lifecycle_state"])
+    state = _ready_source_recovery_state(
+        item["lifecycle_state"],
+        historical_proof_mode=current_lifecycle.historical_proof_mode,
+    )
     signer = item.get("expected_commit_signer")
     parents = item.get("parent_shas")
     if (
