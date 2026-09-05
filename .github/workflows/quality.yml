@@ -76,6 +76,9 @@ jobs:
       - name: Run authenticated Ready/Draft lifecycle execution tests
         run: python3 -m unittest tests/secpal-lifecycle-execution-contract-unit.py
 
+      - name: Run role-specific lifecycle signing tests
+        run: python3 -m unittest tests/secpal-lifecycle-role-signing-unit.py
+
       - name: Run finite skill policy tests
         run: bash tests/secpal-pr-review-skill-policy.sh
 

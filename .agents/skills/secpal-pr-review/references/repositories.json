@@ -86,6 +86,11 @@
           "purpose": "Run authenticated Ready/Draft lifecycle execution tests"
         },
         {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-lifecycle-role-signing-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run role-specific lifecycle signing tests"
+        },
+        {
           "argv": [
             "python3",
             "-m",
