@@ -5,6 +5,7 @@
 set -euo pipefail
 
 PR_BODY="${PR_BODY:-}"
+PR_DRAFT="${PR_DRAFT:-}"
 
 require_body() {
   if [ -z "${PR_BODY//[[:space:]]/}" ]; then
@@ -59,6 +60,11 @@ main() {
   local validate_first_reference
   local no_executable_change_reason
 
+  case "$PR_DRAFT" in
+    true|false) ;;
+    *) echo 'PR_DRAFT must be explicitly true (Draft) or false (Ready).' >&2; exit 1 ;;
+  esac
+
   require_body
   require_section
 
@@ -79,11 +85,14 @@ main() {
     exit 0
   fi
 
-  if ! is_empty_or_na "$failing_proof" && ! is_empty_or_na "$passing_proof"; then
-    exit 0
+  if ! is_empty_or_na "$failing_proof" || ! is_empty_or_na "$validate_first_reference"; then
+    if [ "$PR_DRAFT" = true ] || ! is_empty_or_na "$passing_proof"; then
+      exit 0
+    fi
   fi
 
   echo 'Replace the evidence placeholders with concrete proof or an explicit no-executable-change reason.' >&2
+  echo 'Executable Drafts require fail-first proof or an explicitly permitted validate-first exception reference; Ready PRs also require passing proof.' >&2
   exit 1
 }
 

@@ -5463,6 +5463,12 @@ assert 'covers the exact current Git tree' not in org_prompts[2]
 assert 'binds the current repository, exact HEAD and parent, Git tree' not in org_prompts[2]
 assert 'Run or re-run the touched checks' not in org_prompts[2]
 for row in prompt_rows:
+    for prompt in row[1:3]:
+        assert 'exact candidate PR body' in prompt
+        assert 'canonical local PR evidence validator' in prompt
+        assert 'intended Draft/Ready state' in prompt
+        assert 'Do not publish or edit the PR if validation fails.' in prompt
+        assert '--body-file' in prompt
     for prompt in row:
         assert 'Do not add AI agent attribution' in prompt
         assert 'generated-by text' in prompt

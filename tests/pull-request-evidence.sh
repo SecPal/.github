@@ -4,6 +4,8 @@
 
 set -euo pipefail
 
+export PR_DRAFT=false
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VALIDATOR="$REPO_ROOT/scripts/validate-pull-request-evidence.sh"
@@ -228,5 +230,55 @@ fi
 if ! grep -Fq 'Replace the evidence placeholders with concrete proof or an explicit no-executable-change reason.' "$quick_reference_log"; then
   cat "$quick_reference_log" >&2
   echo "Validator did not explain why quick-reference placeholder text is invalid evidence." >&2
+  exit 1
+fi
+
+failures=0
+assert_validation() {
+  local name="$1" draft="$2" expected="$3" body="$4" actual=0
+  PR_DRAFT="$draft" PR_BODY="$body" bash "$VALIDATOR" >"$TMP_DIR/case.log" 2>&1 || actual=$?
+  if [ "$actual" -ne "$expected" ]; then
+    printf 'FAIL: %s (expected %s, got %s)\n' "$name" "$expected" "$actual" >&2
+    cat "$TMP_DIR/case.log" >&2
+    failures=$((failures + 1))
+  else
+    printf 'PASS: %s\n' "$name"
+  fi
+}
+
+early_body="${positive_body/\`bash tests\/pull-request-evidence.sh\`$'\n'/N\/A$'\n'}"
+empty_body="$(printf '%s\n' "$early_body" | sed 's/^- Failing proof before implementation:.*/- Failing proof before implementation: N\/A/')"
+exception_body="${empty_body/Validate-first exception reference: N\/A/Validate-first exception reference: Fixture repository AGENTS.md, Validation Exceptions: validate-first explicitly permitted for generated schema updates; schema validation selected before regeneration.}"
+ready_exception_body="${exception_body/Passing proof after implementation: N\/A/Passing proof after implementation: schema validation passed after regeneration.}"
+passing_only_body="${empty_body/Passing proof after implementation: N\/A/Passing proof after implementation: schema validation passed.}"
+blank_body="${empty_body//N\/A/}"
+placeholder_exception_body="${exception_body/Validate-first exception reference: */Validate-first exception reference: REPLACE_WITH_VALIDATE_FIRST_REFERENCE}"
+
+for draft in true false; do
+  assert_validation "$draft missing body" "$draft" 1 ''
+  assert_validation "$draft missing section" "$draft" 1 "$missing_section_body"
+  assert_validation "$draft placeholders" "$draft" 1 "$placeholder_body"
+  assert_validation "$draft empty executable evidence" "$draft" 1 "$empty_body"
+  assert_validation "$draft blank executable evidence" "$draft" 1 "$blank_body"
+  assert_validation "$draft passing without fail-first or exception" "$draft" 1 "$passing_only_body"
+  assert_validation "$draft placeholder exception" "$draft" 1 "$placeholder_exception_body"
+  assert_validation "$draft unsupported validate-first default" "$draft" 1 "$template_default_body"
+  assert_validation "$draft no executable change" "$draft" 0 "$docs_only_body"
+  assert_validation "$draft complete fail-first" "$draft" 0 "$positive_body"
+  assert_validation "$draft complete validate-first" "$draft" 0 "$ready_exception_body"
+done
+assert_validation 'Draft fail-first without passing proof' true 0 "$early_body"
+assert_validation 'Draft explicit validate-first without passing proof' true 0 "$exception_body"
+assert_validation 'Ready fail-first without passing proof' false 1 "$early_body"
+assert_validation 'Ready validate-first without passing proof' false 1 "$exception_body"
+assert_validation 'missing lifecycle' '' 1 "$positive_body"
+assert_validation 'invalid lifecycle' draft 1 "$positive_body"
+
+if [ "$failures" -ne 0 ]; then
+  exit 1
+fi
+
+if ! grep -Fq "PR_DRAFT: \${{ github.event.pull_request.draft }}" "$WORKFLOW"; then
+  echo 'Workflow must pass the actual Draft state as data.' >&2
   exit 1
 fi

@@ -33,4 +33,5 @@ jobs:
       - name: Validate pull request evidence section
         env:
           PR_BODY: ${{ github.event.pull_request.body || '' }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
         run: bash scripts/validate-pull-request-evidence.sh

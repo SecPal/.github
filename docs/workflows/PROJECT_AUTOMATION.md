@@ -100,7 +100,10 @@ For incremental development and self-review:
 # 1. Start work - create draft PR
 tmpfile=$(mktemp "${TMPDIR:-/tmp}/pr-body.XXXXXX")
 trap 'rm -f "$tmpfile"' EXIT
-printf '%s\n' "Closes #123" > "$tmpfile"
+cp .github/pull_request_template.md "$tmpfile"
+# Fill in Closes #123 and concrete evidence; replace every placeholder (passing may be N/A in Draft).
+"${EDITOR:-vi}" "$tmpfile"
+PR_BODY="$(cat "$tmpfile")" PR_DRAFT=true bash scripts/validate-pull-request-evidence.sh && \
 gh pr create --draft \
   --title "WIP: Implement feature X" \
   --body-file "$tmpfile"

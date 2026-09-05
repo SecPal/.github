@@ -148,7 +148,12 @@ git push -u origin test-automation
 
 tmpfile=$(mktemp "${TMPDIR:-/tmp}/test-pr-body.XXXXXX")
 trap 'rm -f "$tmpfile"' EXIT
-printf 'Closes #%s\n' "$ISSUE" > "$tmpfile"
+cp .github/pull_request_template.md "$tmpfile"
+printf '\nCloses #%s\n' "$ISSUE" >> "$tmpfile"
+# Describe the test and replace every placeholder with evidence or an allowed N/A.
+# For this content-only test, give the explicit no-executable-change reason.
+"${EDITOR:-vi}" "$tmpfile"
+PR_BODY="$(cat "$tmpfile")" PR_DRAFT=true bash scripts/validate-pull-request-evidence.sh && \
 gh pr create \
   --repo SecPal/api \
   --draft \
