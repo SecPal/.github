@@ -63,6 +63,7 @@ const POLICY_KEYS = new Set([
   "discovery_dispositions",
   "expires_on",
   "manifest_rules",
+  "non_manifest_rules",
   "policy_version",
   "reviewed_on",
   "schema",
@@ -86,6 +87,15 @@ const CANDIDATE_RULE_KEYS = new Set([
   "id",
   "path_regex",
   "source_paths",
+]);
+const NON_MANIFEST_RULE_KEYS = new Set([
+  "authority",
+  "candidate_rule",
+  "case_insensitive",
+  "content_kind",
+  "id",
+  "justification",
+  "path_regex",
 ]);
 const DISCOVERY_DISPOSITION_KEYS = new Set(["justification", "mode", "source_paths"]);
 const UPSTREAM_KEYS = new Set([
@@ -365,6 +375,7 @@ function loadPolicy(filename) {
     "expires_on",
     "supported_config_ecosystems",
     "manifest_rules",
+    "non_manifest_rules",
     "upstream",
     "candidate_rules",
   ]) {
@@ -444,17 +455,22 @@ function loadPolicy(filename) {
       throw new ContractError("POLICY_ERROR", `invalid discovery disposition for ${ecosystem}`);
   }
   const ids = new Set();
-  for (const [kind, rules] of [
-    ["manifest", policy.manifest_rules],
-    ["candidate", policy.candidate_rules],
+  for (const [kind, propertyKey, rules] of [
+    ["manifest", "manifest_rules", policy.manifest_rules],
+    ["candidate", "candidate_rules", policy.candidate_rules],
+    ["non-manifest", "non_manifest_rules", policy.non_manifest_rules],
   ]) {
-    if (!Array.isArray(rules))
-      throw new ContractError("POLICY_ERROR", `${kind}_rules must be an array`);
+    if (!Array.isArray(rules) || (kind === "non-manifest" && !rules.length))
+      throw new ContractError("POLICY_ERROR", `${propertyKey} must be an array`);
     for (const rule of rules) {
       closedKeys(
         rule,
-        kind === "manifest" ? MANIFEST_RULE_KEYS : CANDIDATE_RULE_KEYS,
-        `policy.${kind}_rules`
+        kind === "manifest"
+          ? MANIFEST_RULE_KEYS
+          : kind === "candidate"
+            ? CANDIDATE_RULE_KEYS
+            : NON_MANIFEST_RULE_KEYS,
+        `policy.${propertyKey}`
       );
       if (!rule.id || ids.has(rule.id))
         throw new ContractError("POLICY_ERROR", `invalid duplicate rule id ${rule.id}`);
@@ -474,14 +490,37 @@ function loadPolicy(filename) {
         rule.source_paths.length &&
         rule.source_paths.every((source) => provenance.has(source));
       const policyBackstop = kind === "candidate" && rule.authority === "secpal-review-backstop";
-      if (!validSources && !policyBackstop)
-        throw new ContractError("POLICY_ERROR", `${kind} rule ${rule.id} lacks valid authority`);
+      const policyNonManifest =
+        kind === "non-manifest" &&
+        rule.authority === "secpal-reviewed-non-manifest" &&
+        typeof rule.candidate_rule === "string" &&
+        rule.content_kind === "spdx-json-document" &&
+        (!Object.hasOwn(rule, "case_insensitive") || typeof rule.case_insensitive === "boolean") &&
+        typeof rule.justification === "string" &&
+        rule.justification.length >= 40 &&
+        rule.justification.length <= 500;
+      if (!validSources && !policyBackstop && !policyNonManifest)
+        throw new ContractError(
+          "POLICY_ERROR",
+          `policy.${propertyKey} rule ${rule.id} lacks valid authority`
+        );
       try {
         rule.compiled = new RegExp(rule.path_regex, rule.case_insensitive ? "i" : "");
       } catch (error) {
-        throw new ContractError("POLICY_ERROR", `invalid rule ${rule.id}: ${error.message}`);
+        throw new ContractError(
+          "POLICY_ERROR",
+          `invalid policy.${propertyKey} rule ${rule.id}: ${error.message}`
+        );
       }
     }
+  }
+  const candidateRuleIds = new Set(policy.candidate_rules.map((rule) => rule.id));
+  for (const rule of policy.non_manifest_rules) {
+    if (!candidateRuleIds.has(rule.candidate_rule))
+      throw new ContractError(
+        "POLICY_ERROR",
+        `policy.non_manifest_rules rule ${rule.id} references unknown candidate rule ${rule.candidate_rule}`
+      );
   }
   for (const ecosystem of policy.supported_config_ecosystems) {
     const disposition = policy.discovery_dispositions[ecosystem];
@@ -703,6 +742,56 @@ function contentMatches(root, manifestPath, kind) {
       return false;
     }
   }
+  if (kind === "spdx-json-document") {
+    try {
+      const document = JSON.parse(source);
+      const plainObject = (value) => value && typeof value === "object" && !Array.isArray(value);
+      const nonEmptyString = (value) => typeof value === "string" && value.trim().length > 0;
+      const validUtcTimestamp = (value) => {
+        const match =
+          /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.\d+)?Z$/.exec(value);
+        if (!match) return false;
+        const parsed = new Date(value);
+        return (
+          !Number.isNaN(parsed.valueOf()) &&
+          parsed.getUTCFullYear() === Number(match[1]) &&
+          parsed.getUTCMonth() + 1 === Number(match[2]) &&
+          parsed.getUTCDate() === Number(match[3])
+        );
+      };
+      return (
+        plainObject(document) &&
+        document.spdxVersion === "SPDX-2.3" &&
+        document.SPDXID === "SPDXRef-DOCUMENT" &&
+        document.dataLicense === "CC0-1.0" &&
+        nonEmptyString(document.name) &&
+        nonEmptyString(document.documentNamespace) &&
+        plainObject(document.creationInfo) &&
+        validUtcTimestamp(document.creationInfo.created) &&
+        Array.isArray(document.creationInfo.creators) &&
+        document.creationInfo.creators.length > 0 &&
+        document.creationInfo.creators.every(nonEmptyString) &&
+        Array.isArray(document.packages) &&
+        document.packages.every(
+          (item) =>
+            plainObject(item) &&
+            nonEmptyString(item.SPDXID) &&
+            nonEmptyString(item.name) &&
+            nonEmptyString(item.downloadLocation)
+        ) &&
+        Array.isArray(document.relationships) &&
+        document.relationships.every(
+          (item) =>
+            plainObject(item) &&
+            nonEmptyString(item.spdxElementId) &&
+            nonEmptyString(item.relationshipType) &&
+            nonEmptyString(item.relatedSpdxElement)
+        )
+      );
+    } catch {
+      return false;
+    }
+  }
   throw new ContractError("POLICY_ERROR", `unsupported content matcher ${kind}`);
 }
 
@@ -858,7 +947,12 @@ function discover(root, policy, reviewed) {
     const candidateRules = policy.candidate_rules.filter((rule) =>
       rule.compiled.test(manifestPath)
     );
-    if (!pathRules.length && !candidateRules.length) continue;
+    const nonManifestRules = policy.non_manifest_rules.filter(
+      (rule) =>
+        candidateRules.some((candidate) => candidate.id === rule.candidate_rule) &&
+        rule.compiled.test(manifestPath)
+    );
+    if (!pathRules.length && !candidateRules.length && !nonManifestRules.length) continue;
     let stat;
     try {
       stat = lstatSync(path.join(root, manifestPath));
@@ -889,6 +983,8 @@ function discover(root, policy, reviewed) {
     );
     if (!matchingRules.length) {
       if (!candidateRules.length) continue;
+      if (nonManifestRules.some((rule) => contentMatches(root, manifestPath, rule.content_kind)))
+        continue;
       diagnostics.push({
         candidate_rules: candidateRules.map((rule) => rule.id).sort(),
         code: "UNCLASSIFIED_MANIFEST_CANDIDATE",

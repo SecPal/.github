@@ -843,6 +843,8 @@ grep -Fq 'python3 -m unittest tests/secpal-resolve-fixed-threads-unit.py' "$QUAL
   || fail 'simple resolver unit tests are not enforced in CI'
 grep -Fq 'python3 -m unittest tests/secpal-lifecycle-orchestration-unit.py' "$QUALITY_WORKFLOW" \
   || fail 'finite lifecycle-orchestration unit tests are not enforced in CI'
+grep -Fq 'python3 -m unittest tests/secpal-lifecycle-execution-contract-unit.py' "$QUALITY_WORKFLOW" \
+  || fail 'lifecycle execution unit tests are not enforced in CI'
 grep -Fq 'bash tests/secpal-pr-review-skill-policy.sh' "$QUALITY_WORKFLOW" \
   || fail 'skill policy tests are not enforced in CI'
 grep -Fq 'bash tests/secpal-pr-review-skill-integration.sh' "$QUALITY_WORKFLOW" \
@@ -853,6 +855,8 @@ grep -Fq 'tests/secpal-resolve-fixed-threads-unit.py' "$REGISTRY" \
   || fail 'simple resolver unit tests are not registered'
 grep -Fq 'tests/secpal-lifecycle-orchestration-unit.py' "$REGISTRY" \
   || fail 'finite lifecycle-orchestration unit tests are not registered'
+grep -Fq 'tests/secpal-lifecycle-execution-contract-unit.py' "$REGISTRY" \
+  || fail 'lifecycle execution unit tests are not registered'
 
 protected_paths=(
   "$REPO_ROOT"/.github/workflows/*-review-memory.yml
@@ -941,6 +945,68 @@ assert publication_policy["bootstrap_genesis_repairs"] == [{
     "enrollment_publication_oid": "0bb379a9af38bb14a49c651104d31149bb6c7f18",
     "enrollment_publication_digest": "44fb6c570d4e875f2655e363bfe667107d69d37eedf62487bbf4551cf9288a9d",
 }]
+assert publication_policy["bootstrap_source_admissions"] == [{
+    "schema_version": "1.0",
+    "kind": "BOOTSTRAP_SOURCE_ADMISSION",
+    "subtype": "FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE",
+    "repository": "SecPal/.github",
+    "delivery_issue": 810,
+    "pull_request": 812,
+    "source_head_sha": "a668f6642ffcc76bcbea7fa6b69c5d6198ef5868",
+    "source_tree_sha": "13987395e5bdbeb586effb08e6a6f0ed5082a383",
+    "source_parent_sha": "6487001f57f6223f6502bacf953d9ad90d37a880",
+    "validation_receipt_digest": "83ef66b94d46d862b728a55ebb3affd4d8231ea70f8bf09c0c0aabcbdc7a63cc",
+    "final_attestation_digest": "a6ed34cbf05647e1c7cce4a9435e3f0f17e5d918f9e344763f6d8fbc9ac4e102",
+    "source_signer_identity": "aroviqen@secpal.app",
+    "implementation_path": "scripts/secpal_pr_review/lifecycle_execution.py",
+    "entrypoint": "execute_lifecycle_transition",
+    "purpose": "FIRST_READY_EXECUTOR_BOOTSTRAP",
+    "source_pr_state": "OPEN",
+    "source_pr_draft": True,
+    "source_base_ref": "main",
+    "admission_digest": "dde958066ab287feefdc88e9bf2e92aa3b6df390d7c713be3486f719da9956b4",
+    "evidence_loss_recovery": {
+        "schema_version": "1.0",
+        "kind": "BOOTSTRAP_SOURCE_EVIDENCE_LOSS_RECOVERY",
+        "historical_evidence_status": (
+            "HISTORICAL_EVIDENCE_UNAVAILABLE_BUT_EXACT_RECOVERY_AUTHORIZED"
+        ),
+        "source_admission_digest": (
+            "dde958066ab287feefdc88e9bf2e92aa3b6df390d7c713be3486f719da9956b4"
+        ),
+        "recovery_validation": {
+            "kind": "EXACT_BOOTSTRAP_SOURCE_RECOVERY_VALIDATION",
+            "source_head_sha": "a668f6642ffcc76bcbea7fa6b69c5d6198ef5868",
+            "source_tree_sha": "13987395e5bdbeb586effb08e6a6f0ed5082a383",
+            "command_set_digest": (
+                "efa8f75050280fda50129a5861d139898c9c6350a28eeb3cd73e9c03d5fcd550"
+            ),
+            "result": "PASSED",
+            "validation_digest": (
+                "fd5f4c5ed116c38b9dec715e186cc54aacfe2a6c3da3a441e3c48a99e4722fa4"
+            ),
+        },
+        "technical_security_gate": {
+            "kind": "BOOTSTRAP_SOURCE_RECOVERY_TECHNICAL_SECURITY_GATE",
+            "source_head_sha": "a668f6642ffcc76bcbea7fa6b69c5d6198ef5868",
+            "source_tree_sha": "13987395e5bdbeb586effb08e6a6f0ed5082a383",
+            "review_scope": "EXACT_IMMUTABLE_BOOTSTRAP_EXECUTOR",
+            "feedback_inventory_digest": (
+                "d2236120f769caa74d5da0435330c103a036dfe68a5e0f8274d43a3916ca8f2b"
+            ),
+            "resolved_review_thread_count": 2,
+            "conversation_comment_count": 0,
+            "review_decision": "NONE",
+            "result": "NO_OPEN_TECHNICAL_OR_SECURITY_FINDINGS",
+            "gate_digest": (
+                "4f6a73e91475e8464c4583ac7818c57e5ce19953f54143a359e231ec3a9714b6"
+            ),
+        },
+        "recovery_digest": (
+            "64beea5b886119b8578c01df152992df22f56fdabba80109d589060c40e6b37d"
+        ),
+    },
+}]
 assert publication_policy["historical_compatibility_publications"] == [
     {
         "repository": "SecPal/.github",
@@ -1016,8 +1082,10 @@ assert [
     ["python3", "-m", "unittest", "tests/secpal-resolve-fixed-threads-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-pr-review-actions-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-authority-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-bootstrap-source-admission-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-publication-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-orchestration-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-lifecycle-execution-contract-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-exceptional-recovery-authority-unit.py"],
     ["./tests/secpal-pr-review-skill-policy.sh"],
     ["./tests/secpal-pr-review-skill-integration.sh"],

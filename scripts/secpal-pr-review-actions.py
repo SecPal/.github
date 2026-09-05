@@ -1483,7 +1483,7 @@ query CurrentReviewFeedback(
 ) {
   repository(owner:$owner, name:$name) {
     pullRequest(number:$number) {
-      id headRefOid baseRefName baseRefOid state
+      id headRefOid baseRefName baseRefOid state reviewDecision
       reactions(first:100) {
         nodes { id databaseId content user { id databaseId login } }
         pageInfo { hasNextPage }
@@ -2028,6 +2028,8 @@ class LiveGitHub:
                     or pull_request.get("baseRefName") != initial_pull_request.get("baseRefName")
                     or pull_request.get("baseRefOid") != initial_pull_request.get("baseRefOid")
                     or pull_request.get("state") != initial_pull_request.get("state")
+                    or pull_request.get("reviewDecision")
+                    != initial_pull_request.get("reviewDecision")
                     or pull_request.get("reactions")
                     != initial_pull_request.get("reactions")
                     or any(
@@ -2104,6 +2106,7 @@ class LiveGitHub:
             "base_ref": pull_request.get("baseRefName"),
             "base_sha": pull_request.get("baseRefOid"),
             "pr_state": pull_request.get("state"),
+            "review_decision": pull_request.get("reviewDecision"),
             "feedback": {
                 "pull_request_reactions": _live_reactions(
                     pull_request.get("reactions"), "pull-request reactions"
@@ -3038,13 +3041,17 @@ class FastPathGateway:
             ),
         }
 
-    def capture_stable_feedback(self, repository: str, pull_request_number: int) -> Any:
+    def observe_stable_feedback(
+        self, repository: str, pull_request_number: int
+    ) -> dict[str, Any]:
+        """Return one bounded complete feedback representation without admission."""
+
         try:
             if self.registry_entry.get("repository") != repository:
                 raise fast_path.SecurityBlocker(
                     "selected feedback registry repository does not match the request"
                 )
-            result = self.github._read_current_feedback_once(
+            return self.github._read_current_feedback_once(
                 {"repository": repository, "pull_request_number": pull_request_number},
                 self.registry_entry,
                 {"calls": 0},
@@ -3053,6 +3060,9 @@ class FastPathGateway:
             raise fast_path.TransientReadFailure(str(exc)) from exc
         except (MutationBlocked, RegistryError) as exc:
             raise fast_path.SecurityBlocker(str(exc)) from exc
+
+    def capture_stable_feedback(self, repository: str, pull_request_number: int) -> Any:
+        result = self.observe_stable_feedback(repository, pull_request_number)
         return fast_path.StableFeedbackState.from_payload(
             {
                 "repository": repository,

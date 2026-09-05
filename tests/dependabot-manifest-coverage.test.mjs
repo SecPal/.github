@@ -435,12 +435,90 @@ test("unknown manifest candidates and stale knowledge fail closed", () => {
   const root = repository({
     ".github/dependabot.yml": "version: 2\nupdates: []\n",
     "dependencies.future": "future-package == 1\n",
+    "dependencies.notspdx.json": "{}\n",
+    "dependencies.spdx.json": "{}\n",
+    "dependencies.txt": "dependency inventory without a requirement record\n",
+    "dependencies.yaml": "inventory: []\n",
+    "dependency-manifest.future": "future-package == 1\n",
   });
-  assert.equal(run(root).report.diagnostics[0].code, "UNCLASSIFIED_MANIFEST_CANDIDATE");
+  const candidates = run(root).report.diagnostics.filter(
+    (item) => item.code === "UNCLASSIFIED_MANIFEST_CANDIDATE"
+  );
+  assert.deepEqual(
+    candidates.map((item) => item.manifest_path),
+    [
+      "dependencies.future",
+      "dependencies.notspdx.json",
+      "dependencies.spdx.json",
+      "dependencies.txt",
+      "dependencies.yaml",
+      "dependency-manifest.future",
+    ]
+  );
   const stale = run(root, "coverage", ["--as-of", "2026-12-02"]);
   assert.ok(stale.report.diagnostics.some((item) => item.code === "CATALOG_STALE"));
   const premature = run(root, "coverage", ["--as-of", "2026-09-01"]);
   assert.ok(premature.report.diagnostics.some((item) => item.code === "CATALOG_NOT_YET_REVIEWED"));
+});
+
+test("known SPDX dependency inventory is not a manifest candidate", () => {
+  const inventoryDocument = {
+    SPDXID: "SPDXRef-DOCUMENT",
+    creationInfo: { created: "2026-09-02T00:00:00Z", creators: ["Tool: fixture"] },
+    dataLicense: "CC0-1.0",
+    documentNamespace: "https://spdx.example.test/documents/dependencies",
+    name: "Dependency inventory",
+    packages: [
+      {
+        SPDXID: "SPDXRef-Package-example",
+        downloadLocation: "NOASSERTION",
+        name: "example",
+      },
+    ],
+    relationships: [
+      {
+        relatedSpdxElement: "SPDXRef-Package-example",
+        relationshipType: "DESCRIBES",
+        spdxElementId: "SPDXRef-DOCUMENT",
+      },
+    ],
+    spdxVersion: "SPDX-2.3",
+  };
+  const inventory = `${JSON.stringify(inventoryDocument)}\n`;
+  const root = repository({
+    ".github/dependabot.yml": "version: 2\nupdates: []\n",
+    "dependencies.spdx.json": inventory,
+  });
+  const { report } = run(root);
+  assert.equal(report.status, "PASS");
+  assert.deepEqual(report.manifests, []);
+  assert.deepEqual(report.diagnostics, []);
+
+  const uppercase = repository({
+    ".github/dependabot.yml": "version: 2\nupdates: []\n",
+    "dependencies.SPDX.json": inventory,
+  });
+  assert.equal(run(uppercase).report.diagnostics[0].code, "UNCLASSIFIED_MANIFEST_CANDIDATE");
+
+  for (const mutate of [
+    (document) => delete document.name,
+    (document) => (document.creationInfo = {}),
+    (document) => delete document.creationInfo.created,
+    (document) => (document.creationInfo.created = "2026-02-30T00:00:00Z"),
+    (document) => delete document.creationInfo.creators,
+    (document) => (document.creationInfo.creators = [" "]),
+    (document) => (document.packages = [{}]),
+    (document) => delete document.packages[0].downloadLocation,
+    (document) => (document.relationships = [{}]),
+  ]) {
+    const malformedDocument = structuredClone(inventoryDocument);
+    mutate(malformedDocument);
+    const malformed = repository({
+      ".github/dependabot.yml": "version: 2\nupdates: []\n",
+      "dependencies.spdx.json": `${JSON.stringify(malformedDocument)}\n`,
+    });
+    assert.equal(run(malformed).report.diagnostics[0].code, "UNCLASSIFIED_MANIFEST_CANDIDATE");
+  }
 });
 
 test("tracked manifest symlinks fail closed", () => {
@@ -1045,6 +1123,9 @@ test("catalog discovery dispositions and rule provenance are complete", () => {
   for (const mutate of [
     (policy) => delete policy.discovery_dispositions[policy.supported_config_ecosystems[0]],
     (policy) => delete policy.manifest_rules[0].source_paths,
+    (policy) => delete policy.non_manifest_rules[0].content_kind,
+    (policy) => (policy.non_manifest_rules[0].candidate_rule = "missing-candidate-rule"),
+    (policy) => (policy.non_manifest_rules[0].case_insensitive = "false"),
     (policy) => delete policy.behavior_provenance.cargo_workspace,
     (policy) => (policy.reviewed_on = "2026-99-99"),
   ]) {
@@ -1060,6 +1141,20 @@ test("catalog discovery dispositions and rule provenance are complete", () => {
       "POLICY_ERROR"
     );
   }
+
+  const malformedNonManifestRule = structuredClone(original);
+  delete malformedNonManifestRule.non_manifest_rules[0].content_kind;
+  const malformedRoot = repository({
+    ".github/dependabot.yml": "version: 2\nupdates: []\n",
+    "policy.json": `${JSON.stringify(malformedNonManifestRule)}\n`,
+  });
+  const diagnostic = run(malformedRoot, "coverage", [
+    "--policy",
+    path.join(malformedRoot, "policy.json"),
+  ]).report.diagnostics[0];
+  assert.equal(diagnostic.code, "POLICY_ERROR");
+  assert.match(diagnostic.reason, /policy\.non_manifest_rules/);
+  assert.doesNotMatch(diagnostic.reason, /non-manifest_rules/);
 });
 
 for (const [name, schedule, status] of [
