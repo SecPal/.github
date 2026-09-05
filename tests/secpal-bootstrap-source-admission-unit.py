@@ -1602,28 +1602,32 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
             ]
             if item["subtype"] == EVIDENCE_HELPER_SUBTYPE
         )
-        admission["source_pr_draft"] = False
-        admission["admission_digest"] = source.authority.digest_json(
-            {
-                key: value
-                for key, value in admission.items()
-                if key != "admission_digest"
-            }
-        )
-
-        with tempfile.TemporaryDirectory() as directory:
-            candidate_registry = Path(directory) / "repositories.json"
-            candidate_registry.write_text(json.dumps(registry), encoding="utf-8")
-            with mock.patch.object(
-                source.authority, "_TRUST_REGISTRY", candidate_registry
-            ):
-                trust = source.authority._load_lifecycle_trust_policy(REPOSITORY)
-            ready_policy = next(
-                item
-                for item in trust.bootstrap_source_admissions
-                if item.subtype == EVIDENCE_HELPER_SUBTYPE
+        for expected_draft in (False, True):
+            admission["source_pr_draft"] = expected_draft
+            admission["admission_digest"] = source.authority.digest_json(
+                {
+                    key: value
+                    for key, value in admission.items()
+                    if key != "admission_digest"
+                }
             )
-            self.assertIs(ready_policy.source_pr_draft, False)
+
+            with (
+                self.subTest(expected_draft=expected_draft),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                candidate_registry = Path(directory) / "repositories.json"
+                candidate_registry.write_text(json.dumps(registry), encoding="utf-8")
+                with mock.patch.object(
+                    source.authority, "_TRUST_REGISTRY", candidate_registry
+                ):
+                    trust = source.authority._load_lifecycle_trust_policy(REPOSITORY)
+                exact_policy = next(
+                    item
+                    for item in trust.bootstrap_source_admissions
+                    if item.subtype == EVIDENCE_HELPER_SUBTYPE
+                )
+                self.assertIs(exact_policy.source_pr_draft, expected_draft)
 
         admission["source_pr_draft"] = 0
         admission["admission_digest"] = source.authority.digest_json(
