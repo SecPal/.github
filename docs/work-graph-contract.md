@@ -502,7 +502,69 @@ plus the acceptance criteria that falsify it.
   closed by the closure procedure in section 6.3, because keyword closure skips
   the closure evidence that procedure exists to produce.
 
-### 5.3 After The Primary Pull Request Merges
+### 5.3 Delivery PR lifecycle
+
+Every new SecPal delivery pull request MUST be created as Draft. An agent MUST
+NOT create a new delivery pull request directly in Ready state. Direct-Ready
+creation is a lifecycle violation and is NOT equivalent to the one authorized
+`Draft -> Ready` transition.
+
+The ordinary delivery lifecycle is one finite sequence:
+
+```text
+CREATE_AS_DRAFT
+  -> PRE_READY
+  -> DRAFT_TO_READY exactly once
+  -> FINITE_REVIEW
+  -> OPTIONAL_SINGLE_REMEDIATION_COMMIT
+  -> MERGE
+```
+
+`PRE_READY` includes the validation and delivery gates required by the owning
+repository and the current operator instruction. Only an explicit operator
+authorization after those gates permits the ordinary, exactly one
+`Draft -> Ready` transition. A workflow-specific authority may perform that
+transition only when the canonical SecPal lifecycle already delegates it; a
+generic implementation, commit, push, check result, or review event supplies no
+such authority.
+
+The lifecycle admits these sequences:
+
+```text
+NEW -> DRAFT -> READY -> MERGED
+NEW -> DRAFT -> READY -> REVIEW -> OPTIONAL_SINGLE_REMEDIATION_COMMIT -> READY -> MERGED
+```
+
+It rejects these sequences:
+
+```text
+NEW -> READY                                      invalid: direct Ready creation
+DRAFT -> READY -> DRAFT -> READY                  invalid: ordinary or unauthorized Ready/Draft churn
+READY -> REVIEW -> OPTIONAL_SINGLE_REMEDIATION_COMMIT -> NEW REVIEW REQUEST
+                                                  invalid: recursive review
+```
+
+Ready is monotonic after the first authorized transition during the ordinary
+lifecycle. Ordinary remediation, CI, findings, metadata changes, feedback, or
+recovery do not return the pull request to Draft or authorize another review
+cycle. The only exception is an exact `Ready -> Draft` transition that the
+current operator explicitly authorizes for an independently stated reason. A
+later `Draft -> Ready` transition requires its own explicit operator
+authorization. This bounded exception preserves the same lifecycle and does
+not permit ordinary or unauthorized Ready/Draft churn.
+
+Finite-review authority remains distinct from readiness authority: a new commit
+does not authorize another review, remediation produces no new review request,
+and `Draft -> Ready` does not create an unbounded review lifecycle.
+Explicit operator interruption, including a stop, pause, prohibition, or scope
+narrowing, supersedes any pending delivery or delegated action.
+
+Creation tools and agent instructions MUST carry this semantic rule at their
+effective boundary. When a caller uses a command whose default creates a Ready
+pull request, it MUST explicitly select Draft creation; command syntax is an
+enforcement detail, not a second source of lifecycle authority.
+
+### 5.4 After The Primary Pull Request Merges
 
 Once the primary pull request merges, the leaf is `DONE` and stops being a
 container for further work:

@@ -386,6 +386,13 @@ python3 tests/evidence-architecture-governance.py || {
   exit 1
 }
 
+python3 tests/delivery-lifecycle-governance.py || {
+  echo "" >&2
+  echo "❌ Delivery lifecycle governance regression test failed!" >&2
+  echo "Keep every SecPal delivery PR path Draft-first and preserve the finite Ready/review lifecycle." >&2
+  exit 1
+}
+
 run_postgresql_18_baseline_governance
 
 if [ -f tests/sync-required-checks.sh ]; then
