@@ -458,28 +458,35 @@ def _policy_role_signer(
             root = Path(directory)
             artifact = root / "payload"
             artifact.write_bytes(payload)
-            if signature_format == "ssh":
-                executable = late_disposition._trusted_executable("ssh-keygen")
-                completed = late_disposition._run_signature_command(
-                    executable,
-                    ("-Y", "sign", "-f", signing_key, "-n", domain, str(artifact)),
-                    environment=environment,
-                )
-                signature_path = Path(f"{artifact}.sig")
-            elif signature_format == "openpgp":
-                executable = late_disposition._trusted_executable("gpg")
-                signature_path = root / "payload.asc"
-                completed = late_disposition._run_signature_command(
-                    executable,
-                    (
-                        "--batch", "--no-tty", "--armor", "--local-user",
-                        signing_key, "--output", str(signature_path),
-                        "--detach-sign", str(artifact),
-                    ),
-                    environment=environment,
-                )
-            else:
-                raise LifecycleExecutionError("maintained signature format is unsupported")
+            try:
+                if signature_format == "ssh":
+                    executable = late_disposition._trusted_executable("ssh-keygen")
+                    completed = late_disposition._run_signature_command(
+                        executable,
+                        ("-Y", "sign", "-f", signing_key, "-n", domain, str(artifact)),
+                        environment=environment,
+                    )
+                    signature_path = Path(f"{artifact}.sig")
+                elif signature_format == "openpgp":
+                    executable = late_disposition._trusted_executable("gpg")
+                    signature_path = root / "payload.asc"
+                    completed = late_disposition._run_signature_command(
+                        executable,
+                        (
+                            "--batch", "--no-tty", "--armor", "--local-user",
+                            signing_key, "--output", str(signature_path),
+                            "--detach-sign", str(artifact),
+                        ),
+                        environment=environment,
+                    )
+                else:
+                    raise LifecycleExecutionError(
+                        "maintained signature format is unsupported"
+                    )
+            except late_disposition.LateDispositionError as exc:
+                raise LifecycleExecutionError(
+                    "maintained lifecycle credential is unusable"
+                ) from exc
             try:
                 signature = signature_path.read_text(encoding="utf-8")
             except OSError as exc:

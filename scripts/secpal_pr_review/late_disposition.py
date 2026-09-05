@@ -368,6 +368,7 @@ def _run_signature_command_without_input(
         stdin=subprocess.DEVNULL,
         capture_output=True,
         env=environment,
+        start_new_session=True,
         timeout=30,
     )
 
@@ -384,6 +385,7 @@ def _run_signature_command_with_input(
         input=stdin,
         capture_output=True,
         env=environment,
+        start_new_session=True,
         timeout=30,
     )
 

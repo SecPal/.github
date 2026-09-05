@@ -5,13 +5,18 @@
 
 from __future__ import annotations
 
+import errno
 import inspect
 import json
 import os
 from pathlib import Path
+import select
+import signal
 import subprocess
 import sys
 import tempfile
+import termios
+import time
 from unittest import TestCase, main, mock
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -25,11 +30,21 @@ REPOSITORY = "SecPal/.github"
 ROUTINE = "routine@secpal.app"
 LEGACY_ADOPTION = "legacy-adoption@secpal.app"
 DOMAIN = "secpal-role-signing-regression-v1"
+TEST_PASSPHRASE = "temporary-role-signing-passphrase"
 
 
-def generate_ssh_credential(path: Path) -> str:
+def generate_ssh_credential(path: Path, passphrase: str = "") -> str:
     subprocess.run(
-        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(path)],
+        [
+            "ssh-keygen",
+            "-q",
+            "-t",
+            "ed25519",
+            "-N",
+            passphrase,
+            "-f",
+            str(path),
+        ],
         check=True,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -116,6 +131,59 @@ class RoleSpecificLifecycleSigningTests(TestCase):
         return authority._policy_signature_verifier(self.policy)(
             payload, signature, identity, DOMAIN
         )
+
+    def run_with_controlling_terminal(
+        self, signer: authority.Signer
+    ) -> tuple[bytes, bool]:
+        child, terminal = os.forkpty()
+        if child == 0:
+            try:
+                signer(b"encrypted credential\n", DOMAIN)
+            except BaseException as exc:
+                result = (
+                    f"SIGNING_FAILED:{type(exc).__name__}:{exc}\n".encode()
+                )
+            else:
+                result = b"SIGNATURE_PRODUCED\n"
+            os.write(1, result)
+            os._exit(0)
+
+        attributes = termios.tcgetattr(terminal)
+        attributes[3] &= ~termios.ECHO
+        termios.tcsetattr(terminal, termios.TCSANOW, attributes)
+        output = bytearray()
+        passphrase_supplied = False
+        child_reaped = False
+        deadline = time.monotonic() + 5
+        try:
+            while time.monotonic() < deadline:
+                readable, _, _ = select.select([terminal], [], [], 0.1)
+                if readable:
+                    try:
+                        chunk = os.read(terminal, 4096)
+                    except OSError as exc:
+                        if exc.errno != errno.EIO:
+                            raise
+                        chunk = b""
+                    output.extend(chunk)
+                    if (
+                        b"Enter passphrase" in output
+                        and not passphrase_supplied
+                    ):
+                        os.write(terminal, f"{TEST_PASSPHRASE}\n".encode())
+                        passphrase_supplied = True
+                waited, _status = os.waitpid(child, os.WNOHANG)
+                if waited == child:
+                    child_reaped = True
+                    break
+            if not child_reaped:
+                raise AssertionError("signing child did not terminate promptly")
+        finally:
+            if not child_reaped:
+                os.kill(child, signal.SIGKILL)
+                os.waitpid(child, 0)
+            os.close(terminal)
+        return bytes(output), passphrase_supplied
 
     def test_routine_role_preserves_compatible_global_default(self) -> None:
         policy_patch, home_patch = self.policy_context()
@@ -230,6 +298,50 @@ class RoleSpecificLifecycleSigningTests(TestCase):
             execution.LifecycleExecutionError, "credential is unusable"
         ):
             signer(b"unusable credential\n", DOMAIN)
+
+    def test_signing_command_timeout_is_credential_unusable(self) -> None:
+        self.add_mapping(LEGACY_ADOPTION, str(self.legacy_key))
+        _identity, signer = self.legacy_signer()
+        with mock.patch.object(
+            execution.late_disposition,
+            "_run_signature_command",
+            side_effect=execution.late_disposition.LateDispositionError(
+                "signature command is unavailable"
+            ),
+        ), self.assertRaisesRegex(
+            execution.LifecycleExecutionError, "credential is unusable"
+        ):
+            signer(b"timed out credential\n", DOMAIN)
+
+    def test_encrypted_credential_cannot_use_controlling_terminal(self) -> None:
+        encrypted_key = self.home / "encrypted"
+        encrypted_public = generate_ssh_credential(
+            encrypted_key, TEST_PASSPHRASE
+        )
+        self.policy = authority.LifecycleTrustPolicy(
+            **{
+                **self.policy.__dict__,
+                "signers": {
+                    **self.policy.signers,
+                    LEGACY_ADOPTION: authority.TrustedSigner(
+                        LEGACY_ADOPTION, (encrypted_public,), ()
+                    ),
+                },
+            }
+        )
+        self.add_mapping(LEGACY_ADOPTION, str(encrypted_key))
+        _identity, signer = self.legacy_signer()
+
+        output, passphrase_supplied = self.run_with_controlling_terminal(signer)
+
+        self.assertFalse(passphrase_supplied, output)
+        self.assertNotIn(b"Enter passphrase", output)
+        self.assertNotIn(b"SIGNATURE_PRODUCED", output)
+        self.assertIn(
+            b"SIGNING_FAILED:LifecycleExecutionError:"
+            b"maintained lifecycle credential is unusable",
+            output,
+        )
 
     def test_production_bridge_accepts_no_identity_or_key_path(self) -> None:
         self.assertEqual(
