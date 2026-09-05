@@ -46,11 +46,22 @@ gh issue create \
 
 ### Draft PR Workflow (Recommended)
 
+Before programmatic creation or body editing, materialize the exact candidate PR
+body using the effective repository template and evidence contract. Replace every
+placeholder with actual evidence or an allowed `N/A`, then run all available local
+PR-body validators. A failed validation blocks publication; send the same validated
+file with `--body-file`, without modifying it between validation and publication.
+The canonical validator takes `PR_BODY` and an explicit `PR_DRAFT=true` (Draft) or
+`PR_DRAFT=false` (Ready); lifecycle is never inferred from body prose.
+
 ```bash
 # 1. Create draft PR (→ In Progress)
 tmpfile=$(mktemp "${TMPDIR:-/tmp}/pr-body.XXXXXX")
 trap 'rm -f "$tmpfile"' EXIT
-printf '%s\n' "Closes #123" > "$tmpfile"
+cp .github/pull_request_template.md "$tmpfile"
+# Fill in Closes #123 and concrete evidence; replace every placeholder (passing may be N/A in Draft).
+"${EDITOR:-vi}" "$tmpfile"
+PR_BODY="$(cat "$tmpfile")" PR_DRAFT=true bash scripts/validate-pull-request-evidence.sh && \
 gh pr create --draft \
   --title "WIP: Feature X" \
   --body-file "$tmpfile"
@@ -114,11 +125,26 @@ Resolves #789
 
 Use the validate-first exception only when the repository instructions explicitly allow validate-first.
 Use the no-executable-change reason only for docs/content/template-only PRs.
+Drafts require concrete fail-first proof or an explicitly permitted validate-first exception reference;
+passing proof may be N/A. Ready executable PRs also require concrete passing proof.
 
 ## Checklist
 
 - [ ] Code follows style guide
 - [ ] Documentation updated
+```
+
+For body edits, fetch the current body into a candidate file, edit it, then
+revalidate against the intended state before publishing. For example, for a PR
+that is and remains Draft:
+
+```bash
+tmpfile=$(mktemp "${TMPDIR:-/tmp}/pr-body.XXXXXX")
+trap 'rm -f "$tmpfile"' EXIT
+gh pr view 456 --json body --jq .body > "$tmpfile"
+"${EDITOR:-vi}" "$tmpfile"
+PR_BODY="$(cat "$tmpfile")" PR_DRAFT=true bash scripts/validate-pull-request-evidence.sh && \
+gh pr edit 456 --body-file "$tmpfile"
 ```
 
 ## 🔐 Policy Enforcement
@@ -151,7 +177,11 @@ git cherry-pick -x -S <commit-from-blocked-branch>
 git push -u origin replacement/topic
 tmpfile=$(mktemp "${TMPDIR:-/tmp}/replacement-pr-body.XXXXXX")
 trap 'rm -f "$tmpfile"' EXIT
-printf '%s\n' '## Description' '' 'Replacement PR for blocked unsigned history.' '' '## Related Pull Requests' '' 'Supersedes PR #123' > "$tmpfile"
+cp .github/pull_request_template.md "$tmpfile"
+printf '\n%s\n' '## Related Pull Requests' '' 'Supersedes PR #123' >> "$tmpfile"
+# Describe the replacement and linked issue; replace placeholders with evidence for this change.
+"${EDITOR:-vi}" "$tmpfile"
+PR_BODY="$(cat "$tmpfile")" PR_DRAFT=true bash scripts/validate-pull-request-evidence.sh && \
 gh pr create --draft --title "replacement title" --body-file "$tmpfile"
 ```
 
@@ -278,7 +308,10 @@ gh issue create --label "core-feature" --title "..."
 # 2. Start work (draft PR)
 tmpfile=$(mktemp "${TMPDIR:-/tmp}/pr-body.XXXXXX")
 trap 'rm -f "$tmpfile"' EXIT
-printf '%s\n' "Closes #123" > "$tmpfile"
+cp .github/pull_request_template.md "$tmpfile"
+# Fill in Closes #123 and concrete evidence; replace every placeholder (passing may be N/A in Draft).
+"${EDITOR:-vi}" "$tmpfile"
+PR_BODY="$(cat "$tmpfile")" PR_DRAFT=true bash scripts/validate-pull-request-evidence.sh && \
 gh pr create --draft --body-file "$tmpfile"
 # → Issue: 🚧 In Progress
 
