@@ -454,7 +454,23 @@ class LifecyclePublicationTests(TestCase):
                 "pull_request_reactions": [],
                 "reviews": [],
                 "conversation_comments": [],
-                "threads": [],
+                "threads": [{
+                    "node_id": "THREAD_RECOVERY",
+                    "is_resolved": True,
+                    "is_outdated": False,
+                    "comments": [{
+                        "node_id": "COMMENT_RECOVERY",
+                        "body_digest": hashlib.sha256(
+                            b"technically blocking authentication bypass"
+                        ).hexdigest(),
+                        "actor": {
+                            "login": "reviewer", "node_id": "ACTOR_RECOVERY",
+                            "database_id": 17,
+                        },
+                        "reply_to_id": None,
+                        "reactions": [],
+                    }],
+                }],
             },
         )
         registry = {
@@ -491,7 +507,8 @@ class LifecyclePublicationTests(TestCase):
                 "require_github_verified": True,
             },
         ):
-            safety = fast_path._verify_ready_source_recovery_safety(
+            safety = fast_path.derive_ready_source_recovery_safety_facts(
+                tooling_authority_main="f" * 40,
                 repository=REPOSITORY,
                 pull_request_number=PR,
                 head_sha=chain.head,
@@ -501,30 +518,143 @@ class LifecyclePublicationTests(TestCase):
                 expected_base_sha=HEADS[9],
                 reviewed_state=reviewed,
                 review_decision="APPROVED",
-                feedback_findings=[],
+                feedback_findings=[{
+                    "finding_id": "signed-resolved-safe-decision",
+                    "thread_id": "THREAD_RECOVERY",
+                    "sources": [{
+                        "kind": "THREAD_COMMENT",
+                        "node_id": "COMMENT_RECOVERY",
+                        "digest": reviewed.feedback["threads"][0]["comments"][0][
+                            "body_digest"
+                        ],
+                    }],
+                    "classification": "INFORMATIONAL",
+                    "disposition": "NON_ACTIONABLE",
+                    "evidence_digest": "8" * 64,
+                    "technically_blocking": False,
+                }],
                 fresh_validation_receipt=fresh_receipt,
                 registry=registry,
                 command_set=[],
             )
-        recovery = authority.create_ready_source_recovery_authorization(
-            current_lifecycle=enrolled.lifecycle,
-            current_publication_oid=enrolled.publication_oid,
-            current_publication_digest=enrolled.publication_digest,
-            safety_evidence=safety,
-            commit_signature_evidence=commit,
-            historical_validation_receipt_digest=(
-                chain.initialization["validation_receipt_digest"]
-            ),
-            historical_final_attestation_digest=(
-                chain.initialization["final_attestation_digest"]
-            ),
-            historical_evidence_loss_proof_digest="7" * 64,
-            authorization_id="ready-source-recovery-1",
-            bounded_uses=1,
-            expected_commit_signer={"kind": "SSH_PRINCIPAL", "identity": SIGNER},
-            signer_identity=SIGNER,
-            signer=signer_for(),
+        self.assertNotIn("signature", safety)
+        self.assertFalse(hasattr(fast_path, "is_verified_ready_source_recovery_safety"))
+        actions = load_actions()
+        entry = copy.deepcopy(actions.select_repository(
+            actions.load_registry(), REPOSITORY
+        ))
+        entry["manual_gates"] = []
+        observation = reviewed.to_dict()
+        observation["review_decision"] = "APPROVED"
+        gateway = SimpleNamespace(
+            observe_stable_feedback=lambda *_: observation
         )
+        with (
+            patch.object(
+                actions, "_attestation_local_state",
+                side_effect=[(chain.head, ""), (chain.head, "")],
+            ),
+            patch.object(
+                actions, "_run_attestation_git",
+                return_value=SimpleNamespace(stdout=HEADS[8]),
+            ),
+            patch.object(
+                actions, "_validated_commit_parent", return_value=HEADS[7]
+            ),
+            patch.object(
+                authority, "_load_delivery_signature_policy",
+                return_value={
+                    "accepted_formats": ["ssh"],
+                    "require_github_verified": True,
+                },
+            ),
+        ):
+            recovery = actions._issue_ready_source_recovery_authorization(
+                repository=REPOSITORY, delivery_issue=ISSUE,
+                pull_request_number=PR, expected_head_sha=chain.head,
+                repository_root=Path(self.directory.name),
+                feedback_findings=safety["feedback_findings"],
+                manual_gate_evidence=[], commit_signature_evidence=commit,
+                historical_validation_receipt_digest=(
+                    chain.initialization["validation_receipt_digest"]
+                ),
+                historical_final_attestation_digest=(
+                    chain.initialization["final_attestation_digest"]
+                ),
+                historical_evidence_loss_proof_digest="7" * 64,
+                authorization_id="ready-source-recovery-1",
+                expected_commit_signer={
+                    "kind": "SSH_PRINCIPAL", "identity": SIGNER,
+                },
+                signer_identity=SIGNER, signer=signer_for(),
+                _policy_loader=lambda _: ("f" * 40, entry),
+                _gateway_factory=lambda *_: gateway,
+                _validation_runner=lambda *_: actions.RegisteredValidationResult(),
+                _issuer_source_verifier=lambda _: None,
+                _current_lifecycle_loader=lambda *_: enrolled,
+                _authorization_factory=(
+                    authority._sign_ready_source_recovery_authorization
+                ),
+            )
+
+        with self.assertRaises((
+            authority.LifecycleAuthorityError,
+            publication.LifecyclePublicationError,
+        )):
+            publication.publish_ready_source_recovery(
+                safety, signer_identity=SIGNER, signer=signer_for()
+            )
+
+        tampered = copy.deepcopy(recovery)
+        tampered_facts = tampered["recovery_safety_facts"]
+        tampered_facts["feedback_findings"][0]["evidence_digest"] = "9" * 64
+        tampered_facts["feedback_assessment_digest"] = fast_path.digest_json({
+            "review_decision": tampered_facts["review_decision"],
+            "findings": tampered_facts["feedback_findings"],
+        })
+        unsigned_facts = {
+            key: copy.deepcopy(value)
+            for key, value in tampered_facts.items()
+            if key != "safety_facts_digest"
+        }
+        tampered_facts["safety_facts_digest"] = fast_path.digest_json(
+            unsigned_facts
+        )
+        tampered["feedback_assessment_digest"] = fast_path.digest_json({
+            "review_decision": tampered_facts["review_decision"],
+            "findings": tampered_facts["feedback_findings"],
+        })
+        tampered["authorization_digest"] = authority.digest_json({
+            key: copy.deepcopy(value)
+            for key, value in tampered.items()
+            if key != "authorization_digest"
+        })
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            authority.verify_ready_source_recovery_authorization(
+                tampered, current_lifecycle=enrolled.lifecycle,
+                current_publication_oid=enrolled.publication_oid,
+                current_publication_digest=enrolled.publication_digest,
+            )
+
+        wrong_signer = copy.deepcopy(recovery)
+        wrong_signer["signer_identity"] = OTHER_SIGNER
+        wrong_signer["signature"] = signer_for(OTHER_SIGNER)(
+            authority.canonical_json_bytes(authority._unsigned(
+                wrong_signer, "authorization_digest", "signature"
+            )),
+            authority.READY_SOURCE_RECOVERY_AUTHORIZATION_DOMAIN,
+        )
+        wrong_signer["authorization_digest"] = authority.digest_json({
+            key: copy.deepcopy(value)
+            for key, value in wrong_signer.items()
+            if key != "authorization_digest"
+        })
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            authority.verify_ready_source_recovery_authorization(
+                wrong_signer, current_lifecycle=enrolled.lifecycle,
+                current_publication_oid=enrolled.publication_oid,
+                current_publication_digest=enrolled.publication_digest,
+            )
 
         recovered = publication.publish_ready_source_recovery(
             recovery,
@@ -674,7 +804,8 @@ class LifecyclePublicationTests(TestCase):
             reviewed_state=reviewed,
             manual_gate_evidence=[],
         )
-        safety = fast_path._verify_ready_source_recovery_safety(
+        safety = fast_path.derive_ready_source_recovery_safety_facts(
+            tooling_authority_main="f" * 40,
             repository=REPOSITORY,
             pull_request_number=PR,
             head_sha=HEADS[2],
@@ -708,11 +839,11 @@ class LifecyclePublicationTests(TestCase):
                 "require_github_verified": True,
             },
         ):
-            recovery = authority.create_ready_source_recovery_authorization(
+            recovery = authority._sign_ready_source_recovery_authorization(
                 current_lifecycle=enrolled.lifecycle,
                 current_publication_oid=enrolled.publication_oid,
                 current_publication_digest=enrolled.publication_digest,
-                safety_evidence=safety,
+                recovery_safety_facts=safety,
                 commit_signature_evidence=commit,
                 historical_validation_receipt_digest=(
                     enrolled.lifecycle.validation_receipt_digest

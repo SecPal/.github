@@ -178,8 +178,13 @@ historical package bytes do not become reconstructed evidence. One explicit
 `READY_INTEGRATION_PRIOR_AUTHORITY` recovery may instead bind the exact signed
 sole-parent head and tree, current protected lifecycle publication and complete
 finite Ready history, historical receipt trailer and attestation digest as
-provenance only, fresh complete feedback/validation safety digests, and one
-signed bounded-use authorization. The authorization is appended to the existing
+provenance only, fresh complete feedback/validation facts, and one signed
+bounded-use authorization. Unsigned facts are non-authoritative. The maintained
+issuer derives protected-main policy, captures the complete resolved and
+unresolved feedback universe, executes validation, and signs the full capture,
+exact source-complete technical decisions, policy/command identity, and receipt.
+The accepted signer and protected publication are the first trusted recovery
+boundaries. The authorization is appended to the existing
 protected lifecycle-publication journal without advancing CURRENT. Missing or
 invalid supplied evidence never selects this path, and the published recovery
 becomes stale if its bound lifecycle publication ceases to be CURRENT.

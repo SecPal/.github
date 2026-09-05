@@ -4361,7 +4361,17 @@ def _load_current_recovery_policy(
     return facts.head_sha, entry
 
 
-def _acquire_ready_source_recovery_safety(
+def _verify_recovery_issuer_source(policy_head_sha: str) -> None:
+    """Require the issuer itself to be the exact clean accepted-main source."""
+
+    head, status = _attestation_local_state(REPOSITORY_ROOT, "SecPal/.github")
+    if head != policy_head_sha or status:
+        raise fast_path.SecurityBlocker(
+            "Ready-source recovery issuer is not exact accepted-main tooling"
+        )
+
+
+def _acquire_ready_source_recovery_facts(
     *,
     repository: str,
     pull_request_number: int,
@@ -4436,7 +4446,8 @@ def _acquire_ready_source_recovery_safety(
         reviewed=reviewed,
         manual_gate_evidence=manual_gate_evidence,
     )
-    return fast_path._verify_ready_source_recovery_safety(
+    return fast_path.derive_ready_source_recovery_safety_facts(
+        tooling_authority_main=policy_head_sha,
         repository=repository,
         pull_request_number=pull_request_number,
         head_sha=head,
@@ -4453,27 +4464,94 @@ def _acquire_ready_source_recovery_safety(
     )
 
 
-def acquire_ready_source_recovery_safety(
-    *,
-    repository: str,
-    pull_request_number: int,
-    expected_head_sha: str,
-    repository_root: Path,
-    feedback_findings: Any,
-    manual_gate_evidence: Any,
-) -> Any:
-    """Acquire and seal recovery safety through fixed maintained boundaries."""
+def _issue_ready_source_recovery_authorization(
+    *, repository: str, delivery_issue: int, pull_request_number: int,
+    expected_head_sha: str, repository_root: Path, feedback_findings: Any,
+    manual_gate_evidence: Any, commit_signature_evidence: Any,
+    historical_validation_receipt_digest: str,
+    historical_final_attestation_digest: str,
+    historical_evidence_loss_proof_digest: str, authorization_id: str,
+    expected_commit_signer: Any, signer_identity: str, signer: Any,
+    _policy_loader: Any, _gateway_factory: Any, _validation_runner: Any,
+    _issuer_source_verifier: Any, _current_lifecycle_loader: Any,
+    _authorization_factory: Any,
+) -> dict[str, Any]:
+    """Acquire, reverify, and sign one recovery in one maintained boundary."""
 
-    return _acquire_ready_source_recovery_safety(
+    policy_head_sha, policy_entry = _policy_loader(repository)
+    _issuer_source_verifier(policy_head_sha)
+
+    def accepted_policy(requested_repository: str) -> tuple[str, dict[str, Any]]:
+        if requested_repository != repository:
+            raise fast_path.SecurityBlocker(
+                "Ready-source recovery policy repository changed"
+            )
+        return policy_head_sha, copy.deepcopy(policy_entry)
+
+    facts = _acquire_ready_source_recovery_facts(
         repository=repository,
         pull_request_number=pull_request_number,
         expected_head_sha=expected_head_sha,
         repository_root=repository_root,
         feedback_findings=feedback_findings,
         manual_gate_evidence=manual_gate_evidence,
+        _policy_loader=accepted_policy,
+        _gateway_factory=_gateway_factory,
+        _validation_runner=_validation_runner,
+    )
+    current = _current_lifecycle_loader(repository, delivery_issue)
+    return _authorization_factory(
+        current_lifecycle=current.lifecycle,
+        current_publication_oid=current.publication_oid,
+        current_publication_digest=current.publication_digest,
+        recovery_safety_facts=facts,
+        commit_signature_evidence=commit_signature_evidence,
+        historical_validation_receipt_digest=historical_validation_receipt_digest,
+        historical_final_attestation_digest=historical_final_attestation_digest,
+        historical_evidence_loss_proof_digest=historical_evidence_loss_proof_digest,
+        authorization_id=authorization_id,
+        bounded_uses=1,
+        expected_commit_signer=expected_commit_signer,
+        signer_identity=signer_identity,
+        signer=signer,
+    )
+
+
+def issue_ready_source_recovery_authorization(
+    *, repository: str, delivery_issue: int, pull_request_number: int,
+    expected_head_sha: str, repository_root: Path, feedback_findings: Any,
+    manual_gate_evidence: Any, commit_signature_evidence: Any,
+    historical_validation_receipt_digest: str,
+    historical_final_attestation_digest: str,
+    historical_evidence_loss_proof_digest: str, authorization_id: str,
+    expected_commit_signer: Any, signer_identity: str, signer: Any,
+) -> dict[str, Any]:
+    """Issue the first trusted recovery artifact through fixed acquisition."""
+
+    lifecycle_authority, lifecycle_publication = _load_lifecycle_publication_helpers()
+    return _issue_ready_source_recovery_authorization(
+        repository=repository, delivery_issue=delivery_issue,
+        pull_request_number=pull_request_number,
+        expected_head_sha=expected_head_sha, repository_root=repository_root,
+        feedback_findings=feedback_findings,
+        manual_gate_evidence=manual_gate_evidence,
+        commit_signature_evidence=commit_signature_evidence,
+        historical_validation_receipt_digest=historical_validation_receipt_digest,
+        historical_final_attestation_digest=historical_final_attestation_digest,
+        historical_evidence_loss_proof_digest=historical_evidence_loss_proof_digest,
+        authorization_id=authorization_id,
+        expected_commit_signer=expected_commit_signer,
+        signer_identity=signer_identity, signer=signer,
         _policy_loader=_load_current_recovery_policy,
         _gateway_factory=FastPathGateway,
         _validation_runner=_run_registered_validations,
+        _issuer_source_verifier=_verify_recovery_issuer_source,
+        _current_lifecycle_loader=(
+            lifecycle_publication.verify_current_lifecycle_authority
+        ),
+        _authorization_factory=(
+            lifecycle_authority._sign_ready_source_recovery_authorization
+        ),
     )
 
 

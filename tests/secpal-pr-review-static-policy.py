@@ -547,7 +547,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "validate_manual_gate_evidence",
             "verify_commit_signatures",
             "verify_validation_attestation",
-            "_verify_ready_source_recovery_safety",
+            "derive_ready_source_recovery_safety_facts",
         },
         "follow_up": {
             "FollowUpError",

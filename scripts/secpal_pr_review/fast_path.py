@@ -1037,7 +1037,6 @@ class StableFeedbackState:
 
 
 _VERIFIED_VALIDATION_EVIDENCE = object()
-_VERIFIED_READY_SOURCE_RECOVERY_SAFETY = object()
 
 
 @dataclass(frozen=True)
@@ -1053,33 +1052,6 @@ class VerifiedValidationEvidence:
     source_validation_evidence_digest: str
     _verification_seal: object
 
-
-@dataclass(frozen=True)
-class VerifiedReadySourceRecoverySafety:
-    """Fresh, bounded safety facts for one unchanged pre-persistence Ready source."""
-
-    repository: str
-    pull_request_number: int
-    head_sha: str
-    tree_sha: str
-    parent_shas: tuple[str, ...]
-    expected_base_ref: str
-    expected_base_sha: str
-    reviewed_state_digest: str
-    reviewed_feedback_digest: str
-    review_decision: str
-    feedback_assessment_digest: str
-    fresh_validation_receipt_digest: str
-    _verification_seal: object
-
-
-def is_verified_ready_source_recovery_safety(value: Any) -> bool:
-    """Reject caller-assembled recovery-safety summaries at authority boundaries."""
-
-    return (
-        isinstance(value, VerifiedReadySourceRecoverySafety)
-        and value._verification_seal is _VERIFIED_READY_SOURCE_RECOVERY_SAFETY
-    )
 
 
 def is_verified_validation_evidence(value: Any) -> bool:
@@ -2152,8 +2124,9 @@ def _classified_feedback_sources(
     return expected
 
 
-def _verify_ready_source_recovery_safety(
+def derive_ready_source_recovery_safety_facts(
     *,
+    tooling_authority_main: str,
     repository: str,
     pull_request_number: int,
     head_sha: str,
@@ -2167,9 +2140,10 @@ def _verify_ready_source_recovery_safety(
     fresh_validation_receipt: Any,
     registry: dict[str, Any],
     command_set: list[dict[str, Any]],
-) -> VerifiedReadySourceRecoverySafety:
-    """Seal facts acquired only by the maintained recovery-safety boundary."""
+) -> dict[str, Any]:
+    """Derive canonical unsigned facts; this result carries no authority."""
 
+    policy_head = _require_oid(tooling_authority_main, "recovery tooling authority")
     reviewed = _require_reviewed_state_identity(repository, reviewed_state)
     pr = _require_positive_integer(
         pull_request_number, "Ready-source recovery pull request"
@@ -2354,21 +2328,77 @@ def _verify_ready_source_recovery_safety(
         "review_decision": review_decision,
         "findings": normalized_findings,
     }
-    return VerifiedReadySourceRecoverySafety(
-        repository=repository,
-        pull_request_number=pr,
-        head_sha=head,
-        tree_sha=tree,
-        parent_shas=parents,
-        expected_base_ref=base_ref,
-        expected_base_sha=base_sha,
-        reviewed_state_digest=reviewed.state_digest,
-        reviewed_feedback_digest=reviewed.feedback_digest,
-        review_decision=review_decision,
-        feedback_assessment_digest=digest_json(assessment),
-        fresh_validation_receipt_digest=expected_receipt["receipt_digest"],
-        _verification_seal=_VERIFIED_READY_SOURCE_RECOVERY_SAFETY,
+    facts = {
+        "schema_version": "1.0",
+        "kind": "SECPAL_READY_SOURCE_RECOVERY_SAFETY_FACTS",
+        "tooling_authority_main": policy_head,
+        "repository": repository,
+        "pull_request_number": pr,
+        "head_sha": head,
+        "tree_sha": tree,
+        "parent_shas": list(parents),
+        "expected_base_ref": base_ref,
+        "expected_base_sha": base_sha,
+        "reviewed_state": reviewed.to_dict(),
+        "review_decision": review_decision,
+        "feedback_findings": normalized_findings,
+        "policy_binding": copy.deepcopy(registry),
+        "command_set": copy.deepcopy(command_set),
+        "fresh_validation_receipt": copy.deepcopy(expected_receipt),
+        "reviewed_state_digest": reviewed.state_digest,
+        "reviewed_feedback_digest": reviewed.feedback_digest,
+        "feedback_assessment_digest": digest_json(assessment),
+        "fresh_validation_receipt_digest": expected_receipt["receipt_digest"],
+        "validation_execution_origin": "MAINTAINED_REGISTERED_EXECUTION",
+    }
+    return {**facts, "safety_facts_digest": digest_json(facts)}
+
+
+def verify_ready_source_recovery_safety_facts(value: Any) -> dict[str, Any]:
+    """Recompute complete unsigned facts before an authorization signs them."""
+
+    fields = {
+        "schema_version", "kind", "tooling_authority_main", "repository",
+        "pull_request_number", "head_sha", "tree_sha", "parent_shas",
+        "expected_base_ref", "expected_base_sha", "reviewed_state",
+        "review_decision", "feedback_findings", "policy_binding", "command_set",
+        "fresh_validation_receipt", "reviewed_state_digest",
+        "reviewed_feedback_digest", "feedback_assessment_digest",
+        "fresh_validation_receipt_digest", "validation_execution_origin",
+        "safety_facts_digest",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise SecurityBlocker("Ready-source recovery safety facts are malformed")
+    unsigned = {
+        key: copy.deepcopy(item) for key, item in value.items()
+        if key != "safety_facts_digest"
+    }
+    if value["safety_facts_digest"] != digest_json(unsigned):
+        raise SecurityBlocker("Ready-source recovery safety-facts digest mismatch")
+    if (
+        value["schema_version"] != "1.0"
+        or value["kind"] != "SECPAL_READY_SOURCE_RECOVERY_SAFETY_FACTS"
+        or value["validation_execution_origin"]
+        != "MAINTAINED_REGISTERED_EXECUTION"
+    ):
+        raise SecurityBlocker("Ready-source recovery safety-facts type is invalid")
+    reviewed = StableFeedbackState.from_payload(value["reviewed_state"])
+    derived = derive_ready_source_recovery_safety_facts(
+        tooling_authority_main=value["tooling_authority_main"],
+        repository=value["repository"],
+        pull_request_number=value["pull_request_number"],
+        head_sha=value["head_sha"], tree_sha=value["tree_sha"],
+        parent_shas=value["parent_shas"],
+        expected_base_ref=value["expected_base_ref"],
+        expected_base_sha=value["expected_base_sha"],
+        reviewed_state=reviewed, review_decision=value["review_decision"],
+        feedback_findings=value["feedback_findings"],
+        fresh_validation_receipt=value["fresh_validation_receipt"],
+        registry=value["policy_binding"], command_set=value["command_set"],
     )
+    if derived != value:
+        raise SecurityBlocker("Ready-source recovery safety facts are inconsistent")
+    return derived
 
 
 def _verify_classified_findings(

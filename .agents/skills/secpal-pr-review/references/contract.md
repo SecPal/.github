@@ -781,12 +781,17 @@ attestation digests remain provenance facts only. Fresh complete feedback and
 validation safety digests plus a separately signed one-use authorization are
 mandatory. The recovery is an ancillary record in the existing protected
 lifecycle journal and never becomes a lifecycle transition or second journal.
-The maintained recovery-safety acquisition boundary derives the registry and
-exact command set from independently observed protected `main`, captures
-feedback through the complete bounded stable-feedback reader, treats resolved
-and unresolved threads alike for technical classification, and executes
-current-policy validation itself. No caller-supplied snapshot, policy, command
-set, or synthetic receipt can produce the sealed safety value.
+Unsigned recovery-safety facts have no authority. The maintained issuer derives
+the registry and exact command set from independently observed protected
+`main`, captures feedback through the complete bounded stable-feedback reader,
+treats resolved and unresolved threads alike, executes current-policy
+validation itself, and re-verifies the complete package immediately before
+signing. The existing purpose-bound recovery authorization binds the full
+capture, exact source-complete technical decisions, tooling-policy identity,
+command identity, and validation receipt. Its accepted signer and protected
+publication are the first trusted recovery boundaries. No caller-supplied
+snapshot, unsigned decision, policy, command set, or synthetic receipt is
+recovery authority.
 An invalid or partially supplied ordinary package cannot fall back to recovery,
 and recovery never represents historical artifact bytes as reconstructed.
 

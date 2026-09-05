@@ -29,13 +29,12 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .fast_path import (
     SecurityBlocker,
-    VerifiedReadySourceRecoverySafety,
     VerifiedValidationEvidence,
     canonical_json_bytes,
     digest_json,
-    is_verified_ready_source_recovery_safety,
     is_verified_validation_evidence,
     verify_commit_signatures,
+    verify_ready_source_recovery_safety_facts,
 )
 
 
@@ -395,6 +394,7 @@ READY_SOURCE_RECOVERY_AUTHORIZATION_FIELDS = frozenset(
         "current_publication_oid", "current_publication_digest",
         "lifecycle_state", "reviewed_state_digest",
         "reviewed_feedback_digest", "review_decision",
+        "recovery_safety_facts",
         "feedback_assessment_digest", "fresh_validation_receipt_digest",
         "historical_validation_receipt_digest",
         "historical_final_attestation_digest",
@@ -2728,12 +2728,12 @@ def ready_source_recovery_commit_signature_binding_digest(
     )
 
 
-def create_ready_source_recovery_authorization(
+def _sign_ready_source_recovery_authorization(
     *,
     current_lifecycle: VerifiedLifecycleAuthority,
     current_publication_oid: str,
     current_publication_digest: str,
-    safety_evidence: VerifiedReadySourceRecoverySafety,
+    recovery_safety_facts: Mapping[str, Any],
     commit_signature_evidence: Mapping[str, Any],
     historical_validation_receipt_digest: str,
     historical_final_attestation_digest: str,
@@ -2748,16 +2748,20 @@ def create_ready_source_recovery_authorization(
 
     if not isinstance(current_lifecycle, VerifiedLifecycleAuthority):
         raise LifecycleAuthorityError("current lifecycle authority is not verified")
-    if not is_verified_ready_source_recovery_safety(safety_evidence):
-        raise LifecycleAuthorityError("Ready-source recovery safety is not verified")
+    try:
+        safety = verify_ready_source_recovery_safety_facts(
+            copy.deepcopy(dict(recovery_safety_facts))
+        )
+    except (SecurityBlocker, TypeError, ValueError) as exc:
+        raise LifecycleAuthorityError("Ready-source recovery safety facts are invalid") from exc
     state = _ready_source_recovery_state(
         current_lifecycle.state,
         historical_proof_mode=current_lifecycle.historical_proof_mode,
     )
     if (
-        current_lifecycle.repository != safety_evidence.repository
-        or current_lifecycle.pull_request != safety_evidence.pull_request_number
-        or current_lifecycle.head_sha != safety_evidence.head_sha
+        current_lifecycle.repository != safety["repository"]
+        or current_lifecycle.pull_request != safety["pull_request_number"]
+        or current_lifecycle.head_sha != safety["head_sha"]
     ):
         raise LifecycleAuthorityError(
             "Ready-source recovery safety does not bind CURRENT lifecycle"
@@ -2777,7 +2781,7 @@ def create_ready_source_recovery_authorization(
         )
     commit = copy.deepcopy(dict(commit_signature_evidence))
     if (
-        commit.get("oid") != safety_evidence.head_sha
+        commit.get("oid") != safety["head_sha"]
         or commit.get("source") != "USER"
         or commit.get("signer_identity") != signer_name
     ):
@@ -2792,7 +2796,7 @@ def create_ready_source_recovery_authorization(
         raise LifecycleAuthorityError(
             "Ready-source recovery commit signature is invalid"
         ) from exc
-    if len(verified_commits) != 1 or verified_commits[0]["oid"] != safety_evidence.head_sha:
+    if len(verified_commits) != 1 or verified_commits[0]["oid"] != safety["head_sha"]:
         raise LifecycleAuthorityError(
             "Ready-source recovery commit signature evidence is ambiguous"
         )
@@ -2804,18 +2808,18 @@ def create_ready_source_recovery_authorization(
         "repository": current_lifecycle.repository,
         "delivery_issue": current_lifecycle.delivery_issue,
         "pull_request": current_lifecycle.pull_request,
-        "head_sha": safety_evidence.head_sha,
-        "tree_sha": safety_evidence.tree_sha,
-        "parent_shas": list(safety_evidence.parent_shas),
-        "expected_target_base_ref": safety_evidence.expected_base_ref,
-        "expected_target_base_sha": safety_evidence.expected_base_sha,
+        "head_sha": safety["head_sha"],
+        "tree_sha": safety["tree_sha"],
+        "parent_shas": list(safety["parent_shas"]),
+        "expected_target_base_ref": safety["expected_base_ref"],
+        "expected_target_base_sha": safety["expected_base_sha"],
         "expected_commit_signer": {
             "kind": signer_kind,
             "identity": signer_name,
         },
         "commit_signature_evidence_digest": (
             ready_source_recovery_commit_signature_binding_digest(
-                head_sha=safety_evidence.head_sha,
+                head_sha=safety["head_sha"],
                 expected_signer=signer_value,
                 signature_format=commit["local_signature"].get("format"),
             )
@@ -2830,12 +2834,13 @@ def create_ready_source_recovery_authorization(
             "Ready-source recovery CURRENT publication",
         ),
         "lifecycle_state": copy.deepcopy(state),
-        "reviewed_state_digest": safety_evidence.reviewed_state_digest,
-        "reviewed_feedback_digest": safety_evidence.reviewed_feedback_digest,
-        "review_decision": safety_evidence.review_decision,
-        "feedback_assessment_digest": safety_evidence.feedback_assessment_digest,
+        "recovery_safety_facts": copy.deepcopy(safety),
+        "reviewed_state_digest": safety["reviewed_state_digest"],
+        "reviewed_feedback_digest": safety["reviewed_feedback_digest"],
+        "review_decision": safety["review_decision"],
+        "feedback_assessment_digest": safety["feedback_assessment_digest"],
         "fresh_validation_receipt_digest": (
-            safety_evidence.fresh_validation_receipt_digest
+            safety["fresh_validation_receipt_digest"]
         ),
         "historical_validation_receipt_digest": _require_digest(
             historical_validation_receipt_digest,
@@ -2884,6 +2889,12 @@ def verify_ready_source_recovery_authorization(
         READY_SOURCE_RECOVERY_AUTHORIZATION_FIELDS,
         "Ready-source recovery authorization",
     )
+    try:
+        safety = verify_ready_source_recovery_safety_facts(
+            item["recovery_safety_facts"]
+        )
+    except (SecurityBlocker, TypeError, ValueError) as exc:
+        raise LifecycleAuthorityError("Ready-source recovery safety facts are invalid") from exc
     state = _ready_source_recovery_state(
         item["lifecycle_state"],
         historical_proof_mode=current_lifecycle.historical_proof_mode,
@@ -2904,6 +2915,20 @@ def verify_ready_source_recovery_authorization(
         or item["current_publication_oid"] != current_publication_oid
         or item["current_publication_digest"] != current_publication_digest
         or state != current_lifecycle.state
+        or safety["repository"] != item["repository"]
+        or safety["pull_request_number"] != item["pull_request"]
+        or safety["head_sha"] != item["head_sha"]
+        or safety["tree_sha"] != item["tree_sha"]
+        or safety["parent_shas"] != item["parent_shas"]
+        or safety["expected_base_ref"] != item["expected_target_base_ref"]
+        or safety["expected_base_sha"] != item["expected_target_base_sha"]
+        or safety["reviewed_state_digest"] != item["reviewed_state_digest"]
+        or safety["reviewed_feedback_digest"] != item["reviewed_feedback_digest"]
+        or safety["review_decision"] != item["review_decision"]
+        or safety["feedback_assessment_digest"]
+        != item["feedback_assessment_digest"]
+        or safety["fresh_validation_receipt_digest"]
+        != item["fresh_validation_receipt_digest"]
         or (
             current_lifecycle.validation_receipt_digest is not None
             and item["historical_validation_receipt_digest"]
