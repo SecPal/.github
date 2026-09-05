@@ -5449,7 +5449,7 @@ assert 'tool-specific labels or prefixes' in frontend_prompt
 assert 'Run git status --short --branch before any write action.' in api_prompt
 assert 'Use Form Requests for validation and services for business logic.' in api_prompt
 assert 'Keep changes repo-local, minimal, and consistent with the repository stack.' in api_prompt
-assert 'Write a concise English PR body for SecPal/frontend.' in frontend_prompt
+assert 'Create a draft PR; you must not create it directly Ready.' in frontend_prompt
 assert 'Preserve a branch or worktree already supplied by the execution environment.' in org_prompts[0]
 assert 'Run the smallest relevant validation while iterating' in org_prompts[1]
 assert 'stage the complete intended change set before evaluating reusable validation evidence' in org_prompts[2]

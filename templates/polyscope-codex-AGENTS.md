@@ -75,6 +75,14 @@ Apply these rules only when the session says it is running inside Polyscope.
 - Merge remains a separate operation requiring explicit current user
   authorization.
 
+## Delivery PR lifecycle
+
+- Every new SecPal delivery pull request must be created as Draft. An agent must
+  not create a new delivery pull request directly Ready.
+- Draft creation does not authorize a later Ready transition. Follow the
+  owning repository's canonical lifecycle and require explicit operator
+  authorization for that transition.
+
 ## Canonical Work-Graph Execution
 
 - Under `docs/work-graph-contract.md`, canonical work-graph semantics are

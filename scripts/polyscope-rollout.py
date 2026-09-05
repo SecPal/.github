@@ -3476,6 +3476,9 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
     )
 
     instruction_ref = instruction_reference(spec)
+    draft_creation_rule = (
+        "Create a draft PR; you must not create it directly Ready. "
+    )
     review_prompt = collapse_spaces(
         f"Apply the current SecPal instructions from {instruction_ref}. "
         f"Non-negotiable rules: {NO_AI_ATTRIBUTION_RULE}; {format_bullets(runtime_rules)}. "
@@ -3485,13 +3488,13 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
         "When shared behavior crosses repository boundaries, inspect affected linked roots that are in scope and identify dependency-ordered rollout risks."
     )
     pr_prompt = collapse_spaces(
-        f"Write a concise English PR body for {spec['display_name']}. Apply {instruction_ref}. "
+        f"{draft_creation_rule}Write a concise English PR body for {spec['display_name']}. Apply {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
         f"Keep the PR to one topic and apply these change-reporting rules: {format_bullets(change_tracking)}. "
         "Summarize the problem and evidence, the user-, API-, contract-, or governance-visible change, validations actually run, changelog applicability, linked-repository impact, and proven tracked follow-ups when applicable."
     )
     draft_pr_prompt = collapse_spaces(
-        f"Create a draft PR in English for {spec['display_name']}. Apply {instruction_ref}. "
+        f"{draft_creation_rule}Write a concise English PR body for {spec['display_name']}. Apply {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
         f"Keep one topic per branch and apply: {format_bullets(change_tracking)}. "
         "Summarize the current problem and evidence, the change, validations already run, and any in-scope dependency or unresolved check that prevents readiness."
