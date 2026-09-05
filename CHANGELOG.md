@@ -16,7 +16,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 - admit the exact immutable #776 / PR #779 implementation source through the
   existing accepted-main bootstrap-source authority
 - verify both maintained source signatures and run one fixed bounded validation
-  command before permitting the exact pre-enrollment action entrypoint
+  command with isolated Python startup before permitting the exact
+  pre-enrollment action entrypoint
 - preserve the historical evidence-loss limitation without granting lifecycle,
   publication, Ready, push, merge, or arbitrary-source authority
 

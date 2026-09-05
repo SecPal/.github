@@ -328,8 +328,11 @@ runs in the detached tree; output is discarded and only canonical command,
 exit-status, and success digests are authority. The historical receipt trailer
 is not treated as reconstructable receipt or final-attestation evidence.
 Authentication, validation, and a final clean-tree check all precede the fixed
-command. Its closed launcher supplies repository #776 / PR #779, signer,
-purpose, command, and entrypoint itself, so callers cannot widen the admission.
+command. Both Python subprocess boundaries use the shared isolated `-I -S`
+startup sequence and an authenticated source root, so a retained `HOME` cannot
+load ambient user-site startup hooks. For repository #776 / PR #779, the closed
+launcher supplies the signer, purpose, command, and entrypoint itself, so
+callers cannot widen the admission.
 This authorizes only execution of the admitted implementation; the downstream
 pre-enrollment verifier still owns candidate-tree, push, and initialization
 evidence.

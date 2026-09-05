@@ -216,6 +216,41 @@ else:
 _LAUNCHER = _LAUNCHER_TEMPLATE.replace(
     "__SECPAL_DIAGNOSTIC_RAISE_SITES__", repr(dict(_DIAGNOSTIC_RAISE_SITES))
 )
+_ISOLATED_SOURCE_LAUNCHER = r"""
+import importlib.util
+from pathlib import Path
+import runpy
+import sys
+
+mode = sys.argv[1]
+source_root = Path(sys.argv[2]).resolve(strict=True)
+target = sys.argv[3]
+arguments = sys.argv[4:]
+stdlib = [value for value in sys.path if value and "site-packages" not in value]
+sys.path[:] = [str(source_root), *stdlib]
+
+if mode == "MODULE":
+    sys.argv = [target, *arguments]
+    runpy.run_module(target, run_name="__main__", alter_sys=False)
+elif mode == "ENTRYPOINT":
+    entrypoint = arguments.pop(0)
+    expected = (source_root / target).resolve(strict=True)
+    if source_root not in expected.parents or not expected.is_file():
+        raise RuntimeError("admitted source entrypoint escaped the immutable tree")
+    spec = importlib.util.spec_from_file_location(
+        "secpal_isolated_admitted_source", expected
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("admitted source entrypoint is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    selected = getattr(module, entrypoint, None)
+    if not callable(selected):
+        raise RuntimeError("admitted source entrypoint changed")
+    raise SystemExit(selected(arguments))
+else:
+    raise RuntimeError("isolated source execution mode is unknown")
+"""
 
 
 class BootstrapSourceAdmissionError(ValueError):
@@ -1755,7 +1790,10 @@ def _run_pre_enrollment_source_validation(
             )
         try:
             completed = subprocess.run(
-                [_trusted_python(), *argv[1:]],
+                _isolated_python_command(
+                    _ISOLATED_SOURCE_LAUNCHER,
+                    "MODULE", str(root), argv[2], *argv[3:],
+                ),
                 cwd=root,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
@@ -1848,9 +1886,7 @@ def _execute_pre_enrollment_entrypoint(
 
     selected = _closed_pre_enrollment_invocation(serialized_invocation)
     session = Path(selected["session_directory"]).resolve(strict=True)
-    argv = [
-        _trusted_python(),
-        str(root / policy.implementation_path),
+    arguments = [
         policy.command or "",
         "--repo", policy.repository,
         "--pr", str(policy.pull_request),
@@ -1869,7 +1905,11 @@ def _execute_pre_enrollment_entrypoint(
     helper = authority._load_trusted_command_helper()
     try:
         completed = subprocess.run(
-            argv,
+            _isolated_python_command(
+                _ISOLATED_SOURCE_LAUNCHER,
+                "ENTRYPOINT", str(root), policy.implementation_path,
+                policy.entrypoint or "", *arguments,
+            ),
             cwd=root,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -1958,6 +1998,12 @@ def _trusted_python() -> str:
     raise BootstrapSourceAdmissionError("trusted Python executable is unavailable")
 
 
+def _isolated_python_command(launcher: str, *arguments: str) -> list[str]:
+    """Build the one accepted isolated Python startup sequence."""
+
+    return [_trusted_python(), "-I", "-S", "-c", launcher, *arguments]
+
+
 def _closed_launcher_environment(helper: Any) -> dict[str, str]:
     """Build the child environment before loader or Python startup can run.
 
@@ -2003,7 +2049,7 @@ def _execute_entrypoint(root: Path, serialized_authorization: bytes | str) -> Ma
     environment = _closed_launcher_environment(helper)
     try:
         result = subprocess.run(
-            [_trusted_python(), "-I", "-S", "-c", _LAUNCHER, str(root)],
+            _isolated_python_command(_LAUNCHER, str(root)),
             cwd=root,
             input=authorization,
             stdout=subprocess.PIPE,

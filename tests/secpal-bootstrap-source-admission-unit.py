@@ -1612,6 +1612,105 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
                 Path("/immutable"), self.policy
             )
 
+    def test_hostile_user_site_cannot_run_before_validation_or_entrypoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            home = fixture / "home"
+            session = fixture / "session"
+            session.mkdir(mode=0o700)
+            user_site = (
+                home
+                / ".local"
+                / "lib"
+                / f"python{sys.version_info.major}.{sys.version_info.minor}"
+                / "site-packages"
+            )
+            user_site.mkdir(parents=True)
+            marker = fixture / "ambient-startup-executed"
+            validation_marker = fixture / "validation-executed"
+            entrypoint_marker = fixture / "entrypoint-executed"
+            (user_site / "sitecustomize.py").write_text(
+                "from pathlib import Path\n"
+                f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            validation = fixture / self.policy.validation_command_set[0]["argv"][3]
+            validation.parent.mkdir(parents=True)
+            validation.write_text(
+                "from pathlib import Path\n"
+                "import sys\n"
+                "import unittest\n"
+                f"Path({str(validation_marker)!r}).write_text("
+                "f'{sys.flags.isolated}:{sys.flags.no_site}', encoding='utf-8')\n"
+                "class FixtureTest(unittest.TestCase):\n"
+                "    def test_fixture(self):\n"
+                "        self.assertTrue(True)\n",
+                encoding="utf-8",
+            )
+            entrypoint = fixture / self.policy.implementation_path
+            entrypoint.parent.mkdir(parents=True)
+            entrypoint.write_text(
+                "from pathlib import Path\n"
+                "import sys\n"
+                "def main(argv=None):\n"
+                f"    Path({str(entrypoint_marker)!r}).write_text("
+                "f'{sys.flags.isolated}:{sys.flags.no_site}:{argv[0]}', encoding='utf-8')\n"
+                "    return 0\n",
+                encoding="utf-8",
+            )
+            helper = SimpleNamespace(
+                TRUSTED_COMMAND_PATH="/usr/bin:/bin",
+                command_environment=lambda _name: {"HOME": str(home)},
+            )
+            invocation = json.dumps(
+                {
+                    "repository_root": str(fixture / "repository"),
+                    "session_directory": str(session),
+                    "authorization_id": "authorization",
+                    "validation_receipt_id": "receipt",
+                    "final_attestation_id": "attestation",
+                    "commit_subject": "Integrate authenticated source",
+                }
+            )
+
+            with (
+                self.subTest(boundary="validation"),
+                mock.patch.object(
+                    source.authority,
+                    "_load_trusted_command_helper",
+                    return_value=helper,
+                ),
+                mock.patch.object(source, "_trusted_python", return_value=sys.executable),
+                mock.patch.object(source, "_verify_materialized_tree"),
+            ):
+                source._run_pre_enrollment_source_validation(
+                    fixture, self.policy
+                )
+                self.assertFalse(marker.exists())
+                self.assertEqual(
+                    validation_marker.read_text(encoding="utf-8"), "1:1"
+                )
+
+            marker.unlink(missing_ok=True)
+            with (
+                self.subTest(boundary="entrypoint"),
+                mock.patch.object(
+                    source.authority,
+                    "_load_trusted_command_helper",
+                    return_value=helper,
+                ),
+                mock.patch.object(source, "_trusted_python", return_value=sys.executable),
+            ):
+                result = source._execute_pre_enrollment_entrypoint(
+                    fixture, self.policy, invocation
+                )
+                self.assertEqual(result, {"status": "COMPLETE", "exit_status": 0})
+            self.assertFalse(marker.exists())
+            self.assertEqual(
+                entrypoint_marker.read_text(encoding="utf-8"),
+                f"1:1:{source.PRE_ENROLLMENT_COMMAND}",
+            )
+
     def test_tree_drift_after_validation_creates_no_admission(self) -> None:
         with (
             mock.patch.object(source, "_trusted_python", return_value="/usr/bin/python3"),
