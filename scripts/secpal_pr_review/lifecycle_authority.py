@@ -1164,7 +1164,14 @@ def _parse_lifecycle_trust_policy(
                 )
             )
             or item["source_pr_state"] != "OPEN"
-            or item["source_pr_draft"] is not True
+            or (
+                executable_source
+                and item["source_pr_draft"] is not True
+            )
+            or (
+                byte_source
+                and type(item["source_pr_draft"]) is not bool
+            )
             or item["source_base_ref"] != "main"
             or admission_digest != digest_json(unsigned)
             or identity in source_identities

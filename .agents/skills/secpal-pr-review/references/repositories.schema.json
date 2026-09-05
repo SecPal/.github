@@ -244,7 +244,7 @@
         "implementation_blob_oid": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
         "purpose": { "const": "PR_REVIEW_EVIDENCE_HELPER_SOURCE_ADMISSION" },
         "source_pr_state": { "const": "OPEN" },
-        "source_pr_draft": { "const": true },
+        "source_pr_draft": { "type": "boolean" },
         "source_base_ref": { "const": "main" },
         "policy_source": { "const": "ACCEPTED_MAIN_REPOSITORY_REGISTRY" },
         "admission_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
