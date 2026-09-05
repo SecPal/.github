@@ -186,6 +186,8 @@ def authenticated_external_evidence(
     repository: str = "Example/governance",
     delivery_issue: int = 41,
     pull_request: int = 42,
+    admit_review_budget: bool = False,
+    adoption_timestamp: str = "2026-08-03T00:00:00Z",
 ) -> authority.VerifiedExactStateAdoptionExternalEvidence:
     reviewed = fast_path.StableFeedbackState(
         repository=repository, pull_request_number=pull_request,
@@ -222,6 +224,41 @@ def authenticated_external_evidence(
         },
         "github_verification": {"verified": True, "reason": "valid"},
     }
+    review_budget_admission = None
+    if admit_review_budget:
+        verified_commit = fast_path.verify_commit_signatures(
+            [commit],
+            {
+                "accepted_formats": ["ssh", "openpgp"],
+                "require_github_verified": True,
+            },
+        )[0]
+        review_budget_admission = (
+            authority.create_pre_enrollment_review_budget_consumption_admission(
+                admission_id="pre-enrollment-review-budget:generic-41",
+                repository=repository,
+                delivery_issue=delivery_issue,
+                pull_request=pull_request,
+                head_sha=HEADS[2],
+                tree_sha=HEADS[3],
+                pull_request_state="OPEN",
+                commit_signature_evidence_digest=authority.digest_json(
+                    verified_commit
+                ),
+                validation_receipt_digest=validation.validation_receipt_digest,
+                source_validation_evidence_digest=(
+                    validation.source_validation_evidence_digest
+                ),
+                adoption_source_evidence_digest=(
+                    validation.final_attestation_digest
+                ),
+                observed_pre_enrollment_history=observed,
+                intended_state=state,
+                adoption_timestamp=adoption_timestamp,
+                signer_identity=SIGNER,
+                signer=signer_for(),
+            )
+        )
     with patch.object(
         authority,
         "_load_delivery_signature_policy",
@@ -230,7 +267,7 @@ def authenticated_external_evidence(
             "require_github_verified": True,
         },
     ):
-        return authority.authenticate_exact_state_adoption_external_evidence(
+        arguments = dict(
             repository=repository,
             delivery_issue=delivery_issue,
             pull_request=pull_request,
@@ -242,9 +279,377 @@ def authenticated_external_evidence(
             observed_pre_enrollment_history=observed,
             intended_state=state,
         )
+        if review_budget_admission is not None:
+            arguments["review_budget_consumption_admission"] = (
+                review_budget_admission
+            )
+        return authority.authenticate_exact_state_adoption_external_evidence(
+            **arguments
+        )
 
 
 class LifecycleAuthorityTests(TestCase):
+    def test_exact_adoption_conservatively_preserves_pre_enrollment_review_budget(
+        self,
+    ) -> None:
+        state = authority.initial_state()
+        state.update(
+            unrestricted_review_count=1,
+            remediation_cycle_count=1,
+            draft=True,
+            ready=False,
+            ready_transition_count=0,
+            cycle_3_absent=True,
+        )
+        observed = [
+            {
+                "sequence": 1,
+                "kind": "PR_CREATED_DRAFT",
+                "observed_at": "2026-08-01T00:00:00Z",
+                "head_sha": HEADS[1],
+                "reviewed_head_sha": None,
+            },
+            {
+                "sequence": 2,
+                "kind": "REMEDIATION_HEAD_OBSERVED",
+                "observed_at": "2026-08-02T00:00:00Z",
+                "head_sha": HEADS[2],
+                "reviewed_head_sha": None,
+            },
+        ]
+
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError,
+            "observed pre-enrollment history does not authenticate intended state",
+        ):
+            authenticated_external_evidence(observed=observed, state=state)
+
+        adoption_policy = authority.LifecycleTrustPolicy(
+            repository="Example/governance",
+            accepted_formats=frozenset({"ssh"}),
+            transition_signer_identities=frozenset({OTHER_SIGNER}),
+            authority_signer_identities=frozenset({OTHER_SIGNER}),
+            signers={
+                SIGNER: authority.TrustedSigner(SIGNER, ("unused",), ()),
+                OTHER_SIGNER: authority.TrustedSigner(
+                    OTHER_SIGNER, ("also-unused",), ()
+                ),
+            },
+            initialization_anchors=(),
+            legacy_adoption_signer_identities=frozenset({SIGNER}),
+        )
+        with patch.object(
+            authority,
+            "_load_lifecycle_trust_policy",
+            return_value=adoption_policy,
+        ), patch.object(
+            authority,
+            "_policy_signature_verifier",
+            return_value=verify_signature,
+        ):
+            external = authenticated_external_evidence(
+                observed=observed,
+                state=state,
+                admit_review_budget=True,
+            )
+            evidence = authority.create_exact_state_adoption_evidence(
+                verified_external_evidence=external,
+                adoption_timestamp="2026-08-03T00:00:00Z",
+            )
+            authorization = authority.create_exact_state_adoption_authorization(
+                adoption_evidence=evidence,
+                authorization_id="exact-adoption:generic-41",
+                bounded_uses=1,
+                signer_identity=SIGNER,
+                signer=signer_for(),
+            )
+            proof = authority.create_exact_state_adoption_proof(
+                adoption_evidence=evidence,
+                authorization=authorization,
+                signer_identity=SIGNER,
+                signer=signer_for(),
+            )
+            verified = authority.verify_exact_state_adoption_proof(proof)
+
+        self.assertEqual(
+            [
+                item["kind"]
+                for item in external.observed_pre_enrollment_history
+            ],
+            ["PR_CREATED_DRAFT", "REMEDIATION_HEAD_OBSERVED"],
+        )
+        self.assertEqual(external.intended_state["unrestricted_review_count"], 1)
+        self.assertEqual(
+            evidence["proof_version"],
+            authority.EXACT_ADOPTION_CONSUMPTION_VERSION,
+        )
+        self.assertEqual(
+            evidence["domain"],
+            authority.EXACT_ADOPTION_CONSUMPTION_EVIDENCE_DOMAIN,
+        )
+        self.assertEqual(
+            authorization["domain"],
+            authority.EXACT_ADOPTION_CONSUMPTION_AUTHORIZATION_DOMAIN,
+        )
+        self.assertEqual(
+            proof["domain"], authority.EXACT_ADOPTION_CONSUMPTION_PROOF_DOMAIN
+        )
+        self.assertEqual(verified.state, state)
+        self.assertEqual(verified.historical_proof_mode, "exact_state_adoption")
+
+    def test_review_budget_admission_is_closed_and_disjoint_from_provider_mode(
+        self,
+    ) -> None:
+        state = authority.initial_state()
+        state.update(unrestricted_review_count=1, remediation_cycle_count=1)
+        observed = [
+            {
+                "sequence": 1,
+                "kind": "PR_CREATED_DRAFT",
+                "observed_at": "2026-08-01T00:00:00Z",
+                "head_sha": HEADS[1],
+                "reviewed_head_sha": None,
+            },
+            {
+                "sequence": 2,
+                "kind": "REVIEW_SUBMITTED",
+                "observed_at": "2026-08-02T00:00:00Z",
+                "head_sha": HEADS[1],
+                "reviewed_head_sha": HEADS[1],
+            },
+            {
+                "sequence": 3,
+                "kind": "REMEDIATION_HEAD_OBSERVED",
+                "observed_at": "2026-08-03T00:00:00Z",
+                "head_sha": HEADS[2],
+                "reviewed_head_sha": None,
+            },
+        ]
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "modes are ambiguous"
+        ):
+            authority.create_pre_enrollment_review_budget_consumption_admission(
+                admission_id="ambiguous-provider-and-admission",
+                repository="Example/governance",
+                delivery_issue=41,
+                pull_request=42,
+                head_sha=HEADS[2],
+                tree_sha=HEADS[3],
+                pull_request_state="OPEN",
+                commit_signature_evidence_digest="1" * 64,
+                validation_receipt_digest="2" * 64,
+                source_validation_evidence_digest="3" * 64,
+                adoption_source_evidence_digest="4" * 64,
+                observed_pre_enrollment_history=observed,
+                intended_state=state,
+                adoption_timestamp="2026-08-04T00:00:00Z",
+                signer_identity=SIGNER,
+                signer=signer_for(),
+            )
+
+        parameters = inspect.signature(
+            authority.create_pre_enrollment_review_budget_consumption_admission
+        ).parameters
+        self.assertNotIn("review_count", parameters)
+        self.assertNotIn("review_consumed", parameters)
+        self.assertNotIn("verdict", parameters)
+        self.assertNotIn("findings", parameters)
+        self.assertFalse(
+            any("UNRESTRICTED_REVIEW_RESULT" in value for value in vars(authority))
+        )
+
+    def test_review_budget_admission_rejects_substitution_replay_and_state_scope(
+        self,
+    ) -> None:
+        state = authority.initial_state()
+        state.update(unrestricted_review_count=1, remediation_cycle_count=1)
+        observed = [
+            {
+                "sequence": 1,
+                "kind": "PR_CREATED_DRAFT",
+                "observed_at": "2026-08-01T00:00:00Z",
+                "head_sha": HEADS[1],
+                "reviewed_head_sha": None,
+            },
+            {
+                "sequence": 2,
+                "kind": "REMEDIATION_HEAD_OBSERVED",
+                "observed_at": "2026-08-02T00:00:00Z",
+                "head_sha": HEADS[2],
+                "reviewed_head_sha": None,
+            },
+        ]
+        policy = authority.LifecycleTrustPolicy(
+            repository="Example/governance",
+            accepted_formats=frozenset({"ssh"}),
+            transition_signer_identities=frozenset({OTHER_SIGNER}),
+            authority_signer_identities=frozenset({OTHER_SIGNER}),
+            signers={
+                SIGNER: authority.TrustedSigner(SIGNER, ("unused",), ()),
+                OTHER_SIGNER: authority.TrustedSigner(
+                    OTHER_SIGNER, ("also-unused",), ()
+                ),
+            },
+            initialization_anchors=(),
+            legacy_adoption_signer_identities=frozenset({SIGNER}),
+        )
+        with patch.object(
+            authority, "_load_lifecycle_trust_policy", return_value=policy
+        ), patch.object(
+            authority, "_policy_signature_verifier", return_value=verify_signature
+        ):
+            external = authenticated_external_evidence(
+                observed=observed,
+                state=state,
+                admit_review_budget=True,
+            )
+            admission = copy.deepcopy(
+                external.review_budget_consumption_admission
+            )
+            expected = {
+                "repository": external.repository,
+                "delivery_issue": external.delivery_issue,
+                "pull_request": external.pull_request,
+                "head_sha": external.head_sha,
+                "tree_sha": external.tree_sha,
+                "pull_request_state": external.pull_request_state,
+                "commit_signature_evidence_digest": (
+                    external.commit_signature_evidence_digest
+                ),
+                "validation_receipt_digest": external.validation_receipt_digest,
+                "source_validation_evidence_digest": (
+                    external.source_validation_evidence_digest
+                ),
+                "adoption_source_evidence_digest": (
+                    external.adoption_source_evidence_digest
+                ),
+                "observed_history_digest": authority.digest_json(
+                    list(external.observed_pre_enrollment_history)
+                ),
+                "intended_state_digest": authority.digest_json(
+                    external.intended_state
+                ),
+                "adoption_timestamp": "2026-08-03T00:00:00Z",
+            }
+            verified = (
+                authority.verify_pre_enrollment_review_budget_consumption_admission(
+                    admission, **expected
+                )
+            )
+            self.assertEqual(verified.admission_digest, admission["admission_digest"])
+
+            mutations = (
+                lambda value: value.update(schema_version="9.9"),
+                lambda value: value.update(kind="UNRESTRICTED_REVIEW_RESULT"),
+                lambda value: value.update(domain="wrong-domain"),
+                lambda value: value.update(repository="Other/repository"),
+                lambda value: value.update(delivery_issue=99),
+                lambda value: value.update(pull_request=99),
+                lambda value: value.update(head_sha=HEADS[4]),
+                lambda value: value.update(tree_sha=HEADS[4]),
+                lambda value: value.update(pull_request_state="CLOSED"),
+                lambda value: value.update(
+                    adoption_timestamp="2026-08-04T00:00:00Z"
+                ),
+                lambda value: value.update(
+                    commit_signature_evidence_digest="0" * 64
+                ),
+                lambda value: value.update(validation_receipt_digest="0" * 64),
+                lambda value: value.update(
+                    source_validation_evidence_digest="0" * 64
+                ),
+                lambda value: value.update(
+                    adoption_source_evidence_digest="0" * 64
+                ),
+                lambda value: value.update(observed_history_digest="0" * 64),
+                lambda value: value.update(intended_state_digest="0" * 64),
+                lambda value: value.update(provider_review_submission_count=1),
+                lambda value: value.update(admitted_unrestricted_review_count=0),
+                lambda value: value.update(historical_provenance_status="PRESENT"),
+                lambda value: value.update(assertion="REVIEW_RECONSTRUCTED"),
+                lambda value: value.update(bounded_uses=2),
+                lambda value: value.update(adoption_context_digest="0" * 64),
+                lambda value: value.update(signer_identity=OTHER_SIGNER),
+                lambda value: value.update(admission_digest="0" * 64),
+                lambda value: value.update(unknown_field=True),
+                lambda value: value.pop("admission_id"),
+            )
+            for mutation in mutations:
+                with self.subTest(mutation=mutation), self.assertRaises(
+                    authority.LifecycleAuthorityError
+                ):
+                    changed = copy.deepcopy(admission)
+                    mutation(changed)
+                    authority.verify_pre_enrollment_review_budget_consumption_admission(
+                        changed, **expected
+                    )
+
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                authority.verify_pre_enrollment_review_budget_consumption_admission(
+                    [admission, admission], **expected
+                )
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                authority.verify_pre_enrollment_review_budget_consumption_admission(
+                    admission, **{**expected, "delivery_issue": 99}
+                )
+
+            wrong_signer = {
+                key: copy.deepcopy(value)
+                for key, value in admission.items()
+                if key not in {"signature", "admission_digest"}
+            }
+            wrong_signer["signer_identity"] = OTHER_SIGNER
+            wrong_signer["signature"] = signer_for(OTHER_SIGNER)(
+                authority.canonical_json_bytes(wrong_signer),
+                authority.PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_DOMAIN,
+            )
+            wrong_signer["admission_digest"] = authority.digest_json(
+                wrong_signer
+            )
+            with self.assertRaisesRegex(
+                authority.LifecycleAuthorityError, "independently accepted"
+            ):
+                authority.verify_pre_enrollment_review_budget_consumption_admission(
+                    wrong_signer, **expected
+                )
+
+        reset_state = copy.deepcopy(state)
+        reset_state["unrestricted_review_count"] = 0
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError,
+            "does not authenticate intended state",
+        ):
+            authenticated_external_evidence(observed=observed, state=reset_state)
+
+        over_count = copy.deepcopy(state)
+        over_count["unrestricted_review_count"] = 2
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            authenticated_external_evidence(observed=observed, state=over_count)
+
+        no_remediation_observation = observed[:1]
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError,
+            "does not authenticate intended state",
+        ):
+            authority.create_pre_enrollment_review_budget_consumption_admission(
+                admission_id="cannot-create-remediation",
+                repository="Example/governance",
+                delivery_issue=41,
+                pull_request=42,
+                head_sha=HEADS[1],
+                tree_sha=HEADS[3],
+                pull_request_state="OPEN",
+                commit_signature_evidence_digest="1" * 64,
+                validation_receipt_digest="2" * 64,
+                source_validation_evidence_digest="3" * 64,
+                adoption_source_evidence_digest="4" * 64,
+                observed_pre_enrollment_history=no_remediation_observation,
+                intended_state=state,
+                adoption_timestamp="2026-08-04T00:00:00Z",
+                signer_identity=SIGNER,
+                signer=signer_for(),
+            )
+
     def test_exact_adoption_constructor_requires_verified_external_evidence(self) -> None:
         parameters = inspect.signature(
             authority.create_exact_state_adoption_evidence

@@ -158,6 +158,19 @@ derives the remaining facts. Callers cannot nominate trusted evidence digests.
 Observation-derived Ready and exceptional history entries bind their canonical
 observation digest and never carry an ordinary event-authorization digest.
 
+Version 1 exact adoption retains its provider-backed review-count semantics.
+Version 2 adds one closed
+`PRE_ENROLLMENT_REVIEW_BUDGET_CONSUMPTION_ADMISSION` mode for a previously
+unenrolled delivery whose historical review-consumption provenance was not
+persisted. The migration role signs a domain-separated admission binding the
+exact open delivery, current head and tree, verified signature and validation
+evidence, canonical provider chronology, complete intended state, and adoption
+time. It conservatively consumes the single normal review budget; it does not
+reconstruct a review, verdict, finding, reviewer, or GitHub
+`ReviewSubmission`. Provider review observations and this admission are
+disjoint modes, and supplying both fails closed. Remediation, Ready, exceptional
+history, and every other state field remain independently observation-derived.
+
 Exact-state adoption reuses the maintained migration signer role, enrollment
 uniqueness, protected publication journal, CAS, lifecycle identity and authority
 digest conventions. Later transitions use the ordinary successor verifier, and

@@ -55,6 +55,29 @@ EXACT_ADOPTION_AUTHORIZATION_KIND = "SECPAL_EXACT_STATE_ADOPTION_AUTHORIZATION"
 EXACT_ADOPTION_AUTHORIZATION_DOMAIN = "secpal.exact-state-adoption-authorization/v1"
 EXACT_ADOPTION_EVIDENCE_KIND = "SECPAL_EXACT_STATE_ADOPTION_EVIDENCE"
 EXACT_ADOPTION_EVIDENCE_DOMAIN = "secpal.exact-state-adoption-evidence/v1"
+EXACT_ADOPTION_CONSUMPTION_VERSION = "2.0"
+EXACT_ADOPTION_CONSUMPTION_EVIDENCE_DOMAIN = (
+    "secpal.exact-state-adoption-evidence/v2"
+)
+EXACT_ADOPTION_CONSUMPTION_AUTHORIZATION_DOMAIN = (
+    "secpal.exact-state-adoption-authorization/v2"
+)
+EXACT_ADOPTION_CONSUMPTION_PROOF_DOMAIN = (
+    "secpal.exact-state-adoption-proof/v2"
+)
+PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_KIND = (
+    "SECPAL_PRE_ENROLLMENT_REVIEW_BUDGET_CONSUMPTION_ADMISSION"
+)
+PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_DOMAIN = (
+    "secpal.pre-enrollment-review-budget-consumption-admission/v1"
+)
+PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_VERSION = "1.0"
+REVIEW_CONSUMPTION_PROVENANCE_UNAVAILABLE = (
+    "HISTORICAL_REVIEW_CONSUMPTION_PROVENANCE_UNAVAILABLE"
+)
+CONSERVATIVE_REVIEW_BUDGET_ASSERTION = (
+    "NORMAL_UNRESTRICTED_REVIEW_BUDGET_CONSERVATIVELY_CONSUMED"
+)
 EXACT_ADOPTION_PROOF_MODE = "exact_state_adoption"
 NATIVE_PROOF_MODE = "native_lifecycle"
 PUBLICATION_EVIDENCE_KIND = "SECPAL_PUBLISHED_LIFECYCLE_EVIDENCE"
@@ -143,6 +166,27 @@ class VerifiedLifecycleAuthority:
 
 
 _VERIFIED_EXACT_ADOPTION_EVIDENCE = object()
+_VERIFIED_REVIEW_BUDGET_ADMISSION = object()
+
+
+@dataclass(frozen=True)
+class VerifiedPreEnrollmentReviewBudgetConsumptionAdmission:
+    """One migration-role-authenticated conservative finite-budget fact."""
+
+    admission_digest: str
+    admission_id: str
+    repository: str
+    delivery_issue: int
+    pull_request: int
+    head_sha: str
+    tree_sha: str
+    observed_history_digest: str
+    intended_state_digest: str
+    adoption_timestamp: str
+    adoption_context_digest: str
+    signer_identity: str
+    canonical_admission: dict[str, Any]
+    _verification_seal: object
 
 
 @dataclass(frozen=True)
@@ -162,6 +206,7 @@ class VerifiedExactStateAdoptionExternalEvidence:
     observed_pre_enrollment_history: tuple[dict[str, Any], ...]
     intended_state: dict[str, Any]
     supporting_evidence_digests: tuple[str, ...]
+    review_budget_consumption_admission: dict[str, Any] | None
     _verification_seal: object
 
 
@@ -452,6 +497,9 @@ EXACT_ADOPTION_EVIDENCE_FIELDS = frozenset(
         "adoption_evidence_digest",
     }
 )
+EXACT_ADOPTION_CONSUMPTION_EVIDENCE_FIELDS = frozenset(
+    EXACT_ADOPTION_EVIDENCE_FIELDS | {"review_budget_consumption_admission"}
+)
 EXACT_ADOPTION_AUTHORIZATION_FIELDS = frozenset(
     {
         "schema_version", "kind", "domain", "proof_version", "repository",
@@ -467,6 +515,28 @@ EXACT_ADOPTION_PROOF_FIELDS = frozenset(
         "kind", "domain", "historical_proof_mode", "lifecycle_id",
         "authorization", "authorization_digest", "signer_identity", "signature",
         "proof_digest",
+    }
+)
+EXACT_ADOPTION_CONSUMPTION_PROOF_FIELDS = frozenset(
+    (EXACT_ADOPTION_CONSUMPTION_EVIDENCE_FIELDS - {"kind", "domain"})
+    | {
+        "kind", "domain", "historical_proof_mode", "lifecycle_id",
+        "authorization", "authorization_digest", "signer_identity", "signature",
+        "proof_digest",
+    }
+)
+PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_FIELDS = frozenset(
+    {
+        "schema_version", "kind", "domain", "admission_id", "repository",
+        "delivery_issue", "pull_request", "head_sha", "tree_sha",
+        "pull_request_state", "commit_signature_evidence_digest",
+        "validation_receipt_digest", "source_validation_evidence_digest",
+        "adoption_source_evidence_digest", "observed_history_digest",
+        "intended_state_digest", "adoption_timestamp",
+        "provider_review_submission_count",
+        "admitted_unrestricted_review_count", "historical_provenance_status",
+        "assertion", "bounded_uses", "adoption_context_digest",
+        "signer_identity", "signature", "admission_digest",
     }
 )
 EXACT_ADOPTION_PUBLICATION_FIELDS = frozenset(
@@ -2400,8 +2470,255 @@ def _require_adoption_timestamp(value: Any, label: str) -> str:
     return value
 
 
+def _review_budget_admission_context(
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    head_sha: str,
+    tree_sha: str,
+    pull_request_state: str,
+    commit_signature_evidence_digest: str,
+    validation_receipt_digest: str,
+    source_validation_evidence_digest: str,
+    adoption_source_evidence_digest: str,
+    observed_history_digest: str,
+    intended_state_digest: str,
+    adoption_timestamp: str,
+) -> dict[str, Any]:
+    """Canonical exact adoption context authorized by one budget admission."""
+
+    if pull_request_state != "OPEN":
+        raise LifecycleAuthorityError(
+            "review-budget admission requires an open delivery"
+        )
+    return {
+        "repository": _require_repository(repository),
+        "delivery_issue": _require_positive_int(
+            delivery_issue, "review-budget admission delivery issue"
+        ),
+        "pull_request": _require_positive_int(
+            pull_request, "review-budget admission pull request"
+        ),
+        "head_sha": _require_oid(head_sha, "review-budget admission head"),
+        "tree_sha": _require_oid(tree_sha, "review-budget admission tree"),
+        "pull_request_state": pull_request_state,
+        "commit_signature_evidence_digest": _require_digest(
+            commit_signature_evidence_digest,
+            "review-budget admission commit signature evidence",
+        ),
+        "validation_receipt_digest": _require_digest(
+            validation_receipt_digest, "review-budget admission validation receipt"
+        ),
+        "source_validation_evidence_digest": _require_digest(
+            source_validation_evidence_digest,
+            "review-budget admission source validation evidence",
+        ),
+        "adoption_source_evidence_digest": _require_digest(
+            adoption_source_evidence_digest,
+            "review-budget admission adoption-time source evidence",
+        ),
+        "observed_history_digest": _require_digest(
+            observed_history_digest, "review-budget admission observed history"
+        ),
+        "intended_state_digest": _require_digest(
+            intended_state_digest, "review-budget admission intended state"
+        ),
+        "adoption_timestamp": _require_adoption_timestamp(
+            adoption_timestamp, "review-budget admission timestamp"
+        ),
+    }
+
+
+def create_pre_enrollment_review_budget_consumption_admission(
+    *,
+    admission_id: str,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    head_sha: str,
+    tree_sha: str,
+    pull_request_state: str,
+    commit_signature_evidence_digest: str,
+    validation_receipt_digest: str,
+    source_validation_evidence_digest: str,
+    adoption_source_evidence_digest: str,
+    observed_pre_enrollment_history: Sequence[Mapping[str, Any]],
+    intended_state: Mapping[str, Any],
+    adoption_timestamp: str,
+    signer_identity: str,
+    signer: Signer,
+) -> dict[str, Any]:
+    """Sign one conservative consumed-budget fact, never a historical review."""
+
+    state = _validate_state(
+        dict(intended_state), allow_adopted_observations=True
+    )
+    history = _normalize_observed_pre_enrollment_history(
+        list(observed_pre_enrollment_history),
+        expected_head=_require_oid(head_sha, "review-budget admission head"),
+        intended_state=state,
+        review_budget_consumption_admitted=True,
+    )
+    context = _review_budget_admission_context(
+        repository=repository,
+        delivery_issue=delivery_issue,
+        pull_request=pull_request,
+        head_sha=head_sha,
+        tree_sha=tree_sha,
+        pull_request_state=pull_request_state,
+        commit_signature_evidence_digest=commit_signature_evidence_digest,
+        validation_receipt_digest=validation_receipt_digest,
+        source_validation_evidence_digest=source_validation_evidence_digest,
+        adoption_source_evidence_digest=adoption_source_evidence_digest,
+        observed_history_digest=digest_json(history),
+        intended_state_digest=digest_json(state),
+        adoption_timestamp=adoption_timestamp,
+    )
+    fields = {
+        "schema_version": PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_VERSION,
+        "kind": PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_KIND,
+        "domain": PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_DOMAIN,
+        "admission_id": _require_identity(
+            admission_id, "review-budget admission identity"
+        ),
+        **context,
+        "provider_review_submission_count": 0,
+        "admitted_unrestricted_review_count": MAX_UNRESTRICTED_REVIEWS,
+        "historical_provenance_status": (
+            REVIEW_CONSUMPTION_PROVENANCE_UNAVAILABLE
+        ),
+        "assertion": CONSERVATIVE_REVIEW_BUDGET_ASSERTION,
+        "bounded_uses": 1,
+        "adoption_context_digest": digest_json(context),
+        "signer_identity": _require_identity(
+            signer_identity, "review-budget admission signer"
+        ),
+    }
+    signature = _normalize_signature(
+        signer(
+            canonical_json_bytes(fields),
+            PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_DOMAIN,
+        ),
+        fields["signer_identity"],
+    )
+    signed = {**fields, "signature": signature}
+    return {**signed, "admission_digest": digest_json(signed)}
+
+
+def verify_pre_enrollment_review_budget_consumption_admission(
+    value: Any,
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    head_sha: str,
+    tree_sha: str,
+    pull_request_state: str,
+    commit_signature_evidence_digest: str,
+    validation_receipt_digest: str,
+    source_validation_evidence_digest: str,
+    adoption_source_evidence_digest: str,
+    observed_history_digest: str,
+    intended_state_digest: str,
+    adoption_timestamp: str,
+) -> VerifiedPreEnrollmentReviewBudgetConsumptionAdmission:
+    """Verify the sole review-count input accepted by exact adoption v1.1."""
+
+    admission = _require_closed(
+        value,
+        PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_FIELDS,
+        "pre-enrollment review-budget consumption admission",
+    )
+    context = _review_budget_admission_context(
+        repository=repository,
+        delivery_issue=delivery_issue,
+        pull_request=pull_request,
+        head_sha=head_sha,
+        tree_sha=tree_sha,
+        pull_request_state=pull_request_state,
+        commit_signature_evidence_digest=commit_signature_evidence_digest,
+        validation_receipt_digest=validation_receipt_digest,
+        source_validation_evidence_digest=source_validation_evidence_digest,
+        adoption_source_evidence_digest=adoption_source_evidence_digest,
+        observed_history_digest=observed_history_digest,
+        intended_state_digest=intended_state_digest,
+        adoption_timestamp=adoption_timestamp,
+    )
+    if (
+        admission["schema_version"]
+        != PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_VERSION
+        or admission["kind"] != PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_KIND
+        or admission["domain"] != PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_DOMAIN
+        or admission["provider_review_submission_count"] != 0
+        or isinstance(admission["provider_review_submission_count"], bool)
+        or admission["admitted_unrestricted_review_count"]
+        != MAX_UNRESTRICTED_REVIEWS
+        or isinstance(admission["admitted_unrestricted_review_count"], bool)
+        or admission["historical_provenance_status"]
+        != REVIEW_CONSUMPTION_PROVENANCE_UNAVAILABLE
+        or admission["assertion"] != CONSERVATIVE_REVIEW_BUDGET_ASSERTION
+        or admission["bounded_uses"] != 1
+        or isinstance(admission["bounded_uses"], bool)
+        or admission["adoption_context_digest"] != digest_json(context)
+        or any(admission[field] != expected for field, expected in context.items())
+    ):
+        raise LifecycleAuthorityError(
+            "pre-enrollment review-budget admission scope changed"
+        )
+    admission_id = _require_identity(
+        admission["admission_id"], "review-budget admission identity"
+    )
+    signer_identity = _require_identity(
+        admission["signer_identity"], "review-budget admission signer"
+    )
+    signed = {
+        key: copy.deepcopy(item)
+        for key, item in admission.items()
+        if key != "admission_digest"
+    }
+    admission_digest = _require_digest(
+        admission["admission_digest"], "review-budget admission"
+    )
+    if admission_digest != digest_json(signed):
+        raise LifecycleAuthorityError(
+            "pre-enrollment review-budget admission digest mismatch"
+        )
+    policy = _load_lifecycle_trust_policy(context["repository"])
+    _verify_signature(
+        canonical_json_bytes(
+            _unsigned(admission, "admission_digest", "signature")
+        ),
+        admission["signature"],
+        signer_identity,
+        PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_DOMAIN,
+        policy.legacy_adoption_signer_identities,
+        _policy_signature_verifier(policy),
+    )
+    return VerifiedPreEnrollmentReviewBudgetConsumptionAdmission(
+        admission_digest=admission_digest,
+        admission_id=admission_id,
+        repository=context["repository"],
+        delivery_issue=context["delivery_issue"],
+        pull_request=context["pull_request"],
+        head_sha=context["head_sha"],
+        tree_sha=context["tree_sha"],
+        observed_history_digest=context["observed_history_digest"],
+        intended_state_digest=context["intended_state_digest"],
+        adoption_timestamp=context["adoption_timestamp"],
+        adoption_context_digest=admission["adoption_context_digest"],
+        signer_identity=signer_identity,
+        canonical_admission=copy.deepcopy(admission),
+        _verification_seal=_VERIFIED_REVIEW_BUDGET_ADMISSION,
+    )
+
+
 def _normalize_observed_pre_enrollment_history(
-    value: Any, *, expected_head: str, intended_state: Mapping[str, Any]
+    value: Any,
+    *,
+    expected_head: str,
+    intended_state: Mapping[str, Any],
+    review_budget_consumption_admitted: bool = False,
 ) -> list[dict[str, Any]]:
     """Normalize factual observations without recasting them as lifecycle events."""
 
@@ -2487,9 +2804,25 @@ def _normalize_observed_pre_enrollment_history(
             if draft:
                 raise LifecycleAuthorityError("observed Draft chronology contains hidden churn")
             draft = True
+    provider_review_count = kinds.count("REVIEW_SUBMITTED")
+    if review_budget_consumption_admitted and (
+        provider_review_count != 0
+        or state["unrestricted_review_count"] != MAX_UNRESTRICTED_REVIEWS
+    ):
+        raise LifecycleAuthorityError(
+            "provider review and review-budget admission modes are ambiguous"
+        )
     if (
         kinds.count("PR_CREATED_DRAFT") != 1
-        or kinds.count("REVIEW_SUBMITTED") != state["unrestricted_review_count"]
+        or (
+            not review_budget_consumption_admitted
+            and provider_review_count != state["unrestricted_review_count"]
+        )
+        or (
+            state["remediation_cycle_count"] > 0
+            and state["unrestricted_review_count"]
+            != MAX_UNRESTRICTED_REVIEWS
+        )
         or kinds.count("REMEDIATION_HEAD_OBSERVED")
         != state["remediation_cycle_count"]
         or kinds.count("EXCEPTIONAL_RECOVERY_OBSERVED")
@@ -2573,6 +2906,7 @@ def authenticate_exact_state_adoption_external_evidence(
     validation_evidence: VerifiedValidationEvidence,
     observed_pre_enrollment_history: Sequence[Mapping[str, Any]],
     intended_state: Mapping[str, Any],
+    review_budget_consumption_admission: Mapping[str, Any] | None = None,
 ) -> VerifiedExactStateAdoptionExternalEvidence:
     """Authenticate external artifacts before any adoption proof is assembled."""
 
@@ -2609,17 +2943,52 @@ def authenticate_exact_state_adoption_external_evidence(
     state = _validate_state(
         dict(intended_state), allow_adopted_observations=True
     )
+    has_review_budget_admission = review_budget_consumption_admission is not None
     history = _normalize_observed_pre_enrollment_history(
         list(observed_pre_enrollment_history),
         expected_head=head,
         intended_state=state,
+        review_budget_consumption_admitted=has_review_budget_admission,
     )
+    verified_review_budget_admission = None
+    if review_budget_consumption_admission is not None:
+        verified_review_budget_admission = (
+            verify_pre_enrollment_review_budget_consumption_admission(
+                review_budget_consumption_admission,
+                repository=repository,
+                delivery_issue=issue,
+                pull_request=pr,
+                head_sha=head,
+                tree_sha=tree,
+                pull_request_state=pull_request_state,
+                commit_signature_evidence_digest=signature_evidence_digest,
+                validation_receipt_digest=(
+                    validation_evidence.validation_receipt_digest
+                ),
+                source_validation_evidence_digest=(
+                    validation_evidence.source_validation_evidence_digest
+                ),
+                adoption_source_evidence_digest=(
+                    validation_evidence.final_attestation_digest
+                ),
+                observed_history_digest=digest_json(history),
+                intended_state_digest=digest_json(state),
+                adoption_timestamp=review_budget_consumption_admission.get(
+                    "adoption_timestamp"
+                ),
+            )
+        )
     supporting_digests = tuple(sorted({
         validation_evidence.validation_receipt_digest,
         validation_evidence.source_validation_evidence_digest,
         validation_evidence.final_attestation_digest,
         signature_evidence_digest,
         digest_json(history),
+        *(
+            ()
+            if verified_review_budget_admission is None
+            else (verified_review_budget_admission.admission_digest,)
+        ),
     }))
     return VerifiedExactStateAdoptionExternalEvidence(
         repository=repository,
@@ -2637,6 +3006,13 @@ def authenticate_exact_state_adoption_external_evidence(
         observed_pre_enrollment_history=tuple(copy.deepcopy(history)),
         intended_state=copy.deepcopy(state),
         supporting_evidence_digests=supporting_digests,
+        review_budget_consumption_admission=(
+            None
+            if verified_review_budget_admission is None
+            else copy.deepcopy(
+                verified_review_budget_admission.canonical_admission
+            )
+        ),
         _verification_seal=_VERIFIED_EXACT_ADOPTION_EVIDENCE,
     )
 
@@ -2649,6 +3025,7 @@ def _assemble_exact_state_adoption_evidence(
     observed_pre_enrollment_history: Sequence[Mapping[str, Any]],
     intended_state: Mapping[str, Any], adoption_timestamp: str,
     supporting_evidence_digests: Sequence[str],
+    review_budget_consumption_admission: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble canonical proof fields from already authenticated evidence."""
 
@@ -2663,7 +3040,12 @@ def _assemble_exact_state_adoption_evidence(
         dict(intended_state), allow_adopted_observations=True
     )
     history = _normalize_observed_pre_enrollment_history(
-        list(observed_pre_enrollment_history), expected_head=head, intended_state=state
+        list(observed_pre_enrollment_history),
+        expected_head=head,
+        intended_state=state,
+        review_budget_consumption_admitted=(
+            review_budget_consumption_admission is not None
+        ),
     )
     timestamp = _require_adoption_timestamp(adoption_timestamp, "adoption timestamp")
     observation_instant = _parse_adoption_timestamp(
@@ -2676,11 +3058,45 @@ def _assemble_exact_state_adoption_evidence(
         raise LifecycleAuthorityError("adoption supporting evidence is ambiguous")
     for digest in supporting:
         _require_digest(digest, "adoption supporting evidence")
+    verified_review_budget_admission = None
+    if review_budget_consumption_admission is not None:
+        verified_review_budget_admission = (
+            verify_pre_enrollment_review_budget_consumption_admission(
+                review_budget_consumption_admission,
+                repository=repository,
+                delivery_issue=issue,
+                pull_request=pr,
+                head_sha=head,
+                tree_sha=tree,
+                pull_request_state=pull_request_state,
+                commit_signature_evidence_digest=commit_signature_evidence_digest,
+                validation_receipt_digest=validation_receipt_digest,
+                source_validation_evidence_digest=source_validation_evidence_digest,
+                adoption_source_evidence_digest=adoption_source_evidence_digest,
+                observed_history_digest=digest_json(history),
+                intended_state_digest=digest_json(state),
+                adoption_timestamp=timestamp,
+            )
+        )
+        if verified_review_budget_admission.admission_digest not in supporting:
+            raise LifecycleAuthorityError(
+                "review-budget admission is absent from supporting evidence"
+            )
+    version = (
+        SCHEMA_VERSION
+        if verified_review_budget_admission is None
+        else EXACT_ADOPTION_CONSUMPTION_VERSION
+    )
+    domain = (
+        EXACT_ADOPTION_EVIDENCE_DOMAIN
+        if verified_review_budget_admission is None
+        else EXACT_ADOPTION_CONSUMPTION_EVIDENCE_DOMAIN
+    )
     fields = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": version,
         "kind": EXACT_ADOPTION_EVIDENCE_KIND,
-        "domain": EXACT_ADOPTION_EVIDENCE_DOMAIN,
-        "proof_version": SCHEMA_VERSION,
+        "domain": domain,
+        "proof_version": version,
         "repository": repository,
         "delivery_issue": issue,
         "pull_request": pr,
@@ -2714,6 +3130,10 @@ def _assemble_exact_state_adoption_evidence(
             [item for item in history if item["kind"] == "HEAD_ADVANCED_OBSERVED"]
         ),
     }
+    if verified_review_budget_admission is not None:
+        fields["review_budget_consumption_admission"] = copy.deepcopy(
+            verified_review_budget_admission.canonical_admission
+        )
     return {**fields, "adoption_evidence_digest": digest_json(fields)}
 
 
@@ -2748,18 +3168,36 @@ def create_exact_state_adoption_evidence(
         intended_state=evidence.intended_state,
         adoption_timestamp=adoption_timestamp,
         supporting_evidence_digests=evidence.supporting_evidence_digests,
+        review_budget_consumption_admission=(
+            evidence.review_budget_consumption_admission
+        ),
     )
 
 
 def _verify_exact_state_adoption_evidence(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise LifecycleAuthorityError("exact-state adoption evidence is malformed")
+    fields = frozenset(value)
+    if fields == EXACT_ADOPTION_EVIDENCE_FIELDS:
+        expected_version = SCHEMA_VERSION
+        expected_domain = EXACT_ADOPTION_EVIDENCE_DOMAIN
+        review_budget_admission = None
+    elif fields == EXACT_ADOPTION_CONSUMPTION_EVIDENCE_FIELDS:
+        expected_version = EXACT_ADOPTION_CONSUMPTION_VERSION
+        expected_domain = EXACT_ADOPTION_CONSUMPTION_EVIDENCE_DOMAIN
+        review_budget_admission = value.get("review_budget_consumption_admission")
+    else:
+        raise LifecycleAuthorityError(
+            "exact-state adoption evidence contains unknown or missing fields"
+        )
     evidence = _require_closed(
-        value, EXACT_ADOPTION_EVIDENCE_FIELDS, "exact-state adoption evidence"
+        value, fields, "exact-state adoption evidence"
     )
     if (
-        evidence["schema_version"] != SCHEMA_VERSION
-        or evidence["proof_version"] != SCHEMA_VERSION
+        evidence["schema_version"] != expected_version
+        or evidence["proof_version"] != expected_version
         or evidence["kind"] != EXACT_ADOPTION_EVIDENCE_KIND
-        or evidence["domain"] != EXACT_ADOPTION_EVIDENCE_DOMAIN
+        or evidence["domain"] != expected_domain
         or evidence["ordinary_lifecycle_events"] != []
         or evidence["commit_signature_status"] != "VERIFIED"
     ):
@@ -2778,6 +3216,7 @@ def _verify_exact_state_adoption_evidence(value: Any) -> dict[str, Any]:
         intended_state=evidence["intended_state"],
         adoption_timestamp=evidence["adoption_timestamp"],
         supporting_evidence_digests=evidence["supporting_evidence_digests"],
+        review_budget_consumption_admission=review_budget_admission,
     )
     if rebuilt != evidence:
         raise LifecycleAuthorityError("exact-state adoption evidence binding changed")
@@ -2791,11 +3230,19 @@ def create_exact_state_adoption_authorization(
     """Sign one exact-scope, one-use authorization independently of the proof."""
 
     evidence = _verify_exact_state_adoption_evidence(adoption_evidence)
+    consumption_mode = (
+        evidence["proof_version"] == EXACT_ADOPTION_CONSUMPTION_VERSION
+    )
+    authorization_domain = (
+        EXACT_ADOPTION_CONSUMPTION_AUTHORIZATION_DOMAIN
+        if consumption_mode
+        else EXACT_ADOPTION_AUTHORIZATION_DOMAIN
+    )
     fields = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": evidence["proof_version"],
         "kind": EXACT_ADOPTION_AUTHORIZATION_KIND,
-        "domain": EXACT_ADOPTION_AUTHORIZATION_DOMAIN,
-        "proof_version": SCHEMA_VERSION,
+        "domain": authorization_domain,
+        "proof_version": evidence["proof_version"],
         "repository": evidence["repository"],
         "delivery_issue": evidence["delivery_issue"],
         "pull_request": evidence["pull_request"],
@@ -2810,7 +3257,7 @@ def create_exact_state_adoption_authorization(
     if bounded_uses != 1 or isinstance(bounded_uses, bool):
         raise LifecycleAuthorityError("exact-state adoption authorization must have one use")
     signature = _normalize_signature(
-        signer(canonical_json_bytes(fields), EXACT_ADOPTION_AUTHORIZATION_DOMAIN),
+        signer(canonical_json_bytes(fields), authorization_domain),
         fields["signer_identity"],
     )
     signed = {**fields, "signature": signature}
@@ -2825,11 +3272,16 @@ def create_exact_state_adoption_proof(
 
     evidence = _verify_exact_state_adoption_evidence(adoption_evidence)
     authorization_item = copy.deepcopy(dict(authorization))
+    proof_domain = (
+        EXACT_ADOPTION_CONSUMPTION_PROOF_DOMAIN
+        if evidence["proof_version"] == EXACT_ADOPTION_CONSUMPTION_VERSION
+        else EXACT_ADOPTION_PROOF_DOMAIN
+    )
     fields = {
         **{key: copy.deepcopy(value) for key, value in evidence.items()
            if key not in {"kind", "domain"}},
         "kind": EXACT_ADOPTION_PROOF_KIND,
-        "domain": EXACT_ADOPTION_PROOF_DOMAIN,
+        "domain": proof_domain,
         "historical_proof_mode": EXACT_ADOPTION_PROOF_MODE,
         "lifecycle_id": f"lifecycle-adoption:{evidence['adoption_evidence_digest']}",
         "authorization": authorization_item,
@@ -2837,7 +3289,7 @@ def create_exact_state_adoption_proof(
         "signer_identity": _require_identity(signer_identity, "exact adoption signer"),
     }
     signature = _normalize_signature(
-        signer(canonical_json_bytes(fields), EXACT_ADOPTION_PROOF_DOMAIN),
+        signer(canonical_json_bytes(fields), proof_domain),
         fields["signer_identity"],
     )
     signed = {**fields, "signature": signature}
@@ -2849,22 +3301,41 @@ def verify_exact_state_adoption_proof(
 ) -> VerifiedLifecycleAuthority:
     """Authenticate one exact adopted baseline using maintained adoption trust."""
 
+    if not isinstance(proof_value, Mapping):
+        raise LifecycleAuthorityError("exact-state adoption proof is malformed")
+    proof_fields = frozenset(proof_value)
+    if proof_fields == EXACT_ADOPTION_PROOF_FIELDS:
+        expected_version = SCHEMA_VERSION
+        evidence_fields = EXACT_ADOPTION_EVIDENCE_FIELDS
+        evidence_domain = EXACT_ADOPTION_EVIDENCE_DOMAIN
+        authorization_domain = EXACT_ADOPTION_AUTHORIZATION_DOMAIN
+        proof_domain = EXACT_ADOPTION_PROOF_DOMAIN
+    elif proof_fields == EXACT_ADOPTION_CONSUMPTION_PROOF_FIELDS:
+        expected_version = EXACT_ADOPTION_CONSUMPTION_VERSION
+        evidence_fields = EXACT_ADOPTION_CONSUMPTION_EVIDENCE_FIELDS
+        evidence_domain = EXACT_ADOPTION_CONSUMPTION_EVIDENCE_DOMAIN
+        authorization_domain = EXACT_ADOPTION_CONSUMPTION_AUTHORIZATION_DOMAIN
+        proof_domain = EXACT_ADOPTION_CONSUMPTION_PROOF_DOMAIN
+    else:
+        raise LifecycleAuthorityError(
+            "exact-state adoption proof contains unknown or missing fields"
+        )
     proof = _require_closed(
-        proof_value, EXACT_ADOPTION_PROOF_FIELDS, "exact-state adoption proof"
+        proof_value, proof_fields, "exact-state adoption proof"
     )
     if (
-        proof["schema_version"] != SCHEMA_VERSION
-        or proof["proof_version"] != SCHEMA_VERSION
+        proof["schema_version"] != expected_version
+        or proof["proof_version"] != expected_version
         or proof["kind"] != EXACT_ADOPTION_PROOF_KIND
-        or proof["domain"] != EXACT_ADOPTION_PROOF_DOMAIN
+        or proof["domain"] != proof_domain
         or proof["historical_proof_mode"] != EXACT_ADOPTION_PROOF_MODE
     ):
         raise LifecycleAuthorityError("exact-state adoption proof semantics are unknown")
     evidence = _verify_exact_state_adoption_evidence(
         {
-            **{key: copy.deepcopy(proof[key]) for key in EXACT_ADOPTION_EVIDENCE_FIELDS},
+            **{key: copy.deepcopy(proof[key]) for key in evidence_fields},
             "kind": EXACT_ADOPTION_EVIDENCE_KIND,
-            "domain": EXACT_ADOPTION_EVIDENCE_DOMAIN,
+            "domain": evidence_domain,
         }
     )
     expected_lifecycle = f"lifecycle-adoption:{evidence['adoption_evidence_digest']}"
@@ -2878,10 +3349,10 @@ def verify_exact_state_adoption_proof(
         "exact-state adoption authorization",
     )
     if (
-        authorization["schema_version"] != SCHEMA_VERSION
-        or authorization["proof_version"] != SCHEMA_VERSION
+        authorization["schema_version"] != expected_version
+        or authorization["proof_version"] != expected_version
         or authorization["kind"] != EXACT_ADOPTION_AUTHORIZATION_KIND
-        or authorization["domain"] != EXACT_ADOPTION_AUTHORIZATION_DOMAIN
+        or authorization["domain"] != authorization_domain
         or authorization["bounded_uses"] != 1
         or isinstance(authorization["bounded_uses"], bool)
         or any(
@@ -2913,7 +3384,7 @@ def verify_exact_state_adoption_proof(
             _unsigned(authorization, "authorization_digest", "signature")
         ),
         authorization["signature"], authorization_signer,
-        EXACT_ADOPTION_AUTHORIZATION_DOMAIN,
+        authorization_domain,
         policy.legacy_adoption_signer_identities, verifier,
     )
     proof_signer = _require_identity(proof["signer_identity"], "exact adoption signer")
@@ -2926,7 +3397,7 @@ def verify_exact_state_adoption_proof(
         raise LifecycleAuthorityError("exact-state adoption proof digest mismatch")
     _verify_signature(
         canonical_json_bytes(_unsigned(proof, "proof_digest", "signature")),
-        proof["signature"], proof_signer, EXACT_ADOPTION_PROOF_DOMAIN,
+        proof["signature"], proof_signer, proof_domain,
         policy.legacy_adoption_signer_identities, verifier,
     )
     result = VerifiedLifecycleAuthority(

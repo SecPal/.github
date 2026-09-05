@@ -9,6 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-05 - Preserve Pre-Enrollment Review Consumption
+
+**Changed:**
+
+- add one exact-state-adoption mode that conservatively preserves a consumed
+  unrestricted-review budget when no historical provider review exists
+- bind the admission to exact current delivery and validation evidence under
+  the existing migration authority without reconstructing review results,
+  verdicts, findings, or provider observations
+- keep provider-backed adoption, native lifecycle, legacy checkpoints, and
+  remediation/Ready derivation unchanged and fail closed on mixed modes
+
 ## 2026-09-05 - Authenticate Immutable Helper Source After PR Advancement
 
 **Changed:**
