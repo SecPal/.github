@@ -1710,20 +1710,11 @@ def _validate_action_command(arguments: list[str]) -> None:
             raise MutationBlocked("GraphQL variables do not match the allowlisted document")
         return
     endpoint = arguments[4] if len(arguments) > 4 else ""
-    repository = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
-    encoded_ref = r"[A-Za-z0-9._~%+-]+"
-    rules_endpoint = re.fullmatch(
-        rf"repos/{repository}/rules/branches/{encoded_ref}\?per_page=100&page=[1-9][0-9]*",
-        endpoint,
-    )
-    protection_endpoint = re.fullmatch(
-        rf"repos/{repository}/branches/{encoded_ref}/protection/required_status_checks",
-        endpoint,
-    )
     if len(arguments) == 7 and arguments[5:7] == ["--method", "GET"]:
-        if not rules_endpoint and not protection_endpoint:
+        if evidence.read_only_rest_endpoint_kind(endpoint) is None:
             raise MutationBlocked("REST read endpoint is not exactly allowlisted")
         return
+    repository = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
     if len(arguments) != 11 or arguments[5:7] != ["--method", "POST"]:
         raise MutationBlocked("REST mutation must use the exact POST command shape")
     reaction_endpoint = re.fullmatch(
@@ -2300,16 +2291,20 @@ class LiveGitHub:
 
         def read_branch_protection() -> dict[str, Any]:
             if not policy["require_branch_protection_evidence"]:
-                return {}
+                return evidence.empty_classic_branch_protection()
             endpoint = (
                 f"repos/{owner}/{name}/branches/{encoded_ref}"
-                "/protection/required_status_checks"
+                "/protection"
             )
             response = run(
                 ["gh", "api", "--hostname", "github.com", endpoint, "--method", "GET"]
             )
-            if not isinstance(response, dict):
-                raise MutationFailure("GitHub returned malformed branch protection")
+            try:
+                response = evidence.normalize_classic_branch_protection(response)
+            except evidence.BlockedError as exc:
+                raise MutationBlocked(
+                    f"current classic branch-protection evidence is incomplete: {exc.message}"
+                ) from exc
             add_items(1)
             return response
 
@@ -2867,18 +2862,20 @@ class FastPathGateway:
 
         def read_branch_protection() -> dict[str, Any]:
             if policy.get("require_branch_protection_evidence") is not True:
-                return {}
+                return evidence.empty_classic_branch_protection()
             endpoint = (
                 f"repos/{owner}/{name}/branches/{encoded_ref}"
-                "/protection/required_status_checks"
+                "/protection"
             )
             response = run(
                 ["gh", "api", "--hostname", "github.com", endpoint, "--method", "GET"]
             )
-            if not isinstance(response, dict):
-                raise fast_path.TransientReadFailure(
-                    "GitHub returned malformed branch protection"
-                )
+            try:
+                response = evidence.normalize_classic_branch_protection(response)
+            except evidence.BlockedError as exc:
+                raise fast_path.SecurityBlocker(
+                    f"classic branch-protection evidence is incomplete: {exc.message}"
+                ) from exc
             add_items(1)
             return response
 
@@ -3036,6 +3033,8 @@ class FastPathGateway:
         return {
             "checks": checks,
             "required_specs": required_specs,
+            "ruleset_evidence": copy.deepcopy(rulesets),
+            "classic_branch_protection_evidence": copy.deepcopy(branch_protection),
             "strict_base_required": (
                 ruleset_strict or branch_protection_strict
             ),

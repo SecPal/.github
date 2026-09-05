@@ -1,0 +1,27 @@
+{
+  "attestation_digest": "84066ae060977f266754b54a09c665cc9c6ca9868d0bfaaa84c1b7cd7414fbec",
+  "command_set_digest": "be48816055cefe43f3db214b47e0e19b09a65da20b028734c0ebe98bcef459d4",
+  "eligibility_evidence_digest": "a55704a035ad6cf712ace2f9e5660e38fb50301922764ccb5d427a5982c5309e",
+  "head_sha": "eb3aebf226c3ca215e7021b00207cc996ab06c2e",
+  "manual_gate_evidence": [
+    {
+      "evidence": "Pre-commit passed against the exact eleven-file final change list.",
+      "gate": "Run pre-commit against the exact changed-file list; the list is session-specific and must not be guessed.",
+      "satisfied": true
+    },
+    {
+      "evidence": "The guarded canonical full-protection GET and complete projection passed against SecPal/.github main; no apply operation was used.",
+      "gate": "Run read-only live acceptance only when explicitly required and never use the action helper with --apply before rollout authorization.",
+      "satisfied": true
+    }
+  ],
+  "registry_digest": "cc36bf9c14796f925b628ae6884857d2405eb5f06b4d6f1bddcced80e2b6a635",
+  "repository": "SecPal/.github",
+  "reviewed_feedback_digest": "eb22d6f53b70b4262bcd2e8836f5e3a2ae1f68129410e608a518880ea5155b71",
+  "reviewed_head_sha": "f8d58a3acd5d2b5c84824bf9ecba637e91665ee9",
+  "reviewed_state_digest": "b73573a9431410addd613f62f78df1d1b71faf7568b7fe01a42745b0e4554ca5",
+  "schema_version": "1.0",
+  "successful_result": true,
+  "validated_tree_sha": "d7fca1ea61ea0b4cd78bf18f8555386633e013ea",
+  "validation_receipt_digest": "cc771a06ed843aa97120033acb079bcc8f5ea40ceeef79bf237f0f44bf2a3293"
+}

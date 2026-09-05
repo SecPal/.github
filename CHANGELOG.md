@@ -54,6 +54,23 @@ Log of notable changes to SecPal organization defaults (newest first).
 - keep final-eligibility manifest and authenticated-absence modes disjoint, and
   isolate classification and disposition schema meanings against replay
 
+## 2026-09-04 - Complete Guarded Branch-Protection Evidence
+
+**Changed:**
+
+- capture the complete classic branch-protection state through the existing
+  guarded read-only readiness path
+- retain exact historical compact version-1 snapshots while validating the
+  expanded current projection, and normalize disabled protection through the
+  canonical empty representation
+- treat an omitted `required_signatures` REST field as disabled while rejecting
+  malformed present values and all other incomplete required protection facts
+- preserve repository rulesets as a separate authenticated evidence source and
+  fail closed when required classic-protection evidence is inaccessible or
+  incomplete
+- authenticate the changed readiness helper through its exact protected-main
+  source admission instead of a branch-local current-source pin
+
 ## 2026-09-02 - Execute Authenticated Ready/Draft Transitions
 
 **Added:**
