@@ -2072,6 +2072,32 @@ class MutationTests(TestCase):
         actions.LiveGitHub(runner()).verify_current_required_checks(
             plan(), snapshot, repository_config()
         )
+        disabled_snapshot = copy.deepcopy(snapshot)
+        disabled_snapshot["applicable_rules"] = {
+            "rulesets": [],
+            "branch_protection": p21.review.empty_classic_branch_protection(),
+            "evidence_complete": True,
+        }
+        disabled_snapshot["required_check_evidence"].update(
+            {"required": [], "missing": [], "sources": []}
+        )
+        disabled_snapshot["checks"][0].update(
+            {
+                "requiredness": "non_required",
+                "evidence_state": "non_required_successful",
+            }
+        )
+        disabled_snapshot = p21.finalize_snapshot(disabled_snapshot)
+        disabled_configuration = repository_config()
+        disabled_configuration["check_policy"].update(
+            {
+                "require_ruleset_evidence": False,
+                "require_branch_protection_evidence": False,
+            }
+        )
+        actions.LiveGitHub(runner()).verify_current_required_checks(
+            plan(), disabled_snapshot, disabled_configuration
+        )
         with self.assertRaisesRegex(actions.MutationBlocked, "no longer successful"):
             actions.LiveGitHub(runner(conclusion="FAILURE")).verify_current_required_checks(
                 plan(), snapshot, repository_config()

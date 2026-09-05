@@ -251,6 +251,15 @@ and count against the same configured caps. Any
 difference terminates with `BLOCKED_INCOMPLETE_REVIEW_STATE` before output is
 prepared.
 
+Version-1 snapshots retain two closed classic-protection projections: the
+historical compact `strict`/`contexts`/`checks` object and the current complete
+object. The validator authenticates either representation in its original
+canonical bytes, rejects mixed or unknown shapes, and uses the canonical empty
+complete object when policy disables classic-protection evidence. A missing raw
+`required_signatures` field means signed-commit protection is disabled; a
+present malformed value and every other missing required protection field fail
+closed.
+
 Independent cursors prevent unequal page counts from causing duplicate or
 omitted reads. `completeness.fully_paginated_connections` records pages and
 items for every completed connection. `completeness.api_calls` and

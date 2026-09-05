@@ -2303,10 +2303,20 @@ class SecurityAndOutputTests(unittest.TestCase):
             {"users": [], "teams": [], "apps": []},
         )
 
+    def test_omitted_required_signatures_normalizes_as_disabled(self) -> None:
+        response = classic_protection_response()
+        response.pop("required_signatures")
+        normalized = review.normalize_classic_branch_protection(response)
+        self.assertIs(normalized["required_signatures"], False)
+
+        response["required_signatures"] = {"enabled": "yes"}
+        with self.assertRaises(review.BlockedError):
+            review.normalize_classic_branch_protection(response)
+
     def test_incomplete_or_malformed_classic_protection_fails_closed(self) -> None:
         response = classic_protection_response()
         for mutation in (
-            lambda value: value.pop("required_signatures"),
+            lambda value: value.pop("enforce_admins"),
             lambda value: value["required_pull_request_reviews"].pop(
                 "required_approving_review_count"
             ),
@@ -2324,6 +2334,41 @@ class SecurityAndOutputTests(unittest.TestCase):
         normalized["required_pull_request_reviews"]["enabled"] = 1
         with self.assertRaises(review.BlockedError):
             review.validate_normalized_classic_branch_protection(normalized)
+
+    def test_historical_compact_v1_snapshot_remains_valid(self) -> None:
+        value = snapshot()
+        value["applicable_rules"]["branch_protection"] = {
+            "strict": True,
+            "contexts": ["tests"],
+            "checks": [{"context": "tests", "app_id": 1}],
+        }
+        review.validate_snapshot(finalize_snapshot(value))
+
+    def test_historical_compact_v1_snapshot_is_closed_and_unambiguous(self) -> None:
+        value = snapshot()
+        value["applicable_rules"]["branch_protection"] = {
+            "strict": None,
+            "contexts": [],
+            "checks": [],
+        }
+        value["required_check_evidence"]["sources"] = ["rulesets"]
+        review.validate_snapshot(finalize_snapshot(value))
+
+        value["applicable_rules"]["branch_protection"]["unexpected"] = False
+        with self.assertRaises(review.ContractError):
+            review.validate_snapshot(finalize_snapshot(value))
+
+        value["applicable_rules"]["branch_protection"] = {
+            "strict": None,
+            "contexts": [],
+            "checks": [],
+        }
+        value["required_check_evidence"]["sources"] = [
+            "rulesets",
+            "branch_protection",
+        ]
+        with self.assertRaises(review.ContractError):
+            review.validate_snapshot(finalize_snapshot(value))
 
     def test_graphql_string_variables_cannot_trigger_field_file_reads(self) -> None:
         arguments = review.graphql_arguments(

@@ -2291,7 +2291,7 @@ class LiveGitHub:
 
         def read_branch_protection() -> dict[str, Any]:
             if not policy["require_branch_protection_evidence"]:
-                return {}
+                return evidence.empty_classic_branch_protection()
             endpoint = (
                 f"repos/{owner}/{name}/branches/{encoded_ref}"
                 "/protection"
@@ -2862,7 +2862,7 @@ class FastPathGateway:
 
         def read_branch_protection() -> dict[str, Any]:
             if policy.get("require_branch_protection_evidence") is not True:
-                return {}
+                return evidence.empty_classic_branch_protection()
             endpoint = (
                 f"repos/{owner}/{name}/branches/{encoded_ref}"
                 "/protection"

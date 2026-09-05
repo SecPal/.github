@@ -505,6 +505,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "_commit_signature_format",
             "_mark_effective_checks",
             "_normalize_applicable_rules",
+            "empty_classic_branch_protection",
             "_normalize_check",
             "command_environment",
             "evaluate_checks",

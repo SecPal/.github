@@ -1543,8 +1543,9 @@ def validate_snapshot(snapshot: dict[str, Any]) -> None:
     if not snapshot["applicable_rules"].get("evidence_complete"):
         raise ContractError("Applicable-rule evidence is incomplete")
     try:
-        validate_normalized_classic_branch_protection(
-            snapshot["applicable_rules"].get("branch_protection")
+        validate_snapshot_classic_branch_protection(
+            snapshot["applicable_rules"].get("branch_protection"),
+            snapshot["required_check_evidence"].get("sources"),
         )
     except BlockedError as exc:
         raise ContractError(f"Invalid classic branch-protection evidence: {exc.message}") from exc
@@ -2249,6 +2250,8 @@ CLASSIC_BRANCH_PROTECTION_KEYS = {
     "enforce_admins",
 }
 
+LEGACY_CLASSIC_BRANCH_PROTECTION_KEYS = {"strict", "contexts", "checks"}
+
 
 def empty_classic_branch_protection() -> dict[str, Any]:
     return {
@@ -2326,7 +2329,6 @@ def normalize_classic_branch_protection(value: Any) -> dict[str, Any]:
     required = {
         "required_status_checks",
         "required_pull_request_reviews",
-        "required_signatures",
         "enforce_admins",
         "required_linear_history",
         "allow_force_pushes",
@@ -2478,8 +2480,10 @@ def normalize_classic_branch_protection(value: Any) -> dict[str, Any]:
         "required_conversation_resolution": _enabled_classic_feature(
             value["required_conversation_resolution"], "conversation resolution"
         ),
-        "required_signatures": _enabled_classic_feature(
-            value["required_signatures"], "signed commits"
+        "required_signatures": (
+            _enabled_classic_feature(value["required_signatures"], "signed commits")
+            if "required_signatures" in value
+            else False
         ),
         "required_linear_history": _enabled_classic_feature(
             value["required_linear_history"], "linear history"
@@ -2572,6 +2576,41 @@ def validate_normalized_classic_branch_protection(value: Any) -> dict[str, Any]:
             None,
         )
     return copy.deepcopy(normalized)
+
+
+def validate_snapshot_classic_branch_protection(
+    value: Any,
+    sources: Any,
+) -> dict[str, Any]:
+    """Validate either exact historical compact-v1 or current normalized evidence."""
+
+    if isinstance(value, dict) and set(value) == LEGACY_CLASSIC_BRANCH_PROTECTION_KEYS:
+        if not isinstance(sources, list):
+            raise BlockedError(
+                BLOCKED_INCOMPLETE,
+                "Historical classic branch-protection sources are malformed",
+                "branch_protection",
+                None,
+            )
+        if "branch_protection" not in sources:
+            if value != {"strict": None, "contexts": [], "checks": []}:
+                raise BlockedError(
+                    BLOCKED_INCOMPLETE,
+                    "Disabled historical classic branch-protection evidence is ambiguous",
+                    "branch_protection",
+                    None,
+                )
+            return copy.deepcopy(value)
+        require_rule_evidence(
+            None,
+            value,
+            {
+                "require_ruleset_evidence": False,
+                "require_branch_protection_evidence": True,
+            },
+        )
+        return copy.deepcopy(value)
+    return validate_normalized_classic_branch_protection(value)
 
 
 def require_rule_evidence(
