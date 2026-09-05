@@ -91,6 +91,12 @@ path always uses the ordinary manifest verifier, so malformed, stale, or missing
 supplied evidence cannot downgrade to absence recovery. Final eligibility
 evidence outside late mode is rejected.
 
+Classification schemas `1.0` and `1.1` select the invalid/disproven and
+informational/non-actionable decisions respectively. Disposition schemas bind
+both decision and evidence mode: `1.0`/`1.2` are manifest-backed invalid/info,
+while `1.1`/`1.3` are authenticated-absence invalid/info. Cross-wrapping those
+semantic pairs is rejected.
+
 Parent 1 additionally requires a closed prior-authority manifest authenticated
 by a signed annotated tag and independently verified ordinary receipt, final
 attestation, tree, and signer. The receipt identities must agree end to end.
@@ -163,12 +169,16 @@ validation and push hooks remain required. Hosted checks may be read only for a
 current explicit CI/readiness request, using one bounded current-state read with
 no polling, waiting, sleeping, or automatic repetition.
 
-For an exact technically non-blocking thread outside the authenticated final
-feedback boundary and observed on the unchanged delivery head,
+For an exact technically non-blocking target absent from authenticated final
+eligibility and observed on the unchanged delivery head,
 `secpal-create-late-classification.py` verifies the existing final delivery
-evidence and canonical final eligibility artifact, proves the thread absent
-from both final sets, captures only the named live thread, and
-authenticates the explicit classification decision. Then
+evidence and derives `REVIEWED_BUT_INELIGIBLE` or `ABSENT_FROM_BOTH` from
+authenticated final reviewed state. It accepts
+`INFORMATIONAL + NON_ACTIONABLE` for either origin; the existing
+`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` pair remains accepted
+only for `ABSENT_FROM_BOTH`. All require `technically_blocking=false`. The
+creator captures only the named live thread and authenticates the explicit
+classification decision. Then
 `secpal-create-late-disposition.py` verifies that decision, computes its digest
 internally, and creates a canonical detached SSH/OpenPGP-signed artifact without
 a delivery commit. The resolver consumes both signed artifacts through a
@@ -180,9 +190,9 @@ state, classification, disposition, technical-blocking flag, and guarded
 resolution action. It cannot select arbitrary threads or authorize any other
 GitHub mutation.
 
-This authenticated absence boundary is what “post-push” denotes in the
-resolution lifecycle. It does not use or claim a cryptographic GitHub
-wall-clock push-order proof.
+This authenticated reviewed-state/eligibility boundary is what “post-push”
+denotes in the resolution lifecycle. It does not use or claim a cryptographic
+GitHub wall-clock push-order proof.
 
 See [Simple PR Thread Resolution](../docs/simple-pr-thread-resolution.md) for
 the bounded safety contract and usage.

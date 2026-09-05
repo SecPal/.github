@@ -19,9 +19,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
-
 SCHEMA_VERSION = "1.0"
 ABSENCE_SCHEMA_VERSION = "1.1"
+INFORMATIONAL_SCHEMA_VERSION = "1.1"
+INFORMATIONAL_DISPOSITION_SCHEMA_VERSION = "1.2"
+INFORMATIONAL_ABSENCE_SCHEMA_VERSION = "1.3"
 KIND = "LATE_FEEDBACK_DISPOSITION"
 SIGNATURE_NAMESPACE = "secpal-late-feedback-disposition-v1"
 CLASSIFICATION_KIND = "LATE_FEEDBACK_CLASSIFICATION"
@@ -30,6 +32,36 @@ CLASSIFICATION_PURPOSE = "AUTHORIZE_LATE_FEEDBACK_DISPOSITION"
 TECHNICAL_BLOCKERS = frozenset(
     {"P1", "P2", "SECURITY", "AUTHENTICATION", "INTEGRITY", "FAIL_OPEN"}
 )
+REVIEWED_BUT_INELIGIBLE = "REVIEWED_BUT_INELIGIBLE"
+ABSENT_FROM_BOTH = "ABSENT_FROM_BOTH"
+INVALID_DISPROVEN = (
+    "INVALID_FALSE_OR_MISLEADING",
+    "DISPROVEN_WITH_EVIDENCE",
+)
+INFORMATIONAL_NON_ACTIONABLE = ("INFORMATIONAL", "NON_ACTIONABLE")
+POST_FREEZE_DECISIONS = frozenset(
+    {INVALID_DISPROVEN, INFORMATIONAL_NON_ACTIONABLE}
+)
+POST_FREEZE_ORIGIN_DECISIONS = {
+    REVIEWED_BUT_INELIGIBLE: frozenset({INFORMATIONAL_NON_ACTIONABLE}),
+    ABSENT_FROM_BOTH: POST_FREEZE_DECISIONS,
+}
+SCHEMA_VERSION_DECISIONS = {
+    SCHEMA_VERSION: frozenset({INVALID_DISPROVEN}),
+    INFORMATIONAL_SCHEMA_VERSION: frozenset({INFORMATIONAL_NON_ACTIONABLE}),
+}
+DISPOSITION_SCHEMA_VERSION_POLICY = {
+    SCHEMA_VERSION: (False, INVALID_DISPROVEN),
+    ABSENCE_SCHEMA_VERSION: (True, INVALID_DISPROVEN),
+    INFORMATIONAL_DISPOSITION_SCHEMA_VERSION: (
+        False,
+        INFORMATIONAL_NON_ACTIONABLE,
+    ),
+    INFORMATIONAL_ABSENCE_SCHEMA_VERSION: (
+        True,
+        INFORMATIONAL_NON_ACTIONABLE,
+    ),
+}
 MAXIMUM_ARTIFACT_BYTES = 64 * 1024
 MAXIMUM_SIGNATURE_BYTES = 32 * 1024
 OID = re.compile(r"^[0-9a-f]{40}$")
@@ -464,6 +496,38 @@ def _positive_integer(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
+def schema_version_for_decision(classification: str, disposition: str) -> str:
+    if not isinstance(classification, str) or not isinstance(disposition, str):
+        raise LateDispositionError("late classification decision fields are malformed")
+    decision = (classification, disposition)
+    for schema_version, decisions in SCHEMA_VERSION_DECISIONS.items():
+        if decision in decisions:
+            return schema_version
+    raise LateDispositionError(
+        "late classification decision is not schema-authorized"
+    )
+
+
+def disposition_schema_version_for_decision(
+    classification: str,
+    disposition: str,
+    *,
+    final_eligibility_absent: bool,
+) -> str:
+    if not isinstance(classification, str) or not isinstance(disposition, str):
+        raise LateDispositionError("late disposition decision fields are malformed")
+    decision = (classification, disposition)
+    for schema_version, (absence_mode, authorized_decision) in (
+        DISPOSITION_SCHEMA_VERSION_POLICY.items()
+    ):
+        if (
+            absence_mode is final_eligibility_absent
+            and decision == authorized_decision
+        ):
+            return schema_version
+    raise LateDispositionError("late disposition decision is not schema-authorized")
+
+
 def parse_classification_artifact(
     artifact_path: Path,
     signature_path: Path,
@@ -475,7 +539,6 @@ def parse_classification_artifact(
     head_sha: str,
     thread_id: str,
     signature_environment: dict[str, str] | None = None,
-    require_nonblocking_disposition: bool = True,
 ) -> ClassificationEvidence:
     canonical = verify_detached_signature(
         artifact_path,
@@ -501,10 +564,12 @@ def parse_classification_artifact(
         "thread",
     }
     declared_signer = payload.get("delivery_signer") if isinstance(payload, dict) else None
+    schema_version = payload.get("schema_version") if isinstance(payload, dict) else None
     if (
         not isinstance(payload, dict)
         or set(payload) != expected_keys
-        or payload.get("schema_version") != SCHEMA_VERSION
+        or not isinstance(schema_version, str)
+        or schema_version not in SCHEMA_VERSION_DECISIONS
         or payload.get("kind") != CLASSIFICATION_KIND
         or payload.get("repository") != repository
         or payload.get("delivery_issue_number") != delivery_issue_number
@@ -543,6 +608,10 @@ def parse_classification_artifact(
     }
     if not isinstance(item, dict) or set(item) != item_keys:
         raise LateDispositionError("late classification thread entry is malformed")
+    classification = item.get("classification")
+    disposition = item.get("disposition")
+    if not isinstance(classification, str) or not isinstance(disposition, str):
+        raise LateDispositionError("late classification thread entry is malformed")
     blockers = item.get("technical_blockers")
     if (
         not isinstance(blockers, list)
@@ -572,9 +641,8 @@ def parse_classification_artifact(
         or not isinstance(technically_blocking, bool)
     ):
         raise LateDispositionError("late classification thread binding is malformed")
-    if require_nonblocking_disposition and (
-        item.get("classification") != "INVALID_FALSE_OR_MISLEADING"
-        or item.get("disposition") != "DISPROVEN_WITH_EVIDENCE"
+    if (
+        (classification, disposition) not in SCHEMA_VERSION_DECISIONS[schema_version]
         or technically_blocking is not False
         or blockers
     ):
@@ -599,8 +667,8 @@ def parse_classification_artifact(
             reply_count=item["reply_count"],
             is_resolved=False,
             is_outdated=item["is_outdated"],
-            classification=item["classification"],
-            disposition=item["disposition"],
+            classification=classification,
+            disposition=disposition,
             technically_blocking=technically_blocking,
             classification_evidence_digest=digest,
         ),
@@ -622,7 +690,6 @@ def parse_artifact(
     validation_attestation_digest: str,
     final_eligibility_evidence_digest: str | None,
     thread_ids: tuple[str, ...],
-    allowed_dispositions: dict[str, frozenset[str]],
     final_eligibility_absence_recovery_digest: str | None = None,
     signature_environment: dict[str, str] | None = None,
 ) -> LateDispositionEvidence:
@@ -654,9 +721,11 @@ def parse_artifact(
         "authorized_action",
         "threads",
     }
+    schema_version = payload.get("schema_version") if isinstance(payload, dict) else None
     manifest_mode = (
         isinstance(payload, dict)
-        and payload.get("schema_version") == SCHEMA_VERSION
+        and isinstance(schema_version, str)
+        and schema_version in {SCHEMA_VERSION, INFORMATIONAL_DISPOSITION_SCHEMA_VERSION}
         and set(payload) == common_keys | {"final_eligibility_evidence_digest"}
         and isinstance(final_eligibility_evidence_digest, str)
         and DIGEST.fullmatch(final_eligibility_evidence_digest)
@@ -664,7 +733,8 @@ def parse_artifact(
     )
     absence_mode = (
         isinstance(payload, dict)
-        and payload.get("schema_version") == ABSENCE_SCHEMA_VERSION
+        and isinstance(schema_version, str)
+        and schema_version in {ABSENCE_SCHEMA_VERSION, INFORMATIONAL_ABSENCE_SCHEMA_VERSION}
         and set(payload)
         == common_keys
         | {
@@ -750,8 +820,10 @@ def parse_artifact(
             or item["reply_count"] < 0
             or item.get("is_resolved") is not False
             or not isinstance(item.get("is_outdated"), bool)
-            or classification != "INVALID_FALSE_OR_MISLEADING"
-            or disposition not in allowed_dispositions.get(classification, frozenset())
+            or not isinstance(classification, str)
+            or not isinstance(disposition, str)
+            or DISPOSITION_SCHEMA_VERSION_POLICY.get(schema_version)
+            != (absence_mode, (classification, disposition))
             or item.get("technically_blocking") is not False
             or not isinstance(item.get("classification_evidence_digest"), str)
             or not DIGEST.fullmatch(item["classification_evidence_digest"])

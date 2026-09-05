@@ -718,10 +718,15 @@ one canonical detached-signed `late-classification.schema.json` artifact for
 exactly one named thread, then creates one canonical
 `late-disposition.schema.json` artifact for that same thread.
 Creation first verifies the unchanged final delivery head, tree,
-receipt trailer, attestation, canonical final eligibility artifact, origin, and
-accepted commit signature. It proves the named thread absent from both the
-complete authenticated final reviewed state and eligibility set, verifies that
-every eligible thread belongs to the reviewed state, derives the actual
+receipt trailer, attestation, typed final-eligibility boundary, origin, and
+accepted commit signature. That boundary is either the canonical manifest or
+the maintained exact authenticated-absence record; a supplied invalid manifest
+never falls back to absence. It proves the named thread absent from final
+eligibility and derives its origin from authenticated final reviewed state:
+`REVIEWED_BUT_INELIGIBLE` when present there, or `ABSENT_FROM_BOTH` when
+absent. A target already in final eligibility is rejected, and original
+eligibility is never replaced. It verifies that every eligible thread belongs
+to the reviewed state and derives the actual
 delivery signer fingerprint, reads that named thread twice, and signs the
 classification with that same OS-account identity. The disposition creator
 verifies the classification signature and exact live binding and computes its
@@ -730,9 +735,13 @@ The resolver independently repeats the final-delivery verification, verifies
 both canonical artifacts and detached signatures against the derived signer,
 and compares exact live head, thread, top-level comment node/database identity,
 body digest, reply state, resolved/outdated state, classification, disposition,
-technical-blocking flag, and guarded action before resolving. This path is only
-`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` with
-`technically_blocking=false`; it consumes no review/remediation counter and has
+technical-blocking flag, and guarded action before resolving. The closed path
+accepts `INFORMATIONAL + NON_ACTIONABLE + technically_blocking=false` for
+either origin. Existing
+`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE +
+technically_blocking=false` remains accepted only for `ABSENT_FROM_BOTH`.
+No caller-selected origin, other classification or disposition, or technical
+blocker is accepted. The path consumes no review/remediation counter and has
 no commit, push, Ready, CI, issue, label, review, or merge capability.
 The same origin predicate is independently re-established by disposition
 creation and resolution. “Post-final-push” names this lifecycle boundary; it

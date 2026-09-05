@@ -9,6 +9,19 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-05 - Authenticate Post-Freeze Non-Actionable Disposition
+
+**Changed:**
+
+- derive whether a late review target was reviewed but ineligible or absent
+  from both authenticated final evidence sets instead of accepting a
+  caller-selected origin
+- authorize only the closed `INFORMATIONAL` / `NON_ACTIONABLE` pair with no
+  technical blocker for the new post-freeze path while preserving the existing
+  invalid/disproven authority
+- keep final-eligibility manifest and authenticated-absence modes disjoint, and
+  isolate classification and disposition schema meanings against replay
+
 ## 2026-09-02 - Execute Authenticated Ready/Draft Transitions
 
 **Added:**

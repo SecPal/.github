@@ -148,21 +148,45 @@ merge-readiness inspection.
 ### Authenticated post-final-push late disposition
 
 Commit-bound eligibility above remains unchanged and is the normal remediation
-path. One additional resolution-only path exists for an exact thread outside
-the authenticated final feedback boundary and observed on the unchanged final
-delivery head. It accepts only
-`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` with
-`technically_blocking=false`; classification is explicit independent review
-judgment and is never inferred from text.
+path. One additional resolution-only path exists for an exact thread absent
+from authenticated final eligibility and observed on the unchanged final
+delivery head. Its origin is derived rather than supplied: either the target is
+present in authenticated final reviewed state but absent from final
+eligibility (`REVIEWED_BUT_INELIGIBLE`), or it is absent from both
+(`ABSENT_FROM_BOTH`). A target present in final eligibility is rejected; the
+path never replaces or amends original eligibility.
+
+The closed authorization is
+`INFORMATIONAL + NON_ACTIONABLE + technically_blocking=false` for either
+derived origin. Existing
+`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE +
+technically_blocking=false` authority remains unchanged and is accepted only
+for `ABSENT_FROM_BOTH`. No other classification, disposition, technical
+blocker, or caller-selected origin is accepted. Classification is explicit
+independent review judgment and is never inferred from text.
+
+Classification schema `1.0` remains restricted to the original
+`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` semantics, while
+classification schema `1.1` selects `INFORMATIONAL + NON_ACTIONABLE`.
+Disposition schemas additionally bind the final-eligibility mode: `1.0` and
+`1.2` select manifest-backed invalid and informational decisions respectively;
+`1.1` and `1.3` select authenticated-absence invalid and informational
+decisions. The signed schema version therefore selects one exact evidence-mode
+and decision pair. Formerly rejected bytes do not acquire new authority;
+unknown versions and cross-version pair substitution fail closed.
 
 This path first independently verifies the existing complete final reviewed
-state, the canonical final eligibility artifact authenticated by the receipt
-and attestation, signed receipt trailer, final tree, exact head and origin, and
-accepted local commit signature. Every final-eligibility thread must exist in
-the final reviewed state. The proposed late target must be absent from both
-authenticated sets before classification authority is created, and the same
-origin predicate is independently re-established by disposition creation and
-resolution. The verified signature's
+state, a typed final-eligibility boundary authenticated by the receipt and
+attestation, signed receipt trailer, final tree, exact head and origin, and
+accepted local commit signature. The boundary is either the canonical manifest
+or the maintained exact authenticated-absence record. A supplied invalid
+manifest never falls back to absence. Every manifest thread must exist in the
+final reviewed state. The proposed target must be absent from final eligibility;
+authenticated membership in final reviewed state derives
+`REVIEWED_BUT_INELIGIBLE`, while authenticated absence from it derives
+`ABSENT_FROM_BOTH`. Classification creation, disposition creation, and
+resolution independently re-establish the origin and its closed decision
+policy. The verified signature's
 actual format and fingerprint establish the only signer trust anchor. A strict
 canonical `late-classification.schema.json` document first authenticates the
 exact independently established decision, stable finding ID, finding-evidence
@@ -177,8 +201,9 @@ Outputs use descriptor-relative replacement in opened private directories and
 are required to remain outside the delivery repository.
 
 The signed document binds repository, delivery issue, PR, unchanged final head
-and tree, receipt/attestation/final-eligibility digests, derived signer, exact
-authorized action, and exactly one thread authorization. That authorization
+and tree, receipt/attestation and either final-eligibility-manifest or exact
+absence-record digests, derived signer, exact authorized action, and exactly
+one thread authorization. That authorization
 binds the GraphQL thread ID, top-level comment node and database
 IDs, finding body digest, reply-state digest and count, resolved/outdated state,
 independently established classification evidence digest, classification,
@@ -196,11 +221,11 @@ path consumes zero unrestricted reviews, remediation cycles, commits, pushes,
 and Ready transitions. It has no CI, review-request, label, issue, source,
 readiness, merge, or generic conversation authority.
 
-“Post-final-push” is lifecycle shorthand for feedback outside this
-authenticated final-feedback boundary. This evidence proves canonical snapshot
-and eligibility absence under the unchanged final head; it does not claim that
-GitHub wall-clock creation time is cryptographically ordered after a branch
-push.
+“Post-final-push” is lifecycle shorthand for this authenticated disposition
+boundary. This evidence proves the exact target's reviewed-state membership or
+absence and its eligibility absence under the unchanged final head; it does not
+claim that GitHub wall-clock creation time is cryptographically ordered after
+a branch push.
 
 ## Normal fast-path state machine
 
