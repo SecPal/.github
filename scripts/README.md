@@ -309,9 +309,13 @@ admission only from the exact protected-main registry object, through a closed
 independent `gh`/`git` boundary with concurrent bounded stdout/stderr capture,
 timeout/overflow termination and reap, and rejection of partial output. A
 candidate-local registry or caller-selected executable, path, ref, OID, policy,
-or policy-source value cannot establish the admission. Before this integration
-candidate merges, protected `main` does not yet contain that exact #819
-admission.
+or policy-source value cannot establish the admission. The admitted historical
+commit, tree, parent, signature, validation
+evidence, path, and blob remain immutable after a lawful PR-head advance. The
+live PR independently retains its repository, number, base, state, and Draft
+binding, while one bounded current-head blob observation proves that the
+candidate still consumes the exact admitted helper bytes. The mutable current
+PR head is never treated as the immutable admitted source identity.
 
 Both source paths return a sealed `VerifiedBootstrapSource` with an explicit
 historical evidence status. The #812-only evidence-loss recovery does not apply
