@@ -1666,7 +1666,19 @@ def _require_valid_final_feedback_boundary(
             type(eligibility) is not EligibilityEvidence
             or boundary.eligibility_absence is not None
             or boundary.validation.final_eligibility_absence is not None
-            or boundary.validation.kind != "attestation"
+            or boundary.validation.kind
+            not in {"attestation", "eligibility-bound-ready-integration"}
+            or (
+                boundary.validation.kind == "attestation"
+                and boundary.validation.integration_evidence is not None
+            )
+            or (
+                boundary.validation.kind == "eligibility-bound-ready-integration"
+                and not isinstance(
+                    boundary.validation.integration_evidence,
+                    dict,
+                )
+            )
             or not isinstance(
                 boundary.validation.eligibility_evidence_digest,
                 str,
@@ -1844,6 +1856,7 @@ def load_final_feedback_boundary(
     expected_final_reviewed_state_digest: str,
     final_validation_evidence_path: Path,
     final_eligibility_evidence_path: Path | None,
+    integration_evidence_path: Path | None = None,
 ) -> FinalFeedbackBoundary:
     reviewed = load_reviewed_state(
         final_reviewed_state_path,
@@ -1858,7 +1871,19 @@ def load_final_feedback_boundary(
             repository,
             expected_head,
             reviewed,
+            integration_evidence_path,
         )
+        if (
+            validation.kind == "eligibility-bound-ready-integration"
+            and (
+                not isinstance(validation.integration_evidence, dict)
+                or validation.integration_evidence.get("delivery_issue_number")
+                != delivery_issue
+            )
+        ):
+            raise ResolutionError(
+                "integration validation evidence delivery issue is invalid or stale"
+            )
         eligibility = load_eligibility_evidence(
             final_eligibility_evidence_path,
             repository,
@@ -1900,6 +1925,7 @@ def load_final_feedback_boundary(
         repository,
         expected_head,
         reviewed,
+        integration_evidence_path,
         final_eligibility_absence=absence,
     )
     boundary = FinalFeedbackBoundary(
@@ -2367,6 +2393,7 @@ def create_late_classification_artifact(
     technical_blockers: Sequence[str],
     output_path: Path | str,
     signature_output_path: Path | str,
+    integration_evidence_path: Path | str | None = None,
 ) -> dict[str, Any]:
     if (
         not REPOSITORY.fullmatch(repository)
@@ -2415,6 +2442,11 @@ def create_late_classification_artifact(
         final_eligibility_evidence_path=(
             Path(final_eligibility_evidence_path)
             if final_eligibility_evidence_path is not None
+            else None
+        ),
+        integration_evidence_path=(
+            Path(integration_evidence_path)
+            if integration_evidence_path is not None
             else None
         ),
     )
@@ -2540,6 +2572,7 @@ def create_late_disposition_artifact(
     classification_signature_path: Path | str,
     output_path: Path | str,
     signature_output_path: Path | str,
+    integration_evidence_path: Path | str | None = None,
 ) -> dict[str, Any]:
     if not REPOSITORY.fullmatch(repository):
         raise ResolutionError("repository must use owner/name format")
@@ -2567,6 +2600,11 @@ def create_late_disposition_artifact(
         final_eligibility_evidence_path=(
             Path(final_eligibility_evidence_path)
             if final_eligibility_evidence_path is not None
+            else None
+        ),
+        integration_evidence_path=(
+            Path(integration_evidence_path)
+            if integration_evidence_path is not None
             else None
         ),
     )
@@ -2763,6 +2801,7 @@ def resolve_late_disposition_threads(
     late_classification_signature_path: Path | str,
     late_disposition_evidence_path: Path | str,
     late_disposition_signature_path: Path | str,
+    integration_evidence_path: Path | str | None = None,
 ) -> dict[str, Any]:
     """Resolve only exact late threads authenticated independently of Git history."""
 
@@ -2793,6 +2832,11 @@ def resolve_late_disposition_threads(
         final_eligibility_evidence_path=(
             Path(final_eligibility_evidence_path)
             if final_eligibility_evidence_path is not None
+            else None
+        ),
+        integration_evidence_path=(
+            Path(integration_evidence_path)
+            if integration_evidence_path is not None
             else None
         ),
     )
@@ -3383,8 +3427,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         )
         if any(value is not None for value in late_values):
             if (
-                arguments.integration_evidence is not None
-                or arguments.exceptional_recovery_evidence is not None
+                arguments.exceptional_recovery_evidence is not None
                 or arguments.exceptional_recovery_authorization is not None
             ):
                 raise ResolutionError(
@@ -3400,6 +3443,13 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             if arguments.eligibility_evidence is not None:
                 raise ResolutionError(
                     "commit-bound and late-disposition eligibility are mutually exclusive"
+                )
+            if (
+                arguments.integration_evidence is not None
+                and arguments.final_eligibility_evidence is None
+            ):
+                raise ResolutionError(
+                    "Ready integration late disposition requires final eligibility evidence"
                 )
         elif arguments.final_eligibility_evidence is not None:
             raise ResolutionError(
@@ -3461,6 +3511,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
                 late_disposition_signature_path=(
                     arguments.late_disposition_signature
+                ),
+                **(
+                    {"integration_evidence_path": arguments.integration_evidence}
+                    if arguments.integration_evidence is not None
+                    else {}
                 ),
             )
         else:
