@@ -199,6 +199,12 @@ trailers, reviewed state, signer, and eligibility digest before applying the
 ordinary exact-thread checks. Version-1.1 integration attestations do not carry
 this authority and are rejected for resolution.
 
+A protected pre-persistence prior-Ready recovery changes only how the existing
+integration verifier authenticates parent 1. Thread resolution still requires
+fresh integration-head evidence and the same eligibility-bound version-1.2
+integration attestation; recovery authority itself is never classification,
+disposition, eligibility, or resolution authority.
+
 New manifests use schema version 1.1. The resolver also reads already-authenticated
 version 1.0 manifests for the legacy resolution-eligible dispositions. It
 authenticates the original version 1.0 canonical payload before normalizing the

@@ -37,6 +37,13 @@ integration-resolution attestation and verifies its ordered two-parent
 topology, tree, receipt and integration trailers, signer, reviewed state, and
 eligibility digest through the integration-specific verifier. Never treat a
 historical integration attestation as an ordinary sole-parent attestation.
+When prior Ready evidence genuinely predates persistence, do not invent the
+missing reviewed-state, receipt, eligibility, or attestation bytes. First
+authenticate and publish the explicit one-use pre-persistence recovery through
+the maintained lifecycle-publication authority. Ready integration may then use
+the recovered version-1.2 prior-authority manifest with no historical companion
+files. Supplying any historical companion file selects no fallback: malformed,
+partial, or invalid ordinary evidence remains blocking.
 The command first reads every target completely and requires its current
 comment identities, body digests, and resolution state to match that reviewed
 state. It then performs two complete stable target rechecks of the open PR,

@@ -71,6 +71,23 @@ does not relax the ordinary sole-parent path, create or push an integration,
 change Ready state, read post-push checks, or authorize merge automation.
 Historical receipt reconstruction reads the registry blob from the immutable
 prior delivery commit rather than applying a later registry to older evidence.
+For an explicitly authorized unchanged Ready source whose pre-persistence
+package is proven unavailable, `verify_ready_source_recovery_safety` derives a
+sealed fresh safety summary from the exact open PR head/tree/base/topology,
+complete classified stable feedback, non-blocking review decision, and a fresh
+successful validation receipt. `create_ready_source_recovery_authorization`
+adds exact CURRENT lifecycle/publication, historical trailer/digest provenance,
+accepted commit-signature binding, evidence-loss proof, and one bounded use.
+`publish_ready_source_recovery` appends that signed authority to the existing
+protected lifecycle-publication journal with CAS and authenticated idempotency;
+`verify_current_ready_source_recovery` rejects it after CURRENT changes.
+
+The Ready-integration verifier consumes the resulting version-1.2
+`READY_INTEGRATION_PRIOR_AUTHORITY` without historical companion files. It
+still verifies the immutable commit and annotated authority tag and rejects any
+attempt to supply malformed historical evidence and fall back. These functions
+never synthesize historical bytes, create an integration candidate, add a
+lifecycle state, or mutate feedback.
 When exact thread resolution is required on the integration head,
 `attest-validation` may additionally consume the canonical eligibility
 artifact. That closed combination emits the version-1.2

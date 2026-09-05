@@ -173,6 +173,23 @@ current-head tree, receipt, final attestation, and source-evidence identity.
 Prior-Ready verification authenticates those current facts and the unchanged
 genesis chain; it never treats genesis evidence as evidence for a later head.
 
+For an unchanged Ready delivery that predates evidence persistence, missing
+historical package bytes do not become reconstructed evidence. One explicit
+`READY_INTEGRATION_PRIOR_AUTHORITY` recovery may instead bind the exact signed
+sole-parent head and tree, current protected lifecycle publication and complete
+finite Ready history, historical receipt trailer and attestation digest as
+provenance only, fresh complete feedback/validation safety digests, and one
+signed bounded-use authorization. The authorization is appended to the existing
+protected lifecycle-publication journal without advancing CURRENT. Missing or
+invalid supplied evidence never selects this path, and the published recovery
+becomes stale if its bound lifecycle publication ceases to be CURRENT.
+
+The Ready-integration verifier accepts either the ordinary complete historical
+package or that independently verified protected recovery and normalizes both
+to the same prior-Ready boundary. Recovery does not select current `main`, build
+an integration commit, advance lifecycle state, classify late feedback, or
+resolve a thread.
+
 The maintained migration role uses public credential material distinct from
 ordinary, lifecycle-transition, and publication signers; policy loading rejects
 credential overlap even when the duplicate key is assigned another principal.

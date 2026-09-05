@@ -16,7 +16,7 @@ import importlib.util
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Sequence, TypeVar
+from typing import Any, Callable, TypeVar
 
 
 FOLLOW_UP_HELPER = Path(__file__).resolve().with_name("follow_up.py")
@@ -2156,7 +2156,7 @@ def verify_ready_source_recovery_safety(
     pull_request_number: int,
     head_sha: str,
     tree_sha: str,
-    parent_shas: Sequence[str],
+    parent_shas: list[str] | tuple[str, ...],
     expected_base_ref: str,
     expected_base_sha: str,
     reviewed_state: StableFeedbackState,
