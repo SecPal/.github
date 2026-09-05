@@ -6911,6 +6911,231 @@ class FastPathTests(TestCase):
                 authority, integration
             )
 
+    def test_ready_integration_consumes_published_pre_persistence_recovery(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        raw_authority = ready_integration_prior_authority(reviewed)
+        raw_authority["schema_version"] = "1.2"
+        raw_authority["recovery_publication"] = {
+            "object_oid": "1" * 40,
+            "publication_digest": "2" * 64,
+            "authorization_id": "ready-source-recovery-1",
+            "authorization_digest": "3" * 64,
+            "fresh_validation_receipt_digest": "4" * 64,
+            "feedback_assessment_digest": "5" * 64,
+            "historical_evidence_loss_proof_digest": "6" * 64,
+            "historical_bytes_reconstructed": False,
+        }
+        authority_manifest = fast_path.normalize_ready_integration_prior_authority(
+            raw_authority
+        )
+        integration_value = ready_integration_evidence(
+            reviewed, validated_tree="a" * 40
+        )
+        integration_value["prior_authority_digest"] = fast_path.digest_json(
+            authority_manifest
+        )
+        integration = fast_path.normalize_ready_integration_evidence(
+            integration_value,
+            repository="SecPal/.github",
+            reviewed_state=reviewed,
+            registry=fast_registry(),
+            validated_tree_sha="a" * 40,
+        )
+        recovered = SimpleNamespace(
+            publication_oid="1" * 40,
+            publication_digest="2" * 64,
+            authorization_id="ready-source-recovery-1",
+            authorization_digest="3" * 64,
+            fresh_validation_receipt_digest="4" * 64,
+            feedback_assessment_digest="5" * 64,
+            historical_evidence_loss_proof_digest="6" * 64,
+            repository="SecPal/.github",
+            delivery_issue=9,
+            pull_request=reviewed.pull_request_number,
+            head_sha=reviewed.head_sha,
+            tree_sha="a" * 40,
+            parent_shas=("9" * 40,),
+            expected_target_base_ref=reviewed.base_ref,
+            expected_target_base_sha=reviewed.base_sha,
+            expected_commit_signer=authority_manifest["expected_signer"],
+            commit_signature_evidence_digest="7" * 64,
+            lifecycle_id=authority_manifest["lifecycle"]["identity"],
+            current_authority_digest=authority_manifest["lifecycle"][
+                "current_authority_digest"
+            ],
+            current_publication_oid=authority_manifest["publication"]["object_oid"],
+            current_publication_digest=authority_manifest["publication"][
+                "publication_digest"
+            ],
+            historical_validation_receipt_digest=authority_manifest[
+                "prior_validation_receipt_digest"
+            ],
+            historical_final_attestation_digest=authority_manifest[
+                "prior_final_attestation_digest"
+            ],
+            reviewed_state_digest=reviewed.state_digest,
+            reviewed_feedback_digest=reviewed.feedback_digest,
+        )
+        lifecycle_publication = SimpleNamespace(
+            verify_current_ready_source_recovery=mock.Mock(return_value=recovered)
+        )
+        lifecycle_authority = SimpleNamespace(
+            ready_source_recovery_commit_signature_binding_digest=mock.Mock(
+                return_value="7" * 64
+            )
+        )
+        tag_object = (
+            f"object {reviewed.head_sha}\ntype commit\ntag recovered\n\n"
+            f"SecPal-Prior-Authority: {fast_path.digest_json(authority_manifest)}\n"
+        )
+
+        def git_result(
+            _root: Path, command: list[str], *, allow_failure: bool = False
+        ) -> Any:
+            del allow_failure
+            if command[:2] == ["rev-parse", f"{reviewed.head_sha}^{{tree}}"]:
+                value = "a" * 40
+            elif command[:2] == ["cat-file", "commit"]:
+                value = "tree " + "a" * 40 + "\ngpgsig signature\n"
+            elif command[:2] == ["rev-parse", "refs/tags/recovered^{tag}"]:
+                value = integration["prior_authority_tag_object_sha"]
+            elif command[:2] == ["cat-file", "-t"]:
+                value = "tag"
+            elif command[:2] == ["cat-file", "tag"]:
+                value = tag_object
+            elif command[:2] in (["verify-commit", "--raw"], ["verify-tag", "--raw"]):
+                value = 'Good "git" signature for aroviqen with ED25519 key SHA256:test'
+            else:
+                raise AssertionError(command)
+            return SimpleNamespace(returncode=0, stdout=value, stderr="")
+
+        arguments = SimpleNamespace(
+            repo="SecPal/.github",
+            delivery_issue=9,
+            prior_authority="authority.json",
+            prior_reviewed_state=None,
+            prior_receipt=None,
+            prior_attestation=None,
+            prior_authority_tag_ref="refs/tags/recovered",
+            expected_prior_authority_signer=None,
+        )
+        with (
+            mock.patch.object(actions, "_read_json", return_value=authority_manifest),
+            mock.patch.object(actions, "_validated_commit_parent", return_value="9" * 40),
+            mock.patch.object(
+                actions,
+                "_commit_validation_receipt_digest",
+                return_value=authority_manifest["prior_validation_receipt_digest"],
+            ),
+            mock.patch.object(actions, "_run_attestation_git", side_effect=git_result),
+            mock.patch.object(actions, "_verify_signature_policy_identity"),
+            mock.patch.object(actions, "_verify_integration_signer"),
+            mock.patch.object(
+                actions,
+                "_load_lifecycle_publication_helpers",
+                return_value=(lifecycle_authority, lifecycle_publication),
+            ),
+        ):
+            self.assertEqual(
+                actions._verify_ready_integration_prior_authority(
+                    arguments=arguments,
+                    repository_root=REPO_ROOT,
+                    binding=fast_registry(),
+                    integration_evidence=integration,
+                    live_observation=None,
+                ),
+                authority_manifest,
+            )
+
+            arguments.prior_receipt = "invalid-supplied-history.json"
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "cannot downgrade"
+            ):
+                actions._verify_ready_integration_prior_authority(
+                    arguments=arguments,
+                    repository_root=REPO_ROOT,
+                    binding=fast_registry(),
+                    integration_evidence=integration,
+                    live_observation=None,
+                )
+
+    def test_ready_source_recovery_safety_fails_closed_on_feedback_and_scope(self) -> None:
+        reviewed = fast_feedback(thread_count=1)
+        registry = fast_registry()
+        receipt = fast_path.create_validation_receipt(
+            repository=reviewed.repository,
+            head_sha=reviewed.head_sha,
+            validated_tree_sha="a" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+        )
+        findings = []
+        for index, ((kind, node_id), (source_digest, thread_id)) in enumerate(
+            fast_path._classified_feedback_sources(reviewed).items(), 1
+        ):
+            findings.append(
+                {
+                    "finding_id": f"recovery-finding-{index}",
+                    "thread_id": thread_id,
+                    "sources": [
+                        {"kind": kind, "node_id": node_id, "digest": source_digest}
+                    ],
+                    "classification": "INFORMATIONAL",
+                    "disposition": "NON_ACTIONABLE",
+                    "evidence_digest": f"{index:x}".rjust(64, "0"),
+                    "technically_blocking": False,
+                }
+            )
+        arguments = {
+            "repository": reviewed.repository,
+            "pull_request_number": reviewed.pull_request_number,
+            "head_sha": reviewed.head_sha,
+            "tree_sha": "a" * 40,
+            "parent_shas": ["9" * 40],
+            "expected_base_ref": reviewed.base_ref,
+            "expected_base_sha": reviewed.base_sha,
+            "reviewed_state": reviewed,
+            "review_decision": "APPROVED",
+            "feedback_findings": findings,
+            "fresh_validation_receipt": receipt,
+            "registry": registry,
+            "command_set": registry["validation"],
+        }
+        verified = fast_path.verify_ready_source_recovery_safety(**arguments)
+        self.assertEqual(verified.head_sha, reviewed.head_sha)
+
+        mutations = {
+            "wrong head": lambda value: value.update(head_sha="8" * 40),
+            "wrong base": lambda value: value.update(expected_base_sha="8" * 40),
+            "wrong topology": lambda value: value.update(
+                parent_shas=["8" * 40, "9" * 40]
+            ),
+            "blocking review": lambda value: value.update(
+                review_decision="CHANGES_REQUESTED"
+            ),
+            "incomplete feedback": lambda value: value.update(feedback_findings=[]),
+            "blocking finding": lambda value: value["feedback_findings"][0].update(
+                technically_blocking=True
+            ),
+            "source substitution": lambda value: value["feedback_findings"][0][
+                "sources"
+            ][0].update(digest="f" * 64),
+            "receipt downgrade": lambda value: value[
+                "fresh_validation_receipt"
+            ].update(eligibility_evidence_digest="f" * 64),
+        }
+        for case, mutate in mutations.items():
+            changed = copy.deepcopy(arguments)
+            mutate(changed)
+            with self.subTest(case=case), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                fast_path.verify_ready_source_recovery_safety(**changed)
     def test_ready_integration_binds_exact_adoption_source_evidence(self) -> None:
         reviewed = fast_feedback()
         raw_authority = ready_integration_prior_authority(reviewed)

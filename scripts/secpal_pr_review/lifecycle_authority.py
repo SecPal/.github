@@ -29,9 +29,11 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .fast_path import (
     SecurityBlocker,
+    VerifiedReadySourceRecoverySafety,
     VerifiedValidationEvidence,
     canonical_json_bytes,
     digest_json,
+    is_verified_ready_source_recovery_safety,
     is_verified_validation_evidence,
     verify_commit_signatures,
 )
@@ -59,6 +61,12 @@ EXACT_ADOPTION_PROOF_MODE = "exact_state_adoption"
 NATIVE_PROOF_MODE = "native_lifecycle"
 PUBLICATION_EVIDENCE_KIND = "SECPAL_PUBLISHED_LIFECYCLE_EVIDENCE"
 PUBLICATION_EVIDENCE_DOMAIN = "secpal.published-lifecycle-evidence/v1"
+READY_SOURCE_RECOVERY_AUTHORIZATION_KIND = (
+    "SECPAL_READY_SOURCE_RECOVERY_AUTHORIZATION"
+)
+READY_SOURCE_RECOVERY_AUTHORIZATION_DOMAIN = (
+    "secpal.ready-source-recovery-authorization/v1"
+)
 
 MAX_UNRESTRICTED_REVIEWS = 1
 MAX_REMEDIATION_CYCLES = 2
@@ -375,6 +383,25 @@ STATE_FIELDS = frozenset(
         "exceptional_recovery_history",
         "exceptional_continuation_count",
         "exceptional_continuation_history",
+    }
+)
+READY_SOURCE_RECOVERY_AUTHORIZATION_FIELDS = frozenset(
+    {
+        "schema_version", "kind", "domain", "purpose", "repository",
+        "delivery_issue", "pull_request", "head_sha", "tree_sha",
+        "parent_shas", "expected_target_base_ref", "expected_target_base_sha",
+        "expected_commit_signer", "commit_signature_evidence_digest",
+        "lifecycle_id", "current_authority_digest",
+        "current_publication_oid", "current_publication_digest",
+        "lifecycle_state", "reviewed_state_digest",
+        "reviewed_feedback_digest", "review_decision",
+        "feedback_assessment_digest", "fresh_validation_receipt_digest",
+        "historical_validation_receipt_digest",
+        "historical_final_attestation_digest",
+        "historical_evidence_loss_proof_digest",
+        "historical_evidence_status", "historical_bytes_reconstructed",
+        "authorization_id", "bounded_uses", "signer_identity", "signature",
+        "authorization_digest",
     }
 )
 HISTORY_FIELDS = frozenset(
@@ -2639,6 +2666,297 @@ def authenticate_exact_state_adoption_external_evidence(
         supporting_evidence_digests=supporting_digests,
         _verification_seal=_VERIFIED_EXACT_ADOPTION_EVIDENCE,
     )
+
+
+def _ready_source_recovery_state(value: Mapping[str, Any]) -> dict[str, Any]:
+    state = _validate_state(dict(value))
+    if (
+        state["unrestricted_review_count"] != 1
+        or not 0 <= state["remediation_cycle_count"] <= 2
+        or state["cycle_3_absent"] is not True
+        or state["draft"] is not False
+        or state["ready"] is not True
+        or state["ready_transition_count"] != 1
+        or len(state["ready_history"]) != 1
+        or not 0 <= state["exceptional_recovery_count"] <= 1
+        or not 0 <= state["exceptional_continuation_count"] <= 1
+    ):
+        raise LifecycleAuthorityError(
+            "Ready-source recovery requires the exact bounded Ready lifecycle"
+        )
+    return state
+
+
+def ready_source_recovery_commit_signature_binding_digest(
+    *, head_sha: str, expected_signer: Mapping[str, Any], signature_format: str
+) -> str:
+    """Project only signature facts independently reproducible by the consumer."""
+
+    signer = copy.deepcopy(dict(expected_signer))
+    if set(signer) != {"kind", "identity"}:
+        raise LifecycleAuthorityError("Ready-source recovery commit signer is malformed")
+    kind = signer["kind"]
+    identity = _require_identity(
+        signer["identity"], "Ready-source recovery commit signer"
+    )
+    expected_format = {
+        "SSH_PRINCIPAL": "ssh",
+        "OPENPGP_FINGERPRINT": "openpgp",
+    }.get(kind)
+    if signature_format != expected_format:
+        raise LifecycleAuthorityError(
+            "Ready-source recovery commit signature format changed"
+        )
+    return digest_json(
+        {
+            "oid": _require_oid(head_sha, "Ready-source recovery signed head"),
+            "source": "USER",
+            "signer_identity": identity,
+            "classification": f"LOCAL_{signature_format.upper()}_VERIFIED",
+        }
+    )
+
+
+def create_ready_source_recovery_authorization(
+    *,
+    current_lifecycle: VerifiedLifecycleAuthority,
+    current_publication_oid: str,
+    current_publication_digest: str,
+    safety_evidence: VerifiedReadySourceRecoverySafety,
+    commit_signature_evidence: Mapping[str, Any],
+    historical_validation_receipt_digest: str,
+    historical_final_attestation_digest: str,
+    historical_evidence_loss_proof_digest: str,
+    authorization_id: str,
+    bounded_uses: int,
+    expected_commit_signer: Mapping[str, Any],
+    signer_identity: str,
+    signer: Signer,
+) -> dict[str, Any]:
+    """Sign one bounded recovery without claiming historical-byte reconstruction."""
+
+    if not isinstance(current_lifecycle, VerifiedLifecycleAuthority):
+        raise LifecycleAuthorityError("current lifecycle authority is not verified")
+    if not is_verified_ready_source_recovery_safety(safety_evidence):
+        raise LifecycleAuthorityError("Ready-source recovery safety is not verified")
+    state = _ready_source_recovery_state(current_lifecycle.state)
+    if (
+        current_lifecycle.repository != safety_evidence.repository
+        or current_lifecycle.pull_request != safety_evidence.pull_request_number
+        or current_lifecycle.head_sha != safety_evidence.head_sha
+    ):
+        raise LifecycleAuthorityError(
+            "Ready-source recovery safety does not bind CURRENT lifecycle"
+        )
+    if bounded_uses != 1 or isinstance(bounded_uses, bool):
+        raise LifecycleAuthorityError("Ready-source recovery authorization must have one use")
+    signer_value = copy.deepcopy(dict(expected_commit_signer))
+    if set(signer_value) != {"kind", "identity"}:
+        raise LifecycleAuthorityError("Ready-source recovery commit signer is malformed")
+    signer_kind = signer_value["kind"]
+    signer_name = _require_identity(
+        signer_value["identity"], "Ready-source recovery commit signer"
+    )
+    if signer_kind not in {"SSH_PRINCIPAL", "OPENPGP_FINGERPRINT"}:
+        raise LifecycleAuthorityError(
+            "Ready-source recovery commit signer kind is unsupported"
+        )
+    commit = copy.deepcopy(dict(commit_signature_evidence))
+    if (
+        commit.get("oid") != safety_evidence.head_sha
+        or commit.get("source") != "USER"
+        or commit.get("signer_identity") != signer_name
+    ):
+        raise LifecycleAuthorityError(
+            "Ready-source recovery commit signature identity changed"
+        )
+    try:
+        verified_commits = verify_commit_signatures(
+            [commit], _load_delivery_signature_policy(current_lifecycle.repository)
+        )
+    except SecurityBlocker as exc:
+        raise LifecycleAuthorityError(
+            "Ready-source recovery commit signature is invalid"
+        ) from exc
+    if len(verified_commits) != 1 or verified_commits[0]["oid"] != safety_evidence.head_sha:
+        raise LifecycleAuthorityError(
+            "Ready-source recovery commit signature evidence is ambiguous"
+        )
+    fields = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": READY_SOURCE_RECOVERY_AUTHORIZATION_KIND,
+        "domain": READY_SOURCE_RECOVERY_AUTHORIZATION_DOMAIN,
+        "purpose": "READY_INTEGRATION_PRIOR_AUTHORITY",
+        "repository": current_lifecycle.repository,
+        "delivery_issue": current_lifecycle.delivery_issue,
+        "pull_request": current_lifecycle.pull_request,
+        "head_sha": safety_evidence.head_sha,
+        "tree_sha": safety_evidence.tree_sha,
+        "parent_shas": list(safety_evidence.parent_shas),
+        "expected_target_base_ref": safety_evidence.expected_base_ref,
+        "expected_target_base_sha": safety_evidence.expected_base_sha,
+        "expected_commit_signer": {
+            "kind": signer_kind,
+            "identity": signer_name,
+        },
+        "commit_signature_evidence_digest": (
+            ready_source_recovery_commit_signature_binding_digest(
+                head_sha=safety_evidence.head_sha,
+                expected_signer=signer_value,
+                signature_format=commit["local_signature"].get("format"),
+            )
+        ),
+        "lifecycle_id": current_lifecycle.lifecycle_id,
+        "current_authority_digest": current_lifecycle.authority_digest,
+        "current_publication_oid": _require_oid(
+            current_publication_oid, "Ready-source recovery CURRENT publication"
+        ),
+        "current_publication_digest": _require_digest(
+            current_publication_digest,
+            "Ready-source recovery CURRENT publication",
+        ),
+        "lifecycle_state": copy.deepcopy(state),
+        "reviewed_state_digest": safety_evidence.reviewed_state_digest,
+        "reviewed_feedback_digest": safety_evidence.reviewed_feedback_digest,
+        "review_decision": safety_evidence.review_decision,
+        "feedback_assessment_digest": safety_evidence.feedback_assessment_digest,
+        "fresh_validation_receipt_digest": (
+            safety_evidence.fresh_validation_receipt_digest
+        ),
+        "historical_validation_receipt_digest": _require_digest(
+            historical_validation_receipt_digest,
+            "historical validation-receipt provenance",
+        ),
+        "historical_final_attestation_digest": _require_digest(
+            historical_final_attestation_digest,
+            "historical final-attestation provenance",
+        ),
+        "historical_evidence_loss_proof_digest": _require_digest(
+            historical_evidence_loss_proof_digest,
+            "historical evidence-loss proof",
+        ),
+        "historical_evidence_status": "PROVEN_PRE_PERSISTENCE_PACKAGE_UNAVAILABLE",
+        "historical_bytes_reconstructed": False,
+        "authorization_id": _require_identity(
+            authorization_id, "Ready-source recovery authorization"
+        ),
+        "bounded_uses": 1,
+        "signer_identity": _require_identity(
+            signer_identity, "Ready-source recovery authorization signer"
+        ),
+    }
+    signature = _normalize_signature(
+        signer(
+            canonical_json_bytes(fields),
+            READY_SOURCE_RECOVERY_AUTHORIZATION_DOMAIN,
+        ),
+        fields["signer_identity"],
+    )
+    signed = {**fields, "signature": signature}
+    return {**signed, "authorization_digest": digest_json(signed)}
+
+
+def verify_ready_source_recovery_authorization(
+    value: Any,
+    *,
+    current_lifecycle: VerifiedLifecycleAuthority,
+    current_publication_oid: str,
+    current_publication_digest: str,
+) -> dict[str, Any]:
+    """Authenticate a recovery authorization against exact published CURRENT authority."""
+
+    item = _require_closed(
+        value,
+        READY_SOURCE_RECOVERY_AUTHORIZATION_FIELDS,
+        "Ready-source recovery authorization",
+    )
+    state = _ready_source_recovery_state(item["lifecycle_state"])
+    signer = item.get("expected_commit_signer")
+    parents = item.get("parent_shas")
+    if (
+        item["schema_version"] != SCHEMA_VERSION
+        or item["kind"] != READY_SOURCE_RECOVERY_AUTHORIZATION_KIND
+        or item["domain"] != READY_SOURCE_RECOVERY_AUTHORIZATION_DOMAIN
+        or item["purpose"] != "READY_INTEGRATION_PRIOR_AUTHORITY"
+        or item["repository"] != current_lifecycle.repository
+        or item["delivery_issue"] != current_lifecycle.delivery_issue
+        or item["pull_request"] != current_lifecycle.pull_request
+        or item["head_sha"] != current_lifecycle.head_sha
+        or item["lifecycle_id"] != current_lifecycle.lifecycle_id
+        or item["current_authority_digest"] != current_lifecycle.authority_digest
+        or item["current_publication_oid"] != current_publication_oid
+        or item["current_publication_digest"] != current_publication_digest
+        or state != current_lifecycle.state
+        or (
+            current_lifecycle.validation_receipt_digest is not None
+            and item["historical_validation_receipt_digest"]
+            != current_lifecycle.validation_receipt_digest
+        )
+        or (
+            current_lifecycle.adoption_source_evidence_digest is not None
+            and item["historical_final_attestation_digest"]
+            != current_lifecycle.adoption_source_evidence_digest
+        )
+        or item["historical_evidence_status"]
+        != "PROVEN_PRE_PERSISTENCE_PACKAGE_UNAVAILABLE"
+        or item["historical_bytes_reconstructed"] is not False
+        or item["bounded_uses"] != 1
+        or isinstance(item["bounded_uses"], bool)
+        or item["review_decision"] not in {"NONE", "APPROVED", "REVIEW_REQUIRED"}
+        or not isinstance(parents, list)
+        or len(parents) != 1
+        or not isinstance(signer, dict)
+        or set(signer) != {"kind", "identity"}
+        or signer["kind"] not in {"SSH_PRINCIPAL", "OPENPGP_FINGERPRINT"}
+    ):
+        raise LifecycleAuthorityError(
+            "Ready-source recovery authorization scope changed"
+        )
+    _require_repository(item["repository"])
+    _require_positive_int(item["delivery_issue"], "Ready-source recovery issue")
+    _require_positive_int(item["pull_request"], "Ready-source recovery pull request")
+    for field in (
+        "head_sha", "tree_sha", "current_publication_oid",
+    ):
+        _require_oid(item[field], field)
+    _require_oid(parents[0], "Ready-source recovery parent")
+    _require_identity(item["expected_target_base_ref"], "Ready-source recovery base ref")
+    _require_oid(item["expected_target_base_sha"], "Ready-source recovery base")
+    _require_identity(signer["identity"], "Ready-source recovery commit signer")
+    for field in (
+        "commit_signature_evidence_digest", "current_authority_digest",
+        "current_publication_digest", "reviewed_state_digest",
+        "reviewed_feedback_digest", "feedback_assessment_digest",
+        "fresh_validation_receipt_digest",
+        "historical_validation_receipt_digest",
+        "historical_final_attestation_digest",
+        "historical_evidence_loss_proof_digest", "authorization_digest",
+    ):
+        _require_digest(item[field], field)
+    _require_identity(item["authorization_id"], "Ready-source recovery authorization")
+    authorization_signer = _require_identity(
+        item["signer_identity"], "Ready-source recovery authorization signer"
+    )
+    signed = {
+        key: copy.deepcopy(field) for key, field in item.items()
+        if key != "authorization_digest"
+    }
+    if item["authorization_digest"] != digest_json(signed):
+        raise LifecycleAuthorityError(
+            "Ready-source recovery authorization digest mismatch"
+        )
+    policy = _load_lifecycle_trust_policy(item["repository"])
+    _verify_signature(
+        canonical_json_bytes(
+            _unsigned(item, "authorization_digest", "signature")
+        ),
+        item["signature"],
+        authorization_signer,
+        READY_SOURCE_RECOVERY_AUTHORIZATION_DOMAIN,
+        policy.transition_signer_identities,
+        _policy_signature_verifier(policy),
+    )
+    return copy.deepcopy(item)
 
 
 def _assemble_exact_state_adoption_evidence(
