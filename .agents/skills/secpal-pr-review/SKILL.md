@@ -103,7 +103,11 @@ and create the canonical detached disposition artifact and signature.
 Both creators must verify the existing final reviewed state, typed final
 eligibility boundary, receipt/attestation, final tree, receipt trailer, origin,
 head, and commit signature before deriving the delivery signer and reading the
-explicitly named thread. A final eligibility manifest must match its
+explicitly named thread. They accept ordinary final-delivery evidence or, when
+`--integration-evidence` is supplied, canonical eligibility-bound Ready-
+integration evidence through the same integration-specific verifier used by
+the resolver. The authenticated attestation shape selects the evidence family;
+there is no caller-selected compatibility mode. A final eligibility manifest must match its
 authenticated digest, every eligible thread must exist in the reviewed state,
 and the proposed target must be absent from final eligibility. Each creator and
 the resolver must independently derive reviewed-state membership or absence and
@@ -111,7 +115,8 @@ enforce the matching closed decision policy. Resolve it
 only through `scripts/secpal-resolve-fixed-threads.py` with
 `--delivery-issue`, `--late-disposition-evidence`, and
 `--late-disposition-signature`, together with the matching
-`--late-classification-evidence` and `--late-classification-signature`. The
+`--late-classification-evidence` and `--late-classification-signature`, and the
+same `--integration-evidence` for a Ready-integration source. The
 resolver independently verifies the same
 final evidence, requires the detached SSH/OpenPGP signer to equal the verified
 delivery signer, and fails closed on any artifact, classification, action,

@@ -178,7 +178,14 @@ unknown versions and cross-version pair substitution fail closed.
 This path first independently verifies the existing complete final reviewed
 state, a typed final-eligibility boundary authenticated by the receipt and
 attestation, signed receipt trailer, final tree, exact head and origin, and
-accepted local commit signature. The boundary is either the canonical manifest
+accepted local commit signature. Its source is either ordinary final-delivery
+evidence or canonical eligibility-bound Ready-integration evidence routed
+through the same integration-specific verifier as fixed-thread resolution.
+Authenticated attestation shape, not a caller-selected mode, selects that
+closed source family. Ready-integration evidence additionally preserves its
+repository, delivery issue, PR, ordered parents, current-main identity, both
+trailers, receipt, final attestation, reviewed-state and eligibility bindings,
+version mapping, and signer verification. The boundary is either the canonical manifest
 or the maintained exact authenticated-absence record. A supplied invalid
 manifest never falls back to absence. Every manifest thread must exist in the
 final reviewed state. The proposed target must be absent from final eligibility;

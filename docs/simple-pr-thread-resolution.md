@@ -245,6 +245,17 @@ must be absent from final eligibility. Membership in authenticated final
 reviewed state derives `REVIEWED_BUT_INELIGIBLE`; absence from it derives
 `ABSENT_FROM_BOTH`.
 
+Source authentication accepts exactly ordinary final-delivery evidence or
+canonical eligibility-bound Ready-integration evidence. For the latter, pass
+the same `--integration-evidence` artifact to classification creation,
+disposition creation, and resolution. All three boundaries use the maintained
+integration-specific verifier; the authenticated attestation shape selects the
+family, without a compatibility-mode switch. The verifier preserves the exact
+integration repository, delivery issue, PR, head/tree, ordered parents and
+current-main identity, integration and receipt trailers, receipt, final
+attestation, reviewed-state and eligibility digests, version mapping, and
+signer/signature bindings.
+
 One accepted-main exact recovery record for `SecPal/.github` issue #810 and
 PR #821 permits the alternative
 `AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE` mode. The complete detached late
@@ -311,6 +322,7 @@ python3 scripts/secpal-create-late-classification.py \
   --expected-final-reviewed-state-digest FINAL_REVIEWED_STATE_SHA256 \
   --final-validation-evidence FINAL_ATTESTATION.json \
   --final-eligibility-evidence FINAL_ELIGIBILITY.json \
+  --integration-evidence READY_INTEGRATION.json \
   --thread-id PRRT_example \
   --finding-id LF-LATE-1 \
   --finding-evidence-digest FINDING_EVIDENCE_SHA256 \
@@ -330,6 +342,7 @@ python3 scripts/secpal-create-late-disposition.py \
   --expected-final-reviewed-state-digest FINAL_REVIEWED_STATE_SHA256 \
   --final-validation-evidence FINAL_ATTESTATION.json \
   --final-eligibility-evidence FINAL_ELIGIBILITY.json \
+  --integration-evidence READY_INTEGRATION.json \
   --classification-evidence LATE_CLASSIFICATION.json \
   --classification-signature LATE_CLASSIFICATION.json.sig \
   --output SESSION/LATE_DISPOSITION.json \
@@ -349,6 +362,7 @@ python3 scripts/secpal-resolve-fixed-threads.py \
   --expected-reviewed-state-digest FINAL_REVIEWED_STATE_SHA256 \
   --validation-evidence FINAL_ATTESTATION.json \
   --final-eligibility-evidence FINAL_ELIGIBILITY.json \
+  --integration-evidence READY_INTEGRATION.json \
   --late-classification-evidence SESSION/LATE_CLASSIFICATION.json \
   --late-classification-signature SESSION/LATE_CLASSIFICATION.json.sig \
   --late-disposition-evidence SESSION/LATE_DISPOSITION.json \
@@ -360,6 +374,10 @@ python3 scripts/secpal-resolve-fixed-threads.py \
 For the exact accepted absence-recovery delivery only, omit
 `--final-eligibility-evidence` from all three commands. There is no replacement
 caller input: accepted-main policy selects and verifies the recovery.
+
+The `--integration-evidence` lines apply only to an eligibility-bound Ready-
+integration source; omit them for ordinary final-delivery evidence and for the
+authenticated-absence recovery.
 
 Commit-bound `--eligibility-evidence` and detached
 `--late-disposition-evidence` are mutually exclusive. Missing, non-canonical,
