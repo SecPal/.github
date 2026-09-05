@@ -7848,6 +7848,103 @@ class ResolveFixedThreadsTests(TestCase):
                 ]
             )
 
+    def test_late_producer_clis_require_manifest_for_integration_evidence(
+        self,
+    ) -> None:
+        common = [
+            "--repo",
+            "SecPal/api",
+            "--delivery-issue",
+            "724",
+            "--pr",
+            "123",
+            "--repo-root",
+            "/delivery",
+            "--expected-head",
+            "a" * 40,
+            "--final-reviewed-state",
+            "reviewed.json",
+            "--expected-final-reviewed-state-digest",
+            "b" * 64,
+            "--final-validation-evidence",
+            "attestation.json",
+        ]
+        producer_arguments = (
+            (
+                ROOT / "scripts/secpal-create-late-classification.py",
+                [
+                    *common,
+                    "--thread-id",
+                    "PRRT_exampleOne",
+                    "--finding-id",
+                    "LF-LATE-1",
+                    "--finding-evidence-digest",
+                    "c" * 64,
+                    "--classification",
+                    "INFORMATIONAL",
+                    "--disposition",
+                    "NON_ACTIONABLE",
+                    "--technically-blocking",
+                    "false",
+                    "--output",
+                    "/tmp/classification.json",
+                    "--signature-output",
+                    "/tmp/classification.sig",
+                ],
+            ),
+            (
+                ROOT / "scripts/secpal-create-late-disposition.py",
+                [
+                    *common,
+                    "--classification-evidence",
+                    "classification.json",
+                    "--classification-signature",
+                    "classification.sig",
+                    "--output",
+                    "/tmp/disposition.json",
+                    "--signature-output",
+                    "/tmp/disposition.sig",
+                ],
+            ),
+        )
+
+        for index, (script, arguments) in enumerate(producer_arguments):
+            spec = importlib.util.spec_from_file_location(
+                f"late_producer_cli_{index}", script
+            )
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader if spec is not None else None)
+            producer = importlib.util.module_from_spec(spec)
+            assert spec is not None and spec.loader is not None
+            sys.modules[spec.name] = producer
+            try:
+                spec.loader.exec_module(producer)
+                with redirect_stderr(StringIO()) as error, self.assertRaises(
+                    SystemExit
+                ):
+                    producer.parse_args(
+                        [*arguments, "--integration-evidence", "integration.json"]
+                    )
+                self.assertIn(
+                    "--integration-evidence requires "
+                    "--final-eligibility-evidence",
+                    error.getvalue(),
+                )
+                ordinary = producer.parse_args(arguments)
+                self.assertIsNone(ordinary.integration_evidence)
+                integration = producer.parse_args(
+                    [
+                        *arguments,
+                        "--final-eligibility-evidence",
+                        "eligibility.json",
+                        "--integration-evidence",
+                        "integration.json",
+                    ]
+                )
+                self.assertEqual(integration.integration_evidence, "integration.json")
+            finally:
+                sys.modules.pop(spec.name, None)
+
     def test_cli_partitions_commit_bound_manifest_and_absence_modes(self) -> None:
         base = [
             "--repo",

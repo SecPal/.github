@@ -65,7 +65,15 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--technical-blocker", action="append", default=[])
     parser.add_argument("--output", required=True)
     parser.add_argument("--signature-output", required=True)
-    return parser.parse_args(argv)
+    arguments = parser.parse_args(argv)
+    if (
+        arguments.integration_evidence is not None
+        and arguments.final_eligibility_evidence is None
+    ):
+        parser.error(
+            "--integration-evidence requires --final-eligibility-evidence"
+        )
+    return arguments
 
 
 def main(argv: Sequence[str] | None = None) -> int:
