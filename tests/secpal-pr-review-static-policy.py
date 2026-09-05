@@ -257,6 +257,7 @@ ALLOWED_IMPORT_ROOTS = {
     "dataclasses",
     "datetime",
     "errno",
+    "enum",
     "functools",
     "hashlib",
     "importlib",
@@ -353,6 +354,7 @@ ALLOWED_IMPORTS = {
         "import subprocess",
         "import sys",
         "from dataclasses import dataclass",
+        "from enum import Enum",
         "from pathlib import Path",
         "from typing import Any, Callable, Sequence",
         "from secpal_pr_review import lifecycle_orchestration as module",
@@ -579,7 +581,12 @@ LOADED_MODULE_ATTRIBUTES = {
             "verify_live_follow_up",
         },
         "late_disposition": {
+            "ABSENCE_SCHEMA_VERSION",
             "ABSENT_FROM_BOTH",
+            "DISPOSITION_SCHEMA_VERSION_POLICY",
+            "INFORMATIONAL_ABSENCE_SCHEMA_VERSION",
+            "INFORMATIONAL_DISPOSITION_SCHEMA_VERSION",
+            "INFORMATIONAL_SCHEMA_VERSION",
             "POST_FREEZE_DECISIONS",
             "POST_FREEZE_ORIGIN_DECISIONS",
             "REVIEWED_BUT_INELIGIBLE",
@@ -590,6 +597,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "IDENTITY",
             "MAXIMUM_ARTIFACT_BYTES",
             "SCHEMA_VERSION",
+            "SignerIdentity",
             "TECHNICAL_BLOCKERS",
             "LateDispositionError",
             "_load_canonical_json",
@@ -600,6 +608,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "read_signing_configuration",
             "sign_artifact",
             "signer_from_git_verification",
+            "disposition_schema_version_for_decision",
             "schema_version_for_decision",
         },
         "lifecycle_orchestration": {
@@ -1070,6 +1079,7 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_read_authenticated_follow_up",
     "_resolve_trusted_markdown_node",
     "_load_repository_entry",
+    "_load_final_eligibility_absence",
     "_reject_nonfinite_json_constant",
     "_reject_duplicate_json_object",
     "_remote_repository",
@@ -1077,6 +1087,7 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_run_gh",
     "_run_git",
     "_parse_eligibility_payload",
+    "_require_valid_final_feedback_boundary",
     "_tracked_follow_ups_from_payload",
     "_tracked_follow_up_disposition_report",
     "_validation_registry_binding",
@@ -1093,6 +1104,7 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "read_stable_target_thread",
     "read_target_thread",
     "require_expected_target",
+    "require_late_target_origin",
     "require_post_freeze_decision",
     "resolve_threads",
     "resolve_late_disposition_threads",
@@ -1106,6 +1118,8 @@ RESOLVER_CLASS_SHAPES = {
     "ExpectedThreadState": ClassShape((), (), ("dataclass(frozen=True)",)),
     "EligibilityEvidence": ClassShape((), (), ("dataclass(frozen=True)",)),
     "FinalFeedbackBoundary": ClassShape((), (), ("dataclass(frozen=True)",)),
+    "FinalEligibilityAbsence": ClassShape((), (), ("dataclass(frozen=True)",)),
+    "FinalEligibilityMode": ClassShape(("Enum",), (), ()),
     "InvocationBudget": ClassShape((), (), ("dataclass",)),
     "ParsedEligibility": ClassShape((), (), ("dataclass(frozen=True)",)),
     "RepositoryLimits": ClassShape((), (), ("dataclass(frozen=True)",)),
@@ -1158,6 +1172,14 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
         "_reject_duplicate_json_object",
     ),
     DynamicImportCall(
+        ("_require_valid_final_feedback_boundary",),
+        "_reject_nonfinite_json_constant",
+    ),
+    DynamicImportCall(
+        ("_require_valid_final_feedback_boundary",),
+        "_reject_duplicate_json_object",
+    ),
+    DynamicImportCall(
         ("verify_local_fix_commit",),
         "_run_git",
     ),
@@ -1199,6 +1221,17 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
     ),
 }
 RESOLVER_LOOP_SITES = {
+    LoopSite("for", ("_load_final_eligibility_absence",), "records"),
+    LoopSite(
+        "comprehension",
+        ("_load_final_eligibility_absence",),
+        "record.items()",
+    ),
+    LoopSite(
+        "comprehension",
+        ("_load_final_eligibility_absence",),
+        "normalized",
+    ),
     LoopSite(
         "comprehension",
         ("create_late_classification_artifact",),
@@ -1458,7 +1491,15 @@ class PolicyVisitor(ast.NodeVisitor):
                         or isinstance(statement.value, ast.Constant)
                     )
                 )
-                if not safe_docstring and not safe_field:
+                safe_enum_member = (
+                    node.name == "FinalEligibilityMode"
+                    and isinstance(statement, ast.Assign)
+                    and len(statement.targets) == 1
+                    and isinstance(statement.targets[0], ast.Name)
+                    and isinstance(statement.value, ast.Constant)
+                    and isinstance(statement.value.value, str)
+                )
+                if not safe_docstring and not safe_field and not safe_enum_member:
                     self.finding(
                         statement,
                         "resolver class body is outside the data-only allowlist",

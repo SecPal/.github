@@ -107,6 +107,10 @@
         },
         "focused_validation": { "type": "array", "items": { "$ref": "#/$defs/command" } },
         "required_local_validation": { "type": "array", "items": { "$ref": "#/$defs/command" } },
+        "final_eligibility_absence_recoveries": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/final_eligibility_absence_recovery" }
+        },
         "signature_policy": { "type": "object" },
         "lifecycle_authority_policy": {
           "$ref": "#/$defs/lifecycle_authority_policy"
@@ -152,6 +156,50 @@
         "working_directory": { "type": "string", "minLength": 1 },
         "purpose": { "type": "string", "minLength": 1 },
         "execution_policy": { "enum": ["always", "focused-only"] }
+      }
+    },
+    "final_eligibility_absence_recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "repository",
+        "delivery_issue",
+        "pull_request",
+        "final_head_sha",
+        "final_tree_sha",
+        "final_reviewed_state_digest",
+        "final_validation_receipt_digest",
+        "final_attestation_digest",
+        "final_delivery_signer",
+        "expected_final_reviewed_thread_count",
+        "expected_final_eligibility_status",
+        "recovery_digest"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "kind": { "const": "FINAL_ELIGIBILITY_ABSENCE_RECOVERY" },
+        "repository": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+        "delivery_issue": { "type": "integer", "minimum": 1 },
+        "pull_request": { "type": "integer", "minimum": 1 },
+        "final_head_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "final_tree_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "final_reviewed_state_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "final_validation_receipt_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "final_attestation_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "final_delivery_signer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["format", "fingerprint"],
+          "properties": {
+            "format": { "enum": ["ssh", "openpgp"] },
+            "fingerprint": { "type": "string", "minLength": 1 }
+          }
+        },
+        "expected_final_reviewed_thread_count": { "const": 0 },
+        "expected_final_eligibility_status": { "const": "ABSENT_NOT_AUTHENTICATED" },
+        "recovery_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       }
     },
     "lifecycle_authority_policy": {

@@ -87,8 +87,10 @@ reconstruct that authority.
 
 For an exact technically non-blocking target absent from authenticated final
 eligibility and observed on the unchanged final delivery head, do not create an
-empty delivery commit. Require the complete final reviewed-state and eligibility
-artifacts. Derive `REVIEWED_BUT_INELIGIBLE` when the target is present in final
+empty delivery commit. Require the complete final reviewed state and the typed
+final-eligibility boundary: either its canonical manifest or the maintained
+exact authenticated-absence record. A supplied invalid manifest never falls
+back to absence. Derive `REVIEWED_BUT_INELIGIBLE` when the target is present in final
 reviewed state, or `ABSENT_FROM_BOTH` when it is absent; never accept a
 caller-selected origin or amend original eligibility. Require
 `INFORMATIONAL + NON_ACTIONABLE + technically_blocking=false` for either origin.
@@ -98,10 +100,10 @@ decision and every technical blocker. Use
 `scripts/secpal-create-late-classification.py` to capture and authenticate the
 exact decision, then use `scripts/secpal-create-late-disposition.py` to verify it
 and create the canonical detached disposition artifact and signature.
-Both creators must verify the existing final reviewed state, canonical final
-eligibility artifact, receipt/attestation, final tree, receipt trailer, origin,
+Both creators must verify the existing final reviewed state, typed final
+eligibility boundary, receipt/attestation, final tree, receipt trailer, origin,
 head, and commit signature before deriving the delivery signer and reading the
-explicitly named thread. The final eligibility artifact must match its
+explicitly named thread. A final eligibility manifest must match its
 authenticated digest, every eligible thread must exist in the reviewed state,
 and the proposed target must be absent from final eligibility. Each creator and
 the resolver must independently derive reviewed-state membership or absence and

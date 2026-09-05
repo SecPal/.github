@@ -79,6 +79,24 @@ attestation bind the same eligibility digest. Historical version-1.1
 integration attestations remain valid for their original integration purpose
 but are not thread-resolution authority.
 
+The late-feedback boundary also supports one exact accepted-main
+`AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE` recovery for `SecPal/.github`
+issue #810 / PR #821. The complete detached late-authority tuple selects late
+mode. Within that mode, omitting the final eligibility path selects that policy
+record; the verifier then requires the exact zero-thread reviewed state, final
+head and tree, receipt and attestation digests, delivery signer, and actual
+omission of `eligibility_evidence_digest` from both reconstructed receipt and
+attestation. It creates no eligibility manifest. A supplied final eligibility
+path always uses the ordinary manifest verifier, so malformed, stale, or missing
+supplied evidence cannot downgrade to absence recovery. Final eligibility
+evidence outside late mode is rejected.
+
+Classification schemas `1.0` and `1.1` select the invalid/disproven and
+informational/non-actionable decisions respectively. Disposition schemas bind
+both decision and evidence mode: `1.0`/`1.2` are manifest-backed invalid/info,
+while `1.1`/`1.3` are authenticated-absence invalid/info. Cross-wrapping those
+semantic pairs is rejected.
+
 Parent 1 additionally requires a closed prior-authority manifest authenticated
 by a signed annotated tag and independently verified ordinary receipt, final
 attestation, tree, and signer. The receipt identities must agree end to end.
@@ -233,6 +251,56 @@ normalization derives history provenance. Later head-changing successors bind
 fresh verified current-head evidence in the signed ordinary authority while the
 original adoption proof remains immutable.
 The lifecycle-authority suite is an unconditional registered validation command.
+
+### `secpal_pr_review/bootstrap_source_admission.py`
+
+Authenticates only the exact immutable PR #812 implementation source maintained
+for #810's first Ready-executor bootstrap. Accepted-main policy fixes the source
+head, tree, parent, receipt, final attestation, signer, implementation path,
+entrypoint, purpose, and source PR base repository/ref. Live provider reads emit
+a representation which is purely normalized before a separate pure admission
+step. Evidence files use the maintained bounded regular-file reader. The
+verifier fetches that object into a private detached tree, independently reuses
+the ordinary receipt/final-attestation verifier, and keeps candidate imports
+inside that tree. Its child launcher reports only closed diagnostic identities;
+it never exposes child stderr or exception text.
+
+The ordinary sole-parent path is unchanged: when a historical evidence
+directory is supplied, reviewed state, the byte-semantic receipt reconstructed
+from the immutable delivery registry, and the final attestation must all verify.
+Invalid supplied evidence fails immediately and never falls back. The historical
+receipt reconstruction used by Ready integration remains integration-only and
+does not admit this ordinary source.
+
+For the exact #810 / PR #812 source only, an absent evidence directory selects
+one closed `BOOTSTRAP_SOURCE_EVIDENCE_LOSS_RECOVERY` sub-record in the existing
+accepted-main `bootstrap_source_admissions` policy. It states
+`HISTORICAL_EVIDENCE_UNAVAILABLE_BUT_EXACT_RECOVERY_AUTHORIZED`, binds the
+unchanged source-admission digest, and carries distinct exact-source recovery
+validation and technical/security-gate digests. The verifier re-authenticates
+the signed head, tree, sole parent, receipt trailer, signer, implementation blob,
+path, entrypoint, 40 diagnostic raise sites, non-self-admission property, live
+open Draft PR, `main` base, and the exact canonical stable-feedback inventory
+accepted by the recovery gate. That inventory digest covers review submissions
+and their commit association, conversation comments, review threads, ordered
+thread comments and replies, actors, body digests, reactions, and
+resolved/outdated state through the maintained bounded pagination and duplicate
+identity checks. A new `COMMENTED` review body or same-count feedback
+substitution therefore fails even when the aggregate review decision remains
+unchanged; blocking aggregate review decisions also continue to fail. It also
+reconstructs the immutable source's
+15-command registry only to authenticate the fresh recovery-validation command
+set. It does not synthesize, reconstruct, or claim byte identity for lost
+`reviewed-state.json`, `validation-receipt.json`, or `final-attestation.json`.
+The maintained historical receipt and final-attestation digests remain
+provenance facts, not claims that the unavailable raw artifacts were freshly
+verified.
+
+Both paths return a sealed `VerifiedBootstrapSource` with an explicit historical
+evidence status. Source admission alone performs no GitHub mutation, lifecycle
+publication, CURRENT change, genesis operation, or work-graph mutation; the
+admitted executor still requires #810's separate signed one-use
+lifecycle-transition authorization.
 
 ### `secpal_pr_review/lifecycle_orchestration.py`
 

@@ -165,18 +165,24 @@ for `ABSENT_FROM_BOTH`. No other classification, disposition, technical
 blocker, or caller-selected origin is accepted. Classification is explicit
 independent review judgment and is never inferred from text.
 
-Historical schema `1.0` remains restricted to the original
-`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` semantics. New
-`INFORMATIONAL + NON_ACTIONABLE` artifacts use schema `1.1`. The signed schema
-version selects one exact pair, so formerly rejected `1.0` bytes do not acquire
-new authority; unknown versions and cross-version pair substitution fail closed.
+Classification schema `1.0` remains restricted to the original
+`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` semantics, while
+classification schema `1.1` selects `INFORMATIONAL + NON_ACTIONABLE`.
+Disposition schemas additionally bind the final-eligibility mode: `1.0` and
+`1.2` select manifest-backed invalid and informational decisions respectively;
+`1.1` and `1.3` select authenticated-absence invalid and informational
+decisions. The signed schema version therefore selects one exact evidence-mode
+and decision pair. Formerly rejected bytes do not acquire new authority;
+unknown versions and cross-version pair substitution fail closed.
 
 This path first independently verifies the existing complete final reviewed
-state, the canonical final eligibility artifact authenticated by the receipt
-and attestation, signed receipt trailer, final tree, exact head and origin, and
-accepted local commit signature. Every final-eligibility thread must exist in
-the final reviewed state. The proposed target must be absent from final
-eligibility; authenticated membership in final reviewed state derives
+state, a typed final-eligibility boundary authenticated by the receipt and
+attestation, signed receipt trailer, final tree, exact head and origin, and
+accepted local commit signature. The boundary is either the canonical manifest
+or the maintained exact authenticated-absence record. A supplied invalid
+manifest never falls back to absence. Every manifest thread must exist in the
+final reviewed state. The proposed target must be absent from final eligibility;
+authenticated membership in final reviewed state derives
 `REVIEWED_BUT_INELIGIBLE`, while authenticated absence from it derives
 `ABSENT_FROM_BOTH`. Classification creation, disposition creation, and
 resolution independently re-establish the origin and its closed decision
@@ -195,8 +201,9 @@ Outputs use descriptor-relative replacement in opened private directories and
 are required to remain outside the delivery repository.
 
 The signed document binds repository, delivery issue, PR, unchanged final head
-and tree, receipt/attestation/final-eligibility digests, derived signer, exact
-authorized action, and exactly one thread authorization. That authorization
+and tree, receipt/attestation and either final-eligibility-manifest or exact
+absence-record digests, derived signer, exact authorized action, and exactly
+one thread authorization. That authorization
 binds the GraphQL thread ID, top-level comment node and database
 IDs, finding body digest, reply-state digest and count, resolved/outdated state,
 independently established classification evidence digest, classification,
@@ -500,6 +507,55 @@ use the non-blocking path. `NON_BLOCKING_FOLLOWUP` additionally consumes #689's
 exact live follow-up verification. Its guarded resolution is recorded only as
 `SAFELY_DISPOSITIONED_TRACKED`, never fixed, implemented, or completed. #724's
 detached path remains limited to its exact authenticated disposition allowlist.
+
+## Authenticated Ready/Draft execution boundary
+
+The separate `lifecycle_execution.py` boundary executes only an already signed
+and authenticated lifecycle-orchestration authorization for
+`DRAFT_TO_READY` or `READY_TO_DRAFT`. Its public input is exactly repository,
+delivery issue, and canonical authorization bytes. It accepts no caller state,
+counter, CURRENT, predecessor, transition, signer, completion, executable,
+host, retry, force, or verification-bypass assertion.
+
+The executor first verifies the signed authorization and independently selected
+CURRENT. When CURRENT is the authorized predecessor, it invokes the maintained
+orchestration decision and uses lifecycle authority to derive the one exact
+successor. When CURRENT is already the target, protected journal ancestry must
+prove that its direct transition has the same predecessor, authorization-bound
+event identity, operation, signer, PR, head, lifecycle, state delta, counters,
+and histories. A later or unrelated successor is not authorization reuse and
+fails closed.
+
+Observed state is closed to four cases for either transition:
+
+- GitHub predecessor plus CURRENT predecessor is `NOT_STARTED`;
+- GitHub target plus CURRENT predecessor is
+  `GITHUB_APPLIED_PUBLICATION_PENDING`;
+- GitHub target plus exact CURRENT successor is `COMPLETE`;
+- GitHub predecessor plus exact CURRENT successor is
+  `UNSAFE_REVERSE_PARTIAL` and fails closed.
+
+No other pairing is accepted. `NOT_STARTED` writes GitHub first, verifies its
+live target, and only then calls the existing `advance_current_terminal` exact
+CAS writer. The pending case skips GitHub and publishes the same successor. The
+complete case performs zero writes and never increments Ready history again.
+
+Nominal and ambiguous GitHub results both require independent read-back. An
+ambiguous result at the predecessor stops incomplete without a second write;
+an exact target continues. Publication failure is never blindly retried: one
+CURRENT read recognizes the exact successor as complete or the exact
+predecessor as publication-pending and resumable. Success always ends with a
+fresh independent read of both live GitHub and protected CURRENT.
+
+Progress is not persisted. Same-authorization continuation is valid only while
+GitHub is at the exact target and CURRENT remains the exact authorized
+predecessor. Exact completed replay is an idempotent success with zero writes;
+using that authorization for another successor fails. Review, CI, remediation,
+recovery, integration, and metadata authorities cannot select this executor.
+
+This owner preserves the useful decision/execution boundary and composes the
+existing authorities without adding a permanent lifecycle concept.
+`NEW_PERMANENT_CONCEPT=NO`.
 
 ## Explicit CI and readiness path
 

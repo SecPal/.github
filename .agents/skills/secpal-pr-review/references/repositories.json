@@ -123,6 +123,27 @@
           "purpose": "Validate REUSE metadata"
         }
       ],
+      "final_eligibility_absence_recoveries": [
+        {
+          "schema_version": "1.0",
+          "kind": "FINAL_ELIGIBILITY_ABSENCE_RECOVERY",
+          "repository": "SecPal/.github",
+          "delivery_issue": 810,
+          "pull_request": 821,
+          "final_head_sha": "3bd4dcd08c0c1b9852eeff487c0ecbc2102b02d9",
+          "final_tree_sha": "b26b43004b75340de5c761b00727202b6cd9e255",
+          "final_reviewed_state_digest": "8ab3d9eec9a831cdc0257c4835f264816079a1d5d57c02e4bf5700989b1a52ee",
+          "final_validation_receipt_digest": "8554874ecf0013d9e2f43ba3e060f3bf57987eac3caf142e05c49253a491b1aa",
+          "final_attestation_digest": "d9be593f444a9fa24ce301b236eaaf41776c0230b08cfcd0a2e23ac55f17e05e",
+          "final_delivery_signer": {
+            "format": "ssh",
+            "fingerprint": "SHA256:GCaB6jwhFkzWkmHek5dVQNgxEb1JiLMOyhmIAcd0Vsc"
+          },
+          "expected_final_reviewed_thread_count": 0,
+          "expected_final_eligibility_status": "ABSENT_NOT_AUTHENTICATED",
+          "recovery_digest": "7b63a0d43b3c9f0ddc41500aa12657af61342743e99b9201db634401694d3ccc"
+        }
+      ],
       "signature_policy": {
         "require_github_verified": true,
         "require_local_verified": true,

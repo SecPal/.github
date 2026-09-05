@@ -20,7 +20,10 @@ from pathlib import Path
 from typing import Any, Sequence
 
 SCHEMA_VERSION = "1.0"
+ABSENCE_SCHEMA_VERSION = "1.1"
 INFORMATIONAL_SCHEMA_VERSION = "1.1"
+INFORMATIONAL_DISPOSITION_SCHEMA_VERSION = "1.2"
+INFORMATIONAL_ABSENCE_SCHEMA_VERSION = "1.3"
 KIND = "LATE_FEEDBACK_DISPOSITION"
 SIGNATURE_NAMESPACE = "secpal-late-feedback-disposition-v1"
 CLASSIFICATION_KIND = "LATE_FEEDBACK_CLASSIFICATION"
@@ -46,6 +49,18 @@ POST_FREEZE_ORIGIN_DECISIONS = {
 SCHEMA_VERSION_DECISIONS = {
     SCHEMA_VERSION: frozenset({INVALID_DISPROVEN}),
     INFORMATIONAL_SCHEMA_VERSION: frozenset({INFORMATIONAL_NON_ACTIONABLE}),
+}
+DISPOSITION_SCHEMA_VERSION_POLICY = {
+    SCHEMA_VERSION: (False, INVALID_DISPROVEN),
+    ABSENCE_SCHEMA_VERSION: (True, INVALID_DISPROVEN),
+    INFORMATIONAL_DISPOSITION_SCHEMA_VERSION: (
+        False,
+        INFORMATIONAL_NON_ACTIONABLE,
+    ),
+    INFORMATIONAL_ABSENCE_SCHEMA_VERSION: (
+        True,
+        INFORMATIONAL_NON_ACTIONABLE,
+    ),
 }
 MAXIMUM_ARTIFACT_BYTES = 64 * 1024
 MAXIMUM_SIGNATURE_BYTES = 32 * 1024
@@ -491,6 +506,24 @@ def schema_version_for_decision(classification: str, disposition: str) -> str:
     )
 
 
+def disposition_schema_version_for_decision(
+    classification: str,
+    disposition: str,
+    *,
+    final_eligibility_absent: bool,
+) -> str:
+    decision = (classification, disposition)
+    for schema_version, (absence_mode, authorized_decision) in (
+        DISPOSITION_SCHEMA_VERSION_POLICY.items()
+    ):
+        if (
+            absence_mode is final_eligibility_absent
+            and decision == authorized_decision
+        ):
+            return schema_version
+    raise LateDispositionError("late disposition decision is not schema-authorized")
+
+
 def parse_classification_artifact(
     artifact_path: Path,
     signature_path: Path,
@@ -646,8 +679,9 @@ def parse_artifact(
     validated_tree_sha: str,
     validation_receipt_digest: str,
     validation_attestation_digest: str,
-    final_eligibility_evidence_digest: str,
+    final_eligibility_evidence_digest: str | None,
     thread_ids: tuple[str, ...],
+    final_eligibility_absence_recovery_digest: str | None = None,
     signature_environment: dict[str, str] | None = None,
 ) -> LateDispositionEvidence:
     canonical = verify_detached_signature(
@@ -664,7 +698,7 @@ def parse_artifact(
         )
     except (TypeError, ValueError) as exc:
         raise LateDispositionError("late-disposition artifact is malformed") from exc
-    expected_keys = {
+    common_keys = {
         "schema_version",
         "kind",
         "repository",
@@ -674,17 +708,36 @@ def parse_artifact(
         "validated_tree_sha",
         "validation_receipt_digest",
         "validation_attestation_digest",
-        "final_eligibility_evidence_digest",
         "delivery_signer",
         "authorized_action",
         "threads",
     }
-    if not isinstance(payload, dict) or set(payload) != expected_keys:
+    manifest_mode = (
+        isinstance(payload, dict)
+        and payload.get("schema_version")
+        in {SCHEMA_VERSION, INFORMATIONAL_DISPOSITION_SCHEMA_VERSION}
+        and set(payload) == common_keys | {"final_eligibility_evidence_digest"}
+        and isinstance(final_eligibility_evidence_digest, str)
+        and DIGEST.fullmatch(final_eligibility_evidence_digest)
+        and final_eligibility_absence_recovery_digest is None
+    )
+    absence_mode = (
+        isinstance(payload, dict)
+        and payload.get("schema_version")
+        in {ABSENCE_SCHEMA_VERSION, INFORMATIONAL_ABSENCE_SCHEMA_VERSION}
+        and set(payload)
+        == common_keys
+        | {
+            "final_eligibility_status",
+            "final_eligibility_absence_recovery_digest",
+        }
+        and final_eligibility_evidence_digest is None
+    )
+    if not manifest_mode and not absence_mode:
         raise LateDispositionError("late-disposition artifact shape is unsupported")
     declared_signer = payload.get("delivery_signer")
     if (
-        payload.get("schema_version") not in SCHEMA_VERSION_DECISIONS
-        or payload.get("kind") != KIND
+        payload.get("kind") != KIND
         or payload.get("repository") != repository
         or payload.get("delivery_issue_number") != delivery_issue_number
         or payload.get("pull_request_number") != pull_request_number
@@ -692,8 +745,22 @@ def parse_artifact(
         or payload.get("validated_tree_sha") != validated_tree_sha.lower()
         or payload.get("validation_receipt_digest") != validation_receipt_digest
         or payload.get("validation_attestation_digest") != validation_attestation_digest
-        or payload.get("final_eligibility_evidence_digest")
-        != final_eligibility_evidence_digest
+        or (
+            manifest_mode
+            and payload.get("final_eligibility_evidence_digest")
+            != final_eligibility_evidence_digest
+        )
+        or (
+            absence_mode
+            and (
+                payload.get("final_eligibility_status")
+                != "NO_ELIGIBILITY_WAS_AUTHENTICATED_AT_FINAL_VALIDATION"
+                or payload.get("final_eligibility_absence_recovery_digest")
+                != final_eligibility_absence_recovery_digest
+                or not isinstance(final_eligibility_absence_recovery_digest, str)
+                or not DIGEST.fullmatch(final_eligibility_absence_recovery_digest)
+            )
+        )
         or payload.get("authorized_action") != "RESOLVE_EXACT_REVIEW_THREADS"
         or not isinstance(declared_signer, dict)
         or set(declared_signer) != {"format", "fingerprint"}
@@ -743,8 +810,8 @@ def parse_artifact(
             or item["reply_count"] < 0
             or item.get("is_resolved") is not False
             or not isinstance(item.get("is_outdated"), bool)
-            or (classification, disposition)
-            not in SCHEMA_VERSION_DECISIONS[payload["schema_version"]]
+            or DISPOSITION_SCHEMA_VERSION_POLICY.get(payload["schema_version"])
+            != (absence_mode, (classification, disposition))
             or item.get("technically_blocking") is not False
             or not isinstance(item.get("classification_evidence_digest"), str)
             or not DIGEST.fullmatch(item["classification_evidence_digest"])
