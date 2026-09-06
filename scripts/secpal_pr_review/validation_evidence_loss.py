@@ -5,15 +5,17 @@
 from __future__ import annotations
 
 import copy
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import subprocess
 import tempfile
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 from . import bootstrap_source_admission as transport
 from . import fast_path
@@ -58,6 +60,49 @@ RECORD_FIELDS = frozenset({
 class VerifiedPreEnrollmentValidationEvidenceLossAdmission:
     canonical_admission: dict[str, Any]
     _verification_seal: object
+
+
+@dataclass(frozen=True)
+class PullRequestFacts:
+    number: int
+    state: str
+    draft: bool
+    merged: bool
+    head_sha: str
+    head_repository: str
+    base_repository: str
+    base_ref: str
+    created_at: str
+
+
+@dataclass(frozen=True)
+class IssueFacts:
+    number: int
+    state: str
+
+
+@dataclass(frozen=True)
+class CommitFacts:
+    head_sha: str
+    parent_shas: tuple[str, ...]
+    committed_at: str
+
+
+@dataclass(frozen=True)
+class SourceCommitFacts:
+    head_sha: str
+    tree_sha: str
+    parent_shas: tuple[str, ...]
+    signature_verified: bool
+
+
+@dataclass(frozen=True)
+class NormalizedProviderFacts:
+    pull_request: PullRequestFacts
+    issue: IssueFacts
+    commits: tuple[CommitFacts, ...]
+    timeline_events: tuple[str | None, ...]
+    source_commit: SourceCommitFacts
 
 
 def _intended_state() -> dict[str, Any]:
@@ -218,7 +263,91 @@ def _accepted_policy(repository: str, issue: int) -> tuple[str, dict[str, Any], 
     return main, record, entry, trust
 
 
-def _observe(record: Mapping[str, Any], entry: Any, trust: Any) -> tuple[dict[str, Any], Any]:
+def _provider_mapping(value: Any, label: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise authority.LifecycleAuthorityError(f"{label} provider representation is malformed")
+    return value
+
+
+def _provider_value(value: Any, path: tuple[str, ...], label: str) -> Any:
+    current = value
+    try:
+        for field in path:
+            current = _provider_mapping(current, label)[field]
+    except KeyError as exc:
+        raise authority.LifecycleAuthorityError(f"{label} provider representation is malformed") from exc
+    return current
+
+
+def _normalize_provider_representations(
+    target: Any,
+    issue_state: Any,
+    commits: Any,
+    timeline: Any,
+    source_commit: Any,
+) -> NormalizedProviderFacts:
+    """Purely convert bounded provider representations into canonical facts."""
+
+    target = _provider_mapping(target, "pull request")
+    issue_state = _provider_mapping(issue_state, "issue")
+    source_commit = _provider_mapping(source_commit, "source commit")
+    if not isinstance(commits, list) or len(commits) > 100:
+        raise authority.LifecycleAuthorityError("commit provider representation is malformed")
+    if not isinstance(timeline, list) or len(timeline) > 100:
+        raise authority.LifecycleAuthorityError("timeline provider representation is malformed")
+    try:
+        normalized_commits = tuple(
+            CommitFacts(
+                head_sha=_provider_value(item, ("sha",), "commit"),
+                parent_shas=tuple(
+                    _provider_value(parent, ("sha",), "commit parent")
+                    for parent in _provider_value(item, ("parents",), "commit")
+                ),
+                committed_at=_provider_value(item, ("commit", "committer", "date"), "commit"),
+            )
+            for item in commits
+        )
+        timeline_events = tuple(
+            _provider_mapping(item, "timeline event").get("event") for item in timeline
+        )
+        merged_at = _provider_value(target, ("merged_at",), "pull request")
+        if merged_at is not None and not isinstance(merged_at, str):
+            raise authority.LifecycleAuthorityError("pull request provider representation is malformed")
+        return NormalizedProviderFacts(
+            pull_request=PullRequestFacts(
+                number=_provider_value(target, ("number",), "pull request"),
+                state=str(_provider_value(target, ("state",), "pull request")).upper(),
+                draft=_provider_value(target, ("draft",), "pull request"),
+                merged=merged_at is not None,
+                head_sha=_provider_value(target, ("head", "sha"), "pull request"),
+                head_repository=_provider_value(target, ("head", "repo", "full_name"), "pull request"),
+                base_repository=_provider_value(target, ("base", "repo", "full_name"), "pull request"),
+                base_ref=_provider_value(target, ("base", "ref"), "pull request"),
+                created_at=_provider_value(target, ("created_at",), "pull request"),
+            ),
+            issue=IssueFacts(
+                number=_provider_value(issue_state, ("number",), "issue"),
+                state=str(_provider_value(issue_state, ("state",), "issue")).upper(),
+            ),
+            commits=normalized_commits,
+            timeline_events=timeline_events,
+            source_commit=SourceCommitFacts(
+                head_sha=_provider_value(source_commit, ("sha",), "source commit"),
+                tree_sha=_provider_value(source_commit, ("commit", "tree", "sha"), "source commit"),
+                parent_shas=tuple(
+                    _provider_value(parent, ("sha",), "source commit parent")
+                    for parent in _provider_value(source_commit, ("parents",), "source commit")
+                ),
+                signature_verified=_provider_value(
+                    source_commit, ("commit", "verification", "verified"), "source commit"
+                ),
+            ),
+        )
+    except (TypeError, ValueError) as exc:
+        raise authority.LifecycleAuthorityError("provider representation is malformed") from exc
+
+
+def _observe(record: Mapping[str, Any], entry: Any, trust: Any) -> tuple[SourceCommitFacts, Any]:
     repository = record["repository"]
     issue = record["delivery_issue"]
     pr = record["pull_request"]
@@ -230,37 +359,46 @@ def _observe(record: Mapping[str, Any], entry: Any, trust: Any) -> tuple[dict[st
     helper = transport._load_actions_helper()
     reviewed = helper.FastPathGateway(ROOT, entry).capture_stable_feedback(repository, pr)
     source_commit = _gh_json(f"repos/{repository}/commits/{record['head_sha']}")
-    return _admit_observation(record, target, issue_state, commits, timeline, reviewed, source_commit)
+    normalized = _normalize_provider_representations(
+        target, issue_state, commits, timeline, source_commit,
+    )
+    return _admit_observation(record, normalized, reviewed)
 
 
 def _admit_observation(
-    record: Mapping[str, Any], target: Any, issue_state: Any, commits: Any,
-    timeline: Any, reviewed: Any, source_commit: Any,
-) -> tuple[dict[str, Any], Any]:
+    record: Mapping[str, Any], provider: NormalizedProviderFacts, reviewed: Any,
+) -> tuple[SourceCommitFacts, Any]:
+    if type(provider) is not NormalizedProviderFacts:
+        raise authority.LifecycleAuthorityError("loss admission requires normalized provider facts")
     repository = record["repository"]
     issue = record["delivery_issue"]
     pr = record["pull_request"]
+    target = provider.pull_request
+    issue_state = provider.issue
+    commits = provider.commits
+    timeline = provider.timeline_events
+    source_commit = provider.source_commit
     if (
-        target["number"] != pr or target["state"] != "open" or target["draft"] is not True
-        or target["merged_at"] is not None or target["head"]["sha"] != record["head_sha"]
-        or target["head"]["repo"]["full_name"] != repository
-        or target["base"]["repo"]["full_name"] != repository or target["base"]["ref"] != "main"
-        or issue_state["number"] != issue or issue_state["state"] != "open"
+        target.number != pr or target.state != "OPEN" or target.draft is not True
+        or target.merged or target.head_sha != record["head_sha"]
+        or target.head_repository != repository
+        or target.base_repository != repository or target.base_ref != "main"
+        or issue_state.number != issue or issue_state.state != "OPEN"
     ):
         raise authority.LifecycleAuthorityError("loss source is not the exact open unenrolled Draft")
-    if not isinstance(commits, list) or not commits or len(commits) >= 100:
+    if not commits or len(commits) >= 100:
         raise authority.LifecycleAuthorityError("loss source history is incomplete")
     observations = record["observed_pre_enrollment_history"]
-    if [item["sha"] for item in commits] != [item["head_sha"] for item in observations]:
+    if [item.head_sha for item in commits] != [item["head_sha"] for item in observations]:
         raise authority.LifecycleAuthorityError("loss source observed history changed")
     for index, item in enumerate(commits):
-        if len(item["parents"]) != 1 or (index and item["parents"][0]["sha"] != commits[index - 1]["sha"]):
+        if len(item.parent_shas) != 1 or (index and item.parent_shas[0] != commits[index - 1].head_sha):
             raise authority.LifecycleAuthorityError("loss source history parent topology changed")
-        timestamp = target["created_at"] if index == 0 else item["commit"]["committer"]["date"]
+        timestamp = target.created_at if index == 0 else item.committed_at
         if observations[index]["observed_at"] != timestamp:
             raise authority.LifecycleAuthorityError("loss source history timestamp changed")
-    if not isinstance(timeline, list) or len(timeline) >= 100 or any(
-        event.get("event") in {"ready_for_review", "convert_to_draft"} for event in timeline
+    if len(timeline) >= 100 or any(
+        event in {"ready_for_review", "convert_to_draft"} for event in timeline
     ):
         raise authority.LifecycleAuthorityError("loss source has Ready history or incomplete chronology")
     if reviewed.head_sha != record["head_sha"] or reviewed.pr_state != "OPEN" or reviewed.feedback_digest != record["feedback_digest"]:
@@ -271,10 +409,10 @@ def _admit_observation(
     if {item["source_id"]: item["source_digest"] for item in decisions} != expected:
         raise authority.LifecycleAuthorityError("loss source technical decisions are not source-complete")
     if (
-        source_commit["sha"] != record["head_sha"]
-        or source_commit["commit"]["tree"]["sha"] != record["tree_sha"]
-        or [item["sha"] for item in source_commit["parents"]] != [record["parent_sha"]]
-        or source_commit["commit"]["verification"]["verified"] is not True
+        source_commit.head_sha != record["head_sha"]
+        or source_commit.tree_sha != record["tree_sha"]
+        or list(source_commit.parent_shas) != [record["parent_sha"]]
+        or source_commit.signature_verified is not True
     ):
         raise authority.LifecycleAuthorityError("loss source immutable identity or signature changed")
     return source_commit, reviewed
@@ -358,6 +496,93 @@ def _prepare_dependencies(root: Path, helper: Any) -> None:
             raise authority.LifecycleAuthorityError("current safety locked dependency installation failed")
 
 
+def _current_validation_harness_paths(main: str, helper: Any, entry: Any) -> tuple[str, ...]:
+    commands = helper._complete_validation_commands(entry)
+    paths: set[str] = set()
+    includes_tests = False
+    for command in commands:
+        arguments = command["argv"]
+        if (
+            arguments[:3] == ["python3", "-m", "unittest"]
+            and len(arguments) > 3
+            and all(path.startswith("tests/") for path in arguments[3:])
+        ) or (len(arguments) == 1 and arguments[0].startswith("./tests/")):
+            includes_tests = True
+        elif arguments == ["./scripts/preflight.sh", "--reuse-tracked-only"]:
+            paths.add("scripts/preflight.sh")
+        elif arguments == ["npm", "run", "lint:markdown"]:
+            paths.update({"package.json", "package-lock.json", ".markdownlint.json"})
+        else:
+            raise authority.LifecycleAuthorityError(
+                "current validation command lacks an accepted harness-source boundary"
+            )
+    if includes_tests:
+        try:
+            tracked_tests = transport._git(ROOT, ["ls-tree", "-rz", "--name-only", main, "tests"]).stdout.decode(
+                "utf-8", "strict"
+            )
+        except UnicodeDecodeError as exc:
+            raise authority.LifecycleAuthorityError("current validation harness listing is malformed") from exc
+        paths.update(path for path in tracked_tests.rstrip("\0").split("\0") if path)
+    if not paths:
+        raise authority.LifecycleAuthorityError("current validation harness has no maintained paths")
+    return tuple(sorted(paths))
+
+
+def _copy_current_harness_file(main: str, relative: str, destination_root: Path) -> None:
+    path = Path(relative)
+    if path.is_absolute() or ".." in path.parts or not relative:
+        raise authority.LifecycleAuthorityError("current validation harness path is unsafe")
+    source = ROOT / path
+    if source.is_symlink() or not source.is_file():
+        raise authority.LifecycleAuthorityError("current validation harness file is unavailable")
+    try:
+        payload = source.read_bytes()
+    except OSError as exc:
+        raise authority.LifecycleAuthorityError("current validation harness file is unavailable") from exc
+    actual = transport._git(ROOT, ["hash-object", "--stdin"], input_bytes=payload).stdout.decode(
+        "ascii", "strict"
+    ).strip()
+    expected = transport._git_text(ROOT, ["rev-parse", f"{main}:{relative}"]).strip()
+    if actual != expected:
+        raise authority.LifecycleAuthorityError("current validation harness bytes are not accepted main")
+    tree_entry = transport._git_text(ROOT, ["ls-tree", main, "--", relative]).split()
+    if len(tree_entry) < 3 or tree_entry[0] not in {"100644", "100755"} or tree_entry[1] != "blob":
+        raise authority.LifecycleAuthorityError("current validation harness mode is invalid")
+    destination = destination_root / path
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(payload)
+    destination.chmod(0o755 if tree_entry[0] == "100755" else 0o644)
+
+
+@contextmanager
+def _current_policy_validation_root(
+    main: str,
+    *,
+    source_root: Path,
+    helper: Any,
+    entry: Any,
+) -> Iterator[Path]:
+    """Build a disposable target tree with only accepted-main harness bytes overlaid."""
+
+    source_root = source_root.resolve(strict=True)
+    if not source_root.is_dir():
+        raise authority.LifecycleAuthorityError("immutable validation source root is unavailable")
+    harness_paths = _current_validation_harness_paths(main, helper, entry)
+    with tempfile.TemporaryDirectory(prefix="secpal-current-policy-validation-") as directory:
+        execution_root = Path(directory) / "source"
+        try:
+            shutil.copytree(source_root, execution_root, symlinks=True)
+            tests_root = execution_root / "tests"
+            if tests_root.exists():
+                shutil.rmtree(tests_root)
+            for relative in harness_paths:
+                _copy_current_harness_file(main, relative, execution_root)
+        except OSError as exc:
+            raise authority.LifecycleAuthorityError("current validation harness preparation failed") from exc
+        yield execution_root
+
+
 def _acquire(repository: str, issue: int, *, execute_validation: bool) -> dict[str, Any]:
     main, record, entry, trust = _accepted_policy(repository, issue)
     _, before = _observe(record, entry, trust)
@@ -381,9 +606,11 @@ def _acquire(repository: str, issue: int, *, execute_validation: bool) -> dict[s
             raise authority.LifecycleAuthorityError("loss source historical signed receipt changed")
         source_listing = _verify_source_bytes(root, record["tree_sha"])
         if execute_validation:
-            _prepare_dependencies(root, helper)
-            _verify_source_bytes(root, record["tree_sha"], expected_listing=source_listing)
-            result = helper._run_registered_validations(entry, root)
+            with _current_policy_validation_root(
+                main, source_root=root, helper=helper, entry=entry,
+            ) as validation_root:
+                _prepare_dependencies(validation_root, helper)
+                result = helper._run_registered_validations(entry, validation_root)
             if not result:
                 raise authority.LifecycleAuthorityError(
                     f"current registered safety validation failed: {result.failure_report()}"

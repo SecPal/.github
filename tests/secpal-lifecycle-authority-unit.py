@@ -20,7 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest import TestCase, main
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
@@ -2594,17 +2594,23 @@ class ValidationEvidenceLossTests(TestCase):
                 return ""
             return self.record["head_sha"]
 
+        validation_root = REPO_ROOT
         with patch.object(self.loss, "_accepted_policy", return_value=("c" * 40, self.record, entry, self.trust)), patch.object(
             self.loss, "_observe", return_value=({}, reviewed)
         ), patch.object(self.loss.transport, "_load_actions_helper", return_value=helper), patch.object(
             self.loss.transport, "_git"
         ), patch.object(self.loss.transport, "_git_text", side_effect=git_text), patch.object(
             self.loss, "_source_signature", return_value="3" * 64
-        ), patch.object(self.loss.transport, "_exact_trailer", return_value=self.record["historical_validation_receipt_digest"]):
+        ), patch.object(self.loss.transport, "_exact_trailer", return_value=self.record["historical_validation_receipt_digest"]), patch.object(
+            self.loss, "_current_policy_validation_root", return_value=nullcontext(validation_root)
+        ) as current_harness:
             with patch.object(self.loss, "_prepare_dependencies"), patch.object(self.loss, "_verify_source_bytes"):
                 result = self.loss._acquire(REPOSITORY, 827, execute_validation=True)
             self.assertTrue(result["current_safety"]["successful_result"])
-            helper._run_registered_validations.assert_called_once()
+            current_harness.assert_called_once_with(
+                "c" * 40, source_root=ANY, helper=helper, entry=entry,
+            )
+            helper._run_registered_validations.assert_called_once_with(entry, validation_root)
             helper._run_registered_validations.reset_mock()
             with patch.object(self.loss, "_prepare_dependencies") as prepare, patch.object(self.loss, "_verify_source_bytes"):
                 self.loss._acquire(REPOSITORY, 827, execute_validation=False)
@@ -2703,8 +2709,112 @@ class ValidationEvidenceLossTests(TestCase):
         ), patch.object(self.loss.publication, "require_unenrolled_delivery"):
             return self.loss._observe(self.record, {}, self.trust)
 
+    def test_realistic_provider_representations_are_normalized_before_admission(self) -> None:
+        target, issue, commits, timeline, source = self.provider_facts()
+        target.update({"url": "https://api.github.com/repos/SecPal/.github/pulls/830", "labels": []})
+        issue.update({"url": "https://api.github.com/repos/SecPal/.github/issues/827", "labels": []})
+        for commit in commits:
+            commit.update({"url": f"https://api.github.com/repos/SecPal/.github/commits/{commit['sha']}"})
+        timeline.append({"event": "committed", "sha": commits[-1]["sha"]})
+        source.update({"url": f"https://api.github.com/repos/SecPal/.github/commits/{source['sha']}"})
+
+        normalized = self.loss._normalize_provider_representations(
+            target, issue, commits, timeline, source,
+        )
+
+        self.assertIs(type(normalized), self.loss.NormalizedProviderFacts)
+        self.assertEqual(normalized.pull_request.head_sha, self.record["head_sha"])
+        self.assertEqual(normalized.issue.number, 827)
+        self.assertEqual(normalized.commits[-1].head_sha, self.record["head_sha"])
+        self.assertEqual(normalized.timeline_events, ("committed",))
+        self.assertEqual(normalized.source_commit.tree_sha, self.record["tree_sha"])
+
+        with patch.object(self.loss, "_admit_observation", wraps=self.loss._admit_observation) as admit:
+            self.observe([target, issue, commits, timeline, source])
+        self.assertIs(type(admit.call_args.args[1]), self.loss.NormalizedProviderFacts)
+        with self.assertRaisesRegex(authority.LifecycleAuthorityError, "normalized provider facts"):
+            self.loss._admit_observation(self.record, target, self.reviewed_state())
+
+    def test_current_policy_harness_is_separate_from_immutable_source_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            accepted = temporary / "accepted"
+            source = temporary / "source"
+            accepted.mkdir()
+            source.mkdir()
+            for root, marker in ((accepted, "current"), (source, "historical")):
+                (root / "tests").mkdir()
+                (root / "scripts").mkdir()
+                (root / "tests/harness.py").write_text(f"{marker} harness\n")
+                (root / "tests/harness.sh").write_text(
+                    "#!/usr/bin/env bash\n"
+                    + ("test \"$(cat product.py)\" = \"historical product\"\n" if marker == "current" else "exit 41\n")
+                    + f"# {marker} harness\n"
+                )
+                (root / "tests/harness.sh").chmod(0o755)
+                (root / "scripts/preflight.sh").write_text(f"{marker} preflight\n")
+                (root / "package.json").write_text(f'{{"marker":"{marker}"}}\n')
+                (root / "package-lock.json").write_text(f'{{"marker":"{marker}"}}\n')
+                (root / ".markdownlint.json").write_text(f'{{"marker":"{marker}"}}\n')
+                (root / "product.py").write_text(f"{marker} product\n")
+                subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
+                subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+                subprocess.run(
+                    ["git", "-C", str(root), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                     "commit", "--quiet", "-m", marker],
+                    check=True,
+                )
+            accepted_head = subprocess.check_output(
+                ["git", "-C", str(accepted), "rev-parse", "HEAD"], text=True,
+            ).strip()
+            helper = SimpleNamespace(_complete_validation_commands=lambda entry: (
+                {"argv": ["python3", "-m", "unittest", "tests/harness.py"]},
+                {"argv": ["./scripts/preflight.sh", "--reuse-tracked-only"]},
+                {"argv": ["npm", "run", "lint:markdown"]},
+            ))
+
+            with patch.object(self.loss, "ROOT", accepted):
+                with self.loss._current_policy_validation_root(
+                    accepted_head, source_root=source, helper=helper, entry={},
+                ) as execution_root:
+                    self.assertEqual((execution_root / "tests/harness.py").read_text(), "current harness\n")
+                    self.assertEqual((execution_root / "scripts/preflight.sh").read_text(), "current preflight\n")
+                    self.assertEqual((execution_root / "package.json").read_text(), '{"marker":"current"}\n')
+                    self.assertEqual((execution_root / "product.py").read_text(), "historical product\n")
+                current_helper = self.loss.transport._load_actions_helper()
+                current_entry = {
+                    "focused_validation": [{
+                        "argv": ["./tests/harness.sh"],
+                        "working_directory": ".",
+                        "purpose": "Exercise accepted-current harness against historical source",
+                    }],
+                    "required_local_validation": [],
+                }
+                with self.loss._current_policy_validation_root(
+                    accepted_head, source_root=source, helper=current_helper, entry=current_entry,
+                ) as execution_root:
+                    self.assertTrue(current_helper._run_registered_validations(current_entry, execution_root))
+                (accepted / "tests/harness.py").write_text("candidate harness\n")
+                with self.assertRaisesRegex(authority.LifecycleAuthorityError, "accepted main"):
+                    with self.loss._current_policy_validation_root(
+                        accepted_head, source_root=source, helper=helper, entry={},
+                    ):
+                        self.fail("candidate harness bytes were accepted")
+
+            self.assertEqual((source / "tests/harness.py").read_text(), "historical harness\n")
+            self.assertEqual((source / "product.py").read_text(), "historical product\n")
+            unsupported = SimpleNamespace(_complete_validation_commands=lambda entry: (
+                {"argv": ["python3", "historical-validator.py"]},
+            ))
+            with patch.object(self.loss, "ROOT", accepted):
+                with self.assertRaisesRegex(authority.LifecycleAuthorityError, "harness-source boundary"):
+                    with self.loss._current_policy_validation_root(
+                        accepted_head, source_root=source, helper=unsupported, entry={},
+                    ):
+                        self.fail("unsupported historical harness command was accepted")
+
     def test_provider_acquisition_checks_exact_open_draft_history_and_signature(self) -> None:
-        self.assertEqual(self.observe(self.provider_facts())[0]["sha"], self.record["head_sha"])
+        self.assertEqual(self.observe(self.provider_facts())[0].head_sha, self.record["head_sha"])
         cases = [
             (0, ("draft",), False), (0, ("state",), "closed"),
             (0, ("merged_at",), "2026-09-06T00:00:00Z"),
@@ -2809,15 +2919,16 @@ class ValidationEvidenceLossTests(TestCase):
     def test_loss_execution_static_boundary(self) -> None:
         parsed = ast.parse(inspect.getsource(self.loss))
         imports = {alias.name for node in ast.walk(parsed) if isinstance(node, ast.Import) for alias in node.names}
-        self.assertEqual(imports, {"copy", "os", "re", "stat", "subprocess", "tempfile"})
+        self.assertEqual(imports, {"copy", "os", "re", "shutil", "stat", "subprocess", "tempfile"})
         from_imports = {
             (node.level, node.module, tuple(alias.name for alias in node.names))
             for node in ast.walk(parsed) if isinstance(node, ast.ImportFrom)
         }
         self.assertEqual(from_imports, {
-            (0, "__future__", ("annotations",)), (0, "dataclasses", ("dataclass",)),
+            (0, "__future__", ("annotations",)), (0, "contextlib", ("contextmanager",)),
+            (0, "dataclasses", ("dataclass",)),
             (0, "datetime", ("datetime", "timezone")), (0, "pathlib", ("Path",)),
-            (0, "typing", ("Any", "Mapping")),
+            (0, "typing", ("Any", "Iterator", "Mapping")),
             (1, None, ("bootstrap_source_admission",)), (1, None, ("fast_path",)),
             (1, None, ("lifecycle_authority",)), (1, None, ("lifecycle_execution",)),
             (1, None, ("lifecycle_publication",)),

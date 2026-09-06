@@ -18,6 +18,9 @@ Log of notable changes to SecPal organization defaults (newest first).
 - Bind accepted-main loss policy, immutable signed Draft source, current
   registered safety validation, source-complete feedback and unenrolled history
   without reconstructing historical validation companions.
+- Normalize bounded provider representations into canonical facts before pure
+  admission, and run accepted-current validation harness bytes against a
+  disposable copy of the immutable historical source.
 - Keep review-budget admission separate and reuse protected enrollment uniqueness;
   add no lifecycle state, counter, signer role, publication journal or Ready authority.
 

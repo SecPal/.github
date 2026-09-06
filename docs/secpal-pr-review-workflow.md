@@ -189,10 +189,15 @@ caller-reported missing files and unsigned loss flags carry no authority. It is
 exact-source policy, not an artifact store or another journal. The issuer
 authenticates the live OPEN/Draft PR, head/tree/sole parent, accepted source
 signature and exact trailer, complete stable feedback and provider chronology.
+Provider reads are first converted by a pure, bounded representation-normalization
+boundary into canonical typed facts; admission consumes only those facts and does
+not repeat provider parsing.
 The protected lifecycle journal must prove CURRENT and native admission absent.
 
-Current safety executes the current registered command sequence against an
-isolated checkout of that exact signed source. Source bytes are checked
+Current safety executes the current registered command sequence using accepted-
+current harness bytes over a disposable execution copy of that exact signed
+source. The historical checkout supplies source under validation, never the
+validation harness or command authority. Source bytes are checked
 independently of index flags before and after execution. Every captured source,
 including resolved/outdated threads, replies, review submissions and conversation
 comments, must match the accepted technical decision inventory. Blocking,

@@ -287,12 +287,15 @@ feedback and absence facts without rerunning complete validation. The migration
 signature authenticates the issuer's execution facts.
 
 Acquisition owns provider/Git reads and isolated registered validation.
-`_admit_observation` checks captured provider representations;
-`_assemble_source_facts` only assembles acquired facts. These responsibilities
+`_normalize_provider_representations` purely converts bounded external values
+to canonical typed facts; `_admit_observation` consumes only those facts, and
+`_assemble_source_facts` only assembles admitted facts. These responsibilities
 serve one exact-source contract, not a general source executor. Dependency
 preparation is fixed `npm ci --ignore-scripts --no-audit --no-fund` with a temporary
-HOME, closed credential-free environment and 600-second bound. The existing
-registered runner remains the sole validation-command authority.
+HOME, closed credential-free environment and 600-second bound. Accepted-current
+test, script and package harness bytes are verified against protected main and
+overlaid on a disposable copy of the immutable source before the existing
+registered runner executes; historical harness bytes never become policy.
 
 `current_safety.receipt_digest` is the current execution identity under
 `secpal.pre-enrollment-current-safety/v1`, **not** an ordinary validation receipt.
