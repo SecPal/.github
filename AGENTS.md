@@ -82,8 +82,14 @@ them divergently.
 ## Commits and Communication
 
 - All commits must be cryptographically signed. SSH and OpenPGP signatures are
-  both valid; use the user's existing Git signing configuration without
-  changing its format.
+  both valid. For newly created SecPal Git signing credentials, prefer SSH with
+  Ed25519 where the signing path supports it. Preserve a user's existing valid
+  SSH or OpenPGP signing configuration; do not automatically change its format
+  solely because SSH is preferred for new setups.
+- Keep an SSH signing credential distinct from an SSH transport/authentication
+  credential. For maintained lifecycle signing, preserve policy-selected
+  signer-role separation and its exact role-specific credential selection; one
+  operator controlling multiple credentials does not merge those roles.
 - Never use `--no-verify` or force-push.
 - Keep GitHub-facing communication in English. Make findings concise,
   provider-neutral, actionable, and supported by file/line evidence.

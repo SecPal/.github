@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-06 - Prefer SSH for New Git Signing Credentials
+
+**Changed:**
+
+- prefer SSH with Ed25519 where supported when creating new SecPal Git and
+  lifecycle signing credentials, while retaining SSH and OpenPGP verification
+  for existing, historical, external, and GitHub-generated valid signatures
+- preserve existing valid signing configurations, distinct SSH signing and
+  transport identities, and maintained lifecycle signer-role separation
+
 ## 2026-09-05 - Replace the Exact Review-Helper Source Admission
 
 **Changed:**
