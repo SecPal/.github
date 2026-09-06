@@ -69,7 +69,7 @@ protected_content_matches() {
     "$(normalize_documented_action_pins <<<"$accepted_content")"
 }
 
-normalize_agents_license_branding_overlay() {
+normalize_agents_instruction_overlays() {
   local text
 
   text="$(cat)"
@@ -99,11 +99,20 @@ section = """## Licensing, REUSE, and Branding
   licensing change."""
 overlay = section + "\n\n"
 copyright_line = "SPDX-FileCopyrightText: 2026 SecPal Contributors"
+publication_boundary = """- Before creating or editing a PR body, materialize the exact candidate body,
+  apply the effective PR-template/evidence contract, and run every available
+  local PR-body validator against that exact body and intended Draft/Ready state.
+  Failed validation blocks publication. Evidence completeness follows the
+  canonical lifecycle-aware `scripts/validate-pull-request-evidence.sh` validator.
+"""
 
 if text.count(overlay) != 1 or text.count(copyright_line) != 1:
     raise SystemExit(1)
+if text.count(publication_boundary) != 1:
+    raise SystemExit(1)
 
 text = text.replace(overlay, "", 1)
+text = text.replace(publication_boundary, "", 1)
 text = text.replace(
     copyright_line,
     "SPDX-FileCopyrightText: 2026 SecPal",
@@ -116,9 +125,21 @@ PY
 if sed \
   "s/that SecPal branding optional/that SecPal branding configurable/" \
   "$REPO_ROOT/AGENTS.md" \
-  | normalize_agents_license_branding_overlay >/dev/null; then
+  | normalize_agents_instruction_overlays >/dev/null; then
   fail 'modified licensing and branding instruction overlay was accepted'
 fi
+
+for mutation in \
+  '/^- Before creating or editing a PR body,/,/canonical lifecycle-aware.*validator\./d' \
+  's/exact candidate body/unvalidated summary/' \
+  's/intended Draft\/Ready state/unspecified state/' \
+  's/Failed validation blocks publication/Failed validation allows publication/' \
+  's/validate-pull-request-evidence.sh/alternative-evidence-validator.sh/'; do
+  if sed "$mutation" "$REPO_ROOT/AGENTS.md" \
+    | normalize_agents_instruction_overlays >/dev/null; then
+    fail 'missing or weakened PR pre-publication instruction overlay was accepted'
+  fi
+done
 
 # The work-graph delegation in AGENTS.md is governed by semantic invariants, not
 # by fixed wording. Editorial rewording and rewrapping stay acceptable; changing
@@ -878,8 +899,8 @@ for path in "${protected_paths[@]}"; do
     || fail "accepted protected-file baseline is unavailable: $relative_path"
   current_content="$(<"$path")"
   if [ "$relative_path" = "AGENTS.md" ]; then
-    current_content="$(normalize_agents_license_branding_overlay <<<"$current_content")" \
-      || fail 'canonical licensing and branding instruction overlay changed'
+    current_content="$(normalize_agents_instruction_overlays <<<"$current_content")" \
+      || fail 'canonical licensing, branding, or PR-publication instruction overlay changed'
     current_content="$(agents_delegating_units_removed <<<"$current_content")" \
       || fail 'work-graph delegation could not be normalized out of AGENTS.md'
     accepted_content="$(agents_delegating_units_removed <<<"$accepted_content")" \

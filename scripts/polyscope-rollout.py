@@ -3484,15 +3484,23 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
         f"Review and AI-triage bar: {format_bullets(triage)}. "
         "When shared behavior crosses repository boundaries, inspect affected linked roots that are in scope and identify dependency-ordered rollout risks."
     )
+    publication_guard = (
+        "Before programmatic PR creation or body editing, materialize the exact candidate PR body in a file, "
+        "apply the effective repository PR-template/evidence contract, and run every available local PR-body validator, "
+        "including the canonical local PR evidence validator, against that exact file content and intended Draft/Ready state. "
+        "Do not publish or edit the PR if validation fails. Publish only the unchanged validated file with --body-file. "
+    )
     pr_prompt = collapse_spaces(
         f"Write a concise English PR body for {spec['display_name']}. Apply {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
+        f"{publication_guard}"
         f"Keep the PR to one topic and apply these change-reporting rules: {format_bullets(change_tracking)}. "
         "Summarize the problem and evidence, the user-, API-, contract-, or governance-visible change, validations actually run, changelog applicability, linked-repository impact, and proven tracked follow-ups when applicable."
     )
     draft_pr_prompt = collapse_spaces(
         f"Create a draft PR in English for {spec['display_name']}. Apply {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
+        f"{publication_guard}"
         f"Keep one topic per branch and apply: {format_bullets(change_tracking)}. "
         "Summarize the current problem and evidence, the change, validations already run, and any in-scope dependency or unresolved check that prevents readiness."
     )
