@@ -452,7 +452,7 @@ state.
 
 ### Accepted production architecture and unfinished delivery
 
-[ADR-017 through ADR-023](adr/README.md) are currently indexed as Accepted and
+[ADR-017 through ADR-024](adr/README.md) are currently indexed as Accepted and
 therefore support appropriately scoped Accepted Architecture wording.
 [Epic #695](https://github.com/SecPal/.github/issues/695) and its owning
 implementation work separately govern migration and delivery. ADR acceptance
