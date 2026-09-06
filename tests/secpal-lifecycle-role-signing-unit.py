@@ -182,7 +182,7 @@ class RoleSpecificLifecycleSigningTests(TestCase):
         if child == 0:
             try:
                 signer(b"encrypted credential\n", DOMAIN)
-            except BaseException as exc:
+            except Exception as exc:
                 result = (
                     f"SIGNING_FAILED:{type(exc).__name__}:{exc}\n".encode()
                 )

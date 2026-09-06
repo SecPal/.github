@@ -40,6 +40,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 - Parse real evidence sections with the existing locked Markdown parser, excluding
   raw HTML and code examples and ending at the next heading of any level. Rollout
   examples use a prepared trusted governance checkout rather than absent target scripts.
+
 ## 2026-09-05 - Select Policy-Specific Lifecycle Credentials
 
 **Changed:**
