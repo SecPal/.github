@@ -80,12 +80,20 @@ integration attestations remain valid for their original integration purpose
 but are not thread-resolution authority.
 
 Successful verification of either supported Ready-integration attestation version
-also returns the existing verifier-sealed current-head validation evidence. Its
-canonical source digest binds the complete normalized integration package,
-including delivery, topology, current-main, receipt, reviewed-state, signer, kind,
-and version identities. Exact-state-adopted `HEAD_ADVANCED` may consume that result,
-but all independent lifecycle authorization and publication preconditions remain
-mandatory.
+returns the existing verifier-sealed current-head validation evidence only after
+the canonical verifier has run trusted `git verify-commit` itself and the actual
+integration commit signature, signer identity, format, and fingerprint have
+passed policy. The authenticated result also binds the repository, exact signed
+tree and ordered parents, and maintained signature-policy digest. Consumers
+independently re-verify canonical provenance; caller-created, replaced,
+malformed, or cross-context values therefore fail closed without relying on an
+in-process registrar. The canonical source digest retains its historical binding
+to the complete normalized integration package, including delivery, topology,
+current-main, receipt, reviewed-state, expected signer, kind, and version
+identities; actual signer authentication is the additional precondition for
+issuing that compatible sealed result.
+Exact-state-adopted `HEAD_ADVANCED` may consume it, but all independent lifecycle
+authorization and publication preconditions remain mandatory.
 
 The late-feedback boundary also supports one exact accepted-main
 `AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE` recovery for `SecPal/.github`

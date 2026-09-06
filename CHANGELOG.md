@@ -9,6 +9,21 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-06 - Authenticate Validation-Evidence Provenance
+
+**Fixed:**
+
+- Require consumers to re-verify canonical validation-evidence provenance so
+  caller construction, replacement, malformed objects, and seal substitution
+  fail closed without relying on hidden in-process registration authority.
+- Require the actual Ready-integration commit signature and signer identity to
+  pass the existing canonical verifier before lifecycle-consumable validation
+  evidence is sealed.
+- Bind the authenticated integration commit to its repository, exact tree,
+  ordered parents, and maintained signature-policy digest before sealing.
+- Preserve ordinary validation and historical Ready-integration semantics while
+  removing obsolete internal sentinel-based test fixtures.
+
 ## 2026-09-06 - Seal Ready-Integration Validation Evidence
 
 **Changed:**

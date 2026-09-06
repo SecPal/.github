@@ -305,7 +305,7 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
 
     def _verified_validation(self, policy=None):
         policy = policy or self.policy
-        return fast_path.VerifiedValidationEvidence(
+        return SimpleNamespace(
             repository=policy.repository,
             pull_request_number=policy.pull_request,
             head_sha=policy.source_head_sha,
@@ -313,7 +313,6 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
             validation_receipt_digest=policy.validation_receipt_digest,
             final_attestation_digest=policy.final_attestation_digest,
             source_validation_evidence_digest="2" * 64,
-            _verification_seal=fast_path._VERIFIED_VALIDATION_EVIDENCE,
         )
 
     def _authenticate(
@@ -1618,7 +1617,7 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
 
     def _verified_validation(self, policy=None):
         policy = policy or self.policy
-        return fast_path.VerifiedValidationEvidence(
+        return SimpleNamespace(
             repository=policy.repository,
             pull_request_number=policy.pull_request,
             head_sha=policy.source_head_sha,
@@ -1626,7 +1625,6 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
             validation_receipt_digest=policy.validation_receipt_digest,
             final_attestation_digest=policy.final_attestation_digest,
             source_validation_evidence_digest="2" * 64,
-            _verification_seal=fast_path._VERIFIED_VALIDATION_EVIDENCE,
         )
 
     def _authenticate(

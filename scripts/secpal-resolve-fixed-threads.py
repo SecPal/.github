@@ -1302,41 +1302,55 @@ def verify_local_fix_commit(
                 "integration commit evidence trailer is invalid or stale"
             )
         integration_trailer = integration_trailers[0]
-    commit_object = effective_runner(
-        root,
-        ("cat-file", "commit", expected_head.lower()),
-        allow_failure=True,
-    )
-    verified = effective_runner(
-        root,
-        ("verify-commit", "--raw", expected_head.lower()),
-        allow_failure=True,
-    )
-    local_signature = evidence.interpret_local_signature(
-        verified.returncode,
-        f"{verified.stdout}\n{verified.stderr}",
-        signature_format_hint=(
-            evidence._commit_signature_format(commit_object.stdout)
-            if commit_object.returncode == 0
-            else "unknown"
-        ),
-    )
     signature_policy = _load_repository_entry(repository)["signature_policy"]
-    accepted_formats = signature_policy.get("accepted_formats")
-    if (
-        signature_policy.get("require_local_verified") is not True
-        or local_signature.get("state") != "valid"
-        or local_signature.get("verified") is not True
-        or not isinstance(accepted_formats, list)
-        or local_signature.get("format") not in accepted_formats
-    ):
-        raise ResolutionError("fix commit local signature is not verified")
+    authenticated_commit: fast_path.AuthenticatedIntegrationCommit | None = None
+    local_signature: dict[str, Any] | None = None
+    verified_output: str | None = None
     if validation.kind in {
         "attestation",
         "final-eligibility-absence-attestation",
     }:
+        commit_object = effective_runner(
+            root,
+            ("cat-file", "commit", expected_head.lower()),
+            allow_failure=True,
+        )
+        verified = effective_runner(
+            root,
+            ("verify-commit", "--raw", expected_head.lower()),
+            allow_failure=True,
+        )
+        verified_output = f"{verified.stdout}\n{verified.stderr}"
+        local_signature = evidence.interpret_local_signature(
+            verified.returncode,
+            verified_output,
+            signature_format_hint=(
+                evidence._commit_signature_format(commit_object.stdout)
+                if commit_object.returncode == 0
+                else "unknown"
+            ),
+        )
         if validation.attestation is None:
             raise ResolutionError("validation evidence binding is incomplete")
+        try:
+            fast_path.verify_commit_signatures(
+                [
+                    {
+                        "oid": expected_head.lower(),
+                        "source": "USER",
+                        "local_signature": local_signature,
+                        "github_verification": {
+                            "verified": False,
+                            "reason": "not_required",
+                        },
+                    }
+                ],
+                {**signature_policy, "require_github_verified": False},
+            )
+        except fast_path.SecurityBlocker as exc:
+            raise ResolutionError(
+                "fix commit local signature is not verified"
+            ) from exc
         try:
             registry_binding = _validation_registry_binding(
                 _load_repository_entry(repository)
@@ -1374,6 +1388,13 @@ def verify_local_fix_commit(
             registry_binding = _validation_registry_binding(
                 _load_repository_entry(repository)
             )
+            authenticated_commit = fast_path.authenticate_integration_commit(
+                repository_root=root,
+                repository=repository,
+                head_sha=expected_head.lower(),
+                expected_signer=validation.integration_evidence["expected_signer"],
+                signature_policy=signature_policy,
+            )
             fast_path.verify_eligibility_bound_ready_integration_attestation(
                 validation.attestation,
                 repository=repository,
@@ -1387,38 +1408,35 @@ def verify_local_fix_commit(
                 commit_tree_sha=commit_tree,
                 commit_validation_receipt_digest=trailers[0],
                 commit_integration_evidence_digest=integration_trailer,
+                repository_root=root,
+                signature_policy=signature_policy,
             )
-            expected_signer = validation.integration_evidence["expected_signer"]
-            verified_output = f"{verified.stdout}\n{verified.stderr}"
-            if expected_signer["kind"] == "SSH_PRINCIPAL":
-                signers = re.findall(
-                    r'(?m)^Good "git" signature for ([^\s]+) with ',
-                    verified_output,
-                )
-                expected_identity = expected_signer["identity"]
-            else:
-                status = re.findall(
-                    r"(?m)^\[GNUPG:\] VALIDSIG ([^\r\n]+)$",
-                    verified_output.upper(),
-                )
-                fields = status[0].split() if len(status) == 1 else []
-                signers = [fields[9] if len(fields) == 10 else fields[0]] if len(fields) in {9, 10} else []
-                expected_identity = expected_signer["identity"].upper()
-            if signers != [expected_identity]:
-                raise fast_path.SecurityBlocker(
-                    "integration commit signer does not match evidence"
-                )
-        except (KeyError, fast_path.SecurityBlocker) as exc:
+        except (
+            KeyError,
+            fast_path.RecoverableLocalError,
+            fast_path.SecurityBlocker,
+        ) as exc:
             raise ResolutionError(str(exc)) from exc
-    try:
-        signer = late_disposition.signer_from_git_verification(
-            local_signature["format"],
-            f"{verified.stdout}\n{verified.stderr}",
+    if authenticated_commit is not None:
+        signer = late_disposition.SignerIdentity(
+            signature_format=(
+                "ssh"
+                if authenticated_commit.signer_kind == "SSH_PRINCIPAL"
+                else "openpgp"
+            ),
+            fingerprint=authenticated_commit.signature_fingerprint,
         )
-    except late_disposition.LateDispositionError as exc:
-        if require_signer_identity:
-            raise ResolutionError(str(exc)) from exc
-        return None
+    else:
+        if local_signature is None or verified_output is None:
+            raise ResolutionError("fix commit local signature is unavailable")
+        try:
+            signer = late_disposition.signer_from_git_verification(
+                local_signature["format"], verified_output
+            )
+        except late_disposition.LateDispositionError as exc:
+            if require_signer_identity:
+                raise ResolutionError(str(exc)) from exc
+            return None
     absence = validation.final_eligibility_absence
     if validation.kind == "final-eligibility-absence-attestation" and (
         not isinstance(absence, FinalEligibilityAbsence)

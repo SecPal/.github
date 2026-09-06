@@ -4757,40 +4757,7 @@ def _verify_integration_signer(
     verification_output: str,
     expected_signer: dict[str, str],
 ) -> None:
-    kind = expected_signer["kind"]
-    identity = expected_signer["identity"]
-    if kind == "SSH_PRINCIPAL":
-        matches = re.findall(
-            r'(?m)^Good "git" signature for ([^\s]+) with ', verification_output
-        )
-    else:
-        status_lines = re.findall(
-            r"(?m)^\[GNUPG:\] VALIDSIG ([^\r\n]+)$",
-            verification_output.upper(),
-        )
-        if len(status_lines) != 1:
-            raise fast_path.SecurityBlocker(
-                "integration OpenPGP signer status is malformed or ambiguous"
-            )
-        fields = status_lines[0].split()
-        if len(fields) not in {9, 10}:
-            raise fast_path.SecurityBlocker(
-                "integration OpenPGP signer status is malformed or ambiguous"
-            )
-        signing_fingerprint = fields[0]
-        primary_fingerprint = fields[9] if len(fields) == 10 else signing_fingerprint
-        if not all(
-            re.fullmatch(r"[0-9A-F]{40,64}", fingerprint)
-            for fingerprint in {signing_fingerprint, primary_fingerprint}
-        ):
-            raise fast_path.SecurityBlocker(
-                "integration OpenPGP signer status is malformed or ambiguous"
-            )
-        matches = [primary_fingerprint]
-    if matches != [identity.upper() if kind == "OPENPGP_FINGERPRINT" else identity]:
-        raise fast_path.SecurityBlocker(
-            "integration commit signer does not match the explicitly accepted identity"
-        )
+    fast_path._actual_integration_signer(verification_output, expected_signer)
 
 
 def _verify_signature_policy_identity(
@@ -5559,43 +5526,13 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             raise fast_path.SecurityBlocker(
                 "eligibility evidence differs from the validated receipt"
             )
-        commit_object = _run_attestation_git(
-            repository_root, ["cat-file", "commit", head], allow_failure=True
-        )
-        verified_commit = _run_attestation_git(
-            repository_root, ["verify-commit", "--raw", head], allow_failure=True
-        )
-        local_signature = evidence.interpret_local_signature(
-            verified_commit.returncode,
-            f"{verified_commit.stdout}\n{verified_commit.stderr}",
-            signature_format_hint=(
-                evidence._commit_signature_format(commit_object.stdout)
-                if commit_object.returncode == 0
-                else "unknown"
-            ),
-        )
-        local_signature_policy = {
-            **binding["signature_policy"],
-            "require_github_verified": False,
-        }
-        fast_path.verify_commit_signatures(
-            [
-                {
-                    "oid": head,
-                    "source": "USER",
-                    "local_signature": local_signature,
-                    "github_verification": {
-                        "verified": False,
-                        "reason": "not_required",
-                    },
-                }
-            ],
-            local_signature_policy,
-        )
         if integration_evidence is not None:
-            _verify_integration_signer(
-                f"{verified_commit.stdout}\n{verified_commit.stderr}",
-                integration_evidence["expected_signer"],
+            fast_path.authenticate_integration_commit(
+                repository_root=repository_root,
+                repository=arguments.repo,
+                head_sha=head,
+                expected_signer=integration_evidence["expected_signer"],
+                signature_policy=binding["signature_policy"],
             )
             attestation = fast_path.create_ready_integration_attestation(
                 repository=arguments.repo,
@@ -5607,6 +5544,24 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 integration_evidence=integration_evidence,
             )
         else:
+            commit_object = _run_attestation_git(
+                repository_root, ["cat-file", "commit", head], allow_failure=True
+            )
+            verified_commit = _run_attestation_git(
+                repository_root, ["verify-commit", "--raw", head], allow_failure=True
+            )
+            local_signature = evidence.interpret_local_signature(
+                verified_commit.returncode,
+                f"{verified_commit.stdout}\n{verified_commit.stderr}",
+                signature_format_hint=(
+                    evidence._commit_signature_format(commit_object.stdout)
+                    if commit_object.returncode == 0
+                    else "unknown"
+                ),
+            )
+            _verify_signature_policy_identity(
+                head, local_signature, binding["signature_policy"]
+            )
             attestation = fast_path.create_validation_attestation(
                 repository=arguments.repo,
                 head_sha=head,
