@@ -474,6 +474,14 @@ unknown documents, wrong signers, cross-identity replay, and predecessor/CAS
 drift fail closed. Protected journal ancestry remains the sole dynamic CURRENT
 selector. Zero enrollment remains the valid pre-adoption state.
 
+The version-3 exact-state-adoption source mode consumes the separately signed
+pre-enrollment validation-evidence-loss admission defined in
+`docs/secpal-pr-review-workflow.md`. It reuses ordinary enrollment publication;
+it adds no journal operation or authority to this review-processing skill.
+Review-budget consumption remains a separate authenticated admission. Lost
+historical bytes are not reconstructed, and fresh current safety is not a
+historical receipt or another unrestricted review.
+
 This boundary publishes authority; it does not derive lifecycle semantics,
 implement two-parent integration, or orchestrate the full finite workflow.
 

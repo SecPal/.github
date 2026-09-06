@@ -9,6 +9,21 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-06 - Authenticate Pre-Enrollment Validation-Evidence Loss
+
+**Changed:**
+
+- Add a bounded migration-signed loss admission as an explicit version-3
+  exact-state-adoption source mode; retain adoption versions 1/2 unchanged.
+- Bind accepted-main loss policy, immutable signed Draft source, current
+  registered safety validation, source-complete feedback and unenrolled history
+  without reconstructing historical validation companions.
+- Normalize bounded provider representations into canonical facts before pure
+  admission, and run accepted-current validation harness bytes against a
+  disposable copy of the immutable historical source.
+- Keep review-budget admission separate and reuse protected enrollment uniqueness;
+  add no lifecycle state, counter, signer role, publication journal or Ready authority.
+
 ## 2026-09-05 - Prevalidate Lifecycle-Aware PR Evidence
 
 **Changed:**
