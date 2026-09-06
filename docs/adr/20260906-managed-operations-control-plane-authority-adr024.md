@@ -62,14 +62,24 @@ The canonical reconciliation responsibility is:
 
 ```text
 Desired
--> Observe
+-> Observe through the canonical external-system evidence boundary
 -> Diff
 -> Authorize
 -> Bounded Mutation
--> Read Back
+-> Read Back through the canonical external-system evidence boundary
 -> Accept / Reject
 -> Audit
 ```
+
+`Observe` is orchestration shorthand for consuming evidence produced through
+the Observation, Representation normalization, Admission, and Assembly
+responsibilities defined by the
+[Evidence and External-System Architecture Contract](../evidence-architecture-contract.md).
+Mutation read-back that becomes authoritative operational evidence uses the
+same applicable boundary before Control Plane acceptance. Evidence Admission
+decides whether normalized external facts satisfy the named evidence invariant;
+Control Plane Acceptance separately decides whether the authorized Operation
+established the required postconditions for the intended Desired Generation.
 
 Every authoritative external mutation must be target-scoped and bounded,
 generation-bound where applicable, preconditioned, idempotent, independently
@@ -86,12 +96,20 @@ Accepted Generation by itself.
 The deployment administrative lifecycle remains deliberately narrow:
 
 ```text
-PREPARING
--> ACTIVE
-<-> SUSPENDED
--> DECOMMISSIONING
--> DECOMMISSIONED
+PREPARING -> ACTIVE
+PREPARING -> DECOMMISSIONING
+
+ACTIVE <-> SUSPENDED
+
+ACTIVE -> DECOMMISSIONING
+SUSPENDED -> DECOMMISSIONING
+
+DECOMMISSIONING -> DECOMMISSIONED
 ```
+
+Entering `DECOMMISSIONING` requires explicit destructive authority, including
+when preparation is unsuccessful or cancelled and cleanup must occur without
+activating the deployment.
 
 Update, replacement, resize, failover, recovery, reconciliation, and rollout are
 Operations, not additional deployment lifecycle states. Replacing a physical
@@ -179,7 +197,7 @@ degrades management and reconciliation; it does not automatically create a
 customer-runtime, local database HA, or local application HA outage. Those
 systems continue according to their own deployment and qualification contracts.
 
-Break-glass is bounded, exceptional Recovery Authority whose purpose is to
+Break-glass is a bounded, exceptional Recovery Authority whose purpose is to
 restore the normal Control Plane authority path. It is not a permanent
 super-administrator role, parallel fleet manager, shadow control plane, standing
 authorization bypass, or general way to reveal secret values.
