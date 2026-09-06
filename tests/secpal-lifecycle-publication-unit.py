@@ -336,7 +336,13 @@ def exact_adoption_evidence(
 
 
 def verified_validation_evidence(
-    *, head: str, tree: str, parent: str, pull_request: int = PR
+    *,
+    head: str,
+    tree: str,
+    parent: str,
+    pull_request: int = PR,
+    ready_integration: bool = False,
+    delivery_issue: int = ISSUE,
 ) -> fast_path.VerifiedValidationEvidence:
     reviewed = fast_path.StableFeedbackState(
         repository=REPOSITORY, pull_request_number=pull_request, head_sha=parent,
@@ -344,12 +350,98 @@ def verified_validation_evidence(
         feedback={"pull_request_reactions": [], "reviews": [],
                   "conversation_comments": [], "threads": []},
     )
-    registry = {"manual_gates": []}
+    registry = {
+        "default_branch": "main",
+        "manual_gates": [],
+        "validation": [],
+    }
+    integration = None
+    eligibility_digest = None
+    if ready_integration:
+        eligibility_digest = "e" * 64
+        integration = {
+            "schema_version": "1.1",
+            "kind": "TWO_PARENT_READY_INTEGRATION",
+            "authorization_id": "ready-integration-authorization-001",
+            "repository": REPOSITORY,
+            "delivery_issue_number": delivery_issue,
+            "pull_request_number": pull_request,
+            "prior_delivery_head_sha": parent,
+            "prior_authority_digest": "6" * 64,
+            "prior_authority_tag_object_sha": "7" * 40,
+            "target_base": {
+                "ref": "main",
+                "authorized_sha": HEADS[0],
+                "observed_sha": HEADS[0],
+            },
+            "ordered_parent_shas": [parent, HEADS[0]],
+            "validated_tree_sha": tree,
+            "mechanical_merge_tree_sha": tree,
+            "mechanical_conflict_paths": [],
+            "manual_conflict_resolution_delta": [],
+            "reviewed_state_digest": reviewed.state_digest,
+            "reviewed_feedback_digest": reviewed.feedback_digest,
+            "validation_execution": {
+                "registry_digest": fast_path.digest_json(registry),
+                "command_set_digest": fast_path.digest_json(registry["validation"]),
+            },
+            "expected_signer": {
+                "kind": "SSH_PRINCIPAL",
+                "identity": SIGNER,
+            },
+            "eligibility": {
+                "eligible": True,
+                "lifecycle_identity": "lifecycle-1",
+                "draft_before": False,
+                "draft_after": False,
+                "ready_before": True,
+                "ready_after": True,
+                "ready_transition": False,
+                "review_requested": False,
+                "unrestricted_reviews_before": 1,
+                "unrestricted_reviews_after": 1,
+                "remediation_cycles_before": 2,
+                "remediation_cycles_after": 2,
+                "exceptional_recoveries_before": 0,
+                "exceptional_recoveries_after": 0,
+                "exceptional_continuations_before": 0,
+                "exceptional_continuations_after": 0,
+                "cycle_3": False,
+            },
+        }
     receipt = fast_path.create_validation_receipt(
         repository=REPOSITORY, head_sha=parent, validated_tree_sha=tree,
         registry=registry, command_set=[], successful_result=True,
         reviewed_state=reviewed, manual_gate_evidence=[],
+        eligibility_evidence_digest=eligibility_digest,
+        integration_evidence_digest=(
+            fast_path.digest_json(integration) if integration is not None else None
+        ),
     )
+    if integration is not None:
+        attestation = fast_path.create_ready_integration_attestation(
+            repository=REPOSITORY,
+            head_sha=head,
+            registry=registry,
+            command_set=[],
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+            integration_evidence=integration,
+        )
+        return fast_path.verify_eligibility_bound_ready_integration_attestation(
+            attestation,
+            repository=REPOSITORY,
+            head_sha=head,
+            registry=registry,
+            command_set=[],
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+            integration_evidence=integration,
+            commit_parent_shas=integration["ordered_parent_shas"],
+            commit_tree_sha=tree,
+            commit_validation_receipt_digest=receipt["receipt_digest"],
+            commit_integration_evidence_digest=fast_path.digest_json(integration),
+        )
     attestation = fast_path.create_validation_attestation(
         repository=REPOSITORY, head_sha=head, registry=registry,
         command_set=[], successful_result=True, reviewed_state=reviewed,
@@ -535,7 +627,8 @@ class LifecyclePublicationTests(TestCase):
             signer_identity=SIGNER, signer=signer_for(),
         )
         current_validation = verified_validation_evidence(
-            head=HEADS[4], tree=HEADS[5], parent=HEADS[2]
+            head=HEADS[4], tree=HEADS[5], parent=HEADS[2],
+            ready_integration=True,
         )
         with self.assertRaisesRegex(
             authority.LifecycleAuthorityError, "verified current evidence"
@@ -545,6 +638,17 @@ class LifecyclePublicationTests(TestCase):
                 signer_identity=SIGNER, authority_signer=signer_for(),
                 current_head_evidence=replace(
                     current_validation, _verification_seal=object()
+                ),
+            )
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "verified current evidence"
+        ):
+            authority.issue_exact_state_adoption_successor_authority(
+                serialized_adoption_evidence=serialized, authorization=event,
+                signer_identity=SIGNER, authority_signer=signer_for(),
+                current_head_evidence=verified_validation_evidence(
+                    head=HEADS[4], tree=HEADS[5], parent=HEADS[2],
+                    ready_integration=True, delivery_issue=ISSUE + 1,
                 ),
             )
         snapshot = authority.issue_exact_state_adoption_successor_authority(

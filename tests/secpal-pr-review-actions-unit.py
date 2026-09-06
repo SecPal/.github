@@ -13,6 +13,7 @@ import json
 import subprocess
 import sys
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -9088,6 +9089,78 @@ class FastPathTests(TestCase):
         another["authorization_id"] = "ready-integration-authorization-002"
         with self.assertRaises(fast_path.SecurityBlocker):
             verify(attestation, another)
+
+    def test_ready_integration_verification_yields_sealed_validation_evidence(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        registry = fast_registry()
+        tree = "a" * 40
+        head = "d" * 40
+        integration = ready_integration_evidence(
+            reviewed, validated_tree=tree, registry=registry
+        )
+        receipt = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            validated_tree_sha=tree,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+            integration_evidence_digest=fast_path.digest_json(integration),
+        )
+        attestation = fast_path.create_ready_integration_attestation(
+            repository="SecPal/.github",
+            head_sha=head,
+            registry=registry,
+            command_set=registry["validation"],
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+            integration_evidence=integration,
+        )
+
+        verified = fast_path.verify_ready_integration_attestation(
+            attestation,
+            repository="SecPal/.github",
+            head_sha=head,
+            registry=registry,
+            command_set=registry["validation"],
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+            integration_evidence=integration,
+            commit_parent_shas=integration["ordered_parent_shas"],
+            commit_tree_sha=tree,
+            commit_validation_receipt_digest=receipt["receipt_digest"],
+            commit_integration_evidence_digest=fast_path.digest_json(integration),
+        )
+
+        self.assertTrue(fast_path.is_verified_validation_evidence(verified))
+        self.assertEqual(verified.repository, "SecPal/.github")
+        self.assertEqual(verified.delivery_issue_number, 9)
+        self.assertEqual(verified.pull_request_number, reviewed.pull_request_number)
+        self.assertEqual(verified.head_sha, head)
+        self.assertEqual(verified.tree_sha, tree)
+        self.assertEqual(
+            verified.validation_receipt_digest, receipt["receipt_digest"]
+        )
+        self.assertEqual(
+            verified.final_attestation_digest, attestation["attestation_digest"]
+        )
+        for changed in (
+            replace(verified, delivery_issue_number=10),
+            replace(verified, source_validation_evidence_digest="0" * 64),
+            replace(verified, _verification_seal=object()),
+            replace(
+                verified,
+                _verification_seal=fast_path._VERIFIED_VALIDATION_EVIDENCE,
+            ),
+        ):
+            with self.subTest(changed=changed):
+                self.assertFalse(fast_path.is_verified_validation_evidence(changed))
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "seal is private"):
+            fast_path._VerifiedValidationEvidenceSeal("0" * 64, object())
 
     def test_signed_validation_receipt_trailer_must_be_unique_and_well_formed(self) -> None:
         digest_value = "a" * 64
