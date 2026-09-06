@@ -96,6 +96,10 @@ See [ROLLOUT_GUIDE.md](./ROLLOUT_GUIDE.md) for deployment instructions.
 
 For incremental development and self-review:
 
+Run these PR-body commands from the trusted governance checkout with Node.js 22
+and `npm ci --ignore-scripts` completed. For target repositories without these
+scripts, use the canonical-source setup in [ROLLOUT_GUIDE.md](./ROLLOUT_GUIDE.md).
+
 ```bash
 # 1. Start work - create draft PR
 tmpfile=$(mktemp "${TMPDIR:-/tmp}/pr-body.XXXXXX")

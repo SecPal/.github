@@ -14,13 +14,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 **Changed:**
 
 - Make the canonical PR-body validator consume explicit Draft/Ready state:
-  executable Drafts require fail-first proof or an explicitly permitted
-  validate-first exception reference; Ready PRs additionally require passing proof.
+  executable Drafts require fail-first proof; Ready PRs additionally require passing
+  proof. Reject self-authorized validate-first references because this repository
+  grants no exception.
 - Pass actual GitHub Draft state through the trusted-base PR-evidence workflow,
   retaining mandatory structured evidence and the explicit content-only path.
 - Require exact candidate-body local validation before programmatic PR publication
   or body editing in repository guidance, Polyscope runtime prompts, and maintained
   normal and replacement Draft examples. Failed validation blocks publication.
+- Parse real evidence sections with the existing locked Markdown parser, excluding
+  raw HTML and code examples and ending at the next heading of any level. Rollout
+  examples use a prepared trusted governance checkout rather than absent target scripts.
 
 ## 2026-09-05 - Replace the Exact Review-Helper Source Admission
 

@@ -254,6 +254,8 @@ passing_only_body="${empty_body/Passing proof after implementation: N\/A/Passing
 blank_body="${empty_body//N\/A/}"
 placeholder_exception_body="${exception_body/Validate-first exception reference: */Validate-first exception reference: REPLACE_WITH_VALIDATE_FIRST_REFERENCE}"
 evidence_heading='## TDD / Validate-First Evidence'
+compact_positive_body="$(printf '%s\n' "$positive_body" | sed '/^$/d')"
+compact_placeholder_body="$(printf '%s\n' "$placeholder_body" | sed '/^$/d')"
 
 for draft in true false; do
   assert_validation "$draft missing body" "$draft" 1 ''
@@ -266,7 +268,8 @@ for draft in true false; do
   assert_validation "$draft unsupported validate-first default" "$draft" 1 "$template_default_body"
   assert_validation "$draft no executable change" "$draft" 0 "$docs_only_body"
   assert_validation "$draft complete fail-first" "$draft" 0 "$positive_body"
-  assert_validation "$draft complete validate-first" "$draft" 0 "$ready_exception_body"
+  assert_validation "$draft self-asserted validate-first authority" "$draft" 1 "$ready_exception_body"
+  assert_validation "$draft arbitrary exception" "$draft" 1 "${ready_exception_body/Fixture repository AGENTS.md, Validation Exceptions: validate-first explicitly permitted for generated schema updates; schema validation selected before regeneration./banana}"
   assert_validation "$draft heading mention is not a section" "$draft" 1 "${positive_body/"$evidence_heading"/Mention only: $evidence_heading}"
   assert_validation "$draft evidence before empty section" "$draft" 1 "${positive_body/"$evidence_heading"/## Example}"$'\n\n## TDD / Validate-First Evidence'
   assert_validation "$draft evidence after section ends" "$draft" 1 "${positive_body/"$evidence_heading"/$'## TDD / Validate-First Evidence\n\n## Example'}"
@@ -276,6 +279,15 @@ for draft in true false; do
     assert_validation "$draft real evidence after fenced example ($fence)" "$draft" 0 "$fence"$'markdown\n'"$placeholder_body"$'\n'"$fence"$'\n'"$positive_body"
   done
   assert_validation "$draft real evidence after commented example" "$draft" 0 $'<!--\n'"$placeholder_body"$'\n-->\n'"$positive_body"
+  for heading in '### Elsewhere' '#### Elsewhere' '##### Elsewhere' '###### Elsewhere' '   ### Elsewhere'; do
+    assert_validation "$draft evidence after deeper heading ($heading)" "$draft" 1 "${positive_body/"$evidence_heading"/$evidence_heading$'\n\n'$heading}"
+  done
+  for tag in pre script style textarea div; do
+    assert_validation "$draft raw HTML ($tag)" "$draft" 1 "<$tag>"$'\n'"$compact_positive_body"$'\n'"</$tag>"
+    assert_validation "$draft real evidence after raw HTML ($tag)" "$draft" 0 "<$tag>"$'\n'"$compact_placeholder_body"$'\n'"</$tag>"$'\n\n'"$positive_body"
+  done
+  assert_validation "$draft quoted example is not evidence" "$draft" 1 "$(printf '%s\n' "$positive_body" | sed 's/^/> /')"
+  assert_validation "$draft indented example is not evidence" "$draft" 1 "$(printf '%s\n' "$positive_body" | sed 's/^/    /')"
   for placeholder in TODO TBD todo; do
     assert_validation "$draft unfinished failing proof ($placeholder)" "$draft" 1 "${empty_body/Failing proof before implementation: N\/A/Failing proof before implementation: $placeholder}"
     assert_validation "$draft unfinished passing proof ($placeholder)" "$draft" 1 "${early_body/Passing proof after implementation: N\/A/Passing proof after implementation: $placeholder}"
@@ -284,11 +296,25 @@ for draft in true false; do
   done
 done
 assert_validation 'Draft fail-first without passing proof' true 0 "$early_body"
-assert_validation 'Draft explicit validate-first without passing proof' true 0 "$exception_body"
+assert_validation 'Draft self-asserted exception without passing proof' true 1 "$exception_body"
+assert_validation 'Draft banana without passing proof' true 1 "${exception_body/Fixture repository AGENTS.md, Validation Exceptions: validate-first explicitly permitted for generated schema updates; schema validation selected before regeneration./banana}"
 assert_validation 'Ready fail-first without passing proof' false 1 "$early_body"
 assert_validation 'Ready validate-first without passing proof' false 1 "$exception_body"
 assert_validation 'missing lifecycle' '' 1 "$positive_body"
 assert_validation 'invalid lifecycle' draft 1 "$positive_body"
+
+mkdir -p "$TMP_DIR/rollout-target/.github/workflows"
+printf '%s\n' "$docs_only_body" > "$TMP_DIR/rollout-body.md"
+rollout_gate="$(sed -n '/^PR_BODY=/p' "$REPO_ROOT/docs/workflows/ROLLOUT_GUIDE.md")"
+if ! (
+  cd "$TMP_DIR/rollout-target"
+  export SECPAL_GOVERNANCE_ROOT="$REPO_ROOT" tmpfile="$TMP_DIR/rollout-body.md"
+  bash -c "${rollout_gate%\\} touch \"$TMP_DIR/rollout-published\""
+) > "$TMP_DIR/rollout.log" 2>&1 || [ ! -f "$TMP_DIR/rollout-published" ]; then
+  echo 'FAIL: rollout evidence gate must work without target-local governance scripts' >&2
+  cat "$TMP_DIR/rollout.log" >&2
+  failures=$((failures + 1))
+fi
 
 if [ "$failures" -ne 0 ]; then
   exit 1
@@ -296,5 +322,10 @@ fi
 
 if ! grep -Fq "PR_DRAFT: \${{ github.event.pull_request.draft }}" "$WORKFLOW"; then
   echo 'Workflow must pass the actual Draft state as data.' >&2
+  exit 1
+fi
+
+if ! grep -Fq 'npm ci --ignore-scripts' "$WORKFLOW"; then
+  echo 'Workflow must install the locked Markdown parser from trusted base source.' >&2
   exit 1
 fi

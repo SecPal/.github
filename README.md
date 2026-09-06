@@ -89,6 +89,9 @@ graph LR
 
 **Quick Commands:**
 
+The PR-body examples require Node.js 22 and `npm ci --ignore-scripts` in this
+trusted governance checkout before validation.
+
 ```bash
 # Create enhancement (→ Ideas)
 gh issue create --label "enhancement" --title "..."

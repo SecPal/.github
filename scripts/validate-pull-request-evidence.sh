@@ -4,133 +4,68 @@
 
 set -euo pipefail
 
-PR_BODY="${PR_BODY:-}"
-PR_DRAFT="${PR_DRAFT:-}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/.."
 
-require_body() {
-  if [ -z "${PR_BODY//[[:space:]]/}" ]; then
-    echo "Pull request body is required for PR evidence validation." >&2
-    exit 1
-  fi
+node <<'NODE'
+const MarkdownIt = require('markdown-it');
+
+const body = process.env.PR_BODY || '';
+const draft = process.env.PR_DRAFT;
+const fail = (message) => {
+  console.error(message);
+  process.exit(1);
+};
+const missingEvidence = 'Replace the evidence placeholders with concrete proof or an explicit no-executable-change reason.';
+
+if (draft !== 'true' && draft !== 'false') {
+  fail('PR_DRAFT must be explicitly true (Draft) or false (Ready).');
+}
+if (!body.trim()) {
+  fail('Pull request body is required for PR evidence validation.');
 }
 
-require_section() {
-  EVIDENCE_SECTION="$(printf '%s\n' "$PR_BODY" | awk '
-    {
-      line = $0
-      sub(/\r$/, "", line)
-      if (fence != "") {
-        closing = line
-        sub(/^ ? ? ?/, "", closing)
-        if (substr(closing, 1, 1) == fence && match(closing, /^(```+|~~~+)/)) {
-          if (RLENGTH >= fence_length && substr(closing, RLENGTH + 1) ~ /^[[:space:]]*$/) {
-            fence = ""
-          }
-        }
-        next
-      }
-      if (comment) {
-        if (line ~ /-->/) comment = 0
-        next
-      }
-      if (line ~ /<!--/) {
-        if (line !~ /-->/) comment = 1
-        next
-      }
-      opening = line
-      sub(/^ ? ? ?/, "", opening)
-      if (match(opening, /^(```+|~~~+)/)) {
-        fence = substr(opening, 1, 1)
-        fence_length = RLENGTH
-        next
-      }
-      if (line ~ /^## TDD \/ Validate-First Evidence[[:space:]]*$/ && !section) {
-        section = 1
-      } else if (section && line ~ /^##?[[:space:]]/) {
-        exit
-      }
-      if (section) print line
+const tokens = new MarkdownIt('commonmark', { html: true }).parse(body, {});
+const section = tokens.findIndex((token, index) =>
+  token.type === 'heading_open' && token.level === 0 && token.markup === '##' &&
+  tokens[index + 1]?.content === 'TDD / Validate-First Evidence');
+if (section === -1) {
+  fail('TDD / Validate-First Evidence section is required.');
+}
+
+const labels = [
+  'Failing proof before implementation',
+  'Passing proof after implementation',
+  'Validate-first exception reference',
+  'No executable change reason',
+];
+const fields = new Map();
+let bulletList = false;
+for (let index = section + 3; index < tokens.length; index += 1) {
+  const token = tokens[index];
+  if (token.type === 'heading_open' && token.level === 0) break;
+  if (token.type === 'bullet_list_open' && token.level === 0) bulletList = true;
+  if (token.type === 'bullet_list_close' && token.level === 0) bulletList = false;
+  if (!bulletList || token.type !== 'inline' || token.level !== 3) continue;
+  if (token.children.some((child) => child.type === 'html_inline' || child.type === 'image')) continue;
+  const text = token.children.map((child) =>
+    child.type === 'text' || child.type === 'code_inline' ? child.content :
+      child.type === 'softbreak' || child.type === 'hardbreak' ? '\n' : '').join('');
+  for (const label of labels) {
+    if (text.startsWith(`${label}:`) && !fields.has(label)) {
+      fields.set(label, text.slice(label.length + 1).trim());
     }
-  ')"
-  if [ -z "$EVIDENCE_SECTION" ]; then
-    echo 'TDD / Validate-First Evidence section is required.' >&2
-    exit 1
-  fi
+  }
 }
 
-extract_field() {
-  local label="$1"
-
-  printf '%s\n' "$EVIDENCE_SECTION" | sed -nE "s/^[*-][[:space:]]+${label}:[[:space:]]*(.*)$/\1/p" | head -n 1
+const [failing, passing, exception, noExecutable] = labels.map((label) => fields.get(label) || '');
+const empty = (value) => !value || /^(n\/?a(?:[\s\p{P}].*)?|none|not applicable)$/isu.test(value);
+const placeholder = (value) => /^(TODO|TBD|REPLACE_WITH_(FAILING_PROOF|PASSING_PROOF|VALIDATE_FIRST_REFERENCE|NO_EXECUTABLE_CHANGE_REASON)|<[^<>]+>)$/i.test(value);
+if ([failing, passing, exception, noExecutable].some(placeholder)) fail(missingEvidence);
+if (!empty(exception)) {
+  fail('This repository grants no validate-first exception. PR-body references cannot authorize one; use N/A.');
 }
-
-normalize_value() {
-  local value="$1"
-
-  value="$(printf '%s' "$value" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
-  if [[ "$value" == \`*\` ]]; then
-    value="${value#\`}"
-    value="${value%\`}"
-  fi
-  printf '%s' "$value"
-}
-
-is_empty_or_na() {
-  local value="$1"
-
-  if [ -z "$value" ]; then
-    return 0
-  fi
-
-  printf '%s\n' "$value" | grep -qiE '^(n/?a([[:space:][:punct:]].*)?|none|not applicable)$'
-}
-
-is_placeholder() {
-  local value="$1"
-
-  printf '%s\n' "$value" | grep -qiE '^(TODO|TBD|REPLACE_WITH_(FAILING_PROOF|PASSING_PROOF|VALIDATE_FIRST_REFERENCE|NO_EXECUTABLE_CHANGE_REASON)|<[^<>]+>)$'
-}
-
-main() {
-  local failing_proof
-  local passing_proof
-  local validate_first_reference
-  local no_executable_change_reason
-
-  case "$PR_DRAFT" in
-    true|false) ;;
-    *) echo 'PR_DRAFT must be explicitly true (Draft) or false (Ready).' >&2; exit 1 ;;
-  esac
-
-  require_body
-  require_section
-
-  failing_proof="$(normalize_value "$(extract_field 'Failing proof before implementation')")"
-  passing_proof="$(normalize_value "$(extract_field 'Passing proof after implementation')")"
-  validate_first_reference="$(normalize_value "$(extract_field 'Validate-first exception reference')")"
-  no_executable_change_reason="$(normalize_value "$(extract_field 'No executable change reason')")"
-
-  if is_placeholder "$failing_proof" \
-    || is_placeholder "$passing_proof" \
-    || is_placeholder "$validate_first_reference" \
-    || is_placeholder "$no_executable_change_reason"; then
-    echo 'Replace the evidence placeholders with concrete proof or an explicit no-executable-change reason.' >&2
-    exit 1
-  fi
-
-  if ! is_empty_or_na "$no_executable_change_reason"; then
-    exit 0
-  fi
-
-  if ! is_empty_or_na "$failing_proof" || ! is_empty_or_na "$validate_first_reference"; then
-    if [ "$PR_DRAFT" = true ] || ! is_empty_or_na "$passing_proof"; then
-      exit 0
-    fi
-  fi
-
-  echo 'Replace the evidence placeholders with concrete proof or an explicit no-executable-change reason.' >&2
-  echo 'Executable Drafts require fail-first proof or an explicitly permitted validate-first exception reference; Ready PRs also require passing proof.' >&2
-  exit 1
-}
-
-main "$@"
+if (!empty(noExecutable)) process.exit(0);
+if (!empty(failing) && (draft === 'true' || !empty(passing))) process.exit(0);
+fail(`${missingEvidence}\nExecutable Drafts require fail-first proof; Ready PRs also require passing proof.`);
+NODE

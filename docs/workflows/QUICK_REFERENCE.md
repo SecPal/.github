@@ -53,6 +53,9 @@ PR-body validators. A failed validation blocks publication; send the same valida
 file with `--body-file`, without modifying it between validation and publication.
 The canonical validator takes `PR_BODY` and an explicit `PR_DRAFT=true` (Draft) or
 `PR_DRAFT=false` (Ready); lifecycle is never inferred from body prose.
+It uses the existing locked Markdown parser: run `npm ci --ignore-scripts` in the
+trusted governance checkout first. Evidence fields must be real list content
+under the canonical heading, before the next heading of any level.
 
 ```bash
 # 1. Create draft PR (→ In Progress)
@@ -125,8 +128,10 @@ Resolves #789
 
 Use the validate-first exception only when the repository instructions explicitly allow validate-first.
 Use the no-executable-change reason only for docs/content/template-only PRs.
-Drafts require concrete fail-first proof or an explicitly permitted validate-first exception reference;
-passing proof may be N/A. Ready executable PRs also require concrete passing proof.
+This repository grants no validate-first exception: use `N/A` for that reference.
+An untrusted PR-body reference cannot authorize an exception.
+Drafts require concrete fail-first proof; passing proof may be N/A.
+Ready executable PRs also require concrete passing proof.
 
 ## Checklist
 
