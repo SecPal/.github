@@ -5,7 +5,10 @@
 
 from __future__ import annotations
 
+import ast
+from contextlib import nullcontext
 import copy
+from dataclasses import replace
 import hashlib
 import inspect
 import json
@@ -14,9 +17,10 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest import TestCase, main
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
@@ -289,6 +293,187 @@ def authenticated_external_evidence(
 
 
 class LifecycleAuthorityTests(TestCase):
+    def test_target_827_validation_loss_admission_authenticates_adoption_source(self) -> None:
+        head = "7fd0467c321f1c2b9a06494f4a0c46531c9cc006"
+        tree = "ab8da939ca30a3b906f22c471031083f7132ff94"
+        parent = "f6982d0808cace5a142445b52454dc83515fa297"
+        historical = "d0905955b07c580930ddf05595372c5c13c74387a074907ede4a33ddf1eafb38"
+        fresh = "e210f448c7ed9c123ef2e991684f3706a0ca30b096005fce37a2103a9bdcfa15"
+        migration = "lifecycle-legacy-adoption@secpal.app"
+        timestamp = "2026-09-06T12:00:00Z"
+        state = authority.initial_state()
+        state.update(unrestricted_review_count=1, remediation_cycle_count=2)
+        observations = [
+            {
+                "sequence": sequence, "kind": kind,
+                "observed_at": observed_at, "head_sha": observed_head,
+                "reviewed_head_sha": None,
+            }
+            for sequence, (kind, observed_at, observed_head) in enumerate([
+                ("PR_CREATED_DRAFT", "2026-09-05T14:26:48Z", "4b5dc277bfbee865de5fe5c6bf8874467930475b"),
+                ("HEAD_ADVANCED_OBSERVED", "2026-09-05T14:30:14Z", "b3f45ab2c2351e18587ff92c9b143c0fb7c3ef75"),
+                ("REMEDIATION_HEAD_OBSERVED", "2026-09-05T16:21:55Z", parent),
+                ("REMEDIATION_HEAD_OBSERVED", "2026-09-05T22:14:03Z", head),
+            ], 1)
+        ]
+        self.assertEqual(
+            authority._normalize_observed_pre_enrollment_history(
+                observations, expected_head=head, intended_state=state,
+                review_budget_consumption_admitted=True,
+            ),
+            observations,
+        )
+        signature_policy = {
+            "accepted_formats": ["ssh"], "require_github_verified": True,
+        }
+        commit = {
+            "oid": head, "source": "USER", "signer_identity": SIGNER,
+            "local_signature": {"verified": True, "state": "valid", "format": "ssh"},
+            "github_verification": {"verified": True, "reason": "valid"},
+        }
+        signature_digest = authority.digest_json(
+            fast_path.verify_commit_signatures([commit], signature_policy)[0]
+        )
+        safety = {
+            "receipt_digest": fresh,
+            "validated_tree_sha": tree,
+            "validation_policy_digest": "4" * 64,
+            "command_set_digest": "5" * 64,
+            "feedback_digest": "6" * 64,
+            "technical_decisions": [
+                {
+                    "source_id": f"SEC827-REVIEW-{number:03}",
+                    "source_digest": authority.digest_json({"finding": number}),
+                    "disposition": "CORRECTED_AND_VERIFIED",
+                    "evidence_digest": authority.digest_json({"proof": number, "tree": tree}),
+                }
+                for number in (1, 2, 3)
+            ],
+            "successful_result": True,
+        }
+        fields = {
+            "schema_version": "1.0",
+            "kind": "SECPAL_PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_ADMISSION",
+            "domain": "secpal.pre-enrollment-validation-evidence-loss-admission/v1",
+            "repository": REPOSITORY, "delivery_issue": 827, "pull_request": 830,
+            "head_sha": head, "tree_sha": tree, "parent_sha": parent,
+            "pull_request_state": "OPEN", "draft": True,
+            "source_signer_identity": SIGNER,
+            "commit_signature_evidence_digest": signature_digest,
+            "historical_validation_receipt_digest": historical,
+            "historical_package_status": "UNAVAILABLE",
+            "historical_final_attestation_digest": None,
+            "historical_bytes_reconstructed": False,
+            "loss_proof_policy_digest": "7" * 64,
+            "accepted_main_sha": "c7f9ea7efe2c1523a99e58bf9694f380a21acfeb",
+            "current_safety": safety,
+            "observed_pre_enrollment_history": observations,
+            "intended_state": state,
+            "adoption_timestamp": timestamp,
+            "admission_id": "pre-enrollment-validation-loss:827:830",
+            "bounded_uses": 1, "signer_identity": migration,
+        }
+        fields["signature"] = signer_for(migration)(
+            authority.canonical_json_bytes(fields), fields["domain"]
+        )
+        admission = {**fields, "admission_digest": authority.digest_json(fields)}
+        trust = authority.LifecycleTrustPolicy(
+            repository=REPOSITORY, accepted_formats=frozenset({"ssh"}),
+            transition_signer_identities=frozenset({SIGNER}),
+            authority_signer_identities=frozenset({SIGNER}),
+            legacy_adoption_signer_identities=frozenset({migration}),
+            signers={
+                SIGNER: authority.TrustedSigner(SIGNER, ("source-key",), ()),
+                migration: authority.TrustedSigner(migration, ("migration-key",), ()),
+            },
+            initialization_anchors=(),
+        )
+        with patch.object(authority, "_load_lifecycle_trust_policy", return_value=trust), patch.object(
+            authority, "_policy_signature_verifier", return_value=verify_signature
+        ), patch.object(authority, "_load_delivery_signature_policy", return_value=signature_policy):
+            authority._verify_signature(
+                authority.canonical_json_bytes({key: value for key, value in fields.items() if key != "signature"}),
+                fields["signature"], migration, fields["domain"],
+                trust.legacy_adoption_signer_identities, verify_signature,
+            )
+            context = {
+                "repository": REPOSITORY, "delivery_issue": 827, "pull_request": 830,
+                "head_sha": head, "tree_sha": tree, "pull_request_state": "OPEN",
+                "commit_signature_evidence_digest": signature_digest,
+                "validation_receipt_digest": historical,
+                "source_validation_evidence_digest": authority.digest_json(safety),
+                "adoption_source_evidence_digest": admission["admission_digest"],
+                "adoption_timestamp": timestamp,
+            }
+            budget = authority.create_pre_enrollment_review_budget_consumption_admission(
+                **context, admission_id="review-budget:827:830",
+                observed_pre_enrollment_history=observations, intended_state=state,
+                signer_identity=migration, signer=signer_for(migration),
+            )
+            authority.verify_pre_enrollment_review_budget_consumption_admission(
+                budget, **context, observed_history_digest=authority.digest_json(observations),
+                intended_state_digest=authority.digest_json(state),
+            )
+            verifier = getattr(authority, "verify_pre_enrollment_validation_evidence_loss_admission", None)
+            self.assertTrue(
+                callable(verifier),
+                "exact-state adoption has no verified pre-enrollment validation-evidence-loss source mode",
+            )
+            from scripts.secpal_pr_review import validation_evidence_loss as loss
+
+            with patch.object(loss, "_reauthenticate", return_value=None):
+                verified_source = verifier(authority.canonical_json_bytes(admission))
+            arguments = {
+                "repository": REPOSITORY, "delivery_issue": 827, "pull_request": 830,
+                "head_sha": head, "tree_sha": tree, "pull_request_state": "OPEN",
+                "commit_signature_evidence": commit, "validation_evidence": None,
+                "validation_evidence_loss_admission": verified_source,
+                "observed_pre_enrollment_history": observations, "intended_state": state,
+            }
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                authority.authenticate_exact_state_adoption_external_evidence(**arguments)
+            external = authority.authenticate_exact_state_adoption_external_evidence(
+                **arguments, review_budget_consumption_admission=budget,
+            )
+            for supplied in ({}, {"receipt": "invalid"}, object()):
+                with self.subTest(supplied_historical=type(supplied)):
+                    with self.assertRaisesRegex(authority.LifecycleAuthorityError, "downgrade"):
+                        authority.authenticate_exact_state_adoption_external_evidence(
+                            **{**arguments, "validation_evidence": supplied},
+                            review_budget_consumption_admission=budget,
+                        )
+            wrong_budget = copy.deepcopy(budget)
+            wrong_budget["pull_request"] = 831
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                authority.authenticate_exact_state_adoption_external_evidence(
+                    **arguments, review_budget_consumption_admission=wrong_budget,
+                )
+            evidence = authority.create_exact_state_adoption_evidence(
+                verified_external_evidence=external, adoption_timestamp=timestamp,
+            )
+            self.assertEqual(evidence["proof_version"], "3.0")
+            authorization = authority.create_exact_state_adoption_authorization(
+                adoption_evidence=evidence, authorization_id="adopt:827:830",
+                bounded_uses=1, signer_identity=migration, signer=signer_for(migration),
+            )
+            proof = authority.create_exact_state_adoption_proof(
+                adoption_evidence=evidence, authorization=authorization,
+                signer_identity=migration, signer=signer_for(migration),
+            )
+            verified = authority.verify_exact_state_adoption_proof(proof)
+            for version, domain in (("1.0", authority.EXACT_ADOPTION_PROOF_DOMAIN),
+                                    ("2.0", authority.EXACT_ADOPTION_CONSUMPTION_PROOF_DOMAIN)):
+                with self.subTest(old_wrapper=version):
+                    changed = {**proof, "schema_version": version, "proof_version": version, "domain": domain}
+                    with self.assertRaises(authority.LifecycleAuthorityError):
+                        authority.verify_exact_state_adoption_proof(changed)
+            self.assertEqual(verified.state, state)
+            self.assertEqual(verified.validation_receipt_digest, historical)
+            self.assertEqual(verified.source_validation_evidence_digest, authority.digest_json(safety))
+            self.assertFalse(admission["historical_bytes_reconstructed"])
+            self.assertIsNone(admission["historical_final_attestation_digest"])
+            self.assertNotEqual(historical, fresh)
+
     def test_target_827_fresh_evidence_cannot_replace_signed_receipt(self) -> None:
         head = "7fd0467c321f1c2b9a06494f4a0c46531c9cc006"
         tree = "ab8da939ca30a3b906f22c471031083f7132ff94"
@@ -2242,6 +2427,493 @@ class LifecycleAuthorityTests(TestCase):
         changed[-1]["event_digest"] = "0" * 64
         with self.assertRaises(authority.LifecycleAuthorityError):
             verify_raw(chain.authorities, changed)
+
+
+class ValidationEvidenceLossTests(TestCase):
+    def setUp(self) -> None:
+        from scripts.secpal_pr_review import validation_evidence_loss as loss
+
+        self.loss = loss
+        self.record = json.loads((REPO_ROOT / loss.POLICY_PATH).read_text())["admissions"][0]
+        self.migration = "lifecycle-legacy-adoption@secpal.app"
+        self.trust = authority.LifecycleTrustPolicy(
+            repository=REPOSITORY, accepted_formats=frozenset({"ssh"}),
+            transition_signer_identities=frozenset({SIGNER}),
+            authority_signer_identities=frozenset({SIGNER}),
+            legacy_adoption_signer_identities=frozenset({self.migration}),
+            signers={
+                SIGNER: authority.TrustedSigner(SIGNER, ("source-key",), ()),
+                self.migration: authority.TrustedSigner(self.migration, ("migration-key",), ()),
+            }, initialization_anchors=(), publication_remote_url="https://github.com/SecPal/.github.git",
+        )
+        for name, value in (
+            ("_load_lifecycle_trust_policy", self.trust),
+            ("_policy_signature_verifier", verify_signature),
+        ):
+            patcher = patch.object(authority, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.acquired = {
+            **{key: copy.deepcopy(value) for key, value in self.record.items()
+               if key not in {"feedback_digest", "technical_decisions"}},
+            "pull_request_state": "OPEN", "draft": True,
+            "commit_signature_evidence_digest": "3" * 64,
+            "loss_proof_policy_digest": authority.digest_json(self.record),
+            "accepted_main_sha": "c" * 40,
+            "intended_state": loss._intended_state(),
+            "current_safety": {
+                "receipt_digest": "e210f448c7ed9c123ef2e991684f3706a0ca30b096005fce37a2103a9bdcfa15",
+                "validated_tree_sha": self.record["tree_sha"],
+                "validation_policy_digest": "4" * 64,
+                "command_set_digest": "5" * 64,
+                "feedback_digest": self.record["feedback_digest"],
+                "technical_decisions": [], "successful_result": True,
+            },
+        }
+        self.document = self.sign({
+            "schema_version": "1.0", "kind": loss.KIND, "domain": loss.DOMAIN,
+            **self.acquired, "adoption_timestamp": "2026-09-06T12:00:00Z",
+            "admission_id": "loss:827:830", "bounded_uses": 1,
+            "signer_identity": self.migration,
+        })
+
+    def sign(self, value: dict[str, Any]) -> dict[str, Any]:
+        fields = copy.deepcopy(value)
+        fields.pop("admission_digest", None)
+        fields.pop("signature", None)
+        fields["signature"] = signer_for(fields["signer_identity"])(
+            authority.canonical_json_bytes(fields), self.loss.DOMAIN,
+        )
+        return {**fields, "admission_digest": authority.digest_json(fields)}
+
+    def test_public_verifier_reauthenticates_exact_signed_context(self) -> None:
+        with patch.object(self.loss, "_acquire", return_value=self.acquired) as acquire:
+            verified = self.loss.verify(authority.canonical_json_bytes(self.document))
+            self.assertEqual(self.loss._verified_document(verified), self.document)
+            acquire.assert_called_once_with(REPOSITORY, 827, execute_validation=False)
+        substitutions = {
+            "repository": "Example/governance", "delivery_issue": 828, "pull_request": 831,
+            "head_sha": "a" * 40, "tree_sha": "b" * 40, "parent_sha": "d" * 40,
+            "source_signer_identity": OTHER_SIGNER, "commit_signature_evidence_digest": "0" * 64,
+            "loss_proof_policy_digest": "0" * 64, "accepted_main_sha": "d" * 40,
+        }
+        for field, replacement in substitutions.items():
+            with self.subTest(field=field):
+                changed = copy.deepcopy(self.document)
+                changed[field] = replacement
+                with patch.object(self.loss, "_acquire", return_value=self.acquired):
+                    with self.assertRaises(authority.LifecycleAuthorityError):
+                        self.loss.verify(authority.canonical_json_bytes(self.sign(changed)))
+
+    def test_closed_loss_truth_and_finite_state(self) -> None:
+        substitutions = {
+            "draft": False, "pull_request_state": "CLOSED", "bounded_uses": 2,
+            "historical_package_status": "RECONSTRUCTED",
+            "historical_final_attestation_digest": "2" * 64,
+            "historical_bytes_reconstructed": True, "signer_identity": SIGNER,
+            "observed_pre_enrollment_history": self.record["observed_pre_enrollment_history"][:-1],
+        }
+        for field, replacement in substitutions.items():
+            with self.subTest(field=field):
+                changed = copy.deepcopy(self.document)
+                changed[field] = replacement
+                with self.assertRaises(authority.LifecycleAuthorityError):
+                    self.loss._verify_document(self.sign(changed))
+        for field, value in self.document["intended_state"].items():
+            with self.subTest(counter=field):
+                changed = copy.deepcopy(self.document)
+                changed["intended_state"][field] = (
+                    not value if type(value) is bool else
+                    value + ["fabricated"] if isinstance(value, list) else value + 1
+                )
+                with self.assertRaises(authority.LifecycleAuthorityError):
+                    self.loss._verify_document(self.sign(changed))
+        changed = copy.deepcopy(self.document)
+        changed["current_safety"]["successful_result"] = False
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            self.loss._verify_document(self.sign(changed))
+
+    def test_no_unsigned_loss_or_signature_substitution(self) -> None:
+        changed = copy.deepcopy(self.document)
+        changed["signature"] = signer_for(OTHER_SIGNER)(b"other context", self.loss.DOMAIN)
+        changed["admission_digest"] = authority.digest_json({
+            key: value for key, value in changed.items() if key != "admission_digest"
+        })
+        with self.assertRaises((authority.LifecycleAuthorityError, ValueError)):
+            self.loss._verify_document(changed)
+        for value in (self.document, SimpleNamespace(canonical_admission=self.document),
+                      self.loss.VerifiedPreEnrollmentValidationEvidenceLossAdmission(self.document, object())):
+            with self.subTest(value=type(value)):
+                with self.assertRaises(authority.LifecycleAuthorityError):
+                    self.loss._verified_document(value)
+
+    def test_historical_package_never_downgrades(self) -> None:
+        with patch.object(self.loss, "_acquire") as acquire:
+            for package in (None, {}, {"receipt": {}}, b"reconstructed", self.document):
+                with self.subTest(package=package):
+                    with self.assertRaises(authority.LifecycleAuthorityError):
+                        self.loss.issue(REPOSITORY, 827, historical_package=package)
+            acquire.assert_not_called()
+
+    def test_caller_cannot_select_acquisition_authority(self) -> None:
+        for field in ("registry", "validation_commands", "successful_result", "feedback",
+                      "signer", "intended_state", "source_identity", "current", "loss"):
+            with self.subTest(field=field), patch.object(self.loss, "_acquire") as acquire:
+                with self.assertRaises(TypeError):
+                    self.loss.issue(REPOSITORY, 827, **{field: {}})
+                acquire.assert_not_called()
+
+    def test_live_current_presence_blocks_replay_not_historical_provenance(self) -> None:
+        with patch.object(self.loss, "_acquire", side_effect=authority.LifecycleAuthorityError("CURRENT exists")):
+            with self.assertRaisesRegex(authority.LifecycleAuthorityError, "CURRENT"):
+                self.loss.verify(authority.canonical_json_bytes(self.document))
+            self.assertEqual(self.loss._verify_document(self.document), self.document)
+
+    def test_current_registered_validation_uses_entry_then_immutable_root(self) -> None:
+        entry = {"name": REPOSITORY}
+        reviewed = SimpleNamespace(state_digest="a" * 64, feedback_digest=self.record["feedback_digest"])
+
+        def validate(actual_entry: Any, root: Any) -> bool:
+            self.assertIs(actual_entry, entry)
+            self.assertIsInstance(root, Path)
+            self.assertTrue(root.is_dir())
+            return True
+
+        helper = SimpleNamespace(
+            _fast_registry_binding=lambda entry: {"policy": "current"},
+            _complete_validation_commands=lambda entry: (),
+            _run_registered_validations=Mock(side_effect=validate),
+        )
+
+        def git_text(root: Path, arguments: list[str]) -> str:
+            if arguments == ["rev-parse", "HEAD^{tree}"]:
+                return self.record["tree_sha"]
+            if arguments == ["rev-list", "--parents", "-n", "1", "HEAD"]:
+                return f'{self.record["head_sha"]} {self.record["parent_sha"]}'
+            if arguments == ["diff", "--name-only", "HEAD"]:
+                return ""
+            return self.record["head_sha"]
+
+        with patch.object(self.loss, "_accepted_policy", return_value=("c" * 40, self.record, entry, self.trust)), patch.object(
+            self.loss, "_observe", return_value=({}, reviewed)
+        ), patch.object(self.loss.transport, "_load_actions_helper", return_value=helper), patch.object(
+            self.loss.transport, "_git"
+        ), patch.object(self.loss.transport, "_git_text", side_effect=git_text), patch.object(
+            self.loss, "_source_signature", return_value="3" * 64
+        ), patch.object(self.loss.transport, "_exact_trailer", return_value=self.record["historical_validation_receipt_digest"]):
+            with patch.object(self.loss, "_prepare_dependencies"), patch.object(self.loss, "_verify_source_bytes"):
+                result = self.loss._acquire(REPOSITORY, 827, execute_validation=True)
+            self.assertTrue(result["current_safety"]["successful_result"])
+            helper._run_registered_validations.assert_called_once()
+            helper._run_registered_validations.reset_mock()
+            with patch.object(self.loss, "_prepare_dependencies") as prepare, patch.object(self.loss, "_verify_source_bytes"):
+                self.loss._acquire(REPOSITORY, 827, execute_validation=False)
+            prepare.assert_not_called()
+            helper._run_registered_validations.assert_not_called()
+
+    def test_source_mutation_cannot_hide_behind_index_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for arguments in (["init", "--quiet"],):
+                subprocess.run(["git", "-C", str(root), *arguments], check=True)
+            source = root / "source.py"
+            source.write_text("original\n")
+            subprocess.run(["git", "-C", str(root), "add", "source.py"], check=True)
+            tree = subprocess.check_output(["git", "-C", str(root), "write-tree"], text=True).strip()
+            listing = self.loss._verify_source_bytes(root, tree)
+            subprocess.run(["git", "-C", str(root), "update-index", "--assume-unchanged", "source.py"], check=True)
+            source.write_text("mutated\n")
+            with self.assertRaisesRegex(authority.LifecycleAuthorityError, "source bytes"):
+                self.loss._verify_source_bytes(root, tree)
+            with patch.object(self.loss.transport, "_git_text", side_effect=lambda actual_root, args: (
+                subprocess.check_output(["git", "-C", str(actual_root), *args], text=True)
+                if args[0] == "hash-object" else "substituted tree"
+            )):
+                with self.assertRaisesRegex(authority.LifecycleAuthorityError, "source bytes"):
+                    self.loss._verify_source_bytes(root, tree, expected_listing=listing)
+            source.unlink()
+            source.symlink_to("/dev/null")
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                self.loss._verify_source_bytes(root, tree)
+
+    def test_dependency_setup_is_fixed_locked_and_credential_free(self) -> None:
+        helper = SimpleNamespace(
+            _validation_executable=lambda command, working, root: "/usr/bin/npm",
+            LOCAL_VALIDATION_COMMAND_DIRECTORIES=(Path("/usr/bin"), Path("/bin")),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(self.loss.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run:
+                self.loss._prepare_dependencies(Path(directory), helper)
+            args, keywords = run.call_args
+            self.assertEqual(args[0], ["/usr/bin/npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"])
+            self.assertFalse(keywords.get("shell", False))
+            self.assertEqual(keywords["timeout"], 600)
+            self.assertEqual(set(keywords["env"]), {
+                "HOME", "PATH", "LANG", "LC_ALL", "NPM_CONFIG_USERCONFIG", "NPM_CONFIG_GLOBALCONFIG",
+            })
+            self.assertNotEqual(keywords["env"]["NPM_CONFIG_USERCONFIG"], keywords["env"]["NPM_CONFIG_GLOBALCONFIG"])
+            for key in ("NPM_CONFIG_USERCONFIG", "NPM_CONFIG_GLOBALCONFIG"):
+                self.assertEqual(Path(keywords["env"][key]).parent, Path(keywords["env"]["HOME"]))
+
+    def test_dependency_environment_is_accepted_by_real_npm(self) -> None:
+        real_run = subprocess.run
+
+        def probe_config(arguments: list[str], **keywords: Any) -> Any:
+            return real_run([arguments[0], "config", "get", "ignore-scripts"], **keywords)
+
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            self.loss.subprocess, "run", side_effect=probe_config
+        ):
+            self.loss._prepare_dependencies(Path(directory), self.loss.transport._load_actions_helper())
+
+    def provider_facts(self) -> list[Any]:
+        history = self.record["observed_pre_enrollment_history"]
+        target = {
+            "number": 830, "state": "open", "draft": True, "merged_at": None,
+            "head": {"sha": self.record["head_sha"], "repo": {"full_name": REPOSITORY}},
+            "base": {"ref": "main", "repo": {"full_name": REPOSITORY}},
+            "created_at": history[0]["observed_at"],
+        }
+        commits = [{
+            "sha": observation["head_sha"],
+            "parents": [{"sha": history[index - 1]["head_sha"] if index else "4" * 40}],
+            "commit": {"committer": {"date": observation["observed_at"]}},
+        } for index, observation in enumerate(history)]
+        source = {
+            "sha": self.record["head_sha"], "parents": [{"sha": self.record["parent_sha"]}],
+            "commit": {"tree": {"sha": self.record["tree_sha"]}, "verification": {"verified": True}},
+        }
+        return [target, {"number": 827, "state": "open"}, commits, [], source]
+
+    def reviewed_state(self) -> Any:
+        return fast_path.StableFeedbackState(
+            repository=REPOSITORY, pull_request_number=830,
+            head_sha=self.record["head_sha"], base_ref="main", base_sha="c" * 40,
+            pr_state="OPEN", feedback={
+                "pull_request_reactions": [], "reviews": [], "conversation_comments": [], "threads": [],
+            },
+        )
+
+    def observe(self, facts: list[Any], *, reviewed: Any = None) -> Any:
+        helper = SimpleNamespace(FastPathGateway=lambda root, entry: SimpleNamespace(
+            capture_stable_feedback=lambda repository, pr: reviewed or self.reviewed_state(),
+        ))
+        with patch.object(self.loss, "_gh_json", side_effect=facts), patch.object(
+            self.loss.transport, "_load_actions_helper", return_value=helper
+        ), patch.object(self.loss.publication, "require_unenrolled_delivery"):
+            return self.loss._observe(self.record, {}, self.trust)
+
+    def test_provider_acquisition_checks_exact_open_draft_history_and_signature(self) -> None:
+        self.assertEqual(self.observe(self.provider_facts())[0]["sha"], self.record["head_sha"])
+        cases = [
+            (0, ("draft",), False), (0, ("state",), "closed"),
+            (0, ("merged_at",), "2026-09-06T00:00:00Z"),
+            (0, ("head", "sha"), "a" * 40),
+            (0, ("head", "repo", "full_name"), "Example/governance"),
+            (0, ("base", "ref"), "candidate"), (1, ("number",), 828),
+            (4, ("sha",), "a" * 40), (4, ("commit", "tree", "sha"), "b" * 40),
+            (4, ("commit", "verification", "verified"), False),
+            (4, ("parents",), [{"sha": "d" * 40}]),
+        ]
+        for index, path, value in cases:
+            with self.subTest(index=index, path=path):
+                facts = self.provider_facts()
+                current = facts[index]
+                for key in path[:-1]:
+                    current = current[key]
+                current[path[-1]] = value
+                with self.assertRaises(authority.LifecycleAuthorityError):
+                    self.observe(facts)
+        for index, value in ((2, self.provider_facts()[2][1:]), (3, [{"event": "ready_for_review"}]),
+                             (3, [{"event": "convert_to_draft"}]), (3, [{}] * 100)):
+            with self.subTest(history=index):
+                facts = self.provider_facts()
+                facts[index] = value
+                with self.assertRaises(authority.LifecycleAuthorityError):
+                    self.observe(facts)
+
+    def test_resolved_outdated_replies_remain_complete_safety_sources(self) -> None:
+        reviewed = self.reviewed_state()
+        reviewed.feedback["threads"].append({
+            "node_id": "thread", "is_resolved": True, "is_outdated": True,
+            "comments": [
+                {"node_id": "finding", "body_digest": "a" * 64, "reactions": []},
+                {"node_id": "reply", "body_digest": "b" * 64, "reactions": []},
+            ],
+        })
+        reviewed.feedback["conversation_comments"].append({
+            "node_id": "conversation", "body_digest": "c" * 64, "reactions": [],
+        })
+        self.assertEqual(len(fast_path._classified_feedback_sources(reviewed)), 1)
+        sources = fast_path._classified_feedback_sources(reviewed, include_resolved=True)
+        self.assertEqual(len(sources), 3)
+        self.record["feedback_digest"] = reviewed.feedback_digest
+        with self.assertRaisesRegex(authority.LifecycleAuthorityError, "source-complete"):
+            self.observe(self.provider_facts(), reviewed=reviewed)
+        self.record["technical_decisions"] = [{
+            "source_id": f"{kind}:{identity}", "source_digest": facts[0],
+            "disposition": "CORRECTED_AND_VERIFIED", "evidence_digest": "d" * 64,
+        } for (kind, identity), facts in sources.items()]
+        self.observe(self.provider_facts(), reviewed=reviewed)
+        self.record["technical_decisions"][0]["disposition"] = "BLOCKING"
+        with self.assertRaisesRegex(authority.LifecycleAuthorityError, "blocking"):
+            self.observe(self.provider_facts(), reviewed=reviewed)
+
+    def test_source_signer_requires_local_crypto_success_and_exact_principal(self) -> None:
+        for returncode, output in (
+            (1, f'Good "git" signature for {SIGNER} with ED25519 key SHA256:test'),
+            (0, f'Good "git" signature for {OTHER_SIGNER} with ED25519 key SHA256:test'),
+            (0, "unsigned"),
+        ):
+            with self.subTest(returncode=returncode, output=output), patch.object(
+                self.loss.transport, "_allowed_signers", return_value=Path("/public/allowed-signers")
+            ), patch.object(self.loss.transport, "_run_bootstrap_git", return_value=SimpleNamespace(
+                returncode=returncode, stdout=output.encode(), stderr=b"",
+            )):
+                with self.assertRaisesRegex(authority.LifecycleAuthorityError, "signer"):
+                    self.loss._source_signature(REPO_ROOT, self.record, self.trust)
+
+    def test_candidate_local_or_unprotected_main_cannot_issue(self) -> None:
+        for protected, head, dirty in ((False, "c" * 40, ""), (True, "a" * 40, ""),
+                                       (True, "c" * 40, "modified policy")):
+            with self.subTest(protected=protected, head=head, dirty=dirty):
+                responses = [
+                    {"commit": {"sha": "c" * 40}, "protected": protected},
+                    {"sha": "c" * 40, "commit": {"verification": {"verified": True}}},
+                ]
+                with patch.object(self.loss, "_gh_json", side_effect=responses), patch.object(
+                    self.loss.transport, "_git_text", side_effect=lambda root, args: head if args == ["rev-parse", "HEAD"] else dirty
+                ):
+                    with self.assertRaises(authority.LifecycleAuthorityError):
+                        self.loss._accepted_policy(REPOSITORY, 827)
+
+    def test_unenrolled_check_uses_protected_journal_and_never_treats_failure_as_absence(self) -> None:
+        publication = self.loss.publication
+        with patch.object(publication, "_verify_live_protection"), patch.object(
+            publication, "_isolated_repository", return_value=nullcontext((REPO_ROOT, {}))
+        ), patch.object(publication, "_observe_remote_current_once", return_value="c" * 40):
+            for latest, admissions in (({}, {}), ({(REPOSITORY, 827): object()}, {}),
+                                       ({}, {(REPOSITORY, 827): object()})):
+                with self.subTest(latest=bool(latest), admissions=bool(admissions)), patch.object(
+                    publication, "_walk_journal", return_value=([], latest, admissions)
+                ):
+                    if latest or admissions:
+                        with self.assertRaises(publication.LifecyclePublicationError):
+                            publication.require_unenrolled_delivery(REPOSITORY, 827)
+                    else:
+                        publication.require_unenrolled_delivery(REPOSITORY, 827)
+        with patch.object(publication, "_verify_live_protection", side_effect=publication.LifecyclePublicationError("provider failed")):
+            with self.assertRaisesRegex(publication.LifecyclePublicationError, "provider failed"):
+                publication.require_unenrolled_delivery(REPOSITORY, 827)
+
+    def test_loss_execution_static_boundary(self) -> None:
+        parsed = ast.parse(inspect.getsource(self.loss))
+        imports = {alias.name for node in ast.walk(parsed) if isinstance(node, ast.Import) for alias in node.names}
+        self.assertEqual(imports, {"copy", "os", "re", "stat", "subprocess", "tempfile"})
+        from_imports = {
+            (node.level, node.module, tuple(alias.name for alias in node.names))
+            for node in ast.walk(parsed) if isinstance(node, ast.ImportFrom)
+        }
+        self.assertEqual(from_imports, {
+            (0, "__future__", ("annotations",)), (0, "dataclasses", ("dataclass",)),
+            (0, "datetime", ("datetime", "timezone")), (0, "pathlib", ("Path",)),
+            (0, "typing", ("Any", "Mapping")),
+            (1, None, ("bootstrap_source_admission",)), (1, None, ("fast_path",)),
+            (1, None, ("lifecycle_authority",)), (1, None, ("lifecycle_execution",)),
+            (1, None, ("lifecycle_publication",)),
+        })
+        process_owners = []
+        for function in parsed.body:
+            if not isinstance(function, ast.FunctionDef):
+                continue
+            for call in ast.walk(function):
+                if not isinstance(call, ast.Call):
+                    continue
+                if isinstance(call.func, ast.Name):
+                    self.assertNotIn(call.func.id, {"eval", "exec", "compile", "__import__", "getattr"})
+                if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name):
+                    if call.func.value.id == "subprocess":
+                        process_owners.append((function.name, call.func.attr))
+        self.assertEqual(process_owners, [("_prepare_dependencies", "run")])
+
+    def test_issuer_uses_existing_migration_role_only_after_acquisition(self) -> None:
+        with patch.object(self.loss, "_acquire", return_value=self.acquired) as acquire, patch.object(
+            self.loss.execution, "_local_signer", return_value=signer_for(self.migration)
+        ) as signer:
+            issued = self.loss.issue(REPOSITORY, 827)
+            acquire.assert_called_once_with(REPOSITORY, 827, execute_validation=True)
+            signer.assert_called_once_with(self.migration)
+            self.assertEqual(issued["signer_identity"], self.migration)
+            self.assertEqual(issued["bounded_uses"], 1)
+            self.assertEqual(issued["current_safety"], self.acquired["current_safety"])
+        with patch.object(self.loss, "_acquire", side_effect=authority.LifecycleAuthorityError("registered validation failed")), patch.object(
+            self.loss.execution, "_local_signer"
+        ) as signer:
+            with self.assertRaisesRegex(authority.LifecycleAuthorityError, "validation failed"):
+                self.loss.issue(REPOSITORY, 827)
+            signer.assert_not_called()
+
+    def test_generic_v3_enrollment_uses_existing_journal_once(self) -> None:
+        publication = self.loss.publication
+        signature_policy = {"accepted_formats": ["ssh"], "require_github_verified": True}
+        commit = {
+            "oid": self.record["head_sha"], "source": "USER", "signer_identity": SIGNER,
+            "local_signature": {"verified": True, "state": "valid", "format": "ssh"},
+            "github_verification": {"verified": True, "reason": "valid"},
+        }
+        signature_digest = authority.digest_json(fast_path.verify_commit_signatures([commit], signature_policy)[0])
+        admission = self.sign({
+            **self.document, "delivery_issue": ISSUE, "pull_request": PR,
+            "commit_signature_evidence_digest": signature_digest,
+        })
+        context = {
+            "repository": REPOSITORY, "delivery_issue": ISSUE, "pull_request": PR,
+            "head_sha": admission["head_sha"], "tree_sha": admission["tree_sha"],
+            "pull_request_state": "OPEN", "commit_signature_evidence_digest": signature_digest,
+            "validation_receipt_digest": admission["historical_validation_receipt_digest"],
+            "source_validation_evidence_digest": authority.digest_json(admission["current_safety"]),
+            "adoption_source_evidence_digest": admission["admission_digest"],
+            "adoption_timestamp": admission["adoption_timestamp"],
+        }
+        budget = authority.create_pre_enrollment_review_budget_consumption_admission(
+            **context, admission_id="generic-budget", observed_pre_enrollment_history=admission["observed_pre_enrollment_history"],
+            intended_state=admission["intended_state"], signer_identity=self.migration, signer=signer_for(self.migration),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            remote = Path(directory) / "publication.git"
+            subprocess.run(["git", "init", "--bare", "--quiet", str(remote)], check=True)
+            trust = replace(self.trust, publication_remote_url=str(remote), publication_signer_identities=frozenset({SIGNER}))
+            with patch.object(authority, "_load_lifecycle_trust_policy", return_value=trust), patch.object(
+                publication, "_verify_live_protection"
+            ), patch.object(self.loss, "_reauthenticate", side_effect=lambda doc: publication.require_unenrolled_delivery(
+                doc["repository"], doc["delivery_issue"]
+            )), patch.object(authority, "_load_delivery_signature_policy", return_value=signature_policy):
+                sealed = self.loss.verify(authority.canonical_json_bytes(admission))
+                external = authority.authenticate_exact_state_adoption_external_evidence(
+                    repository=REPOSITORY, delivery_issue=ISSUE, pull_request=PR,
+                    head_sha=admission["head_sha"], tree_sha=admission["tree_sha"], pull_request_state="OPEN",
+                    commit_signature_evidence=commit, validation_evidence=None, validation_evidence_loss_admission=sealed,
+                    review_budget_consumption_admission=budget,
+                    observed_pre_enrollment_history=admission["observed_pre_enrollment_history"], intended_state=admission["intended_state"],
+                )
+                evidence = authority.create_exact_state_adoption_evidence(
+                    verified_external_evidence=external, adoption_timestamp=admission["adoption_timestamp"],
+                )
+                authorization = authority.create_exact_state_adoption_authorization(
+                    adoption_evidence=evidence, authorization_id="generic-v3-adoption", bounded_uses=1,
+                    signer_identity=self.migration, signer=signer_for(self.migration),
+                )
+                proof = authority.create_exact_state_adoption_proof(
+                    adoption_evidence=evidence, authorization=authorization,
+                    signer_identity=self.migration, signer=signer_for(self.migration),
+                )
+                bundle = authority.serialize_exact_state_adoption_evidence(exact_state_adoption_proof=proof)
+                enrolled = publication.enroll_existing_lifecycle(bundle, signer_identity=SIGNER, signer=signer_for())
+                current = publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE)
+                self.assertEqual(enrolled.lifecycle.authority_digest, current.lifecycle.authority_digest)
+                self.assertEqual(current.lifecycle.state, self.loss._intended_state())
+                with self.assertRaisesRegex(publication.LifecyclePublicationError, "enrolled"):
+                    publication.enroll_existing_lifecycle(bundle, signer_identity=SIGNER, signer=signer_for())
 
 
 if __name__ == "__main__":

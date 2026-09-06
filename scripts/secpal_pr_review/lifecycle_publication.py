@@ -1227,6 +1227,10 @@ def enroll_existing_lifecycle(
         if is_native
         else authority.verify_lifecycle_authority_for_publication(bundle_raw)
     )
+    if exact_adoption and bundle["exact_state_adoption_proof"].get("proof_version") == authority.EXACT_ADOPTION_LOSS_VERSION:
+        authority.verify_pre_enrollment_validation_evidence_loss_admission(
+            canonical_json_bytes(bundle["exact_state_adoption_proof"]["validation_evidence_loss_admission"])
+        )
     policy = authority._load_lifecycle_trust_policy(verified.repository)
     _verify_live_protection(policy)
     with _isolated_repository(policy, write=True) as (root, credential_environment):
@@ -1358,6 +1362,23 @@ def advance_current_terminal(
         object_oid, document["publication_digest"], policy.publication_branch,
         tip, predecessor_oid, lifecycle, bundle_raw,
     )
+
+
+def require_unenrolled_delivery(repository: str, delivery_issue: int) -> None:
+    """Authenticate absence using the same protected journal as CURRENT selection."""
+
+    issue = authority._require_positive_int(delivery_issue, "delivery issue")
+    policy = authority._load_lifecycle_trust_policy(repository)
+    _verify_live_protection(policy)
+    with _isolated_repository(policy, write=False) as (root, credential_environment):
+        tip = _observe_remote_current_once(
+            root, policy.publication_remote_url, policy.publication_branch,
+            credential_environment=credential_environment,
+        )
+        if tip is not None:
+            _, latest, admissions = _walk_journal(root, tip, policy.publication_branch)
+            if (repository, issue) in latest or (repository, issue) in admissions:
+                raise LifecyclePublicationError("delivery is already enrolled or natively admitted")
 
 
 def verify_current_lifecycle_authority(

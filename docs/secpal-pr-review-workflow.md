@@ -171,6 +171,53 @@ reconstruct a review, verdict, finding, reviewer, or GitHub
 disjoint modes, and supplying both fails closed. Remediation, Ready, exceptional
 history, and every other state field remain independently observation-derived.
 
+Version 3 adds the distinct
+`SECPAL_PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_ADMISSION` source mode. It does
+not reinterpret versions 1/2. Its sole authority is adoption source truth for an
+exact signed, unenrolled OPEN Draft with unavailable commit-bound validation
+companions and successful fresh current-policy safety validation. Historical
+reviewed-state, receipt, and final-attestation bytes are never synthesized. The
+historical final-attestation identity remains unavailable; PR prose cannot supply
+it. The signed receipt trailer remains provenance, not the missing receipt.
+
+The maintained issuer accepts only repository and issue selectors. Clean current
+protected main selects the exact loss acknowledgment in
+`policies/pre-enrollment-validation-evidence-loss.json`, the existing registry,
+and the existing migration/adoption signer role. That record becomes an
+authenticated acknowledgment only when accepted on protected main; issue prose,
+caller-reported missing files and unsigned loss flags carry no authority. It is
+exact-source policy, not an artifact store or another journal. The issuer
+authenticates the live OPEN/Draft PR, head/tree/sole parent, accepted source
+signature and exact trailer, complete stable feedback and provider chronology.
+The protected lifecycle journal must prove CURRENT and native admission absent.
+
+Current safety executes the current registered command sequence against an
+isolated checkout of that exact signed source. Source bytes are checked
+independently of index flags before and after execution. Every captured source,
+including resolved/outdated threads, replies, review submissions and conversation
+comments, must match the accepted technical decision inventory. Blocking,
+incomplete or changed decisions reject. This is current safety, not another
+unrestricted review. Source, feedback or accepted-main drift invalidates live
+verification. Fresh safety identity and historical receipt provenance are
+separate bindings and must differ.
+
+The version-1 loss admission permits only review 1, remediation 2, Ready
+transitions 0, Draft true, Ready false, no exceptional history and no Cycle 3.
+The existing review-budget admission remains independently required for review
+1; exactly two normalized `REMEDIATION_HEAD_OBSERVED` entries establish
+remediation 2. Ordinary verified validation and the sealed loss source are
+disjoint inputs: invalid or partially supplied historical evidence cannot
+downgrade to loss mode.
+
+The signed admission becomes immutable provenance in the version-3 adoption
+proof and existing signed one-use adoption authorization. Enrollment rechecks
+live absence and source facts, then uses existing protected publication/CAS
+uniqueness to reject competing enrollment and replay. Historical proof
+verification checks signatures and closed bindings without requiring CURRENT
+to remain absent after enrollment. No new state, signer, counter, journal,
+Ready permission or source-bootstrap authority is introduced. The #827 / PR #830
+case is exercised hermetically; implementation does not enroll or mutate it.
+
 Exact-state adoption reuses the maintained migration signer role, enrollment
 uniqueness, protected publication journal, CAS, lifecycle identity and authority
 digest conventions. Later transitions use the ordinary successor verifier, and
