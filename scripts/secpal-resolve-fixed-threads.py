@@ -1302,30 +1302,34 @@ def verify_local_fix_commit(
                 "integration commit evidence trailer is invalid or stale"
             )
         integration_trailer = integration_trailers[0]
-    commit_object = effective_runner(
-        root,
-        ("cat-file", "commit", expected_head.lower()),
-        allow_failure=True,
-    )
-    verified = effective_runner(
-        root,
-        ("verify-commit", "--raw", expected_head.lower()),
-        allow_failure=True,
-    )
-    local_signature = evidence.interpret_local_signature(
-        verified.returncode,
-        f"{verified.stdout}\n{verified.stderr}",
-        signature_format_hint=(
-            evidence._commit_signature_format(commit_object.stdout)
-            if commit_object.returncode == 0
-            else "unknown"
-        ),
-    )
     signature_policy = _load_repository_entry(repository)["signature_policy"]
+    authenticated_commit: fast_path.AuthenticatedIntegrationCommit | None = None
+    local_signature: dict[str, Any] | None = None
+    verified_output: str | None = None
     if validation.kind in {
         "attestation",
         "final-eligibility-absence-attestation",
     }:
+        commit_object = effective_runner(
+            root,
+            ("cat-file", "commit", expected_head.lower()),
+            allow_failure=True,
+        )
+        verified = effective_runner(
+            root,
+            ("verify-commit", "--raw", expected_head.lower()),
+            allow_failure=True,
+        )
+        verified_output = f"{verified.stdout}\n{verified.stderr}"
+        local_signature = evidence.interpret_local_signature(
+            verified.returncode,
+            verified_output,
+            signature_format_hint=(
+                evidence._commit_signature_format(commit_object.stdout)
+                if commit_object.returncode == 0
+                else "unknown"
+            ),
+        )
         if validation.attestation is None:
             raise ResolutionError("validation evidence binding is incomplete")
         try:
@@ -1385,9 +1389,8 @@ def verify_local_fix_commit(
                 _load_repository_entry(repository)
             )
             authenticated_commit = fast_path.authenticate_integration_commit(
+                repository_root=root,
                 head_sha=expected_head.lower(),
-                local_signature=local_signature,
-                verification_output=f"{verified.stdout}\n{verified.stderr}",
                 expected_signer=validation.integration_evidence["expected_signer"],
                 signature_policy=signature_policy,
             )
@@ -1408,15 +1411,26 @@ def verify_local_fix_commit(
             )
         except (KeyError, fast_path.SecurityBlocker) as exc:
             raise ResolutionError(str(exc)) from exc
-    try:
-        signer = late_disposition.signer_from_git_verification(
-            local_signature["format"],
-            f"{verified.stdout}\n{verified.stderr}",
+    if authenticated_commit is not None:
+        signer = late_disposition.SignerIdentity(
+            signature_format=(
+                "ssh"
+                if authenticated_commit.signer_kind == "SSH_PRINCIPAL"
+                else "openpgp"
+            ),
+            fingerprint=authenticated_commit.signature_fingerprint,
         )
-    except late_disposition.LateDispositionError as exc:
-        if require_signer_identity:
-            raise ResolutionError(str(exc)) from exc
-        return None
+    else:
+        if local_signature is None or verified_output is None:
+            raise ResolutionError("fix commit local signature is unavailable")
+        try:
+            signer = late_disposition.signer_from_git_verification(
+                local_signature["format"], verified_output
+            )
+        except late_disposition.LateDispositionError as exc:
+            if require_signer_identity:
+                raise ResolutionError(str(exc)) from exc
+            return None
     absence = validation.final_eligibility_absence
     if validation.kind == "final-eligibility-absence-attestation" and (
         not isinstance(absence, FinalEligibilityAbsence)

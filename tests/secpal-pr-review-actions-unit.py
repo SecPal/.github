@@ -4735,19 +4735,26 @@ def authenticated_integration_commit(
     *,
     signer: str = "aroviqen",
 ) -> fast_path.AuthenticatedIntegrationCommit:
-    return fast_path.authenticate_integration_commit(
-        head_sha=head_sha,
-        local_signature={
-            "state": "valid",
-            "verified": True,
-            "format": "ssh",
-        },
-        verification_output=(
-            f'Good "git" signature for {signer} with ED25519 key SHA256:test\n'
+    git_results = [
+        subprocess.CompletedProcess(
+            [], 0, "gpgsig -----BEGIN SSH SIGNATURE-----\n\n", ""
         ),
-        expected_signer=integration["expected_signer"],
-        signature_policy=fast_registry()["signature_policy"],
-    )
+        subprocess.CompletedProcess(
+            [],
+            0,
+            f'Good "git" signature for {signer} with ED25519 key SHA256:test\n',
+            "",
+        ),
+    ]
+    with mock.patch.object(
+        fast_path, "_run_integration_commit_git", side_effect=git_results
+    ):
+        return fast_path.authenticate_integration_commit(
+            repository_root=REPO_ROOT,
+            head_sha=head_sha,
+            expected_signer=integration["expected_signer"],
+            signature_policy=fast_registry()["signature_policy"],
+        )
 
 
 def ready_integration_prior_authority(
@@ -7483,6 +7490,11 @@ class FastPathTests(TestCase):
             mock.patch.object(actions, "select_repository", return_value=entry),
             mock.patch.object(actions, "_read_json", side_effect=read_json),
             mock.patch.object(actions, "_run_attestation_git", side_effect=git_result),
+            mock.patch.object(
+                fast_path,
+                "_run_integration_commit_git",
+                side_effect=lambda root, command: git_result(root, command),
+            ),
             mock.patch.object(actions, "_verify_ready_integration_prior_authority"),
             mock.patch.object(
                 actions,
@@ -8873,25 +8885,12 @@ class FastPathTests(TestCase):
                     output,
                     {"kind": "SSH_PRINCIPAL", "identity": "aroviqen"},
                 )
-        with self.assertRaisesRegex(
-            fast_path.SecurityBlocker, "accepted identity"
-        ):
-            fast_path.authenticate_integration_commit(
-                head_sha="d" * 40,
-                local_signature={
-                    "state": "valid",
-                    "verified": True,
-                    "format": "ssh",
-                },
-                verification_output=(
-                    'Good "git" signature for another with ED25519 key '
-                    "SHA256:test\n"
-                ),
-                expected_signer={
-                    "kind": "SSH_PRINCIPAL",
-                    "identity": "aroviqen",
-                },
-                signature_policy=fast_registry()["signature_policy"],
+        integration = ready_integration_evidence(
+            fast_feedback(), validated_tree="a" * 40
+        )
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "accepted identity"):
+            authenticated_integration_commit(
+                "d" * 40, integration, signer="another"
             )
         with self.assertRaisesRegex(fast_path.SecurityBlocker, "unsigned"):
             fast_path.verify_commit_signatures(
@@ -8911,6 +8910,26 @@ class FastPathTests(TestCase):
                     }
                 ],
                 {"accepted_formats": ["ssh", "openpgp"]},
+            )
+
+    def test_caller_signature_claims_cannot_mint_integration_authority(self) -> None:
+        with self.assertRaises(TypeError):
+            fast_path.authenticate_integration_commit(
+                head_sha="d" * 40,
+                local_signature={
+                    "state": "valid",
+                    "verified": True,
+                    "format": "ssh",
+                },
+                verification_output=(
+                    'Good "git" signature for aroviqen with ED25519 key '
+                    "SHA256:caller-claim\n"
+                ),
+                expected_signer={
+                    "kind": "SSH_PRINCIPAL",
+                    "identity": "aroviqen",
+                },
+                signature_policy=fast_registry()["signature_policy"],
             )
 
     def test_ready_integration_rejects_historical_first_parent_receipt_reuse(self) -> None:
@@ -9331,6 +9350,14 @@ class FastPathTests(TestCase):
         self.assertFalse(
             hasattr(fast_path, "_register_verified_validation_evidence")
         )
+        self.assertNotIn(
+            "_register",
+            fast_path.verify_validation_attestation.__kwdefaults__ or {},
+        )
+        self.assertNotIn(
+            "_register",
+            fast_path.verify_ready_integration_attestation.__kwdefaults__ or {},
+        )
         candidate_self_sealed = fast_path._unregistered_validation_evidence(
             repository=verified.repository,
             delivery_issue_number=verified.delivery_issue_number,
@@ -9402,6 +9429,7 @@ class FastPathTests(TestCase):
             "head_sha",
             "signer_kind",
             "signer_identity",
+            "signature_fingerprint",
             "signature_classification",
             "authentication_digest",
         ):

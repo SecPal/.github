@@ -5526,28 +5526,10 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             raise fast_path.SecurityBlocker(
                 "eligibility evidence differs from the validated receipt"
             )
-        commit_object = _run_attestation_git(
-            repository_root, ["cat-file", "commit", head], allow_failure=True
-        )
-        verified_commit = _run_attestation_git(
-            repository_root, ["verify-commit", "--raw", head], allow_failure=True
-        )
-        local_signature = evidence.interpret_local_signature(
-            verified_commit.returncode,
-            f"{verified_commit.stdout}\n{verified_commit.stderr}",
-            signature_format_hint=(
-                evidence._commit_signature_format(commit_object.stdout)
-                if commit_object.returncode == 0
-                else "unknown"
-            ),
-        )
         if integration_evidence is not None:
             fast_path.authenticate_integration_commit(
+                repository_root=repository_root,
                 head_sha=head,
-                local_signature=local_signature,
-                verification_output=(
-                    f"{verified_commit.stdout}\n{verified_commit.stderr}"
-                ),
                 expected_signer=integration_evidence["expected_signer"],
                 signature_policy=binding["signature_policy"],
             )
@@ -5561,6 +5543,21 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 integration_evidence=integration_evidence,
             )
         else:
+            commit_object = _run_attestation_git(
+                repository_root, ["cat-file", "commit", head], allow_failure=True
+            )
+            verified_commit = _run_attestation_git(
+                repository_root, ["verify-commit", "--raw", head], allow_failure=True
+            )
+            local_signature = evidence.interpret_local_signature(
+                verified_commit.returncode,
+                f"{verified_commit.stdout}\n{verified_commit.stderr}",
+                signature_format_hint=(
+                    evidence._commit_signature_format(commit_object.stdout)
+                    if commit_object.returncode == 0
+                    else "unknown"
+                ),
+            )
             _verify_signature_policy_identity(
                 head, local_signature, binding["signature_policy"]
             )

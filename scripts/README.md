@@ -81,11 +81,13 @@ but are not thread-resolution authority.
 
 Successful verification of either supported Ready-integration attestation version
 returns the existing verifier-sealed current-head validation evidence only after
-the actual integration commit signature and signer identity have passed the
-canonical signature verifier. The immutable private authority is bound to the
-exact returned object identity; copying, replacing, reconstructing, or mutating
-its nested seal cannot authenticate another value. The canonical source digest
-retains its historical binding to the complete normalized integration package,
+the canonical verifier has run trusted `git verify-commit` itself and the actual
+integration commit signature, signer identity, format, and fingerprint have
+passed policy. Caller-provided signature claims or verifier output cannot mint
+that authenticated-commit capability. The immutable private authority is bound
+to the exact returned object identity; copying, replacing, reconstructing, or
+mutating its nested seal cannot authenticate another value. The canonical source
+digest retains its historical binding to the complete normalized integration package,
 including delivery, topology, current-main, receipt, reviewed-state, expected
 signer, kind, and version identities; actual signer authentication is the
 additional precondition for issuing that compatible sealed result.

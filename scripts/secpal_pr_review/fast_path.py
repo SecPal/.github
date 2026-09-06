@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import tempfile
 import importlib.util
 import sys
@@ -21,6 +22,8 @@ from typing import Any, Callable, TypeVar
 
 
 FOLLOW_UP_HELPER = Path(__file__).resolve().with_name("follow_up.py")
+EVIDENCE_HELPER = Path(__file__).resolve().parents[1] / "secpal-pr-review.py"
+EXTERNAL_COMMAND_TIMEOUT_SECONDS = 30
 
 
 def _load_follow_up_helper() -> Any:
@@ -44,6 +47,30 @@ def _load_follow_up_helper() -> Any:
 
 
 follow_up = _load_follow_up_helper()
+
+
+def _load_evidence_helper() -> Any:
+    module_name = "secpal_pr_review.integration_evidence_helper"
+    loaded = sys.modules.get(module_name)
+    if loaded is not None:
+        loaded_path = getattr(loaded, "__file__", None)
+        if (
+            not isinstance(loaded_path, str)
+            or Path(loaded_path).resolve() != EVIDENCE_HELPER
+        ):
+            raise RuntimeError("Canonical evidence helper has an unexpected path")
+        return loaded
+    spec = importlib.util.spec_from_file_location(module_name, EVIDENCE_HELPER)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load evidence helper: {EVIDENCE_HELPER}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
+    return module
 
 
 OID = re.compile(r"^[0-9a-fA-F]{40,64}$")
@@ -1068,6 +1095,7 @@ class AuthenticatedIntegrationCommit:
     head_sha: str
     signer_kind: str
     signer_identity: str
+    signature_fingerprint: str
     signature_classification: str
     authentication_digest: str
 
@@ -1079,6 +1107,7 @@ def _integration_commit_authentication_binding(
         "head_sha": value.head_sha,
         "signer_kind": value.signer_kind,
         "signer_identity": value.signer_identity,
+        "signature_fingerprint": value.signature_fingerprint,
         "signature_classification": value.signature_classification,
     }
 
@@ -1178,20 +1207,89 @@ def _actual_integration_signer(
     return kind, actual_identity
 
 
-def authenticate_integration_commit(
+def _actual_signature_fingerprint(
+    verification_output: str, signer_kind: str
+) -> str:
+    if signer_kind == "SSH_PRINCIPAL":
+        matches = re.findall(r"\b(SHA256:[A-Za-z0-9+/=]+)\b", verification_output)
+        if len(set(matches)) == 1:
+            return matches[0]
+    elif signer_kind == "OPENPGP_FINGERPRINT":
+        status_lines = re.findall(
+            r"(?m)^\[GNUPG:\] VALIDSIG ([^\r\n]+)$",
+            verification_output.upper(),
+        )
+        fields = status_lines[0].split() if len(status_lines) == 1 else []
+        if fields and re.fullmatch(r"[0-9A-F]{40,64}", fields[0]):
+            return fields[0]
+    raise SecurityBlocker("integration commit signature fingerprint is unavailable")
+
+
+def _run_integration_commit_git(
+    repository_root: Path, arguments: list[str]
+) -> subprocess.CompletedProcess[str]:
+    evidence = _load_evidence_helper()
+    try:
+        git_executable = evidence.resolve_trusted_executable("git")
+        environment = evidence.command_environment("git")
+    except evidence.CommandPolicyError as exc:
+        raise RecoverableLocalError(
+            "integration commit verification is unavailable"
+        ) from exc
+    try:
+        return subprocess.run(
+            [git_executable, *arguments],
+            cwd=repository_root,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=environment,
+            timeout=EXTERNAL_COMMAND_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RecoverableLocalError(
+            "integration commit verification is unavailable"
+        ) from exc
+
+
+def _authenticate_integration_commit(
     *,
+    repository_root: Path | str,
     head_sha: str,
-    local_signature: dict[str, Any],
-    verification_output: str,
     expected_signer: dict[str, str],
     signature_policy: dict[str, Any],
-    _register: Callable[
+    register: Callable[
         [AuthenticatedIntegrationCommit], AuthenticatedIntegrationCommit
-    ] = _register_authenticated_integration_commit,
+    ],
 ) -> AuthenticatedIntegrationCommit:
     """Authenticate the actual commit signature and signer before seal issuance."""
 
     head = _require_oid(head_sha, "integration commit")
+    try:
+        root = Path(repository_root).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise RecoverableLocalError(
+            "integration commit repository is unavailable"
+        ) from exc
+    if not root.is_dir():
+        raise RecoverableLocalError("integration commit repository is unavailable")
+    commit_object = _run_integration_commit_git(root, ["cat-file", "commit", head])
+    verified_commit = _run_integration_commit_git(
+        root, ["verify-commit", "--raw", head]
+    )
+    evidence = _load_evidence_helper()
+    local_signature = evidence.interpret_local_signature(
+        verified_commit.returncode,
+        f"{verified_commit.stdout}\n{verified_commit.stderr}",
+        signature_format_hint=(
+            evidence._commit_signature_format(commit_object.stdout)
+            if commit_object.returncode == 0
+            else "unknown"
+        ),
+    )
     verified = verify_commit_signatures(
         [
             {
@@ -1208,20 +1306,55 @@ def authenticate_integration_commit(
     )
     if len(verified) != 1 or verified[0]["oid"] != head:
         raise SecurityBlocker("integration commit signature identity changed")
+    verification_output = f"{verified_commit.stdout}\n{verified_commit.stderr}"
     signer_kind, signer_identity = _actual_integration_signer(
         verification_output, expected_signer
     )
+    expected_format = "ssh" if signer_kind == "SSH_PRINCIPAL" else "openpgp"
+    if local_signature.get("format") != expected_format:
+        raise SecurityBlocker("integration commit signer format does not match policy")
     fields = {
         "head_sha": head,
         "signer_kind": signer_kind,
         "signer_identity": signer_identity,
+        "signature_fingerprint": _actual_signature_fingerprint(
+            verification_output, signer_kind
+        ),
         "signature_classification": verified[0]["classification"],
     }
-    return _register(
+    return register(
         AuthenticatedIntegrationCommit(
             **fields, authentication_digest=digest_json(fields)
         )
     )
+
+
+def _integration_commit_authenticator(
+    register: Callable[
+        [AuthenticatedIntegrationCommit], AuthenticatedIntegrationCommit
+    ],
+) -> Callable[..., AuthenticatedIntegrationCommit]:
+    def authenticate_integration_commit(
+        *,
+        repository_root: Path | str,
+        head_sha: str,
+        expected_signer: dict[str, str],
+        signature_policy: dict[str, Any],
+    ) -> AuthenticatedIntegrationCommit:
+        return _authenticate_integration_commit(
+            repository_root=repository_root,
+            head_sha=head_sha,
+            expected_signer=expected_signer,
+            signature_policy=signature_policy,
+            register=register,
+        )
+
+    return authenticate_integration_commit
+
+
+authenticate_integration_commit = _integration_commit_authenticator(
+    _register_authenticated_integration_commit
+)
 
 
 def is_authenticated_integration_commit(
@@ -2090,7 +2223,7 @@ def verify_eligibility_bound_ready_integration_attestation(
     )
 
 
-def verify_ready_integration_attestation(
+def _verify_ready_integration_attestation_unsealed(
     attestation: Any,
     *,
     repository: str,
@@ -2105,9 +2238,6 @@ def verify_ready_integration_attestation(
     commit_validation_receipt_digest: str | None,
     commit_integration_evidence_digest: str | None,
     authenticated_integration_commit: AuthenticatedIntegrationCommit | None = None,
-    _register: Callable[
-        [VerifiedValidationEvidence], VerifiedValidationEvidence
-    ] = _register_verified_validation_evidence,
 ) -> VerifiedValidationEvidence:
     reviewed_state = _require_reviewed_state_identity(repository, reviewed_state)
     normalized = normalize_ready_integration_evidence(
@@ -2160,21 +2290,19 @@ def verify_ready_integration_attestation(
         expected_signer=normalized["expected_signer"],
     ):
         raise SecurityBlocker("authenticated integration commit is required")
-    return _register(
-        _unregistered_validation_evidence(
-            repository=normalized["repository"],
-            delivery_issue_number=normalized["delivery_issue_number"],
-            pull_request_number=normalized["pull_request_number"],
-            head_sha=head_sha,
-            tree_sha=normalized["validated_tree_sha"],
-            validation_receipt_digest=validation_receipt["receipt_digest"],
-            final_attestation_digest=expected["attestation_digest"],
-            source_validation_evidence_digest=digest_json(source_binding),
-        )
+    return _unregistered_validation_evidence(
+        repository=normalized["repository"],
+        delivery_issue_number=normalized["delivery_issue_number"],
+        pull_request_number=normalized["pull_request_number"],
+        head_sha=head_sha,
+        tree_sha=normalized["validated_tree_sha"],
+        validation_receipt_digest=validation_receipt["receipt_digest"],
+        final_attestation_digest=expected["attestation_digest"],
+        source_validation_evidence_digest=digest_json(source_binding),
     )
 
 
-def verify_validation_attestation(
+def _verify_validation_attestation_unsealed(
     attestation: Any,
     *,
     repository: str,
@@ -2185,9 +2313,6 @@ def verify_validation_attestation(
     commit_parent_sha: str,
     commit_tree_sha: str,
     commit_validation_receipt_digest: str | None,
-    _register: Callable[
-        [VerifiedValidationEvidence], VerifiedValidationEvidence
-    ] = _register_verified_validation_evidence,
 ) -> VerifiedValidationEvidence:
     reviewed_state = _require_reviewed_state_identity(repository, reviewed_state)
     reviewed_pull_request = reviewed_state.pull_request_number
@@ -2244,21 +2369,96 @@ def verify_validation_attestation(
         "reviewed_state_digest": reviewed_state.state_digest,
         "reviewed_feedback_digest": reviewed_state.feedback_digest,
     }
-    return _register(
-        _unregistered_validation_evidence(
-            repository=repository,
-            pull_request_number=reviewed_pull_request,
-            head_sha=head_sha,
-            tree_sha=commit_tree_sha,
-            validation_receipt_digest=receipt["receipt_digest"],
-            final_attestation_digest=expected["attestation_digest"],
-            source_validation_evidence_digest=digest_json(source_binding),
-        )
+    return _unregistered_validation_evidence(
+        repository=repository,
+        pull_request_number=reviewed_pull_request,
+        head_sha=head_sha,
+        tree_sha=commit_tree_sha,
+        validation_receipt_digest=receipt["receipt_digest"],
+        final_attestation_digest=expected["attestation_digest"],
+        source_validation_evidence_digest=digest_json(source_binding),
     )
+
+
+def _validation_evidence_verifiers(
+    register: Callable[[VerifiedValidationEvidence], VerifiedValidationEvidence],
+) -> tuple[
+    Callable[..., VerifiedValidationEvidence],
+    Callable[..., VerifiedValidationEvidence],
+]:
+    def verify_ready_integration_attestation(
+        attestation: Any,
+        *,
+        repository: str,
+        head_sha: str,
+        registry: dict[str, Any],
+        command_set: list[dict[str, Any]],
+        reviewed_state: StableFeedbackState,
+        validation_receipt: dict[str, Any],
+        integration_evidence: dict[str, Any],
+        commit_parent_shas: list[str],
+        commit_tree_sha: str,
+        commit_validation_receipt_digest: str | None,
+        commit_integration_evidence_digest: str | None,
+        authenticated_integration_commit: AuthenticatedIntegrationCommit
+        | None = None,
+    ) -> VerifiedValidationEvidence:
+        return register(
+            _verify_ready_integration_attestation_unsealed(
+                attestation,
+                repository=repository,
+                head_sha=head_sha,
+                registry=registry,
+                command_set=command_set,
+                reviewed_state=reviewed_state,
+                validation_receipt=validation_receipt,
+                integration_evidence=integration_evidence,
+                commit_parent_shas=commit_parent_shas,
+                commit_tree_sha=commit_tree_sha,
+                commit_validation_receipt_digest=commit_validation_receipt_digest,
+                commit_integration_evidence_digest=commit_integration_evidence_digest,
+                authenticated_integration_commit=authenticated_integration_commit,
+            )
+        )
+
+    def verify_validation_attestation(
+        attestation: Any,
+        *,
+        repository: str,
+        head_sha: str,
+        registry: dict[str, Any],
+        command_set: list[dict[str, Any]],
+        reviewed_state: StableFeedbackState,
+        commit_parent_sha: str,
+        commit_tree_sha: str,
+        commit_validation_receipt_digest: str | None,
+    ) -> VerifiedValidationEvidence:
+        return register(
+            _verify_validation_attestation_unsealed(
+                attestation,
+                repository=repository,
+                head_sha=head_sha,
+                registry=registry,
+                command_set=command_set,
+                reviewed_state=reviewed_state,
+                commit_parent_sha=commit_parent_sha,
+                commit_tree_sha=commit_tree_sha,
+                commit_validation_receipt_digest=commit_validation_receipt_digest,
+            )
+        )
+
+    return verify_ready_integration_attestation, verify_validation_attestation
+
+
+verify_ready_integration_attestation, verify_validation_attestation = (
+    _validation_evidence_verifiers(_register_verified_validation_evidence)
+)
 
 
 del _register_verified_validation_evidence
 del _register_authenticated_integration_commit
+del _integration_commit_authenticator
+del _validation_evidence_verifiers
 
 
 def verify_commit_signatures(

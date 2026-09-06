@@ -1246,6 +1246,17 @@ def final_eligibility_absence_fixture(
 
 
 class ResolveFixedThreadsTests(TestCase):
+    def setUp(self) -> None:
+        self._integration_git_patch = mock.patch.object(
+            MODULE.fast_path,
+            "_run_integration_commit_git",
+            side_effect=lambda root, arguments: MODULE._run_git(
+                root, tuple(arguments), allow_failure=True
+            ),
+        )
+        self._integration_git_patch.start()
+        self.addCleanup(self._integration_git_patch.stop)
+
     def _openpgp_fixture_environment(self, root: Path) -> dict[str, str]:
         (root / ".config").mkdir()
         (root / ".gnupg").mkdir(mode=0o700)

@@ -128,6 +128,26 @@ EVIDENCE_CALLS = (
     ),
 )
 
+FAST_PATH_CALLS = (
+    ProcessCall(
+        None,
+        "_run_integration_commit_git",
+        "git_executable",
+        "arguments",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("cwd", "repository_root"),
+            ("encoding", "'utf-8'"),
+            ("env", "environment"),
+            ("errors", "'replace'"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("text", "True"),
+            ("timeout", "EXTERNAL_COMMAND_TIMEOUT_SECONDS"),
+        ),
+    ),
+)
+
 RESOLVER_CALLS = (
     ProcessCall(
         None,
@@ -226,7 +246,7 @@ LATE_DISPOSITION_CALLS = (
 EXPECTED_CALLS = {
     "secpal-pr-review.py": EVIDENCE_CALLS,
     "secpal-pr-review-actions.py": ACTION_CALLS,
-    "fast_path.py": (),
+    "fast_path.py": FAST_PATH_CALLS,
     "follow_up.py": (),
     "secpal-resolve-fixed-threads.py": RESOLVER_CALLS,
     "late_disposition.py": LATE_DISPOSITION_CALLS,
@@ -295,6 +315,7 @@ ALLOWED_IMPORT_ROOTS = {
     "types",
     "typing",
     "urllib",
+    "weakref",
 }
 ALLOWED_IMPORTS = {
     "secpal-pr-review.py": {
@@ -344,8 +365,10 @@ ALLOWED_IMPORTS = {
         "import json",
         "import os",
         "import re",
+        "import subprocess",
         "import sys",
         "import tempfile",
+        "import weakref",
         "from dataclasses import dataclass, field",
         "from pathlib import Path",
         "from typing import Any, Callable, TypeVar",
@@ -550,6 +573,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "TransientReadFailure",
             "UnknownWriteResult",
             "atomic_write_json",
+            "authenticate_integration_commit",
             "canonical_json_bytes",
             "create_validation_attestation",
             "create_validation_receipt",
@@ -564,6 +588,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "validate_manual_gate_evidence",
             "verify_commit_signatures",
             "verify_validation_attestation",
+            "_actual_integration_signer",
         },
         "follow_up": {
             "FollowUpError",
@@ -571,6 +596,13 @@ LOADED_MODULE_ATTRIBUTES = {
         },
     },
     "fast_path.py": {
+        "evidence": {
+            "CommandPolicyError",
+            "_commit_signature_format",
+            "command_environment",
+            "interpret_local_signature",
+            "resolve_trusted_executable",
+        },
         "follow_up": {
             "FollowUpError",
             "parse_follow_up",
@@ -742,6 +774,18 @@ DYNAMIC_IMPORT_CALLS = {
         ),
     },
     "fast_path.py": {
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "importlib.util.spec_from_file_location(module_name, EVIDENCE_HELPER)",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "spec.loader.exec_module(module)",
+        ),
         DynamicImportCall(
             ("_load_follow_up_helper",),
             "importlib.util.spec_from_file_location("
@@ -930,6 +974,10 @@ SAFE_GETATTR_CALLS = {
     },
     "fast_path.py": {
         DynamicImportCall(
+            ("_load_evidence_helper",),
+            "getattr(loaded, '__file__', None)",
+        ),
+        DynamicImportCall(
             ("_load_follow_up_helper",),
             "getattr(loaded, '__file__', None)",
         ),
@@ -994,6 +1042,14 @@ SAFE_SYS_MODULES_CALLS = {
     },
     "fast_path.py": {
         DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules.get(module_name)",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules.pop(spec.name, None)",
+        ),
+        DynamicImportCall(
             ("_load_follow_up_helper",),
             "sys.modules.get('secpal_pr_review.follow_up')",
         ),
@@ -1057,6 +1113,10 @@ SAFE_SYS_MODULES_STORES = {
         ),
     },
     "fast_path.py": {
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules[spec.name]",
+        ),
         DynamicImportCall(
             ("_load_follow_up_helper",),
             "sys.modules[spec.name]",

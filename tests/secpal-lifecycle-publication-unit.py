@@ -428,6 +428,27 @@ def verified_validation_evidence(
             validation_receipt=receipt,
             integration_evidence=integration,
         )
+        git_results = [
+            subprocess.CompletedProcess(
+                [], 0, "gpgsig -----BEGIN SSH SIGNATURE-----\n\n", ""
+            ),
+            subprocess.CompletedProcess(
+                [],
+                0,
+                f'Good "git" signature for {SIGNER} with ED25519 key '
+                "SHA256:test\n",
+                "",
+            ),
+        ]
+        with patch.object(
+            fast_path, "_run_integration_commit_git", side_effect=git_results
+        ):
+            authenticated_commit = fast_path.authenticate_integration_commit(
+                repository_root=Path(__file__).resolve().parents[1],
+                head_sha=head,
+                expected_signer=integration["expected_signer"],
+                signature_policy={"accepted_formats": ["ssh", "openpgp"]},
+            )
         return fast_path.verify_eligibility_bound_ready_integration_attestation(
             attestation,
             repository=REPOSITORY,
@@ -441,20 +462,7 @@ def verified_validation_evidence(
             commit_tree_sha=tree,
             commit_validation_receipt_digest=receipt["receipt_digest"],
             commit_integration_evidence_digest=fast_path.digest_json(integration),
-            authenticated_integration_commit=fast_path.authenticate_integration_commit(
-                head_sha=head,
-                local_signature={
-                    "state": "valid",
-                    "verified": True,
-                    "format": "ssh",
-                },
-                verification_output=(
-                    f'Good "git" signature for {SIGNER} with ED25519 key '
-                    "SHA256:test\n"
-                ),
-                expected_signer=integration["expected_signer"],
-                signature_policy={"accepted_formats": ["ssh", "openpgp"]},
-            ),
+            authenticated_integration_commit=authenticated_commit,
         )
     attestation = fast_path.create_validation_attestation(
         repository=REPOSITORY, head_sha=head, registry=registry,
