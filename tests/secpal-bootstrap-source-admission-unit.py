@@ -4,16 +4,16 @@
 
 from __future__ import annotations
 
+import base64
 from contextlib import contextmanager
 from dataclasses import replace
 import hashlib
-import io
 import inspect
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
-import tarfile
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -38,6 +38,53 @@ STALE_RECEIPT = "a09090603206134470b21f58224d6fd35c4a26f4cc87ca7936c068421d0e867
 STALE_ATTESTATION = "e585aab46ea8e30a28fd953d98711460d0e45818637cf68ab36e25e550b9e5e6"
 BLOB = "4cfd9eb73a522224f9dfca4176d1aad386b81d50"
 RECOVERY_FEEDBACK_DIGEST = "d2236120f769caa74d5da0435330c103a036dfe68a5e0f8274d43a3916ca8f2b"
+HISTORICAL_SOURCE_FIXTURE = (
+    Path(__file__).parent
+    / "fixtures"
+    / "bootstrap-source-admission-a668f664.pack.b64"
+)
+# This is the minimal historical object closure needed to bind the admitted
+# commit to its executable paths and import the exact executor in isolation.
+HISTORICAL_SOURCE_FILES = {
+    "scripts/secpal_pr_review/fast_path.py": (
+        "d924628f7bb18be9575eb761ab429462bd9b69c8"
+    ),
+    "scripts/secpal_pr_review/follow_up.py": (
+        "1380027b1f771dfbd3f318a95b31efaad0ec0835"
+    ),
+    "scripts/secpal_pr_review/late_disposition.py": (
+        "beec15391a6f5a249fe5eb3deaf603b988146b7a"
+    ),
+    "scripts/secpal_pr_review/lifecycle_authority.py": (
+        "45d3b020ffad90a1be55cf8d4ac971dce823f2d8"
+    ),
+    "scripts/secpal_pr_review/lifecycle_execution.py": BLOB,
+    "scripts/secpal_pr_review/lifecycle_orchestration.py": (
+        "0cc24301660af6654cd25f3687644bf868f59331"
+    ),
+    "scripts/secpal_pr_review/lifecycle_publication.py": (
+        "3e3e55bff14118b9cac12699d41cc8381758aea1"
+    ),
+    "scripts/secpal_work_graph/__init__.py": (
+        "1cfe7fd9d9479c1f3356574e566dd8bf39391d04"
+    ),
+    "scripts/secpal_work_graph/model.py": (
+        "11b18ad1a82570aa0d17a18efb11120fe2eaae0a"
+    ),
+    "scripts/secpal_work_graph/replanning.py": (
+        "2f1a13e1c2ddd4966683a4dd310a1993c60872a5"
+    ),
+}
+HISTORICAL_SOURCE_OBJECTS = frozenset(
+    {
+        HEAD,
+        TREE,
+        "565cdf820a0745a07ff8bb81817a7fea931be70b",
+        "a619c2a7c4d50152e4aa77baab32c74e03474c91",
+        "7d0191f68a7461329cbd7653e3f7ed66d5fdcdf8",
+        *HISTORICAL_SOURCE_FILES.values(),
+    }
+)
 
 EVIDENCE_HELPER_ISSUE = 818
 EVIDENCE_HELPER_PR = 819
@@ -85,6 +132,94 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
             "manual_gate_evidence": [],
             "validation_receipt_digest": RECEIPT,
         }
+
+    @staticmethod
+    def _historical_git_environment() -> dict[str, str]:
+        return {
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "PATH": os.environ.get("PATH", os.defpath),
+        }
+
+    def _historical_git(
+        self,
+        git_directory: Path,
+        arguments: list[str],
+        *,
+        input_bytes: bytes | None = None,
+        check: bool = True,
+    ) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            ["git", "--git-dir", str(git_directory), *arguments],
+            cwd=git_directory.parent,
+            env=self._historical_git_environment(),
+            input=input_bytes,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=check,
+        )
+
+    @contextmanager
+    def _isolated_historical_source(self, pack: bytes | None = None):
+        if pack is None:
+            encoded = b"".join(HISTORICAL_SOURCE_FIXTURE.read_bytes().splitlines())
+            pack = base64.b64decode(encoded, validate=True)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            git_directory = root / "fixture.git"
+            subprocess.run(
+                ["git", "init", "--bare", str(git_directory)],
+                cwd=root,
+                env=self._historical_git_environment(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+            for identity, kind in ((HEAD, "commit"), (BLOB, "blob")):
+                absent = self._historical_git(
+                    git_directory,
+                    ["cat-file", "-e", f"{identity}^{{{kind}}}"],
+                    check=False,
+                )
+                self.assertNotEqual(absent.returncode, 0)
+
+            self._historical_git(
+                git_directory,
+                ["index-pack", "--stdin", "--fix-thin"],
+                input_bytes=pack,
+            )
+            observed_objects = frozenset(
+                self._historical_git(
+                    git_directory,
+                    [
+                        "cat-file",
+                        "--batch-all-objects",
+                        "--batch-check=%(objectname)",
+                    ],
+                ).stdout.decode("ascii").splitlines()
+            )
+            self.assertEqual(observed_objects, HISTORICAL_SOURCE_OBJECTS)
+            identities = self._historical_git(
+                git_directory,
+                ["rev-parse", f"{HEAD}^{{commit}}", f"{HEAD}^{{tree}}", f"{HEAD}^"],
+            ).stdout.decode("ascii").splitlines()
+            self.assertEqual(identities, [HEAD, TREE, PARENT])
+
+            source_root = root / "source"
+            for path, expected_blob in HISTORICAL_SOURCE_FILES.items():
+                observed_blob = self._historical_git(
+                    git_directory, ["rev-parse", f"{HEAD}:{path}"]
+                ).stdout.decode("ascii").strip()
+                self.assertEqual(observed_blob, expected_blob)
+                raw = self._historical_git(
+                    git_directory, ["cat-file", "blob", observed_blob]
+                ).stdout
+                destination = source_root / path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(raw)
+            yield git_directory, source_root
 
     def _recovery_review_document(self) -> dict[str, object]:
         actor = {
@@ -852,14 +987,10 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
         self.assertNotIn("secret stderr", str(raised.exception))
 
     def test_exact_executor_raise_sites_have_exhaustive_diagnostic_agreement(self) -> None:
-        repository_root = Path(__file__).resolve().parents[1]
-        raw = subprocess.run(
-            ["git", "cat-file", "blob", BLOB],
-            cwd=repository_root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=True,
-        ).stdout
+        with self._isolated_historical_source() as (git_directory, _source_root):
+            raw = self._historical_git(
+                git_directory, ["cat-file", "blob", BLOB]
+            ).stdout
         sites = source._verify_diagnostic_raise_site_agreement(raw, BLOB)
         mapping = dict(source._DIAGNOSTIC_RAISE_SITES)
 
@@ -895,25 +1026,32 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
             source._verify_diagnostic_raise_site_agreement(raw, "0" * 40)
 
     def test_real_isolated_launcher_uses_exact_traceback_site_and_hides_text(self) -> None:
-        repository_root = Path(__file__).resolve().parents[1]
-        archived = subprocess.run(
-            ["git", "archive", HEAD],
-            cwd=repository_root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=True,
-        ).stdout
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            with tarfile.open(fileobj=io.BytesIO(archived), mode="r:") as archive:
-                archive.extractall(root, filter="data")
+        with self._isolated_historical_source() as (_git_directory, source_root):
             with self.assertRaises(source.BootstrapSourceAdmissionError) as raised:
-                source._execute_entrypoint(root, b"not signed authorization")
+                source._execute_entrypoint(
+                    source_root, b"not signed authorization"
+                )
         self.assertEqual(
             raised.exception.diagnostic_identity,
             "AUTHORIZATION_ORCHESTRATION_FAILURE",
         )
         self.assertNotIn("authorization is invalid", str(raised.exception))
+
+    def test_historical_source_fixture_materializes_from_empty_object_database(self) -> None:
+        with self._isolated_historical_source() as (git_directory, source_root):
+            observed_blob = self._historical_git(
+                git_directory,
+                ["hash-object", str(source_root / source.IMPLEMENTATION_PATH)],
+            ).stdout.decode("ascii").strip()
+        self.assertEqual(observed_blob, BLOB)
+
+    def test_substituted_historical_source_fixture_fails_closed(self) -> None:
+        encoded = b"".join(HISTORICAL_SOURCE_FIXTURE.read_bytes().splitlines())
+        substituted = bytearray(base64.b64decode(encoded, validate=True))
+        substituted[len(substituted) // 2] ^= 1
+        with self.assertRaises(subprocess.CalledProcessError):
+            with self._isolated_historical_source(bytes(substituted)):
+                pass
 
     def test_substituted_executor_cannot_select_identity_by_message(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
