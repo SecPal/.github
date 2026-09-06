@@ -9,6 +9,21 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-06 - Authenticate Pre-Enrollment Validation-Evidence Loss
+
+**Changed:**
+
+- Add a bounded migration-signed loss admission as an explicit version-3
+  exact-state-adoption source mode; retain adoption versions 1/2 unchanged.
+- Bind accepted-main loss policy, immutable signed Draft source, current
+  registered safety validation, source-complete feedback and unenrolled history
+  without reconstructing historical validation companions.
+- Normalize bounded provider representations into canonical facts before pure
+  admission, and run accepted-current validation harness bytes against a
+  disposable copy of the immutable historical source.
+- Keep review-budget admission separate and reuse protected enrollment uniqueness;
+  add no lifecycle state, counter, signer role, publication journal or Ready authority.
+
 ## 2026-09-06 - Prefer SSH for New Git Signing Credentials
 
 **Changed:**
@@ -35,6 +50,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 - Parse real evidence sections with the existing locked Markdown parser, excluding
   raw HTML and code examples and ending at the next heading of any level. Rollout
   examples use a prepared trusted governance checkout rather than absent target scripts.
+
+## 2026-09-05 - Select Policy-Specific Lifecycle Credentials
+
+**Changed:**
+
+- select distinct lifecycle signing credentials from bounded OS-account Git
+  configuration only after installed policy selects the required signer role
+- preserve the routine global Git signing key as a compatible default while
+  forbidding it from overriding or replacing a distinct legacy-adoption mapping
+- verify every produced signature against accepted policy credential material
+  before returning a production signer to existing lifecycle constructors
 
 ## 2026-09-05 - Replace the Exact Review-Helper Source Admission
 

@@ -56,6 +56,10 @@ EXACT_ADOPTION_AUTHORIZATION_DOMAIN = "secpal.exact-state-adoption-authorization
 EXACT_ADOPTION_EVIDENCE_KIND = "SECPAL_EXACT_STATE_ADOPTION_EVIDENCE"
 EXACT_ADOPTION_EVIDENCE_DOMAIN = "secpal.exact-state-adoption-evidence/v1"
 EXACT_ADOPTION_CONSUMPTION_VERSION = "2.0"
+EXACT_ADOPTION_LOSS_VERSION = "3.0"
+EXACT_ADOPTION_LOSS_EVIDENCE_DOMAIN = "secpal.exact-state-adoption-evidence/v3"
+EXACT_ADOPTION_LOSS_AUTHORIZATION_DOMAIN = "secpal.exact-state-adoption-authorization/v3"
+EXACT_ADOPTION_LOSS_PROOF_DOMAIN = "secpal.exact-state-adoption-proof/v3"
 EXACT_ADOPTION_CONSUMPTION_EVIDENCE_DOMAIN = (
     "secpal.exact-state-adoption-evidence/v2"
 )
@@ -208,6 +212,7 @@ class VerifiedExactStateAdoptionExternalEvidence:
     supporting_evidence_digests: tuple[str, ...]
     review_budget_consumption_admission: dict[str, Any] | None
     _verification_seal: object
+    validation_evidence_loss_admission: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -500,6 +505,9 @@ EXACT_ADOPTION_EVIDENCE_FIELDS = frozenset(
 EXACT_ADOPTION_CONSUMPTION_EVIDENCE_FIELDS = frozenset(
     EXACT_ADOPTION_EVIDENCE_FIELDS | {"review_budget_consumption_admission"}
 )
+EXACT_ADOPTION_LOSS_EVIDENCE_FIELDS = frozenset(
+    EXACT_ADOPTION_CONSUMPTION_EVIDENCE_FIELDS | {"validation_evidence_loss_admission"}
+)
 EXACT_ADOPTION_AUTHORIZATION_FIELDS = frozenset(
     {
         "schema_version", "kind", "domain", "proof_version", "repository",
@@ -524,6 +532,9 @@ EXACT_ADOPTION_CONSUMPTION_PROOF_FIELDS = frozenset(
         "authorization", "authorization_digest", "signer_identity", "signature",
         "proof_digest",
     }
+)
+EXACT_ADOPTION_LOSS_PROOF_FIELDS = frozenset(
+    EXACT_ADOPTION_CONSUMPTION_PROOF_FIELDS | {"validation_evidence_loss_admission"}
 )
 PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_FIELDS = frozenset(
     {
@@ -1609,10 +1620,14 @@ def _verify_openpgp_signature(
     payload: bytes,
     signature_value: str,
     signer: TrustedSigner,
+    *,
+    command_environment: Mapping[str, str] | None = None,
 ) -> None:
     if not signer.openpgp_fingerprints:
         raise LifecycleAuthorityError("trusted signer has no OpenPGP credential")
     executable, environment = _trusted_signature_command("gpg")
+    if command_environment is not None:
+        environment = dict(command_environment)
     with tempfile.TemporaryDirectory(prefix="secpal-lifecycle-openpgp-") as directory:
         root = Path(directory)
         payload_file = root / "payload"
@@ -1653,7 +1668,11 @@ def _verify_openpgp_signature(
             raise LifecycleAuthorityError("OpenPGP lifecycle signature is invalid")
 
 
-def _policy_signature_verifier(policy: LifecycleTrustPolicy) -> SignatureVerifier:
+def _policy_signature_verifier(
+    policy: LifecycleTrustPolicy,
+    *,
+    command_environment: Mapping[str, str] | None = None,
+) -> SignatureVerifier:
     def verify(
         payload: bytes,
         signature: Mapping[str, Any],
@@ -1667,7 +1686,12 @@ def _policy_signature_verifier(policy: LifecycleTrustPolicy) -> SignatureVerifie
         if signature_format == "ssh":
             _verify_ssh_signature(payload, signature["value"], credential, domain)
         elif signature_format == "openpgp":
-            _verify_openpgp_signature(payload, signature["value"], credential)
+            _verify_openpgp_signature(
+                payload,
+                signature["value"],
+                credential,
+                command_environment=command_environment,
+            )
         else:
             raise LifecycleAuthorityError("lifecycle signature format is unknown")
         return VerifiedSignature(expected_signer, signature_format)
@@ -2901,6 +2925,20 @@ def _normalize_observed_pre_enrollment_history(
     return normalized
 
 
+def verify_pre_enrollment_validation_evidence_loss_admission(serialized: bytes | str) -> Any:
+    from . import validation_evidence_loss
+
+    return validation_evidence_loss.verify(serialized)
+
+
+def issue_pre_enrollment_validation_evidence_loss_admission(
+    repository: str, delivery_issue: int,
+) -> dict[str, Any]:
+    from . import validation_evidence_loss
+
+    return validation_evidence_loss.issue(repository, delivery_issue)
+
+
 def authenticate_exact_state_adoption_external_evidence(
     *,
     repository: str,
@@ -2910,10 +2948,11 @@ def authenticate_exact_state_adoption_external_evidence(
     tree_sha: str,
     pull_request_state: str,
     commit_signature_evidence: Mapping[str, Any],
-    validation_evidence: VerifiedValidationEvidence,
+    validation_evidence: VerifiedValidationEvidence | None,
     observed_pre_enrollment_history: Sequence[Mapping[str, Any]],
     intended_state: Mapping[str, Any],
     review_budget_consumption_admission: Mapping[str, Any] | None = None,
+    validation_evidence_loss_admission: Any = None,
 ) -> VerifiedExactStateAdoptionExternalEvidence:
     """Authenticate external artifacts before any adoption proof is assembled."""
 
@@ -2924,7 +2963,26 @@ def authenticate_exact_state_adoption_external_evidence(
     tree = _require_oid(tree_sha, "adopted tree")
     if pull_request_state != "OPEN":
         raise LifecycleAuthorityError("adoption requires an open delivery")
-    if not is_verified_validation_evidence(validation_evidence) or (
+    loss = None
+    if validation_evidence_loss_admission is not None:
+        from . import validation_evidence_loss
+
+        if validation_evidence is not None:
+            raise LifecycleAuthorityError("historical evidence cannot downgrade into loss admission")
+        loss = validation_evidence_loss._verified_document(validation_evidence_loss_admission)
+        if review_budget_consumption_admission is None or any(
+            loss[field] != expected for field, expected in {
+                "repository": repository, "delivery_issue": issue, "pull_request": pr,
+                "head_sha": head, "tree_sha": tree, "pull_request_state": pull_request_state,
+                "observed_pre_enrollment_history": list(observed_pre_enrollment_history),
+                "intended_state": dict(intended_state),
+            }.items()
+        ):
+            raise LifecycleAuthorityError("loss admission scope or independent review budget is missing")
+        receipt_digest = loss["historical_validation_receipt_digest"]
+        source_digest = digest_json(loss["current_safety"])
+        adoption_digest = loss["admission_digest"]
+    elif not is_verified_validation_evidence(validation_evidence) or (
         validation_evidence.repository != repository
         or validation_evidence.pull_request_number != pr
         or validation_evidence.head_sha != head
@@ -2933,6 +2991,10 @@ def authenticate_exact_state_adoption_external_evidence(
         raise LifecycleAuthorityError(
             "adoption validation evidence does not bind the delivery"
         )
+    else:
+        receipt_digest = validation_evidence.validation_receipt_digest
+        source_digest = validation_evidence.source_validation_evidence_digest
+        adoption_digest = validation_evidence.final_attestation_digest
     commit = copy.deepcopy(dict(commit_signature_evidence))
     try:
         verified_commits = verify_commit_signatures(
@@ -2947,6 +3009,8 @@ def authenticate_exact_state_adoption_external_evidence(
             "adoption commit signature evidence changed identity"
         )
     signature_evidence_digest = digest_json(verified_commits[0])
+    if loss is not None and signature_evidence_digest != loss["commit_signature_evidence_digest"]:
+        raise LifecycleAuthorityError("loss admission source signature changed")
     state = _validate_state(
         dict(intended_state), allow_adopted_observations=True
     )
@@ -2969,15 +3033,9 @@ def authenticate_exact_state_adoption_external_evidence(
                 tree_sha=tree,
                 pull_request_state=pull_request_state,
                 commit_signature_evidence_digest=signature_evidence_digest,
-                validation_receipt_digest=(
-                    validation_evidence.validation_receipt_digest
-                ),
-                source_validation_evidence_digest=(
-                    validation_evidence.source_validation_evidence_digest
-                ),
-                adoption_source_evidence_digest=(
-                    validation_evidence.final_attestation_digest
-                ),
+                validation_receipt_digest=receipt_digest,
+                source_validation_evidence_digest=source_digest,
+                adoption_source_evidence_digest=adoption_digest,
                 observed_history_digest=digest_json(history),
                 intended_state_digest=digest_json(state),
                 adoption_timestamp=review_budget_consumption_admission.get(
@@ -2986,9 +3044,9 @@ def authenticate_exact_state_adoption_external_evidence(
             )
         )
     supporting_digests = tuple(sorted({
-        validation_evidence.validation_receipt_digest,
-        validation_evidence.source_validation_evidence_digest,
-        validation_evidence.final_attestation_digest,
+        receipt_digest,
+        source_digest,
+        adoption_digest,
         signature_evidence_digest,
         digest_json(history),
         *(
@@ -3005,11 +3063,9 @@ def authenticate_exact_state_adoption_external_evidence(
         tree_sha=tree,
         pull_request_state=pull_request_state,
         commit_signature_evidence_digest=signature_evidence_digest,
-        validation_receipt_digest=validation_evidence.validation_receipt_digest,
-        source_validation_evidence_digest=(
-            validation_evidence.source_validation_evidence_digest
-        ),
-        adoption_source_evidence_digest=validation_evidence.final_attestation_digest,
+        validation_receipt_digest=receipt_digest,
+        source_validation_evidence_digest=source_digest,
+        adoption_source_evidence_digest=adoption_digest,
         observed_pre_enrollment_history=tuple(copy.deepcopy(history)),
         intended_state=copy.deepcopy(state),
         supporting_evidence_digests=supporting_digests,
@@ -3021,6 +3077,7 @@ def authenticate_exact_state_adoption_external_evidence(
             )
         ),
         _verification_seal=_VERIFIED_EXACT_ADOPTION_EVIDENCE,
+        validation_evidence_loss_admission=loss,
     )
 
 
@@ -3033,6 +3090,7 @@ def _assemble_exact_state_adoption_evidence(
     intended_state: Mapping[str, Any], adoption_timestamp: str,
     supporting_evidence_digests: Sequence[str],
     review_budget_consumption_admission: Mapping[str, Any] | None = None,
+    validation_evidence_loss_admission: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble canonical proof fields from already authenticated evidence."""
 
@@ -3099,6 +3157,26 @@ def _assemble_exact_state_adoption_evidence(
         if verified_review_budget_admission is None
         else EXACT_ADOPTION_CONSUMPTION_EVIDENCE_DOMAIN
     )
+    loss = None
+    if validation_evidence_loss_admission is not None:
+        from . import validation_evidence_loss
+
+        loss = validation_evidence_loss._verify_document(validation_evidence_loss_admission)
+        if verified_review_budget_admission is None or any(
+            loss[field] != expected for field, expected in {
+                "repository": repository, "delivery_issue": issue, "pull_request": pr,
+                "head_sha": head, "tree_sha": tree, "pull_request_state": pull_request_state,
+                "commit_signature_evidence_digest": commit_signature_evidence_digest,
+                "historical_validation_receipt_digest": validation_receipt_digest,
+                "observed_pre_enrollment_history": history, "intended_state": state,
+                "adoption_timestamp": timestamp, "admission_digest": adoption_source_evidence_digest,
+            }.items()
+        ) or digest_json(loss["current_safety"]) != source_validation_evidence_digest:
+            raise LifecycleAuthorityError("loss admission does not bind exact adoption evidence")
+        if loss["admission_digest"] not in supporting:
+            raise LifecycleAuthorityError("loss admission is missing from supporting evidence")
+        version = EXACT_ADOPTION_LOSS_VERSION
+        domain = EXACT_ADOPTION_LOSS_EVIDENCE_DOMAIN
     fields = {
         "schema_version": version,
         "kind": EXACT_ADOPTION_EVIDENCE_KIND,
@@ -3141,6 +3219,8 @@ def _assemble_exact_state_adoption_evidence(
         fields["review_budget_consumption_admission"] = copy.deepcopy(
             verified_review_budget_admission.canonical_admission
         )
+    if loss is not None:
+        fields["validation_evidence_loss_admission"] = loss
     return {**fields, "adoption_evidence_digest": digest_json(fields)}
 
 
@@ -3178,6 +3258,7 @@ def create_exact_state_adoption_evidence(
         review_budget_consumption_admission=(
             evidence.review_budget_consumption_admission
         ),
+        validation_evidence_loss_admission=evidence.validation_evidence_loss_admission,
     )
 
 
@@ -3185,6 +3266,7 @@ def _verify_exact_state_adoption_evidence(value: Any) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise LifecycleAuthorityError("exact-state adoption evidence is malformed")
     fields = frozenset(value)
+    loss_admission = None
     if fields == EXACT_ADOPTION_EVIDENCE_FIELDS:
         expected_version = SCHEMA_VERSION
         expected_domain = EXACT_ADOPTION_EVIDENCE_DOMAIN
@@ -3193,6 +3275,11 @@ def _verify_exact_state_adoption_evidence(value: Any) -> dict[str, Any]:
         expected_version = EXACT_ADOPTION_CONSUMPTION_VERSION
         expected_domain = EXACT_ADOPTION_CONSUMPTION_EVIDENCE_DOMAIN
         review_budget_admission = value.get("review_budget_consumption_admission")
+    elif fields == EXACT_ADOPTION_LOSS_EVIDENCE_FIELDS:
+        expected_version = EXACT_ADOPTION_LOSS_VERSION
+        expected_domain = EXACT_ADOPTION_LOSS_EVIDENCE_DOMAIN
+        review_budget_admission = value.get("review_budget_consumption_admission")
+        loss_admission = value.get("validation_evidence_loss_admission")
     else:
         raise LifecycleAuthorityError(
             "exact-state adoption evidence contains unknown or missing fields"
@@ -3224,6 +3311,7 @@ def _verify_exact_state_adoption_evidence(value: Any) -> dict[str, Any]:
         adoption_timestamp=evidence["adoption_timestamp"],
         supporting_evidence_digests=evidence["supporting_evidence_digests"],
         review_budget_consumption_admission=review_budget_admission,
+        validation_evidence_loss_admission=loss_admission,
     )
     if rebuilt != evidence:
         raise LifecycleAuthorityError("exact-state adoption evidence binding changed")
@@ -3245,6 +3333,8 @@ def create_exact_state_adoption_authorization(
         if consumption_mode
         else EXACT_ADOPTION_AUTHORIZATION_DOMAIN
     )
+    if evidence["proof_version"] == EXACT_ADOPTION_LOSS_VERSION:
+        authorization_domain = EXACT_ADOPTION_LOSS_AUTHORIZATION_DOMAIN
     fields = {
         "schema_version": evidence["proof_version"],
         "kind": EXACT_ADOPTION_AUTHORIZATION_KIND,
@@ -3284,6 +3374,8 @@ def create_exact_state_adoption_proof(
         if evidence["proof_version"] == EXACT_ADOPTION_CONSUMPTION_VERSION
         else EXACT_ADOPTION_PROOF_DOMAIN
     )
+    if evidence["proof_version"] == EXACT_ADOPTION_LOSS_VERSION:
+        proof_domain = EXACT_ADOPTION_LOSS_PROOF_DOMAIN
     fields = {
         **{key: copy.deepcopy(value) for key, value in evidence.items()
            if key not in {"kind", "domain"}},
@@ -3323,6 +3415,12 @@ def verify_exact_state_adoption_proof(
         evidence_domain = EXACT_ADOPTION_CONSUMPTION_EVIDENCE_DOMAIN
         authorization_domain = EXACT_ADOPTION_CONSUMPTION_AUTHORIZATION_DOMAIN
         proof_domain = EXACT_ADOPTION_CONSUMPTION_PROOF_DOMAIN
+    elif proof_fields == EXACT_ADOPTION_LOSS_PROOF_FIELDS:
+        expected_version = EXACT_ADOPTION_LOSS_VERSION
+        evidence_fields = EXACT_ADOPTION_LOSS_EVIDENCE_FIELDS
+        evidence_domain = EXACT_ADOPTION_LOSS_EVIDENCE_DOMAIN
+        authorization_domain = EXACT_ADOPTION_LOSS_AUTHORIZATION_DOMAIN
+        proof_domain = EXACT_ADOPTION_LOSS_PROOF_DOMAIN
     else:
         raise LifecycleAuthorityError(
             "exact-state adoption proof contains unknown or missing fields"

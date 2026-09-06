@@ -267,6 +267,49 @@ Mixed provider-review/admission inputs, replay into another context, resets,
 and using the admission to derive remediation or Ready state fail closed.
 The lifecycle-authority suite is an unconditional registered validation command.
 
+### `secpal_pr_review/validation_evidence_loss.py`
+
+Owns the version-1
+`SECPAL_PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_ADMISSION` consumed only by
+exact-state-adoption version 3. Existing adoption versions 1/2 and ordinary
+commit-bound validation remain unchanged. Its semantic contract is the
+exact-state-adoption section of `docs/secpal-pr-review-workflow.md`.
+
+The maintained entry points are
+`lifecycle_authority.issue_pre_enrollment_validation_evidence_loss_admission(repository, delivery_issue)`
+and
+`lifecycle_authority.verify_pre_enrollment_validation_evidence_loss_admission(serialized)`.
+Issuance requires clean current protected main, not candidate-local policy.
+There is no caller-selected registry, command list, signer, source checkout,
+successful result, feedback snapshot, loss flag or CURRENT selector. Public
+verification authenticates signed bytes and reacquires current source, policy,
+feedback and absence facts without rerunning complete validation. The migration
+signature authenticates the issuer's execution facts.
+
+Acquisition owns provider/Git reads and isolated registered validation.
+`_normalize_provider_representations` purely converts bounded external values
+to canonical typed facts; `_admit_observation` consumes only those facts, and
+`_assemble_source_facts` only assembles admitted facts. These responsibilities
+serve one exact-source contract, not a general source executor. Dependency
+preparation is fixed `npm ci --ignore-scripts --no-audit --no-fund` with a temporary
+HOME, closed credential-free environment and 600-second bound. Accepted-current
+test, script and package harness bytes are verified against protected main and
+overlaid on a disposable copy of the immutable source before the existing
+registered runner executes; historical harness bytes never become policy.
+
+`current_safety.receipt_digest` is the current execution identity under
+`secpal.pre-enrollment-current-safety/v1`, **not** an ordinary validation receipt.
+The target-shaped regression retains the previously observed divergent receipt
+identities; production derives its own current execution identity. No historical
+package bytes or unauthenticated final-attestation identity are reconstructed.
+
+The sealed source enters existing external-evidence authentication with
+`validation_evidence=None` and a separately authenticated review-budget admission.
+Passing both source modes rejects. The existing adoption proof and enrollment
+publication supply durable provenance and the single use. Issuance alone neither
+enrolls nor authorizes review, remediation, Ready, thread resolution or recovery.
+The #787 bootstrap and existing role credential selection remain separate.
+
 ### `secpal_pr_review/bootstrap_source_admission.py`
 
 Authenticates exact immutable implementation sources through one accepted-main
@@ -366,6 +409,23 @@ classification and the #689 exact live follow-up verifier. The guarded resolver
 continues to authenticate commit-bound eligibility and reports the resolution
 as `SAFELY_DISPOSITIONED_TRACKED`, never fixed, implemented, or completed. The
 orchestration suite is an unconditional registered validation command.
+
+### `secpal_pr_review/lifecycle_execution.py`
+
+Executes the maintained authenticated Ready/Draft transitions and supplies the
+local signer bridge used by lifecycle production paths. Signer identities come
+only from installed lifecycle policy. The OS account may add bounded global Git
+configuration values under `secpal.lifecycleSigningCredential`, each containing
+exactly a JSON `identity` and `credential` reference. The identity must already
+be selected by a policy role; the local mapping grants no authority.
+
+Explicit mappings override the compatible routine `user.signingkey` default.
+Distinct legacy-adoption signing has no routine-key fallback. SSH references
+must be normalized absolute paths, OpenPGP references must be full
+fingerprints, and every detached result is cryptographically verified against
+the accepted policy credential before becoming a `Signer` result. Selection
+keeps the existing closed non-interactive environment and does not use an SSH
+agent, inspect private-key contents, search for keys, or mutate Git config.
 
 ### `secpal_pr_review/lifecycle_publication.py`
 

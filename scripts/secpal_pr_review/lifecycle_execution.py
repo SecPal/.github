@@ -428,53 +428,98 @@ def _single_role_identity(identities: frozenset[str], label: str) -> str:
     return next(iter(identities))
 
 
-def _local_signer(identity: str) -> authority.Signer:
+def _policy_role_signer(
+    policy: authority.LifecycleTrustPolicy,
+    identities: frozenset[str],
+    label: str,
+    *,
+    allow_routine_default: bool,
+) -> tuple[str, authority.Signer]:
+    identity = _single_role_identity(identities, label)
     try:
-        signature_format, signing_key = late_disposition.read_signing_configuration()
         environment = late_disposition.signing_environment()
+        signature_format, signing_key = (
+            late_disposition.read_role_signing_configuration(
+                identity,
+                allow_routine_default=allow_routine_default,
+                environment=environment,
+            )
+        )
     except late_disposition.LateDispositionError as exc:
-        raise LifecycleExecutionError("maintained local signing authority is unavailable") from exc
+        raise LifecycleExecutionError(str(exc)) from exc
+    if signature_format not in policy.accepted_formats:
+        raise LifecycleExecutionError(
+            "maintained local signing format is not accepted by policy"
+        )
+    verifier = authority._policy_signature_verifier(
+        policy, command_environment=environment
+    )
 
     def sign(payload: bytes, domain: str) -> dict[str, str]:
         with tempfile.TemporaryDirectory(prefix="secpal-lifecycle-execution-sign-") as directory:
             root = Path(directory)
             artifact = root / "payload"
             artifact.write_bytes(payload)
-            if signature_format == "ssh":
-                executable = late_disposition._trusted_executable("ssh-keygen")
-                completed = late_disposition._run_signature_command(
-                    executable,
-                    ("-Y", "sign", "-f", signing_key, "-n", domain, str(artifact)),
-                    environment=environment,
-                )
-                signature_path = Path(f"{artifact}.sig")
-            elif signature_format == "openpgp":
-                executable = late_disposition._trusted_executable("gpg")
-                signature_path = root / "payload.asc"
-                completed = late_disposition._run_signature_command(
-                    executable,
-                    (
-                        "--batch", "--no-tty", "--armor", "--local-user",
-                        signing_key, "--output", str(signature_path),
-                        "--detach-sign", str(artifact),
-                    ),
-                    environment=environment,
-                )
-            else:
-                raise LifecycleExecutionError("maintained signature format is unsupported")
+            try:
+                if signature_format == "ssh":
+                    executable = late_disposition._trusted_executable("ssh-keygen")
+                    completed = late_disposition._run_signature_command(
+                        executable,
+                        ("-Y", "sign", "-f", signing_key, "-n", domain, str(artifact)),
+                        environment=environment,
+                    )
+                    signature_path = Path(f"{artifact}.sig")
+                elif signature_format == "openpgp":
+                    executable = late_disposition._trusted_executable("gpg")
+                    signature_path = root / "payload.asc"
+                    completed = late_disposition._run_signature_command(
+                        executable,
+                        (
+                            "--batch", "--no-tty", "--armor", "--local-user",
+                            signing_key, "--output", str(signature_path),
+                            "--detach-sign", str(artifact),
+                        ),
+                        environment=environment,
+                    )
+                else:
+                    raise LifecycleExecutionError(
+                        "maintained signature format is unsupported"
+                    )
+            except late_disposition.LateDispositionError as exc:
+                raise LifecycleExecutionError(
+                    "maintained lifecycle credential is unusable"
+                ) from exc
             try:
                 signature = signature_path.read_text(encoding="utf-8")
             except OSError as exc:
-                raise LifecycleExecutionError("maintained lifecycle signing failed") from exc
+                raise LifecycleExecutionError(
+                    "maintained lifecycle credential is unusable"
+                ) from exc
             if completed.returncode != 0 or not signature:
-                raise LifecycleExecutionError("maintained lifecycle signing failed")
-            return {
+                raise LifecycleExecutionError(
+                    "maintained lifecycle credential is unusable"
+                )
+            result = {
                 "format": signature_format,
                 "signer_identity": identity,
                 "value": signature,
             }
+            try:
+                verified = verifier(payload, result, identity, domain)
+            except authority.LifecycleAuthorityError as exc:
+                raise LifecycleExecutionError(
+                    "maintained lifecycle credential does not match accepted policy identity"
+                ) from exc
+            if (
+                verified.signer_identity != identity
+                or verified.signature_format != signature_format
+            ):
+                raise LifecycleExecutionError(
+                    "maintained lifecycle credential does not match accepted policy identity"
+                )
+            return result
 
-    return sign
+    return identity, sign
 
 
 def _production_signing_authorities(
@@ -484,28 +529,49 @@ def _production_signing_authorities(
         policy = authority._load_lifecycle_trust_policy(repository)
     except authority.LifecycleAuthorityError as exc:
         raise LifecycleExecutionError("maintained lifecycle signing policy is unavailable") from exc
-    transition_identity = _single_role_identity(
-        policy.transition_signer_identities, "transition signer role"
+    transition_identity, transition_signer = _policy_role_signer(
+        policy,
+        policy.transition_signer_identities,
+        "transition signer role",
+        allow_routine_default=True,
     )
-    authority_identity = _single_role_identity(
-        policy.authority_signer_identities, "authority signer role"
+    authority_identity, authority_signer = _policy_role_signer(
+        policy,
+        policy.authority_signer_identities,
+        "authority signer role",
+        allow_routine_default=True,
     )
-    publication_identity = _single_role_identity(
-        policy.publication_signer_identities, "publication signer role"
+    publication_identity, publication_signer = _policy_role_signer(
+        policy,
+        policy.publication_signer_identities,
+        "publication signer role",
+        allow_routine_default=True,
     )
     if authorization_signer != transition_identity:
         raise LifecycleExecutionError("authorization signer differs from maintained transition signer")
-    signers = {
-        identity: _local_signer(identity)
-        for identity in {transition_identity, authority_identity, publication_identity}
-    }
     return SigningAuthorities(
-        transition_identity,
-        signers[transition_identity],
-        authority_identity,
-        signers[authority_identity],
-        publication_identity,
-        signers[publication_identity],
+        transition_identity, transition_signer,
+        authority_identity, authority_signer,
+        publication_identity, publication_signer,
+    )
+
+
+def _production_legacy_adoption_signer(
+    repository: str,
+) -> tuple[str, authority.Signer]:
+    """Supply the maintained exact-adoption constructors' accepted signer role."""
+
+    try:
+        policy = authority._load_lifecycle_trust_policy(repository)
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecycleExecutionError(
+            "maintained lifecycle signing policy is unavailable"
+        ) from exc
+    return _policy_role_signer(
+        policy,
+        policy.legacy_adoption_signer_identities,
+        "legacy-adoption signer role",
+        allow_routine_default=False,
     )
 
 

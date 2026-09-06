@@ -140,11 +140,13 @@ a hidden technical dependency or maintaining divergent conformance rules.
 
 This ADR defines the ownership boundary; it does not claim that
 `SecPal/operations` is currently an executable, privileged production operations
-control plane. Under [#705](https://github.com/SecPal/.github/issues/705), that
-repository is currently information/architecture collection. Before it gains
-executable or privileged production automation or live control-plane
-responsibility, a separate governance/security-hardening contract must be
-accepted. This refinement does not bypass that requirement.
+control plane. ADR-024 separately accepts Managed Operations Control Plane
+authority, trust, and reconciliation semantics without changing this ownership
+boundary. Before `SecPal/operations` gains executable or privileged production
+automation, the governance and privilege gate owned by
+[`SecPal/operations#11`](https://github.com/SecPal/operations/issues/11) must be
+implemented. ADR acceptance does not satisfy that gate or prove the Control
+Plane implemented or production-qualified.
 
 ## Relationships
 
@@ -156,4 +158,5 @@ and ADR-022 owns self-hosted topology, Managed technical capability profiles,
 and their bounded failure-class semantics. This ADR owns only the public/private
 capability and policy boundary; endpoint mechanisms do not alter ADR-022
 topology or profile semantics. See also
-[#705](https://github.com/SecPal/.github/issues/705) and ADR-020.
+[#705](https://github.com/SecPal/.github/issues/705),
+[#844](https://github.com/SecPal/.github/issues/844), ADR-020, and ADR-024.
