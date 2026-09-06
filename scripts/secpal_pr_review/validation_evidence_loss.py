@@ -668,14 +668,13 @@ def issue(repository: str, delivery_issue: int, *, historical_package: Any = _UN
     if historical_package is not _UNSUPPLIED:
         raise authority.LifecycleAuthorityError("supplied historical evidence cannot downgrade to loss admission")
     acquired = _acquire(repository, delivery_issue, execute_validation=True)
-    trust = authority._load_lifecycle_trust_policy(repository)
-    identity = execution._single_role_identity(trust.legacy_adoption_signer_identities, "migration/adoption signer")
+    identity, signer = execution._production_legacy_adoption_signer(repository)
     fields = {
         "schema_version": "1.0", "kind": KIND, "domain": DOMAIN, **acquired,
         "admission_id": f"pre-enrollment-validation-loss:{authority.digest_json(acquired)}",
         "adoption_timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "bounded_uses": 1, "signer_identity": identity,
     }
-    signature = execution._local_signer(identity)(authority.canonical_json_bytes(fields), DOMAIN)
+    signature = signer(authority.canonical_json_bytes(fields), DOMAIN)
     signed = {**fields, "signature": signature}
     return _verify_document({**signed, "admission_digest": authority.digest_json(signed)})

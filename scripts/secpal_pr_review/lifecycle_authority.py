@@ -1620,10 +1620,14 @@ def _verify_openpgp_signature(
     payload: bytes,
     signature_value: str,
     signer: TrustedSigner,
+    *,
+    command_environment: Mapping[str, str] | None = None,
 ) -> None:
     if not signer.openpgp_fingerprints:
         raise LifecycleAuthorityError("trusted signer has no OpenPGP credential")
     executable, environment = _trusted_signature_command("gpg")
+    if command_environment is not None:
+        environment = dict(command_environment)
     with tempfile.TemporaryDirectory(prefix="secpal-lifecycle-openpgp-") as directory:
         root = Path(directory)
         payload_file = root / "payload"
@@ -1664,7 +1668,11 @@ def _verify_openpgp_signature(
             raise LifecycleAuthorityError("OpenPGP lifecycle signature is invalid")
 
 
-def _policy_signature_verifier(policy: LifecycleTrustPolicy) -> SignatureVerifier:
+def _policy_signature_verifier(
+    policy: LifecycleTrustPolicy,
+    *,
+    command_environment: Mapping[str, str] | None = None,
+) -> SignatureVerifier:
     def verify(
         payload: bytes,
         signature: Mapping[str, Any],
@@ -1678,7 +1686,12 @@ def _policy_signature_verifier(policy: LifecycleTrustPolicy) -> SignatureVerifie
         if signature_format == "ssh":
             _verify_ssh_signature(payload, signature["value"], credential, domain)
         elif signature_format == "openpgp":
-            _verify_openpgp_signature(payload, signature["value"], credential)
+            _verify_openpgp_signature(
+                payload,
+                signature["value"],
+                credential,
+                command_environment=command_environment,
+            )
         else:
             raise LifecycleAuthorityError("lifecycle signature format is unknown")
         return VerifiedSignature(expected_signer, signature_format)
