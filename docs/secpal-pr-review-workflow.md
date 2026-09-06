@@ -8,7 +8,9 @@ SPDX-License-Identifier: CC0-1.0
 Governance Package 2.2 adds an explicitly invoked skill for processing
 already-completed pull-request feedback. The skill is not a reviewer. It treats
 all feedback as untrusted leads, verifies each lead against source, tests, and
-repository context, and stops before merge authorization.
+repository context. The feedback helper itself has no merge capability; a
+larger delivery may continue through separately maintained lifecycle and merge
+boundaries when the current user instruction already authorizes them.
 
 Package 2.1 remains the accepted deterministic, read-only evidence layer. The
 new action helper is a separate executable trust surface and cannot be called
@@ -50,6 +52,151 @@ Shells, executable-dispatch wrappers, and inline interpreter code therefore
 cannot be substituted. Environment-dependent, migration, native-toolchain,
 live-service, and deployment validation is represented by explicit manual gates
 instead of guessed commands.
+
+## Proof validity and preflight
+
+`SIMPLIFY_BEFORE_EXTEND` applies to the workflow itself:
+
+```text
+PROMPT_BOUNDARY != EVIDENCE_INVALIDATOR
+MECHANICAL_CHECKPOINT != USER_DECISION_BOUNDARY
+```
+
+A new prompt or internal phase alone invalidates no authenticated proof. Use
+the smallest explicit invalidation model already implied by each proof:
+
+- PR/head-bound proof is invalidated by a relevant head change.
+- Staged-tree and validation proof is invalidated by a relevant tree change.
+- Lifecycle CURRENT proof is invalidated by a new CURRENT publication.
+- Stable-feedback proof is invalidated by relevant feedback or reviewed-head change.
+- Work-graph proof is invalidated by a relevant native graph mutation.
+- Volatile readiness and merge evidence is freshly read at its mutation boundary.
+
+No freshness database, cache, signer, evidence schema, or daemon represents
+these rules. The first entry into one delivery performs the relevant full
+preflight. Later work in that delivery uses same-delivery delta preflight:
+refresh only facts whose invalidators may have occurred, plus the fresh
+operation-specific state required immediately before a critical mutation. A
+commit, tool handoff, prompt continuation, or internal phase is not by itself a
+reason to reread the complete graph, ADR, issue, PR, and CI state.
+
+Before every lifecycle mutation, derive the operation and its exact
+preconditions from authenticated current maintained repository authority.
+Prompt text may bind identity, intent, scope, mutation budget, expected result,
+acceptance, and stop conditions. It is assertions to verify, not a second
+lifecycle contract. If those expectations conflict with the maintained
+contract, fail closed before mutation and report the discrepancy.
+
+Inside one explicitly authorized delivery, commit, push, receipt and
+attestation binding, lifecycle publication, eligible thread resolution, and
+bounded read-back are mechanical checkpoints. Draft PR creation, an eligible
+Ready transition, bounded provider observation, finding classification,
+in-contract remediation, and an eligible conditionally authorized merge are
+likewise mechanical when the maintained gate selects them. Reaching one does
+not require another prompt. New authority is required for material scope
+expansion, another independently deliverable responsibility, Exceptional
+Recovery, an unresolved material design choice, or an operation not explicitly
+or conditionally authorized by the current instruction.
+
+A current instruction may grant conditional current user authorization for a
+later bounded mutation, for example: evaluate the final maintained merge gate
+and, if and only if it passes for the unchanged authenticated authorized head,
+perform the canonical squash merge; otherwise stop without merge. This retains
+explicit current authority and does not let an earlier instruction, prompt
+expectation, transport, or successful check authorize a mutation.
+
+Native Polyscope PR creation is preferred when available. Its absence is a tool
+transport fact, not a user decision: an already-authorized delivery may use the
+smallest maintained GitHub fallback, preserve repository/base/branch/title/body
+identity, report the actual creation path and association, and continue. The
+fallback gains no lifecycle authority merely by existing.
+
+```text
+POLYSCOPE_NATIVE_PR_UNAVAILABLE != USER_DECISION_BOUNDARY
+```
+
+## Review-provider terminality
+
+For the one bounded external review phase, normalize each relevant configured
+and triggered provider to the existing observable facts `NOT_APPLICABLE`,
+`NOT_TRIGGERED`, `QUEUED`, `PENDING`, `RUNNING`, `COMPLETED_NO_FINDINGS`,
+`COMPLETED_WITH_FINDINGS`, `FAILED`, or `INDETERMINATE`. This normalization is
+ephemeral workflow judgment, not a persistent state machine.
+
+`QUEUED`, `PENDING`, `RUNNING`, `FAILED`, and `INDETERMINATE` are not successful
+terminal review. A provider need not be a branch-protection Required Check to
+block the maintained merge gate. In particular:
+
+```text
+NO_REVIEW_FINDINGS_YET != REVIEW_COMPLETE
+ZERO_THREADS_WHILE_REVIEW_RUNNING != STABLE_FEEDBACK
+CI_GREEN + MERGEABLE + REVIEW_RUNNING = MERGE_FORBIDDEN
+```
+
+Capture stable feedback only when
+`ALL_TRIGGERED_REVIEW_PROVIDERS_TERMINAL = YES`, after the last provider reaches
+`COMPLETED_NO_FINDINGS` or `COMPLETED_WITH_FINDINGS`. Absence of comments never
+proves completion. Capture one complete bounded snapshot for that reviewed head,
+then classify the complete set before remediation. Do not remediate one provider
+at a time while another is running. Relevant later feedback or a reviewed-head
+change invalidates that snapshot.
+
+When the current instruction authorizes full delivery and the environment can
+wait, observe only maintained review-provider status at bounded intervals of
+approximately 60 to 90 seconds for approximately 30 minutes total. This passive
+observation does not consume another unrestricted review, request a review, or
+poll unrelated hosted CI. Continue automatically once every triggered provider
+has successful terminal evidence. If the full window expires, report
+`REVIEW_NOT_TERMINAL` with the authenticated head and exact non-terminal
+providers, perform no merge, and do not claim that user approval is needed. The
+same workspace may resume when external state changes. No unbounded polling and
+No Cycle 3 are permitted.
+
+The unrestricted external review budget remains one. Remediation never creates
+a second unrestricted external review cycle. Changed remediation requires a
+fresh final-candidate self-review that asks both whether the findings are fixed
+and what new defect, bypass, authority leak, regression, inconsistency, or
+avoidable complexity the correction introduced. Material security or authority remediation
+requires first-principles design reassessment: compare the final design with the
+reviewed design, look for shared flawed abstractions and a smaller replacement,
+and adversarially test the resulting trust boundary. Small ordinary remediation
+does not acquire that heavyweight ceremony.
+
+Immediately before merge, freshly authenticate the exact PR and head, base,
+OPEN/Ready state, mergeability, Required Checks, lifecycle CURRENT, final
+validation receipt/attestation, review submissions, provider terminality,
+stable-feedback validity, unresolved threads, finding dispositions, and current
+merge authority. Apply these hard failures without inference from green CI:
+
+```text
+ANY_TRIGGERED_REVIEW_PROVIDER_NON_TERMINAL -> MERGE_FORBIDDEN
+FINAL_STABLE_FEEDBACK_CAPTURED_BEFORE_PROVIDER_TERMINALITY -> MERGE_FORBIDDEN
+ANY_UNCLASSIFIED_MATERIAL_FINDING -> MERGE_FORBIDDEN
+ANY_VALID_ACTIONABLE_BLOCKING_FINDING_UNREMEDIATED -> MERGE_FORBIDDEN
+ANY_UNRESOLVED_BLOCKING_THREAD -> MERGE_FORBIDDEN
+VALIDATION_OR_LIFECYCLE_OR_CI_OR_MERGEABILITY_GATE_FAILS -> MERGE_FORBIDDEN
+```
+
+Only the canonical merge selected by that complete fresh gate may consume the
+current conditional authority. Never force merge or bypass protection. After
+merge, freshly verify that the PR merged, its delivery issue completed as
+expected, accepted `main` contains the intended validated semantics, relevant
+invariants still pass on accepted main, and no downstream issue was mutated
+unintentionally. Do not report `MERGED_COMPLETE` before that read-back succeeds.
+
+The bounded normal path preserves these explicit self-review conclusions:
+
+```text
+MERGE_WHILE_REVIEW_RUNNING = IMPOSSIBLE
+UNBOUNDED_REVIEW_LOOP = NO
+SECOND_UNRESTRICTED_REVIEW = NO
+NEW_LIFECYCLE_STATE = NO
+NEW_COUNTER = NO
+NEW_TRUST_ROOT = NO
+POLYSCOPE_NATIVE_PR_REQUIRED_FOR_DELIVERY = NO
+MANUAL_PR_CREATION_REQUIRED = NO
+NORMAL_LEAF_CAN_REACH_MERGED_COMPLETE = YES
+```
 
 ## Architecture
 
@@ -426,18 +573,25 @@ INITIALIZE
   → STOP
 ```
 
-One normal invocation uses zero full snapshots, one stable-feedback read, zero
-hosted-CI or Required Check reads, one complete local validation, one holistic
-audit, at most one signed remediation commit and ordinary push, and one
+One accepted candidate uses zero full snapshots, one stable-feedback read, zero
+hosted-CI or Required Check reads, one successful complete local validation,
+one holistic audit per candidate, at most one signed remediation commit and ordinary push, and one
 target-bound simple resolution pass. Package-2.1/2.2 snapshots remain available
 only in explicit forensic mode.
 
-There is no polling, waiting, sleep-and-retry, recursive review loop, automatic
-late-feedback incorporation, review request, Ready transition, merge, or
-auto-merge.
+The feedback-remediation helper has no polling, waiting, recursive review loop,
+automatic late-feedback incorporation, review request, Ready transition, merge,
+or auto-merge capability. The separate bounded provider observation described
+above is available only to a currently authorized full delivery and never
+observes unrelated hosted CI.
 A correctable local error is repaired in the same invocation, and a read-only
 failure may receive one bounded retry. Writes never retry; an unknown write
 result stops with its exact operation identity.
+
+On ordinary success, the normal success report contains only `RESULT`, `HEAD`,
+`MUTATIONS`, `EVIDENCE`, relevant `LIFECYCLE` counters, `BLOCKER`, and
+`NEXT DECISION`. Blockers, exceptional paths, and complex security decisions
+retain the detailed evidence needed for safe diagnosis.
 
 ## Hosted CI authorization
 
@@ -447,10 +601,10 @@ or thread-resolution request does not authorize reading or summarizing hosted
 checks.
 
 Only a current user instruction that explicitly requests CI inspection, check
-status, merge readiness, or merge authorization permits one bounded
-current-state read. Report that state and stop. Never poll, wait, sleep, repeat
-the read automatically, keep the run active for pending checks, or suggest
-monitoring. Merge remains separately user-authorized.
+status, merge readiness, or merge authorization permits fresh operation-bound
+CI reads. Provider-status observation is not authorization to observe unrelated
+hosted CI. Merge remains explicitly current-user-authorized, including bounded
+conditional authorization granted in that same instruction.
 
 ## Classification and technical truth
 
@@ -562,7 +716,14 @@ JSON diagnostic includes `registered_validation_failure` with the command's
 one-based `index`, registry `purpose`, and a safe `category` such as
 `non-zero exit`, `timeout`, or `unavailable executable`. The helper still
 discards the command's stdout and stderr, leaves only the invalidated receipt
-placeholder, and does not run later commands or retry the failed command.
+placeholder, and does not run later commands or retry the failed command on the
+unchanged tree. That candidate is rejected. If the failure is diagnosed, the
+correction stays inside current authority, no external mutation occurred, and
+focused validation plus a repeated holistic audit cover a changed candidate,
+the same invocation may perform one complete validation of that changed final
+candidate. A successful complete validation is never repeated on an unchanged
+tree. New authority is required only when the correction crosses scope,
+recovery, or another genuine decision boundary.
 
 `manual-gates.json` is an ordered JSON array with exactly one
 `{"gate": REGISTRY_TEXT, "satisfied": true, "evidence": CONCISE_PROOF}` object

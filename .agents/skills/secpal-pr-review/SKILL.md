@@ -161,7 +161,9 @@ starting:
 Do not use this skill for generic code review, creating a PR, requesting any
 review, debugging CI without completed feedback, ordinary implementation,
 Draft-to-Ready transitions, or merge-only requests. Never request another
-review. Never mark a PR Ready, merge, enable auto-merge, amend a
+review. The skill helper never marks a PR Ready, merges, or enables auto-merge;
+an explicitly authorized larger delivery may use the separate maintained
+lifecycle and merge mechanisms before or after this feedback path. Never amend a
 reviewed commit, force-push, bypass hooks, or use administrator privileges.
 
 Read [references/contract.md](references/contract.md) completely before acting.
@@ -191,6 +193,42 @@ directories above it. Use that source repository's:
 Never import or call the action helper from the evidence helper. Never add a
 mutation command to the evidence helper. Execute configured validation commands
 as argument arrays in the target repository, without a shell.
+
+## Delivery continuity and proof reuse
+
+Apply `SIMPLIFY_BEFORE_EXTEND` to the workflow. A prompt boundary is not an
+evidence invalidator, and a mechanical checkpoint is not a user decision
+boundary. On first delivery entry, perform the relevant full preflight. During
+the same delivery, refresh only operation-relevant facts whose defined
+invalidators may have occurred. A head change invalidates head-bound proof; a
+tree change invalidates validation proof; a new CURRENT publication invalidates
+prior CURRENT proof; relevant feedback or reviewed-head change invalidates
+stable feedback; native graph mutation invalidates work-graph proof; volatile
+readiness is freshly read at its actual boundary. Create no freshness store.
+
+Before mutation, derive the canonical operation and its exact preconditions
+from authenticated current maintained repository authority. Prompt expectations
+bind scope and authority but remain assertions to verify. If they conflict with
+the maintained contract, fail closed before mutation and report the discrepancy.
+
+Commit creation, push, receipt/attestation binding, lifecycle publication,
+eligible thread resolution, and bounded read-back require no new prompt while
+they remain inside current authority. The same applies to an eligible Ready
+transition or merge when the current instruction explicitly authorizes that
+later mutation conditionally on its maintained gate. New user authority is
+required only for a genuine new operation, material scope, recovery, or
+unresolved decision boundary. The helper's own mutation allowlist remains
+unchanged.
+
+Stable feedback is captured once per reviewed head only after every triggered
+review provider has successful terminal evidence. `QUEUED`, `PENDING`,
+`RUNNING`, `FAILED`, and `INDETERMINATE` block stable capture and merge; empty
+comments or threads do not prove completion. Classify the complete bounded
+snapshot before one coherent remediation batch. A currently authorized full
+delivery may observe provider state for about 30 minutes at 60-to-90-second
+intervals without requesting another review, consuming another review cycle,
+or polling unrelated hosted CI. Expiry reports `REVIEW_NOT_TERMINAL`; the same
+workspace may resume after external state changes.
 
 ## Finite lifecycle continuity
 
@@ -255,11 +293,15 @@ The following state machine applies only to the full feedback-remediation path.
    its deterministic staged-tree,
    parent-head, registry, command-set, manual-gate, result, and reviewed-feedback
    receipt. Do not continue discovery or change the tree after this step begins.
-   A failed command produces no receipt and is a terminal security blocker for
-   this invocation. Do not change the tree or retry any complete command.
-   Require a new explicit remediation invocation so any correction receives
-   focused validation and a fresh holistic audit before its single complete
-   validation. Never repeat a successful complete validation.
+   A failed command produces no receipt and rejects that candidate tree. Do not
+   retry the unchanged failed candidate or represent it as successful evidence.
+   If the failure is diagnosed, its focused correction remains inside current
+   authority, no external mutation occurred, and the changed tree receives
+   focused validation plus a fresh holistic audit, perform one complete
+   validation of the changed candidate in the same invocation. Require a new
+   invocation only when correction needs new scope, recovery, authority, or a
+   user decision. Never repeat a successful complete validation on an unchanged
+   tree.
 6. When remediation changed the staged tree, create one signed commit containing
    exactly that tree, use the receipt digest as its single
    `SecPal-Validation-Receipt` trailer, and use `attest-validation --bind-commit`
@@ -286,9 +328,11 @@ The following state machine applies only to the full feedback-remediation path.
    exact signed orchestration authorization described above. This
    reads only the named targets, requires their comments to equal the reviewed
    feedback, and does not reclassify or gate on unrelated PR state.
-9. Report the commit, branch, remote synchronization, local validation,
-   worktree state, PR identity, and resolution results, then stop. Merge remains
-   separately authorized by the current user instruction.
+9. On ordinary success, report only `RESULT`, `HEAD`, `MUTATIONS`, `EVIDENCE`,
+   relevant lifecycle counters, `BLOCKER`, and `NEXT DECISION`. Add detailed
+   audit evidence for blockers, exceptional paths, or complex security
+   decisions. The helper then stops; a separately maintained merge mechanism
+   may continue only under explicit current authority.
 
 Short-circuit immediately to the applicable terminal outcome when a blocker is
 detected. Green CI alone never establishes technical truth or merge readiness.

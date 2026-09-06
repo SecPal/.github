@@ -606,13 +606,10 @@ grep -Fq 'Focused validation must not invoke a complete, repository-wide, or agg
   || fail 'focused validation may still consume the complete validation gate'
 grep -Fq 'A registered focused-only command explicitly authorized by its matching manual gate is the bounded exception.' <<<"$contract_text" \
   || fail 'authorized focused-only aggregate validation has no bounded exception'
-grep -Fq 'A failed command produces no receipt; the command invalidates any report already at its configured output before validation begins, terminates this invocation, and permits no tree change or complete-command retry.' <<<"$contract_text" \
-  || fail 'failed complete validation does not invalidate stale output or terminate'
-grep -Fq 'A new explicit remediation invocation must capture fresh state and audit any correction' <<<"$contract_text" \
-  || fail 'failed complete validation may reuse the prior audit'
-if grep -Fq 'one new complete attempt' "$CONTRACT"; then
-  fail 'contract permits a second complete validation attempt in one invocation'
-fi
+grep -Fq 'A failed command produces no receipt and rejects that candidate tree.' <<<"$contract_text" \
+  || fail 'failed complete validation does not invalidate its candidate'
+grep -Fq 'one complete validation of the changed candidate in the same invocation' <<<"$contract_text" \
+  || fail 'failed complete validation cannot continue after in-contract correction'
 grep -Fq 'normal_signed_remediation_commits: 1' "$CONTRACT" || fail 'commit limit drifted'
 grep -Fq 'normal_fast_forward_pushes: 1' "$CONTRACT" || fail 'push limit drifted'
 grep -Fq 'maximum_evidence_replies_total: 10' "$CONTRACT" || fail 'reply limit drifted'
@@ -632,6 +629,79 @@ grep -Fq 'A normal invocation has one remediation pass.' "$CONTRACT" || fail 'si
 grep -Fq 'never appends unreviewed feedback' "$CONTRACT" || fail 'late-feedback rule missing'
 
 template_text="$(tr '\n' ' ' <"$POLYSCOPE_TEMPLATE" | tr -s '[:space:]' ' ')"
+workflow_text="$(tr '\n' ' ' <"$WORKFLOW_DOC" | tr -s '[:space:]' ' ')"
+
+# Issue #849 keeps workflow checkpoints finite without treating prompts as
+# evidence invalidators or provider activity as completed review.
+for required_text in \
+  'PROMPT_BOUNDARY != EVIDENCE_INVALIDATOR' \
+  'MECHANICAL_CHECKPOINT != USER_DECISION_BOUNDARY' \
+  'A new prompt or internal phase alone invalidates no authenticated proof.' \
+  'PR/head-bound proof is invalidated by a relevant head change.' \
+  'Staged-tree and validation proof is invalidated by a relevant tree change.' \
+  'Lifecycle CURRENT proof is invalidated by a new CURRENT publication.' \
+  'Stable-feedback proof is invalidated by relevant feedback or reviewed-head change.' \
+  'Work-graph proof is invalidated by a relevant native graph mutation.' \
+  'Volatile readiness and merge evidence is freshly read at its mutation boundary.' \
+  'same-delivery delta preflight' \
+  'derive the operation and its exact preconditions from authenticated current maintained repository authority' \
+  'fail closed before mutation and report the discrepancy' \
+  'conditional current user authorization' \
+  'commit, push, receipt and attestation binding, lifecycle publication, eligible thread resolution, and bounded read-back are mechanical checkpoints' \
+  'normal success report contains only'; do
+  grep -Fq "$required_text" <<<"$workflow_text" \
+    || fail "issue #849 workflow contract is incomplete: $required_text"
+done
+
+for required_text in \
+  'NOT_APPLICABLE' \
+  'NOT_TRIGGERED' \
+  'QUEUED' \
+  'PENDING' \
+  'RUNNING' \
+  'COMPLETED_NO_FINDINGS' \
+  'COMPLETED_WITH_FINDINGS' \
+  'FAILED' \
+  'INDETERMINATE' \
+  'NO_REVIEW_FINDINGS_YET != REVIEW_COMPLETE' \
+  'ZERO_THREADS_WHILE_REVIEW_RUNNING != STABLE_FEEDBACK' \
+  'CI_GREEN + MERGEABLE + REVIEW_RUNNING = MERGE_FORBIDDEN' \
+  'ALL_TRIGGERED_REVIEW_PROVIDERS_TERMINAL = YES' \
+  'approximately 60 to 90 seconds' \
+  'approximately 30 minutes' \
+  'REVIEW_NOT_TERMINAL' \
+  'does not consume another unrestricted review' \
+  'one complete bounded snapshot' \
+  'classify the complete set before remediation' \
+  'POLYSCOPE_NATIVE_PR_UNAVAILABLE != USER_DECISION_BOUNDARY' \
+  'ANY_TRIGGERED_REVIEW_PROVIDER_NON_TERMINAL -> MERGE_FORBIDDEN' \
+  'FINAL_STABLE_FEEDBACK_CAPTURED_BEFORE_PROVIDER_TERMINALITY -> MERGE_FORBIDDEN' \
+  'NORMAL_LEAF_CAN_REACH_MERGED_COMPLETE = YES' \
+  'MERGE_WHILE_REVIEW_RUNNING = IMPOSSIBLE' \
+  'SECOND_UNRESTRICTED_REVIEW = NO' \
+  'NEW_LIFECYCLE_STATE = NO' \
+  'NEW_COUNTER = NO' \
+  'NEW_TRUST_ROOT = NO'; do
+  grep -Fq "$required_text" <<<"$workflow_text" \
+    || fail "review-provider terminality contract is incomplete: $required_text"
+done
+
+grep -Fq 'A failed command produces no receipt and rejects that candidate tree.' <<<"$contract_text" \
+  || fail 'failed complete validation no longer rejects its candidate without a receipt'
+grep -Fq 'The unchanged failed candidate cannot be retried.' <<<"$contract_text" \
+  || fail 'failed unchanged candidate may be blindly retried'
+grep -Fq 'one complete validation of the changed candidate in the same invocation' <<<"$contract_text" \
+  || fail 'in-contract corrected validation cannot continue in the same invocation'
+grep -Fq 'repeat the holistic audit for that changed candidate' <<<"$contract_text" \
+  || fail 'changed corrected candidate can reuse the prior audit'
+grep -Fq 'A successful complete validation is never repeated on an unchanged tree.' <<<"$contract_text" \
+  || fail 'successful complete validation can repeat on an unchanged tree'
+grep -Fq 'Material security or authority remediation requires first-principles design reassessment' <<<"$workflow_text" \
+  || fail 'material remediation does not trigger design reassessment'
+grep -Fq 'Small ordinary remediation does not acquire that heavyweight ceremony.' <<<"$workflow_text" \
+  || fail 'ordinary remediation is burdened by material-remediation ceremony'
+grep -Fq 'No Cycle 3' <<<"$workflow_text" \
+  || fail 'issue #849 workflow no longer excludes Cycle 3'
 grep -Fq \
   'Do not read, monitor, poll, wait for, summarize, or gate work on GitHub-hosted CI unless the user explicitly requests CI inspection, check status, merge readiness, or merge authorization in the current instruction.' \
   <<<"$template_text" \
@@ -704,13 +774,10 @@ grep -Fq 'Never use a complete, repository-wide, or aggregate suite as focused v
   || fail 'skill does not keep aggregate suites forbidden by default'
 grep -Fq 'A registered focused-only command explicitly authorized by its matching manual gate is the bounded exception.' <<<"$normal_skill_text" \
   || fail 'skill blocks authorized focused-only aggregate validation'
-grep -Fq 'A failed command produces no receipt and is a terminal security blocker for this invocation.' <<<"$normal_skill_text" \
-  || fail 'skill does not terminate after failed complete validation'
-grep -Fq 'Require a new explicit remediation invocation so any correction receives focused validation and a fresh holistic audit' <<<"$normal_skill_text" \
-  || fail 'skill permits correction without a fresh audit'
-if grep -Fq 'one new complete attempt' <<<"$normal_skill_section"; then
-  fail 'skill permits a second complete validation attempt in one invocation'
-fi
+grep -Fq 'A failed command produces no receipt and rejects that candidate tree.' <<<"$normal_skill_text" \
+  || fail 'skill does not reject failed complete-validation candidates'
+grep -Fq 'one complete validation of the changed candidate in the same invocation' <<<"$normal_skill_text" \
+  || fail 'skill cannot continue after in-contract correction'
 if grep -Eq 'Required Checks|mergeability|branch-protection|pull-request reactions' <<<"$normal_skill_section"; then
   fail 'default remediation still gates resolution on unrelated readiness state'
 fi

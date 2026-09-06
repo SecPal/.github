@@ -9,6 +9,25 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-06 - Reduce PR Lifecycle Prompt And Validation Loops
+
+**Changed:**
+
+- Reuse authenticated delivery evidence until its explicit head, tree, CURRENT,
+  feedback, graph, or volatile-readiness invalidator occurs, and use delta
+  preflight during same-delivery continuation.
+- Treat in-contract commit, push, evidence binding, lifecycle publication,
+  review observation, remediation, resolution, and conditionally authorized
+  merge as mechanical checkpoints rather than new prompt boundaries.
+- Require affirmative successful terminal evidence from every triggered review
+  provider before stable-feedback capture or merge, with finite observation and
+  one batched finding set per reviewed head.
+- Permit focused in-contract correction after failed Complete Validation in the
+  same invocation only for a changed, freshly audited candidate; preserve no
+  receipt for failure and no repeated success on an unchanged tree.
+- Keep lifecycle counters, Ready monotonicity, Cycle-3 absence, finite external
+  review authority, hosted-CI isolation, and merge fail-closed semantics intact.
+
 ## 2026-09-06 - Authenticate Validation-Evidence Provenance
 
 **Fixed:**
