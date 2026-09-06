@@ -315,7 +315,6 @@ ALLOWED_IMPORT_ROOTS = {
     "types",
     "typing",
     "urllib",
-    "weakref",
 }
 ALLOWED_IMPORTS = {
     "secpal-pr-review.py": {
@@ -368,7 +367,6 @@ ALLOWED_IMPORTS = {
         "import subprocess",
         "import sys",
         "import tempfile",
-        "import weakref",
         "from dataclasses import dataclass, field",
         "from pathlib import Path",
         "from typing import Any, Callable, TypeVar",

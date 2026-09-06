@@ -15,7 +15,6 @@ import subprocess
 import tempfile
 import importlib.util
 import sys
-import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, TypeVar
@@ -1004,9 +1003,9 @@ class StableFeedbackState:
 
 @dataclass(frozen=True, slots=True)
 class _VerifiedValidationEvidenceSeal:
-    """Bind the private verifier authority to one exact immutable result."""
+    """Carry canonical provenance that consumers independently re-verify."""
 
-    binding_digest: str
+    provenance_json: str
 
 
 @dataclass(frozen=True)
@@ -1037,130 +1036,36 @@ def _validation_evidence_binding(value: VerifiedValidationEvidence) -> dict[str,
     }
 
 
-def _validation_evidence_authority() -> tuple[
-    Callable[[VerifiedValidationEvidence], VerifiedValidationEvidence],
-    Callable[[Any], bool],
-]:
-    """Keep exact verifier-issued object identities outside caller-owned state."""
-
-    issued: dict[
-        int, tuple[weakref.ReferenceType[VerifiedValidationEvidence], str]
-    ] = {}
-
-    def register(value: VerifiedValidationEvidence) -> VerifiedValidationEvidence:
-        identity = id(value)
-        binding_digest = digest_json(_validation_evidence_binding(value))
-
-        def discard(
-            reference: weakref.ReferenceType[VerifiedValidationEvidence],
-            *,
-            expected_identity: int = identity,
-        ) -> None:
-            current = issued.get(expected_identity)
-            if current is not None and current[0] is reference:
-                issued.pop(expected_identity, None)
-
-        issued[identity] = (weakref.ref(value, discard), binding_digest)
-        return value
-
-    def verify(value: Any) -> bool:
-        if not isinstance(value, VerifiedValidationEvidence) or not isinstance(
-            value._verification_seal, _VerifiedValidationEvidenceSeal
-        ):
-            return False
-        registered = issued.get(id(value))
-        if registered is None or registered[0]() is not value:
-            return False
-        try:
-            binding_digest = digest_json(_validation_evidence_binding(value))
-            return (
-                registered[1] == binding_digest
-                and value._verification_seal.binding_digest == binding_digest
-            )
-        except (SecurityBlocker, TypeError, ValueError):
-            return False
-
-    return register, verify
-
-
-_register_verified_validation_evidence, is_verified_validation_evidence = (
-    _validation_evidence_authority()
-)
-
-
 @dataclass(frozen=True)
 class AuthenticatedIntegrationCommit:
     """Exact commit and actual signer proven by the canonical signature verifier."""
 
+    repository: str
     head_sha: str
+    tree_sha: str
+    parent_shas: tuple[str, ...]
     signer_kind: str
     signer_identity: str
     signature_fingerprint: str
     signature_classification: str
+    signature_policy_digest: str
     authentication_digest: str
 
 
 def _integration_commit_authentication_binding(
     value: AuthenticatedIntegrationCommit,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     return {
+        "repository": value.repository,
         "head_sha": value.head_sha,
+        "tree_sha": value.tree_sha,
+        "parent_shas": list(value.parent_shas),
         "signer_kind": value.signer_kind,
         "signer_identity": value.signer_identity,
         "signature_fingerprint": value.signature_fingerprint,
         "signature_classification": value.signature_classification,
+        "signature_policy_digest": value.signature_policy_digest,
     }
-
-
-def _integration_commit_authority() -> tuple[
-    Callable[[AuthenticatedIntegrationCommit], AuthenticatedIntegrationCommit],
-    Callable[[Any], bool],
-]:
-    issued: dict[
-        int, tuple[weakref.ReferenceType[AuthenticatedIntegrationCommit], str]
-    ] = {}
-
-    def register(
-        value: AuthenticatedIntegrationCommit,
-    ) -> AuthenticatedIntegrationCommit:
-        identity = id(value)
-        binding_digest = digest_json(_integration_commit_authentication_binding(value))
-
-        def discard(
-            reference: weakref.ReferenceType[AuthenticatedIntegrationCommit],
-            *,
-            expected_identity: int = identity,
-        ) -> None:
-            current = issued.get(expected_identity)
-            if current is not None and current[0] is reference:
-                issued.pop(expected_identity, None)
-
-        issued[identity] = (weakref.ref(value, discard), binding_digest)
-        return value
-
-    def verify(value: Any) -> bool:
-        if not isinstance(value, AuthenticatedIntegrationCommit):
-            return False
-        registered = issued.get(id(value))
-        if registered is None or registered[0]() is not value:
-            return False
-        try:
-            binding_digest = digest_json(
-                _integration_commit_authentication_binding(value)
-            )
-            return (
-                registered[1] == binding_digest
-                and value.authentication_digest == binding_digest
-            )
-        except (SecurityBlocker, TypeError, ValueError):
-            return False
-
-    return register, verify
-
-
-_register_authenticated_integration_commit, _is_authenticated_integration_commit = (
-    _integration_commit_authority()
-)
 
 
 def _actual_integration_signer(
@@ -1255,18 +1160,42 @@ def _run_integration_commit_git(
         ) from exc
 
 
+def _repository_from_remote(value: str) -> str | None:
+    match = re.fullmatch(
+        r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+        r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?",
+        value.strip(),
+    )
+    return match.group(1) if match is not None else None
+
+
+def _commit_topology(commit_object: str) -> tuple[str, tuple[str, ...]]:
+    headers = commit_object.split("\n\n", 1)[0].splitlines()
+    trees = [line[5:].lower() for line in headers if line.startswith("tree ")]
+    parents = tuple(
+        line[7:].lower() for line in headers if line.startswith("parent ")
+    )
+    if (
+        len(trees) != 1
+        or not OID.fullmatch(trees[0])
+        or any(not OID.fullmatch(parent) for parent in parents)
+    ):
+        raise SecurityBlocker("integration commit topology is malformed")
+    return trees[0], parents
+
+
 def _authenticate_integration_commit(
     *,
     repository_root: Path | str,
+    repository: str,
     head_sha: str,
     expected_signer: dict[str, str],
     signature_policy: dict[str, Any],
-    register: Callable[
-        [AuthenticatedIntegrationCommit], AuthenticatedIntegrationCommit
-    ],
 ) -> AuthenticatedIntegrationCommit:
-    """Authenticate the actual commit signature and signer before seal issuance."""
+    """Authenticate the signed commit, its topology, signer, and trust context."""
 
+    if not isinstance(repository, str) or not REPOSITORY.fullmatch(repository):
+        raise SecurityBlocker("integration commit repository identity is malformed")
     head = _require_oid(head_sha, "integration commit")
     try:
         root = Path(repository_root).resolve(strict=True)
@@ -1276,7 +1205,13 @@ def _authenticate_integration_commit(
         ) from exc
     if not root.is_dir():
         raise RecoverableLocalError("integration commit repository is unavailable")
+    origin = _run_integration_commit_git(root, ["remote", "get-url", "origin"])
+    if origin.returncode != 0 or _repository_from_remote(origin.stdout) != repository:
+        raise SecurityBlocker("integration commit repository identity changed")
     commit_object = _run_integration_commit_git(root, ["cat-file", "commit", head])
+    if commit_object.returncode != 0:
+        raise SecurityBlocker("integration commit object is unavailable")
+    tree_sha, parent_shas = _commit_topology(commit_object.stdout)
     verified_commit = _run_integration_commit_git(
         root, ["verify-commit", "--raw", head]
     )
@@ -1314,65 +1249,89 @@ def _authenticate_integration_commit(
     if local_signature.get("format") != expected_format:
         raise SecurityBlocker("integration commit signer format does not match policy")
     fields = {
+        "repository": repository,
         "head_sha": head,
+        "tree_sha": tree_sha,
+        "parent_shas": list(parent_shas),
         "signer_kind": signer_kind,
         "signer_identity": signer_identity,
         "signature_fingerprint": _actual_signature_fingerprint(
             verification_output, signer_kind
         ),
         "signature_classification": verified[0]["classification"],
+        "signature_policy_digest": digest_json(signature_policy),
     }
-    return register(
-        AuthenticatedIntegrationCommit(
-            **fields, authentication_digest=digest_json(fields)
-        )
+    return AuthenticatedIntegrationCommit(
+        **{**fields, "parent_shas": parent_shas},
+        authentication_digest=digest_json(fields),
     )
 
 
-def _integration_commit_authenticator(
-    register: Callable[
-        [AuthenticatedIntegrationCommit], AuthenticatedIntegrationCommit
-    ],
-) -> Callable[..., AuthenticatedIntegrationCommit]:
-    def authenticate_integration_commit(
-        *,
-        repository_root: Path | str,
-        head_sha: str,
-        expected_signer: dict[str, str],
-        signature_policy: dict[str, Any],
-    ) -> AuthenticatedIntegrationCommit:
-        return _authenticate_integration_commit(
-            repository_root=repository_root,
-            head_sha=head_sha,
-            expected_signer=expected_signer,
-            signature_policy=signature_policy,
-            register=register,
-        )
-
-    return authenticate_integration_commit
+def authenticate_integration_commit(
+    *,
+    repository_root: Path | str,
+    repository: str,
+    head_sha: str,
+    expected_signer: dict[str, str],
+    signature_policy: dict[str, Any],
+) -> AuthenticatedIntegrationCommit:
+    return _authenticate_integration_commit(
+        repository_root=repository_root,
+        repository=repository,
+        head_sha=head_sha,
+        expected_signer=expected_signer,
+        signature_policy=signature_policy,
+    )
 
 
-authenticate_integration_commit = _integration_commit_authenticator(
-    _register_authenticated_integration_commit
-)
-
-
-def is_authenticated_integration_commit(
-    value: Any, *, head_sha: str, expected_signer: dict[str, str]
+def _authenticated_integration_commit_agrees(
+    value: Any,
+    *,
+    repository: str | None = None,
+    head_sha: str,
+    tree_sha: str | None = None,
+    parent_shas: list[str] | tuple[str, ...] | None = None,
+    expected_signer: dict[str, str],
+    signature_policy: dict[str, Any] | None = None,
 ) -> bool:
-    if not _is_authenticated_integration_commit(value):
+    try:
+        if not isinstance(value, AuthenticatedIntegrationCommit):
+            return False
+        binding = _integration_commit_authentication_binding(value)
+        if value.authentication_digest != digest_json(binding):
+            return False
+        expected_kind = (
+            expected_signer.get("kind")
+            if isinstance(expected_signer, dict)
+            else None
+        )
+        expected_identity = (
+            expected_signer.get("identity")
+            if isinstance(expected_signer, dict)
+            else None
+        )
+        if expected_kind == "OPENPGP_FINGERPRINT" and isinstance(
+            expected_identity, str
+        ):
+            expected_identity = expected_identity.upper()
+        return (
+            value.head_sha == head_sha.lower()
+            and value.signer_kind == expected_kind
+            and value.signer_identity == expected_identity
+            and (repository is None or value.repository == repository)
+            and (tree_sha is None or value.tree_sha == tree_sha.lower())
+            and (
+                parent_shas is None
+                or value.parent_shas
+                == tuple(parent.lower() for parent in parent_shas)
+            )
+            and (
+                signature_policy is None
+                or value.signature_policy_digest == digest_json(signature_policy)
+            )
+        )
+    except (AttributeError, KeyError, SecurityBlocker, TypeError, ValueError):
         return False
-    expected_kind = expected_signer.get("kind") if isinstance(expected_signer, dict) else None
-    expected_identity = (
-        expected_signer.get("identity") if isinstance(expected_signer, dict) else None
-    )
-    if expected_kind == "OPENPGP_FINGERPRINT" and isinstance(expected_identity, str):
-        expected_identity = expected_identity.upper()
-    return (
-        value.head_sha == head_sha.lower()
-        and value.signer_kind == expected_kind
-        and value.signer_identity == expected_identity
-    )
 
 
 def _unregistered_validation_evidence(
@@ -1396,7 +1355,6 @@ def _unregistered_validation_evidence(
         "final_attestation_digest": final_attestation_digest,
         "source_validation_evidence_digest": source_validation_evidence_digest,
     }
-    seal = _VerifiedValidationEvidenceSeal(digest_json(fields))
     return VerifiedValidationEvidence(
         repository=repository,
         pull_request_number=pull_request_number,
@@ -1405,8 +1363,20 @@ def _unregistered_validation_evidence(
         validation_receipt_digest=validation_receipt_digest,
         final_attestation_digest=final_attestation_digest,
         source_validation_evidence_digest=source_validation_evidence_digest,
-        _verification_seal=seal,
+        _verification_seal=None,
         delivery_issue_number=delivery_issue_number,
+    )
+
+
+def _seal_validation_evidence(
+    value: VerifiedValidationEvidence, provenance: dict[str, Any]
+) -> VerifiedValidationEvidence:
+    seal = _VerifiedValidationEvidenceSeal(
+        canonical_json_bytes(provenance).decode("utf-8")
+    )
+    return VerifiedValidationEvidence(
+        **_validation_evidence_binding(value),
+        _verification_seal=seal,
     )
 
 
@@ -2184,7 +2154,8 @@ def verify_eligibility_bound_ready_integration_attestation(
     commit_tree_sha: str,
     commit_validation_receipt_digest: str | None,
     commit_integration_evidence_digest: str | None,
-    authenticated_integration_commit: AuthenticatedIntegrationCommit | None = None,
+    repository_root: Path | str,
+    signature_policy: dict[str, Any],
 ) -> VerifiedValidationEvidence:
     """Verify the closed integration-resolution attestation kind."""
 
@@ -2219,7 +2190,8 @@ def verify_eligibility_bound_ready_integration_attestation(
         commit_tree_sha=commit_tree_sha,
         commit_validation_receipt_digest=commit_validation_receipt_digest,
         commit_integration_evidence_digest=commit_integration_evidence_digest,
-        authenticated_integration_commit=authenticated_integration_commit,
+        repository_root=repository_root,
+        signature_policy=signature_policy,
     )
 
 
@@ -2237,7 +2209,8 @@ def _verify_ready_integration_attestation_unsealed(
     commit_tree_sha: str,
     commit_validation_receipt_digest: str | None,
     commit_integration_evidence_digest: str | None,
-    authenticated_integration_commit: AuthenticatedIntegrationCommit | None = None,
+    repository_root: Path | str,
+    signature_policy: dict[str, Any],
 ) -> VerifiedValidationEvidence:
     reviewed_state = _require_reviewed_state_identity(repository, reviewed_state)
     normalized = normalize_ready_integration_evidence(
@@ -2247,6 +2220,11 @@ def _verify_ready_integration_attestation_unsealed(
         registry=registry,
         validated_tree_sha=commit_tree_sha,
     )
+    if (
+        not isinstance(signature_policy, dict)
+        or signature_policy != registry.get("signature_policy")
+    ):
+        raise SecurityBlocker("integration signature policy context changed")
     if commit_parent_shas != normalized["ordered_parent_shas"]:
         raise SecurityBlocker("integration attestation ordered parents changed")
     if (
@@ -2284,10 +2262,21 @@ def _verify_ready_integration_attestation_unsealed(
         "attestation_schema_version": expected["schema_version"],
         "attestation_kind": expected["kind"],
     }
-    if not is_authenticated_integration_commit(
-        authenticated_integration_commit,
+    authenticated_integration_commit = authenticate_integration_commit(
+        repository_root=repository_root,
+        repository=repository,
         head_sha=head_sha,
         expected_signer=normalized["expected_signer"],
+        signature_policy=signature_policy,
+    )
+    if not _authenticated_integration_commit_agrees(
+        authenticated_integration_commit,
+        repository=repository,
+        head_sha=head_sha,
+        tree_sha=commit_tree_sha,
+        parent_shas=commit_parent_shas,
+        expected_signer=normalized["expected_signer"],
+        signature_policy=signature_policy,
     ):
         raise SecurityBlocker("authenticated integration commit is required")
     return _unregistered_validation_evidence(
@@ -2380,85 +2369,166 @@ def _verify_validation_attestation_unsealed(
     )
 
 
-def _validation_evidence_verifiers(
-    register: Callable[[VerifiedValidationEvidence], VerifiedValidationEvidence],
-) -> tuple[
-    Callable[..., VerifiedValidationEvidence],
-    Callable[..., VerifiedValidationEvidence],
-]:
-    def verify_ready_integration_attestation(
-        attestation: Any,
-        *,
-        repository: str,
-        head_sha: str,
-        registry: dict[str, Any],
-        command_set: list[dict[str, Any]],
-        reviewed_state: StableFeedbackState,
-        validation_receipt: dict[str, Any],
-        integration_evidence: dict[str, Any],
-        commit_parent_shas: list[str],
-        commit_tree_sha: str,
-        commit_validation_receipt_digest: str | None,
-        commit_integration_evidence_digest: str | None,
-        authenticated_integration_commit: AuthenticatedIntegrationCommit
-        | None = None,
-    ) -> VerifiedValidationEvidence:
-        return register(
-            _verify_ready_integration_attestation_unsealed(
-                attestation,
-                repository=repository,
-                head_sha=head_sha,
-                registry=registry,
-                command_set=command_set,
-                reviewed_state=reviewed_state,
-                validation_receipt=validation_receipt,
-                integration_evidence=integration_evidence,
-                commit_parent_shas=commit_parent_shas,
-                commit_tree_sha=commit_tree_sha,
-                commit_validation_receipt_digest=commit_validation_receipt_digest,
-                commit_integration_evidence_digest=commit_integration_evidence_digest,
-                authenticated_integration_commit=authenticated_integration_commit,
-            )
+def verify_ready_integration_attestation(
+    attestation: Any,
+    *,
+    repository: str,
+    head_sha: str,
+    registry: dict[str, Any],
+    command_set: list[dict[str, Any]],
+    reviewed_state: StableFeedbackState,
+    validation_receipt: dict[str, Any],
+    integration_evidence: dict[str, Any],
+    commit_parent_shas: list[str],
+    commit_tree_sha: str,
+    commit_validation_receipt_digest: str | None,
+    commit_integration_evidence_digest: str | None,
+    repository_root: Path | str,
+    signature_policy: dict[str, Any],
+) -> VerifiedValidationEvidence:
+    result = _verify_ready_integration_attestation_unsealed(
+        attestation,
+        repository=repository,
+        head_sha=head_sha,
+        registry=registry,
+        command_set=command_set,
+        reviewed_state=reviewed_state,
+        validation_receipt=validation_receipt,
+        integration_evidence=integration_evidence,
+        commit_parent_shas=commit_parent_shas,
+        commit_tree_sha=commit_tree_sha,
+        commit_validation_receipt_digest=commit_validation_receipt_digest,
+        commit_integration_evidence_digest=commit_integration_evidence_digest,
+        repository_root=repository_root,
+        signature_policy=signature_policy,
+    )
+    provenance = {
+        "kind": "READY_INTEGRATION",
+        "attestation": copy.deepcopy(attestation),
+        "repository": repository,
+        "head_sha": head_sha,
+        "registry": copy.deepcopy(registry),
+        "command_set": copy.deepcopy(command_set),
+        "reviewed_state": reviewed_state.to_dict(),
+        "validation_receipt": copy.deepcopy(validation_receipt),
+        "integration_evidence": copy.deepcopy(integration_evidence),
+        "commit_parent_shas": list(commit_parent_shas),
+        "commit_tree_sha": commit_tree_sha,
+        "commit_validation_receipt_digest": commit_validation_receipt_digest,
+        "commit_integration_evidence_digest": commit_integration_evidence_digest,
+        "repository_root": str(Path(repository_root).resolve()),
+        "signature_policy": copy.deepcopy(signature_policy),
+    }
+    return _seal_validation_evidence(result, provenance)
+
+
+def verify_validation_attestation(
+    attestation: Any,
+    *,
+    repository: str,
+    head_sha: str,
+    registry: dict[str, Any],
+    command_set: list[dict[str, Any]],
+    reviewed_state: StableFeedbackState,
+    commit_parent_sha: str,
+    commit_tree_sha: str,
+    commit_validation_receipt_digest: str | None,
+) -> VerifiedValidationEvidence:
+    result = _verify_validation_attestation_unsealed(
+        attestation,
+        repository=repository,
+        head_sha=head_sha,
+        registry=registry,
+        command_set=command_set,
+        reviewed_state=reviewed_state,
+        commit_parent_sha=commit_parent_sha,
+        commit_tree_sha=commit_tree_sha,
+        commit_validation_receipt_digest=commit_validation_receipt_digest,
+    )
+    provenance = {
+        "kind": "ORDINARY",
+        "attestation": copy.deepcopy(attestation),
+        "repository": repository,
+        "head_sha": head_sha,
+        "registry": copy.deepcopy(registry),
+        "command_set": copy.deepcopy(command_set),
+        "reviewed_state": reviewed_state.to_dict(),
+        "commit_parent_sha": commit_parent_sha,
+        "commit_tree_sha": commit_tree_sha,
+        "commit_validation_receipt_digest": commit_validation_receipt_digest,
+    }
+    return _seal_validation_evidence(result, provenance)
+
+
+def is_verified_validation_evidence(value: Any) -> bool:
+    """Re-verify canonical provenance instead of trusting caller-held authority."""
+
+    try:
+        if not isinstance(value, VerifiedValidationEvidence) or not isinstance(
+            value._verification_seal, _VerifiedValidationEvidenceSeal
+        ):
+            return False
+        raw = value._verification_seal.provenance_json
+        provenance = json.loads(raw)
+        if (
+            not isinstance(provenance, dict)
+            or canonical_json_bytes(provenance).decode("utf-8") != raw
+        ):
+            return False
+        reviewed_state = StableFeedbackState.from_payload(
+            provenance["reviewed_state"]
         )
-
-    def verify_validation_attestation(
-        attestation: Any,
-        *,
-        repository: str,
-        head_sha: str,
-        registry: dict[str, Any],
-        command_set: list[dict[str, Any]],
-        reviewed_state: StableFeedbackState,
-        commit_parent_sha: str,
-        commit_tree_sha: str,
-        commit_validation_receipt_digest: str | None,
-    ) -> VerifiedValidationEvidence:
-        return register(
-            _verify_validation_attestation_unsealed(
-                attestation,
-                repository=repository,
-                head_sha=head_sha,
-                registry=registry,
-                command_set=command_set,
+        kind = provenance.get("kind")
+        if kind == "ORDINARY":
+            verified = _verify_validation_attestation_unsealed(
+                provenance["attestation"],
+                repository=provenance["repository"],
+                head_sha=provenance["head_sha"],
+                registry=provenance["registry"],
+                command_set=provenance["command_set"],
                 reviewed_state=reviewed_state,
-                commit_parent_sha=commit_parent_sha,
-                commit_tree_sha=commit_tree_sha,
-                commit_validation_receipt_digest=commit_validation_receipt_digest,
+                commit_parent_sha=provenance["commit_parent_sha"],
+                commit_tree_sha=provenance["commit_tree_sha"],
+                commit_validation_receipt_digest=provenance[
+                    "commit_validation_receipt_digest"
+                ],
             )
+        elif kind == "READY_INTEGRATION":
+            verified = _verify_ready_integration_attestation_unsealed(
+                provenance["attestation"],
+                repository=provenance["repository"],
+                head_sha=provenance["head_sha"],
+                registry=provenance["registry"],
+                command_set=provenance["command_set"],
+                reviewed_state=reviewed_state,
+                validation_receipt=provenance["validation_receipt"],
+                integration_evidence=provenance["integration_evidence"],
+                commit_parent_shas=provenance["commit_parent_shas"],
+                commit_tree_sha=provenance["commit_tree_sha"],
+                commit_validation_receipt_digest=provenance[
+                    "commit_validation_receipt_digest"
+                ],
+                commit_integration_evidence_digest=provenance[
+                    "commit_integration_evidence_digest"
+                ],
+                repository_root=provenance["repository_root"],
+                signature_policy=provenance["signature_policy"],
+            )
+        else:
+            return False
+        return _validation_evidence_binding(verified) == _validation_evidence_binding(
+            value
         )
-
-    return verify_ready_integration_attestation, verify_validation_attestation
-
-
-verify_ready_integration_attestation, verify_validation_attestation = (
-    _validation_evidence_verifiers(_register_verified_validation_evidence)
-)
-
-
-del _register_verified_validation_evidence
-del _register_authenticated_integration_commit
-del _integration_commit_authenticator
-del _validation_evidence_verifiers
+    except (
+        AttributeError,
+        KeyError,
+        OSError,
+        RecoverableLocalError,
+        SecurityBlocker,
+        TypeError,
+        ValueError,
+    ):
+        return False
 
 
 def verify_commit_signatures(

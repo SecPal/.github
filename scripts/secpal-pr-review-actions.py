@@ -5529,6 +5529,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         if integration_evidence is not None:
             fast_path.authenticate_integration_commit(
                 repository_root=repository_root,
+                repository=arguments.repo,
                 head_sha=head,
                 expected_signer=integration_evidence["expected_signer"],
                 signature_policy=binding["signature_policy"],

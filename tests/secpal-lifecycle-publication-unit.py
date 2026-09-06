@@ -353,6 +353,7 @@ def verified_validation_evidence(
     registry = {
         "default_branch": "main",
         "manual_gates": [],
+        "signature_policy": {"accepted_formats": ["ssh", "openpgp"]},
         "validation": [],
     }
     integration = None
@@ -430,7 +431,20 @@ def verified_validation_evidence(
         )
         git_results = [
             subprocess.CompletedProcess(
-                [], 0, "gpgsig -----BEGIN SSH SIGNATURE-----\n\n", ""
+                [], 0, "https://github.com/SecPal/.github.git\n", ""
+            ),
+            subprocess.CompletedProcess(
+                [],
+                0,
+                (
+                    f"tree {tree}\n"
+                    + "".join(
+                        f"parent {parent_sha}\n"
+                        for parent_sha in integration["ordered_parent_shas"]
+                    )
+                    + "gpgsig -----BEGIN SSH SIGNATURE-----\n\n"
+                ),
+                "",
             ),
             subprocess.CompletedProcess(
                 [],
@@ -443,27 +457,22 @@ def verified_validation_evidence(
         with patch.object(
             fast_path, "_run_integration_commit_git", side_effect=git_results
         ):
-            authenticated_commit = fast_path.authenticate_integration_commit(
-                repository_root=Path(__file__).resolve().parents[1],
+            return fast_path.verify_eligibility_bound_ready_integration_attestation(
+                attestation,
+                repository=REPOSITORY,
                 head_sha=head,
-                expected_signer=integration["expected_signer"],
-                signature_policy={"accepted_formats": ["ssh", "openpgp"]},
+                registry=registry,
+                command_set=[],
+                reviewed_state=reviewed,
+                validation_receipt=receipt,
+                integration_evidence=integration,
+                commit_parent_shas=integration["ordered_parent_shas"],
+                commit_tree_sha=tree,
+                commit_validation_receipt_digest=receipt["receipt_digest"],
+                commit_integration_evidence_digest=fast_path.digest_json(integration),
+                repository_root=Path(__file__).resolve().parents[1],
+                signature_policy=registry["signature_policy"],
             )
-        return fast_path.verify_eligibility_bound_ready_integration_attestation(
-            attestation,
-            repository=REPOSITORY,
-            head_sha=head,
-            registry=registry,
-            command_set=[],
-            reviewed_state=reviewed,
-            validation_receipt=receipt,
-            integration_evidence=integration,
-            commit_parent_shas=integration["ordered_parent_shas"],
-            commit_tree_sha=tree,
-            commit_validation_receipt_digest=receipt["receipt_digest"],
-            commit_integration_evidence_digest=fast_path.digest_json(integration),
-            authenticated_integration_commit=authenticated_commit,
-        )
     attestation = fast_path.create_validation_attestation(
         repository=REPOSITORY, head_sha=head, registry=registry,
         command_set=[], successful_result=True, reviewed_state=reviewed,
@@ -652,10 +661,50 @@ class LifecyclePublicationTests(TestCase):
             head=HEADS[4], tree=HEADS[5], parent=HEADS[2],
             ready_integration=True,
         )
+
+        def issue_successor(**kwargs: Any) -> dict[str, Any]:
+            provenance = json.loads(
+                current_validation._verification_seal.provenance_json
+            )
+            integration = provenance["integration_evidence"]
+            git_results = [
+                subprocess.CompletedProcess(
+                    [], 0, "https://github.com/SecPal/.github.git\n", ""
+                ),
+                subprocess.CompletedProcess(
+                    [],
+                    0,
+                    (
+                        f"tree {integration['validated_tree_sha']}\n"
+                        + "".join(
+                            f"parent {parent_sha}\n"
+                            for parent_sha in integration["ordered_parent_shas"]
+                        )
+                        + "gpgsig -----BEGIN SSH SIGNATURE-----\n\n"
+                    ),
+                    "",
+                ),
+                subprocess.CompletedProcess(
+                    [],
+                    0,
+                    f'Good "git" signature for {SIGNER} with ED25519 key '
+                    "SHA256:test\n",
+                    "",
+                ),
+            ]
+            with patch.object(
+                fast_path,
+                "_run_integration_commit_git",
+                side_effect=git_results,
+            ):
+                return authority.issue_exact_state_adoption_successor_authority(
+                    **kwargs
+                )
+
         with self.assertRaisesRegex(
             authority.LifecycleAuthorityError, "verified current evidence"
         ):
-            authority.issue_exact_state_adoption_successor_authority(
+            issue_successor(
                 serialized_adoption_evidence=serialized, authorization=event,
                 signer_identity=SIGNER, authority_signer=signer_for(),
                 current_head_evidence=replace(
@@ -665,7 +714,7 @@ class LifecyclePublicationTests(TestCase):
         with self.assertRaisesRegex(
             authority.LifecycleAuthorityError, "verified current evidence"
         ):
-            authority.issue_exact_state_adoption_successor_authority(
+            issue_successor(
                 serialized_adoption_evidence=serialized, authorization=event,
                 signer_identity=SIGNER, authority_signer=signer_for(),
                 current_head_evidence=verified_validation_evidence(
@@ -673,7 +722,7 @@ class LifecyclePublicationTests(TestCase):
                     ready_integration=True, delivery_issue=ISSUE + 1,
                 ),
             )
-        snapshot = authority.issue_exact_state_adoption_successor_authority(
+        snapshot = issue_successor(
             serialized_adoption_evidence=serialized, authorization=event,
             signer_identity=SIGNER, authority_signer=signer_for(),
             current_head_evidence=current_validation,

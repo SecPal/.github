@@ -8,6 +8,7 @@ import copy
 import hashlib
 import importlib
 import importlib.util
+import inspect
 import io
 import json
 import subprocess
@@ -4729,15 +4730,25 @@ def ready_integration_evidence(
     }
 
 
-def authenticated_integration_commit(
-    head_sha: str,
-    integration: dict[str, Any],
-    *,
-    signer: str = "aroviqen",
-) -> fast_path.AuthenticatedIntegrationCommit:
-    git_results = [
+def integration_commit_git_results(
+    integration: dict[str, Any], *, signer: str = "aroviqen"
+) -> list[subprocess.CompletedProcess[str]]:
+    return [
         subprocess.CompletedProcess(
-            [], 0, "gpgsig -----BEGIN SSH SIGNATURE-----\n\n", ""
+            [], 0, "https://github.com/SecPal/.github.git\n", ""
+        ),
+        subprocess.CompletedProcess(
+            [],
+            0,
+            (
+                f"tree {integration['validated_tree_sha']}\n"
+                + "".join(
+                    f"parent {parent}\n"
+                    for parent in integration["ordered_parent_shas"]
+                )
+                + "gpgsig -----BEGIN SSH SIGNATURE-----\n\n"
+            ),
+            "",
         ),
         subprocess.CompletedProcess(
             [],
@@ -4746,15 +4757,67 @@ def authenticated_integration_commit(
             "",
         ),
     ]
+
+
+def authenticated_integration_commit(
+    head_sha: str,
+    integration: dict[str, Any],
+    *,
+    signer: str = "aroviqen",
+) -> fast_path.AuthenticatedIntegrationCommit:
     with mock.patch.object(
-        fast_path, "_run_integration_commit_git", side_effect=git_results
+        fast_path,
+        "_run_integration_commit_git",
+        side_effect=integration_commit_git_results(integration, signer=signer),
     ):
         return fast_path.authenticate_integration_commit(
             repository_root=REPO_ROOT,
+            repository="SecPal/.github",
             head_sha=head_sha,
             expected_signer=integration["expected_signer"],
             signature_policy=fast_registry()["signature_policy"],
         )
+
+
+def verified_ready_integration_attestation(
+    attestation: Any, **kwargs: Any
+) -> fast_path.VerifiedValidationEvidence:
+    integration = kwargs["integration_evidence"]
+    kwargs.setdefault("repository_root", REPO_ROOT)
+    kwargs.setdefault("signature_policy", kwargs["registry"]["signature_policy"])
+    with mock.patch.object(
+        fast_path,
+        "_run_integration_commit_git",
+        side_effect=integration_commit_git_results(integration),
+    ):
+        return fast_path.verify_ready_integration_attestation(attestation, **kwargs)
+
+
+def verified_eligibility_bound_ready_integration_attestation(
+    attestation: Any, **kwargs: Any
+) -> fast_path.VerifiedValidationEvidence:
+    integration = kwargs["integration_evidence"]
+    kwargs.setdefault("repository_root", REPO_ROOT)
+    kwargs.setdefault("signature_policy", kwargs["registry"]["signature_policy"])
+    with mock.patch.object(
+        fast_path,
+        "_run_integration_commit_git",
+        side_effect=integration_commit_git_results(integration),
+    ):
+        return fast_path.verify_eligibility_bound_ready_integration_attestation(
+            attestation, **kwargs
+        )
+
+
+def is_verified_ready_evidence(
+    value: Any, integration: dict[str, Any]
+) -> bool:
+    with mock.patch.object(
+        fast_path,
+        "_run_integration_commit_git",
+        side_effect=integration_commit_git_results(integration),
+    ):
+        return fast_path.is_verified_validation_evidence(value)
 
 
 def ready_integration_prior_authority(
@@ -7443,7 +7506,10 @@ class FastPathTests(TestCase):
             allow_failure: bool = False,
         ) -> Any:
             del allow_failure
-            if command[:4] == ["rev-list", "--parents", "-n", "1"]:
+            if command == ["remote", "get-url", "origin"]:
+                stdout = "https://github.com/SecPal/.github.git\n"
+                stderr = ""
+            elif command[:4] == ["rev-list", "--parents", "-n", "1"]:
                 stdout = f"{final_head} {reviewed.head_sha} {reviewed.base_sha}\n"
                 stderr = ""
             elif command == ["rev-parse", "HEAD^{tree}"]:
@@ -7459,7 +7525,9 @@ class FastPathTests(TestCase):
                 stderr = ""
             elif command[:2] == ["cat-file", "commit"]:
                 stdout = (
-                    "tree deadbeef\ngpgsig -----BEGIN SSH SIGNATURE-----\n"
+                    f"tree {tree}\nparent {reviewed.head_sha}\n"
+                    f"parent {reviewed.base_sha}\n"
+                    "gpgsig -----BEGIN SSH SIGNATURE-----\n"
                     " signature\n -----END SSH SIGNATURE-----\n\nmessage\n"
                 )
                 stderr = ""
@@ -8990,7 +9058,6 @@ class FastPathTests(TestCase):
             validation_receipt=receipt,
             integration_evidence=integration,
         )
-
         self.assertEqual(attestation["schema_version"], "1.2")
         self.assertEqual(
             attestation["kind"],
@@ -9014,11 +9081,8 @@ class FastPathTests(TestCase):
             "commit_integration_evidence_digest": fast_path.digest_json(
                 integration
             ),
-            "authenticated_integration_commit": authenticated_integration_commit(
-                "d" * 40, integration
-            ),
         }
-        fast_path.verify_eligibility_bound_ready_integration_attestation(
+        verified_eligibility_bound_ready_integration_attestation(
             attestation, **verification
         )
 
@@ -9027,7 +9091,7 @@ class FastPathTests(TestCase):
         with self.assertRaisesRegex(
             fast_path.SecurityBlocker, "eligibility-bound"
         ):
-            fast_path.verify_eligibility_bound_ready_integration_attestation(
+            verified_eligibility_bound_ready_integration_attestation(
                 missing, **verification
             )
 
@@ -9042,7 +9106,7 @@ class FastPathTests(TestCase):
             mismatched_fields
         )
         with self.assertRaisesRegex(fast_path.SecurityBlocker, "eligibility differ"):
-            fast_path.verify_eligibility_bound_ready_integration_attestation(
+            verified_eligibility_bound_ready_integration_attestation(
                 mismatched, **verification
             )
 
@@ -9068,7 +9132,7 @@ class FastPathTests(TestCase):
         with self.assertRaisesRegex(
             fast_path.SecurityBlocker, "eligibility-bound"
         ):
-            fast_path.verify_eligibility_bound_ready_integration_attestation(
+            verified_eligibility_bound_ready_integration_attestation(
                 historical, **verification
             )
 
@@ -9125,7 +9189,7 @@ class FastPathTests(TestCase):
         )
 
         def verify(candidate: dict[str, Any], evidence_value: dict[str, Any]) -> None:
-            fast_path.verify_ready_integration_attestation(
+            verified_ready_integration_attestation(
                 candidate,
                 repository="SecPal/.github",
                 head_sha=head,
@@ -9138,9 +9202,6 @@ class FastPathTests(TestCase):
                 commit_tree_sha=tree,
                 commit_validation_receipt_digest=receipt["receipt_digest"],
                 commit_integration_evidence_digest=fast_path.digest_json(evidence_value),
-                authenticated_integration_commit=authenticated_integration_commit(
-                    head, evidence_value
-                ),
             )
 
         verify(attestation, integration)
@@ -9187,7 +9248,7 @@ class FastPathTests(TestCase):
             integration_evidence=integration,
         )
 
-        verified = fast_path.verify_ready_integration_attestation(
+        verified = verified_ready_integration_attestation(
             attestation,
             repository="SecPal/.github",
             head_sha=head,
@@ -9200,12 +9261,9 @@ class FastPathTests(TestCase):
             commit_tree_sha=tree,
             commit_validation_receipt_digest=receipt["receipt_digest"],
             commit_integration_evidence_digest=fast_path.digest_json(integration),
-            authenticated_integration_commit=authenticated_integration_commit(
-                head, integration
-            ),
         )
 
-        self.assertTrue(fast_path.is_verified_validation_evidence(verified))
+        self.assertTrue(is_verified_ready_evidence(verified, integration))
         self.assertEqual(verified.repository, "SecPal/.github")
         self.assertEqual(verified.delivery_issue_number, 9)
         self.assertEqual(verified.pull_request_number, reviewed.pull_request_number)
@@ -9260,9 +9318,9 @@ class FastPathTests(TestCase):
         ):
             changed = replace(verified, **{field: value})
             with self.subTest(field=field):
-                self.assertFalse(fast_path.is_verified_validation_evidence(changed))
+                self.assertFalse(is_verified_ready_evidence(changed, integration))
         with self.assertRaises(AttributeError):
-            verified._verification_seal.binding_digest = "0" * 64
+            verified._verification_seal.provenance_json = "{}\n"
 
     def test_validation_evidence_authority_rejects_mutated_and_bypassed_seals(
         self,
@@ -9294,7 +9352,7 @@ class FastPathTests(TestCase):
             validation_receipt=receipt,
             integration_evidence=integration,
         )
-        verified = fast_path.verify_ready_integration_attestation(
+        verified = verified_ready_integration_attestation(
             attestation,
             repository="SecPal/.github",
             head_sha=head,
@@ -9307,18 +9365,18 @@ class FastPathTests(TestCase):
             commit_tree_sha=tree,
             commit_validation_receipt_digest=receipt["receipt_digest"],
             commit_integration_evidence_digest=fast_path.digest_json(integration),
-            authenticated_integration_commit=authenticated_integration_commit(
-                head, integration
-            ),
         )
 
-        changed = replace(verified, repository="Other/repository")
-        object.__setattr__(
-            changed._verification_seal,
-            "binding_digest",
-            fast_path.digest_json(fast_path._validation_evidence_binding(changed)),
+        changed_provenance = json.loads(verified._verification_seal.provenance_json)
+        changed_provenance["repository"] = "Other/repository"
+        changed = replace(
+            verified,
+            repository="Other/repository",
+            _verification_seal=fast_path._VerifiedValidationEvidenceSeal(
+                fast_path.canonical_json_bytes(changed_provenance).decode("utf-8")
+            ),
         )
-        self.assertFalse(fast_path.is_verified_validation_evidence(changed))
+        self.assertFalse(is_verified_ready_evidence(changed, integration))
 
         bypassed_seal = object.__new__(fast_path._VerifiedValidationEvidenceSeal)
         bypassed = replace(
@@ -9328,10 +9386,10 @@ class FastPathTests(TestCase):
         )
         object.__setattr__(
             bypassed_seal,
-            "binding_digest",
-            fast_path.digest_json(fast_path._validation_evidence_binding(bypassed)),
+            "provenance_json",
+            "{}\n",
         )
-        self.assertFalse(fast_path.is_verified_validation_evidence(bypassed))
+        self.assertFalse(is_verified_ready_evidence(bypassed, integration))
 
         forged = fast_path.VerifiedValidationEvidence(
             repository=verified.repository,
@@ -9344,7 +9402,7 @@ class FastPathTests(TestCase):
             source_validation_evidence_digest=(
                 verified.source_validation_evidence_digest
             ),
-            _verification_seal=verified._verification_seal,
+            _verification_seal=object(),
         )
         self.assertFalse(fast_path.is_verified_validation_evidence(forged))
         self.assertFalse(
@@ -9374,6 +9432,224 @@ class FastPathTests(TestCase):
             fast_path.is_verified_validation_evidence(candidate_self_sealed)
         )
 
+    def test_authority_predicates_fail_closed_for_partially_initialized_objects(
+        self,
+    ) -> None:
+        malformed_evidence = object.__new__(fast_path.VerifiedValidationEvidence)
+        malformed_commit = object.__new__(fast_path.AuthenticatedIntegrationCommit)
+        malformed_seal = object.__new__(fast_path._VerifiedValidationEvidenceSeal)
+        malformed_nested_evidence = fast_path.VerifiedValidationEvidence(
+            repository="SecPal/.github",
+            delivery_issue_number=857,
+            pull_request_number=858,
+            head_sha="d" * 40,
+            tree_sha="a" * 40,
+            validation_receipt_digest="b" * 64,
+            final_attestation_digest="c" * 64,
+            source_validation_evidence_digest="e" * 64,
+            _verification_seal=malformed_seal,
+        )
+
+        self.assertFalse(
+            fast_path.is_verified_validation_evidence(malformed_evidence)
+        )
+        self.assertFalse(
+            fast_path.is_verified_validation_evidence(malformed_nested_evidence)
+        )
+        self.assertFalse(
+            fast_path._authenticated_integration_commit_agrees(
+                malformed_commit,
+                head_sha="d" * 40,
+                expected_signer={
+                    "kind": "SSH_PRINCIPAL",
+                    "identity": "aroviqen",
+                },
+            )
+        )
+
+    def test_exported_verifier_does_not_expose_registration_authority(self) -> None:
+        forged = fast_path._unregistered_validation_evidence(
+            repository="SecPal/.github",
+            delivery_issue_number=857,
+            pull_request_number=858,
+            head_sha="d" * 40,
+            tree_sha="a" * 40,
+            validation_receipt_digest="b" * 64,
+            final_attestation_digest="c" * 64,
+            source_validation_evidence_digest="e" * 64,
+        )
+        for verifier in (
+            fast_path.verify_validation_attestation,
+            fast_path.verify_ready_integration_attestation,
+            fast_path.authenticate_integration_commit,
+        ):
+            captured_callables = [
+                cell.cell_contents
+                for cell in (verifier.__closure__ or ())
+                if callable(cell.cell_contents)
+            ]
+            with self.subTest(verifier=verifier.__name__):
+                self.assertEqual(captured_callables, [])
+        self.assertFalse(fast_path.is_verified_validation_evidence(forged))
+
+    def test_authenticated_commit_binds_observed_topology_and_trust_context(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        registry = fast_registry()
+        claimed_tree = "a" * 40
+        head = "d" * 40
+        integration = ready_integration_evidence(
+            reviewed, validated_tree=claimed_tree, registry=registry
+        )
+        receipt = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            validated_tree_sha=claimed_tree,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+            integration_evidence_digest=fast_path.digest_json(integration),
+        )
+        attestation = fast_path.create_ready_integration_attestation(
+            repository="SecPal/.github",
+            head_sha=head,
+            registry=registry,
+            command_set=registry["validation"],
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+            integration_evidence=integration,
+        )
+        authenticated = authenticated_integration_commit(head, integration)
+        self.assertEqual(authenticated.repository, "SecPal/.github")
+        self.assertEqual(authenticated.tree_sha, claimed_tree)
+        self.assertEqual(
+            authenticated.parent_shas,
+            tuple(integration["ordered_parent_shas"]),
+        )
+        self.assertEqual(
+            authenticated.signature_policy_digest,
+            fast_path.digest_json(registry["signature_policy"]),
+        )
+        self.assertNotIn(
+            "authenticated_integration_commit",
+            inspect.signature(
+                fast_path.verify_ready_integration_attestation
+            ).parameters,
+        )
+        for case, observed_tree, observed_parents in (
+            (
+                "tree",
+                "b" * 40,
+                integration["ordered_parent_shas"],
+            ),
+            (
+                "parents",
+                claimed_tree,
+                ["c" * 40, *integration["ordered_parent_shas"][1:]],
+            ),
+        ):
+            git_results = integration_commit_git_results(integration)
+            git_results[1] = subprocess.CompletedProcess(
+                [],
+                0,
+                (
+                    f"tree {observed_tree}\n"
+                    + "".join(
+                        f"parent {parent}\n" for parent in observed_parents
+                    )
+                    + "gpgsig -----BEGIN SSH SIGNATURE-----\n\n"
+                ),
+                "",
+            )
+            with (
+                self.subTest(case=case),
+                tempfile.TemporaryDirectory() as repository_root,
+                mock.patch.object(
+                    fast_path,
+                    "_run_integration_commit_git",
+                    side_effect=git_results,
+                ),
+                self.assertRaisesRegex(
+                    fast_path.SecurityBlocker,
+                    "authenticated integration commit",
+                ),
+            ):
+                fast_path.verify_ready_integration_attestation(
+                    attestation,
+                    repository="SecPal/.github",
+                    head_sha=head,
+                    registry=registry,
+                    command_set=registry["validation"],
+                    reviewed_state=reviewed,
+                    validation_receipt=receipt,
+                    integration_evidence=integration,
+                    commit_parent_shas=integration["ordered_parent_shas"],
+                    commit_tree_sha=claimed_tree,
+                    commit_validation_receipt_digest=receipt["receipt_digest"],
+                    commit_integration_evidence_digest=fast_path.digest_json(
+                        integration
+                    ),
+                    repository_root=repository_root,
+                    signature_policy=registry["signature_policy"],
+                )
+
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker,
+            "signature policy context changed",
+        ):
+            fast_path.verify_ready_integration_attestation(
+                attestation,
+                repository="SecPal/.github",
+                head_sha=head,
+                registry=registry,
+                command_set=registry["validation"],
+                reviewed_state=reviewed,
+                validation_receipt=receipt,
+                integration_evidence=integration,
+                commit_parent_shas=integration["ordered_parent_shas"],
+                commit_tree_sha=claimed_tree,
+                commit_validation_receipt_digest=receipt["receipt_digest"],
+                commit_integration_evidence_digest=fast_path.digest_json(integration),
+                repository_root=REPO_ROOT,
+                signature_policy={"accepted_formats": ["ssh"]},
+            )
+
+        wrong_context = integration_commit_git_results(integration)
+        wrong_context[0] = subprocess.CompletedProcess(
+            [], 0, "https://github.com/Other/repository.git\n", ""
+        )
+        with (
+            tempfile.TemporaryDirectory() as repository_root,
+            mock.patch.object(
+                fast_path,
+                "_run_integration_commit_git",
+                side_effect=wrong_context,
+            ),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "repository identity changed",
+            ),
+        ):
+            fast_path.verify_ready_integration_attestation(
+                attestation,
+                repository="SecPal/.github",
+                head_sha=head,
+                registry=registry,
+                command_set=registry["validation"],
+                reviewed_state=reviewed,
+                validation_receipt=receipt,
+                integration_evidence=integration,
+                commit_parent_shas=integration["ordered_parent_shas"],
+                commit_tree_sha=claimed_tree,
+                commit_validation_receipt_digest=receipt["receipt_digest"],
+                commit_integration_evidence_digest=fast_path.digest_json(integration),
+                repository_root=repository_root,
+                signature_policy=registry["signature_policy"],
+            )
+
     def test_ready_integration_cannot_seal_without_commit_authentication(self) -> None:
         reviewed = fast_feedback()
         registry = fast_registry()
@@ -9402,8 +9678,18 @@ class FastPathTests(TestCase):
             validation_receipt=receipt,
             integration_evidence=integration,
         )
-        with self.assertRaisesRegex(
-            fast_path.SecurityBlocker, "authenticated integration commit"
+        with (
+            mock.patch.object(
+                fast_path,
+                "_run_integration_commit_git",
+                side_effect=fast_path.RecoverableLocalError(
+                    "integration commit verification is unavailable"
+                ),
+            ),
+            self.assertRaisesRegex(
+                fast_path.RecoverableLocalError,
+                "integration commit verification is unavailable",
+            ),
         ):
             fast_path.verify_ready_integration_attestation(
                 attestation,
@@ -9418,39 +9704,8 @@ class FastPathTests(TestCase):
                 commit_tree_sha=tree,
                 commit_validation_receipt_digest=receipt["receipt_digest"],
                 commit_integration_evidence_digest=fast_path.digest_json(integration),
-            )
-
-        authenticated = authenticated_integration_commit(head, integration)
-        self.assertFalse(
-            hasattr(fast_path, "_register_authenticated_integration_commit")
-        )
-        bypassed = object.__new__(fast_path.AuthenticatedIntegrationCommit)
-        for field in (
-            "head_sha",
-            "signer_kind",
-            "signer_identity",
-            "signature_fingerprint",
-            "signature_classification",
-            "authentication_digest",
-        ):
-            object.__setattr__(bypassed, field, getattr(authenticated, field))
-        with self.assertRaisesRegex(
-            fast_path.SecurityBlocker, "authenticated integration commit"
-        ):
-            fast_path.verify_ready_integration_attestation(
-                attestation,
-                repository="SecPal/.github",
-                head_sha=head,
-                registry=registry,
-                command_set=registry["validation"],
-                reviewed_state=reviewed,
-                validation_receipt=receipt,
-                integration_evidence=integration,
-                commit_parent_shas=integration["ordered_parent_shas"],
-                commit_tree_sha=tree,
-                commit_validation_receipt_digest=receipt["receipt_digest"],
-                commit_integration_evidence_digest=fast_path.digest_json(integration),
-                authenticated_integration_commit=bypassed,
+                repository_root=REPO_ROOT,
+                signature_policy=registry["signature_policy"],
             )
 
     def test_signed_validation_receipt_trailer_must_be_unique_and_well_formed(self) -> None:

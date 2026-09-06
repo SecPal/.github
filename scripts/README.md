@@ -83,14 +83,15 @@ Successful verification of either supported Ready-integration attestation versio
 returns the existing verifier-sealed current-head validation evidence only after
 the canonical verifier has run trusted `git verify-commit` itself and the actual
 integration commit signature, signer identity, format, and fingerprint have
-passed policy. Caller-provided signature claims or verifier output cannot mint
-that authenticated-commit capability. The immutable private authority is bound
-to the exact returned object identity; copying, replacing, reconstructing, or
-mutating its nested seal cannot authenticate another value. The canonical source
-digest retains its historical binding to the complete normalized integration package,
-including delivery, topology, current-main, receipt, reviewed-state, expected
-signer, kind, and version identities; actual signer authentication is the
-additional precondition for issuing that compatible sealed result.
+passed policy. The authenticated result also binds the repository, exact signed
+tree and ordered parents, and maintained signature-policy digest. Consumers
+independently re-verify canonical provenance; caller-created, replaced,
+malformed, or cross-context values therefore fail closed without relying on an
+in-process registrar. The canonical source digest retains its historical binding
+to the complete normalized integration package, including delivery, topology,
+current-main, receipt, reviewed-state, expected signer, kind, and version
+identities; actual signer authentication is the additional precondition for
+issuing that compatible sealed result.
 Exact-state-adopted `HEAD_ADVANCED` may consume it, but all independent lifecycle
 authorization and publication preconditions remain mandatory.
 

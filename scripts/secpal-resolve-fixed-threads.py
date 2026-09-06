@@ -1390,6 +1390,7 @@ def verify_local_fix_commit(
             )
             authenticated_commit = fast_path.authenticate_integration_commit(
                 repository_root=root,
+                repository=repository,
                 head_sha=expected_head.lower(),
                 expected_signer=validation.integration_evidence["expected_signer"],
                 signature_policy=signature_policy,
@@ -1407,9 +1408,14 @@ def verify_local_fix_commit(
                 commit_tree_sha=commit_tree,
                 commit_validation_receipt_digest=trailers[0],
                 commit_integration_evidence_digest=integration_trailer,
-                authenticated_integration_commit=authenticated_commit,
+                repository_root=root,
+                signature_policy=signature_policy,
             )
-        except (KeyError, fast_path.SecurityBlocker) as exc:
+        except (
+            KeyError,
+            fast_path.RecoverableLocalError,
+            fast_path.SecurityBlocker,
+        ) as exc:
             raise ResolutionError(str(exc)) from exc
     if authenticated_commit is not None:
         signer = late_disposition.SignerIdentity(

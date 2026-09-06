@@ -3425,6 +3425,62 @@ class ResolveFixedThreadsTests(TestCase):
         self.assertEqual(result["pending"], [thread_id])
         self.assertEqual(result["status"], "success")
 
+    def test_ready_integration_translates_recoverable_authenticator_failure(
+        self,
+    ) -> None:
+        thread_id = "PRRT_INTEGRATION_AUTH_UNAVAILABLE"
+        reviewed = reviewed_state_payload(thread_id, [])
+        eligibility = eligibility_payload(reviewed, (thread_id,))
+        integration, receipt, attestation = integration_validation_payloads(
+            reviewed,
+            MODULE._digest_json(eligibility),
+            expected_head="c" * 40,
+        )
+        git = FakeGit(
+            expected_head=attestation["head_sha"],
+            reviewed_head=reviewed["head_sha"],
+            second_parent=reviewed["base_sha"],
+            tree=attestation["validated_tree_sha"],
+            receipt_digest=receipt["receipt_digest"],
+            integration_digest=MODULE.fast_path.digest_json(integration),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, value in (
+                ("reviewed.json", reviewed),
+                ("validation.json", attestation),
+                ("eligibility.json", eligibility),
+                ("integration.json", integration),
+            ):
+                (root / name).write_text(json.dumps(value), encoding="utf-8")
+            with (
+                mock.patch.object(MODULE, "_run_git", git),
+                mock.patch.object(
+                    MODULE.fast_path,
+                    "authenticate_integration_commit",
+                    side_effect=MODULE.fast_path.RecoverableLocalError(
+                        "integration commit verification is unavailable"
+                    ),
+                ),
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "integration commit verification is unavailable",
+                ),
+            ):
+                MODULE.resolve_threads(
+                    "SecPal/api",
+                    123,
+                    attestation["head_sha"],
+                    (thread_id,),
+                    apply=False,
+                    repository_root=root,
+                    reviewed_state_path=root / "reviewed.json",
+                    expected_reviewed_state_digest=reviewed["state_digest"],
+                    validation_evidence_path=root / "validation.json",
+                    eligibility_evidence_path=root / "eligibility.json",
+                    integration_evidence_path=root / "integration.json",
+                )
+
     def test_eligibility_bound_ready_integration_rejects_wrong_actual_signer(
         self,
     ) -> None:

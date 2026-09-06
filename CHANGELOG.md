@@ -9,16 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
-## 2026-09-06 - Authenticate Immutable Validation-Evidence Seals
+## 2026-09-06 - Authenticate Validation-Evidence Provenance
 
 **Fixed:**
 
-- Keep verifier-issued validation-evidence authority in a private identity
-  registry so copied, replaced, reconstructed, or nested-seal-mutated values
-  cannot regain authenticated status.
+- Require consumers to re-verify canonical validation-evidence provenance so
+  caller construction, replacement, malformed objects, and seal substitution
+  fail closed without relying on hidden in-process registration authority.
 - Require the actual Ready-integration commit signature and signer identity to
   pass the existing canonical verifier before lifecycle-consumable validation
   evidence is sealed.
+- Bind the authenticated integration commit to its repository, exact tree,
+  ordered parents, and maintained signature-policy digest before sealing.
 - Preserve ordinary validation and historical Ready-integration semantics while
   removing obsolete internal sentinel-based test fixtures.
 
