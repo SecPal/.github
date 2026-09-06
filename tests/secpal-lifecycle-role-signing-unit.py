@@ -416,6 +416,38 @@ class RoleSpecificLifecycleSigningTests(TestCase):
         ):
             self.legacy_signer()
 
+    def test_role_mapping_command_output_is_bounded_before_parsing(self) -> None:
+        for index in range(
+            execution.late_disposition.MAXIMUM_ROLE_CREDENTIAL_MAPPINGS + 1
+        ):
+            self.git_config(
+                execution.late_disposition.ROLE_CREDENTIAL_CONFIG_KEY,
+                f"{index}:" + "x" * 4094,
+                add=True,
+            )
+        with self.assertRaisesRegex(
+            execution.late_disposition.LateDispositionError,
+            "output limit",
+        ):
+            execution.late_disposition._read_global_git_values(
+                execution.late_disposition.ROLE_CREDENTIAL_CONFIG_KEY,
+                self.environment,
+            )
+
+    def test_routine_openpgp_exact_key_selector_is_preserved(self) -> None:
+        self.git_config("gpg.format", "openpgp")
+        exact_selector = f"{OPENPGP_FIXTURE_FINGERPRINT}!"
+        self.git_config("user.signingkey", exact_selector)
+
+        self.assertEqual(
+            execution.late_disposition.read_role_signing_configuration(
+                ROUTINE,
+                allow_routine_default=True,
+                environment=self.environment,
+            ),
+            ("openpgp", exact_selector),
+        )
+
     def test_nul_containing_mapping_fails_closed(self) -> None:
         raw = json.dumps(
             {"identity": LEGACY_ADOPTION, "credential": "/credential\x00suffix"}

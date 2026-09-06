@@ -66,6 +66,10 @@ MAXIMUM_ARTIFACT_BYTES = 64 * 1024
 MAXIMUM_SIGNATURE_BYTES = 32 * 1024
 MAXIMUM_ROLE_CREDENTIAL_MAPPINGS = 32
 MAXIMUM_ROLE_CREDENTIAL_MAPPING_BYTES = 4096
+MAXIMUM_ROLE_CREDENTIAL_OUTPUT_BYTES = (
+    MAXIMUM_ROLE_CREDENTIAL_MAPPINGS
+    * (MAXIMUM_ROLE_CREDENTIAL_MAPPING_BYTES + 1)
+)
 ROLE_CREDENTIAL_CONFIG_KEY = "secpal.lifecycleSigningCredential"
 OID = re.compile(r"^[0-9a-f]{40}$")
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -74,6 +78,7 @@ THREAD_ID = re.compile(r"^PRRT_[A-Za-z0-9_-]+$")
 IDENTITY = re.compile(r"^[^\x00-\x20\x7f]{1,256}$")
 SSH_FINGERPRINT = re.compile(r"SHA256:[A-Za-z0-9+/]+={0,2}")
 OPENPGP_FINGERPRINT = re.compile(r"[0-9A-Fa-f]{40,64}")
+OPENPGP_CREDENTIAL = re.compile(r"[0-9A-Fa-f]{40,64}!?")
 TRUSTED_COMMAND_DIRECTORIES = tuple(
     Path(value) for value in ("/usr/bin", "/bin", "/usr/local/bin", "/opt/homebrew/bin", "/opt/local/bin")
 )
@@ -414,15 +419,34 @@ def _read_global_git_values(
 ) -> tuple[str, ...]:
     executable = _trusted_executable("git")
     arguments = ("config", "--global", "--null", "--get-all", key)
-    completed = _run_signature_command(
-        executable, arguments, environment=environment
-    )
+    try:
+        with tempfile.TemporaryFile() as output:
+            completed = subprocess.run(
+                [executable, *arguments],
+                check=False,
+                stdin=subprocess.DEVNULL,
+                stdout=output,
+                stderr=subprocess.DEVNULL,
+                env=environment,
+                start_new_session=True,
+                timeout=30,
+            )
+            if output.tell() > MAXIMUM_ROLE_CREDENTIAL_OUTPUT_BYTES:
+                raise LateDispositionError(
+                    "OS-account role credential mapping output limit exceeded"
+                )
+            output.seek(0)
+            raw_output = output.read(MAXIMUM_ROLE_CREDENTIAL_OUTPUT_BYTES + 1)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise LateDispositionError(
+            "OS-account signing configuration is unavailable"
+        ) from exc
     if completed.returncode not in (0, 1):
         raise LateDispositionError(
             "OS-account signing configuration is unavailable"
         )
     try:
-        values = completed.stdout.decode("utf-8").split("\0")
+        values = raw_output.decode("utf-8").split("\0")
     except UnicodeDecodeError as exc:
         raise LateDispositionError(
             "OS-account role credential mapping is malformed"
@@ -513,7 +537,7 @@ def read_role_signing_configuration(
             raise LateDispositionError(
                 "OS-account role credential reference is ambiguous"
             )
-    elif not OPENPGP_FINGERPRINT.fullmatch(credential):
+    elif not OPENPGP_CREDENTIAL.fullmatch(credential):
         raise LateDispositionError(
             "OS-account role credential reference is ambiguous"
         )
