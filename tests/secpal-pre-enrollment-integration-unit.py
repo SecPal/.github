@@ -25,6 +25,58 @@ SPEC.loader.exec_module(actions)
 
 
 class PreEnrollmentIntegrationBoundaryTests(TestCase):
+    def test_completed_dependency_inventory_does_not_override_canonical_ready(self) -> None:
+        graph = {
+            "complete": True,
+            "issue": {
+                "key": "SecPal/.github#776",
+                "leaf": True,
+                "ready": True,
+                "blocked": False,
+                "malformed": False,
+                "reasons": [],
+                "blocked_by": ["SecPal/.github#787", "SecPal/.github#771"],
+            },
+        }
+
+        actions._verify_pre_enrollment_work_graph_result(
+            graph,
+            repository="SecPal/.github",
+            delivery_issue=776,
+            expected_digest=fast_path.digest_json(graph),
+        )
+
+    def test_nonready_blocked_or_malformed_work_graph_fails_closed(self) -> None:
+        base = {
+            "complete": True,
+            "issue": {
+                "key": "SecPal/.github#776",
+                "leaf": True,
+                "ready": True,
+                "blocked": False,
+                "malformed": False,
+                "reasons": [],
+                "blocked_by": [],
+            },
+        }
+        mutations = (
+            {"ready": False},
+            {"ready": False, "blocked": True, "reasons": ["unsatisfied dependency"]},
+            {"ready": False, "malformed": True, "reasons": ["malformed graph"]},
+            {"ready": True, "blocked": False, "malformed": False, "reasons": ["ambiguous"]},
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                graph = copy.deepcopy(base)
+                graph["issue"].update(mutation)
+                with self.assertRaises(actions.fast_path.SecurityBlocker):
+                    actions._verify_pre_enrollment_work_graph_result(
+                        graph,
+                        repository="SecPal/.github",
+                        delivery_issue=776,
+                        expected_digest=fast_path.digest_json(graph),
+                    )
+
     def test_attestation_cli_can_select_typed_draft_pre_enrollment_integration(self) -> None:
         arguments = actions.build_parser().parse_args(
             [

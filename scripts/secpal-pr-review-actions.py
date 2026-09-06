@@ -4958,20 +4958,16 @@ def _verify_pre_enrollment_external_authority(
         raise fast_path.SecurityBlocker(
             "canonical pre-enrollment work-graph evidence is unavailable"
         ) from exc
-    if (
-        graph_result.returncode != 0
-        or graph.get("complete") is not True
-        or issue.get("key")
-        != f'{evidence_value["repository"]}#{evidence_value["delivery_issue"]}'
-        or issue.get("leaf") is not True
-        or issue.get("ready") is not True
-        or issue.get("blocked_by") != []
-        or fast_path.digest_json(graph)
-        != evidence_value["work_graph"]["evidence_digest"]
-    ):
+    if graph_result.returncode != 0:
         raise fast_path.SecurityBlocker(
             "canonical work graph does not authorize pre-enrollment execution"
         )
+    _verify_pre_enrollment_work_graph_result(
+        graph,
+        repository=evidence_value["repository"],
+        delivery_issue=evidence_value["delivery_issue"],
+        expected_digest=evidence_value["work_graph"]["evidence_digest"],
+    )
     absence = lifecycle_publication.verify_pre_enrollment_absence(
         evidence_value["repository"], evidence_value["delivery_issue"]
     )
@@ -4989,6 +4985,32 @@ def _verify_pre_enrollment_external_authority(
     ):
         raise fast_path.SecurityBlocker(
             "delivery has lifecycle authority or stale lifecycle-absence evidence"
+        )
+
+
+def _verify_pre_enrollment_work_graph_result(
+    graph: dict[str, Any],
+    *,
+    repository: str,
+    delivery_issue: int,
+    expected_digest: str,
+) -> None:
+    """Consume the canonical derived state without reinterpreting edge inventory."""
+
+    issue = graph.get("issue")
+    if (
+        graph.get("complete") is not True
+        or not isinstance(issue, dict)
+        or issue.get("key") != f"{repository}#{delivery_issue}"
+        or issue.get("leaf") is not True
+        or issue.get("ready") is not True
+        or issue.get("blocked") is not False
+        or issue.get("malformed") is not False
+        or issue.get("reasons") != []
+        or fast_path.digest_json(graph) != expected_digest
+    ):
+        raise fast_path.SecurityBlocker(
+            "canonical work graph does not authorize pre-enrollment execution"
         )
 
 

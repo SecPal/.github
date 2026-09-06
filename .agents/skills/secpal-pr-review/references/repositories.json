@@ -174,6 +174,38 @@
             "enrollment_publication_digest": "44fb6c570d4e875f2655e363bfe667107d69d37eedf62487bbf4551cf9288a9d"
           }
         ],
+        "historical_compatibility_publications": [
+          {
+            "repository": "SecPal/.github",
+            "delivery_issue": 692,
+            "pull_request": 757,
+            "initial_head_sha": "6c234f18f4a9cfe3fd80f78be31446efb4634f0c",
+            "initialization_digest": "4e071bcbfc17a20cc54b3f608f10418b3cc376eddce0dfba6ddbe54e2e53108f",
+            "enrollment_publication_oid": "52e76a4eef0fdbb297c16d4bcf64b813bef84062",
+            "enrollment_publication_digest": "ace5dd8f514870f33d734d6e8f6f7371b48783c6a6823d6a496b895f4cc0ac5e",
+            "historical_proof_mode": "native_lifecycle"
+          },
+          {
+            "repository": "SecPal/.github",
+            "delivery_issue": 674,
+            "pull_request": 758,
+            "initial_head_sha": "325c0a3af7fd0f0d7143de7e448ea4fa7c875a65",
+            "initialization_digest": "2756e83b52c8af10c30926cb1d62d5501819a790158f560cf0f608587df321e9",
+            "enrollment_publication_oid": "80950f8908f29ead325eb99caf1977e51fad37e1",
+            "enrollment_publication_digest": "b5fa17ae18f5fc7208c7e13b9c361d59adc0128446404e79bbf42587679cbfad",
+            "historical_proof_mode": "native_lifecycle"
+          },
+          {
+            "repository": "SecPal/.github",
+            "delivery_issue": 735,
+            "pull_request": 759,
+            "initial_head_sha": "bd31adf8a0f797e4af65e9892936bed49a233634",
+            "initialization_digest": "6b630e40702ae69145226f8b40c8e6540914cd6e12815720551330faa2ca9d3d",
+            "enrollment_publication_oid": "2a5c2d9554ca7b70fd4f2e486da18ae9697af912",
+            "enrollment_publication_digest": "abd53fe73fc29257656151b3ad3777cbe72012102a5a5bcec95ec23529c0e211",
+            "historical_proof_mode": "native_lifecycle"
+          }
+        ],
         "delivery_initializations": [
           {
             "delivery_issue": 692,

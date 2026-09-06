@@ -253,6 +253,9 @@ class LifecycleAuthorityTests(TestCase):
                 "current_authority_digest": "4" * 64,
             },
         ]
+        entry["lifecycle_authority_policy"][
+            "historical_compatibility_publications"
+        ] = []
         with tempfile.TemporaryDirectory(prefix="lifecycle-policy-test-") as directory:
             policy_path = Path(directory) / "repositories.json"
             policy_path.write_text(json.dumps(registry), encoding="utf-8")

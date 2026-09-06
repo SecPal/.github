@@ -279,6 +279,119 @@ class LifecyclePublicationTests(TestCase):
         ):
             publication.verify_pre_enrollment_absence(REPOSITORY, ISSUE)
 
+    def test_pre_enrollment_absence_accepts_signed_unrelated_modern_history(self) -> None:
+        other_issue = ISSUE + 1
+        fields = {
+            "schema_version": publication.SCHEMA_VERSION,
+            "kind": publication.PUBLICATION_KIND,
+            "domain": publication.PUBLICATION_DOMAIN,
+            "operation": "ENROLL_EXISTING_LIFECYCLE",
+            "repository": REPOSITORY,
+            "delivery_issue": other_issue,
+            "lifecycle_id": "lifecycle:unrelated-exact-adoption",
+            "initialization_evidence_digest": "1" * 64,
+            "pull_request": PR + 1,
+            "head_sha": HEADS[1],
+            "terminal_authority_digest": "2" * 64,
+            "historical_proof_mode": "exact_state_adoption",
+            "legacy_adoption_checkpoint_digest": None,
+            "lifecycle_evidence": {
+                "kind": "SECPAL_EXACT_STATE_ADOPTION_EVIDENCE",
+                "proof_version": "3.0",
+            },
+            "lifecycle_evidence_digest": "",
+            "publication_branch": BRANCH,
+            "journal_predecessor_oid": None,
+            "predecessor_publication_oid": None,
+            "predecessor_publication_digest": None,
+            "predecessor_terminal_authority_digest": None,
+            "signer_identity": SIGNER,
+        }
+        evidence_raw = authority.canonical_json_bytes(fields["lifecycle_evidence"])
+        fields["lifecycle_evidence_digest"] = hashlib.sha256(evidence_raw).hexdigest()
+        raw = publication._sign_publication(fields, signer_for())
+        oid = publication._write_publication_object(self.probe, raw, None)
+        publication._cas_remote_ref(self.probe, str(self.remote), BRANCH, oid, None)
+
+        absence = publication.verify_pre_enrollment_absence(REPOSITORY, ISSUE)
+        self.assertEqual(absence.observed_tip_oid, oid)
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError,
+            "already has native genesis or CURRENT",
+        ):
+            publication.verify_pre_enrollment_absence(REPOSITORY, other_issue)
+
+    def test_pre_enrollment_absence_rejects_corrupt_unrelated_publication(self) -> None:
+        fields = {
+            "schema_version": publication.SCHEMA_VERSION,
+            "kind": publication.PUBLICATION_KIND,
+            "domain": publication.PUBLICATION_DOMAIN,
+            "operation": "ENROLL_EXISTING_LIFECYCLE",
+            "repository": REPOSITORY,
+            "delivery_issue": ISSUE + 1,
+            "lifecycle_id": "lifecycle:corrupt",
+            "initialization_evidence_digest": "1" * 64,
+            "pull_request": PR + 1,
+            "head_sha": HEADS[1],
+            "terminal_authority_digest": "2" * 64,
+            "historical_proof_mode": "exact_state_adoption",
+            "legacy_adoption_checkpoint_digest": None,
+            "lifecycle_evidence": {"kind": "corrupt"},
+            "lifecycle_evidence_digest": "3" * 64,
+            "publication_branch": BRANCH,
+            "journal_predecessor_oid": None,
+            "predecessor_publication_oid": None,
+            "predecessor_publication_digest": None,
+            "predecessor_terminal_authority_digest": None,
+            "signer_identity": SIGNER,
+        }
+        raw = publication._sign_publication(fields, signer_for())
+        oid = publication._write_publication_object(self.probe, raw, None)
+        publication._cas_remote_ref(self.probe, str(self.remote), BRANCH, oid, None)
+
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError,
+            "lifecycle-evidence digest mismatch",
+        ):
+            publication.verify_pre_enrollment_absence(REPOSITORY, ISSUE)
+
+    def test_pre_enrollment_absence_rejects_unknown_proof_mode(self) -> None:
+        fields = {
+            "schema_version": publication.SCHEMA_VERSION,
+            "kind": publication.PUBLICATION_KIND,
+            "domain": publication.PUBLICATION_DOMAIN,
+            "operation": "ENROLL_EXISTING_LIFECYCLE",
+            "repository": REPOSITORY,
+            "delivery_issue": ISSUE + 1,
+            "lifecycle_id": "lifecycle:unknown",
+            "initialization_evidence_digest": "1" * 64,
+            "pull_request": PR + 1,
+            "head_sha": HEADS[1],
+            "terminal_authority_digest": "2" * 64,
+            "historical_proof_mode": "future_unreviewed_mode",
+            "legacy_adoption_checkpoint_digest": None,
+            "lifecycle_evidence": {"kind": "unknown"},
+            "lifecycle_evidence_digest": "",
+            "publication_branch": BRANCH,
+            "journal_predecessor_oid": None,
+            "predecessor_publication_oid": None,
+            "predecessor_publication_digest": None,
+            "predecessor_terminal_authority_digest": None,
+            "signer_identity": SIGNER,
+        }
+        fields["lifecycle_evidence_digest"] = hashlib.sha256(
+            authority.canonical_json_bytes(fields["lifecycle_evidence"])
+        ).hexdigest()
+        raw = publication._sign_publication(fields, signer_for())
+        oid = publication._write_publication_object(self.probe, raw, None)
+        publication._cas_remote_ref(self.probe, str(self.remote), BRANCH, oid, None)
+
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError,
+            "historical-proof mode is invalid",
+        ):
+            publication.verify_pre_enrollment_absence(REPOSITORY, ISSUE)
+
     def test_public_consumer_cannot_inject_trust_or_select_terminal(self) -> None:
         parameters = inspect.signature(publication.verify_current_lifecycle_authority).parameters
         self.assertEqual(list(parameters), ["repository", "delivery_issue", "expected"])
