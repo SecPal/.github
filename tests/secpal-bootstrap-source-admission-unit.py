@@ -15,6 +15,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -107,6 +108,13 @@ EVIDENCE_HELPER_PURPOSE = "PR_REVIEW_EVIDENCE_HELPER_SOURCE_ADMISSION"
 EVIDENCE_HELPER_ADMISSION_DIGEST = (
     "38aa92b53d5289db44063ce4197687c18bb162c344aa37326ee2703013158418"
 )
+PRE_ENROLLMENT_ISSUE = 776
+PRE_ENROLLMENT_PR = 779
+PRE_ENROLLMENT_HEAD = "8371bef95afeed854e4892ef1af5ed54467aeb74"
+PRE_ENROLLMENT_TREE = "c2ed276ac00ae2057e048a81a54c92f96569e63c"
+PRE_ENROLLMENT_PARENT = "ad684beb8eb334f83c02e214f7b566f23aeb9ec5"
+PRE_ENROLLMENT_SUBTYPE = "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE"
+PRE_ENROLLMENT_PURPOSE = "PRE_ENROLLMENT_IMPLEMENTATION_BOOTSTRAP"
 PROTECTED_MAIN_HEAD = "a5a7b0704645659a5db7df820b2d448de3859560"
 
 
@@ -1140,7 +1148,9 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
             result = source._execute_entrypoint(Path("/exact/source"), b"authorization")
         self.assertEqual(result, {"status": "COMPLETE"})
         arguments = runner.call_args.args[0]
-        self.assertEqual(arguments[:4], ["/usr/bin/python3", "-I", "-S", "-c"])
+        self.assertEqual(
+            arguments[:5], ["/usr/bin/python3", "-I", "-S", "-B", "-c"]
+        )
         self.assertEqual(arguments[-1], "/exact/source")
         self.assertNotIn("PYTHONPATH", runner.call_args.kwargs["env"])
         for key in ("HOME", "GH_CONFIG_DIR", "GH_TOKEN", "GITHUB_TOKEN"):
@@ -1522,7 +1532,7 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
         self.assertEqual(len(self.trust.bootstrap_genesis_repairs), 1)
         repair = self.trust.bootstrap_genesis_repairs[0]
         self.assertEqual((repair.repair_issue, repair.delivery_issue), (774, 736))
-        self.assertEqual(len(self.trust.bootstrap_source_admissions), 2)
+        self.assertEqual(len(self.trust.bootstrap_source_admissions), 3)
         admission = next(
             item
             for item in self.trust.bootstrap_source_admissions
@@ -1539,6 +1549,30 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
         )
         self.assertNotIn(787, (admission.delivery_issue, admission.pull_request))
 
+    def test_exact_pre_enrollment_source_policy_is_maintained(self) -> None:
+        _trust, policy = source._select_policy_from_trust(
+            self.trust,
+            REPOSITORY,
+            PRE_ENROLLMENT_ISSUE,
+            PRE_ENROLLMENT_SUBTYPE,
+            PRE_ENROLLMENT_PURPOSE,
+        )
+
+        self.assertEqual(
+            (
+                policy.pull_request,
+                policy.source_head_sha,
+                policy.source_tree_sha,
+                policy.source_parent_sha,
+            ),
+            (
+                PRE_ENROLLMENT_PR,
+                PRE_ENROLLMENT_HEAD,
+                PRE_ENROLLMENT_TREE,
+                PRE_ENROLLMENT_PARENT,
+            ),
+        )
+
     def test_no_generic_branch_execution_trust_exists(self) -> None:
         self.assertEqual(
             set(inspect.signature(source.execute_first_ready_executor_bootstrap).parameters),
@@ -1550,6 +1584,756 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
             },
         )
         self.assertNotIn("shell=True", inspect.getsource(source))
+
+
+class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.trust = source.authority._load_lifecycle_trust_policy(REPOSITORY)
+        self.policy = next(
+            item
+            for item in self.trust.bootstrap_source_admissions
+            if item.subtype == PRE_ENROLLMENT_SUBTYPE
+        )
+
+    def facts(self, **changes):
+        value = source.GitHubSourceFacts(
+            base_repository=REPOSITORY,
+            base_ref="main",
+            head_repository=REPOSITORY,
+            pull_request=PRE_ENROLLMENT_PR,
+            state="OPEN",
+            draft=True,
+            head_sha=PRE_ENROLLMENT_HEAD,
+            commit_sha=PRE_ENROLLMENT_HEAD,
+            tree_sha=PRE_ENROLLMENT_TREE,
+            parent_shas=(PRE_ENROLLMENT_PARENT,),
+            github_verified=True,
+            github_verification_reason="valid",
+        )
+        return replace(value, **changes)
+
+    def test_exact_policy_binds_source_execution_and_validation(self) -> None:
+        self.assertEqual(
+            (
+                self.policy.repository,
+                self.policy.delivery_issue,
+                self.policy.pull_request,
+                self.policy.source_head_sha,
+                self.policy.source_tree_sha,
+                self.policy.source_parent_sha,
+                self.policy.source_signer_identity,
+                self.policy.signer_policy_identity,
+                self.policy.implementation_path,
+                self.policy.entrypoint,
+                self.policy.command,
+                self.policy.purpose,
+                self.policy.policy_source,
+                self.policy.historical_evidence_status,
+            ),
+            (
+                REPOSITORY,
+                PRE_ENROLLMENT_ISSUE,
+                PRE_ENROLLMENT_PR,
+                PRE_ENROLLMENT_HEAD,
+                PRE_ENROLLMENT_TREE,
+                PRE_ENROLLMENT_PARENT,
+                "aroviqen@secpal.app",
+                "MAINTAINED_LIFECYCLE_SIGNER_POLICY",
+                source.PRE_ENROLLMENT_IMPLEMENTATION_PATH,
+                source.PRE_ENROLLMENT_ENTRYPOINT,
+                source.PRE_ENROLLMENT_COMMAND,
+                PRE_ENROLLMENT_PURPOSE,
+                source.ACCEPTED_MAIN_POLICY_SOURCE,
+                "HISTORICAL_EVIDENCE_UNAVAILABLE",
+            ),
+        )
+        self.assertIsNone(self.policy.validation_receipt_digest)
+        self.assertIsNone(self.policy.final_attestation_digest)
+        self.assertEqual(
+            fast_path.digest_json(list(self.policy.validation_command_set)),
+            self.policy.validation_command_set_digest,
+        )
+        self.assertEqual(
+            fast_path.digest_json(list(self.policy.validation_results)),
+            self.policy.validation_result_digest,
+        )
+
+    def test_exact_identity_and_signature_facts_are_required(self) -> None:
+        source._admit_github_source(self.facts(), self.policy)
+        mutations = (
+            {"base_repository": "Other/.github"},
+            {"head_repository": "Other/.github"},
+            {"pull_request": 780},
+            {"commit_sha": "1" * 40},
+            {"tree_sha": "2" * 40},
+            {"parent_shas": ("3" * 40,)},
+            {"github_verified": False},
+            {"github_verification_reason": "unsigned"},
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), self.assertRaises(
+                source.BootstrapSourceAdmissionError
+            ):
+                source._admit_github_source(self.facts(**mutation), self.policy)
+
+    def test_lawful_live_head_advance_preserves_immutable_source(self) -> None:
+        source._admit_github_source(
+            self.facts(head_sha="4" * 40), self.policy
+        )
+
+    def test_wrong_issue_purpose_or_cross_delivery_replay_is_rejected(self) -> None:
+        for issue, purpose in (
+            (777, PRE_ENROLLMENT_PURPOSE),
+            (PRE_ENROLLMENT_ISSUE, "FIRST_READY_EXECUTOR_BOOTSTRAP"),
+        ):
+            with self.subTest(issue=issue, purpose=purpose), self.assertRaises(
+                source.BootstrapSourceAdmissionError
+            ):
+                source._select_policy_from_trust(
+                    self.trust,
+                    REPOSITORY,
+                    issue,
+                    PRE_ENROLLMENT_SUBTYPE,
+                    purpose,
+                )
+
+    def test_both_source_commits_use_the_maintained_signer(self) -> None:
+        calls = []
+
+        def git_text(_root, arguments):
+            if arguments == ["rev-parse", "HEAD"]:
+                return PRE_ENROLLMENT_HEAD + "\n"
+            if arguments == ["rev-parse", f"{PRE_ENROLLMENT_HEAD}^{{tree}}"]:
+                return PRE_ENROLLMENT_TREE + "\n"
+            if arguments[:3] == ["rev-list", "--parents", "-n"]:
+                return f"{PRE_ENROLLMENT_HEAD} {PRE_ENROLLMENT_PARENT}\n"
+            raise AssertionError(arguments)
+
+        with (
+            mock.patch.object(source, "_git_text", side_effect=git_text),
+            mock.patch.object(
+                source,
+                "_verify_commit_signature",
+                side_effect=lambda _root, _trust, policy: calls.append(
+                    (policy.source_head_sha, policy.source_signer_identity)
+                ),
+            ),
+            mock.patch.object(
+                source,
+                "_implementation_blob",
+                return_value=self.policy.implementation_blob_oid,
+            ),
+        ):
+            source._authenticate_exact_materialized_source(
+                Path("/fixture"), self.trust, self.policy
+            )
+        self.assertEqual(
+            calls,
+            [
+                (PRE_ENROLLMENT_HEAD, "aroviqen@secpal.app"),
+                (PRE_ENROLLMENT_PARENT, "aroviqen@secpal.app"),
+            ],
+        )
+
+    def test_validation_is_fixed_bounded_and_failure_creates_no_admission(self) -> None:
+        successful = subprocess.CompletedProcess([], 0, b"ignored", b"ignored")
+        with (
+            mock.patch.object(source, "_trusted_python", return_value="/usr/bin/python3"),
+            mock.patch.object(
+                source.authority,
+                "_load_trusted_command_helper",
+                return_value=SimpleNamespace(TRUSTED_COMMAND_PATH="/usr/bin:/bin"),
+            ),
+            mock.patch.object(source, "_closed_launcher_environment", return_value={}),
+            mock.patch.object(source, "_run_isolated_python", return_value=successful) as run,
+            mock.patch.object(source, "_verify_materialized_tree"),
+        ):
+            source._run_pre_enrollment_source_validation(
+                Path("/immutable"), self.policy
+            )
+        self.assertEqual(run.call_args.args[0][1:4], ["-I", "-S", "-B"])
+        failed = subprocess.CompletedProcess([], 1, b"secret", b"secret")
+        with (
+            mock.patch.object(source, "_trusted_python", return_value="/usr/bin/python3"),
+            mock.patch.object(
+                source.authority,
+                "_load_trusted_command_helper",
+                return_value=SimpleNamespace(TRUSTED_COMMAND_PATH="/usr/bin:/bin"),
+            ),
+            mock.patch.object(source, "_closed_launcher_environment", return_value={}),
+            mock.patch.object(source, "_run_isolated_python", return_value=failed),
+            mock.patch.object(source, "_verify_materialized_tree"),
+            self.assertRaisesRegex(
+                source.BootstrapSourceAdmissionError, "created no admission"
+            ),
+        ):
+            source._run_pre_enrollment_source_validation(
+                Path("/immutable"), self.policy
+            )
+
+    def test_hostile_user_site_cannot_run_before_validation_or_entrypoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            home = fixture / "home"
+            session = fixture / "session"
+            session.mkdir(mode=0o700)
+            user_site = (
+                home
+                / ".local"
+                / "lib"
+                / f"python{sys.version_info.major}.{sys.version_info.minor}"
+                / "site-packages"
+            )
+            user_site.mkdir(parents=True)
+            marker = fixture / "ambient-startup-executed"
+            validation_marker = fixture / "validation-executed"
+            entrypoint_marker = fixture / "entrypoint-executed"
+            (user_site / "sitecustomize.py").write_text(
+                "from pathlib import Path\n"
+                f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            validation = fixture / self.policy.validation_command_set[0]["argv"][3]
+            validation.parent.mkdir(parents=True)
+            validation.write_text(
+                "from pathlib import Path\n"
+                "import sys\n"
+                "import unittest\n"
+                f"Path({str(validation_marker)!r}).write_text("
+                "f'{sys.flags.isolated}:{sys.flags.no_site}', encoding='utf-8')\n"
+                "class FixtureTest(unittest.TestCase):\n"
+                "    def test_fixture(self):\n"
+                "        self.assertTrue(True)\n",
+                encoding="utf-8",
+            )
+            entrypoint = fixture / self.policy.implementation_path
+            entrypoint.parent.mkdir(parents=True)
+            entrypoint.write_text(
+                "from pathlib import Path\n"
+                "import sys\n"
+                "def main(argv=None):\n"
+                f"    Path({str(entrypoint_marker)!r}).write_text("
+                "f'{sys.flags.isolated}:{sys.flags.no_site}:{argv[0]}', encoding='utf-8')\n"
+                "    return 0\n",
+                encoding="utf-8",
+            )
+            helper = SimpleNamespace(
+                TRUSTED_COMMAND_PATH="/usr/bin:/bin",
+                command_environment=lambda _name: {"HOME": str(home)},
+            )
+            invocation = json.dumps(
+                {
+                    "repository_root": str(fixture / "repository"),
+                    "session_directory": str(session),
+                    "authorization_id": "authorization",
+                    "validation_receipt_id": "receipt",
+                    "final_attestation_id": "attestation",
+                    "commit_subject": "Integrate authenticated source",
+                }
+            )
+
+            with (
+                self.subTest(boundary="validation"),
+                mock.patch.object(
+                    source.authority,
+                    "_load_trusted_command_helper",
+                    return_value=helper,
+                ),
+                mock.patch.object(source, "_trusted_python", return_value=sys.executable),
+                mock.patch.object(source, "_verify_materialized_tree"),
+            ):
+                source._run_pre_enrollment_source_validation(
+                    fixture, self.policy
+                )
+                self.assertFalse(marker.exists())
+                self.assertEqual(
+                    validation_marker.read_text(encoding="utf-8"), "1:1"
+                )
+
+            marker.unlink(missing_ok=True)
+            with (
+                self.subTest(boundary="entrypoint"),
+                mock.patch.object(
+                    source.authority,
+                    "_load_trusted_command_helper",
+                    return_value=helper,
+                ),
+                mock.patch.object(source, "_trusted_python", return_value=sys.executable),
+            ):
+                result = source._execute_pre_enrollment_entrypoint(
+                    fixture, self.policy, invocation
+                )
+                self.assertEqual(result, {"status": "COMPLETE", "exit_status": 0})
+            self.assertFalse(marker.exists())
+            self.assertEqual(
+                entrypoint_marker.read_text(encoding="utf-8"),
+                f"1:1:{source.PRE_ENROLLMENT_COMMAND}",
+            )
+
+    def test_recovery_finding_stdlib_cannot_be_shadowed_by_admitted_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            marker = fixture / "shadowed-stdlib"
+            (fixture / "unittest.py").write_text(
+                "from pathlib import Path\n"
+                f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            validation = fixture / self.policy.validation_command_set[0]["argv"][3]
+            validation.parent.mkdir(parents=True)
+            validation.write_text(
+                "import unittest\n"
+                "class FixtureTest(unittest.TestCase):\n"
+                "    def test_fixture(self): self.assertTrue(True)\n",
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(source, "_trusted_python", return_value=sys.executable),
+                mock.patch.object(source, "_verify_materialized_tree"),
+            ):
+                source._run_pre_enrollment_source_validation(fixture, self.policy)
+            self.assertFalse(marker.exists())
+
+    def test_recovery_finding_validation_and_entrypoint_write_no_bytecode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            session = fixture / "session"
+            session.mkdir(mode=0o700)
+            validation = fixture / self.policy.validation_command_set[0]["argv"][3]
+            validation.parent.mkdir(parents=True)
+            validation.write_text(
+                "import unittest\n"
+                "class FixtureTest(unittest.TestCase):\n"
+                "    def test_fixture(self): self.assertTrue(True)\n",
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(source, "_trusted_python", return_value=sys.executable),
+                mock.patch.object(source, "_verify_materialized_tree"),
+            ):
+                source._run_pre_enrollment_source_validation(fixture, self.policy)
+            entrypoint = fixture / self.policy.implementation_path
+            entrypoint.parent.mkdir(parents=True)
+            entrypoint.write_text(
+                "def main(argv=None): return 0\n", encoding="utf-8"
+            )
+            invocation = json.dumps({
+                "repository_root": str(fixture), "session_directory": str(session),
+                "authorization_id": "authorization", "validation_receipt_id": "receipt",
+                "final_attestation_id": "attestation", "commit_subject": "subject",
+            })
+            with mock.patch.object(
+                source, "_trusted_python", return_value=sys.executable
+            ):
+                source._execute_pre_enrollment_entrypoint(
+                    fixture, self.policy, invocation
+                )
+            self.assertEqual(list(fixture.rglob("*.pyc")), [])
+
+    def test_recovery_finding_timeout_reaps_destructive_process_group(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            session = fixture / "session"
+            session.mkdir(mode=0o700)
+            marker = fixture / "surviving-descendant"
+            entrypoint = fixture / self.policy.implementation_path
+            entrypoint.parent.mkdir(parents=True)
+            entrypoint.write_text(
+                "import subprocess, sys, time\n"
+                "def main(argv=None):\n"
+                "    subprocess.Popen([sys.executable, '-c', "
+                f"\"import time; time.sleep(0.5); open({str(marker)!r}, 'w').write('alive')\"])\n"
+                "    time.sleep(5)\n"
+                "    return 0\n",
+                encoding="utf-8",
+            )
+            invocation = json.dumps({
+                "repository_root": str(fixture), "session_directory": str(session),
+                "authorization_id": "authorization", "validation_receipt_id": "receipt",
+                "final_attestation_id": "attestation", "commit_subject": "subject",
+            })
+            with (
+                mock.patch.object(source, "_trusted_python", return_value=sys.executable),
+                mock.patch.object(source, "_PRE_ENROLLMENT_EXECUTION_TIMEOUT_SECONDS", 0.1),
+                self.assertRaises(source.BootstrapSourceAdmissionError),
+            ):
+                source._execute_pre_enrollment_entrypoint(fixture, self.policy, invocation)
+            time.sleep(0.8)
+            self.assertFalse(marker.exists())
+
+    def test_recovery_finding_child_failure_retains_closed_diagnostic(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            session = fixture / "session"
+            session.mkdir(mode=0o700)
+            entrypoint = fixture / self.policy.implementation_path
+            entrypoint.parent.mkdir(parents=True)
+            entrypoint.write_text(
+                "import json, sys\n"
+                "def main(argv=None):\n"
+                "    print(json.dumps({'status':'BLOCKED_SECURITY','blocker':'secret'}), file=sys.stderr)\n"
+                "    return 3\n",
+                encoding="utf-8",
+            )
+            invocation = json.dumps({
+                "repository_root": str(fixture), "session_directory": str(session),
+                "authorization_id": "authorization", "validation_receipt_id": "receipt",
+                "final_attestation_id": "attestation", "commit_subject": "subject",
+            })
+            with (
+                mock.patch.object(source, "_trusted_python", return_value=sys.executable),
+                self.assertRaises(source.BootstrapSourceAdmissionError) as raised,
+            ):
+                source._execute_pre_enrollment_entrypoint(fixture, self.policy, invocation)
+            self.assertEqual(raised.exception.diagnostic_identity, "BLOCKED_SECURITY")
+            self.assertNotIn("secret", str(raised.exception))
+
+    def test_recovery_finding_source_signer_must_have_routine_role(self) -> None:
+        registry_path = (
+            Path(__file__).resolve().parents[1]
+            / ".agents/skills/secpal-pr-review/references/repositories.json"
+        )
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        governance = next(
+            item for item in registry["repositories"] if item["repository"] == REPOSITORY
+        )
+        policy = governance["lifecycle_authority_policy"]
+        admission = next(
+            item for item in policy["bootstrap_source_admissions"]
+            if item["subtype"] == PRE_ENROLLMENT_SUBTYPE
+        )
+        admission["source_signer_identity"] = policy[
+            "legacy_adoption_signer_identities"
+        ][0]
+        admission["admission_digest"] = source.authority.digest_json({
+            key: value for key, value in admission.items() if key != "admission_digest"
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "repositories.json"
+            path.write_text(json.dumps(registry), encoding="utf-8")
+            with (
+                mock.patch.object(source.authority, "_TRUST_REGISTRY", path),
+                self.assertRaises(source.authority.LifecycleAuthorityError),
+            ):
+                source.authority._load_lifecycle_trust_policy(REPOSITORY)
+
+    def test_recovery_finding_validation_environment_is_credential_free(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            marker = fixture / "validation-environment.json"
+            validation = fixture / self.policy.validation_command_set[0]["argv"][3]
+            validation.parent.mkdir(parents=True)
+            validation.write_text(
+                "import json, os, unittest\n"
+                "from pathlib import Path\n"
+                "keys = ('HOME','GH_CONFIG_DIR','GH_TOKEN','GITHUB_TOKEN')\n"
+                f"Path({str(marker)!r}).write_text(json.dumps(dict((key, "
+                "os.environ.get(key)) for key in keys)))\n"
+                "class FixtureTest(unittest.TestCase):\n"
+                "    def test_fixture(self): self.assertTrue(True)\n",
+                encoding="utf-8",
+            )
+            helper = SimpleNamespace(
+                TRUSTED_COMMAND_PATH="/usr/bin:/bin",
+                command_environment=lambda _name: {
+                    "HOME": "/credential-bearing-home",
+                    "GH_CONFIG_DIR": "/credential-bearing-config",
+                    "GH_TOKEN": "secret-token",
+                    "GITHUB_TOKEN": "other-secret-token",
+                },
+            )
+            with (
+                mock.patch.object(
+                    source.authority,
+                    "_load_trusted_command_helper",
+                    return_value=helper,
+                ),
+                mock.patch.object(source, "_trusted_python", return_value=sys.executable),
+                mock.patch.object(source, "_verify_materialized_tree"),
+            ):
+                source._run_pre_enrollment_source_validation(fixture, self.policy)
+            observed = json.loads(marker.read_text(encoding="utf-8"))
+            self.assertNotEqual(observed["HOME"], "/credential-bearing-home")
+            self.assertIsNone(observed["GH_CONFIG_DIR"])
+            self.assertIsNone(observed["GH_TOKEN"])
+            self.assertIsNone(observed["GITHUB_TOKEN"])
+
+    def test_recovery_finding_pre_enrollment_source_must_remain_draft(self) -> None:
+        registry_path = (
+            Path(__file__).resolve().parents[1]
+            / ".agents/skills/secpal-pr-review/references/repositories.json"
+        )
+        original = json.loads(registry_path.read_text(encoding="utf-8"))
+        for draft_value in (False, 0, "true", None):
+            registry = json.loads(json.dumps(original))
+            governance = next(
+                item
+                for item in registry["repositories"]
+                if item["repository"] == REPOSITORY
+            )
+            admission = next(
+                item
+                for item in governance["lifecycle_authority_policy"][
+                    "bootstrap_source_admissions"
+                ]
+                if item["subtype"] == PRE_ENROLLMENT_SUBTYPE
+            )
+            admission["source_pr_draft"] = draft_value
+            admission["admission_digest"] = source.authority.digest_json({
+                key: value
+                for key, value in admission.items()
+                if key != "admission_digest"
+            })
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "repositories.json"
+                path.write_text(json.dumps(registry), encoding="utf-8")
+                with (
+                    self.subTest(draft_value=draft_value),
+                    mock.patch.object(source.authority, "_TRUST_REGISTRY", path),
+                    self.assertRaises(source.authority.LifecycleAuthorityError),
+                ):
+                    source.authority._load_lifecycle_trust_policy(REPOSITORY)
+
+    def test_tree_drift_after_validation_creates_no_admission(self) -> None:
+        with (
+            mock.patch.object(source, "_trusted_python", return_value="/usr/bin/python3"),
+            mock.patch.object(
+                source.authority,
+                "_load_trusted_command_helper",
+                return_value=SimpleNamespace(TRUSTED_COMMAND_PATH="/usr/bin:/bin"),
+            ),
+            mock.patch.object(source, "_closed_launcher_environment", return_value={}),
+            mock.patch.object(
+                source,
+                "_run_isolated_python",
+                return_value=subprocess.CompletedProcess([], 0, b"", b""),
+            ),
+            mock.patch.object(
+                source,
+                "_verify_materialized_tree",
+                side_effect=source.BootstrapSourceAdmissionError("tree drift"),
+            ),
+            self.assertRaisesRegex(source.BootstrapSourceAdmissionError, "tree drift"),
+        ):
+            source._run_pre_enrollment_source_validation(
+                Path("/immutable"), self.policy
+            )
+
+    def test_candidate_local_verifier_cannot_create_pre_enrollment_admission(self) -> None:
+        record = (
+            f"100755 blob {self.policy.implementation_blob_oid}\t"
+            f"{self.policy.implementation_path}\x00"
+        )
+        with (
+            mock.patch.object(source, "_git_text", return_value=record),
+            mock.patch.object(
+                source,
+                "_git",
+                return_value=subprocess.CompletedProcess(
+                    [], 0, b"def main(argv=None):\n    return 0\n", b""
+                ),
+            ),
+            mock.patch.object(
+                source,
+                "_run_bootstrap_git",
+                return_value=subprocess.CompletedProcess([], 0, b"", b""),
+            ),
+            self.assertRaisesRegex(
+                source.BootstrapSourceAdmissionError,
+                "candidate-local verifier cannot self-admit",
+            ),
+        ):
+            source._implementation_blob(Path("/immutable"), self.policy)
+
+    def test_caller_selected_command_set_or_registry_is_rejected(self) -> None:
+        changed_command = replace(
+            self.policy,
+            validation_command_set=(
+                {"argv": ["python3", "other.py"], "working_directory": ".", "purpose": "other"},
+            ),
+        )
+        for changed in (
+            changed_command,
+            replace(self.policy, validation_command_set_digest="5" * 64),
+            replace(self.policy, validation_result_digest="6" * 64),
+        ):
+            with self.subTest(changed=changed), self.assertRaisesRegex(
+                source.BootstrapSourceAdmissionError, "validation policy"
+            ):
+                source._run_pre_enrollment_source_validation(
+                    Path("/immutable"), changed
+                )
+        self.assertNotIn(
+            "registry", inspect.signature(
+                source.verify_pre_enrollment_implementation_source
+            ).parameters
+        )
+        self.assertNotIn(
+            "signer", inspect.signature(
+                source.verify_pre_enrollment_implementation_source
+            ).parameters
+        )
+
+    def test_authentication_failure_executes_no_candidate_command(self) -> None:
+        executed = mock.Mock()
+        with (
+            mock.patch.object(
+                source,
+                "_select_pre_enrollment_policy",
+                return_value=(self.trust, self.policy),
+            ),
+            mock.patch.object(
+                source,
+                "_authenticate_live_github_source",
+                side_effect=source.BootstrapSourceAdmissionError("rejected"),
+            ),
+            mock.patch.object(
+                source, "_execute_pre_enrollment_entrypoint", executed
+            ),
+            self.assertRaises(source.BootstrapSourceAdmissionError),
+        ):
+            source.execute_pre_enrollment_implementation_bootstrap(
+                REPOSITORY, PRE_ENROLLMENT_ISSUE, b"{}"
+            )
+        executed.assert_not_called()
+
+    def test_exact_source_executes_only_after_authentication_and_validation(self) -> None:
+        calls = []
+
+        @contextmanager
+        def isolated(_trust, _policy):
+            calls.append("isolated")
+            yield Path("/immutable")
+
+        with (
+            mock.patch.object(
+                source,
+                "_select_pre_enrollment_policy",
+                return_value=(self.trust, self.policy),
+            ),
+            mock.patch.object(
+                source,
+                "_authenticate_live_github_source",
+                side_effect=lambda _policy: calls.append("github"),
+            ),
+            mock.patch.object(source, "_isolated_source_repository", isolated),
+            mock.patch.object(
+                source,
+                "_authenticate_exact_materialized_source",
+                side_effect=lambda *_args: (
+                    calls.append("source")
+                    or (
+                        PRE_ENROLLMENT_HEAD,
+                        PRE_ENROLLMENT_TREE,
+                        self.policy.implementation_blob_oid,
+                    )
+                ),
+            ),
+            mock.patch.object(
+                source,
+                "_run_pre_enrollment_source_validation",
+                side_effect=lambda *_args: calls.append("validation"),
+            ),
+            mock.patch.object(
+                source,
+                "_verify_materialized_tree",
+                side_effect=lambda *_args: calls.append("tree"),
+            ),
+            mock.patch.object(
+                source,
+                "_execute_pre_enrollment_entrypoint",
+                side_effect=lambda *_args: calls.append("execute")
+                or {"status": "COMPLETE", "exit_status": 0},
+            ),
+        ):
+            result = source.execute_pre_enrollment_implementation_bootstrap(
+                REPOSITORY, PRE_ENROLLMENT_ISSUE, b"{}"
+            )
+        self.assertEqual(result["status"], "COMPLETE")
+        self.assertEqual(result["admission_digest"], self.policy.admission_digest)
+        self.assertEqual(result["source_head_sha"], PRE_ENROLLMENT_HEAD)
+        self.assertEqual(
+            result["validation_command_set_digest"],
+            self.policy.validation_command_set_digest,
+        )
+        self.assertEqual(
+            calls,
+            ["github", "isolated", "source", "validation", "tree", "execute", "tree"],
+        )
+
+    def test_only_closed_operational_inputs_reach_the_fixed_command(self) -> None:
+        signature = inspect.signature(
+            source.execute_pre_enrollment_implementation_bootstrap
+        )
+        self.assertEqual(
+            set(signature.parameters),
+            {"repository", "delivery_issue", "serialized_invocation"},
+        )
+        for extra in ("signer", "registry", "command", "entrypoint", "purpose", "source_ref"):
+            with self.subTest(extra=extra), self.assertRaises(
+                source.BootstrapSourceAdmissionError
+            ):
+                source._closed_pre_enrollment_invocation(
+                    json.dumps({extra: "caller-selected"})
+                )
+
+    def test_operational_outputs_are_confined_to_one_private_session(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory).chmod(0o700)
+            invocation = {
+                "repository_root": "/exact/repository",
+                "session_directory": directory,
+                "authorization_id": "authorization",
+                "validation_receipt_id": "receipt",
+                "final_attestation_id": "attestation",
+                "commit_subject": "Integrate authenticated source",
+            }
+            self.assertEqual(
+                source._closed_pre_enrollment_invocation(
+                    json.dumps(invocation)
+                )["session_directory"],
+                directory,
+            )
+            Path(directory).chmod(0o755)
+            with self.assertRaisesRegex(
+                source.BootstrapSourceAdmissionError, "not private"
+            ):
+                source._closed_pre_enrollment_invocation(
+                    json.dumps(invocation)
+                )
+
+    def test_admission_has_no_push_lifecycle_genesis_ready_or_merge_authority(self) -> None:
+        verifier_source = inspect.getsource(
+            source.verify_pre_enrollment_implementation_source
+        )
+        for forbidden in (
+            "push", "INITIALIZED_DRAFT", "genesis", "publication", "ready", "merge"
+        ):
+            self.assertNotIn(forbidden, verifier_source.lower())
+        self.assertNotIn("shell=True", inspect.getsource(source))
+
+    def test_pre_enrollment_seam_reuses_the_existing_verifier_family(self) -> None:
+        implementation = inspect.getsource(
+            source.verify_pre_enrollment_implementation_source
+        )
+        for owner in (
+            "_select_pre_enrollment_policy",
+            "_authenticate_live_github_source",
+            "_isolated_source_repository",
+            "_authenticate_exact_materialized_source",
+            "_verify_materialized_tree",
+        ):
+            self.assertIn(owner, implementation)
+        self.assertEqual(
+            len(
+                [
+                    name
+                    for name in vars(source)
+                    if name == "_verify_commit_signature"
+                ]
+            ),
+            1,
+        )
 
 
 class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):

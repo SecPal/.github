@@ -393,7 +393,25 @@ atomically re-reads the PR head with the blob selected at the initially
 authenticated head, so concurrent advancement fails closed. The mutable
 current PR head is never treated as the immutable admitted source identity.
 
-Both source paths return a sealed `VerifiedBootstrapSource` with an explicit
+The executable `PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE` subtype is the one
+exact #776 / PR #779 bootstrap source. Protected-main policy fixes its head,
+tree, predecessor, maintained signer policy, action-helper blob, `main`
+entrypoint, `integrate-pre-enrollment-draft` command, purpose, and one-command
+validation set. Both source commits are verified before the candidate suite
+runs in the detached tree; output is discarded and only canonical command,
+exit-status, and success digests are authority. The historical receipt trailer
+is not treated as reconstructable receipt or final-attestation evidence.
+Authentication, validation, and a final clean-tree check all precede the fixed
+command. Both Python subprocess boundaries use the shared isolated `-I -S`
+startup sequence and an authenticated source root, so a retained `HOME` cannot
+load ambient user-site startup hooks. For repository #776 / PR #779, the closed
+launcher supplies the signer, purpose, command, and entrypoint itself, so
+callers cannot widen the admission.
+This authorizes only execution of the admitted implementation; the downstream
+pre-enrollment verifier still owns candidate-tree, push, and initialization
+evidence.
+
+All source paths return a sealed `VerifiedBootstrapSource` with an explicit
 historical evidence status. The #812-only evidence-loss recovery does not apply
 to the byte-only #819 subtype. Historical P2.1 remains rooted at commit
 `833eef2afc063ae777e7e2b64b2f252e3fe1e49e` and helper blob

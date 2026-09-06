@@ -250,6 +250,117 @@
         "admission_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       }
     },
+    "preEnrollmentDraftIntegrationSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "subtype",
+        "repository",
+        "delivery_issue",
+        "pull_request",
+        "source_head_sha",
+        "source_tree_sha",
+        "source_parent_sha",
+        "source_signer_identity",
+        "signer_policy_identity",
+        "implementation_path",
+        "implementation_blob_oid",
+        "entrypoint",
+        "command",
+        "purpose",
+        "source_pr_state",
+        "source_pr_draft",
+        "source_base_ref",
+        "policy_source",
+        "historical_evidence_status",
+        "validation_registry_path",
+        "validation_command_set",
+        "validation_command_set_digest",
+        "validation_results",
+        "validation_result_digest",
+        "admission_digest"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "kind": { "const": "BOOTSTRAP_SOURCE_ADMISSION" },
+        "subtype": { "const": "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE" },
+        "repository": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+        "delivery_issue": { "type": "integer", "minimum": 1 },
+        "pull_request": { "type": "integer", "minimum": 1 },
+        "source_head_sha": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
+        "source_tree_sha": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
+        "source_parent_sha": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
+        "source_signer_identity": { "type": "string", "minLength": 1 },
+        "signer_policy_identity": { "const": "MAINTAINED_LIFECYCLE_SIGNER_POLICY" },
+        "implementation_path": { "const": "scripts/secpal-pr-review-actions.py" },
+        "implementation_blob_oid": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
+        "entrypoint": { "const": "main" },
+        "command": { "const": "integrate-pre-enrollment-draft" },
+        "purpose": { "const": "PRE_ENROLLMENT_IMPLEMENTATION_BOOTSTRAP" },
+        "source_pr_state": { "const": "OPEN" },
+        "source_pr_draft": { "const": true },
+        "source_base_ref": { "const": "main" },
+        "policy_source": { "const": "ACCEPTED_MAIN_REPOSITORY_REGISTRY" },
+        "historical_evidence_status": { "const": "HISTORICAL_EVIDENCE_UNAVAILABLE" },
+        "validation_registry_path": {
+          "const": ".agents/skills/secpal-pr-review/references/repositories.json"
+        },
+        "validation_command_set": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["argv", "working_directory", "purpose"],
+            "properties": {
+              "argv": {
+                "type": "array",
+                "prefixItems": [
+                  { "const": "python3" },
+                  { "const": "-m" },
+                  { "const": "unittest" },
+                  { "type": "string", "pattern": "^tests/[a-z0-9-]+-unit\\.py$" }
+                ],
+                "minItems": 4,
+                "maxItems": 4
+              },
+              "working_directory": { "const": "." },
+              "purpose": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "validation_command_set_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "validation_results": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["command_digest", "exit_status", "successful"],
+            "properties": {
+              "command_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "exit_status": { "const": 0 },
+              "successful": { "const": true }
+            }
+          }
+        },
+        "validation_result_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "admission_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
     "repository": {
       "type": "object",
       "additionalProperties": false,
@@ -514,7 +625,8 @@
           "items": {
             "oneOf": [
               { "$ref": "#/$defs/firstReadyExecutorBootstrapSource" },
-              { "$ref": "#/$defs/prReviewEvidenceHelperSource" }
+              { "$ref": "#/$defs/prReviewEvidenceHelperSource" },
+              { "$ref": "#/$defs/preEnrollmentDraftIntegrationSource" }
             ]
           }
         },

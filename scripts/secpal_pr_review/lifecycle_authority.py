@@ -306,8 +306,8 @@ class BootstrapSourceAdmissionPolicy:
     source_head_sha: str
     source_tree_sha: str
     source_parent_sha: str
-    validation_receipt_digest: str
-    final_attestation_digest: str
+    validation_receipt_digest: str | None
+    final_attestation_digest: str | None
     source_signer_identity: str
     implementation_path: str
     implementation_blob_oid: str | None
@@ -317,6 +317,14 @@ class BootstrapSourceAdmissionPolicy:
     source_pr_draft: bool
     source_base_ref: str
     policy_source: str | None
+    signer_policy_identity: str | None
+    command: str | None
+    historical_evidence_status: str | None
+    validation_registry_path: str | None
+    validation_command_set: tuple[dict[str, Any], ...]
+    validation_command_set_digest: str | None
+    validation_results: tuple[dict[str, Any], ...]
+    validation_result_digest: str | None
     admission_digest: str
     evidence_loss_recovery: BootstrapSourceEvidenceLossRecovery | None = None
 
@@ -1105,6 +1113,20 @@ def _parse_lifecycle_trust_policy(
             "admission_digest",
         }
     )
+    pre_enrollment_source_fields = frozenset(
+        {
+            "schema_version", "kind", "subtype", "repository",
+            "delivery_issue", "pull_request", "source_head_sha",
+            "source_tree_sha", "source_parent_sha", "source_signer_identity",
+            "signer_policy_identity", "implementation_path",
+            "implementation_blob_oid", "entrypoint", "command", "purpose",
+            "source_pr_state", "source_pr_draft", "source_base_ref",
+            "policy_source", "historical_evidence_status",
+            "validation_registry_path", "validation_command_set",
+            "validation_command_set_digest", "validation_results",
+            "validation_result_digest", "admission_digest",
+        }
+    )
     source_recovery_field = "evidence_loss_recovery"
     raw_sources = policy["bootstrap_source_admissions"]
     if not isinstance(raw_sources, list):
@@ -1122,6 +1144,8 @@ def _parse_lifecycle_trust_policy(
             source_fields = source_common_fields | {
                 "implementation_blob_oid", "policy_source"
             }
+        elif subtype == "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE":
+            source_fields = pre_enrollment_source_fields
         else:
             raise LifecycleAuthorityError("bootstrap source admission subtype is unknown")
         allowed_fields = {source_fields}
@@ -1146,10 +1170,52 @@ def _parse_lifecycle_trust_policy(
         admission_digest = _require_digest(item["admission_digest"], "source admission")
         executable_source = subtype == "FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE"
         byte_source = subtype == "PR_REVIEW_EVIDENCE_HELPER_SOURCE"
+        pre_enrollment_source = (
+            subtype == "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE"
+        )
         implementation_blob = (
             _require_oid(item["implementation_blob_oid"], "source implementation blob")
-            if byte_source else None
+            if byte_source or pre_enrollment_source else None
         )
+        validation_commands = item.get("validation_command_set", [])
+        validation_results = item.get("validation_results", [])
+        if pre_enrollment_source:
+            commands_valid = (
+                isinstance(validation_commands, list)
+                and 0 < len(validation_commands) <= 4
+                and all(
+                    isinstance(command, dict)
+                    and set(command) == {"argv", "working_directory", "purpose"}
+                    and isinstance(command["argv"], list)
+                    and len(command["argv"]) == 4
+                    and command["argv"][:3] == ["python3", "-m", "unittest"]
+                    and isinstance(command["argv"][3], str)
+                    and re.fullmatch(
+                        r"tests/[a-z0-9-]+-unit\.py", command["argv"][3]
+                    )
+                    and command["working_directory"] == "."
+                    and isinstance(command["purpose"], str)
+                    and command["purpose"]
+                    and command["purpose"] == command["purpose"].strip()
+                    for command in validation_commands
+                )
+            )
+            results_valid = (
+                isinstance(validation_results, list)
+                and len(validation_results) == len(validation_commands)
+                and all(
+                    isinstance(result, dict)
+                    and set(result) == {
+                        "command_digest", "exit_status", "successful"
+                    }
+                    and result["command_digest"] == digest_json(command)
+                    and result["exit_status"] == 0
+                    and result["successful"] is True
+                    for command, result in zip(
+                        validation_commands, validation_results, strict=True
+                    )
+                )
+            )
         if (
             item["schema_version"] != SCHEMA_VERSION
             or item["kind"] != "BOOTSTRAP_SOURCE_ADMISSION"
@@ -1174,9 +1240,36 @@ def _parse_lifecycle_trust_policy(
                     != "ACCEPTED_MAIN_REPOSITORY_REGISTRY"
                 )
             )
+            or (
+                pre_enrollment_source
+                and (
+                    item["implementation_path"]
+                    != "scripts/secpal-pr-review-actions.py"
+                    or item["entrypoint"] != "main"
+                    or item["command"] != "integrate-pre-enrollment-draft"
+                    or item["purpose"]
+                    != "PRE_ENROLLMENT_IMPLEMENTATION_BOOTSTRAP"
+                    or item["policy_source"]
+                    != "ACCEPTED_MAIN_REPOSITORY_REGISTRY"
+                    or item["signer_policy_identity"]
+                    != "MAINTAINED_LIFECYCLE_SIGNER_POLICY"
+                    or item["source_signer_identity"]
+                    not in transition_signers
+                    or item["historical_evidence_status"]
+                    != "HISTORICAL_EVIDENCE_UNAVAILABLE"
+                    or item["validation_registry_path"]
+                    != ".agents/skills/secpal-pr-review/references/repositories.json"
+                    or not commands_valid
+                    or item["validation_command_set_digest"]
+                    != digest_json(validation_commands)
+                    or not results_valid
+                    or item["validation_result_digest"]
+                    != digest_json(validation_results)
+                )
+            )
             or item["source_pr_state"] != "OPEN"
             or (
-                executable_source
+                (executable_source or pre_enrollment_source)
                 and item["source_pr_draft"] is not True
             )
             or (
@@ -1356,21 +1449,41 @@ def _parse_lifecycle_trust_policy(
                 source_head_sha=head,
                 source_tree_sha=_require_oid(item["source_tree_sha"], "source tree"),
                 source_parent_sha=_require_oid(item["source_parent_sha"], "source parent"),
-                validation_receipt_digest=_require_digest(
-                    item["validation_receipt_digest"], "source validation receipt"
+                validation_receipt_digest=(
+                    None if pre_enrollment_source else _require_digest(
+                        item["validation_receipt_digest"], "source validation receipt"
+                    )
                 ),
-                final_attestation_digest=_require_digest(
-                    item["final_attestation_digest"], "source final attestation"
+                final_attestation_digest=(
+                    None if pre_enrollment_source else _require_digest(
+                        item["final_attestation_digest"], "source final attestation"
+                    )
                 ),
                 source_signer_identity=item["source_signer_identity"],
                 implementation_path=item["implementation_path"],
                 implementation_blob_oid=implementation_blob,
-                entrypoint=item["entrypoint"] if executable_source else None,
+                entrypoint=(
+                    item["entrypoint"]
+                    if executable_source or pre_enrollment_source else None
+                ),
                 purpose=item["purpose"],
                 source_pr_state=item["source_pr_state"],
                 source_pr_draft=item["source_pr_draft"],
                 source_base_ref=item["source_base_ref"],
-                policy_source=item["policy_source"] if byte_source else None,
+                policy_source=(
+                    item["policy_source"]
+                    if byte_source or pre_enrollment_source else None
+                ),
+                signer_policy_identity=item.get("signer_policy_identity"),
+                command=item.get("command"),
+                historical_evidence_status=item.get("historical_evidence_status"),
+                validation_registry_path=item.get("validation_registry_path"),
+                validation_command_set=tuple(copy.deepcopy(validation_commands)),
+                validation_command_set_digest=item.get(
+                    "validation_command_set_digest"
+                ),
+                validation_results=tuple(copy.deepcopy(validation_results)),
+                validation_result_digest=item.get("validation_result_digest"),
                 admission_digest=admission_digest,
                 evidence_loss_recovery=recovery,
             )

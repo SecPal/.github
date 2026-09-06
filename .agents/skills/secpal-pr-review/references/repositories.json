@@ -280,6 +280,52 @@
             "source_base_ref": "main",
             "policy_source": "ACCEPTED_MAIN_REPOSITORY_REGISTRY",
             "admission_digest": "38aa92b53d5289db44063ce4197687c18bb162c344aa37326ee2703013158418"
+          },
+          {
+            "schema_version": "1.0",
+            "kind": "BOOTSTRAP_SOURCE_ADMISSION",
+            "subtype": "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE",
+            "repository": "SecPal/.github",
+            "delivery_issue": 776,
+            "pull_request": 779,
+            "source_head_sha": "8371bef95afeed854e4892ef1af5ed54467aeb74",
+            "source_tree_sha": "c2ed276ac00ae2057e048a81a54c92f96569e63c",
+            "source_parent_sha": "ad684beb8eb334f83c02e214f7b566f23aeb9ec5",
+            "source_signer_identity": "aroviqen@secpal.app",
+            "signer_policy_identity": "MAINTAINED_LIFECYCLE_SIGNER_POLICY",
+            "implementation_path": "scripts/secpal-pr-review-actions.py",
+            "implementation_blob_oid": "8625a412b1951c577040d8a640bd0fdf8cedbe4e",
+            "entrypoint": "main",
+            "command": "integrate-pre-enrollment-draft",
+            "purpose": "PRE_ENROLLMENT_IMPLEMENTATION_BOOTSTRAP",
+            "source_pr_state": "OPEN",
+            "source_pr_draft": true,
+            "source_base_ref": "main",
+            "policy_source": "ACCEPTED_MAIN_REPOSITORY_REGISTRY",
+            "historical_evidence_status": "HISTORICAL_EVIDENCE_UNAVAILABLE",
+            "validation_registry_path": ".agents/skills/secpal-pr-review/references/repositories.json",
+            "validation_command_set": [
+              {
+                "argv": [
+                  "python3",
+                  "-m",
+                  "unittest",
+                  "tests/secpal-pre-enrollment-integration-unit.py"
+                ],
+                "working_directory": ".",
+                "purpose": "Validate exact pre-enrollment integration source"
+              }
+            ],
+            "validation_command_set_digest": "3b08a61c6e34a068cb60871651a1183c71137e0c09870d7c33498ebc34682e54",
+            "validation_results": [
+              {
+                "command_digest": "e9e6289a8f21d3f4e2407a7276f1034c48401ccdddbefb0574e1afab5c0c1ced",
+                "exit_status": 0,
+                "successful": true
+              }
+            ],
+            "validation_result_digest": "619bcfbcd84a5b65a5a59a7085cb0cd81687881eae2624c33652d5a95401f9d3",
+            "admission_digest": "3690f61e86aaced05576bf7c85fe08fbd530bc08a809776c927980768dc58244"
           }
         ],
         "historical_compatibility_publications": [

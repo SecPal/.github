@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Authenticate exact implementation sources admitted by accepted-main policy.
 
-The #810 subtype retains its exact isolated execution boundary.  Byte-only
-subtypes expose no entrypoint or execution mechanism.  Lifecycle orchestration
-and signed one-use transition authorization remain the sole mutation authority.
+The #810 subtype retains its exact isolated execution boundary. The #776
+subtype adds one fixed pre-enrollment action command after the same independent
+authentication. Byte-only subtypes expose no entrypoint or execution mechanism.
+Downstream typed evidence remains the sole candidate and mutation authority.
 """
 
 from __future__ import annotations
@@ -12,13 +13,14 @@ from __future__ import annotations
 import ast
 from contextlib import contextmanager
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import selectors
+import signal
 import subprocess
 import sys
 import tempfile
@@ -39,6 +41,11 @@ ENTRYPOINT = "execute_lifecycle_transition"
 EVIDENCE_HELPER_ADMISSION_SUBTYPE = "PR_REVIEW_EVIDENCE_HELPER_SOURCE"
 EVIDENCE_HELPER_PURPOSE = "PR_REVIEW_EVIDENCE_HELPER_SOURCE_ADMISSION"
 EVIDENCE_HELPER_IMPLEMENTATION_PATH = "scripts/secpal-pr-review.py"
+PRE_ENROLLMENT_ADMISSION_SUBTYPE = "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE"
+PRE_ENROLLMENT_PURPOSE = "PRE_ENROLLMENT_IMPLEMENTATION_BOOTSTRAP"
+PRE_ENROLLMENT_IMPLEMENTATION_PATH = "scripts/secpal-pr-review-actions.py"
+PRE_ENROLLMENT_ENTRYPOINT = "main"
+PRE_ENROLLMENT_COMMAND = "integrate-pre-enrollment-draft"
 ACCEPTED_MAIN_POLICY_SOURCE = "ACCEPTED_MAIN_REPOSITORY_REGISTRY"
 PROTECTED_MAIN_REPOSITORY = "SecPal/.github"
 PROTECTED_MAIN_DEFAULT_BRANCH = "main"
@@ -52,6 +59,17 @@ _DIGEST = re.compile(r"[0-9a-f]{64}")
 _VERIFIED_SOURCE = object()
 MAXIMUM_EVIDENCE_BYTES = late_disposition.MAXIMUM_ARTIFACT_BYTES
 _BOOTSTRAP_COMMAND_TIMEOUT_SECONDS = 30
+_PRE_ENROLLMENT_EXECUTION_TIMEOUT_SECONDS = 1800
+_PRE_ENROLLMENT_DIAGNOSTIC_IDENTITIES = frozenset(
+    {
+        "RECOVERABLE_LOCAL_ERROR",
+        "BLOCKED_TRANSIENT_READ_FAILED",
+        "BLOCKED_SECURITY",
+        "BLOCKED_MUTATION_FAILED",
+        "BLOCKED",
+        "INVALID_OR_UNSAFE_INPUT",
+    }
+)
 _BOOTSTRAP_COMMAND_DIRECTORIES = (
     Path("/usr/bin"),
     Path("/bin"),
@@ -209,6 +227,41 @@ else:
 _LAUNCHER = _LAUNCHER_TEMPLATE.replace(
     "__SECPAL_DIAGNOSTIC_RAISE_SITES__", repr(dict(_DIAGNOSTIC_RAISE_SITES))
 )
+_ISOLATED_SOURCE_LAUNCHER = r"""
+import importlib.util
+from pathlib import Path
+import runpy
+import sys
+
+mode = sys.argv[1]
+source_root = Path(sys.argv[2]).resolve(strict=True)
+target = sys.argv[3]
+arguments = sys.argv[4:]
+stdlib = [value for value in sys.path if value and "site-packages" not in value]
+sys.path[:] = [*stdlib, str(source_root)]
+
+if mode == "MODULE":
+    sys.argv = [target, *arguments]
+    runpy.run_module(target, run_name="__main__", alter_sys=False)
+elif mode == "ENTRYPOINT":
+    entrypoint = arguments.pop(0)
+    expected = (source_root / target).resolve(strict=True)
+    if source_root not in expected.parents or not expected.is_file():
+        raise RuntimeError("admitted source entrypoint escaped the immutable tree")
+    spec = importlib.util.spec_from_file_location(
+        "secpal_isolated_admitted_source", expected
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("admitted source entrypoint is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    selected = getattr(module, entrypoint, None)
+    if not callable(selected):
+        raise RuntimeError("admitted source entrypoint changed")
+    raise SystemExit(selected(arguments))
+else:
+    raise RuntimeError("isolated source execution mode is unknown")
+"""
 
 
 class BootstrapSourceAdmissionError(ValueError):
@@ -289,14 +342,19 @@ class VerifiedBootstrapSource:
     head_sha: str
     tree_sha: str
     parent_sha: str
-    validation_receipt_digest: str
-    final_attestation_digest: str
+    validation_receipt_digest: str | None
+    final_attestation_digest: str | None
     signer_identity: str
     implementation_path: str
     implementation_blob_oid: str
     entrypoint: str | None
     purpose: str
     policy_source: str | None
+    signer_policy_identity: str | None
+    command: str | None
+    validation_registry_path: str | None
+    validation_command_set_digest: str | None
+    validation_result_digest: str | None
     admission_digest: str
     historical_evidence_status: str
     recovery_authority_digest: str | None
@@ -865,6 +923,28 @@ def _select_evidence_helper_policy(
     )
 
 
+def _select_pre_enrollment_policy(
+    repository: str, delivery_issue: int
+) -> tuple[authority.LifecycleTrustPolicy, authority.BootstrapSourceAdmissionPolicy]:
+    """Select the executable #776 admission solely from protected main."""
+
+    try:
+        repository = authority._require_repository(repository)
+        delivery_issue = authority._require_positive_int(
+            delivery_issue, "bootstrap delivery issue"
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise BootstrapSourceAdmissionError(str(exc)) from exc
+    trust = _load_protected_main_trust_policy(repository)
+    return _select_policy_from_trust(
+        trust,
+        repository,
+        delivery_issue,
+        PRE_ENROLLMENT_ADMISSION_SUBTYPE,
+        PRE_ENROLLMENT_PURPOSE,
+    )
+
+
 def _verify_materialized_tree(
     root: Path, policy: authority.BootstrapSourceAdmissionPolicy
 ) -> None:
@@ -996,7 +1076,10 @@ def _admit_github_source(
 ) -> None:
     """Purely admit current PR identity and immutable source provenance."""
 
-    byte_source = policy.subtype == EVIDENCE_HELPER_ADMISSION_SUBTYPE
+    immutable_source = policy.subtype in {
+        EVIDENCE_HELPER_ADMISSION_SUBTYPE,
+        PRE_ENROLLMENT_ADMISSION_SUBTYPE,
+    }
     valid = (
         isinstance(facts, GitHubSourceFacts)
         and facts.base_repository == policy.repository
@@ -1005,7 +1088,7 @@ def _admit_github_source(
         and facts.pull_request == policy.pull_request
         and facts.state == policy.source_pr_state
         and facts.draft is policy.source_pr_draft
-        and (byte_source or facts.head_sha == policy.source_head_sha)
+        and (immutable_source or facts.head_sha == policy.source_head_sha)
         and facts.commit_sha == policy.source_head_sha
         and facts.tree_sha == policy.source_tree_sha
         and facts.parent_shas == (policy.source_parent_sha,)
@@ -1110,9 +1193,15 @@ def _admit_current_candidate_blob(
 ) -> None:
     """Admit only exact helper-byte consumption by the current candidate."""
 
+    valid_source = (
+        policy.subtype == EVIDENCE_HELPER_ADMISSION_SUBTYPE
+        and policy.implementation_path == EVIDENCE_HELPER_IMPLEMENTATION_PATH
+    ) or (
+        policy.subtype == PRE_ENROLLMENT_ADMISSION_SUBTYPE
+        and policy.implementation_path == PRE_ENROLLMENT_IMPLEMENTATION_PATH
+    )
     if (
-        policy.subtype != EVIDENCE_HELPER_ADMISSION_SUBTYPE
-        or policy.implementation_path != EVIDENCE_HELPER_IMPLEMENTATION_PATH
+        not valid_source
         or current_head_sha != expected_head_sha
         or blob != policy.implementation_blob_oid
     ):
@@ -1129,7 +1218,10 @@ def _authenticate_live_github_source(
     observation = _observe_github(policy)
     facts = _normalize_github_observation(observation)
     _admit_github_source(facts, policy)
-    if policy.subtype == EVIDENCE_HELPER_ADMISSION_SUBTYPE:
+    if policy.subtype in {
+        EVIDENCE_HELPER_ADMISSION_SUBTYPE,
+        PRE_ENROLLMENT_ADMISSION_SUBTYPE,
+    }:
         current_head_sha, blob = _normalize_current_candidate_blob(
             _observe_current_candidate_blob(policy, facts.head_sha),
             policy.repository,
@@ -1402,6 +1494,29 @@ def _implementation_blob(root: Path, policy: authority.BootstrapSourceAdmissionP
                 "admitted byte-source path or blob differs from accepted-main policy"
             )
         return fields[2]
+    if policy.subtype == PRE_ENROLLMENT_ADMISSION_SUBTYPE:
+        if (
+            policy.implementation_path != PRE_ENROLLMENT_IMPLEMENTATION_PATH
+            or policy.entrypoint != PRE_ENROLLMENT_ENTRYPOINT
+            or policy.command != PRE_ENROLLMENT_COMMAND
+            or policy.policy_source != ACCEPTED_MAIN_POLICY_SOURCE
+            or fields[2] != policy.implementation_blob_oid
+        ):
+            raise BootstrapSourceAdmissionError(
+                "pre-enrollment source path, entrypoint, command, or blob changed"
+            )
+        self_admission = _run_bootstrap_git(
+            root,
+            [
+                "cat-file", "-e",
+                f"{policy.source_tree_sha}:scripts/secpal_pr_review/bootstrap_source_admission.py",
+            ],
+        )
+        if self_admission.returncode == 0:
+            raise BootstrapSourceAdmissionError(
+                "candidate-local verifier cannot self-admit"
+            )
+        return fields[2]
     if policy.subtype != ADMISSION_SUBTYPE or policy.implementation_blob_oid is not None:
         raise BootstrapSourceAdmissionError("source-admission subtype is not executable")
     raw = _git(root, ["cat-file", "blob", fields[2]]).stdout
@@ -1506,11 +1621,15 @@ def _authenticate_exact_materialized_source(
     ):
         raise BootstrapSourceAdmissionError("source head, tree, or parent changed")
     _verify_commit_signature(root, trust, policy)
-    trailer = _exact_trailer(root, head)
-    if trailer != policy.validation_receipt_digest:
-        raise BootstrapSourceAdmissionError(
-            "source commit validation-receipt trailer changed"
-        )
+    if policy.subtype == PRE_ENROLLMENT_ADMISSION_SUBTYPE:
+        predecessor_policy = replace(policy, source_head_sha=policy.source_parent_sha)
+        _verify_commit_signature(root, trust, predecessor_policy)
+    else:
+        trailer = _exact_trailer(root, head)
+        if trailer != policy.validation_receipt_digest:
+            raise BootstrapSourceAdmissionError(
+                "source commit validation-receipt trailer changed"
+            )
     blob = _implementation_blob(root, policy)
     return head, tree, blob
 
@@ -1539,6 +1658,11 @@ def _verified_bootstrap_source(
         entrypoint=policy.entrypoint,
         purpose=policy.purpose,
         policy_source=policy.policy_source,
+        signer_policy_identity=policy.signer_policy_identity,
+        command=policy.command,
+        validation_registry_path=policy.validation_registry_path,
+        validation_command_set_digest=policy.validation_command_set_digest,
+        validation_result_digest=policy.validation_result_digest,
         admission_digest=policy.admission_digest,
         historical_evidence_status=historical_evidence_status,
         recovery_authority_digest=(
@@ -1646,6 +1770,244 @@ def verify_pr_review_evidence_helper_source(
         return verified
 
 
+def _run_pre_enrollment_source_validation(
+    root: Path, policy: authority.BootstrapSourceAdmissionPolicy
+) -> None:
+    """Run only the accepted-main command set and retain bounded result facts."""
+
+    if (
+        policy.subtype != PRE_ENROLLMENT_ADMISSION_SUBTYPE
+        or policy.validation_command_set_digest
+        != fast_path.digest_json(list(policy.validation_command_set))
+        or policy.validation_result_digest
+        != fast_path.digest_json(list(policy.validation_results))
+    ):
+        raise BootstrapSourceAdmissionError(
+            "pre-enrollment validation policy is invalid"
+        )
+    helper = authority._load_trusted_command_helper()
+    observed: list[dict[str, Any]] = []
+    with tempfile.TemporaryDirectory(
+        prefix="secpal-pre-enrollment-validation-home-"
+    ) as home_directory:
+        validation_environment = _closed_validation_environment(
+            helper, Path(home_directory)
+        )
+        for command in policy.validation_command_set:
+            argv = command.get("argv") if isinstance(command, dict) else None
+            if (
+                not isinstance(argv, list)
+                or not argv
+                or argv[0] != "python3"
+                or not all(isinstance(value, str) and value for value in argv)
+                or command.get("working_directory") != "."
+            ):
+                raise BootstrapSourceAdmissionError(
+                    "pre-enrollment validation command is invalid"
+                )
+            try:
+                completed = _run_isolated_python(
+                    _isolated_python_command(
+                        _ISOLATED_SOURCE_LAUNCHER,
+                        "MODULE", str(root), argv[2], *argv[3:],
+                    ),
+                    cwd=root,
+                    timeout=120,
+                    env=validation_environment,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise BootstrapSourceAdmissionError(
+                    "pre-enrollment source validation failed"
+                ) from exc
+            observed.append(
+                {
+                    "command_digest": fast_path.digest_json(command),
+                    "exit_status": completed.returncode,
+                    "successful": completed.returncode == 0,
+                }
+            )
+            _verify_materialized_tree(root, policy)
+    if tuple(observed) != policy.validation_results:
+        raise BootstrapSourceAdmissionError(
+            "pre-enrollment source validation created no admission"
+        )
+
+
+def verify_pre_enrollment_implementation_source(
+    repository: str, delivery_issue: int
+) -> VerifiedBootstrapSource:
+    """Authenticate and validate only the exact #776 implementation snapshot."""
+
+    trust, policy = _select_pre_enrollment_policy(repository, delivery_issue)
+    _authenticate_live_github_source(policy)
+    with _isolated_source_repository(trust, policy) as root:
+        head, tree, blob = _authenticate_exact_materialized_source(
+            root, trust, policy
+        )
+        _run_pre_enrollment_source_validation(root, policy)
+        _verify_materialized_tree(root, policy)
+        return _verified_bootstrap_source(
+            policy,
+            head=head,
+            tree=tree,
+            blob=blob,
+            historical_evidence_status=policy.historical_evidence_status or "",
+        )
+
+
+def _closed_pre_enrollment_invocation(
+    serialized_invocation: bytes | str,
+) -> dict[str, str]:
+    value = _closed_json(serialized_invocation, "pre-enrollment invocation")
+    fields = {
+        "repository_root", "session_directory", "authorization_id",
+        "validation_receipt_id", "final_attestation_id", "commit_subject",
+    }
+    if set(value) != fields or any(
+        not isinstance(value[field], str)
+        or not value[field]
+        or "\x00" in value[field]
+        for field in fields
+    ):
+        raise BootstrapSourceAdmissionError(
+            "pre-enrollment invocation is not closed"
+        )
+    try:
+        session = Path(value["session_directory"]).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise BootstrapSourceAdmissionError(
+            "pre-enrollment session directory is unavailable"
+        ) from exc
+    session_status = session.stat()
+    if (
+        not session.is_dir()
+        or session_status.st_uid != os.getuid()
+        or session_status.st_mode & 0o777 != 0o700
+    ):
+        raise BootstrapSourceAdmissionError(
+            "pre-enrollment session directory is not private"
+        )
+    return {field: value[field] for field in sorted(fields)}
+
+
+def _execute_pre_enrollment_entrypoint(
+    root: Path,
+    policy: authority.BootstrapSourceAdmissionPolicy,
+    serialized_invocation: bytes | str,
+) -> Mapping[str, Any]:
+    """Invoke the fixed admitted command without exposing candidate-selected argv."""
+
+    selected = _closed_pre_enrollment_invocation(serialized_invocation)
+    session = Path(selected["session_directory"]).resolve(strict=True)
+    arguments = [
+        policy.command or "",
+        "--repo", policy.repository,
+        "--pr", str(policy.pull_request),
+        "--delivery-issue", str(policy.delivery_issue),
+        "--repo-root", selected["repository_root"],
+        "--evidence", str(session / "pre-enrollment-evidence.json"),
+        "--authorization-id", selected["authorization_id"],
+        "--expected-signer", policy.source_signer_identity,
+        "--validation-receipt-id", selected["validation_receipt_id"],
+        "--final-attestation-id", selected["final_attestation_id"],
+        "--commit-subject", selected["commit_subject"],
+        "--receipt-output", str(session / "validation-receipt.json"),
+        "--attestation-output", str(session / "final-attestation.json"),
+        "--apply",
+    ]
+    helper = authority._load_trusted_command_helper()
+    try:
+        completed = _run_isolated_python(
+            _isolated_python_command(
+                _ISOLATED_SOURCE_LAUNCHER,
+                "ENTRYPOINT", str(root), policy.implementation_path,
+                policy.entrypoint or "", *arguments,
+            ),
+            cwd=root,
+            timeout=_PRE_ENROLLMENT_EXECUTION_TIMEOUT_SECONDS,
+            env=_closed_launcher_environment(helper),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise BootstrapSourceAdmissionError(
+            "admitted pre-enrollment entrypoint failed"
+        ) from exc
+    if completed.returncode != 0:
+        identity = "UNEXPECTED_CLOSED_CHILD_FAILURE"
+        try:
+            failure = json.loads(
+                completed.stderr,
+                object_pairs_hook=publication._reject_duplicate_pairs,
+            )
+            if (
+                isinstance(failure, dict)
+                and failure.get("status") in _PRE_ENROLLMENT_DIAGNOSTIC_IDENTITIES
+            ):
+                identity = failure["status"]
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            pass
+        raise BootstrapSourceAdmissionError(
+            f"admitted pre-enrollment entrypoint failed: {identity}",
+            diagnostic_identity=identity,
+        )
+    return {"status": "COMPLETE", "exit_status": 0}
+
+
+def execute_pre_enrollment_implementation_bootstrap(
+    repository: str,
+    delivery_issue: int,
+    serialized_invocation: bytes | str,
+) -> Mapping[str, Any]:
+    """Execute the fixed #776 command only after accepted-main authentication."""
+
+    trust, policy = _select_pre_enrollment_policy(repository, delivery_issue)
+    _authenticate_live_github_source(policy)
+    with _isolated_source_repository(trust, policy) as root:
+        head, tree, blob = _authenticate_exact_materialized_source(
+            root, trust, policy
+        )
+        _run_pre_enrollment_source_validation(root, policy)
+        verified = _verified_bootstrap_source(
+            policy,
+            head=head,
+            tree=tree,
+            blob=blob,
+            historical_evidence_status=policy.historical_evidence_status or "",
+        )
+        if not is_verified_bootstrap_source(verified):
+            raise BootstrapSourceAdmissionError(
+                "pre-enrollment source admission verification was not retained"
+            )
+        _verify_materialized_tree(root, policy)
+        result = _execute_pre_enrollment_entrypoint(
+            root, policy, serialized_invocation
+        )
+        if result != {"status": "COMPLETE", "exit_status": 0}:
+            raise BootstrapSourceAdmissionError(
+                "admitted pre-enrollment result is not closed"
+            )
+        _verify_materialized_tree(root, policy)
+        return {
+            "status": "COMPLETE",
+            "exit_status": 0,
+            "repository": verified.repository,
+            "delivery_issue": verified.delivery_issue,
+            "pull_request": verified.pull_request,
+            "source_head_sha": verified.head_sha,
+            "source_tree_sha": verified.tree_sha,
+            "source_parent_sha": verified.parent_sha,
+            "signer_identity": verified.signer_identity,
+            "signer_policy_identity": verified.signer_policy_identity,
+            "entrypoint": verified.entrypoint,
+            "command": verified.command,
+            "purpose": verified.purpose,
+            "validation_registry_path": verified.validation_registry_path,
+            "validation_command_set_digest": verified.validation_command_set_digest,
+            "validation_result_digest": verified.validation_result_digest,
+            "historical_evidence_status": verified.historical_evidence_status,
+            "admission_digest": verified.admission_digest,
+        }
+
+
 def _trusted_python() -> str:
     helper = authority._load_trusted_command_helper()
     for directory in helper.TRUSTED_COMMAND_DIRECTORIES:
@@ -1657,6 +2019,114 @@ def _trusted_python() -> str:
         if resolved.is_file() and os.access(resolved, os.X_OK):
             return str(resolved)
     raise BootstrapSourceAdmissionError("trusted Python executable is unavailable")
+
+
+def _isolated_python_command(launcher: str, *arguments: str) -> list[str]:
+    """Build the one accepted isolated Python startup sequence."""
+
+    return [_trusted_python(), "-I", "-S", "-B", "-c", launcher, *arguments]
+
+
+def _terminate_isolated_process_group(process: subprocess.Popen[bytes]) -> None:
+    """Terminate and reap the complete isolated child process group."""
+
+    for stop_signal in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(process.pid, stop_signal)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=1)
+            if stop_signal == signal.SIGTERM:
+                # Descendants can outlive their direct parent, so still signal the
+                # process group once more before treating the boundary as closed.
+                continue
+            return
+        except subprocess.TimeoutExpired:
+            continue
+    process.wait()
+
+
+def _run_isolated_python(
+    command: list[str], *, cwd: Path, timeout: float, env: Mapping[str, str]
+) -> subprocess.CompletedProcess[bytes]:
+    """Run one admitted Python command with bounded output and group lifetime."""
+
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        raise BootstrapSourceAdmissionError(
+            "isolated admitted-source process is unavailable"
+        ) from exc
+    selector = selectors.DefaultSelector()
+    output = {"stdout": [], "stderr": []}
+    sizes = {"stdout": 0, "stderr": 0}
+    deadline = time.monotonic() + timeout
+    try:
+        assert process.stdout is not None and process.stderr is not None
+        for label, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ, label)
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_isolated_process_group(process)
+                raise BootstrapSourceAdmissionError(
+                    "isolated admitted-source process timed out"
+                )
+            events = selector.select(min(remaining, 0.1))
+            if not events and process.poll() is not None:
+                events = [
+                    (key, selectors.EVENT_READ)
+                    for key in tuple(selector.get_map().values())
+                ]
+            for key, _mask in events:
+                stream = key.fileobj
+                label = key.data
+                capacity = MAXIMUM_EVIDENCE_BYTES - sizes[label]
+                try:
+                    chunk = os.read(stream.fileno(), min(65536, capacity + 1))
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(stream)
+                    stream.close()
+                    continue
+                if len(chunk) > capacity:
+                    _terminate_isolated_process_group(process)
+                    raise BootstrapSourceAdmissionError(
+                        "isolated admitted-source output limit exceeded"
+                    )
+                output[label].append(chunk)
+                sizes[label] += len(chunk)
+        try:
+            returncode = process.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired as exc:
+            _terminate_isolated_process_group(process)
+            raise BootstrapSourceAdmissionError(
+                "isolated admitted-source process timed out"
+            ) from exc
+        return subprocess.CompletedProcess(
+            command,
+            returncode,
+            b"".join(output["stdout"]),
+            b"".join(output["stderr"]),
+        )
+    finally:
+        selector.close()
+        for stream in (process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
+        if process.poll() is None:
+            _terminate_isolated_process_group(process)
 
 
 def _closed_launcher_environment(helper: Any) -> dict[str, str]:
@@ -1689,6 +2159,40 @@ def _closed_launcher_environment(helper: Any) -> dict[str, str]:
     return environment
 
 
+def _closed_validation_environment(helper: Any, home: Path) -> dict[str, str]:
+    """Build the credential-free environment for admitted source validation."""
+
+    try:
+        home = home.resolve(strict=True)
+        status = home.stat()
+    except (OSError, RuntimeError) as exc:
+        raise BootstrapSourceAdmissionError(
+            "validation home is unavailable"
+        ) from exc
+    command_path = getattr(helper, "TRUSTED_COMMAND_PATH", None)
+    if (
+        not home.is_dir()
+        or status.st_uid != os.getuid()
+        or status.st_mode & 0o077
+        or not isinstance(command_path, str)
+        or not command_path
+    ):
+        raise BootstrapSourceAdmissionError(
+            "validation environment is invalid"
+        )
+    return {
+        "PATH": command_path,
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PAGER": "cat",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+
+
 def _execute_entrypoint(root: Path, serialized_authorization: bytes | str) -> Mapping[str, Any]:
     authorization = (
         serialized_authorization.encode("utf-8")
@@ -1704,7 +2208,7 @@ def _execute_entrypoint(root: Path, serialized_authorization: bytes | str) -> Ma
     environment = _closed_launcher_environment(helper)
     try:
         result = subprocess.run(
-            [_trusted_python(), "-I", "-S", "-c", _LAUNCHER, str(root)],
+            _isolated_python_command(_LAUNCHER, str(root)),
             cwd=root,
             input=authorization,
             stdout=subprocess.PIPE,
