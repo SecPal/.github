@@ -25,6 +25,7 @@ LATE_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/late-disposit
 STATIC_POLICY="$REPO_ROOT/tests/secpal-pr-review-static-policy.py"
 POLYSCOPE_TEMPLATE="$REPO_ROOT/templates/polyscope-codex-AGENTS.md"
 WORKFLOW_DOC="$REPO_ROOT/docs/secpal-pr-review-workflow.md"
+WORK_GRAPH_CONTRACT="$REPO_ROOT/docs/work-graph-contract.md"
 SIMPLE_RESOLUTION_DOC="$REPO_ROOT/docs/simple-pr-thread-resolution.md"
 SCRIPT_README="$REPO_ROOT/scripts/README.md"
 POLYSCOPE_INSTALLER="$REPO_ROOT/scripts/install-polyscope-rollout.sh"
@@ -601,7 +602,8 @@ grep -Fq 'normal_complete_snapshots: 0' "$CONTRACT" || fail 'normal snapshot lim
 grep -Fq 'normal_stable_feedback_reads: 1' "$CONTRACT" || fail 'stable feedback read limit drifted'
 grep -Fq 'normal_required_check_reads_before_resolution: 0' "$CONTRACT" || fail 'default remediation still reads Required Checks'
 grep -Fq 'normal_complete_validation_runs: 1' "$CONTRACT" || fail 'complete validation limit drifted'
-grep -Fq 'maximum_holistic_audits: 1' "$CONTRACT" || fail 'holistic audit limit drifted'
+grep -Fq 'maximum_holistic_audits: 1 # for the current candidate tree' "$CONTRACT" \
+  || fail 'holistic audit session limit drifted'
 grep -Fq 'Focused validation must not invoke a complete, repository-wide, or aggregate suite' "$CONTRACT" \
   || fail 'focused validation may still consume the complete validation gate'
 grep -Fq 'A registered focused-only command explicitly authorized by its matching manual gate is the bounded exception.' <<<"$contract_text" \
@@ -641,7 +643,7 @@ for required_text in \
   'Staged-tree and validation proof is invalidated by a relevant tree change.' \
   'Lifecycle CURRENT proof is invalidated by a new CURRENT publication.' \
   'Stable-feedback proof is invalidated by relevant feedback or reviewed-head change.' \
-  'Work-graph proof is invalidated by a relevant native graph mutation.' \
+  'Work-graph proof validity is owned by' \
   'Volatile readiness and merge evidence is freshly read at its mutation boundary.' \
   'same-delivery delta preflight' \
   'derive the operation and its exact preconditions from authenticated current maintained repository authority' \
@@ -696,6 +698,14 @@ grep -Fq 'repeat the holistic audit for that changed candidate' <<<"$contract_te
   || fail 'changed corrected candidate can reuse the prior audit'
 grep -Fq 'A successful complete validation is never repeated on an unchanged tree.' <<<"$contract_text" \
   || fail 'successful complete validation can repeat on an unchanged tree'
+grep -Fq 'This authorizes exactly one corrected candidate' <<<"$contract_text" \
+  || fail 'changed-candidate complete validation is not finitely bounded'
+grep -Fq 'replaces that invalidated proof rather than incrementing the counter' <<<"$contract_text" \
+  || fail 'corrected-candidate audit changes the lifecycle counter'
+grep -Fq 'A canonical work-graph read is invalidated by a relevant native graph mutation.' "$WORK_GRAPH_CONTRACT" \
+  || fail 'work-graph invalidation is not owned by its canonical contract'
+grep -Fq '_require_review_providers_terminal(provider_state)' "$ACTIONS" \
+  || fail 'stable-feedback capture does not enforce provider terminality'
 grep -Fq 'Material security or authority remediation requires first-principles design reassessment' <<<"$workflow_text" \
   || fail 'material remediation does not trigger design reassessment'
 grep -Fq 'Small ordinary remediation does not acquire that heavyweight ceremony.' <<<"$workflow_text" \

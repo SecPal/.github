@@ -80,12 +80,14 @@ Apply these rules only when the session says it is running inside Polyscope.
 - Perform the relevant full preflight on first entry to a delivery. During the
   same delivery, use delta preflight: refresh only facts whose defined
   invalidators may have occurred and freshly read operation-specific volatile
-  state at a critical mutation boundary. A new prompt, internal phase, commit,
-  or tool handoff alone invalidates no proof and does not require a complete
-  graph, ADR, issue, PR, and CI reread.
+  state at a critical mutation boundary. A new prompt, internal phase, or tool
+  handoff alone invalidates no proof and does not require a complete graph, ADR,
+  issue, PR, and CI reread. A commit that advances `HEAD` invalidates head-bound
+  proof while leaving unrelated proof subject to its own invalidator.
 - Reuse PR/head-bound, staged-tree/validation, lifecycle CURRENT,
-  stable-feedback, and work-graph proof until a relevant head, tree, CURRENT
-  publication, feedback/reviewed-head, or native graph mutation invalidates it.
+  and stable-feedback proof until a relevant head, tree, CURRENT publication,
+  or feedback/reviewed-head change invalidates it. Work-graph proof validity
+  comes only from `docs/work-graph-contract.md` and its canonical reader.
   Keep readiness and merge evidence short-lived and read it at the actual
   boundary. Do not create a freshness database, schema, signer, or daemon.
 - Before each lifecycle mutation, derive the canonical operation and exact

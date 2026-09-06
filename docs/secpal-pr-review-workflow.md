@@ -69,7 +69,8 @@ the smallest explicit invalidation model already implied by each proof:
 - Staged-tree and validation proof is invalidated by a relevant tree change.
 - Lifecycle CURRENT proof is invalidated by a new CURRENT publication.
 - Stable-feedback proof is invalidated by relevant feedback or reviewed-head change.
-- Work-graph proof is invalidated by a relevant native graph mutation.
+- Work-graph proof validity is owned by `docs/work-graph-contract.md`; refresh
+  its canonical read after a relevant native graph mutation.
 - Volatile readiness and merge evidence is freshly read at its mutation boundary.
 
 No freshness database, cache, signer, evidence schema, or daemon represents
@@ -83,7 +84,8 @@ reason to reread the complete graph, ADR, issue, PR, and CI state.
 Before every lifecycle mutation, derive the operation and its exact
 preconditions from authenticated current maintained repository authority.
 Prompt text may bind identity, intent, scope, mutation budget, expected result,
-acceptance, and stop conditions. It is assertions to verify, not a second
+acceptance, and stop conditions. Those expectations are assertions to verify,
+not a second
 lifecycle contract. If those expectations conflict with the maintained
 contract, fail closed before mutation and report the discrepancy.
 
@@ -140,6 +142,14 @@ proves completion. Capture one complete bounded snapshot for that reviewed head,
 then classify the complete set before remediation. Do not remediate one provider
 at a time while another is running. Relevant later feedback or a reviewed-head
 change invalidates that snapshot.
+
+The existing bounded capture query enforces the visible provider gate before
+admitting stable feedback. It rejects non-terminal, malformed, forged,
+duplicated, or wrong-head Codex summaries, requires a Codex summary for a Ready
+PR, and rejects a pending Copilot review request. The query discards provider
+status after the gate, preserving the existing stable-feedback schema and
+digest. Provider absence remains `NOT_TRIGGERED` only where the maintained
+observable boundary has no affirmative trigger evidence.
 
 When the current instruction authorizes full delivery and the environment can
 wait, observe only maintained review-provider status at bounded intervals of
@@ -722,8 +732,11 @@ correction stays inside current authority, no external mutation occurred, and
 focused validation plus a repeated holistic audit cover a changed candidate,
 the same invocation may perform one complete validation of that changed final
 candidate. A successful complete validation is never repeated on an unchanged
-tree. New authority is required only when the correction crosses scope,
-recovery, or another genuine decision boundary.
+tree. If that single corrected candidate also fails, stop without a third
+candidate or attempt in the invocation. The fresh audit replaces the
+invalidated audit for the rejected tree; it does not increment the existing
+one-audit session counter. New authority is required only when the correction
+crosses scope, recovery, or another genuine decision boundary.
 
 `manual-gates.json` is an ordered JSON array with exactly one
 `{"gate": REGISTRY_TEXT, "satisfied": true, "evidence": CONCISE_PROOF}` object

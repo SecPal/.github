@@ -16,7 +16,7 @@ normal_complete_snapshots: 0
 normal_stable_feedback_reads: 1
 normal_required_check_reads_before_resolution: 0
 normal_complete_validation_runs: 1 # successful run for the accepted candidate
-maximum_holistic_audits: 1 # per candidate tree
+maximum_holistic_audits: 1 # for the current candidate tree
 normal_signed_remediation_commits: 1
 normal_fast_forward_pushes: 1
 maximum_evidence_replies_per_qualifying_invalid_finding: 1
@@ -40,6 +40,12 @@ are available only in explicitly selected forensic/audit mode and are not a
 normal-path prerequisite. The one normal stable-feedback read captures the
 reviewed state before remediation. Pagination needed to finish that bounded
 logical read does not create another read.
+
+The holistic-audit limit remains the existing one-audit session counter. A
+relevant tree change rejects the prior candidate and invalidates its audit; the
+fresh audit for the one permitted corrected candidate replaces that invalidated
+proof rather than incrementing the counter or creating another remediation
+cycle.
 
 Security blockers stop immediately. A recoverable local error may be corrected
 in the same invocation and reruns only its affected focused command. A
@@ -93,6 +99,12 @@ prove completion. A currently authorized full delivery may observe provider
 status at bounded intervals for about 30 minutes without consuming another
 review or polling unrelated hosted CI. Expiry returns `REVIEW_NOT_TERMINAL` and
 permits the same workspace to resume later.
+
+The normal capture query enforces this boundary before stable-state admission.
+It rejects a visible non-terminal, malformed, forged, duplicate, or wrong-head
+Codex summary; it rejects a Ready PR with no Codex summary and a pending Copilot
+review request. Provider status remains ephemeral and is excluded from the
+stable-feedback artifact, so this adds no evidence family or persistence.
 
 ## Simple resolution-only path
 
@@ -334,7 +346,9 @@ When the failure is diagnosed, correction remains inside current authority, no
 external mutation occurred, and focused validation plus a fresh holistic audit
 cover a changed tree, the workflow may perform one complete validation of the
 changed candidate in the same invocation. It must repeat the holistic audit for
-that changed candidate. A successful complete validation is never repeated on
+that changed candidate. This authorizes exactly one corrected candidate; if its
+complete validation fails, stop without another correction or attempt in this
+invocation. A successful complete validation is never repeated on
 an unchanged tree. A new invocation is required only when correction requires
 new scope, recovery, authority, or another user decision. Time is informational
 only and cannot determine validity.

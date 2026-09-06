@@ -21,7 +21,8 @@ Log of notable changes to SecPal organization defaults (newest first).
   merge as mechanical checkpoints rather than new prompt boundaries.
 - Require affirmative successful terminal evidence from every triggered review
   provider before stable-feedback capture or merge, with finite observation and
-  one batched finding set per reviewed head.
+  one batched finding set per reviewed head; enforce the visible provider gate
+  inside the existing bounded stable-feedback capture.
 - Permit focused in-contract correction after failed Complete Validation in the
   same invocation only for a changed, freshly audited candidate; preserve no
   receipt for failure and no repeated success on an unchanged tree.

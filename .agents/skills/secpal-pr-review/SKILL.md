@@ -224,11 +224,14 @@ Stable feedback is captured once per reviewed head only after every triggered
 review provider has successful terminal evidence. `QUEUED`, `PENDING`,
 `RUNNING`, `FAILED`, and `INDETERMINATE` block stable capture and merge; empty
 comments or threads do not prove completion. Classify the complete bounded
-snapshot before one coherent remediation batch. A currently authorized full
-delivery may observe provider state for about 30 minutes at 60-to-90-second
-intervals without requesting another review, consuming another review cycle,
-or polling unrelated hosted CI. Expiry reports `REVIEW_NOT_TERMINAL`; the same
-workspace may resume after external state changes.
+snapshot before one coherent remediation batch. The existing capture query
+rejects a visible non-terminal Codex summary, a missing Codex summary on a
+Ready PR, and a pending Copilot review request before admitting stable feedback.
+A currently authorized full delivery may observe provider state for about 30
+minutes at 60-to-90-second intervals without requesting another review,
+consuming another review cycle, or polling unrelated hosted CI. Expiry reports
+`REVIEW_NOT_TERMINAL`; the same workspace may resume after external state
+changes.
 
 ## Finite lifecycle continuity
 
@@ -292,13 +295,16 @@ The following state machine applies only to the full feedback-remediation path.
    and explicit satisfied evidence for every registered manual gate. Preserve
    its deterministic staged-tree,
    parent-head, registry, command-set, manual-gate, result, and reviewed-feedback
-   receipt. Do not continue discovery or change the tree after this step begins.
+   receipt. Do not continue discovery or change that candidate tree after this
+   step begins.
    A failed command produces no receipt and rejects that candidate tree. Do not
    retry the unchanged failed candidate or represent it as successful evidence.
    If the failure is diagnosed, its focused correction remains inside current
    authority, no external mutation occurred, and the changed tree receives
    focused validation plus a fresh holistic audit, perform one complete
-   validation of the changed candidate in the same invocation. Require a new
+   validation of the changed candidate in the same invocation. If that
+   corrected candidate also fails, stop with a validation blocker; do not create
+   a third candidate or validation attempt. Require a new
    invocation only when correction needs new scope, recovery, authority, or a
    user decision. Never repeat a successful complete validation on an unchanged
    tree.

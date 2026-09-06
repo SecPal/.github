@@ -3516,7 +3516,7 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
     merge_and_push_prompt = collapse_spaces(
         f"Before push and merge for {spec['display_name']}, apply {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
-        "A prompt or mechanical checkpoint alone invalidates no proof. Within the same delivery, refresh only facts whose defined invalidators may have occurred and freshly read operation-specific volatile state at its boundary. "
+        "A prompt or mechanical checkpoint alone invalidates no unrelated proof; a commit that advances HEAD invalidates head-bound proof. Within the same delivery, refresh only facts whose defined invalidators may have occurred and freshly read operation-specific volatile state at its boundary. "
         "First stage the complete intended change set before evaluating reusable validation evidence. "
         "Reuse only evidence that identifies the successful commands and binds the current repository, exact HEAD and parent, exact final staged tree, including every newly added path, validation registry, command set, and required manual-gate evidence. "
         "Treat that evidence as stale if any bound value, staged content, or tracked content changed, and do not stage additional content after deciding to reuse it. "
