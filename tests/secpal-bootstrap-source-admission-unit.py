@@ -43,7 +43,7 @@ HISTORICAL_SOURCE_FIXTURE = (
     / "fixtures"
     / "bootstrap-source-admission-a668f664.pack.b64"
 )
-# This is the minimal historical object closure needed to bind the admitted
+# This is the minimal historical object set needed to bind the admitted
 # commit to its executable paths and import the exact executor in isolation.
 HISTORICAL_SOURCE_FILES = {
     "scripts/secpal_pr_review/fast_path.py": (
@@ -79,6 +79,7 @@ HISTORICAL_SOURCE_OBJECTS = frozenset(
     {
         HEAD,
         TREE,
+        PARENT,
         "565cdf820a0745a07ff8bb81817a7fea931be70b",
         "a619c2a7c4d50152e4aa77baab32c74e03474c91",
         "7d0191f68a7461329cbd7653e3f7ed66d5fdcdf8",
@@ -177,7 +178,11 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
                 stderr=subprocess.PIPE,
                 check=True,
             )
-            for identity, kind in ((HEAD, "commit"), (BLOB, "blob")):
+            for identity, kind in (
+                (HEAD, "commit"),
+                (PARENT, "commit"),
+                (BLOB, "blob"),
+            ):
                 absent = self._historical_git(
                     git_directory,
                     ["cat-file", "-e", f"{identity}^{{{kind}}}"],
@@ -203,9 +208,15 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
             self.assertEqual(observed_objects, HISTORICAL_SOURCE_OBJECTS)
             identities = self._historical_git(
                 git_directory,
-                ["rev-parse", f"{HEAD}^{{commit}}", f"{HEAD}^{{tree}}", f"{HEAD}^"],
+                [
+                    "rev-parse",
+                    f"{HEAD}^{{commit}}",
+                    f"{HEAD}^{{tree}}",
+                    f"{HEAD}^",
+                    f"{PARENT}^{{commit}}",
+                ],
             ).stdout.decode("ascii").splitlines()
-            self.assertEqual(identities, [HEAD, TREE, PARENT])
+            self.assertEqual(identities, [HEAD, TREE, PARENT, PARENT])
 
             source_root = root / "source"
             for path, expected_blob in HISTORICAL_SOURCE_FILES.items():
