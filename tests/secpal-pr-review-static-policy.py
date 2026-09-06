@@ -167,6 +167,21 @@ RESOLVER_CALLS = (
 LATE_DISPOSITION_CALLS = (
     ProcessCall(
         None,
+        "_read_global_git_values",
+        "executable",
+        "arguments",
+        (
+            ("check", "False"),
+            ("env", "environment"),
+            ("stderr", "subprocess.DEVNULL"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("start_new_session", "True"),
+            ("stdout", "output"),
+            ("timeout", "30"),
+        ),
+    ),
+    ProcessCall(
+        None,
         "_read_global_git_value",
         "executable",
         "arguments",
@@ -188,6 +203,7 @@ LATE_DISPOSITION_CALLS = (
             ("check", "False"),
             ("env", "environment"),
             ("stdin", "subprocess.DEVNULL"),
+            ("start_new_session", "True"),
             ("timeout", "30"),
         ),
     ),
@@ -201,6 +217,7 @@ LATE_DISPOSITION_CALLS = (
             ("check", "False"),
             ("env", "environment"),
             ("input", "stdin"),
+            ("start_new_session", "True"),
             ("timeout", "30"),
         ),
     ),
@@ -483,7 +500,7 @@ DIRECT_MODULE_ATTRIBUTES = {
         "errno": {"EINVAL", "ENOTSUP"},
         "pwd": {"getpwuid"},
         "stat": {"S_ISREG"},
-        "tempfile": {"TemporaryDirectory"},
+        "tempfile": {"TemporaryDirectory", "TemporaryFile"},
     },
     "secpal-create-late-disposition.py": {
         "importlib": {"util"},

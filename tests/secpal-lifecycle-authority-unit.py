@@ -2949,16 +2949,17 @@ class ValidationEvidenceLossTests(TestCase):
 
     def test_issuer_uses_existing_migration_role_only_after_acquisition(self) -> None:
         with patch.object(self.loss, "_acquire", return_value=self.acquired) as acquire, patch.object(
-            self.loss.execution, "_local_signer", return_value=signer_for(self.migration)
+            self.loss.execution, "_production_legacy_adoption_signer",
+            return_value=(self.migration, signer_for(self.migration)),
         ) as signer:
             issued = self.loss.issue(REPOSITORY, 827)
             acquire.assert_called_once_with(REPOSITORY, 827, execute_validation=True)
-            signer.assert_called_once_with(self.migration)
+            signer.assert_called_once_with(REPOSITORY)
             self.assertEqual(issued["signer_identity"], self.migration)
             self.assertEqual(issued["bounded_uses"], 1)
             self.assertEqual(issued["current_safety"], self.acquired["current_safety"])
         with patch.object(self.loss, "_acquire", side_effect=authority.LifecycleAuthorityError("registered validation failed")), patch.object(
-            self.loss.execution, "_local_signer"
+            self.loss.execution, "_production_legacy_adoption_signer"
         ) as signer:
             with self.assertRaisesRegex(authority.LifecycleAuthorityError, "validation failed"):
                 self.loss.issue(REPOSITORY, 827)
