@@ -4,16 +4,16 @@
 
 from __future__ import annotations
 
+import base64
 from contextlib import contextmanager
 from dataclasses import replace
 import hashlib
-import io
 import inspect
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
-import tarfile
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -38,25 +38,74 @@ STALE_RECEIPT = "a09090603206134470b21f58224d6fd35c4a26f4cc87ca7936c068421d0e867
 STALE_ATTESTATION = "e585aab46ea8e30a28fd953d98711460d0e45818637cf68ab36e25e550b9e5e6"
 BLOB = "4cfd9eb73a522224f9dfca4176d1aad386b81d50"
 RECOVERY_FEEDBACK_DIGEST = "d2236120f769caa74d5da0435330c103a036dfe68a5e0f8274d43a3916ca8f2b"
+HISTORICAL_SOURCE_FIXTURE = (
+    Path(__file__).parent
+    / "fixtures"
+    / "bootstrap-source-admission-a668f664.pack.b64"
+)
+# This is the minimal historical object set needed to bind the admitted
+# commit to its executable paths and import the exact executor in isolation.
+HISTORICAL_SOURCE_FILES = {
+    "scripts/secpal_pr_review/fast_path.py": (
+        "d924628f7bb18be9575eb761ab429462bd9b69c8"
+    ),
+    "scripts/secpal_pr_review/follow_up.py": (
+        "1380027b1f771dfbd3f318a95b31efaad0ec0835"
+    ),
+    "scripts/secpal_pr_review/late_disposition.py": (
+        "beec15391a6f5a249fe5eb3deaf603b988146b7a"
+    ),
+    "scripts/secpal_pr_review/lifecycle_authority.py": (
+        "45d3b020ffad90a1be55cf8d4ac971dce823f2d8"
+    ),
+    "scripts/secpal_pr_review/lifecycle_execution.py": BLOB,
+    "scripts/secpal_pr_review/lifecycle_orchestration.py": (
+        "0cc24301660af6654cd25f3687644bf868f59331"
+    ),
+    "scripts/secpal_pr_review/lifecycle_publication.py": (
+        "3e3e55bff14118b9cac12699d41cc8381758aea1"
+    ),
+    "scripts/secpal_work_graph/__init__.py": (
+        "1cfe7fd9d9479c1f3356574e566dd8bf39391d04"
+    ),
+    "scripts/secpal_work_graph/model.py": (
+        "11b18ad1a82570aa0d17a18efb11120fe2eaae0a"
+    ),
+    "scripts/secpal_work_graph/replanning.py": (
+        "2f1a13e1c2ddd4966683a4dd310a1993c60872a5"
+    ),
+}
+HISTORICAL_SOURCE_OBJECTS = frozenset(
+    {
+        HEAD,
+        TREE,
+        PARENT,
+        "565cdf820a0745a07ff8bb81817a7fea931be70b",
+        "a619c2a7c4d50152e4aa77baab32c74e03474c91",
+        "7d0191f68a7461329cbd7653e3f7ed66d5fdcdf8",
+        *HISTORICAL_SOURCE_FILES.values(),
+    }
+)
 
 EVIDENCE_HELPER_ISSUE = 818
 EVIDENCE_HELPER_PR = 819
-EVIDENCE_HELPER_HEAD = "eb3aebf226c3ca215e7021b00207cc996ab06c2e"
-EVIDENCE_HELPER_CURRENT_HEAD = "9c1dd1ee48dfd91e1e320853d2e5b995030e02b8"
-EVIDENCE_HELPER_TREE = "d7fca1ea61ea0b4cd78bf18f8555386633e013ea"
-EVIDENCE_HELPER_PARENT = "f8d58a3acd5d2b5c84824bf9ecba637e91665ee9"
+EVIDENCE_HELPER_HEAD = "e14f7668354763af5033f511097ddf990d6e8ef5"
+EVIDENCE_HELPER_CURRENT_HEAD = "b297745297b7aa98ba24ef05c011a7906a0a43d8"
+EVIDENCE_HELPER_TREE = "5065ce77573e9753249de055f6122f14362cbb30"
+EVIDENCE_HELPER_PARENT = "b297745297b7aa98ba24ef05c011a7906a0a43d8"
 EVIDENCE_HELPER_RECEIPT = (
-    "cc771a06ed843aa97120033acb079bcc8f5ea40ceeef79bf237f0f44bf2a3293"
+    "4a21e7f8b0f3a96bdecf78b97a55cf77c12b9fae7b012c32d3d19d2f1195801e"
 )
 EVIDENCE_HELPER_ATTESTATION = (
-    "84066ae060977f266754b54a09c665cc9c6ca9868d0bfaaa84c1b7cd7414fbec"
+    "6e17c6e1bb3a9a11538605206ef7b6dd6c8738d9f7dedc03ab1c913303cbd0fd"
 )
 EVIDENCE_HELPER_PATH = "scripts/secpal-pr-review.py"
-EVIDENCE_HELPER_BLOB = "b37b30eeb7b44bed26d517d096f92e31aa0dd0ff"
+EVIDENCE_HELPER_BLOB = "130e49df1c6e90c3db1b4286e74639f1d3fc1418"
+EVIDENCE_HELPER_OLD_BLOB = "b37b30eeb7b44bed26d517d096f92e31aa0dd0ff"
 EVIDENCE_HELPER_SUBTYPE = "PR_REVIEW_EVIDENCE_HELPER_SOURCE"
 EVIDENCE_HELPER_PURPOSE = "PR_REVIEW_EVIDENCE_HELPER_SOURCE_ADMISSION"
 EVIDENCE_HELPER_ADMISSION_DIGEST = (
-    "7c5cf40666c233bb45bea4349414fd6fd9c48cfffe6f6571bf5637c2660ef25d"
+    "38aa92b53d5289db44063ce4197687c18bb162c344aa37326ee2703013158418"
 )
 PRE_ENROLLMENT_ISSUE = 776
 PRE_ENROLLMENT_PR = 779
@@ -91,6 +140,104 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
             "manual_gate_evidence": [],
             "validation_receipt_digest": RECEIPT,
         }
+
+    @staticmethod
+    def _historical_git_environment() -> dict[str, str]:
+        return {
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "PATH": os.environ.get("PATH", os.defpath),
+        }
+
+    def _historical_git(
+        self,
+        git_directory: Path,
+        arguments: list[str],
+        *,
+        input_bytes: bytes | None = None,
+        check: bool = True,
+    ) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            ["git", "--git-dir", str(git_directory), *arguments],
+            cwd=git_directory.parent,
+            env=self._historical_git_environment(),
+            input=input_bytes,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=check,
+        )
+
+    @contextmanager
+    def _isolated_historical_source(self, pack: bytes | None = None):
+        if pack is None:
+            encoded = b"".join(HISTORICAL_SOURCE_FIXTURE.read_bytes().splitlines())
+            pack = base64.b64decode(encoded, validate=True)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            git_directory = root / "fixture.git"
+            subprocess.run(
+                ["git", "init", "--bare", str(git_directory)],
+                cwd=root,
+                env=self._historical_git_environment(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+            for identity, kind in (
+                (HEAD, "commit"),
+                (PARENT, "commit"),
+                (BLOB, "blob"),
+            ):
+                absent = self._historical_git(
+                    git_directory,
+                    ["cat-file", "-e", f"{identity}^{{{kind}}}"],
+                    check=False,
+                )
+                self.assertNotEqual(absent.returncode, 0)
+
+            self._historical_git(
+                git_directory,
+                ["index-pack", "--stdin", "--fix-thin"],
+                input_bytes=pack,
+            )
+            observed_objects = frozenset(
+                self._historical_git(
+                    git_directory,
+                    [
+                        "cat-file",
+                        "--batch-all-objects",
+                        "--batch-check=%(objectname)",
+                    ],
+                ).stdout.decode("ascii").splitlines()
+            )
+            self.assertEqual(observed_objects, HISTORICAL_SOURCE_OBJECTS)
+            identities = self._historical_git(
+                git_directory,
+                [
+                    "rev-parse",
+                    f"{HEAD}^{{commit}}",
+                    f"{HEAD}^{{tree}}",
+                    f"{HEAD}^",
+                    f"{PARENT}^{{commit}}",
+                ],
+            ).stdout.decode("ascii").splitlines()
+            self.assertEqual(identities, [HEAD, TREE, PARENT, PARENT])
+
+            source_root = root / "source"
+            for path, expected_blob in HISTORICAL_SOURCE_FILES.items():
+                observed_blob = self._historical_git(
+                    git_directory, ["rev-parse", f"{HEAD}:{path}"]
+                ).stdout.decode("ascii").strip()
+                self.assertEqual(observed_blob, expected_blob)
+                raw = self._historical_git(
+                    git_directory, ["cat-file", "blob", observed_blob]
+                ).stdout
+                destination = source_root / path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(raw)
+            yield git_directory, source_root
 
     def _recovery_review_document(self) -> dict[str, object]:
         actor = {
@@ -858,14 +1005,10 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
         self.assertNotIn("secret stderr", str(raised.exception))
 
     def test_exact_executor_raise_sites_have_exhaustive_diagnostic_agreement(self) -> None:
-        repository_root = Path(__file__).resolve().parents[1]
-        raw = subprocess.run(
-            ["git", "cat-file", "blob", BLOB],
-            cwd=repository_root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=True,
-        ).stdout
+        with self._isolated_historical_source() as (git_directory, _source_root):
+            raw = self._historical_git(
+                git_directory, ["cat-file", "blob", BLOB]
+            ).stdout
         sites = source._verify_diagnostic_raise_site_agreement(raw, BLOB)
         mapping = dict(source._DIAGNOSTIC_RAISE_SITES)
 
@@ -901,25 +1044,32 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
             source._verify_diagnostic_raise_site_agreement(raw, "0" * 40)
 
     def test_real_isolated_launcher_uses_exact_traceback_site_and_hides_text(self) -> None:
-        repository_root = Path(__file__).resolve().parents[1]
-        archived = subprocess.run(
-            ["git", "archive", HEAD],
-            cwd=repository_root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=True,
-        ).stdout
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            with tarfile.open(fileobj=io.BytesIO(archived), mode="r:") as archive:
-                archive.extractall(root, filter="data")
+        with self._isolated_historical_source() as (_git_directory, source_root):
             with self.assertRaises(source.BootstrapSourceAdmissionError) as raised:
-                source._execute_entrypoint(root, b"not signed authorization")
+                source._execute_entrypoint(
+                    source_root, b"not signed authorization"
+                )
         self.assertEqual(
             raised.exception.diagnostic_identity,
             "AUTHORIZATION_ORCHESTRATION_FAILURE",
         )
         self.assertNotIn("authorization is invalid", str(raised.exception))
+
+    def test_historical_source_fixture_materializes_from_empty_object_database(self) -> None:
+        with self._isolated_historical_source() as (git_directory, source_root):
+            observed_blob = self._historical_git(
+                git_directory,
+                ["hash-object", str(source_root / source.IMPLEMENTATION_PATH)],
+            ).stdout.decode("ascii").strip()
+        self.assertEqual(observed_blob, BLOB)
+
+    def test_substituted_historical_source_fixture_fails_closed(self) -> None:
+        encoded = b"".join(HISTORICAL_SOURCE_FIXTURE.read_bytes().splitlines())
+        substituted = bytearray(base64.b64decode(encoded, validate=True))
+        substituted[len(substituted) // 2] ^= 1
+        with self.assertRaises(subprocess.CalledProcessError):
+            with self._isolated_historical_source(bytes(substituted)):
+                pass
 
     def test_substituted_executor_cannot_select_identity_by_message(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2129,6 +2279,70 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
             ),
         )
 
+    def test_byte_source_ready_binding_is_exact_boolean(self) -> None:
+        registry_path = (
+            Path(__file__).resolve().parents[1]
+            / ".agents/skills/secpal-pr-review/references/repositories.json"
+        )
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        governance = next(
+            item
+            for item in registry["repositories"]
+            if item["repository"] == REPOSITORY
+        )
+        admission = next(
+            item
+            for item in governance["lifecycle_authority_policy"][
+                "bootstrap_source_admissions"
+            ]
+            if item["subtype"] == EVIDENCE_HELPER_SUBTYPE
+        )
+        for expected_draft in (False, True):
+            admission["source_pr_draft"] = expected_draft
+            admission["admission_digest"] = source.authority.digest_json(
+                {
+                    key: value
+                    for key, value in admission.items()
+                    if key != "admission_digest"
+                }
+            )
+
+            with (
+                self.subTest(expected_draft=expected_draft),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                candidate_registry = Path(directory) / "repositories.json"
+                candidate_registry.write_text(json.dumps(registry), encoding="utf-8")
+                with mock.patch.object(
+                    source.authority, "_TRUST_REGISTRY", candidate_registry
+                ):
+                    trust = source.authority._load_lifecycle_trust_policy(REPOSITORY)
+                exact_policy = next(
+                    item
+                    for item in trust.bootstrap_source_admissions
+                    if item.subtype == EVIDENCE_HELPER_SUBTYPE
+                )
+                self.assertIs(exact_policy.source_pr_draft, expected_draft)
+
+        admission["source_pr_draft"] = 0
+        admission["admission_digest"] = source.authority.digest_json(
+            {
+                key: value
+                for key, value in admission.items()
+                if key != "admission_digest"
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            candidate_registry = Path(directory) / "repositories.json"
+            candidate_registry.write_text(json.dumps(registry), encoding="utf-8")
+            with (
+                mock.patch.object(
+                    source.authority, "_TRUST_REGISTRY", candidate_registry
+                ),
+                self.assertRaises(source.authority.LifecycleAuthorityError),
+            ):
+                source.authority._load_lifecycle_trust_policy(REPOSITORY)
+
     def test_protected_main_observation_is_exact_and_closed(self) -> None:
         payload = self._protected_main_observation().repository_json
         completed = subprocess.CompletedProcess([], 0, payload, b"")
@@ -2548,7 +2762,7 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
             head_repository=REPOSITORY,
             pull_request=EVIDENCE_HELPER_PR,
             state="OPEN",
-            draft=True,
+            draft=False,
             head_sha=EVIDENCE_HELPER_HEAD,
             commit_sha=EVIDENCE_HELPER_HEAD,
             tree_sha=EVIDENCE_HELPER_TREE,
@@ -2563,7 +2777,7 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
             {"head_repository": "Other/repo"},
             {"pull_request": 820},
             {"state": "CLOSED"},
-            {"draft": False},
+            {"draft": True},
             {"commit_sha": "4" * 40},
             {"tree_sha": "5" * 40},
             {"parent_shas": ("6" * 40,)},
@@ -2583,7 +2797,7 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
             head_repository=REPOSITORY,
             pull_request=EVIDENCE_HELPER_PR,
             state="OPEN",
-            draft=True,
+            draft=False,
             head_sha=EVIDENCE_HELPER_CURRENT_HEAD,
             commit_sha=EVIDENCE_HELPER_HEAD,
             tree_sha=EVIDENCE_HELPER_TREE,
@@ -2598,7 +2812,7 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
         pull = {
             "number": EVIDENCE_HELPER_PR,
             "state": "open",
-            "draft": True,
+            "draft": False,
             "base": {"ref": "main", "repo": {"full_name": REPOSITORY}},
             "head": {
                 "repo": {"full_name": REPOSITORY},
@@ -2677,7 +2891,7 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
                 self.policy,
             )
 
-    def test_current_candidate_helper_substitution_fails_closed(self) -> None:
+    def test_live_old_candidate_helper_fails_under_successor_admission(self) -> None:
         raw = json.dumps(
             {
                 "data": {
@@ -2687,7 +2901,7 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
                             "number": EVIDENCE_HELPER_PR,
                             "headRefOid": EVIDENCE_HELPER_CURRENT_HEAD,
                         },
-                        "object": {"oid": "8" * 40},
+                        "object": {"oid": EVIDENCE_HELPER_OLD_BLOB},
                     }
                 }
             }
@@ -2872,6 +3086,38 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
                     999,
                     source_evidence_directory="/candidate/evidence",
                 )
+
+    def test_duplicate_active_delivery_admission_is_rejected(self) -> None:
+        registry_path = (
+            Path(__file__).resolve().parents[1]
+            / ".agents/skills/secpal-pr-review/references/repositories.json"
+        )
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        governance = next(
+            item
+            for item in registry["repositories"]
+            if item["repository"] == REPOSITORY
+        )
+        admissions = governance["lifecycle_authority_policy"][
+            "bootstrap_source_admissions"
+        ]
+        exact = next(
+            item
+            for item in admissions
+            if item["subtype"] == EVIDENCE_HELPER_SUBTYPE
+        )
+        admissions.append(json.loads(json.dumps(exact)))
+
+        with tempfile.TemporaryDirectory() as directory:
+            candidate_registry = Path(directory) / "repositories.json"
+            candidate_registry.write_text(json.dumps(registry), encoding="utf-8")
+            with (
+                mock.patch.object(
+                    source.authority, "_TRUST_REGISTRY", candidate_registry
+                ),
+                self.assertRaises(source.authority.LifecycleAuthorityError),
+            ):
+                source.authority._load_lifecycle_trust_policy(REPOSITORY)
 
     def test_wrong_path_or_blob_is_rejected_by_byte_admission(self) -> None:
         for policy, record in (

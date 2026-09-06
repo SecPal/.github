@@ -69,7 +69,7 @@ protected_content_matches() {
     "$(normalize_documented_action_pins <<<"$accepted_content")"
 }
 
-normalize_agents_license_branding_overlay() {
+normalize_agents_instruction_overlays() {
   local text
 
   text="$(cat)"
@@ -99,11 +99,20 @@ section = """## Licensing, REUSE, and Branding
   licensing change."""
 overlay = section + "\n\n"
 copyright_line = "SPDX-FileCopyrightText: 2026 SecPal Contributors"
+publication_boundary = """- Before creating or editing a PR body, materialize the exact candidate body,
+  apply the effective PR-template/evidence contract, and run every available
+  local PR-body validator against that exact body and intended Draft/Ready state.
+  Failed validation blocks publication. Evidence completeness follows the
+  canonical lifecycle-aware `scripts/validate-pull-request-evidence.sh` validator.
+"""
 
 if text.count(overlay) != 1 or text.count(copyright_line) != 1:
     raise SystemExit(1)
+if text.count(publication_boundary) != 1:
+    raise SystemExit(1)
 
 text = text.replace(overlay, "", 1)
+text = text.replace(publication_boundary, "", 1)
 text = text.replace(
     copyright_line,
     "SPDX-FileCopyrightText: 2026 SecPal",
@@ -116,9 +125,21 @@ PY
 if sed \
   "s/that SecPal branding optional/that SecPal branding configurable/" \
   "$REPO_ROOT/AGENTS.md" \
-  | normalize_agents_license_branding_overlay >/dev/null; then
+  | normalize_agents_instruction_overlays >/dev/null; then
   fail 'modified licensing and branding instruction overlay was accepted'
 fi
+
+for mutation in \
+  '/^- Before creating or editing a PR body,/,/canonical lifecycle-aware.*validator\./d' \
+  's/exact candidate body/unvalidated summary/' \
+  's/intended Draft\/Ready state/unspecified state/' \
+  's/Failed validation blocks publication/Failed validation allows publication/' \
+  's/validate-pull-request-evidence.sh/alternative-evidence-validator.sh/'; do
+  if sed "$mutation" "$REPO_ROOT/AGENTS.md" \
+    | normalize_agents_instruction_overlays >/dev/null; then
+    fail 'missing or weakened PR pre-publication instruction overlay was accepted'
+  fi
+done
 
 # The work-graph delegation in AGENTS.md is governed by semantic invariants, not
 # by fixed wording. Editorial rewording and rewrapping stay acceptable; changing
@@ -878,8 +899,8 @@ for path in "${protected_paths[@]}"; do
     || fail "accepted protected-file baseline is unavailable: $relative_path"
   current_content="$(<"$path")"
   if [ "$relative_path" = "AGENTS.md" ]; then
-    current_content="$(normalize_agents_license_branding_overlay <<<"$current_content")" \
-      || fail 'canonical licensing and branding instruction overlay changed'
+    current_content="$(normalize_agents_instruction_overlays <<<"$current_content")" \
+      || fail 'canonical licensing, branding, or PR-publication instruction overlay changed'
     current_content="$(agents_delegating_units_removed <<<"$current_content")" \
       || fail 'work-graph delegation could not be normalized out of AGENTS.md'
     accepted_content="$(agents_delegating_units_removed <<<"$accepted_content")" \
@@ -1013,20 +1034,20 @@ assert publication_policy["bootstrap_source_admissions"][:2] == [{
     "repository": "SecPal/.github",
     "delivery_issue": 818,
     "pull_request": 819,
-    "source_head_sha": "eb3aebf226c3ca215e7021b00207cc996ab06c2e",
-    "source_tree_sha": "d7fca1ea61ea0b4cd78bf18f8555386633e013ea",
-    "source_parent_sha": "f8d58a3acd5d2b5c84824bf9ecba637e91665ee9",
-    "validation_receipt_digest": "cc771a06ed843aa97120033acb079bcc8f5ea40ceeef79bf237f0f44bf2a3293",
-    "final_attestation_digest": "84066ae060977f266754b54a09c665cc9c6ca9868d0bfaaa84c1b7cd7414fbec",
+    "source_head_sha": "e14f7668354763af5033f511097ddf990d6e8ef5",
+    "source_tree_sha": "5065ce77573e9753249de055f6122f14362cbb30",
+    "source_parent_sha": "b297745297b7aa98ba24ef05c011a7906a0a43d8",
+    "validation_receipt_digest": "4a21e7f8b0f3a96bdecf78b97a55cf77c12b9fae7b012c32d3d19d2f1195801e",
+    "final_attestation_digest": "6e17c6e1bb3a9a11538605206ef7b6dd6c8738d9f7dedc03ab1c913303cbd0fd",
     "source_signer_identity": "aroviqen@secpal.app",
     "implementation_path": "scripts/secpal-pr-review.py",
-    "implementation_blob_oid": "b37b30eeb7b44bed26d517d096f92e31aa0dd0ff",
+    "implementation_blob_oid": "130e49df1c6e90c3db1b4286e74639f1d3fc1418",
     "purpose": "PR_REVIEW_EVIDENCE_HELPER_SOURCE_ADMISSION",
     "source_pr_state": "OPEN",
-    "source_pr_draft": True,
+    "source_pr_draft": False,
     "source_base_ref": "main",
     "policy_source": "ACCEPTED_MAIN_REPOSITORY_REGISTRY",
-    "admission_digest": "7c5cf40666c233bb45bea4349414fd6fd9c48cfffe6f6571bf5637c2660ef25d",
+    "admission_digest": "38aa92b53d5289db44063ce4197687c18bb162c344aa37326ee2703013158418",
 }]
 pre_enrollment_source = publication_policy["bootstrap_source_admissions"][2]
 assert set(pre_enrollment_source) == {
@@ -1056,6 +1077,12 @@ assert source_variants == [
 ]
 assert "entrypoint" in schema["$defs"]["firstReadyExecutorBootstrapSource"]["required"]
 assert "entrypoint" not in schema["$defs"]["prReviewEvidenceHelperSource"]["properties"]
+assert schema["$defs"]["firstReadyExecutorBootstrapSource"]["properties"][
+    "source_pr_draft"
+] == {"const": True}
+assert schema["$defs"]["prReviewEvidenceHelperSource"]["properties"][
+    "source_pr_draft"
+] == {"type": "boolean"}
 assert publication_policy["historical_compatibility_publications"] == [
     {
         "repository": "SecPal/.github",
@@ -1135,6 +1162,7 @@ assert [
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-publication-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-orchestration-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-execution-contract-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-lifecycle-role-signing-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-exceptional-recovery-authority-unit.py"],
     ["./tests/secpal-pr-review-skill-policy.sh"],
     ["./tests/secpal-pr-review-skill-integration.sh"],

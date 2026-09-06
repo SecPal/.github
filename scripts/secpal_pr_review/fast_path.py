@@ -2000,6 +2000,7 @@ def verify_commit_signatures(
 
 def _classified_feedback_sources(
     reviewed_state: StableFeedbackState,
+    *, include_resolved: bool = False,
 ) -> dict[tuple[str, str], tuple[str, str | None]]:
     expected: dict[tuple[str, str], tuple[str, str | None]] = {}
 
@@ -2040,7 +2041,7 @@ def _classified_feedback_sources(
                 None,
             )
     for thread in reviewed_state.feedback["threads"]:
-        if thread["is_resolved"] is True:
+        if thread["is_resolved"] is True and not include_resolved:
             continue
         for comment in thread["comments"]:
             add(

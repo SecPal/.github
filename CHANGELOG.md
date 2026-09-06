@@ -9,6 +9,21 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-06 - Authenticate Pre-Enrollment Validation-Evidence Loss
+
+**Changed:**
+
+- Add a bounded migration-signed loss admission as an explicit version-3
+  exact-state-adoption source mode; retain adoption versions 1/2 unchanged.
+- Bind accepted-main loss policy, immutable signed Draft source, current
+  registered safety validation, source-complete feedback and unenrolled history
+  without reconstructing historical validation companions.
+- Normalize bounded provider representations into canonical facts before pure
+  admission, and run accepted-current validation harness bytes against a
+  disposable copy of the immutable historical source.
+- Keep review-budget admission separate and reuse protected enrollment uniqueness;
+  add no lifecycle state, counter, signer role, publication journal or Ready authority.
+
 ## 2026-09-05 - Authenticate Pre-Enrollment Bootstrap Source
 
 **Added:**
@@ -20,6 +35,56 @@ Log of notable changes to SecPal organization defaults (newest first).
   pre-enrollment action entrypoint
 - preserve the historical evidence-loss limitation without granting lifecycle,
   publication, Ready, push, merge, or arbitrary-source authority
+
+## 2026-09-05 - Prevalidate Lifecycle-Aware PR Evidence
+
+**Changed:**
+
+- Make the canonical PR-body validator consume explicit Draft/Ready state:
+  executable Drafts require fail-first proof; Ready PRs additionally require passing
+  proof. Reject self-authorized validate-first references because this repository
+  grants no exception.
+- Pass actual GitHub Draft state through the trusted-base PR-evidence workflow,
+  retaining mandatory structured evidence and the explicit content-only path.
+- Require exact candidate-body local validation before programmatic PR publication
+  or body editing in repository guidance, Polyscope runtime prompts, and maintained
+  normal and replacement Draft examples. Failed validation blocks publication.
+- Parse real evidence sections with the existing locked Markdown parser, excluding
+  raw HTML and code examples and ending at the next heading of any level. Rollout
+  examples use a prepared trusted governance checkout rather than absent target scripts.
+
+## 2026-09-05 - Select Policy-Specific Lifecycle Credentials
+
+**Changed:**
+
+- select distinct lifecycle signing credentials from bounded OS-account Git
+  configuration only after installed policy selects the required signer role
+- preserve the routine global Git signing key as a compatible default while
+  forbidding it from overriding or replacing a distinct legacy-adoption mapping
+- verify every produced signature against accepted policy credential material
+  before returning a production signer to existing lifecycle constructors
+
+## 2026-09-05 - Replace the Exact Review-Helper Source Admission
+
+**Changed:**
+
+- replace the single active #818 review-helper source admission with the exact
+  validated Cycle-2 successor commit and helper blob
+- bind the byte-only source policy to PR #819's live Ready state while keeping
+  the executable bootstrap source Draft-only and candidate self-admission
+  impossible
+
+## 2026-09-05 - Preserve Pre-Enrollment Review Consumption
+
+**Changed:**
+
+- add one exact-state-adoption mode that conservatively preserves a consumed
+  unrestricted-review budget when no historical provider review exists
+- bind the admission to exact current delivery and validation evidence under
+  the existing migration authority without reconstructing review results,
+  verdicts, findings, or provider observations
+- keep provider-backed adoption, native lifecycle, legacy checkpoints, and
+  remediation/Ready derivation unchanged and fail closed on mixed modes
 
 ## 2026-09-05 - Authenticate Immutable Helper Source After PR Advancement
 

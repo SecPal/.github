@@ -89,6 +89,9 @@ graph LR
 
 **Quick Commands:**
 
+The PR-body examples require Node.js 22 and `npm ci --ignore-scripts` in this
+trusted governance checkout before validation.
+
 ```bash
 # Create enhancement (→ Ideas)
 gh issue create --label "enhancement" --title "..."
@@ -102,7 +105,10 @@ gh issue create --label "priority: blocker" --title "..."
 # Draft PR workflow (recommended)
 tmpfile=$(mktemp "${TMPDIR:-/tmp}/pr-body.XXXXXX")
 trap 'rm -f "$tmpfile"' EXIT
-printf '%s\n' "Closes #123" > "$tmpfile"
+cp .github/pull_request_template.md "$tmpfile"
+# Fill in the issue and concrete evidence; replace every placeholder (passing may be N/A in Draft).
+"${EDITOR:-vi}" "$tmpfile"
+PR_BODY="$(cat "$tmpfile")" PR_DRAFT=true bash scripts/validate-pull-request-evidence.sh && \
 gh pr create --draft --body-file "$tmpfile"  # → In Progress
 gh pr ready <PR>                            # → In Review
 gh pr ready --undo <PR>                     # → In Progress (changes needed)
