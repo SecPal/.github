@@ -20,6 +20,7 @@ import os
 from pathlib import Path
 import re
 import selectors
+import signal
 import subprocess
 import sys
 import tempfile
@@ -59,6 +60,16 @@ _VERIFIED_SOURCE = object()
 MAXIMUM_EVIDENCE_BYTES = late_disposition.MAXIMUM_ARTIFACT_BYTES
 _BOOTSTRAP_COMMAND_TIMEOUT_SECONDS = 30
 _PRE_ENROLLMENT_EXECUTION_TIMEOUT_SECONDS = 1800
+_PRE_ENROLLMENT_DIAGNOSTIC_IDENTITIES = frozenset(
+    {
+        "RECOVERABLE_LOCAL_ERROR",
+        "BLOCKED_TRANSIENT_READ_FAILED",
+        "BLOCKED_SECURITY",
+        "BLOCKED_MUTATION_FAILED",
+        "BLOCKED",
+        "INVALID_OR_UNSAFE_INPUT",
+    }
+)
 _BOOTSTRAP_COMMAND_DIRECTORIES = (
     Path("/usr/bin"),
     Path("/bin"),
@@ -227,7 +238,7 @@ source_root = Path(sys.argv[2]).resolve(strict=True)
 target = sys.argv[3]
 arguments = sys.argv[4:]
 stdlib = [value for value in sys.path if value and "site-packages" not in value]
-sys.path[:] = [str(source_root), *stdlib]
+sys.path[:] = [*stdlib, str(source_root)]
 
 if mode == "MODULE":
     sys.argv = [target, *arguments]
@@ -1776,44 +1787,46 @@ def _run_pre_enrollment_source_validation(
         )
     helper = authority._load_trusted_command_helper()
     observed: list[dict[str, Any]] = []
-    for command in policy.validation_command_set:
-        argv = command.get("argv") if isinstance(command, dict) else None
-        if (
-            not isinstance(argv, list)
-            or not argv
-            or argv[0] != "python3"
-            or not all(isinstance(value, str) and value for value in argv)
-            or command.get("working_directory") != "."
-        ):
-            raise BootstrapSourceAdmissionError(
-                "pre-enrollment validation command is invalid"
-            )
-        try:
-            completed = subprocess.run(
-                _isolated_python_command(
-                    _ISOLATED_SOURCE_LAUNCHER,
-                    "MODULE", str(root), argv[2], *argv[3:],
-                ),
-                cwd=root,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-                timeout=120,
-                env=_closed_launcher_environment(helper),
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise BootstrapSourceAdmissionError(
-                "pre-enrollment source validation failed"
-            ) from exc
-        observed.append(
-            {
-                "command_digest": fast_path.digest_json(command),
-                "exit_status": completed.returncode,
-                "successful": completed.returncode == 0,
-            }
+    with tempfile.TemporaryDirectory(
+        prefix="secpal-pre-enrollment-validation-home-"
+    ) as home_directory:
+        validation_environment = _closed_validation_environment(
+            helper, Path(home_directory)
         )
-        _verify_materialized_tree(root, policy)
+        for command in policy.validation_command_set:
+            argv = command.get("argv") if isinstance(command, dict) else None
+            if (
+                not isinstance(argv, list)
+                or not argv
+                or argv[0] != "python3"
+                or not all(isinstance(value, str) and value for value in argv)
+                or command.get("working_directory") != "."
+            ):
+                raise BootstrapSourceAdmissionError(
+                    "pre-enrollment validation command is invalid"
+                )
+            try:
+                completed = _run_isolated_python(
+                    _isolated_python_command(
+                        _ISOLATED_SOURCE_LAUNCHER,
+                        "MODULE", str(root), argv[2], *argv[3:],
+                    ),
+                    cwd=root,
+                    timeout=120,
+                    env=validation_environment,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise BootstrapSourceAdmissionError(
+                    "pre-enrollment source validation failed"
+                ) from exc
+            observed.append(
+                {
+                    "command_digest": fast_path.digest_json(command),
+                    "exit_status": completed.returncode,
+                    "successful": completed.returncode == 0,
+                }
+            )
+            _verify_materialized_tree(root, policy)
     if tuple(observed) != policy.validation_results:
         raise BootstrapSourceAdmissionError(
             "pre-enrollment source validation created no admission"
@@ -1904,17 +1917,13 @@ def _execute_pre_enrollment_entrypoint(
     ]
     helper = authority._load_trusted_command_helper()
     try:
-        completed = subprocess.run(
+        completed = _run_isolated_python(
             _isolated_python_command(
                 _ISOLATED_SOURCE_LAUNCHER,
                 "ENTRYPOINT", str(root), policy.implementation_path,
                 policy.entrypoint or "", *arguments,
             ),
             cwd=root,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
             timeout=_PRE_ENROLLMENT_EXECUTION_TIMEOUT_SECONDS,
             env=_closed_launcher_environment(helper),
         )
@@ -1923,8 +1932,22 @@ def _execute_pre_enrollment_entrypoint(
             "admitted pre-enrollment entrypoint failed"
         ) from exc
     if completed.returncode != 0:
+        identity = "UNEXPECTED_CLOSED_CHILD_FAILURE"
+        try:
+            failure = json.loads(
+                completed.stderr,
+                object_pairs_hook=publication._reject_duplicate_pairs,
+            )
+            if (
+                isinstance(failure, dict)
+                and failure.get("status") in _PRE_ENROLLMENT_DIAGNOSTIC_IDENTITIES
+            ):
+                identity = failure["status"]
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            pass
         raise BootstrapSourceAdmissionError(
-            "admitted pre-enrollment entrypoint failed"
+            f"admitted pre-enrollment entrypoint failed: {identity}",
+            diagnostic_identity=identity,
         )
     return {"status": "COMPLETE", "exit_status": 0}
 
@@ -2001,7 +2024,109 @@ def _trusted_python() -> str:
 def _isolated_python_command(launcher: str, *arguments: str) -> list[str]:
     """Build the one accepted isolated Python startup sequence."""
 
-    return [_trusted_python(), "-I", "-S", "-c", launcher, *arguments]
+    return [_trusted_python(), "-I", "-S", "-B", "-c", launcher, *arguments]
+
+
+def _terminate_isolated_process_group(process: subprocess.Popen[bytes]) -> None:
+    """Terminate and reap the complete isolated child process group."""
+
+    for stop_signal in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(process.pid, stop_signal)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=1)
+            if stop_signal == signal.SIGTERM:
+                # Descendants can outlive their direct parent, so still signal the
+                # process group once more before treating the boundary as closed.
+                continue
+            return
+        except subprocess.TimeoutExpired:
+            continue
+    process.wait()
+
+
+def _run_isolated_python(
+    command: list[str], *, cwd: Path, timeout: float, env: Mapping[str, str]
+) -> subprocess.CompletedProcess[bytes]:
+    """Run one admitted Python command with bounded output and group lifetime."""
+
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        raise BootstrapSourceAdmissionError(
+            "isolated admitted-source process is unavailable"
+        ) from exc
+    selector = selectors.DefaultSelector()
+    output = {"stdout": [], "stderr": []}
+    sizes = {"stdout": 0, "stderr": 0}
+    deadline = time.monotonic() + timeout
+    try:
+        assert process.stdout is not None and process.stderr is not None
+        for label, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ, label)
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_isolated_process_group(process)
+                raise BootstrapSourceAdmissionError(
+                    "isolated admitted-source process timed out"
+                )
+            events = selector.select(min(remaining, 0.1))
+            if not events and process.poll() is not None:
+                events = [
+                    (key, selectors.EVENT_READ)
+                    for key in tuple(selector.get_map().values())
+                ]
+            for key, _mask in events:
+                stream = key.fileobj
+                label = key.data
+                capacity = MAXIMUM_EVIDENCE_BYTES - sizes[label]
+                try:
+                    chunk = os.read(stream.fileno(), min(65536, capacity + 1))
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(stream)
+                    stream.close()
+                    continue
+                if len(chunk) > capacity:
+                    _terminate_isolated_process_group(process)
+                    raise BootstrapSourceAdmissionError(
+                        "isolated admitted-source output limit exceeded"
+                    )
+                output[label].append(chunk)
+                sizes[label] += len(chunk)
+        try:
+            returncode = process.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired as exc:
+            _terminate_isolated_process_group(process)
+            raise BootstrapSourceAdmissionError(
+                "isolated admitted-source process timed out"
+            ) from exc
+        return subprocess.CompletedProcess(
+            command,
+            returncode,
+            b"".join(output["stdout"]),
+            b"".join(output["stderr"]),
+        )
+    finally:
+        selector.close()
+        for stream in (process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
+        if process.poll() is None:
+            _terminate_isolated_process_group(process)
 
 
 def _closed_launcher_environment(helper: Any) -> dict[str, str]:
@@ -2032,6 +2157,40 @@ def _closed_launcher_environment(helper: Any) -> dict[str, str]:
                 )
             environment[key] = value
     return environment
+
+
+def _closed_validation_environment(helper: Any, home: Path) -> dict[str, str]:
+    """Build the credential-free environment for admitted source validation."""
+
+    try:
+        home = home.resolve(strict=True)
+        status = home.stat()
+    except (OSError, RuntimeError) as exc:
+        raise BootstrapSourceAdmissionError(
+            "validation home is unavailable"
+        ) from exc
+    command_path = getattr(helper, "TRUSTED_COMMAND_PATH", None)
+    if (
+        not home.is_dir()
+        or status.st_uid != os.getuid()
+        or status.st_mode & 0o077
+        or not isinstance(command_path, str)
+        or not command_path
+    ):
+        raise BootstrapSourceAdmissionError(
+            "validation environment is invalid"
+        )
+    return {
+        "PATH": command_path,
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PAGER": "cat",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
 
 
 def _execute_entrypoint(root: Path, serialized_authorization: bytes | str) -> Mapping[str, Any]:

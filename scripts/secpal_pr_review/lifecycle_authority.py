@@ -1253,6 +1253,8 @@ def _parse_lifecycle_trust_policy(
                     != "ACCEPTED_MAIN_REPOSITORY_REGISTRY"
                     or item["signer_policy_identity"]
                     != "MAINTAINED_LIFECYCLE_SIGNER_POLICY"
+                    or item["source_signer_identity"]
+                    not in transition_signers
                     or item["historical_evidence_status"]
                     != "HISTORICAL_EVIDENCE_UNAVAILABLE"
                     or item["validation_registry_path"]
@@ -1267,7 +1269,7 @@ def _parse_lifecycle_trust_policy(
             )
             or item["source_pr_state"] != "OPEN"
             or (
-                executable_source
+                (executable_source or pre_enrollment_source)
                 and item["source_pr_draft"] is not True
             )
             or (

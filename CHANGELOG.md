@@ -33,6 +33,10 @@ Log of notable changes to SecPal organization defaults (newest first).
 - verify both maintained source signatures and run one fixed bounded validation
   command with isolated Python startup before permitting the exact
   pre-enrollment action entrypoint
+- keep trusted standard-library paths ahead of admitted imports, disable bytecode
+  writes, terminate the complete apply process group on timeout, retain only
+  closed bounded failure identities, validate without host GitHub credentials,
+  and require both the routine lifecycle signer role and Draft source state
 - preserve the historical evidence-loss limitation without granting lifecycle,
   publication, Ready, push, merge, or arbitrary-source authority
 
