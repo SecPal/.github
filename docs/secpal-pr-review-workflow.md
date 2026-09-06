@@ -107,15 +107,6 @@ loads this maintained policy and invokes concrete `ssh-keygen` or GnuPG
 detached-signature verification. Signer assertions inside evidence are never
 sufficient.
 
-SSH is preferred when creating a new lifecycle signing credential, using
-Ed25519 where the relevant signing path supports it. SSH and OpenPGP remain
-accepted verification formats, including for existing and historical evidence.
-This preference does not migrate an existing valid credential or alter the
-policy-selected signer role and exact role-specific credential selection. An SSH
-signing credential is distinct from an SSH transport/authentication credential,
-and one operator controlling multiple credentials does not collapse lifecycle
-signer roles.
-
 The public verifier accepts only a canonical serialized evidence bundle. It
 rejects duplicate and unknown fields, non-finite JSON, noncanonical encodings,
 and caller-preparsed mappings before recomputing every state from genesis. Git

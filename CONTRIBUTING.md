@@ -353,6 +353,10 @@ Keep your SSH signing credential distinct from an SSH transport/authentication
 credential. Do not create or reuse one merely for convenience. Existing valid
 SSH and OpenPGP signing configurations remain valid: do not automatically
 migrate or rewrite them solely because SSH is preferred for a new setup.
+Contributors, agents, and tools must not automatically switch a valid OpenPGP
+configuration to SSH for that reason. Maintained lifecycle signer roles and
+their policy-selected credentials remain distinct even when one operator
+controls multiple credentials.
 
 ### Preferred new setup: SSH signing
 
