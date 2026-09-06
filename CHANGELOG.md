@@ -9,6 +9,19 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-06 - Seal Ready-Integration Validation Evidence
+
+**Changed:**
+
+- Return canonical verifier-sealed validation evidence after successful
+  Ready-integration evidence, receipt, topology, and final-attestation verification.
+- Bind the seal to the authenticated delivery issue, PR, integrated head and tree,
+  ordered parents, current-main identity, reviewed state, signer expectation, kinds,
+  versions, and canonical evidence digests so mutation and replay fail closed.
+- Allow the existing exact-state-adopted `HEAD_ADVANCED` authority to consume that
+  result without changing its independent lifecycle preconditions or historical
+  Ready-integration semantics.
+
 ## 2026-09-06 - Authenticate Pre-Enrollment Validation-Evidence Loss
 
 **Changed:**

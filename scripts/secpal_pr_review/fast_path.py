@@ -977,6 +977,17 @@ class StableFeedbackState:
 _VERIFIED_VALIDATION_EVIDENCE = object()
 
 
+class _VerifiedValidationEvidenceSeal:
+    """Bind the private verifier authority to one exact immutable result."""
+
+    __slots__ = ("binding_digest",)
+
+    def __init__(self, binding_digest: str, authority: object) -> None:
+        if authority is not _VERIFIED_VALIDATION_EVIDENCE:
+            raise SecurityBlocker("validation evidence seal is private")
+        self.binding_digest = binding_digest
+
+
 @dataclass(frozen=True)
 class VerifiedValidationEvidence:
     """Canonical source evidence exposed only after full attestation verification."""
@@ -989,15 +1000,72 @@ class VerifiedValidationEvidence:
     final_attestation_digest: str
     source_validation_evidence_digest: str
     _verification_seal: object
+    delivery_issue_number: int | None = None
+
+
+def _validation_evidence_binding(value: VerifiedValidationEvidence) -> dict[str, Any]:
+    return {
+        "repository": value.repository,
+        "delivery_issue_number": value.delivery_issue_number,
+        "pull_request_number": value.pull_request_number,
+        "head_sha": value.head_sha,
+        "tree_sha": value.tree_sha,
+        "validation_receipt_digest": value.validation_receipt_digest,
+        "final_attestation_digest": value.final_attestation_digest,
+        "source_validation_evidence_digest": value.source_validation_evidence_digest,
+    }
+
+
+def _verified_validation_evidence(
+    *,
+    repository: str,
+    pull_request_number: int,
+    head_sha: str,
+    tree_sha: str,
+    validation_receipt_digest: str,
+    final_attestation_digest: str,
+    source_validation_evidence_digest: str,
+    delivery_issue_number: int | None = None,
+) -> VerifiedValidationEvidence:
+    fields = {
+        "repository": repository,
+        "delivery_issue_number": delivery_issue_number,
+        "pull_request_number": pull_request_number,
+        "head_sha": head_sha,
+        "tree_sha": tree_sha,
+        "validation_receipt_digest": validation_receipt_digest,
+        "final_attestation_digest": final_attestation_digest,
+        "source_validation_evidence_digest": source_validation_evidence_digest,
+    }
+    seal = _VerifiedValidationEvidenceSeal(
+        digest_json(fields), _VERIFIED_VALIDATION_EVIDENCE
+    )
+    return VerifiedValidationEvidence(
+        repository=repository,
+        pull_request_number=pull_request_number,
+        head_sha=head_sha,
+        tree_sha=tree_sha,
+        validation_receipt_digest=validation_receipt_digest,
+        final_attestation_digest=final_attestation_digest,
+        source_validation_evidence_digest=source_validation_evidence_digest,
+        _verification_seal=seal,
+        delivery_issue_number=delivery_issue_number,
+    )
 
 
 def is_verified_validation_evidence(value: Any) -> bool:
     """Reject caller-constructed validation summaries at trust boundaries."""
 
-    return (
-        isinstance(value, VerifiedValidationEvidence)
-        and value._verification_seal is _VERIFIED_VALIDATION_EVIDENCE
-    )
+    if not isinstance(value, VerifiedValidationEvidence) or not isinstance(
+        value._verification_seal, _VerifiedValidationEvidenceSeal
+    ):
+        return False
+    try:
+        return value._verification_seal.binding_digest == digest_json(
+            _validation_evidence_binding(value)
+        )
+    except (SecurityBlocker, TypeError, ValueError):
+        return False
 
 
 def _require_reviewed_state_identity(
@@ -1774,7 +1842,7 @@ def verify_eligibility_bound_ready_integration_attestation(
     commit_tree_sha: str,
     commit_validation_receipt_digest: str | None,
     commit_integration_evidence_digest: str | None,
-) -> None:
+) -> VerifiedValidationEvidence:
     """Verify the closed integration-resolution attestation kind."""
 
     if (
@@ -1795,7 +1863,7 @@ def verify_eligibility_bound_ready_integration_attestation(
         raise SecurityBlocker(
             "Ready integration receipt and attestation eligibility differ"
         )
-    verify_ready_integration_attestation(
+    return verify_ready_integration_attestation(
         attestation,
         repository=repository,
         head_sha=head_sha,
@@ -1825,7 +1893,8 @@ def verify_ready_integration_attestation(
     commit_tree_sha: str,
     commit_validation_receipt_digest: str | None,
     commit_integration_evidence_digest: str | None,
-) -> None:
+) -> VerifiedValidationEvidence:
+    reviewed_state = _require_reviewed_state_identity(repository, reviewed_state)
     normalized = normalize_ready_integration_evidence(
         integration_evidence,
         repository=repository,
@@ -1851,6 +1920,35 @@ def verify_ready_integration_attestation(
     )
     if not isinstance(attestation, dict) or attestation != expected:
         raise SecurityBlocker("Ready integration attestation is invalid or stale")
+    source_binding = {
+        "repository": normalized["repository"],
+        "delivery_issue_number": normalized["delivery_issue_number"],
+        "pull_request_number": normalized["pull_request_number"],
+        "head_sha": head_sha,
+        "tree_sha": normalized["validated_tree_sha"],
+        "ordered_parent_shas": normalized["ordered_parent_shas"],
+        "current_main": normalized["target_base"],
+        "validation_receipt_digest": validation_receipt["receipt_digest"],
+        "final_attestation_digest": expected["attestation_digest"],
+        "integration_evidence": normalized,
+        "reviewed_state_digest": reviewed_state.state_digest,
+        "reviewed_feedback_digest": reviewed_state.feedback_digest,
+        "expected_signer": normalized["expected_signer"],
+        "evidence_schema_version": normalized["schema_version"],
+        "evidence_kind": normalized["kind"],
+        "attestation_schema_version": expected["schema_version"],
+        "attestation_kind": expected["kind"],
+    }
+    return _verified_validation_evidence(
+        repository=normalized["repository"],
+        delivery_issue_number=normalized["delivery_issue_number"],
+        pull_request_number=normalized["pull_request_number"],
+        head_sha=head_sha,
+        tree_sha=normalized["validated_tree_sha"],
+        validation_receipt_digest=validation_receipt["receipt_digest"],
+        final_attestation_digest=expected["attestation_digest"],
+        source_validation_evidence_digest=digest_json(source_binding),
+    )
 
 
 def verify_validation_attestation(
@@ -1920,7 +2018,7 @@ def verify_validation_attestation(
         "reviewed_state_digest": reviewed_state.state_digest,
         "reviewed_feedback_digest": reviewed_state.feedback_digest,
     }
-    return VerifiedValidationEvidence(
+    return _verified_validation_evidence(
         repository=repository,
         pull_request_number=reviewed_pull_request,
         head_sha=head_sha,
@@ -1928,7 +2026,6 @@ def verify_validation_attestation(
         validation_receipt_digest=receipt["receipt_digest"],
         final_attestation_digest=expected["attestation_digest"],
         source_validation_evidence_digest=digest_json(source_binding),
-        _verification_seal=_VERIFIED_VALIDATION_EVIDENCE,
     )
 
 

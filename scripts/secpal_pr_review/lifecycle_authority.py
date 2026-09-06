@@ -2984,6 +2984,10 @@ def authenticate_exact_state_adoption_external_evidence(
         adoption_digest = loss["admission_digest"]
     elif not is_verified_validation_evidence(validation_evidence) or (
         validation_evidence.repository != repository
+        or (
+            validation_evidence.delivery_issue_number is not None
+            and validation_evidence.delivery_issue_number != issue
+        )
         or validation_evidence.pull_request_number != pr
         or validation_evidence.head_sha != head
         or validation_evidence.tree_sha != tree
@@ -3744,6 +3748,11 @@ def issue_exact_state_adoption_successor_authority(
         if (
             not is_verified_validation_evidence(current_head_evidence)
             or current_head_evidence.repository != predecessor.repository
+            or (
+                current_head_evidence.delivery_issue_number is not None
+                and current_head_evidence.delivery_issue_number
+                != predecessor.delivery_issue
+            )
             or current_head_evidence.pull_request_number != resulting_pr
             or current_head_evidence.head_sha != event["resulting_head_sha"]
         ):
