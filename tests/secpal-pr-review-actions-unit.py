@@ -2272,6 +2272,7 @@ class MutationTests(TestCase):
                         "reactions": copy.deepcopy(empty),
                         "reviews": copy.deepcopy(empty),
                         "comments": copy.deepcopy(empty),
+                        "reviewRequests": copy.deepcopy(empty),
                         "reviewThreads": {
                             "nodes": [
                                 {
@@ -9908,6 +9909,161 @@ class FastPathTests(TestCase):
         self.assertEqual(state.feedback_digest, fast_feedback(1).feedback_digest)
         self.assertEqual(read_feedback.call_args.args[1], selected)
 
+    def test_visible_codex_nonterminal_states_block_stable_feedback(self) -> None:
+        for status in ("queued", "pending", "running", "failed", "indeterminate"):
+            with self.subTest(status=status):
+                pull_request = {
+                    "headRefOid": p21.HEAD,
+                    "isDraft": False,
+                    "comments": {
+                        "nodes": [
+                            {
+                                "author": {"login": "chatgpt-codex-connector"},
+                                "body": (
+                                    '<!-- codex-pull-request-review-summary -->\n'
+                                    '<!-- codex-security-review:v1 '
+                                    f'{{"headSha":"{p21.HEAD}","status":"{status}"}} -->'
+                                )
+                            }
+                        ],
+                        "pageInfo": {"hasNextPage": False},
+                    },
+                    "reviewRequests": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+                }
+                with self.assertRaisesRegex(
+                    actions.MutationBlocked,
+                    "review provider is not terminal",
+                ):
+                    actions._require_review_providers_terminal(pull_request)
+
+    def test_pending_copilot_request_blocks_empty_feedback(self) -> None:
+        pull_request = {
+            "headRefOid": p21.HEAD,
+            "isDraft": True,
+            "comments": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+            "reviewRequests": {
+                "nodes": [
+                    {
+                        "requestedReviewer": {
+                            "__typename": "User",
+                            "login": "copilot-pull-request-reviewer",
+                        }
+                    }
+                ],
+                "pageInfo": {"hasNextPage": False},
+            },
+        }
+        with self.assertRaisesRegex(
+            actions.MutationBlocked,
+            "Copilot Pull Request Review is pending",
+        ):
+            actions._require_review_providers_terminal(pull_request)
+
+    def test_completed_or_untriggered_providers_permit_stable_feedback(self) -> None:
+        completed = {
+            "headRefOid": p21.HEAD,
+            "isDraft": False,
+            "comments": {
+                "nodes": [
+                    {
+                        "author": {"login": "chatgpt-codex-connector"},
+                        "body": (
+                            '<!-- codex-pull-request-review-summary -->\n'
+                            '<!-- codex-security-review:v1 '
+                            f'{{"headSha":"{p21.HEAD}","status":"completed"}} -->\n'
+                            '| Review | Status | Commit | Review trigger |\n'
+                            '| --- | --- | --- | --- |\n'
+                            '| **Code Review** | **Completed** | head | ready |\n'
+                            '| **Security Review** | **Completed** | head | ready |'
+                        )
+                    }
+                ],
+                "pageInfo": {"hasNextPage": False},
+            },
+            "reviewRequests": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+        }
+        untriggered = {
+            "headRefOid": p21.HEAD,
+            "isDraft": True,
+            "comments": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+            "reviewRequests": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+        }
+        actions._require_review_providers_terminal(completed)
+        actions._require_review_providers_terminal(untriggered)
+
+    def test_forged_or_duplicate_codex_status_is_indeterminate(self) -> None:
+        for author, metadata in (
+            (
+                "attacker",
+                f'{{"headSha":"{p21.HEAD}","status":"completed"}}',
+            ),
+            (
+                "chatgpt-codex-connector",
+                f'{{"headSha":"{p21.HEAD}","status":"running",'
+                '"status":"completed"}',
+            ),
+        ):
+            with self.subTest(author=author, metadata=metadata):
+                pull_request = {
+                    "headRefOid": p21.HEAD,
+                    "isDraft": False,
+                    "comments": {
+                        "nodes": [
+                            {
+                                "author": {"login": author},
+                                "body": (
+                                    '<!-- codex-pull-request-review-summary -->\n'
+                                    f'<!-- codex-security-review:v1 {metadata} -->'
+                                ),
+                            }
+                        ],
+                        "pageInfo": {"hasNextPage": False},
+                    },
+                    "reviewRequests": {
+                        "nodes": [],
+                        "pageInfo": {"hasNextPage": False},
+                    },
+                }
+                with self.assertRaisesRegex(
+                    actions.MutationBlocked,
+                    "Codex review provider status is indeterminate",
+                ):
+                    actions._require_review_providers_terminal(pull_request)
+
+    def test_completed_codex_metadata_cannot_override_nonterminal_table_row(self) -> None:
+        for visible_status in ("**Running**", "**Completed** (running)"):
+            with self.subTest(visible_status=visible_status):
+                pull_request = {
+                    "headRefOid": p21.HEAD,
+                    "isDraft": False,
+                    "comments": {
+                        "nodes": [
+                            {
+                                "author": {"login": "chatgpt-codex-connector"},
+                                "body": (
+                                    '<!-- codex-pull-request-review-summary -->\n'
+                                    '<!-- codex-security-review:v1 '
+                                    f'{{"headSha":"{p21.HEAD}","status":"completed"}} -->\n'
+                                    '| Review | Status | Commit | Review trigger |\n'
+                                    '| --- | --- | --- | --- |\n'
+                                    '| **Code Review** | **Completed** | head | ready |\n'
+                                    f'| **Security Review** | {visible_status} | head | ready |'
+                                ),
+                            }
+                        ],
+                        "pageInfo": {"hasNextPage": False},
+                    },
+                    "reviewRequests": {
+                        "nodes": [],
+                        "pageInfo": {"hasNextPage": False},
+                    },
+                }
+                with self.assertRaisesRegex(
+                    actions.MutationBlocked,
+                    "Codex review provider is not terminal",
+                ):
+                    actions._require_review_providers_terminal(pull_request)
+
     def test_required_checks_use_the_allowlisted_graphql_read(self) -> None:
         check_payload = {
             "data": {
@@ -9916,6 +10072,7 @@ class FastPathTests(TestCase):
                         "id": "PR_1",
                         "headRefOid": p21.HEAD,
                         "state": "OPEN",
+                        "isDraft": True,
                         "baseRefName": "main",
                         "baseRefOid": p21.BASE,
                         "baseRepository": {"id": "REPO_1", "nameWithOwner": "SecPal/.github"},

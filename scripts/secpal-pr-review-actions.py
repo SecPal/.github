@@ -1483,7 +1483,7 @@ query CurrentReviewFeedback(
 ) {
   repository(owner:$owner, name:$name) {
     pullRequest(number:$number) {
-      id headRefOid baseRefName baseRefOid state reviewDecision
+      id headRefOid baseRefName baseRefOid state isDraft reviewDecision
       reactions(first:100) {
         nodes { id databaseId content user { id databaseId login } }
         pageInfo { hasNextPage }
@@ -1521,6 +1521,17 @@ query CurrentReviewFeedback(
           }
         }
         pageInfo { hasNextPage endCursor }
+      }
+      reviewRequests(first:100) {
+        nodes {
+          requestedReviewer {
+            __typename
+            ... on User { login }
+            ... on Mannequin { login }
+            ... on Team { slug organization { login } }
+          }
+        }
+        pageInfo { hasNextPage }
       }
       reviewThreads(first:100, after:$threadsCursor) {
         nodes {
@@ -1748,6 +1759,96 @@ def _validate_action_command(arguments: list[str]) -> None:
             or not re.fullmatch(r"in_reply_to=[1-9][0-9]*", arguments[10])
         ):
             raise MutationBlocked("inline reply arguments are not exactly allowlisted")
+
+
+_CODEX_REVIEW_SUMMARY_MARKER = "<!-- codex-pull-request-review-summary -->"
+_CODEX_REVIEW_STATUS = re.compile(
+    r"<!--\s*codex-security-review:v1\s+(\{.*?\})\s*-->",
+    re.DOTALL,
+)
+_COPILOT_REVIEWER_LOGINS = frozenset(
+    {"copilot-pull-request-reviewer", "github-copilot"}
+)
+
+
+def _normalized_reviewer_login(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return re.sub(r"\[bot\]$", "", value.strip().lower())
+
+
+def _require_review_providers_terminal(pull_request: dict[str, Any]) -> None:
+    """Reject visible non-terminal automated review-provider evidence."""
+
+    head_sha = pull_request.get("headRefOid")
+    comments = _bounded_nodes(
+        pull_request.get("comments"), "review-provider status comments"
+    )
+    summary_comments = [
+        item
+        for item in comments
+        if _CODEX_REVIEW_SUMMARY_MARKER in str(item.get("body") or "")
+    ]
+    if len(summary_comments) > 1:
+        raise MutationBlocked("Codex review provider status is indeterminate")
+    if pull_request.get("isDraft") is False and not summary_comments:
+        raise MutationBlocked("Codex review provider status is indeterminate")
+    if summary_comments:
+        author = summary_comments[0].get("author")
+        if (
+            not isinstance(author, dict)
+            or author.get("login") != "chatgpt-codex-connector"
+        ):
+            raise MutationBlocked("Codex review provider status is indeterminate")
+        body = str(summary_comments[0].get("body") or "")
+        matches = _CODEX_REVIEW_STATUS.findall(body)
+        if len(matches) != 1:
+            raise MutationBlocked("Codex review provider status is indeterminate")
+
+        def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            value: dict[str, Any] = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError("duplicate provider status key")
+                value[key] = item
+            return value
+
+        try:
+            status = json.loads(matches[0], object_pairs_hook=reject_duplicate_keys)
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise MutationBlocked("Codex review provider status is indeterminate") from exc
+        if not isinstance(status, dict) or not {"headSha", "status"} <= set(status):
+            raise MutationBlocked("Codex review provider status is indeterminate")
+        if status.get("headSha") != head_sha:
+            raise MutationBlocked("Codex review provider status is stale for the current head")
+        if status.get("status") != "completed":
+            raise MutationBlocked("Codex review provider is not terminal")
+        for label in ("Code Review", "Security Review"):
+            rows = [
+                line
+                for line in body.splitlines()
+                if f"**{label}**" in line
+            ]
+            if len(rows) != 1:
+                raise MutationBlocked("Codex review provider status is indeterminate")
+            cells = rows[0].split("|")
+            if len(cells) < 4 or cells[2].strip() != "**Completed**":
+                raise MutationBlocked("Codex review provider is not terminal")
+
+    requests = _bounded_nodes(
+        pull_request.get("reviewRequests"), "review-provider requests"
+    )
+    for request in requests:
+        reviewer = request.get("requestedReviewer")
+        if not isinstance(reviewer, dict):
+            raise MutationBlocked("review-provider request is indeterminate")
+        login = (
+            reviewer.get("slug")
+            if reviewer.get("__typename") == "Team"
+            else reviewer.get("login")
+        )
+        if _normalized_reviewer_login(login) in _COPILOT_REVIEWER_LOGINS:
+            raise MutationBlocked("Copilot Pull Request Review is pending")
 
 
 class ActionCommandRunner:
@@ -2028,10 +2129,13 @@ class LiveGitHub:
                     or pull_request.get("baseRefName") != initial_pull_request.get("baseRefName")
                     or pull_request.get("baseRefOid") != initial_pull_request.get("baseRefOid")
                     or pull_request.get("state") != initial_pull_request.get("state")
+                    or pull_request.get("isDraft") != initial_pull_request.get("isDraft")
                     or pull_request.get("reviewDecision")
                     != initial_pull_request.get("reviewDecision")
                     or pull_request.get("reactions")
                     != initial_pull_request.get("reactions")
+                    or pull_request.get("reviewRequests")
+                    != initial_pull_request.get("reviewRequests")
                     or any(
                         pull_request.get(key) != initial_pull_request.get(key)
                         for key in connections
@@ -2062,6 +2166,12 @@ class LiveGitHub:
         reviews = connections["reviews"]
         comments = connections["comments"]
         threads = connections["reviewThreads"]
+        provider_state = dict(pull_request)
+        provider_state["comments"] = {
+            "nodes": comments,
+            "pageInfo": {"hasNextPage": False},
+        }
+        _require_review_providers_terminal(provider_state)
         for label, nodes in (
             ("reviews", reviews),
             ("conversation comments", comments),

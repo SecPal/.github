@@ -44,6 +44,10 @@ the PR-wide feedback and exact target reads. Reply targets include their exact
 parent node identity. Registry validation permits only the required direct
 tools, checked-in scripts, and approved project-script forms before any command
 runs. PR-wide feedback must match across two complete bounded projections.
+Normal stable-feedback capture also rejects visible non-terminal, malformed,
+forged, duplicate, or wrong-head Codex status, a Ready PR with no Codex summary,
+and pending Copilot review requests before admission. Provider status is an
+ephemeral gate and is not added to the stable-feedback artifact or digest.
 Resolution plans reject
 unrecorded already-resolved targets, canonical-reference cycles, unsafe
 canonical dispositions, actionable fixes without commit and test proof, and
