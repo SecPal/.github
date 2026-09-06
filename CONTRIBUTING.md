@@ -361,20 +361,28 @@ controls multiple credentials.
 ### Preferred new setup: SSH signing
 
 Create a dedicated Ed25519 SSH signing credential, then configure Git to use
-its public-key identity:
+its local private key directly:
 
 ```bash
 # Generate a dedicated SSH signing key; do not reuse an SSH transport key.
-ssh-keygen -t ed25519 -C "your-email@example.com"
+ssh-keygen \
+  -t ed25519 \
+  -f "$HOME/.ssh/id_ed25519_secpal_signing" \
+  -C "your-email@example.com"
 
-# Configure Git to sign commits with the corresponding public key.
+# Configure Git to sign commits with the dedicated private key.
 git config --global gpg.format ssh
-git config --global user.signingkey <PATH_TO_SSH_SIGNING_PUBLIC_KEY>
+git config --global user.signingkey "$HOME/.ssh/id_ed25519_secpal_signing"
 git config --global commit.gpgSign true
 
-# Add the public key to GitHub as a signing key under
+# Register only the corresponding public key with GitHub as a signing key:
+# $HOME/.ssh/id_ed25519_secpal_signing.pub
 # Settings → SSH and GPG keys → New SSH key → Signing Key.
 ```
+
+Keep `$HOME/.ssh/id_ed25519_secpal_signing` local and private; never add or
+upload it. Only the corresponding `.pub` key is registered with GitHub for
+signing-key verification and trust distribution.
 
 ### Supported alternative: OpenPGP signing
 

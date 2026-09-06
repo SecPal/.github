@@ -234,11 +234,12 @@ php artisan test
 ```bash
 git config --global gpg.format ssh
 git config --global commit.gpgsign true
-git config --global user.signingkey <your-ssh-signing-public-key>
+git config --global user.signingkey "$HOME/.ssh/id_ed25519_secpal_signing"
 ```
 
-For the preferred dedicated SSH-signing-key setup and the supported OpenPGP
-alternative, see [Signing Commits](../../CONTRIBUTING.md#signing-commits).
+For dedicated signing-key generation, public-key-only GitHub registration, and
+the supported OpenPGP alternative, see
+[Signing Commits](../../CONTRIBUTING.md#signing-commits).
 
 ## Future Enhancements
 
