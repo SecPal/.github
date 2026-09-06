@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-06 - Accept Canonical Completed Codex Status
+
+**Fixed:**
+
+- Accept the canonical successful Codex Code Review and Security Review status
+  rows, including their closed `relative-time` representation, while preserving
+  historical completed-row compatibility.
+- Continue to reject non-terminal, ambiguous, malformed, duplicate, forged,
+  stale, and missing provider evidence before stable-feedback capture or merge.
+
 ## 2026-09-06 - Reduce PR Lifecycle Prompt And Validation Loops
 
 **Changed:**

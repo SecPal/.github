@@ -1766,6 +1766,17 @@ _CODEX_REVIEW_STATUS = re.compile(
     r"<!--\s*codex-security-review:v1\s+(\{.*?\})\s*-->",
     re.DOTALL,
 )
+_CODEX_CANONICAL_COMPLETED_STATUS = re.compile(
+    r'✅ \*\*Completed\*\* <relative-time datetime="'
+    r'(?P<datetime>[0-9]{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])'
+    r'|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-9]))'
+    r'T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]'
+    r'(?:\.[0-9]{1,6})?Z)">(?P=datetime)</relative-time>'
+)
+_CODEX_REVIEW_LABELS = {
+    "Code Review": frozenset({"**Code Review**", "📝 **Code Review**"}),
+    "Security Review": frozenset({"**Security Review**", "🔒 **Security Review**"}),
+}
 _COPILOT_REVIEWER_LOGINS = frozenset(
     {"copilot-pull-request-reviewer", "github-copilot"}
 )
@@ -1775,6 +1786,23 @@ def _normalized_reviewer_login(value: Any) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
     return re.sub(r"\[bot\]$", "", value.strip().lower())
+
+
+def _is_codex_completed_status(value: str) -> bool:
+    if value == "**Completed**":
+        return True
+    match = _CODEX_CANONICAL_COMPLETED_STATUS.fullmatch(value)
+    if match is None:
+        return False
+    timestamp = match.group("datetime")
+    year = int(timestamp[:4])
+    if year == 0:
+        return False
+    if timestamp[5:10] == "02-29" and not (
+        year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    ):
+        return False
+    return True
 
 
 def _require_review_providers_terminal(pull_request: dict[str, Any]) -> None:
@@ -1832,7 +1860,16 @@ def _require_review_providers_terminal(pull_request: dict[str, Any]) -> None:
             if len(rows) != 1:
                 raise MutationBlocked("Codex review provider status is indeterminate")
             cells = rows[0].split("|")
-            if len(cells) < 4 or cells[2].strip() != "**Completed**":
+            if (
+                len(cells) != 6
+                or cells[0].strip()
+                or cells[-1].strip()
+                or cells[1].strip() not in _CODEX_REVIEW_LABELS[label]
+                or not cells[3].strip()
+                or not cells[4].strip()
+            ):
+                raise MutationBlocked("Codex review provider status is indeterminate")
+            if not _is_codex_completed_status(cells[2].strip()):
                 raise MutationBlocked("Codex review provider is not terminal")
 
     requests = _bounded_nodes(

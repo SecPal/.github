@@ -9909,6 +9909,41 @@ class FastPathTests(TestCase):
         self.assertEqual(state.feedback_digest, fast_feedback(1).feedback_digest)
         self.assertEqual(read_feedback.call_args.args[1], selected)
 
+    @staticmethod
+    def _codex_provider_state(
+        *,
+        code_status: str = "**Completed**",
+        security_status: str = "**Completed**",
+        code_label: str = "**Code Review**",
+        security_label: str = "**Security Review**",
+        metadata_head: str = p21.HEAD,
+        author: str = "chatgpt-codex-connector",
+        extra_rows: str = "",
+    ) -> dict[str, Any]:
+        return {
+            "headRefOid": p21.HEAD,
+            "isDraft": False,
+            "comments": {
+                "nodes": [
+                    {
+                        "author": {"login": author},
+                        "body": (
+                            "<!-- codex-pull-request-review-summary -->\n"
+                            "<!-- codex-security-review:v1 "
+                            f'{{"headSha":"{metadata_head}","status":"completed"}} -->\n'
+                            "| Review | Status | Commit | Review trigger |\n"
+                            "| --- | --- | --- | --- |\n"
+                            f"| {code_label} | {code_status} | head | ready |\n"
+                            f"| {security_label} | {security_status} | head | ready |"
+                            f"{extra_rows}"
+                        ),
+                    }
+                ],
+                "pageInfo": {"hasNextPage": False},
+            },
+            "reviewRequests": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+        }
+
     def test_visible_codex_nonterminal_states_block_stable_feedback(self) -> None:
         for status in ("queued", "pending", "running", "failed", "indeterminate"):
             with self.subTest(status=status):
@@ -9960,28 +9995,7 @@ class FastPathTests(TestCase):
             actions._require_review_providers_terminal(pull_request)
 
     def test_completed_or_untriggered_providers_permit_stable_feedback(self) -> None:
-        completed = {
-            "headRefOid": p21.HEAD,
-            "isDraft": False,
-            "comments": {
-                "nodes": [
-                    {
-                        "author": {"login": "chatgpt-codex-connector"},
-                        "body": (
-                            '<!-- codex-pull-request-review-summary -->\n'
-                            '<!-- codex-security-review:v1 '
-                            f'{{"headSha":"{p21.HEAD}","status":"completed"}} -->\n'
-                            '| Review | Status | Commit | Review trigger |\n'
-                            '| --- | --- | --- | --- |\n'
-                            '| **Code Review** | **Completed** | head | ready |\n'
-                            '| **Security Review** | **Completed** | head | ready |'
-                        )
-                    }
-                ],
-                "pageInfo": {"hasNextPage": False},
-            },
-            "reviewRequests": {"nodes": [], "pageInfo": {"hasNextPage": False}},
-        }
+        completed = self._codex_provider_state()
         untriggered = {
             "headRefOid": p21.HEAD,
             "isDraft": True,
@@ -9990,6 +10004,136 @@ class FastPathTests(TestCase):
         }
         actions._require_review_providers_terminal(completed)
         actions._require_review_providers_terminal(untriggered)
+
+    def test_canonical_live_completed_status_is_terminal_for_each_codex_review(self) -> None:
+        live_status = (
+            '✅ **Completed** <relative-time datetime="2026-09-06T22:21:12.382893Z">'
+            "2026-09-06T22:21:12.382893Z</relative-time>"
+        )
+        leap_day_status = (
+            '✅ **Completed** <relative-time datetime="2024-02-29T22:21:12Z">'
+            "2024-02-29T22:21:12Z</relative-time>"
+        )
+        for fields in (
+            {"code_label": "📝 **Code Review**", "code_status": live_status},
+            {
+                "security_label": "🔒 **Security Review**",
+                "security_status": live_status,
+            },
+            {"code_label": "📝 **Code Review**", "code_status": leap_day_status},
+        ):
+            with self.subTest(fields=fields):
+                actions._require_review_providers_terminal(
+                    self._codex_provider_state(**fields)
+                )
+
+    def test_nonterminal_or_ambiguous_codex_rows_remain_rejected(self) -> None:
+        rejected = (
+            "**Running**",
+            "**Pending**",
+            "**Queued**",
+            "**Failed**",
+            "**Indeterminate**",
+            "arbitrary Completed text",
+            "**Completed** (running)",
+            (
+                '✅ **Completed** <relative-time datetime="2026-09-06T21:30:00Z">'
+                "2026-09-06T21:30:00Z</relative-time> trailing"
+            ),
+            (
+                '✅ **Completed** <relative-time datetime="2026-09-06T21:30:00Z">'
+                "2026-09-06T21:30:00Z</relative-time><em>terminal</em>"
+            ),
+        )
+        for status in rejected:
+            with self.subTest(status=status):
+                with self.assertRaisesRegex(
+                    actions.MutationBlocked,
+                    "Codex review provider is not terminal",
+                ):
+                    actions._require_review_providers_terminal(
+                        self._codex_provider_state(security_status=status)
+                    )
+
+    def test_malformed_canonical_codex_rows_fail_closed(self) -> None:
+        malformed = (
+            '✅ **Completed** <relative-time>now</relative-time>',
+            (
+                '✅ **Completed** <relative-time datetime="not-a-time">'
+                "now</relative-time>"
+            ),
+            (
+                '✅ **Completed** <relative-time datetime="2026-02-31T21:30:00Z">'
+                "2026-02-31T21:30:00Z</relative-time>"
+            ),
+            (
+                '✅ **Completed** <relative-time datetime="2026-02-29T21:30:00Z">'
+                "2026-02-29T21:30:00Z</relative-time>"
+            ),
+            (
+                '✅ **Completed** <relative-time datetime="0000-01-01T21:30:00Z">'
+                "0000-01-01T21:30:00Z</relative-time>"
+            ),
+            (
+                '✅ **Completed** <relative-time datetime="2026-09-06T21:30:00Z">'
+                "now"
+            ),
+            (
+                '✅ **Completed** <relative-time datetime="2026-09-06T21:30:00Z" '
+                'class="relative">now</relative-time>'
+            ),
+            (
+                '✅ **Completed** <relative-time datetime="2026-09-06T21:30:00Z">'
+                "2026-09-06T21:31:00Z</relative-time>"
+            ),
+            "**Completed** | injected | cell",
+        )
+        for status in malformed:
+            with self.subTest(status=status):
+                with self.assertRaises(actions.MutationBlocked):
+                    actions._require_review_providers_terminal(
+                        self._codex_provider_state(code_status=status)
+                    )
+
+    def test_duplicate_codex_rows_remain_indeterminate(self) -> None:
+        pull_request = self._codex_provider_state(
+            extra_rows="\n| **Code Review** | **Completed** | head | ready |"
+        )
+        with self.assertRaisesRegex(
+            actions.MutationBlocked,
+            "Codex review provider status is indeterminate",
+        ):
+            actions._require_review_providers_terminal(pull_request)
+
+    def test_wrong_head_codex_summary_remains_rejected(self) -> None:
+        with self.assertRaisesRegex(
+            actions.MutationBlocked,
+            "Codex review provider status is stale for the current head",
+        ):
+            actions._require_review_providers_terminal(
+                self._codex_provider_state(metadata_head="f" * 40)
+            )
+
+    def test_ready_pr_missing_codex_summary_remains_rejected(self) -> None:
+        pull_request = self._codex_provider_state()
+        pull_request["comments"] = {
+            "nodes": [],
+            "pageInfo": {"hasNextPage": False},
+        }
+        with self.assertRaisesRegex(
+            actions.MutationBlocked,
+            "Codex review provider status is indeterminate",
+        ):
+            actions._require_review_providers_terminal(pull_request)
+
+    def test_running_codex_row_cannot_reach_stable_capture_merge_gate(self) -> None:
+        with self.assertRaisesRegex(
+            actions.MutationBlocked,
+            "Codex review provider is not terminal",
+        ):
+            actions._require_review_providers_terminal(
+                self._codex_provider_state(security_status="**Running**")
+            )
 
     def test_forged_or_duplicate_codex_status_is_indeterminate(self) -> None:
         for author, metadata in (
@@ -10001,6 +10145,10 @@ class FastPathTests(TestCase):
                 "chatgpt-codex-connector",
                 f'{{"headSha":"{p21.HEAD}","status":"running",'
                 '"status":"completed"}',
+            ),
+            (
+                "chatgpt-codex-connector",
+                f'{{"headSha":"{p21.HEAD}","status":}}',
             ),
         ):
             with self.subTest(author=author, metadata=metadata):
