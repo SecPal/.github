@@ -13,7 +13,8 @@ We welcome contributions to SecPal! Please read our [Code of Conduct](CODE_OF_CO
 
 Ensure you have the following tools installed:
 
-- **Git** with GPG signing configured
+- **Git** with cryptographic commit signing configured (SSH is preferred for a
+  new setup; OpenPGP remains supported)
 - **Node.js** (v22.x) and npm/pnpm/yarn
 - **PHP** 8.4 and Composer (for backend projects)
 - **Pre-commit** hooks tool (optional but recommended)
@@ -116,7 +117,8 @@ These exclusions are configured in `.preflight-exclude` and match the GitHub CI 
 2. **Create a feature branch** using our naming convention (see below).
 3. **Write your code** and add tests where applicable.
 4. **Ensure all tests pass** locally by running `./scripts/preflight.sh`.
-5. **Sign your commits** with GPG (see below).
+5. **Sign your commits** cryptographically (see below; SSH is preferred for a
+   new setup).
 6. **Push your branch** and open a pull request against `main`.
 
 All pull requests will be reviewed by a maintainer and by GitHub Copilot.
@@ -343,7 +345,50 @@ Closes #123"
 
 ## Signing Commits
 
-All commits must be signed with GPG. To set up commit signing:
+All commits must be cryptographically signed. SSH and OpenPGP are both accepted
+signature formats. SSH is the preferred format for a newly created SecPal Git
+signing credential; use Ed25519 where the relevant signing path supports it.
+
+Keep your SSH signing credential distinct from an SSH transport/authentication
+credential. Do not create or reuse one merely for convenience. Existing valid
+SSH and OpenPGP signing configurations remain valid: do not automatically
+migrate or rewrite them solely because SSH is preferred for a new setup.
+Contributors, agents, and tools must not automatically switch a valid OpenPGP
+configuration to SSH for that reason. Maintained lifecycle signer roles and
+their policy-selected credentials remain distinct even when one operator
+controls multiple credentials.
+
+### Preferred new setup: SSH signing
+
+Create a dedicated Ed25519 SSH signing credential, then configure Git to use
+its local private key directly:
+
+```bash
+# Generate a dedicated SSH signing key; do not reuse an SSH transport key.
+ssh-keygen \
+  -t ed25519 \
+  -f "$HOME/.ssh/id_ed25519_secpal_signing" \
+  -C "your-email@example.com"
+
+# Configure Git to sign commits with the dedicated private key.
+git config --global gpg.format ssh
+git config --global user.signingkey "$HOME/.ssh/id_ed25519_secpal_signing"
+git config --global commit.gpgSign true
+
+# Register only the corresponding public key with GitHub as a signing key:
+# $HOME/.ssh/id_ed25519_secpal_signing.pub
+# Settings → SSH and GPG keys → New SSH key → Signing Key.
+```
+
+Keep `$HOME/.ssh/id_ed25519_secpal_signing` local and private; never add or
+upload it. Only the corresponding `.pub` key is registered with GitHub for
+signing-key verification and trust distribution.
+
+### Supported alternative: OpenPGP signing
+
+OpenPGP remains supported for existing, historical, external, and
+GitHub-generated valid signatures. To create a new OpenPGP setup when that path
+is appropriate:
 
 ```bash
 # Generate a GPG key (if you don't have one)

@@ -51,7 +51,8 @@ If you want to run workflow linting locally outside pre-commit and CI, install `
 
 - Git user.name - critical
 - Git user.email - critical
-- GPG commit signing - recommended
+- Cryptographic commit signing - required by SecPal; SSH is preferred for new
+  setups and OpenPGP remains supported
 
 ### 2. API Repository (Laravel + Native PHP Runtime)
 
@@ -228,12 +229,17 @@ cd /path/to/api
 php artisan test
 ```
 
-### "GPG commit signing not configured"
+### "Git commit signing not configured"
 
 ```bash
+git config --global gpg.format ssh
 git config --global commit.gpgsign true
-git config --global user.signingkey <your-gpg-key-id>
+git config --global user.signingkey "$HOME/.ssh/id_ed25519_secpal_signing"
 ```
+
+For dedicated signing-key generation, public-key-only GitHub registration, and
+the supported OpenPGP alternative, see
+[Signing Commits](../../CONTRIBUTING.md#signing-commits).
 
 ## Future Enhancements
 
