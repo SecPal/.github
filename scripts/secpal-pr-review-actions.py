@@ -1791,7 +1791,18 @@ def _normalized_reviewer_login(value: Any) -> str | None:
 def _is_codex_completed_status(value: str) -> bool:
     if value == "**Completed**":
         return True
-    return _CODEX_CANONICAL_COMPLETED_STATUS.fullmatch(value) is not None
+    match = _CODEX_CANONICAL_COMPLETED_STATUS.fullmatch(value)
+    if match is None:
+        return False
+    timestamp = match.group("datetime")
+    year = int(timestamp[:4])
+    if year == 0:
+        return False
+    if timestamp[5:10] == "02-29" and not (
+        year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    ):
+        return False
+    return True
 
 
 def _require_review_providers_terminal(pull_request: dict[str, Any]) -> None:

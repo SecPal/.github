@@ -10010,12 +10010,17 @@ class FastPathTests(TestCase):
             '✅ **Completed** <relative-time datetime="2026-09-06T22:21:12.382893Z">'
             "2026-09-06T22:21:12.382893Z</relative-time>"
         )
+        leap_day_status = (
+            '✅ **Completed** <relative-time datetime="2024-02-29T22:21:12Z">'
+            "2024-02-29T22:21:12Z</relative-time>"
+        )
         for fields in (
             {"code_label": "📝 **Code Review**", "code_status": live_status},
             {
                 "security_label": "🔒 **Security Review**",
                 "security_status": live_status,
             },
+            {"code_label": "📝 **Code Review**", "code_status": leap_day_status},
         ):
             with self.subTest(fields=fields):
                 actions._require_review_providers_terminal(
@@ -10060,6 +10065,14 @@ class FastPathTests(TestCase):
             (
                 '✅ **Completed** <relative-time datetime="2026-02-31T21:30:00Z">'
                 "2026-02-31T21:30:00Z</relative-time>"
+            ),
+            (
+                '✅ **Completed** <relative-time datetime="2026-02-29T21:30:00Z">'
+                "2026-02-29T21:30:00Z</relative-time>"
+            ),
+            (
+                '✅ **Completed** <relative-time datetime="0000-01-01T21:30:00Z">'
+                "0000-01-01T21:30:00Z</relative-time>"
             ),
             (
                 '✅ **Completed** <relative-time datetime="2026-09-06T21:30:00Z">'
