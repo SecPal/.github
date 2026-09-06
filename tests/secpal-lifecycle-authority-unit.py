@@ -289,6 +289,101 @@ def authenticated_external_evidence(
 
 
 class LifecycleAuthorityTests(TestCase):
+    def test_target_827_fresh_evidence_cannot_replace_signed_receipt(self) -> None:
+        head = "7fd0467c321f1c2b9a06494f4a0c46531c9cc006"
+        tree = "ab8da939ca30a3b906f22c471031083f7132ff94"
+        historical = "d0905955b07c580930ddf05595372c5c13c74387a074907ede4a33ddf1eafb38"
+        observed_fresh = "e210f448c7ed9c123ef2e991684f3706a0ca30b096005fce37a2103a9bdcfa15"
+        parent = "f6982d0808cace5a142445b52454dc83515fa297"
+        state = authority.initial_state()
+        state.update(unrestricted_review_count=1, remediation_cycle_count=2)
+        observations = [
+            {
+                "sequence": sequence,
+                "kind": kind,
+                "observed_at": observed_at,
+                "head_sha": observed_head,
+                "reviewed_head_sha": None,
+            }
+            for sequence, (kind, observed_at, observed_head) in enumerate(
+                [
+                    ("PR_CREATED_DRAFT", "2026-09-05T14:26:48Z", "4b5dc277bfbee865de5fe5c6bf8874467930475b"),
+                    ("HEAD_ADVANCED_OBSERVED", "2026-09-05T14:30:14Z", "b3f45ab2c2351e18587ff92c9b143c0fb7c3ef75"),
+                    ("REMEDIATION_HEAD_OBSERVED", "2026-09-05T16:21:55Z", "f6982d0808cace5a142445b52454dc83515fa297"),
+                    ("REMEDIATION_HEAD_OBSERVED", "2026-09-05T22:14:03Z", head),
+                ],
+                1,
+            )
+        ]
+        normalized = authority._normalize_observed_pre_enrollment_history(
+            observations,
+            expected_head=head,
+            intended_state=state,
+            review_budget_consumption_admitted=True,
+        )
+        self.assertEqual(normalized, observations)
+        self.assertEqual(
+            sum(item["kind"] == "REMEDIATION_HEAD_OBSERVED" for item in normalized),
+            2,
+        )
+        self.assertNotEqual(historical, observed_fresh)
+        reviewed = fast_path.StableFeedbackState(
+            repository=REPOSITORY,
+            pull_request_number=830,
+            head_sha=parent,
+            base_ref="main",
+            base_sha="41f08b6d0f5d47664193ca283bdd9b744c19aee0",
+            pr_state="OPEN",
+            feedback={
+                "pull_request_reactions": [], "reviews": [],
+                "conversation_comments": [], "threads": [],
+            },
+        )
+        registry = {"manual_gates": []}
+        fixture_receipt = fast_path.create_validation_receipt(
+            repository=REPOSITORY,
+            head_sha=parent,
+            validated_tree_sha=tree,
+            registry=registry,
+            command_set=[],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+        )
+        fixture_attestation = fast_path.create_validation_attestation(
+            repository=REPOSITORY,
+            head_sha=head,
+            registry=registry,
+            command_set=[],
+            successful_result=True,
+            reviewed_state=reviewed,
+            validation_receipt=fixture_receipt,
+        )
+        arguments = {
+            "repository": REPOSITORY,
+            "head_sha": head,
+            "registry": registry,
+            "command_set": [],
+            "reviewed_state": reviewed,
+            "commit_parent_sha": parent,
+            "commit_tree_sha": tree,
+        }
+        positive = fast_path.verify_validation_attestation(
+            fixture_attestation,
+            **arguments,
+            commit_validation_receipt_digest=fixture_receipt["receipt_digest"],
+        )
+        self.assertTrue(fast_path.is_verified_validation_evidence(positive))
+        self.assertNotIn(
+            fixture_receipt["receipt_digest"], (historical, observed_fresh)
+        )
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "receipt"):
+            fast_path.verify_validation_attestation(
+                fixture_attestation,
+                **arguments,
+                commit_validation_receipt_digest=historical,
+            )
+
     def test_exact_adoption_conservatively_preserves_pre_enrollment_review_budget(
         self,
     ) -> None:
