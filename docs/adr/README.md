@@ -85,6 +85,7 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 
 ### Accepted
 
+- [ADR-024: Managed Operations Control Plane Authority and Trust Boundaries](20260906-managed-operations-control-plane-authority-adr024.md) - 2026-09-06; consumes ADR-023's ownership boundary without claiming control-plane implementation or production qualification
 - [ADR-023: Public Self-Hosting vs Private Managed Operations Boundary](20260824-public-self-hosting-private-managed-operations-adr023.md) - 2026-08-24; ownership boundary clarified under [#748](https://github.com/SecPal/.github/issues/748)
 - [ADR-022: Deployment Topology Evolution and High Availability](20260824-deployment-topology-high-availability-adr022.md) - 2026-08-24; local HA, Managed capability profiles, and controlled cross-provider continuity refined under [#843](https://github.com/SecPal/.github/issues/843)
 - [ADR-021: OCI Supply-Chain and Vulnerability Evidence Architecture](20260824-oci-supply-chain-vulnerability-evidence-adr021.md) - 2026-08-24
