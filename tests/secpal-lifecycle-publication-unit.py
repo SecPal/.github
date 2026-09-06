@@ -441,6 +441,20 @@ def verified_validation_evidence(
             commit_tree_sha=tree,
             commit_validation_receipt_digest=receipt["receipt_digest"],
             commit_integration_evidence_digest=fast_path.digest_json(integration),
+            authenticated_integration_commit=fast_path.authenticate_integration_commit(
+                head_sha=head,
+                local_signature={
+                    "state": "valid",
+                    "verified": True,
+                    "format": "ssh",
+                },
+                verification_output=(
+                    f'Good "git" signature for {SIGNER} with ED25519 key '
+                    "SHA256:test\n"
+                ),
+                expected_signer=integration["expected_signer"],
+                signature_policy={"accepted_formats": ["ssh", "openpgp"]},
+            ),
         )
     attestation = fast_path.create_validation_attestation(
         repository=REPOSITORY, head_sha=head, registry=registry,
