@@ -30,6 +30,7 @@ from scripts.secpal_pr_review import lifecycle_authority as authority
 from scripts.secpal_pr_review import lifecycle_execution as execution
 from scripts.secpal_pr_review import lifecycle_orchestration as orchestration
 from scripts.secpal_pr_review import lifecycle_publication as publication
+from scripts.secpal_pr_review import fast_path
 
 
 REPOSITORY = "SecPal/.github"
@@ -181,6 +182,9 @@ class Harness:
         self.current = self.predecessor
         self.target: publication.VerifiedLifecyclePublication | None = None
         self.transition: publication.VerifiedLifecyclePublicationTransition | None = None
+        self.transitions: dict[
+            str, publication.VerifiedLifecyclePublicationTransition
+        ] = {}
         self.github = execution.LivePullRequest(
             REPOSITORY,
             PR,
@@ -237,17 +241,19 @@ class Harness:
         self.events.append("write-publication")
         self.publication_writes.append(raw)
         successor, event = self._candidate(raw)
+        predecessor = self.current
+        publication_number = len(self.publication_writes) + 4
         target = publication.VerifiedLifecyclePublication(
-            "5" * 40,
-            "6" * 64,
+            f"{publication_number:x}" * 40,
+            f"{publication_number + 1:x}" * 64,
             BRANCH,
-            self.predecessor.publication_oid,
-            self.predecessor.publication_oid,
+            predecessor.publication_oid,
+            predecessor.publication_oid,
             successor,
             raw,
         )
         transition = publication.VerifiedLifecyclePublicationTransition(
-            predecessor=self.predecessor,
+            predecessor=predecessor,
             successor=target,
             event_id=event["event_id"],
             event_digest=event["event_digest"],
@@ -264,19 +270,19 @@ class Harness:
         if self.publication_mode in {"SUCCESS", "AMBIGUOUS_TARGET"}:
             self.target = target
             self.transition = transition
+            self.transitions[predecessor.publication_oid] = transition
             self.current = target
         if self.publication_mode == "SUCCESS":
             return target
         raise publication.LifecyclePublicationError("ambiguous fixture publication")
 
     def historical_reader(self, repository: str, issue: int, predecessor_oid: str):
-        if (repository, issue, predecessor_oid) != (
-            REPOSITORY,
-            ISSUE,
-            self.predecessor.publication_oid,
-        ) or self.transition is None:
+        if (repository, issue) != (REPOSITORY, ISSUE):
             raise publication.LifecyclePublicationError("no exact successor")
-        return copy.deepcopy(self.transition)
+        transition = self.transitions.get(predecessor_oid)
+        if transition is None:
+            raise publication.LifecyclePublicationError("no exact successor")
+        return copy.deepcopy(transition)
 
     def execute(self, authorization: bytes) -> execution.LifecycleExecutionResult:
         return execution._execute_lifecycle_transition(
@@ -302,6 +308,7 @@ def authorization_for(
     lifecycle: authority.VerifiedLifecycleAuthority | None = None,
     delivery_issue: int = ISSUE,
     signer_identity: str = SIGNER,
+    scope: dict[str, Any] | None = None,
 ) -> bytes:
     selected = lifecycle or harness.predecessor.lifecycle
     return orchestration.create_user_authorization(
@@ -313,10 +320,83 @@ def authorization_for(
         publication_digest=publication_digest or harness.predecessor.publication_digest,
         operation=operation,
         reason=f"Authorize exact {operation} fixture",
-        scope={"pull_request": selected.pull_request, "head_sha": selected.head_sha},
+        scope=(
+            {"pull_request": selected.pull_request, "head_sha": selected.head_sha}
+            if scope is None
+            else scope
+        ),
         signer_identity=signer_identity,
         signer=signer_for(signer_identity),
     )
+
+
+def convergence_fixture() -> tuple[
+    Harness,
+    bytes,
+    bytes,
+    fast_path.VerifiedValidationEvidence,
+    fast_path.AuthenticatedIntegrationCommit,
+    execution.GitHubLifecycleHistory,
+]:
+    harness = Harness(Chain())
+    ready = authorization_for(harness, "DRAFT_TO_READY")
+    resulting_head = "b" * 40
+    remediation = authorization_for(
+        harness,
+        "REMEDIATION_COMPLETED",
+        scope={
+            "pull_request": PR,
+            "predecessor_head_sha": HEAD,
+            "resulting_head_sha": resulting_head,
+            "finding_ids": ["finding-1"],
+        },
+    )
+    harness.github = execution.LivePullRequest(
+        REPOSITORY, PR, "OPEN", resulting_head, False
+    )
+    validation = fast_path.VerifiedValidationEvidence(
+        repository=REPOSITORY,
+        delivery_issue_number=ISSUE,
+        pull_request_number=PR,
+        head_sha=resulting_head,
+        tree_sha="c" * 40,
+        validation_receipt_digest="d" * 64,
+        final_attestation_digest="e" * 64,
+        source_validation_evidence_digest="f" * 64,
+        _verification_seal=object(),
+    )
+    signature_policy = {
+        "require_github_verified": True,
+        "require_local_verified": True,
+        "accepted_formats": ["ssh"],
+    }
+    commit_fields = {
+        "repository": REPOSITORY,
+        "head_sha": resulting_head,
+        "tree_sha": validation.tree_sha,
+        "parent_shas": [HEAD],
+        "signer_kind": "SSH_PRINCIPAL",
+        "signer_identity": SIGNER,
+        "signature_fingerprint": "SHA256:fixture",
+        "signature_classification": "VERIFIED",
+        "signature_policy_digest": fast_path.digest_json(signature_policy),
+    }
+    commit = fast_path.AuthenticatedIntegrationCommit(
+        **{
+            **commit_fields,
+            "parent_shas": (HEAD,),
+            "authentication_digest": fast_path.digest_json(commit_fields),
+        }
+    )
+    history = execution.GitHubLifecycleHistory(
+        complete=True,
+        events=(
+            execution.GitHubLifecycleEvent("COMMIT", HEAD),
+            execution.GitHubLifecycleEvent("READY", None),
+            execution.GitHubLifecycleEvent("COMMIT", resulting_head),
+        ),
+    )
+    return harness, ready, remediation, validation, commit, history
 
 
 class LifecycleExecutionTests(TestCase):
@@ -342,6 +422,303 @@ class LifecycleExecutionTests(TestCase):
         chain = Chain()
         chain.append("DRAFT_TO_READY")
         return Harness(chain)
+
+    def converge_fixture(
+        self,
+        harness: Harness,
+        ready: bytes,
+        remediation: bytes,
+        validation: fast_path.VerifiedValidationEvidence,
+        commit: fast_path.AuthenticatedIntegrationCommit,
+        history: execution.GitHubLifecycleHistory,
+        *,
+        evidence_valid: bool = True,
+        delivery_issue: int = ISSUE,
+    ) -> execution.LifecycleExecutionResult:
+        with mock.patch.object(
+            authority,
+            "is_verified_validation_evidence",
+            return_value=evidence_valid,
+        ):
+            return execution._converge_pending_ready_head_advancement(
+                REPOSITORY,
+                delivery_issue,
+                ready,
+                remediation,
+                validation,
+                current_reader=harness.current_reader,
+                historical_reader=harness.historical_reader,
+                github_reader=harness.github_reader,
+                github_history_reader=lambda *_args: history,
+                publisher=harness.publisher,
+                signing_authority_provider=fixture_signing_authorities,
+                source_commit_authenticator=lambda *_args, **_kwargs: commit,
+            )
+
+    def test_failing_first_pending_ready_converges_across_one_remediation(self) -> None:
+        harness, ready, remediation, validation, commit, history = convergence_fixture()
+
+        with self.assertRaisesRegex(
+            execution.LifecycleExecutionError, "head|identity or state changed"
+        ):
+            harness.execute(ready)
+
+        result = self.converge_fixture(
+            harness, ready, remediation, validation, commit, history
+        )
+
+        self.assertEqual(result.status, "COMPLETE")
+        self.assertEqual(result.observed_case, "COMPOSED_HEAD_ADVANCEMENT")
+        self.assertEqual(result.head_sha, validation.head_sha)
+        self.assertEqual(result.github_write_attempts, 0)
+        self.assertEqual(result.publication_write_attempts, 2)
+        self.assertEqual(
+            [
+                transition.successor.lifecycle.state
+                for transition in harness.transitions.values()
+            ][-1]["remediation_cycle_count"],
+            1,
+        )
+        self.assertEqual(
+            [
+                transition.transition_kind
+                for transition in harness.transitions.values()
+            ],
+            ["DRAFT_TO_READY", "REMEDIATION_COMPLETED"],
+        )
+        self.assertEqual(harness.github_writes, [])
+        replay = self.converge_fixture(
+            harness, ready, remediation, validation, commit, history
+        )
+        self.assertEqual(replay.status, "COMPLETE")
+        self.assertEqual(replay.publication_write_attempts, 0)
+        self.assertEqual(len(harness.publication_writes), 2)
+
+    def test_composed_midpoint_resumes_and_complete_replay_is_zero_write(self) -> None:
+        harness, ready, remediation, validation, commit, history = convergence_fixture()
+        ready_fields = orchestration._verify_signed_user_authorization(
+            ready, REPOSITORY
+        )
+        ready_raw = execution._append_successor_evidence(
+            harness.predecessor,
+            ready_fields,
+            fixture_signing_authorities(),
+        )
+        harness.publisher(ready_raw)
+
+        result = self.converge_fixture(
+            harness, ready, remediation, validation, commit, history
+        )
+        self.assertEqual(result.status, "COMPLETE")
+        self.assertEqual(result.publication_write_attempts, 1)
+        self.assertEqual(len(harness.publication_writes), 2)
+
+    def test_composed_partial_publication_resumes_only_from_exact_state(self) -> None:
+        harness, ready, remediation, validation, commit, history = convergence_fixture()
+        harness.publication_mode = "AMBIGUOUS_PREDECESSOR"
+        first = self.converge_fixture(
+            harness, ready, remediation, validation, commit, history
+        )
+        self.assertEqual(first.status, "PUBLICATION_PENDING")
+        self.assertEqual(first.publication_write_attempts, 1)
+        self.assertEqual(harness.current, harness.predecessor)
+
+        harness.publication_mode = "SUCCESS"
+        completed = self.converge_fixture(
+            harness, ready, remediation, validation, commit, history
+        )
+        self.assertEqual(completed.status, "COMPLETE")
+        self.assertEqual(completed.publication_write_attempts, 2)
+
+        midpoint, ready, remediation, validation, commit, history = convergence_fixture()
+        ready_fields = orchestration._verify_signed_user_authorization(
+            ready, REPOSITORY
+        )
+        midpoint.publisher(
+            execution._append_successor_evidence(
+                midpoint.predecessor,
+                ready_fields,
+                fixture_signing_authorities(),
+            )
+        )
+        midpoint.publication_mode = "AMBIGUOUS_PREDECESSOR"
+        pending = self.converge_fixture(
+            midpoint, ready, remediation, validation, commit, history
+        )
+        self.assertEqual(pending.status, "PUBLICATION_PENDING")
+        self.assertEqual(pending.publication_write_attempts, 1)
+        self.assertTrue(midpoint.current.lifecycle.state["ready"])
+        self.assertEqual(midpoint.current.lifecycle.state["remediation_cycle_count"], 0)
+
+        midpoint.publication_mode = "SUCCESS"
+        completed = self.converge_fixture(
+            midpoint, ready, remediation, validation, commit, history
+        )
+        self.assertEqual(completed.status, "COMPLETE")
+        self.assertEqual(completed.publication_write_attempts, 1)
+        self.assertEqual(midpoint.current.lifecycle.state["remediation_cycle_count"], 1)
+
+        replay = self.converge_fixture(
+            harness, ready, remediation, validation, commit, history
+        )
+        self.assertEqual(replay.publication_write_attempts, 0)
+        self.assertEqual(len(harness.publication_writes), 3)
+
+    def test_composed_chronology_ambiguity_fails_before_publication(self) -> None:
+        mutations = {
+            "incomplete": execution.GitHubLifecycleHistory(False, ()),
+            "still-draft": execution.GitHubLifecycleHistory(
+                True,
+                (
+                    execution.GitHubLifecycleEvent("COMMIT", HEAD),
+                    execution.GitHubLifecycleEvent("READY", None),
+                    execution.GitHubLifecycleEvent("DRAFT", None),
+                    execution.GitHubLifecycleEvent("COMMIT", "b" * 40),
+                ),
+            ),
+            "unknown-intermediate": execution.GitHubLifecycleHistory(
+                True,
+                (
+                    execution.GitHubLifecycleEvent("COMMIT", HEAD),
+                    execution.GitHubLifecycleEvent("READY", None),
+                    execution.GitHubLifecycleEvent("COMMIT", "9" * 40),
+                    execution.GitHubLifecycleEvent("COMMIT", "b" * 40),
+                ),
+            ),
+            "force-push": execution.GitHubLifecycleHistory(
+                True,
+                (
+                    execution.GitHubLifecycleEvent("COMMIT", HEAD),
+                    execution.GitHubLifecycleEvent("READY", None),
+                    execution.GitHubLifecycleEvent("FORCE_PUSH", None),
+                    execution.GitHubLifecycleEvent("COMMIT", "b" * 40),
+                ),
+            ),
+            "multiple-ready": execution.GitHubLifecycleHistory(
+                True,
+                (
+                    execution.GitHubLifecycleEvent("COMMIT", HEAD),
+                    execution.GitHubLifecycleEvent("READY", None),
+                    execution.GitHubLifecycleEvent("READY", None),
+                    execution.GitHubLifecycleEvent("COMMIT", "b" * 40),
+                ),
+            ),
+        }
+        for name, changed_history in mutations.items():
+            harness, ready, remediation, validation, commit, _ = convergence_fixture()
+            with self.subTest(name=name), self.assertRaises(
+                execution.LifecycleExecutionError
+            ):
+                self.converge_fixture(
+                    harness,
+                    ready,
+                    remediation,
+                    validation,
+                    commit,
+                    changed_history,
+                )
+            self.assertEqual(harness.publication_writes, [])
+
+    def test_composed_identity_authority_and_source_substitution_fail_closed(self) -> None:
+        cases: list[tuple[str, Any]] = []
+
+        harness, ready, remediation, validation, commit, history = convergence_fixture()
+        object.__setattr__(harness.github, "draft", True)
+        cases.append(("github-draft", (harness, ready, remediation, validation, commit, history, True)))
+
+        harness, ready, remediation, validation, commit, history = convergence_fixture()
+        object.__setattr__(harness.github, "pull_request", PR + 1)
+        cases.append(("wrong-pr", (harness, ready, remediation, validation, commit, history, True)))
+
+        harness, ready, remediation, validation, commit, history = convergence_fixture()
+        cases.append(("wrong-issue", (harness, ready, remediation, validation, commit, history, True, ISSUE + 1)))
+
+        harness, ready, remediation, validation, commit, history = convergence_fixture()
+        stale = copy.deepcopy(harness.current)
+        object.__setattr__(stale, "publication_oid", "9" * 40)
+        harness.current = stale
+        cases.append(("stale-current", (harness, ready, remediation, validation, commit, history, True)))
+
+        harness, ready, remediation, validation, commit, history = convergence_fixture()
+        cases.append(("invalid-ready", (harness, b"{}", remediation, validation, commit, history, True)))
+
+        harness, ready, remediation, validation, commit, history = convergence_fixture()
+        cases.append(("invalid-remediation", (harness, ready, b"{}", validation, commit, history, True)))
+
+        harness, ready, _, validation, commit, history = convergence_fixture()
+        wrong_scope = authorization_for(
+            harness,
+            "REMEDIATION_COMPLETED",
+            scope={
+                "pull_request": PR,
+                "predecessor_head_sha": "9" * 40,
+                "resulting_head_sha": validation.head_sha,
+                "finding_ids": ["finding-1"],
+            },
+        )
+        cases.append(("wrong-source-predecessor", (harness, ready, wrong_scope, validation, commit, history, True)))
+
+        harness, ready, _, validation, commit, history = convergence_fixture()
+        wrong_kind = authorization_for(
+            harness,
+            "HEAD_ADVANCED",
+            scope={
+                "pull_request": PR,
+                "predecessor_head_sha": HEAD,
+                "resulting_head_sha": validation.head_sha,
+                "finding_ids": ["finding-1"],
+            },
+        )
+        cases.append(("wrong-source-kind", (harness, ready, wrong_kind, validation, commit, history, True)))
+
+        harness, ready, remediation, validation, commit, history = convergence_fixture()
+        wrong_parent = replace(commit, parent_shas=("9" * 40,))
+        cases.append(("wrong-parent", (harness, ready, remediation, validation, wrong_parent, history, True)))
+
+        harness, ready, remediation, validation, commit, history = convergence_fixture()
+        wrong_head = replace(commit, head_sha="9" * 40)
+        cases.append(("wrong-result", (harness, ready, remediation, validation, wrong_head, history, True)))
+
+        harness, ready, remediation, validation, commit, history = convergence_fixture()
+        cases.append(("invalid-attestation", (harness, ready, remediation, validation, commit, history, False)))
+
+        harness, ready, remediation, validation, commit, history = convergence_fixture()
+        wrong_signer = replace(commit, signer_identity="other@secpal.app")
+        cases.append(("wrong-signer", (harness, ready, remediation, validation, wrong_signer, history, True)))
+
+        for name, arguments in cases:
+            selected_issue = arguments[7] if len(arguments) == 8 else ISSUE
+            with self.subTest(name=name), self.assertRaises(
+                execution.LifecycleExecutionError
+            ):
+                self.converge_fixture(
+                    *arguments[:6],
+                    evidence_valid=arguments[6],
+                    delivery_issue=selected_issue,
+                )
+            self.assertEqual(arguments[0].publication_writes, [])
+
+    def test_composed_public_surface_has_no_caller_state_or_sequence(self) -> None:
+        self.assertEqual(
+            list(
+                inspect.signature(
+                    execution.converge_pending_ready_head_advancement
+                ).parameters
+            ),
+            [
+                "repository",
+                "delivery_issue",
+                "serialized_ready_authorization",
+                "serialized_remediation_authorization",
+                "remediation_validation_evidence",
+            ],
+        )
+        source = inspect.getsource(execution)
+        self.assertNotIn("transition_sequence", source)
+        self.assertNotIn("final_state", source)
+        self.assertNotIn("EXCEPTIONAL_RECOVERY", inspect.getsource(
+            execution._converge_pending_ready_head_advancement
+        ))
 
     def test_cases_1_2_3_normal_success_orders_and_converges(self) -> None:
         harness = self.draft_harness()
@@ -632,6 +1009,7 @@ class LifecycleExecutionTests(TestCase):
         substituted = copy.deepcopy(harness.transition)
         object.__setattr__(substituted, "transition_kind", "READY_TO_DRAFT")
         harness.transition = substituted
+        harness.transitions[harness.predecessor.publication_oid] = substituted
         with self.assertRaises(execution.LifecycleExecutionError):
             harness.execute(auth)
         self.assertEqual(len(harness.publication_writes), 1)
@@ -738,6 +1116,59 @@ class LifecycleExecutionTests(TestCase):
             list(inspect.signature(execution.execute_lifecycle_transition).parameters),
             ["repository", "delivery_issue", "serialized_authorization"],
         )
+
+    def test_ready_history_observation_is_closed_complete_and_bounded(self) -> None:
+        calls: list[list[str]] = []
+        response = authority.canonical_json_bytes(
+            {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "timelineItems": {
+                                "pageInfo": {"hasNextPage": False},
+                                "nodes": [
+                                    {
+                                        "__typename": "PullRequestCommit",
+                                        "commit": {"oid": HEAD},
+                                    },
+                                    {"__typename": "ReadyForReviewEvent"},
+                                    {
+                                        "__typename": "PullRequestCommit",
+                                        "commit": {"oid": "b" * 40},
+                                    },
+                                ],
+                            }
+                        }
+                    }
+                }
+            }
+        )
+
+        def run(arguments: list[str]):
+            calls.append(arguments)
+            return type("Result", (), {"returncode": 0, "stdout": response})()
+
+        with mock.patch.object(publication, "_run_gh", side_effect=run):
+            observed = execution._read_live_github_history(REPOSITORY, PR)
+        execution._validate_github_ready_history(observed, HEAD, "b" * 40)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0:3], ["api", "--hostname", "github.com"])
+        self.assertIn("timelineItems(first:100", calls[0][5])
+
+        incomplete = response.replace(b'"hasNextPage":false', b'"hasNextPage":true')
+        with mock.patch.object(
+            publication,
+            "_run_gh",
+            return_value=type(
+                "Result", (), {"returncode": 0, "stdout": incomplete}
+            )(),
+        ):
+            with self.assertRaisesRegex(execution.LifecycleExecutionError, "incomplete"):
+                execution._validate_github_ready_history(
+                    execution._read_live_github_history(REPOSITORY, PR),
+                    HEAD,
+                    "b" * 40,
+                )
 
 
 if __name__ == "__main__":

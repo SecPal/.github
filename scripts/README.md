@@ -510,6 +510,16 @@ the accepted policy credential before becoming a `Signer` result. Selection
 keeps the existing closed non-interactive environment and does not use an SSH
 agent, inspect private-key contents, search for keys, or mutate Git config.
 
+The executor additionally converges one fixed publication-lag shape without a
+new lifecycle primitive: an authenticated pending `DRAFT_TO_READY` at H0,
+followed by exactly one authenticated Ready-only `REMEDIATION_COMPLETED` source
+advance to sole-child H1. It requires complete GitHub Ready chronology, the
+existing signed source authorization and findings, verifier-sealed validation
+and attestation evidence, exact tree and signer authentication, and sequential
+protected publication of the two existing successors. Predecessor, midpoint,
+and complete re-entry are idempotent; ambiguity and ancestry-only claims fail
+closed, and GitHub is never written again when already Ready.
+
 ### `secpal_pr_review/lifecycle_publication.py`
 
 Publishes lifecycle authority on one protected, append-only global journal

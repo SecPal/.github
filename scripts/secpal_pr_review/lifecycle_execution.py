@@ -11,7 +11,7 @@ one exact GitHub Ready/Draft mutation and bounded convergence verification.
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 import tempfile
@@ -21,6 +21,7 @@ from . import late_disposition
 from . import lifecycle_authority as authority
 from . import lifecycle_orchestration as orchestration
 from . import lifecycle_publication as publication
+from . import fast_path
 from .fast_path import canonical_json_bytes
 
 
@@ -32,6 +33,22 @@ query LifecycleExecutionPullRequest($owner:String!, $name:String!, $number:Int!)
   repository(owner:$owner, name:$name) {
     nameWithOwner
     pullRequest(number:$number) { number state isDraft headRefOid }
+  }
+}
+"""
+
+LIVE_PULL_REQUEST_HISTORY_QUERY = r"""
+query LifecycleExecutionHistory($owner:String!, $name:String!, $number:Int!) {
+  repository(owner:$owner, name:$name) {
+    pullRequest(number:$number) {
+      timelineItems(first:100, itemTypes:[PULL_REQUEST_COMMIT,READY_FOR_REVIEW_EVENT,CONVERT_TO_DRAFT_EVENT,HEAD_REF_FORCE_PUSHED_EVENT]) {
+        pageInfo { hasNextPage }
+        nodes {
+          __typename
+          ... on PullRequestCommit { commit { oid } }
+        }
+      }
+    }
   }
 }
 """
@@ -48,6 +65,18 @@ class LivePullRequest:
     state: str
     head_sha: str
     draft: bool
+
+
+@dataclass(frozen=True)
+class GitHubLifecycleEvent:
+    kind: str
+    head_sha: str | None
+
+
+@dataclass(frozen=True)
+class GitHubLifecycleHistory:
+    complete: bool
+    events: tuple[GitHubLifecycleEvent, ...]
 
 
 @dataclass(frozen=True)
@@ -86,6 +115,8 @@ GitHubReader = Callable[[str, int], LivePullRequest]
 GitHubWriter = Callable[[str, int, str], str]
 Publisher = Callable[..., publication.VerifiedLifecyclePublication]
 SigningAuthorityProvider = Callable[[str, str], SigningAuthorities]
+GitHubHistoryReader = Callable[[str, int], GitHubLifecycleHistory]
+SourceCommitAuthenticator = Callable[..., fast_path.AuthenticatedIntegrationCommit]
 
 
 def classify_observed_state(
@@ -111,7 +142,7 @@ def classify_observed_state(
 
 
 def _validate_live_pull_request(
-    observed: Any, authorization: Mapping[str, Any]
+    observed: Any, authorization: Mapping[str, Any], *, expected_head: str | None = None
 ) -> LivePullRequest:
     if not isinstance(observed, LivePullRequest):
         raise LifecycleExecutionError("live GitHub pull-request evidence is malformed")
@@ -126,7 +157,7 @@ def _validate_live_pull_request(
     if (
         repository != authorization["repository"]
         or pull_request != authorization["pull_request"]
-        or head_sha != authorization["head_sha"]
+        or head_sha != (authorization["head_sha"] if expected_head is None else expected_head)
         or observed.state != "OPEN"
         or not isinstance(observed.draft, bool)
     ):
@@ -297,6 +328,9 @@ def _append_successor_evidence(
     predecessor: publication.VerifiedLifecyclePublication,
     authorization: Mapping[str, Any],
     signers: SigningAuthorities,
+    *,
+    resulting_head_sha: str | None = None,
+    current_head_evidence: fast_path.VerifiedValidationEvidence | None = None,
 ) -> bytes:
     raw = predecessor.serialized_lifecycle_evidence
     if not isinstance(raw, bytes):
@@ -305,6 +339,11 @@ def _append_successor_evidence(
         parsed = authority._load_canonical_json(raw, "CURRENT lifecycle evidence")
         if not isinstance(parsed, dict):
             raise authority.LifecycleAuthorityError("CURRENT lifecycle evidence is malformed")
+        resulting_head = (
+            predecessor.lifecycle.head_sha
+            if resulting_head_sha is None
+            else authority._require_oid(resulting_head_sha, "resulting head")
+        )
         event = authority.create_transition_authorization(
             event_id=f"authorization:{authorization['authorization_digest']}",
             repository=predecessor.lifecycle.repository,
@@ -313,7 +352,7 @@ def _append_successor_evidence(
             pull_request=predecessor.lifecycle.pull_request,
             predecessor_authority_digest=predecessor.lifecycle.authority_digest,
             predecessor_head_sha=predecessor.lifecycle.head_sha,
-            resulting_head_sha=predecessor.lifecycle.head_sha,
+            resulting_head_sha=resulting_head,
             transition_kind=authorization["operation"],
             replacement_pull_request=None,
             initialization_evidence_digest=(
@@ -331,6 +370,7 @@ def _append_successor_evidence(
                 authorization=event,
                 signer_identity=signers.authority_identity,
                 authority_signer=signers.authority_signer,
+                current_head_evidence=current_head_evidence,
             )
             parsed["transition_authorizations"].append(event)
             parsed["authority_chain"].append(snapshot)
@@ -362,6 +402,7 @@ def _append_successor_evidence(
                 accepted_event_signers=policy.transition_signer_identities,
                 accepted_authority_signers=policy.authority_signer_identities,
                 signature_verifier=authority._policy_signature_verifier(policy),
+                current_head_evidence=current_head_evidence,
             )
             events.append(event)
             snapshots.append(snapshot)
@@ -395,7 +436,7 @@ def _append_successor_evidence(
         or successor.initialization_evidence_digest
         != predecessor.lifecycle.initialization_evidence_digest
         or successor.pull_request != predecessor.lifecycle.pull_request
-        or successor.head_sha != predecessor.lifecycle.head_sha
+        or successor.head_sha != resulting_head
         or successor.state != expected_state
     ):
         raise LifecycleExecutionError("derived lifecycle successor changed preserved state")
@@ -619,6 +660,162 @@ def _read_live_github(repository: str, pull_request: int) -> LivePullRequest:
     )
 
 
+def _read_live_github_history(
+    repository: str, pull_request: int
+) -> GitHubLifecycleHistory:
+    owner, name = repository.split("/", 1)
+    result = publication._run_gh(
+        [
+            "api", "--hostname", "github.com", "graphql",
+            "-f", f"query={LIVE_PULL_REQUEST_HISTORY_QUERY}",
+            "-f", f"owner={owner}", "-f", f"name={name}",
+            "-F", f"number={pull_request}",
+        ]
+    )
+    if result.returncode != 0:
+        raise LifecycleExecutionError("GitHub lifecycle history is unavailable")
+    try:
+        value = json.loads(
+            result.stdout, object_pairs_hook=publication._reject_duplicate_pairs
+        )
+        connection = value["data"]["repository"]["pullRequest"]["timelineItems"]
+        nodes = connection["nodes"]
+        if value.get("errors") or not isinstance(nodes, list):
+            raise LifecycleExecutionError("GitHub lifecycle history is incomplete")
+        names = {
+            "ReadyForReviewEvent": "READY",
+            "ConvertToDraftEvent": "DRAFT",
+            "HeadRefForcePushedEvent": "FORCE_PUSH",
+        }
+        events: list[GitHubLifecycleEvent] = []
+        for node in nodes:
+            if not isinstance(node, dict) or not isinstance(node.get("__typename"), str):
+                raise LifecycleExecutionError("GitHub lifecycle history is malformed")
+            typename = node["__typename"]
+            if typename == "PullRequestCommit":
+                head = authority._require_oid(node["commit"]["oid"], "timeline commit")
+                events.append(GitHubLifecycleEvent("COMMIT", head))
+            elif typename in names:
+                events.append(GitHubLifecycleEvent(names[typename], None))
+            else:
+                raise LifecycleExecutionError("GitHub lifecycle history is not closed")
+        complete = connection["pageInfo"]["hasNextPage"] is False
+    except (
+        KeyError,
+        TypeError,
+        json.JSONDecodeError,
+        authority.LifecycleAuthorityError,
+        publication.LifecyclePublicationError,
+    ) as exc:
+        raise LifecycleExecutionError("GitHub lifecycle history is malformed") from exc
+    return GitHubLifecycleHistory(complete=complete, events=tuple(events))
+
+
+def _validate_github_ready_history(
+    observed: Any, predecessor_head: str, resulting_head: str
+) -> None:
+    if not isinstance(observed, GitHubLifecycleHistory) or observed.complete is not True:
+        raise LifecycleExecutionError("GitHub Ready history is incomplete")
+    if any(
+        not isinstance(event, GitHubLifecycleEvent)
+        or event.kind not in {"COMMIT", "READY", "DRAFT", "FORCE_PUSH"}
+        or (event.kind == "COMMIT") != (event.head_sha is not None)
+        for event in observed.events
+    ):
+        raise LifecycleExecutionError("GitHub Ready history is malformed")
+    predecessor_positions = [
+        index
+        for index, event in enumerate(observed.events)
+        if event.kind == "COMMIT" and event.head_sha == predecessor_head
+    ]
+    resulting_positions = [
+        index
+        for index, event in enumerate(observed.events)
+        if event.kind == "COMMIT" and event.head_sha == resulting_head
+    ]
+    if len(predecessor_positions) != 1 or len(resulting_positions) != 1:
+        raise LifecycleExecutionError("GitHub Ready history does not bind both heads")
+    start, end = predecessor_positions[0], resulting_positions[0]
+    between = observed.events[start + 1 : end]
+    if (
+        start >= end
+        or sum(event.kind == "READY" for event in between) != 1
+        or any(event.kind in {"COMMIT", "DRAFT", "FORCE_PUSH"} for event in between)
+        or any(
+            event.kind in {"COMMIT", "DRAFT", "FORCE_PUSH", "READY"}
+            for event in observed.events[end + 1 :]
+        )
+    ):
+        raise LifecycleExecutionError("GitHub Ready/head chronology is ambiguous")
+
+
+def _reauthenticate_external_convergence(
+    repository: str,
+    authorization: Mapping[str, Any],
+    resulting_head: str,
+    github_reader: GitHubReader,
+    github_history_reader: GitHubHistoryReader,
+) -> None:
+    live = _validate_live_pull_request(
+        github_reader(repository, authorization["pull_request"]),
+        authorization,
+        expected_head=resulting_head,
+    )
+    if live.draft:
+        raise LifecycleExecutionError("GitHub is still Draft")
+    _validate_github_ready_history(
+        github_history_reader(repository, authorization["pull_request"]),
+        authorization["head_sha"],
+        resulting_head,
+    )
+
+
+def _source_signature_policy(
+    policy: authority.LifecycleTrustPolicy,
+) -> dict[str, Any]:
+    return {
+        "require_github_verified": True,
+        "require_local_verified": True,
+        "accepted_formats": sorted(policy.accepted_formats),
+    }
+
+
+def _authenticate_source_commit(
+    repository: str,
+    head_sha: str,
+    signer_identity: str,
+) -> fast_path.AuthenticatedIntegrationCommit:
+    try:
+        policy = authority._load_lifecycle_trust_policy(repository)
+        signer = policy.signers[signer_identity]
+    except (KeyError, authority.LifecycleAuthorityError) as exc:
+        raise LifecycleExecutionError("source signer is not maintained") from exc
+    expected: list[dict[str, str]] = []
+    if signer.ssh_public_keys:
+        expected.append({"kind": "SSH_PRINCIPAL", "identity": signer_identity})
+    expected.extend(
+        {"kind": "OPENPGP_FINGERPRINT", "identity": fingerprint}
+        for fingerprint in signer.openpgp_fingerprints
+    )
+    authenticated: list[fast_path.AuthenticatedIntegrationCommit] = []
+    for expected_signer in expected:
+        try:
+            authenticated.append(
+                fast_path.authenticate_integration_commit(
+                    repository_root=Path.cwd(),
+                    repository=repository,
+                    head_sha=head_sha,
+                    expected_signer=expected_signer,
+                    signature_policy=_source_signature_policy(policy),
+                )
+            )
+        except (fast_path.RecoverableLocalError, fast_path.SecurityBlocker):
+            continue
+    if len(authenticated) != 1:
+        raise LifecycleExecutionError("source head signer is invalid or ambiguous")
+    return authenticated[0]
+
+
 def _write_live_github(repository: str, pull_request: int, operation: str) -> str:
     if operation not in SUPPORTED_OPERATIONS:
         raise LifecycleExecutionError("GitHub lifecycle mutation is not allowlisted")
@@ -634,6 +831,7 @@ def _result(
     github_attempts: int, publication_attempts: int,
     github_verified: bool, current_verified: bool,
     current: publication.VerifiedLifecyclePublication | None,
+    result_head: str | None = None,
 ) -> LifecycleExecutionResult:
     return LifecycleExecutionResult(
         status=status,
@@ -642,7 +840,7 @@ def _result(
         repository=authorization["repository"],
         delivery_issue=authorization["delivery_issue"],
         pull_request=authorization["pull_request"],
-        head_sha=authorization["head_sha"],
+        head_sha=(authorization["head_sha"] if result_head is None else result_head),
         authorization_digest=authorization["authorization_digest"],
         github_write_attempts=github_attempts,
         publication_write_attempts=publication_attempts,
@@ -650,6 +848,474 @@ def _result(
         current_target_verified=current_verified,
         publication_oid=(None if current is None else current.publication_oid),
         publication_digest=(None if current is None else current.publication_digest),
+    )
+
+
+def _same_publication(
+    left: publication.VerifiedLifecyclePublication,
+    right: publication.VerifiedLifecyclePublication,
+) -> bool:
+    return (
+        isinstance(left, publication.VerifiedLifecyclePublication)
+        and isinstance(right, publication.VerifiedLifecyclePublication)
+        and left.publication_oid == right.publication_oid
+        and left.publication_digest == right.publication_digest
+        and left.lifecycle == right.lifecycle
+    )
+
+
+def _verified_lifecycle_from_raw(raw: bytes) -> authority.VerifiedLifecycleAuthority:
+    try:
+        parsed = authority._load_canonical_json(raw, "derived lifecycle successor")
+        admitted_initialization = None
+        if parsed.get("kind") != authority.EXACT_ADOPTION_EVIDENCE_KIND:
+            bundle = (
+                parsed.get("lifecycle_evidence")
+                if parsed.get("kind") == authority.PUBLICATION_EVIDENCE_KIND
+                else parsed
+            )
+            if isinstance(bundle, dict):
+                admitted_initialization = bundle.get("delivery_initialization")
+        return authority._verify_lifecycle_authority_for_journal(
+            raw, admitted_initialization=admitted_initialization
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecycleExecutionError("derived lifecycle successor is invalid") from exc
+
+
+def _validate_remediation_transition_delta(
+    transition: publication.VerifiedLifecyclePublicationTransition,
+    authorization: Mapping[str, Any],
+    validation: fast_path.VerifiedValidationEvidence,
+) -> None:
+    predecessor = transition.predecessor
+    successor = transition.successor
+    try:
+        expected_state = _derive_transition_state(
+            predecessor.lifecycle,
+            "REMEDIATION_COMPLETED",
+            transition.event_digest,
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecycleExecutionError("published remediation state is invalid") from exc
+    if (
+        transition.transition_kind != "REMEDIATION_COMPLETED"
+        or transition.event_id
+        != f"authorization:{authorization['authorization_digest']}"
+        or transition.event_signer_identity != authorization["signer_identity"]
+        or transition.pull_request != authorization["pull_request"]
+        or transition.predecessor_authority_digest
+        != predecessor.lifecycle.authority_digest
+        or transition.predecessor_head_sha != authorization["head_sha"]
+        or transition.resulting_head_sha != validation.head_sha
+        or successor.lifecycle.repository != predecessor.lifecycle.repository
+        or successor.lifecycle.delivery_issue != predecessor.lifecycle.delivery_issue
+        or successor.lifecycle.lifecycle_id != predecessor.lifecycle.lifecycle_id
+        or successor.lifecycle.pull_request != predecessor.lifecycle.pull_request
+        or successor.lifecycle.head_sha != validation.head_sha
+        or successor.lifecycle.tree_sha != validation.tree_sha
+        or successor.lifecycle.validation_receipt_digest
+        != validation.validation_receipt_digest
+        or successor.lifecycle.source_validation_evidence_digest
+        != validation.source_validation_evidence_digest
+        or successor.lifecycle.adoption_source_evidence_digest
+        != validation.final_attestation_digest
+        or successor.lifecycle.state != expected_state
+    ):
+        raise LifecycleExecutionError(
+            "published remediation is not the exact authenticated successor"
+        )
+
+
+def _verify_remediation_authorization(
+    raw: bytes | str,
+    predecessor: publication.VerifiedLifecyclePublication,
+    ready_successor: publication.VerifiedLifecyclePublication,
+    resulting_head: str,
+) -> tuple[dict[str, Any], orchestration.LifecycleDecision]:
+    try:
+        verified = orchestration._verify_user_authorization(
+            raw, predecessor, predecessor.lifecycle
+        )
+        finding_ids = orchestration._authorized_finding_ids(verified)
+        event_id = f"authorization:{verified['authorization_digest']}"
+        orchestration._authorization(
+            raw,
+            event_id=event_id,
+            operation="REMEDIATION_COMPLETED",
+            expected_scope={
+                "pull_request": predecessor.lifecycle.pull_request,
+                "predecessor_head_sha": predecessor.lifecycle.head_sha,
+                "resulting_head_sha": resulting_head,
+                "finding_ids": finding_ids,
+            },
+            observed=predecessor,
+            lifecycle=predecessor.lifecycle,
+            verifier=orchestration._verify_user_authorization,
+            verified_item=verified,
+        )
+        request = {
+            "event_kind": "REMEDIATION_COMMIT_PUSHED",
+            "event_id": event_id,
+            "pull_request": predecessor.lifecycle.pull_request,
+            "head_sha": resulting_head,
+            "replacement_pull_request": None,
+            "classification": None,
+            "follow_up": None,
+            "authorization": raw,
+        }
+        preverified = lambda *_args: copy.deepcopy(verified)
+        try:
+            orchestration._orchestrate_event(
+                predecessor.lifecycle.repository,
+                predecessor.lifecycle.delivery_issue,
+                request,
+                current_reader=lambda *_args: predecessor,
+                authorization_verifier=preverified,
+            )
+        except orchestration.LifecycleOrchestrationError:
+            pass
+        else:
+            raise LifecycleExecutionError(
+                "source transition is valid while Draft; ordering is ambiguous"
+            )
+        decision = orchestration._orchestrate_event(
+            predecessor.lifecycle.repository,
+            predecessor.lifecycle.delivery_issue,
+            request,
+            current_reader=lambda *_args: ready_successor,
+            authorization_verifier=preverified,
+        )
+    except (authority.LifecycleAuthorityError, orchestration.LifecycleOrchestrationError) as exc:
+        raise LifecycleExecutionError(
+            "remediation source-change authorization is invalid"
+        ) from exc
+    if (
+        decision.lifecycle_transition != "REMEDIATION_COMPLETED"
+        or decision.preserve_ready is not True
+        or decision.transition_to_draft
+        or decision.resulting_head_sha != resulting_head
+        or decision.authorization_digest != verified["authorization_digest"]
+    ):
+        raise LifecycleExecutionError("remediation transition ordering is ambiguous")
+    return verified, decision
+
+
+def _validate_source_advancement(
+    repository: str,
+    delivery_issue: int,
+    predecessor_head: str,
+    authorization: Mapping[str, Any],
+    validation: Any,
+    authenticated_commit: Any,
+) -> None:
+    if (
+        not authority.is_verified_validation_evidence(validation)
+        or validation.repository != repository
+        or validation.delivery_issue_number != delivery_issue
+        or validation.pull_request_number != authorization["pull_request"]
+        or validation.head_sha != authorization["scope"]["resulting_head_sha"]
+    ):
+        raise LifecycleExecutionError("remediation validation evidence is invalid")
+    try:
+        policy = authority._load_lifecycle_trust_policy(repository)
+        maintained_signer = policy.signers[authorization["signer_identity"]]
+    except (KeyError, authority.LifecycleAuthorityError) as exc:
+        raise LifecycleExecutionError("remediation source signer is not maintained") from exc
+    if not isinstance(authenticated_commit, fast_path.AuthenticatedIntegrationCommit):
+        raise LifecycleExecutionError("remediation source head is not authenticated")
+    if authenticated_commit.signer_kind == "SSH_PRINCIPAL":
+        expected_signer = {
+            "kind": "SSH_PRINCIPAL",
+            "identity": authorization["signer_identity"],
+        }
+        signer_accepted = bool(maintained_signer.ssh_public_keys)
+    else:
+        expected_signer = {
+            "kind": "OPENPGP_FINGERPRINT",
+            "identity": authenticated_commit.signer_identity,
+        }
+        signer_accepted = (
+            authenticated_commit.signer_identity.upper()
+            in {item.upper() for item in maintained_signer.openpgp_fingerprints}
+        )
+    if (
+        not signer_accepted
+        or not fast_path._authenticated_integration_commit_agrees(
+            authenticated_commit,
+            repository=repository,
+            head_sha=validation.head_sha,
+            tree_sha=validation.tree_sha,
+            parent_shas=[predecessor_head],
+            expected_signer=expected_signer,
+            signature_policy=_source_signature_policy(policy),
+        )
+    ):
+        raise LifecycleExecutionError(
+            "remediation source lineage, tree, or signer is invalid"
+        )
+
+
+def _converge_pending_ready_head_advancement(
+    repository: str,
+    delivery_issue: int,
+    serialized_ready_authorization: bytes | str,
+    serialized_remediation_authorization: bytes | str,
+    remediation_validation_evidence: fast_path.VerifiedValidationEvidence,
+    *,
+    current_reader: CurrentReader,
+    historical_reader: HistoricalReader,
+    github_reader: GitHubReader,
+    github_history_reader: GitHubHistoryReader,
+    publisher: Publisher,
+    signing_authority_provider: SigningAuthorityProvider,
+    source_commit_authenticator: SourceCommitAuthenticator,
+) -> LifecycleExecutionResult:
+    """Converge one fixed Ready publication followed by one remediation head."""
+
+    try:
+        repository = authority._require_repository(repository)
+        delivery_issue = authority._require_positive_int(
+            delivery_issue, "delivery issue"
+        )
+        ready_authorization = orchestration._verify_signed_user_authorization(
+            serialized_ready_authorization, repository
+        )
+    except (authority.LifecycleAuthorityError, orchestration.LifecycleOrchestrationError) as exc:
+        raise LifecycleExecutionError("Ready authorization is invalid") from exc
+    if (
+        ready_authorization["delivery_issue"] != delivery_issue
+        or ready_authorization["operation"] != "DRAFT_TO_READY"
+    ):
+        raise LifecycleExecutionError("convergence requires exact Draft-to-Ready authority")
+    if not isinstance(
+        remediation_validation_evidence, fast_path.VerifiedValidationEvidence
+    ):
+        raise LifecycleExecutionError("remediation validation evidence is malformed")
+
+    current = current_reader(repository, delivery_issue)
+    if _is_exact_predecessor(current, ready_authorization):
+        predecessor = current
+        ready_transition = None
+        position = "PREDECESSOR"
+    else:
+        try:
+            ready_transition = historical_reader(
+                repository, delivery_issue, ready_authorization["publication_oid"]
+            )
+        except (authority.LifecycleAuthorityError, publication.LifecyclePublicationError) as exc:
+            raise LifecycleExecutionError("pending Ready predecessor is not CURRENT ancestry") from exc
+        _validate_transition_delta(
+            ready_transition, ready_authorization, serialized_ready_authorization
+        )
+        predecessor = ready_transition.predecessor
+        if _same_publication(current, ready_transition.successor):
+            position = "MIDPOINT"
+        else:
+            position = "TARGET_CANDIDATE"
+
+    _authenticate_predecessor_decision(
+        predecessor, serialized_ready_authorization, ready_authorization
+    )
+    _reauthenticate_external_convergence(
+        repository,
+        ready_authorization,
+        remediation_validation_evidence.head_sha,
+        github_reader,
+        github_history_reader,
+    )
+
+    signers = signing_authority_provider(
+        repository, ready_authorization["signer_identity"]
+    )
+    if ready_transition is None:
+        ready_raw = _append_successor_evidence(
+            predecessor, ready_authorization, signers
+        )
+        ready_lifecycle = _verified_lifecycle_from_raw(ready_raw)
+        ready_successor = publication.VerifiedLifecyclePublication(
+            "f" * 40,
+            authority.digest_json({"candidate": ready_lifecycle.authority_digest}),
+            predecessor.publication_branch,
+            predecessor.publication_oid,
+            predecessor.publication_oid,
+            ready_lifecycle,
+            ready_raw,
+        )
+    else:
+        ready_raw = ready_transition.successor.serialized_lifecycle_evidence
+        ready_successor = ready_transition.successor
+
+    remediation_authorization, _ = _verify_remediation_authorization(
+        serialized_remediation_authorization,
+        predecessor,
+        ready_successor,
+        remediation_validation_evidence.head_sha,
+    )
+    if remediation_authorization["signer_identity"] != signers.transition_identity:
+        raise LifecycleExecutionError(
+            "remediation authorization signer differs from maintained transition signer"
+        )
+    authenticated_commit = source_commit_authenticator(
+        repository,
+        remediation_validation_evidence.head_sha,
+        remediation_authorization["signer_identity"],
+    )
+    _validate_source_advancement(
+        repository,
+        delivery_issue,
+        ready_authorization["head_sha"],
+        remediation_authorization,
+        remediation_validation_evidence,
+        authenticated_commit,
+    )
+
+    remediation_transition = None
+    if position == "TARGET_CANDIDATE":
+        try:
+            remediation_transition = historical_reader(
+                repository, delivery_issue, ready_successor.publication_oid
+            )
+        except (authority.LifecycleAuthorityError, publication.LifecyclePublicationError) as exc:
+            raise LifecycleExecutionError("CURRENT is not an exact composed successor") from exc
+        _validate_remediation_transition_delta(
+            remediation_transition,
+            remediation_authorization,
+            remediation_validation_evidence,
+        )
+        if not _same_publication(current, remediation_transition.successor):
+            raise LifecycleExecutionError("CURRENT advanced incompatibly")
+        position = "TARGET"
+
+    publication_attempts = 0
+    if position == "PREDECESSOR":
+        before = current_reader(repository, delivery_issue)
+        if not _same_publication(before, predecessor):
+            raise LifecycleExecutionError("CURRENT changed before Ready publication")
+        _reauthenticate_external_convergence(
+            repository,
+            ready_authorization,
+            remediation_validation_evidence.head_sha,
+            github_reader,
+            github_history_reader,
+        )
+        publication_attempts += 1
+        try:
+            published = publisher(
+                ready_raw,
+                signer_identity=signers.publication_identity,
+                signer=signers.publication_signer,
+            )
+        except Exception:
+            published = None
+        observed = current_reader(repository, delivery_issue)
+        if _same_publication(observed, predecessor):
+            return _result(
+                status="PUBLICATION_PENDING",
+                observed_case="COMPOSED_HEAD_ADVANCEMENT",
+                authorization=ready_authorization,
+                github_attempts=0,
+                publication_attempts=publication_attempts,
+                github_verified=True,
+                current_verified=False,
+                current=observed,
+                result_head=remediation_validation_evidence.head_sha,
+            )
+        ready_transition = historical_reader(
+            repository, delivery_issue, predecessor.publication_oid
+        )
+        _validate_transition_delta(
+            ready_transition, ready_authorization, serialized_ready_authorization
+        )
+        ready_successor = ready_transition.successor
+        if not _same_publication(observed, ready_successor):
+            raise LifecycleExecutionError("Ready midpoint publication is incompatible")
+        if published is not None and not _same_publication(published, observed):
+            raise LifecycleExecutionError("Ready publication response differs from CURRENT")
+        position = "MIDPOINT"
+
+    if position == "MIDPOINT":
+        _reauthenticate_external_convergence(
+            repository,
+            ready_authorization,
+            remediation_validation_evidence.head_sha,
+            github_reader,
+            github_history_reader,
+        )
+        observed = current_reader(repository, delivery_issue)
+        if not _same_publication(observed, ready_successor):
+            raise LifecycleExecutionError("CURRENT changed before remediation publication")
+        remediation_raw = _append_successor_evidence(
+            ready_successor,
+            remediation_authorization,
+            signers,
+            resulting_head_sha=remediation_validation_evidence.head_sha,
+            current_head_evidence=remediation_validation_evidence,
+        )
+        publication_attempts += 1
+        try:
+            published = publisher(
+                remediation_raw,
+                signer_identity=signers.publication_identity,
+                signer=signers.publication_signer,
+            )
+        except Exception:
+            published = None
+        observed = current_reader(repository, delivery_issue)
+        if _same_publication(observed, ready_successor):
+            return _result(
+                status="PUBLICATION_PENDING",
+                observed_case="COMPOSED_HEAD_ADVANCEMENT",
+                authorization=ready_authorization,
+                github_attempts=0,
+                publication_attempts=publication_attempts,
+                github_verified=True,
+                current_verified=False,
+                current=observed,
+                result_head=remediation_validation_evidence.head_sha,
+            )
+        remediation_transition = historical_reader(
+            repository, delivery_issue, ready_successor.publication_oid
+        )
+        _validate_remediation_transition_delta(
+            remediation_transition,
+            remediation_authorization,
+            remediation_validation_evidence,
+        )
+        if not _same_publication(observed, remediation_transition.successor):
+            raise LifecycleExecutionError("remediation publication is incompatible")
+        if published is not None and not _same_publication(published, observed):
+            raise LifecycleExecutionError("remediation publication response differs from CURRENT")
+
+    _reauthenticate_external_convergence(
+        repository,
+        ready_authorization,
+        remediation_validation_evidence.head_sha,
+        github_reader,
+        github_history_reader,
+    )
+    final_current = current_reader(repository, delivery_issue)
+    if remediation_transition is None:
+        remediation_transition = historical_reader(
+            repository, delivery_issue, ready_successor.publication_oid
+        )
+        _validate_remediation_transition_delta(
+            remediation_transition,
+            remediation_authorization,
+            remediation_validation_evidence,
+        )
+    if not _same_publication(final_current, remediation_transition.successor):
+        raise LifecycleExecutionError("final composed lifecycle convergence is not exact")
+    return _result(
+        status="COMPLETE",
+        observed_case="COMPOSED_HEAD_ADVANCEMENT",
+        authorization=ready_authorization,
+        github_attempts=0,
+        publication_attempts=publication_attempts,
+        github_verified=True,
+        current_verified=True,
+        current=final_current,
+        result_head=remediation_validation_evidence.head_sha,
     )
 
 
@@ -864,4 +1530,29 @@ def execute_lifecycle_transition(
         github_writer=_write_live_github,
         publisher=publication.advance_current_terminal,
         signing_authority_provider=_production_signing_authorities,
+    )
+
+
+def converge_pending_ready_head_advancement(
+    repository: str,
+    delivery_issue: int,
+    serialized_ready_authorization: bytes | str,
+    serialized_remediation_authorization: bytes | str,
+    remediation_validation_evidence: fast_path.VerifiedValidationEvidence,
+) -> LifecycleExecutionResult:
+    """Converge the sole supported two-successor lifecycle publication shape."""
+
+    return _converge_pending_ready_head_advancement(
+        repository,
+        delivery_issue,
+        serialized_ready_authorization,
+        serialized_remediation_authorization,
+        remediation_validation_evidence,
+        current_reader=publication.verify_current_lifecycle_authority,
+        historical_reader=publication._verify_historical_lifecycle_transition,
+        github_reader=_read_live_github,
+        github_history_reader=_read_live_github_history,
+        publisher=publication.advance_current_terminal,
+        signing_authority_provider=_production_signing_authorities,
+        source_commit_authenticator=_authenticate_source_commit,
     )

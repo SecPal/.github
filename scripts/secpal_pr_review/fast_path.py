@@ -2397,6 +2397,7 @@ def _verify_validation_attestation_unsealed(
     commit_parent_sha: str,
     commit_tree_sha: str,
     commit_validation_receipt_digest: str | None,
+    delivery_issue_number: int | None = None,
 ) -> VerifiedValidationEvidence:
     reviewed_state = _require_reviewed_state_identity(repository, reviewed_state)
     reviewed_pull_request = reviewed_state.pull_request_number
@@ -2453,8 +2454,13 @@ def _verify_validation_attestation_unsealed(
         "reviewed_state_digest": reviewed_state.state_digest,
         "reviewed_feedback_digest": reviewed_state.feedback_digest,
     }
+    if delivery_issue_number is not None:
+        if isinstance(delivery_issue_number, bool) or delivery_issue_number <= 0:
+            raise SecurityBlocker("delivery issue identity is invalid")
+        source_binding["delivery_issue_number"] = delivery_issue_number
     return _unregistered_validation_evidence(
         repository=repository,
+        delivery_issue_number=delivery_issue_number,
         pull_request_number=reviewed_pull_request,
         head_sha=head_sha,
         tree_sha=commit_tree_sha,
@@ -2528,6 +2534,7 @@ def verify_validation_attestation(
     commit_parent_sha: str,
     commit_tree_sha: str,
     commit_validation_receipt_digest: str | None,
+    delivery_issue_number: int | None = None,
 ) -> VerifiedValidationEvidence:
     result = _verify_validation_attestation_unsealed(
         attestation,
@@ -2539,6 +2546,7 @@ def verify_validation_attestation(
         commit_parent_sha=commit_parent_sha,
         commit_tree_sha=commit_tree_sha,
         commit_validation_receipt_digest=commit_validation_receipt_digest,
+        delivery_issue_number=delivery_issue_number,
     )
     provenance = {
         "kind": "ORDINARY",
@@ -2551,6 +2559,7 @@ def verify_validation_attestation(
         "commit_parent_sha": commit_parent_sha,
         "commit_tree_sha": commit_tree_sha,
         "commit_validation_receipt_digest": commit_validation_receipt_digest,
+        "delivery_issue_number": delivery_issue_number,
     }
     return _seal_validation_evidence(result, provenance)
 
@@ -2587,6 +2596,7 @@ def is_verified_validation_evidence(value: Any) -> bool:
                 commit_validation_receipt_digest=provenance[
                     "commit_validation_receipt_digest"
                 ],
+                delivery_issue_number=provenance.get("delivery_issue_number"),
             )
         elif kind == "READY_INTEGRATION":
             verified = _verify_ready_integration_attestation_unsealed(
