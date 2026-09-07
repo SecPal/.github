@@ -80,6 +80,42 @@ REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SECRET_VALUE = re.compile(
     r"(?i)(?:github_pat_|gh[opsu]_|-----BEGIN [A-Z ]*PRIVATE KEY-----|authorization\s*:\s*bearer)"
 )
+VALIDATION_REGISTRY_ENTRY_FIELDS = frozenset(
+    {
+        "repository",
+        "default_branch",
+        "allowed_base_repositories",
+        "reviewer_identities",
+        "focused_validation",
+        "required_local_validation",
+        "final_eligibility_absence_recoveries",
+        "signature_policy",
+        "lifecycle_authority_policy",
+        "pre_enrollment_integration_policy",
+        "check_policy",
+        "manual_gates",
+        "unsupported_operations",
+        "maximum_api_calls",
+        "maximum_items",
+        "maximum_threads",
+        "maximum_comments",
+        "maximum_reactions",
+    }
+)
+VALIDATION_REGISTRY_PROJECTION_FIELDS = frozenset(
+    {
+        "repository",
+        "default_branch",
+        "allowed_base_repositories",
+        "focused_validation",
+        "required_local_validation",
+        "signature_policy",
+        "check_policy",
+        "manual_gates",
+        "maximum_api_calls",
+        "maximum_items",
+    }
+)
 SUPPORTED_BATCH_CAPABILITIES = frozenset({"THREAD_RESOLUTION"})
 TRANSIENT_PULL_REQUEST_REACTION_CONTENTS = frozenset({"EYES"})
 SOURCE_KINDS = frozenset(
@@ -216,6 +252,65 @@ def canonical_json_bytes(value: Any) -> bytes:
 
 def digest_json(value: Any) -> str:
     return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
+def validation_registry_projection(entry: Any) -> dict[str, Any]:
+    """Return the one closed registry identity used by validation evidence."""
+
+    if not isinstance(entry, dict):
+        raise SecurityBlocker("validation registry entry is malformed")
+    missing = sorted(VALIDATION_REGISTRY_PROJECTION_FIELDS - entry.keys())
+    unknown = sorted(entry.keys() - VALIDATION_REGISTRY_ENTRY_FIELDS)
+    if missing or unknown:
+        raise SecurityBlocker(
+            "validation registry entry is not a supported closed projection"
+        )
+    focused_validation = entry["focused_validation"]
+    required_validation = entry["required_local_validation"]
+    if not isinstance(focused_validation, list) or not isinstance(
+        required_validation, list
+    ):
+        raise SecurityBlocker("validation registry command set is malformed")
+    validation = [
+        command
+        for command in focused_validation
+        if isinstance(command, dict)
+        and command.get("execution_policy", "always") == "always"
+    ]
+    if any(not isinstance(command, dict) for command in focused_validation) or any(
+        not isinstance(command, dict) for command in required_validation
+    ):
+        raise SecurityBlocker("validation registry command set is malformed")
+    binding = {
+        "repository": entry["repository"],
+        "default_branch": entry["default_branch"],
+        "allowed_base_repositories": copy.deepcopy(
+            entry["allowed_base_repositories"]
+        ),
+        "manual_gates": copy.deepcopy(entry["manual_gates"]),
+        "signature_policy": copy.deepcopy(entry["signature_policy"]),
+        "check_policy": copy.deepcopy(entry["check_policy"]),
+        "limits": {
+            key: entry[key] for key in ("maximum_api_calls", "maximum_items")
+        },
+        "validation": copy.deepcopy(validation + required_validation),
+        "focused_only_validation": copy.deepcopy(
+            [
+                command
+                for command in focused_validation
+                if command.get("execution_policy") == "focused-only"
+            ]
+        ),
+    }
+    if "pre_enrollment_integration_policy" in entry:
+        if not isinstance(entry["pre_enrollment_integration_policy"], dict):
+            raise SecurityBlocker(
+                "pre-enrollment integration registry policy is malformed"
+            )
+        binding["pre_enrollment_integration_policy"] = copy.deepcopy(
+            entry["pre_enrollment_integration_policy"]
+        )
+    return binding
 
 
 def _all_strings(value: Any) -> list[str]:

@@ -550,29 +550,7 @@ def load_repository_limits(repository: str) -> RepositoryLimits:
 
 
 def _validation_registry_binding(entry: dict[str, Any]) -> dict[str, Any]:
-    focused_validation = entry["focused_validation"]
-    validation = [
-        command
-        for command in focused_validation
-        if command.get("execution_policy", "always") == "always"
-    ] + list(entry["required_local_validation"])
-    return {
-        "repository": entry["repository"],
-        "default_branch": entry["default_branch"],
-        "allowed_base_repositories": entry["allowed_base_repositories"],
-        "manual_gates": entry["manual_gates"],
-        "signature_policy": entry["signature_policy"],
-        "check_policy": entry["check_policy"],
-        "limits": {
-            key: entry[key] for key in ("maximum_api_calls", "maximum_items")
-        },
-        "validation": validation,
-        "focused_only_validation": [
-            command
-            for command in focused_validation
-            if command.get("execution_policy") == "focused-only"
-        ],
-    }
+    return fast_path.validation_registry_projection(entry)
 
 
 def _load_final_eligibility_absence(

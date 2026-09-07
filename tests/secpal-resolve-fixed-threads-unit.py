@@ -1246,6 +1246,106 @@ def final_eligibility_absence_fixture(
 
 
 class ResolveFixedThreadsTests(TestCase):
+    def test_resolver_registry_projection_is_owned_by_fast_path(self) -> None:
+        entry = copy.deepcopy(MODULE._load_repository_entry("SecPal/.github"))
+        expected = {"canonical_projection": True}
+        with mock.patch.object(
+            MODULE.fast_path,
+            "validation_registry_projection",
+            return_value=expected,
+        ) as projection:
+            self.assertIs(MODULE._validation_registry_binding(entry), expected)
+        projection.assert_called_once_with(entry)
+
+    def test_validation_registry_projection_matches_attester_with_additive_policy(
+        self,
+    ) -> None:
+        entry = copy.deepcopy(MODULE._load_repository_entry("SecPal/.github"))
+        policy = {
+            "schema_version": "1.0",
+            "command": "integrate-pre-enrollment-draft",
+            "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+            "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+            "maximum_candidates": 1,
+            "maximum_pushes": 1,
+            "force_push": False,
+            "automatic_retry": False,
+            "merge_pull_request": False,
+        }
+        entry["pre_enrollment_integration_policy"] = policy
+
+        attester_projection = MODULE.fast_path.validation_registry_projection(entry)
+        resolver_projection = MODULE._validation_registry_binding(entry)
+        self.assertEqual(resolver_projection, attester_projection)
+
+        reviewed_payload = reviewed_state_payload(
+            "PRRT_registryProjection", [("COMMENT_registryProjection", "Finding", None)]
+        )
+        reviewed_payload["repository"] = "SecPal/.github"
+        identity = {
+            key: reviewed_payload[key]
+            for key in (
+                "repository",
+                "pull_request_number",
+                "head_sha",
+                "base_ref",
+                "base_sha",
+                "pr_state",
+            )
+        }
+        feedback = {
+            key: reviewed_payload[key]
+            for key in (
+                "pull_request_reactions",
+                "reviews",
+                "conversation_comments",
+                "threads",
+            )
+        }
+        reviewed_payload["feedback_digest"] = MODULE._digest_json(feedback)
+        reviewed_payload["state_digest"] = MODULE._digest_json(
+            {**identity, "feedback": feedback}
+        )
+        reviewed = MODULE.fast_path.StableFeedbackState.from_payload(
+            reviewed_payload
+        )
+        gates = [
+            {"gate": gate, "satisfied": True, "evidence": f"Fixture gate {index}"}
+            for index, gate in enumerate(
+                attester_projection["manual_gates"], start=1
+            )
+        ]
+        receipt = MODULE.fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            validated_tree_sha="d" * 40,
+            registry=attester_projection,
+            command_set=attester_projection["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=gates,
+        )
+        attestation = MODULE.fast_path.create_validation_attestation(
+            repository="SecPal/.github",
+            head_sha="c" * 40,
+            registry=attester_projection,
+            command_set=attester_projection["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+        )
+        MODULE.fast_path.verify_validation_attestation(
+            attestation,
+            repository="SecPal/.github",
+            head_sha="c" * 40,
+            registry=resolver_projection,
+            command_set=resolver_projection["validation"],
+            reviewed_state=reviewed,
+            commit_parent_sha=reviewed.head_sha,
+            commit_tree_sha="d" * 40,
+            commit_validation_receipt_digest=receipt["receipt_digest"],
+        )
+
     def setUp(self) -> None:
         self._integration_git_patch = mock.patch.object(
             MODULE.fast_path,
