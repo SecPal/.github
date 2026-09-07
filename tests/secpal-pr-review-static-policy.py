@@ -107,6 +107,56 @@ ACTION_CALLS = (
             ("timeout", "EXTERNAL_COMMAND_TIMEOUT_SECONDS"),
         ),
     ),
+    ProcessCall(
+        None,
+        "_run_pre_enrollment_work_graph",
+        "sys.executable",
+        "arguments",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("cwd", "repository_root"),
+            ("encoding", "'utf-8'"),
+            ("errors", "'replace'"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("text", "True"),
+            ("timeout", "EXTERNAL_COMMAND_TIMEOUT_SECONDS"),
+        ),
+    ),
+    ProcessCall(
+        None,
+        "_create_signed_pre_enrollment_commit",
+        "git_executable",
+        "arguments",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("cwd", "repository_root"),
+            ("encoding", "'utf-8'"),
+            ("env", "evidence.command_environment('git')"),
+            ("errors", "'replace'"),
+            ("input", "message"),
+            ("text", "True"),
+            ("timeout", "EXTERNAL_COMMAND_TIMEOUT_SECONDS"),
+        ),
+    ),
+    ProcessCall(
+        None,
+        "_push_pre_enrollment_commit",
+        "git_executable",
+        "arguments",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("cwd", "repository_root"),
+            ("encoding", "'utf-8'"),
+            ("env", "evidence.command_environment('git')"),
+            ("errors", "'replace'"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("text", "True"),
+            ("timeout", "EXTERNAL_COMMAND_TIMEOUT_SECONDS"),
+        ),
+    ),
 )
 
 EVIDENCE_CALLS = (
@@ -124,6 +174,26 @@ EVIDENCE_CALLS = (
             ("stdin", "subprocess.DEVNULL"),
             ("text", "True"),
             ("timeout", "self.timeout_seconds"),
+        ),
+    ),
+)
+
+FAST_PATH_CALLS = (
+    ProcessCall(
+        None,
+        "_run_integration_commit_git",
+        "git_executable",
+        "arguments",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("cwd", "repository_root"),
+            ("encoding", "'utf-8'"),
+            ("env", "environment"),
+            ("errors", "'replace'"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("text", "True"),
+            ("timeout", "EXTERNAL_COMMAND_TIMEOUT_SECONDS"),
         ),
     ),
 )
@@ -226,7 +296,7 @@ LATE_DISPOSITION_CALLS = (
 EXPECTED_CALLS = {
     "secpal-pr-review.py": EVIDENCE_CALLS,
     "secpal-pr-review-actions.py": ACTION_CALLS,
-    "fast_path.py": (),
+    "fast_path.py": FAST_PATH_CALLS,
     "follow_up.py": (),
     "secpal-resolve-fixed-threads.py": RESOLVER_CALLS,
     "late_disposition.py": LATE_DISPOSITION_CALLS,
@@ -344,6 +414,7 @@ ALLOWED_IMPORTS = {
         "import json",
         "import os",
         "import re",
+        "import subprocess",
         "import sys",
         "import tempfile",
         "from dataclasses import dataclass, field",
@@ -478,7 +549,7 @@ DIRECT_MODULE_ATTRIBUTES = {
         "importlib": {"util"},
         "pwd": {"getpwuid"},
         "site": {"getusersitepackages"},
-        "sys": {"modules", "platform", "stderr", "stdout", "version_info"},
+        "sys": {"executable", "modules", "platform", "stderr", "stdout", "version_info"},
         "tempfile": {"TemporaryDirectory"},
         "types": {"ModuleType"},
     },
@@ -550,6 +621,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "TransientReadFailure",
             "UnknownWriteResult",
             "atomic_write_json",
+            "authenticate_integration_commit",
             "canonical_json_bytes",
             "create_validation_attestation",
             "create_validation_receipt",
@@ -562,15 +634,35 @@ LOADED_MODULE_ATTRIBUTES = {
             "normalize_ready_integration_prior_authority",
             "normalize_exceptional_recovery_evidence",
             "validate_manual_gate_evidence",
+            "validation_registry_projection",
             "verify_commit_signatures",
             "verify_validation_attestation",
+            "_actual_integration_signer",
         },
         "follow_up": {
             "FollowUpError",
             "parse_follow_up",
         },
+        "pre_enrollment": {
+            "FrozenObservation",
+            "KIND",
+            "PreEnrollmentIntegrationError",
+            "create_final_attestation",
+            "create_validation_receipt",
+            "execute_once",
+            "loads_closed_json",
+            "normalize_evidence",
+            "verify_authorization",
+        },
     },
     "fast_path.py": {
+        "evidence": {
+            "CommandPolicyError",
+            "_commit_signature_format",
+            "command_environment",
+            "interpret_local_signature",
+            "resolve_trusted_executable",
+        },
         "follow_up": {
             "FollowUpError",
             "parse_follow_up",
@@ -675,6 +767,19 @@ DYNAMIC_IMPORT_CALLS = {
             "spec.loader.exec_module(module)",
         ),
         DynamicImportCall(
+            ("_load_pre_enrollment_integration_helper",),
+            "importlib.util.spec_from_file_location("
+            "module_name, PRE_ENROLLMENT_INTEGRATION_HELPER)",
+        ),
+        DynamicImportCall(
+            ("_load_pre_enrollment_integration_helper",),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_pre_enrollment_integration_helper",),
+            "spec.loader.exec_module(module)",
+        ),
+        DynamicImportCall(
             ("_load_lifecycle_publication_helpers", "load"),
             "importlib.util.spec_from_file_location(module_name, path)",
         ),
@@ -742,6 +847,18 @@ DYNAMIC_IMPORT_CALLS = {
         ),
     },
     "fast_path.py": {
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "importlib.util.spec_from_file_location(module_name, EVIDENCE_HELPER)",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "spec.loader.exec_module(module)",
+        ),
         DynamicImportCall(
             ("_load_follow_up_helper",),
             "importlib.util.spec_from_file_location("
@@ -812,6 +929,10 @@ SAFE_GETATTR_CALLS = {
         DynamicImportCall(
             ("_command_attest_validation",),
             "getattr(arguments, 'integration_evidence', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'pre_enrollment_integration_evidence', None)",
         ),
         DynamicImportCall(
             ("_command_attest_validation",),
@@ -930,6 +1051,10 @@ SAFE_GETATTR_CALLS = {
     },
     "fast_path.py": {
         DynamicImportCall(
+            ("_load_evidence_helper",),
+            "getattr(loaded, '__file__', None)",
+        ),
+        DynamicImportCall(
             ("_load_follow_up_helper",),
             "getattr(loaded, '__file__', None)",
         ),
@@ -948,6 +1073,10 @@ SAFE_SYS_MODULES_CALLS = {
         DynamicImportCall(
             ("_load_fast_path_helper",),
             "sys.modules.pop(spec.name, None)",
+        ),
+        DynamicImportCall(
+            ("_load_pre_enrollment_integration_helper",),
+            "sys.modules.get(module_name)",
         ),
         DynamicImportCall(
             ("_load_lifecycle_publication_helpers",),
@@ -994,6 +1123,14 @@ SAFE_SYS_MODULES_CALLS = {
     },
     "fast_path.py": {
         DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules.get(module_name)",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules.pop(spec.name, None)",
+        ),
+        DynamicImportCall(
             ("_load_follow_up_helper",),
             "sys.modules.get('secpal_pr_review.follow_up')",
         ),
@@ -1034,6 +1171,14 @@ SAFE_SYS_MODULES_STORES = {
             "sys.modules[f'{package_name}.fast_path']",
         ),
         DynamicImportCall(
+            ("_load_lifecycle_publication_helpers",),
+            "sys.modules[f'{package_name}.pre_enrollment_integration']",
+        ),
+        DynamicImportCall(
+            ("_load_pre_enrollment_integration_helper",),
+            "sys.modules[module_name]",
+        ),
+        DynamicImportCall(
             ("_load_lifecycle_publication_helpers", "load"),
             "sys.modules[module_name]",
         ),
@@ -1057,6 +1202,10 @@ SAFE_SYS_MODULES_STORES = {
         ),
     },
     "fast_path.py": {
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules[spec.name]",
+        ),
         DynamicImportCall(
             ("_load_follow_up_helper",),
             "sys.modules[spec.name]",

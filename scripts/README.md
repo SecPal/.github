@@ -44,12 +44,54 @@ the PR-wide feedback and exact target reads. Reply targets include their exact
 parent node identity. Registry validation permits only the required direct
 tools, checked-in scripts, and approved project-script forms before any command
 runs. PR-wide feedback must match across two complete bounded projections.
+Normal stable-feedback capture also rejects visible non-terminal, malformed,
+forged, duplicate, or wrong-head Codex status, a Ready PR with no Codex summary,
+and pending Copilot review requests before admission. Provider status is an
+ephemeral gate and is not added to the stable-feedback artifact or digest.
 Resolution plans reject
 unrecorded already-resolved targets, canonical-reference cycles, unsafe
 canonical dispositions, actionable fixes without commit and test proof, and
 operations whose evidence does not match their logical finding. Their initial
 and final heads must also encode exactly one new linear commit per recorded
 signed push, or no commit movement for a no-push session.
+
+`attest-validation --pre-enrollment-integration-evidence` is the distinct
+version-1.0 `PRE_ENROLLMENT_DRAFT_INTEGRATION` path. It applies only to an open
+Draft delivery with no CURRENT publication, native genesis, or lifecycle-aware
+head advancement. A signed one-shot authorization, canonical READY work-graph
+read, protected-journal absence proof, and one final GitHub observation bind
+parent 1 to the exact Draft PR head and parent 2 to the freshly observed
+registered default-branch tip. The clean mechanical merge tree permits no
+delta. A conflict tree binds every conflict path and permits an exact delta on
+those paths only, with no retained conflict markers.
+
+Complete validation emits
+`PRE_ENROLLMENT_DRAFT_INTEGRATION_VALIDATION_RECEIPT`; the signed two-parent
+candidate uses the separate `SecPal-Pre-Enrollment-Integration` and
+`SecPal-Pre-Enrollment-Validation-Receipt` trailers. Binding emits
+`PRE_ENROLLMENT_DRAFT_INTEGRATION_FINAL_ATTESTATION`. The one-shot executor
+constructs at most one candidate, durably writes its receipt and attestation
+before the irreversible non-force push, verifies final PR-head equality, never
+retries, and has no merge, Ready-transition, review-request, issue, label, or
+lifecycle-publication operation. Its verified initial-head proof additionally
+requires the opaque result of the maintained commit topology and signature
+verifier; caller-authored attestation fields cannot mint that proof. It is the
+only non-ordinary merge proof accepted by lifecycle initialization and creates
+no lifecycle event or counter.
+
+The closed mutation surface is selected explicitly as
+`secpal-pr-review-actions.py integrate-pre-enrollment-draft --apply`. It requires
+the repository, PR, delivery issue, signed evidence file, authorization ID,
+expected signer, fresh receipt and attestation IDs, one-line commit subject,
+and separate receipt/attestation outputs. The worktree index must contain the
+exact authenticated resolved tree; the command does not expose a generic ref
+or arbitrary push selector.
+
+For a delivery selected by the maintained pre-enrollment source admission,
+native genesis additionally requires schema-1.1 typed head evidence and an
+exact live open Draft PR whose head equals that initialization. Consequently a
+competing ordinary genesis cannot cross the absence-check-to-push interval;
+the integrated head must become live before its genesis is admissible.
 
 `attest-validation` also exposes a separately selected version-1.1
 `TWO_PARENT_READY_INTEGRATION` evidence path. It authenticates exactly one
@@ -71,6 +113,13 @@ does not relax the ordinary sole-parent path, create or push an integration,
 change Ready state, read post-push checks, or authorize merge automation.
 Historical receipt reconstruction reads the registry blob from the immutable
 prior delivery commit rather than applying a later registry to older evidence.
+Both the validation attester and fixed-thread resolver derive registry identity
+through the same closed `fast_path` projection. An admitted pre-enrollment
+integration policy therefore participates identically in both paths, while an
+unknown authority-bearing repository field fails closed. The shared projection
+rule does not change registry provenance: current evidence uses the authenticated
+current entry, and historical evidence continues to use its immutable
+evidence-time entry.
 When exact thread resolution is required on the integration head,
 `attest-validation` may additionally consume the canonical eligibility
 artifact. That closed combination emits the version-1.2
@@ -78,6 +127,22 @@ artifact. That closed combination emits the version-1.2
 attestation bind the same eligibility digest. Historical version-1.1
 integration attestations remain valid for their original integration purpose
 but are not thread-resolution authority.
+
+Successful verification of either supported Ready-integration attestation version
+returns the existing verifier-sealed current-head validation evidence only after
+the canonical verifier has run trusted `git verify-commit` itself and the actual
+integration commit signature, signer identity, format, and fingerprint have
+passed policy. The authenticated result also binds the repository, exact signed
+tree and ordered parents, and maintained signature-policy digest. Consumers
+independently re-verify canonical provenance; caller-created, replaced,
+malformed, or cross-context values therefore fail closed without relying on an
+in-process registrar. The canonical source digest retains its historical binding
+to the complete normalized integration package, including delivery, topology,
+current-main, receipt, reviewed-state, expected signer, kind, and version
+identities; actual signer authentication is the additional precondition for
+issuing that compatible sealed result.
+Exact-state-adopted `HEAD_ADVANCED` may consume it, but all independent lifecycle
+authorization and publication preconditions remain mandatory.
 
 The late-feedback boundary also supports one exact accepted-main
 `AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE` recovery for `SecPal/.github`
@@ -373,7 +438,25 @@ atomically re-reads the PR head with the blob selected at the initially
 authenticated head, so concurrent advancement fails closed. The mutable
 current PR head is never treated as the immutable admitted source identity.
 
-Both source paths return a sealed `VerifiedBootstrapSource` with an explicit
+The executable `PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE` subtype is the one
+exact #776 / PR #779 bootstrap source. Protected-main policy fixes its head,
+tree, predecessor, maintained signer policy, action-helper blob, `main`
+entrypoint, `integrate-pre-enrollment-draft` command, purpose, and one-command
+validation set. Both source commits are verified before the candidate suite
+runs in the detached tree; output is discarded and only canonical command,
+exit-status, and success digests are authority. The historical receipt trailer
+is not treated as reconstructable receipt or final-attestation evidence.
+Authentication, validation, and a final clean-tree check all precede the fixed
+command. Both Python subprocess boundaries use the shared isolated `-I -S`
+startup sequence and an authenticated source root, so a retained `HOME` cannot
+load ambient user-site startup hooks. For repository #776 / PR #779, the closed
+launcher supplies the signer, purpose, command, and entrypoint itself, so
+callers cannot widen the admission.
+This authorizes only execution of the admitted implementation; the downstream
+pre-enrollment verifier still owns candidate-tree, push, and initialization
+evidence.
+
+All source paths return a sealed `VerifiedBootstrapSource` with an explicit
 historical evidence status. The #812-only evidence-loss recovery does not apply
 to the byte-only #819 subtype. Historical P2.1 remains rooted at commit
 `833eef2afc063ae777e7e2b64b2f252e3fe1e49e` and helper blob

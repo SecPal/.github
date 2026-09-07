@@ -35,6 +35,7 @@ from .fast_path import (
     is_verified_validation_evidence,
     verify_commit_signatures,
 )
+from . import pre_enrollment_integration
 
 
 SCHEMA_VERSION = "1.0"
@@ -306,8 +307,8 @@ class BootstrapSourceAdmissionPolicy:
     source_head_sha: str
     source_tree_sha: str
     source_parent_sha: str
-    validation_receipt_digest: str
-    final_attestation_digest: str
+    validation_receipt_digest: str | None
+    final_attestation_digest: str | None
     source_signer_identity: str
     implementation_path: str
     implementation_blob_oid: str | None
@@ -317,6 +318,14 @@ class BootstrapSourceAdmissionPolicy:
     source_pr_draft: bool
     source_base_ref: str
     policy_source: str | None
+    signer_policy_identity: str | None
+    command: str | None
+    historical_evidence_status: str | None
+    validation_registry_path: str | None
+    validation_command_set: tuple[dict[str, Any], ...]
+    validation_command_set_digest: str | None
+    validation_results: tuple[dict[str, Any], ...]
+    validation_result_digest: str | None
     admission_digest: str
     evidence_loss_recovery: BootstrapSourceEvidenceLossRecovery | None = None
 
@@ -449,6 +458,7 @@ INITIALIZATION_FIELDS = frozenset(
         "initialization_digest",
     }
 )
+INITIALIZATION_WITH_HEAD_PROOF_FIELDS = INITIALIZATION_FIELDS | {"initial_head_proof"}
 BUNDLE_FIELDS = frozenset(
     {
         "schema_version",
@@ -728,11 +738,12 @@ def create_delivery_initialization(
     final_attestation_digest: str,
     signer_identity: str,
     signer: Signer,
+    initial_head_proof: pre_enrollment_integration.VerifiedInitialHeadProof | None = None,
 ) -> dict[str, Any]:
-    """Create signed ordinary-delivery initialization evidence."""
+    """Create signed initialization for an ordinary or verified typed initial head."""
 
     fields = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": "1.1" if initial_head_proof is not None else SCHEMA_VERSION,
         "kind": INITIALIZATION_KIND,
         "domain": INITIALIZATION_DOMAIN,
         "repository": _require_repository(repository),
@@ -747,6 +758,30 @@ def create_delivery_initialization(
         ),
         "signer_identity": _require_identity(signer_identity, "initialization signer"),
     }
+    if initial_head_proof is not None:
+        if not pre_enrollment_integration.is_verified_initial_head_proof(
+            initial_head_proof
+        ):
+            raise LifecycleAuthorityError(
+                "initial-head proof was not returned by the maintained verifier"
+            )
+        proof = initial_head_proof.to_dict()
+        if (
+            proof["kind"]
+            != pre_enrollment_integration.INITIAL_HEAD_PROOF_KIND
+            or proof["repository"] != fields["repository"]
+            or proof["delivery_issue"] != fields["delivery_issue"]
+            or proof["pull_request"] != fields["pull_request"]
+            or proof["initial_head_sha"] != fields["initial_head_sha"]
+            or proof["validation_receipt_digest"]
+            != fields["validation_receipt_digest"]
+            or proof["final_attestation_digest"]
+            != fields["final_attestation_digest"]
+        ):
+            raise LifecycleAuthorityError(
+                "verified pre-enrollment initial-head proof identity changed"
+            )
+        fields["initial_head_proof"] = proof
     signature = _normalize_signature(
         signer(canonical_json_bytes(fields), INITIALIZATION_DOMAIN), signer_identity
     )
@@ -761,10 +796,15 @@ def _verify_delivery_initialization(
     signature_verifier: SignatureVerifier,
     require_maintained_anchor: bool = True,
 ) -> dict[str, Any]:
-    initialization = _require_closed(
-        value, INITIALIZATION_FIELDS, "delivery initialization"
+    if not isinstance(value, dict):
+        raise LifecycleAuthorityError("delivery initialization schema is not closed")
+    expected_fields = (
+        INITIALIZATION_WITH_HEAD_PROOF_FIELDS
+        if value.get("schema_version") == "1.1"
+        else INITIALIZATION_FIELDS
     )
-    if initialization["schema_version"] != SCHEMA_VERSION:
+    initialization = _require_closed(value, expected_fields, "delivery initialization")
+    if initialization["schema_version"] not in {SCHEMA_VERSION, "1.1"}:
         raise LifecycleAuthorityError("unknown delivery-initialization version")
     if (
         initialization["kind"] != INITIALIZATION_KIND
@@ -779,6 +819,35 @@ def _verify_delivery_initialization(
     head = _require_oid(initialization["initial_head_sha"], "initial head")
     _require_digest(initialization["validation_receipt_digest"], "validation receipt")
     _require_digest(initialization["final_attestation_digest"], "final attestation")
+    if initialization["schema_version"] == "1.1":
+        proof = _require_closed(
+            initialization["initial_head_proof"],
+            frozenset(
+                {
+                    "kind", "repository", "delivery_issue", "pull_request",
+                    "initial_head_sha", "validation_receipt_digest",
+                    "final_attestation_digest", "integration_evidence_digest",
+                }
+            ),
+            "initial-head proof",
+        )
+        if (
+            proof["kind"] != pre_enrollment_integration.INITIAL_HEAD_PROOF_KIND
+            or proof["repository"] != repository
+            or proof["delivery_issue"] != issue
+            or proof["pull_request"] != pull_request
+            or proof["initial_head_sha"] != head
+            or proof["validation_receipt_digest"]
+            != initialization["validation_receipt_digest"]
+            or proof["final_attestation_digest"]
+            != initialization["final_attestation_digest"]
+        ):
+            raise LifecycleAuthorityError(
+                "authenticated pre-enrollment initial-head proof is inconsistent"
+            )
+        _require_digest(
+            proof["integration_evidence_digest"], "integration evidence"
+        )
     signer = _require_identity(initialization["signer_identity"], "initialization signer")
     signed = {
         key: copy.deepcopy(item)
@@ -1105,6 +1174,20 @@ def _parse_lifecycle_trust_policy(
             "admission_digest",
         }
     )
+    pre_enrollment_source_fields = frozenset(
+        {
+            "schema_version", "kind", "subtype", "repository",
+            "delivery_issue", "pull_request", "source_head_sha",
+            "source_tree_sha", "source_parent_sha", "source_signer_identity",
+            "signer_policy_identity", "implementation_path",
+            "implementation_blob_oid", "entrypoint", "command", "purpose",
+            "source_pr_state", "source_pr_draft", "source_base_ref",
+            "policy_source", "historical_evidence_status",
+            "validation_registry_path", "validation_command_set",
+            "validation_command_set_digest", "validation_results",
+            "validation_result_digest", "admission_digest",
+        }
+    )
     source_recovery_field = "evidence_loss_recovery"
     raw_sources = policy["bootstrap_source_admissions"]
     if not isinstance(raw_sources, list):
@@ -1122,6 +1205,8 @@ def _parse_lifecycle_trust_policy(
             source_fields = source_common_fields | {
                 "implementation_blob_oid", "policy_source"
             }
+        elif subtype == "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE":
+            source_fields = pre_enrollment_source_fields
         else:
             raise LifecycleAuthorityError("bootstrap source admission subtype is unknown")
         allowed_fields = {source_fields}
@@ -1146,10 +1231,52 @@ def _parse_lifecycle_trust_policy(
         admission_digest = _require_digest(item["admission_digest"], "source admission")
         executable_source = subtype == "FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE"
         byte_source = subtype == "PR_REVIEW_EVIDENCE_HELPER_SOURCE"
+        pre_enrollment_source = (
+            subtype == "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE"
+        )
         implementation_blob = (
             _require_oid(item["implementation_blob_oid"], "source implementation blob")
-            if byte_source else None
+            if byte_source or pre_enrollment_source else None
         )
+        validation_commands = item.get("validation_command_set", [])
+        validation_results = item.get("validation_results", [])
+        if pre_enrollment_source:
+            commands_valid = (
+                isinstance(validation_commands, list)
+                and 0 < len(validation_commands) <= 4
+                and all(
+                    isinstance(command, dict)
+                    and set(command) == {"argv", "working_directory", "purpose"}
+                    and isinstance(command["argv"], list)
+                    and len(command["argv"]) == 4
+                    and command["argv"][:3] == ["python3", "-m", "unittest"]
+                    and isinstance(command["argv"][3], str)
+                    and re.fullmatch(
+                        r"tests/[a-z0-9-]+-unit\.py", command["argv"][3]
+                    )
+                    and command["working_directory"] == "."
+                    and isinstance(command["purpose"], str)
+                    and command["purpose"]
+                    and command["purpose"] == command["purpose"].strip()
+                    for command in validation_commands
+                )
+            )
+            results_valid = (
+                isinstance(validation_results, list)
+                and len(validation_results) == len(validation_commands)
+                and all(
+                    isinstance(result, dict)
+                    and set(result) == {
+                        "command_digest", "exit_status", "successful"
+                    }
+                    and result["command_digest"] == digest_json(command)
+                    and result["exit_status"] == 0
+                    and result["successful"] is True
+                    for command, result in zip(
+                        validation_commands, validation_results, strict=True
+                    )
+                )
+            )
         if (
             item["schema_version"] != SCHEMA_VERSION
             or item["kind"] != "BOOTSTRAP_SOURCE_ADMISSION"
@@ -1174,9 +1301,36 @@ def _parse_lifecycle_trust_policy(
                     != "ACCEPTED_MAIN_REPOSITORY_REGISTRY"
                 )
             )
+            or (
+                pre_enrollment_source
+                and (
+                    item["implementation_path"]
+                    != "scripts/secpal-pr-review-actions.py"
+                    or item["entrypoint"] != "main"
+                    or item["command"] != "integrate-pre-enrollment-draft"
+                    or item["purpose"]
+                    != "PRE_ENROLLMENT_IMPLEMENTATION_BOOTSTRAP"
+                    or item["policy_source"]
+                    != "ACCEPTED_MAIN_REPOSITORY_REGISTRY"
+                    or item["signer_policy_identity"]
+                    != "MAINTAINED_LIFECYCLE_SIGNER_POLICY"
+                    or item["source_signer_identity"]
+                    not in transition_signers
+                    or item["historical_evidence_status"]
+                    != "HISTORICAL_EVIDENCE_UNAVAILABLE"
+                    or item["validation_registry_path"]
+                    != ".agents/skills/secpal-pr-review/references/repositories.json"
+                    or not commands_valid
+                    or item["validation_command_set_digest"]
+                    != digest_json(validation_commands)
+                    or not results_valid
+                    or item["validation_result_digest"]
+                    != digest_json(validation_results)
+                )
+            )
             or item["source_pr_state"] != "OPEN"
             or (
-                executable_source
+                (executable_source or pre_enrollment_source)
                 and item["source_pr_draft"] is not True
             )
             or (
@@ -1356,21 +1510,41 @@ def _parse_lifecycle_trust_policy(
                 source_head_sha=head,
                 source_tree_sha=_require_oid(item["source_tree_sha"], "source tree"),
                 source_parent_sha=_require_oid(item["source_parent_sha"], "source parent"),
-                validation_receipt_digest=_require_digest(
-                    item["validation_receipt_digest"], "source validation receipt"
+                validation_receipt_digest=(
+                    None if pre_enrollment_source else _require_digest(
+                        item["validation_receipt_digest"], "source validation receipt"
+                    )
                 ),
-                final_attestation_digest=_require_digest(
-                    item["final_attestation_digest"], "source final attestation"
+                final_attestation_digest=(
+                    None if pre_enrollment_source else _require_digest(
+                        item["final_attestation_digest"], "source final attestation"
+                    )
                 ),
                 source_signer_identity=item["source_signer_identity"],
                 implementation_path=item["implementation_path"],
                 implementation_blob_oid=implementation_blob,
-                entrypoint=item["entrypoint"] if executable_source else None,
+                entrypoint=(
+                    item["entrypoint"]
+                    if executable_source or pre_enrollment_source else None
+                ),
                 purpose=item["purpose"],
                 source_pr_state=item["source_pr_state"],
                 source_pr_draft=item["source_pr_draft"],
                 source_base_ref=item["source_base_ref"],
-                policy_source=item["policy_source"] if byte_source else None,
+                policy_source=(
+                    item["policy_source"]
+                    if byte_source or pre_enrollment_source else None
+                ),
+                signer_policy_identity=item.get("signer_policy_identity"),
+                command=item.get("command"),
+                historical_evidence_status=item.get("historical_evidence_status"),
+                validation_registry_path=item.get("validation_registry_path"),
+                validation_command_set=tuple(copy.deepcopy(validation_commands)),
+                validation_command_set_digest=item.get(
+                    "validation_command_set_digest"
+                ),
+                validation_results=tuple(copy.deepcopy(validation_results)),
+                validation_result_digest=item.get("validation_result_digest"),
                 admission_digest=admission_digest,
                 evidence_loss_recovery=recovery,
             )
@@ -2984,6 +3158,10 @@ def authenticate_exact_state_adoption_external_evidence(
         adoption_digest = loss["admission_digest"]
     elif not is_verified_validation_evidence(validation_evidence) or (
         validation_evidence.repository != repository
+        or (
+            validation_evidence.delivery_issue_number is not None
+            and validation_evidence.delivery_issue_number != issue
+        )
         or validation_evidence.pull_request_number != pr
         or validation_evidence.head_sha != head
         or validation_evidence.tree_sha != tree
@@ -3744,6 +3922,11 @@ def issue_exact_state_adoption_successor_authority(
         if (
             not is_verified_validation_evidence(current_head_evidence)
             or current_head_evidence.repository != predecessor.repository
+            or (
+                current_head_evidence.delivery_issue_number is not None
+                and current_head_evidence.delivery_issue_number
+                != predecessor.delivery_issue
+            )
             or current_head_evidence.pull_request_number != resulting_pr
             or current_head_evidence.head_sha != event["resulting_head_sha"]
         ):

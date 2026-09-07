@@ -65,6 +65,7 @@ class FakeGit:
         repository: str = "SecPal/api",
         signature_valid: bool = True,
         signature_format: str = "ssh",
+        signer_identity: str = "fixture",
         signer_fingerprint: str = "SHA256:fixtureDeliverySigner",
         signing_key: str = "/tmp/fixture-signing-key",
         second_parent: str | None = None,
@@ -77,6 +78,7 @@ class FakeGit:
         self.repository = repository
         self.signature_valid = signature_valid
         self.signature_format = signature_format
+        self.signer_identity = signer_identity
         self.signer_fingerprint = signer_fingerprint
         self.signing_key = signing_key
         self.second_parent = second_parent
@@ -132,7 +134,7 @@ class FakeGit:
                 return subprocess.CompletedProcess(call, 1, "", "bad signature")
             if self.signature_format == "ssh":
                 stdout = (
-                    'Good "git" signature for fixture with ED25519 key '
+                    f'Good "git" signature for {self.signer_identity} with ED25519 key '
                     f"{self.signer_fingerprint}\n"
                 )
             else:
@@ -1244,6 +1246,148 @@ def final_eligibility_absence_fixture(
 
 
 class ResolveFixedThreadsTests(TestCase):
+    def test_resolver_registry_projection_is_owned_by_fast_path(self) -> None:
+        entry = copy.deepcopy(MODULE._load_repository_entry("SecPal/.github"))
+        expected = {"canonical_projection": True}
+        with mock.patch.object(
+            MODULE.fast_path,
+            "validation_registry_projection",
+            return_value=expected,
+        ) as projection:
+            self.assertIs(MODULE._validation_registry_binding(entry), expected)
+        projection.assert_called_once_with(entry)
+
+    def test_resolver_loads_closed_additive_policy_before_projection(self) -> None:
+        registry = json.loads(MODULE.REGISTRY_PATH.read_text(encoding="utf-8"))
+        entry = next(
+            item
+            for item in registry["repositories"]
+            if item["repository"] == "SecPal/.github"
+        )
+        entry["pre_enrollment_integration_policy"] = {
+            "schema_version": "1.0",
+            "command": "integrate-pre-enrollment-draft",
+            "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+            "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+            "maximum_candidates": 1,
+            "maximum_pushes": 1,
+            "force_push": False,
+            "automatic_retry": False,
+            "merge_pull_request": False,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            registry_path = Path(directory) / "repositories.json"
+            registry_path.write_text(json.dumps(registry), encoding="utf-8")
+            with mock.patch.object(MODULE, "REGISTRY_PATH", registry_path):
+                selected = MODULE._load_repository_entry("SecPal/.github")
+
+        self.assertEqual(
+            MODULE._validation_registry_binding(selected)[
+                "pre_enrollment_integration_policy"
+            ],
+            entry["pre_enrollment_integration_policy"],
+        )
+
+    def test_validation_registry_projection_matches_attester_with_additive_policy(
+        self,
+    ) -> None:
+        entry = copy.deepcopy(MODULE._load_repository_entry("SecPal/.github"))
+        policy = {
+            "schema_version": "1.0",
+            "command": "integrate-pre-enrollment-draft",
+            "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+            "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+            "maximum_candidates": 1,
+            "maximum_pushes": 1,
+            "force_push": False,
+            "automatic_retry": False,
+            "merge_pull_request": False,
+        }
+        entry["pre_enrollment_integration_policy"] = policy
+
+        attester_projection = MODULE.fast_path.validation_registry_projection(entry)
+        resolver_projection = MODULE._validation_registry_binding(entry)
+        self.assertEqual(resolver_projection, attester_projection)
+
+        reviewed_payload = reviewed_state_payload(
+            "PRRT_registryProjection", [("COMMENT_registryProjection", "Finding", None)]
+        )
+        reviewed_payload["repository"] = "SecPal/.github"
+        identity = {
+            key: reviewed_payload[key]
+            for key in (
+                "repository",
+                "pull_request_number",
+                "head_sha",
+                "base_ref",
+                "base_sha",
+                "pr_state",
+            )
+        }
+        feedback = {
+            key: reviewed_payload[key]
+            for key in (
+                "pull_request_reactions",
+                "reviews",
+                "conversation_comments",
+                "threads",
+            )
+        }
+        reviewed_payload["feedback_digest"] = MODULE._digest_json(feedback)
+        reviewed_payload["state_digest"] = MODULE._digest_json(
+            {**identity, "feedback": feedback}
+        )
+        reviewed = MODULE.fast_path.StableFeedbackState.from_payload(
+            reviewed_payload
+        )
+        gates = [
+            {"gate": gate, "satisfied": True, "evidence": f"Fixture gate {index}"}
+            for index, gate in enumerate(
+                attester_projection["manual_gates"], start=1
+            )
+        ]
+        receipt = MODULE.fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            validated_tree_sha="d" * 40,
+            registry=attester_projection,
+            command_set=attester_projection["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=gates,
+        )
+        attestation = MODULE.fast_path.create_validation_attestation(
+            repository="SecPal/.github",
+            head_sha="c" * 40,
+            registry=attester_projection,
+            command_set=attester_projection["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+        )
+        MODULE.fast_path.verify_validation_attestation(
+            attestation,
+            repository="SecPal/.github",
+            head_sha="c" * 40,
+            registry=resolver_projection,
+            command_set=resolver_projection["validation"],
+            reviewed_state=reviewed,
+            commit_parent_sha=reviewed.head_sha,
+            commit_tree_sha="d" * 40,
+            commit_validation_receipt_digest=receipt["receipt_digest"],
+        )
+
+    def setUp(self) -> None:
+        self._integration_git_patch = mock.patch.object(
+            MODULE.fast_path,
+            "_run_integration_commit_git",
+            side_effect=lambda root, arguments: MODULE._run_git(
+                root, tuple(arguments), allow_failure=True
+            ),
+        )
+        self._integration_git_patch.start()
+        self.addCleanup(self._integration_git_patch.stop)
+
     def _openpgp_fixture_environment(self, root: Path) -> dict[str, str]:
         (root / ".config").mkdir()
         (root / ".gnupg").mkdir(mode=0o700)
@@ -3411,6 +3555,115 @@ class ResolveFixedThreadsTests(TestCase):
 
         self.assertEqual(result["pending"], [thread_id])
         self.assertEqual(result["status"], "success")
+
+    def test_ready_integration_translates_recoverable_authenticator_failure(
+        self,
+    ) -> None:
+        thread_id = "PRRT_INTEGRATION_AUTH_UNAVAILABLE"
+        reviewed = reviewed_state_payload(thread_id, [])
+        eligibility = eligibility_payload(reviewed, (thread_id,))
+        integration, receipt, attestation = integration_validation_payloads(
+            reviewed,
+            MODULE._digest_json(eligibility),
+            expected_head="c" * 40,
+        )
+        git = FakeGit(
+            expected_head=attestation["head_sha"],
+            reviewed_head=reviewed["head_sha"],
+            second_parent=reviewed["base_sha"],
+            tree=attestation["validated_tree_sha"],
+            receipt_digest=receipt["receipt_digest"],
+            integration_digest=MODULE.fast_path.digest_json(integration),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, value in (
+                ("reviewed.json", reviewed),
+                ("validation.json", attestation),
+                ("eligibility.json", eligibility),
+                ("integration.json", integration),
+            ):
+                (root / name).write_text(json.dumps(value), encoding="utf-8")
+            with (
+                mock.patch.object(MODULE, "_run_git", git),
+                mock.patch.object(
+                    MODULE.fast_path,
+                    "authenticate_integration_commit",
+                    side_effect=MODULE.fast_path.RecoverableLocalError(
+                        "integration commit verification is unavailable"
+                    ),
+                ),
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "integration commit verification is unavailable",
+                ),
+            ):
+                MODULE.resolve_threads(
+                    "SecPal/api",
+                    123,
+                    attestation["head_sha"],
+                    (thread_id,),
+                    apply=False,
+                    repository_root=root,
+                    reviewed_state_path=root / "reviewed.json",
+                    expected_reviewed_state_digest=reviewed["state_digest"],
+                    validation_evidence_path=root / "validation.json",
+                    eligibility_evidence_path=root / "eligibility.json",
+                    integration_evidence_path=root / "integration.json",
+                )
+
+    def test_eligibility_bound_ready_integration_rejects_wrong_actual_signer(
+        self,
+    ) -> None:
+        thread_id = "PRRT_INTEGRATION_WRONG_SIGNER"
+        comment = ("PRRC_INTEGRATION_ROOT", "Intentional protocol body.", None)
+        reviewed = reviewed_state_payload(thread_id, [comment])
+        eligibility = eligibility_payload(reviewed, (thread_id,))
+        integration, receipt, attestation = integration_validation_payloads(
+            reviewed,
+            MODULE._digest_json(eligibility),
+            expected_head="c" * 40,
+        )
+        git = FakeGit(
+            expected_head="c" * 40,
+            reviewed_head=reviewed["head_sha"],
+            second_parent=reviewed["base_sha"],
+            tree=attestation["validated_tree_sha"],
+            receipt_digest=receipt["receipt_digest"],
+            integration_digest=MODULE.fast_path.digest_json(integration),
+            signer_identity="other",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, value in (
+                ("reviewed.json", reviewed),
+                ("validation.json", attestation),
+                ("eligibility.json", eligibility),
+                ("integration.json", integration),
+            ):
+                (root / name).write_text(json.dumps(value), encoding="utf-8")
+            github = mock.Mock()
+            with (
+                mock.patch.object(MODULE, "_run_git", git),
+                mock.patch.object(MODULE, "_run_gh", github),
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError, "explicitly accepted identity"
+                ),
+            ):
+                MODULE.resolve_threads(
+                    "SecPal/api",
+                    123,
+                    "c" * 40,
+                    (thread_id,),
+                    apply=False,
+                    repository_root=root,
+                    reviewed_state_path=root / "reviewed.json",
+                    expected_reviewed_state_digest=reviewed["state_digest"],
+                    validation_evidence_path=root / "validation.json",
+                    eligibility_evidence_path=root / "eligibility.json",
+                    integration_evidence_path=root / "integration.json",
+                )
+            github.assert_not_called()
 
     def test_ready_integration_source_authenticates_late_classification(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
