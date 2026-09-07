@@ -5438,14 +5438,22 @@ def _verify_ready_integration_prior_authority(
         or authority["expected_signer"]["identity"] != required_paths[5]
     ):
         raise fast_path.SecurityBlocker("Ready integration prior authority identity changed")
+    head = authority["prior_delivery_head_sha"]
     reviewed = _load_fast_state(required_paths[1])
     if reviewed.pull_request_number != authority["pull_request_number"]:
         raise fast_path.SecurityBlocker(
             "prior delivery pull-request identity changed"
         )
+    if integration_evidence.get("reviewed_head_sha", head) != head and (
+        reviewed.state_digest != integration_evidence["reviewed_state_digest"]
+        or reviewed.feedback_digest
+        != integration_evidence["reviewed_feedback_digest"]
+    ):
+        raise fast_path.SecurityBlocker(
+            "prior reviewed-state identity changed"
+        )
     receipt = _read_json(required_paths[2], "prior validation receipt")
     attestation = _read_json(required_paths[3], "prior validation attestation")
-    head = authority["prior_delivery_head_sha"]
     parent = _validated_commit_parent(repository_root, head)
     tree = _run_attestation_git(repository_root, ["rev-parse", f"{head}^{{tree}}"]).stdout.strip()
     trailer = _commit_validation_receipt_digest(repository_root, head)

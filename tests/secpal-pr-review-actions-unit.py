@@ -6708,6 +6708,66 @@ class FastPathTests(TestCase):
                 live_observation=None,
             )
 
+    def test_ready_integration_prior_authority_rejects_reviewed_digest_mismatch(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        raw_authority = ready_integration_prior_authority(reviewed)
+        raw_authority["prior_delivery_head_sha"] = "9" * 40
+        authority = fast_path.normalize_ready_integration_prior_authority(raw_authority)
+        raw_integration = ready_integration_evidence(
+            reviewed, validated_tree="a" * 40
+        )
+        raw_integration.update(
+            schema_version="1.2",
+            reviewed_head_sha=reviewed.head_sha,
+            prior_delivery_head_sha="9" * 40,
+            ordered_parent_shas=["9" * 40, reviewed.base_sha],
+            prior_authority_digest=fast_path.digest_json(authority),
+        )
+        integration = fast_path.normalize_ready_integration_evidence(
+            raw_integration,
+            repository="SecPal/.github",
+            reviewed_state=reviewed,
+            registry=fast_registry(),
+            validated_tree_sha="a" * 40,
+        )
+        changed_reviewed = fast_path.StableFeedbackState(
+            repository=reviewed.repository,
+            pull_request_number=reviewed.pull_request_number,
+            head_sha="b" * 40,
+            base_ref=reviewed.base_ref,
+            base_sha=reviewed.base_sha,
+            pr_state=reviewed.pr_state,
+            feedback=reviewed.feedback,
+        )
+        arguments = SimpleNamespace(
+            repo="SecPal/.github",
+            delivery_issue=9,
+            prior_authority="authority.json",
+            prior_reviewed_state="prior-reviewed.json",
+            prior_receipt="prior-receipt.json",
+            prior_attestation="prior-attestation.json",
+            prior_authority_tag_ref="refs/tags/prior-authority",
+            expected_prior_authority_signer="aroviqen",
+        )
+
+        with (
+            mock.patch.object(actions, "_read_json", return_value=authority),
+            mock.patch.object(actions, "_load_fast_state", return_value=changed_reviewed),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "prior reviewed-state identity changed",
+            ),
+        ):
+            actions._verify_ready_integration_prior_authority(
+                arguments=arguments,
+                repository_root=REPO_ROOT,
+                binding=fast_registry(),
+                integration_evidence=integration,
+                live_observation=None,
+            )
+
     def test_ready_integration_reconstructs_prior_policy_from_prior_commit(self) -> None:
         registry = json.loads(actions.REGISTRY_PATH.read_text(encoding="utf-8"))
         historical_binding = next(
@@ -7865,6 +7925,28 @@ class FastPathTests(TestCase):
                     registry=registry,
                     validated_tree_sha=observed_tree,
                 )
+
+    def test_ready_integration_accepts_attested_remediation_successor(self) -> None:
+        reviewed = fast_feedback()
+        integration = ready_integration_evidence(
+            reviewed, validated_tree="a" * 40
+        )
+        remediation_head = "9" * 40
+        integration["schema_version"] = "1.2"
+        integration["reviewed_head_sha"] = reviewed.head_sha
+        integration["prior_delivery_head_sha"] = remediation_head
+        integration["ordered_parent_shas"][0] = remediation_head
+
+        normalized = fast_path.normalize_ready_integration_evidence(
+            integration,
+            repository="SecPal/.github",
+            reviewed_state=reviewed,
+            registry=fast_registry(),
+            validated_tree_sha="a" * 40,
+        )
+
+        self.assertEqual(normalized["prior_delivery_head_sha"], remediation_head)
+        self.assertEqual(normalized["reviewed_state_digest"], reviewed.state_digest)
 
     def test_ready_integration_explicit_selection_rejects_issue_or_signer_substitution(
         self,

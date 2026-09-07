@@ -869,8 +869,14 @@ already verified final delivery attestation and does not create a new receipt.
 
 Ordinary remediation and recovery continue to require one parent. A separately
 user-authorized mechanical integration into an already-Ready delivery PR uses
-`attest-validation --integration-evidence` and the closed version-1.1
-`TWO_PARENT_READY_INTEGRATION` topology. The invocation also supplies the exact
+`attest-validation --integration-evidence` and the closed version-1.1 or
+version-1.2 `TWO_PARENT_READY_INTEGRATION` topology. Version 1.1 retains the
+same-head reviewed snapshot. Version 1.2 separately binds the reviewed head so
+an already-attested remediation successor can remain parent 1 without
+requesting another unrestricted review. In that case the prior ordinary
+receipt and final attestation must authenticate the exact reviewed-state and
+feedback digests; an unrelated or caller-substituted snapshot fails closed.
+The invocation also supplies the exact
 delivery issue, authorization ID, and expected signer. Its evidence fixes parent
 1 to the previously authenticated Ready head and parent 2 to the explicitly
 authenticated current registered `main` snapshot, in that order, and requires

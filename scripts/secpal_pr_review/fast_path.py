@@ -205,6 +205,7 @@ READY_INTEGRATION_KEYS = frozenset(
         "eligibility",
     }
 )
+READY_INTEGRATION_V12_KEYS = READY_INTEGRATION_KEYS | {"reviewed_head_sha"}
 
 READY_INTEGRATION_PRIOR_AUTHORITY_KEYS = frozenset(
     {
@@ -535,11 +536,19 @@ def normalize_ready_integration_evidence(
 ) -> dict[str, Any]:
     """Normalize and admit one explicitly authorized Ready-head integration."""
 
-    if not isinstance(value, dict) or set(value) != READY_INTEGRATION_KEYS:
+    if not isinstance(value, dict):
         raise SecurityBlocker("Ready integration evidence is malformed or ambiguous")
     if any(SECRET_VALUE.search(item) for item in _all_strings(value)):
         raise SecurityBlocker("Ready integration evidence contains secret-like text")
-    if value.get("schema_version") != "1.1" or value.get("kind") != READY_INTEGRATION_KIND:
+    schema_version = value.get("schema_version")
+    expected_keys = (
+        READY_INTEGRATION_V12_KEYS
+        if schema_version == "1.2"
+        else READY_INTEGRATION_KEYS
+    )
+    if set(value) != expected_keys:
+        raise SecurityBlocker("Ready integration evidence is malformed or ambiguous")
+    if schema_version not in {"1.1", "1.2"} or value.get("kind") != READY_INTEGRATION_KIND:
         raise SecurityBlocker("Ready integration topology kind or version is unsupported")
     normalized_repository = _require_string(value.get("repository"), "integration repository")
     if normalized_repository != repository or reviewed_state.repository != repository:
@@ -558,11 +567,18 @@ def normalize_ready_integration_evidence(
     prior_head = _require_oid(
         value.get("prior_delivery_head_sha"), "prior delivery head"
     )
+    reviewed_head = (
+        prior_head
+        if schema_version == "1.1"
+        else _require_oid(value.get("reviewed_head_sha"), "integration reviewed head")
+    )
+    if reviewed_head != reviewed_state.head_sha:
+        raise SecurityBlocker("integration reviewed head is stale or substituted")
+    if schema_version == "1.1" and prior_head != reviewed_head:
+        raise SecurityBlocker("integration first parent is stale or substituted")
     prior_authority_digest = _require_digest(
         value.get("prior_authority_digest"), "prior Ready authority digest"
     )
-    if prior_head != reviewed_state.head_sha:
-        raise SecurityBlocker("integration first parent is stale or substituted")
     target_base = value.get("target_base")
     if not isinstance(target_base, dict) or set(target_base) != {
         "ref",
@@ -711,7 +727,7 @@ def normalize_ready_integration_evidence(
     ):
         raise SecurityBlocker("integration eligibility or lifecycle continuity is invalid")
     normalized = {
-        "schema_version": "1.1",
+        "schema_version": schema_version,
         "kind": READY_INTEGRATION_KIND,
         "authorization_id": authorization_id,
         "repository": normalized_repository,
@@ -746,6 +762,8 @@ def normalize_ready_integration_evidence(
         },
         "eligibility": copy.deepcopy(eligibility),
     }
+    if schema_version == "1.2":
+        normalized["reviewed_head_sha"] = reviewed_head
     return normalized
 
 

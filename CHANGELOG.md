@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-07 - Bind Remediated Ready Integration Review
+
+**Fixed:**
+
+- Allow Ready integration to retain the one authenticated reviewed snapshot
+  when parent 1 is its separately attested remediation successor.
+- Bind the reviewed head and exact reviewed-state and feedback digests through
+  the prior head's verified receipt and final attestation, while preserving
+  live parent, current-main, lifecycle, signer, and provider checks.
+
 ## 2026-09-07 - Converge Pending Ready Publication After Remediation
 
 **Fixed:**
