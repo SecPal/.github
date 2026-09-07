@@ -11,7 +11,7 @@ one exact GitHub Ready/Draft mutation and bounded convergence verification.
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 import json
 from pathlib import Path
 import tempfile
