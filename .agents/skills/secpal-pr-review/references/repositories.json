@@ -288,13 +288,13 @@
             "repository": "SecPal/.github",
             "delivery_issue": 776,
             "pull_request": 779,
-            "source_head_sha": "8371bef95afeed854e4892ef1af5ed54467aeb74",
-            "source_tree_sha": "c2ed276ac00ae2057e048a81a54c92f96569e63c",
-            "source_parent_sha": "ad684beb8eb334f83c02e214f7b566f23aeb9ec5",
+            "source_head_sha": "afc22b9ecace257e7fc0d67c414bf40e9153fe26",
+            "source_tree_sha": "6be7fa33a43971640f90c4490820dd6b9314ac9f",
+            "source_parent_sha": "8371bef95afeed854e4892ef1af5ed54467aeb74",
             "source_signer_identity": "aroviqen@secpal.app",
             "signer_policy_identity": "MAINTAINED_LIFECYCLE_SIGNER_POLICY",
             "implementation_path": "scripts/secpal-pr-review-actions.py",
-            "implementation_blob_oid": "8625a412b1951c577040d8a640bd0fdf8cedbe4e",
+            "implementation_blob_oid": "10ddb0fd14d33fa28ef9f58391f3558c272eb8ad",
             "entrypoint": "main",
             "command": "integrate-pre-enrollment-draft",
             "purpose": "PRE_ENROLLMENT_IMPLEMENTATION_BOOTSTRAP",
@@ -313,19 +313,39 @@
                   "tests/secpal-pre-enrollment-integration-unit.py"
                 ],
                 "working_directory": ".",
-                "purpose": "Validate exact pre-enrollment integration source"
+                "purpose": "Run pre-enrollment Draft integration unit tests"
+              },
+              {
+                "argv": ["python3", "-m", "unittest", "tests/secpal-lifecycle-authority-unit.py"],
+                "working_directory": ".",
+                "purpose": "Run persistent lifecycle-authority unit tests"
+              },
+              {
+                "argv": ["python3", "-m", "unittest", "tests/secpal-lifecycle-publication-unit.py"],
+                "working_directory": ".",
+                "purpose": "Run lifecycle enrollment and current-terminal publication tests"
               }
             ],
-            "validation_command_set_digest": "3b08a61c6e34a068cb60871651a1183c71137e0c09870d7c33498ebc34682e54",
+            "validation_command_set_digest": "fdc9e2f8be6e08546af324de39b4ef32532a98ca997aea91eec14c0c1f5b0827",
             "validation_results": [
               {
-                "command_digest": "e9e6289a8f21d3f4e2407a7276f1034c48401ccdddbefb0574e1afab5c0c1ced",
+                "command_digest": "e094c9760a3900913d19dfe14e4ec04260e5809088a63fbdc95ad1cb827bb337",
+                "exit_status": 0,
+                "successful": true
+              },
+              {
+                "command_digest": "cf9f39c2a893a67ad1031b7fb9274733ffb80f02754fa13b1042e0b8b763314d",
+                "exit_status": 0,
+                "successful": true
+              },
+              {
+                "command_digest": "567d8f90ffdc674313648ca23aa450e855576b76deff70518692675a202ff22a",
                 "exit_status": 0,
                 "successful": true
               }
             ],
-            "validation_result_digest": "619bcfbcd84a5b65a5a59a7085cb0cd81687881eae2624c33652d5a95401f9d3",
-            "admission_digest": "3690f61e86aaced05576bf7c85fe08fbd530bc08a809776c927980768dc58244"
+            "validation_result_digest": "dc9895751a3922a3396b50e8e0e0333e2afd6e993e799ba86925c374e5e701fc",
+            "admission_digest": "23171459163f9e9b3bd8b4299ec141395b74cdddf6bd9b2691e1e06de8bde93b"
           }
         ],
         "historical_compatibility_publications": [
