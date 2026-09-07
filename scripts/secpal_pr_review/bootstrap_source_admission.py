@@ -14,12 +14,14 @@ import ast
 from contextlib import contextmanager
 import copy
 from dataclasses import dataclass, replace
+import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import selectors
+import shutil
 import signal
 import subprocess
 import sys
@@ -60,6 +62,13 @@ _VERIFIED_SOURCE = object()
 MAXIMUM_EVIDENCE_BYTES = late_disposition.MAXIMUM_ARTIFACT_BYTES
 _BOOTSTRAP_COMMAND_TIMEOUT_SECONDS = 30
 _PRE_ENROLLMENT_EXECUTION_TIMEOUT_SECONDS = 1800
+_WORK_GRAPH_NODE_PACKAGE = "markdown-it"
+_WORK_GRAPH_NODE_PACKAGE_VERSION = "14.3.0"
+_NPM_REGISTRY = "https://registry.npmjs.org/"
+_NPM_INTEGRITY = re.compile(r"sha512-[A-Za-z0-9+/]+={0,2}")
+_NPM_PACKAGE_NAME = re.compile(
+    r"(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*"
+)
 _PRE_ENROLLMENT_DIAGNOSTIC_IDENTITIES = frozenset(
     {
         "RECOVERABLE_LOCAL_ERROR",
@@ -1894,6 +1903,8 @@ def _execute_pre_enrollment_entrypoint(
     root: Path,
     policy: authority.BootstrapSourceAdmissionPolicy,
     serialized_invocation: bytes | str,
+    *,
+    dependency_environment: Mapping[str, str],
 ) -> Mapping[str, Any]:
     """Invoke the fixed admitted command without exposing candidate-selected argv."""
 
@@ -1916,6 +1927,16 @@ def _execute_pre_enrollment_entrypoint(
         "--apply",
     ]
     helper = authority._load_trusted_command_helper()
+    if (
+        set(dependency_environment) != {"NODE_OPTIONS"}
+        or not isinstance(dependency_environment["NODE_OPTIONS"], str)
+        or not dependency_environment["NODE_OPTIONS"].startswith("--require=")
+    ):
+        raise BootstrapSourceAdmissionError(
+            "authenticated Work-Graph dependency environment is invalid"
+        )
+    environment = _closed_launcher_environment(helper)
+    environment.update(dependency_environment)
     try:
         completed = _run_isolated_python(
             _isolated_python_command(
@@ -1925,7 +1946,7 @@ def _execute_pre_enrollment_entrypoint(
             ),
             cwd=root,
             timeout=_PRE_ENROLLMENT_EXECUTION_TIMEOUT_SECONDS,
-            env=_closed_launcher_environment(helper),
+            env=environment,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise BootstrapSourceAdmissionError(
@@ -1978,14 +1999,21 @@ def execute_pre_enrollment_implementation_bootstrap(
                 "pre-enrollment source admission verification was not retained"
             )
         _verify_materialized_tree(root, policy)
-        result = _execute_pre_enrollment_entrypoint(
-            root, policy, serialized_invocation
-        )
+        helper = authority._load_trusted_command_helper()
+        with _authenticated_work_graph_dependencies(root, helper) as dependency_environment:
+            try:
+                result = _execute_pre_enrollment_entrypoint(
+                    root,
+                    policy,
+                    serialized_invocation,
+                    dependency_environment=dependency_environment,
+                )
+            finally:
+                _verify_materialized_tree(root, policy)
         if result != {"status": "COMPLETE", "exit_status": 0}:
             raise BootstrapSourceAdmissionError(
                 "admitted pre-enrollment result is not closed"
             )
-        _verify_materialized_tree(root, policy)
         return {
             "status": "COMPLETE",
             "exit_status": 0,
@@ -2191,6 +2219,380 @@ def _closed_validation_environment(helper: Any, home: Path) -> dict[str, str]:
         "GIT_CONFIG_GLOBAL": os.devnull,
         "PYTHONDONTWRITEBYTECODE": "1",
     }
+
+
+def _read_authenticated_dependency_json(root: Path, name: str) -> tuple[bytes, Any]:
+    """Read one regular manifest already covered by authenticated source-tree identity."""
+
+    path = root / name
+    try:
+        if path.is_symlink() or not path.is_file():
+            raise OSError
+        payload = path.read_bytes()
+        value = json.loads(payload, object_pairs_hook=publication._reject_duplicate_pairs)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise BootstrapSourceAdmissionError(
+            "authenticated Work-Graph dependency manifest is invalid"
+        ) from exc
+    if not payload or len(payload) > MAXIMUM_EVIDENCE_BYTES or not isinstance(value, dict):
+        raise BootstrapSourceAdmissionError(
+            "authenticated Work-Graph dependency manifest is invalid"
+        )
+    return payload, value
+
+
+def _node_dependency_candidates(importer: str, dependency: str) -> tuple[str, ...]:
+    parts = tuple(Path(importer).parts)
+    dependency_parts = tuple(Path(dependency).parts)
+    candidates = [Path(*parts, "node_modules", *dependency_parts).as_posix()]
+    for index in reversed(
+        [position for position, value in enumerate(parts) if value == "node_modules"]
+    ):
+        candidates.append(
+            Path(*parts[:index], "node_modules", *dependency_parts).as_posix()
+        )
+    return tuple(dict.fromkeys(candidates))
+
+
+def _locked_work_graph_dependency_plan(
+    root: Path,
+) -> tuple[dict[str, Any], dict[str, Any], tuple[str, ...]]:
+    """Derive the narrow npm-ci input from authenticated manifest and lock bytes."""
+
+    _, manifest = _read_authenticated_dependency_json(root, "package.json")
+    _, lock = _read_authenticated_dependency_json(root, "package-lock.json")
+    root_dependencies = manifest.get("devDependencies")
+    lock_packages = lock.get("packages")
+    lock_root = lock_packages.get("") if isinstance(lock_packages, dict) else None
+    if (
+        manifest.get("private") is not True
+        or not isinstance(root_dependencies, dict)
+        or root_dependencies.get(_WORK_GRAPH_NODE_PACKAGE)
+        != _WORK_GRAPH_NODE_PACKAGE_VERSION
+        or lock.get("lockfileVersion") != 3
+        or lock.get("requires") is not True
+        or not isinstance(lock_root, dict)
+        or (lock_root.get("devDependencies") or {}).get(_WORK_GRAPH_NODE_PACKAGE)
+        != _WORK_GRAPH_NODE_PACKAGE_VERSION
+    ):
+        raise BootstrapSourceAdmissionError(
+            "authenticated Work-Graph dependency identity is invalid"
+        )
+
+    package_key = f"node_modules/{_WORK_GRAPH_NODE_PACKAGE}"
+    pending = [package_key]
+    selected: dict[str, dict[str, Any]] = {}
+    while pending:
+        key = pending.pop()
+        if key in selected:
+            continue
+        metadata = lock_packages.get(key)
+        if not isinstance(metadata, dict):
+            raise BootstrapSourceAdmissionError(
+                "authenticated Work-Graph dependency closure is incomplete"
+            )
+        version = metadata.get("version")
+        resolved = metadata.get("resolved")
+        integrity = metadata.get("integrity")
+        dependencies = metadata.get("dependencies", {})
+        if (
+            not isinstance(version, str)
+            or not version
+            or (key == package_key and version != _WORK_GRAPH_NODE_PACKAGE_VERSION)
+            or not isinstance(resolved, str)
+            or not resolved.startswith(_NPM_REGISTRY)
+            or not isinstance(integrity, str)
+            or _NPM_INTEGRITY.fullmatch(integrity) is None
+            or not isinstance(dependencies, dict)
+            or any(
+                not isinstance(name, str)
+                or _NPM_PACKAGE_NAME.fullmatch(name) is None
+                or not isinstance(specification, str)
+                for name, specification in dependencies.items()
+            )
+            or metadata.get("link") is True
+            or metadata.get("inBundle") is True
+        ):
+            raise BootstrapSourceAdmissionError(
+                "authenticated Work-Graph dependency identity is invalid"
+            )
+        selected[key] = copy.deepcopy(metadata)
+        for dependency in dependencies:
+            resolved_key = next(
+                (
+                    candidate
+                    for candidate in _node_dependency_candidates(key, dependency)
+                    if candidate in lock_packages
+                ),
+                None,
+            )
+            if resolved_key is None:
+                raise BootstrapSourceAdmissionError(
+                    "authenticated Work-Graph dependency closure is incomplete"
+                )
+            pending.append(resolved_key)
+
+    package_document = {
+        "name": "secpal-authenticated-work-graph-runtime",
+        "private": True,
+        "dependencies": {_WORK_GRAPH_NODE_PACKAGE: _WORK_GRAPH_NODE_PACKAGE_VERSION},
+    }
+    lock_document = {
+        "name": package_document["name"],
+        "lockfileVersion": 3,
+        "requires": True,
+        "packages": {
+            "": {
+                "name": package_document["name"],
+                "dependencies": package_document["dependencies"],
+            },
+            **{key: selected[key] for key in sorted(selected)},
+        },
+    }
+    package_names = tuple(
+        sorted(
+            {
+                key.rsplit("node_modules/", 1)[1].split("/node_modules/", 1)[0]
+                for key in selected
+            }
+        )
+    )
+    return package_document, lock_document, package_names
+
+
+def _trusted_dependency_executable(helper: Any, name: str) -> str:
+    directories = getattr(helper, "TRUSTED_COMMAND_DIRECTORIES", ())
+    if not isinstance(directories, tuple):
+        raise BootstrapSourceAdmissionError("trusted dependency command policy is invalid")
+    for directory in directories:
+        candidate = Path(directory) / name
+        try:
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+        except OSError:
+            continue
+    raise BootstrapSourceAdmissionError(
+        f"trusted {name} executable is unavailable"
+    )
+
+
+def _dependency_file_snapshot(root: Path) -> dict[str, str]:
+    snapshot: dict[str, str] = {}
+    try:
+        for path in sorted(root.rglob("*")):
+            relative = path.relative_to(root).as_posix()
+            if path.is_symlink():
+                raise BootstrapSourceAdmissionError(
+                    "authenticated Work-Graph dependency contains a symlink"
+                )
+            if path.is_dir():
+                continue
+            if not path.is_file():
+                raise BootstrapSourceAdmissionError(
+                    "authenticated Work-Graph dependency contains a special file"
+                )
+            snapshot[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise BootstrapSourceAdmissionError(
+            "authenticated Work-Graph dependency bytes are unavailable"
+        ) from exc
+    if not snapshot:
+        raise BootstrapSourceAdmissionError(
+            "authenticated Work-Graph dependency materialization is empty"
+        )
+    return snapshot
+
+
+def _node_runtime_guard(
+    source_root: Path,
+    dependency_root: Path,
+    node_executable: str,
+    package_names: tuple[str, ...],
+    snapshot: Mapping[str, str],
+) -> str:
+    values = {
+        "source": str(source_root),
+        "dependency": str(dependency_root),
+        "node": str(Path(node_executable).resolve(strict=True)),
+        "packages": list(package_names),
+        "snapshot": dict(snapshot),
+    }
+    encoded = json.dumps(values, sort_keys=True, separators=(",", ":"))
+    return f"""'use strict';
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const Module = require('node:module');
+const path = require('node:path');
+const policy = {encoded};
+const modules = path.join(policy.dependency, 'node_modules');
+if (fs.realpathSync(process.execPath) !== policy.node) throw new Error('untrusted Node executable');
+const actual = {{}};
+function walk(directory) {{
+  for (const entry of fs.readdirSync(directory, {{withFileTypes:true}})) {{
+    const candidate = path.join(directory, entry.name);
+    const relative = path.relative(modules, candidate).split(path.sep).join('/');
+    if (entry.isSymbolicLink()) throw new Error('dependency symlink rejected');
+    if (entry.isDirectory()) walk(candidate);
+    else if (entry.isFile()) actual[relative] = crypto.createHash('sha256').update(fs.readFileSync(candidate)).digest('hex');
+    else throw new Error('dependency special file rejected');
+  }}
+}}
+walk(modules);
+const actualKeys = Object.keys(actual).sort();
+const expectedKeys = Object.keys(policy.snapshot).sort();
+if (JSON.stringify(actualKeys) !== JSON.stringify(expectedKeys) ||
+    actualKeys.some(key => actual[key] !== policy.snapshot[key])) throw new Error('dependency bytes changed');
+const original = Module._resolveFilename;
+const builtins = new Set(Module.builtinModules.map(value => value.replace(/^node:/, '')));
+const allowed = new Set(policy.packages);
+function inside(candidate, root) {{
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative));
+}}
+function packageName(request) {{
+  if (request.startsWith('@')) return request.split('/').slice(0, 2).join('/');
+  return request.split('/', 1)[0];
+}}
+Module._resolveFilename = function(request, parent, isMain, options) {{
+  if (typeof request !== 'string') throw new Error('invalid module request');
+  const builtin = request.startsWith('node:') || builtins.has(request);
+  let resolved;
+  if (builtin) return original.call(this, request, parent, isMain, options);
+  const bare = !request.startsWith('.') && !path.isAbsolute(request);
+  if (bare) {{
+    const selectedPackage = packageName(request);
+    if (!allowed.has(selectedPackage) ||
+        (parent && typeof parent.filename === 'string' && inside(parent.filename, policy.source) &&
+         selectedPackage !== 'markdown-it')) throw new Error('untrusted bare module rejected');
+    const trustedParent = {{id:'secpal-runtime', filename:path.join(policy.dependency, 'entry.cjs'), paths:[modules]}};
+    resolved = original.call(this, request, trustedParent, isMain);
+  }} else {{
+    resolved = original.call(this, request, parent, isMain, options);
+  }}
+  const real = fs.realpathSync(resolved);
+  if (!inside(real, policy.source) && !inside(real, modules)) throw new Error('module resolution escaped authenticated roots');
+  return real;
+}};
+"""
+
+
+@contextmanager
+def _authenticated_work_graph_dependencies(
+    source_root: Path, helper: Any
+) -> Iterator[dict[str, str]]:
+    """Create the narrow lockfile-authenticated Node boundary outside source.
+
+    The private cache begins empty. Network retrieval is therefore allowed, but
+    only for exact authenticated lockfile URLs and integrity digests; registry
+    metadata, host cache bytes, npm configuration, and credentials are not
+    authority. A missing archive or unavailable network fails this operation.
+    """
+
+    source_root = source_root.resolve(strict=True)
+    package_document, lock_document, package_names = (
+        _locked_work_graph_dependency_plan(source_root)
+    )
+    npm = _trusted_dependency_executable(helper, "npm")
+    node = _trusted_dependency_executable(helper, "node")
+    directories = helper.TRUSTED_COMMAND_DIRECTORIES
+    with tempfile.TemporaryDirectory(
+        prefix="secpal-authenticated-work-graph-dependencies-"
+    ) as directory:
+        private_root = Path(directory)
+        private_root.chmod(0o700)
+        acquisition = private_root / "acquisition"
+        dependency_root = private_root / "runtime"
+        cache = private_root / "cache"
+        home = private_root / "home"
+        for path in (acquisition, dependency_root, cache, home):
+            path.mkdir(mode=0o700)
+        user_config = home / "user.npmrc"
+        global_config = home / "global.npmrc"
+        user_config.write_text("", encoding="utf-8")
+        global_config.write_text("", encoding="utf-8")
+        user_config.chmod(0o600)
+        global_config.chmod(0o600)
+        (acquisition / "package.json").write_text(
+            json.dumps(package_document, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        (acquisition / "package-lock.json").write_text(
+            json.dumps(lock_document, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        environment = {
+            "HOME": str(home),
+            "PATH": os.pathsep.join(str(path) for path in directories),
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "NPM_CONFIG_USERCONFIG": str(user_config),
+            "NPM_CONFIG_GLOBALCONFIG": str(global_config),
+            "NPM_CONFIG_CACHE": str(cache),
+            "NPM_CONFIG_REGISTRY": _NPM_REGISTRY,
+            "NPM_CONFIG_REPLACE_REGISTRY_HOST": "never",
+            "NPM_CONFIG_IGNORE_SCRIPTS": "true",
+            "NPM_CONFIG_AUDIT": "false",
+            "NPM_CONFIG_FUND": "false",
+            "NPM_CONFIG_UPDATE_NOTIFIER": "false",
+            "NPM_CONFIG_STRICT_SSL": "true",
+        }
+        try:
+            completed = subprocess.run(
+                [npm, "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+                cwd=acquisition,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=600,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise BootstrapSourceAdmissionError(
+                "authenticated Work-Graph dependency acquisition failed"
+            ) from exc
+        if completed.returncode != 0:
+            raise BootstrapSourceAdmissionError(
+                "authenticated Work-Graph dependency acquisition failed"
+            )
+        acquired_modules = acquisition / "node_modules"
+        runtime_modules = dependency_root / "node_modules"
+        try:
+            shutil.copytree(
+                acquired_modules,
+                runtime_modules,
+                symlinks=True,
+                ignore=shutil.ignore_patterns(".bin", ".package-lock.json"),
+            )
+        except OSError as exc:
+            raise BootstrapSourceAdmissionError(
+                "authenticated Work-Graph dependency materialization failed"
+            ) from exc
+        snapshot = _dependency_file_snapshot(runtime_modules)
+        guard = dependency_root / "runtime-guard.cjs"
+        try:
+            guard.write_text(
+                _node_runtime_guard(
+                    source_root, dependency_root, node, package_names, snapshot
+                ),
+                encoding="utf-8",
+            )
+            for path in sorted(runtime_modules.rglob("*"), reverse=True):
+                path.chmod(0o500 if path.is_dir() else 0o400)
+            runtime_modules.chmod(0o500)
+            guard.chmod(0o400)
+            dependency_root.chmod(0o500)
+        except OSError as exc:
+            raise BootstrapSourceAdmissionError(
+                "authenticated Work-Graph dependency protection failed"
+            ) from exc
+        try:
+            yield {"NODE_OPTIONS": f"--require={guard}"}
+        finally:
+            if _dependency_file_snapshot(runtime_modules) != snapshot:
+                raise BootstrapSourceAdmissionError(
+                    "authenticated Work-Graph dependency bytes changed during execution"
+                )
 
 
 def _execute_entrypoint(root: Path, serialized_authorization: bytes | str) -> Mapping[str, Any]:

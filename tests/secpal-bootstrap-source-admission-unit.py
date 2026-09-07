@@ -12,6 +12,7 @@ import inspect
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -25,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.secpal_pr_review import bootstrap_source_admission as source
 from scripts.secpal_pr_review import fast_path
+from scripts.secpal_work_graph import acceptance_criteria
 
 
 REPOSITORY = "SecPal/.github"
@@ -1177,6 +1179,7 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
             "DYLD_LIBRARY_PATH": "/attacker/dylibs",
             "PYTHONPATH": "/attacker/python",
             "PYTHONHOME": "/attacker/home",
+            "NODE_PATH": "/tmp/node_modules",
             "SECPAL_UNEXPECTED_PARENT_ENV": "attacker-controlled",
         }
         with (
@@ -1200,6 +1203,7 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
             "DYLD_LIBRARY_PATH",
             "PYTHONPATH",
             "PYTHONHOME",
+            "NODE_PATH",
             "SECPAL_UNEXPECTED_PARENT_ENV",
         ):
             self.assertNotIn(key, environment)
@@ -1639,6 +1643,11 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
             validation.parent.mkdir(parents=True, exist_ok=True)
             validation.write_text(body, encoding="utf-8")
 
+    @staticmethod
+    def _copy_dependency_manifests(destination: Path) -> None:
+        for name in ("package.json", "package-lock.json"):
+            shutil.copyfile(Path(name), destination / name)
+
     def test_exact_policy_binds_source_execution_and_validation(self) -> None:
         self.assertEqual(
             (
@@ -1926,7 +1935,12 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
                 mock.patch.object(source, "_trusted_python", return_value=sys.executable),
             ):
                 result = source._execute_pre_enrollment_entrypoint(
-                    fixture, self.policy, invocation
+                    fixture,
+                    self.policy,
+                    invocation,
+                    dependency_environment={
+                        "NODE_OPTIONS": "--require=/authenticated/runtime-guard.cjs"
+                    },
                 )
                 self.assertEqual(result, {"status": "COMPLETE", "exit_status": 0})
             self.assertFalse(marker.exists())
@@ -1987,7 +2001,12 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
                 source, "_trusted_python", return_value=sys.executable
             ):
                 source._execute_pre_enrollment_entrypoint(
-                    fixture, self.policy, invocation
+                    fixture,
+                    self.policy,
+                    invocation,
+                    dependency_environment={
+                        "NODE_OPTIONS": "--require=/authenticated/runtime-guard.cjs"
+                    },
                 )
             self.assertEqual(list(fixture.rglob("*.pyc")), [])
 
@@ -2018,7 +2037,14 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
                 mock.patch.object(source, "_PRE_ENROLLMENT_EXECUTION_TIMEOUT_SECONDS", 0.1),
                 self.assertRaises(source.BootstrapSourceAdmissionError),
             ):
-                source._execute_pre_enrollment_entrypoint(fixture, self.policy, invocation)
+                source._execute_pre_enrollment_entrypoint(
+                    fixture,
+                    self.policy,
+                    invocation,
+                    dependency_environment={
+                        "NODE_OPTIONS": "--require=/authenticated/runtime-guard.cjs"
+                    },
+                )
             time.sleep(0.8)
             self.assertFalse(marker.exists())
 
@@ -2045,7 +2071,14 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
                 mock.patch.object(source, "_trusted_python", return_value=sys.executable),
                 self.assertRaises(source.BootstrapSourceAdmissionError) as raised,
             ):
-                source._execute_pre_enrollment_entrypoint(fixture, self.policy, invocation)
+                source._execute_pre_enrollment_entrypoint(
+                    fixture,
+                    self.policy,
+                    invocation,
+                    dependency_environment={
+                        "NODE_OPTIONS": "--require=/authenticated/runtime-guard.cjs"
+                    },
+                )
             self.assertEqual(raised.exception.diagnostic_identity, "BLOCKED_SECURITY")
             self.assertNotIn("secret", str(raised.exception))
 
@@ -2264,6 +2297,13 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
             calls.append("isolated")
             yield Path("/immutable")
 
+        @contextmanager
+        def dependencies(root, helper):
+            self.assertEqual(root, Path("/immutable"))
+            self.assertIsNotNone(helper)
+            calls.append("dependencies")
+            yield {"NODE_OPTIONS": "--require=/authenticated/runtime-guard.cjs"}
+
         with (
             mock.patch.object(
                 source,
@@ -2300,8 +2340,19 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
             ),
             mock.patch.object(
                 source,
+                "_authenticated_work_graph_dependencies",
+                side_effect=dependencies,
+            ),
+            mock.patch.object(
+                source,
                 "_execute_pre_enrollment_entrypoint",
-                side_effect=lambda *_args: calls.append("execute")
+                side_effect=lambda *_args, **keywords: (
+                    self.assertEqual(
+                        keywords["dependency_environment"],
+                        {"NODE_OPTIONS": "--require=/authenticated/runtime-guard.cjs"},
+                    )
+                    or calls.append("execute")
+                )
                 or {"status": "COMPLETE", "exit_status": 0},
             ),
         ):
@@ -2317,7 +2368,236 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
         )
         self.assertEqual(
             calls,
-            ["github", "isolated", "source", "validation", "tree", "execute", "tree"],
+            [
+                "github", "isolated", "source", "validation", "tree",
+                "dependencies", "execute", "tree",
+            ],
+        )
+
+    def test_authenticated_lock_derives_only_the_markdown_parser_closure(self) -> None:
+        package, lock, names = source._locked_work_graph_dependency_plan(
+            Path.cwd()
+        )
+        self.assertEqual(
+            names,
+            (
+                "argparse", "entities", "linkify-it", "markdown-it",
+                "mdurl", "punycode.js", "uc.micro",
+            ),
+        )
+        self.assertEqual(package["dependencies"], {"markdown-it": "14.3.0"})
+        self.assertEqual(
+            set(lock["packages"]),
+            {"", *(f"node_modules/{name}" for name in names)},
+        )
+        self.assertNotIn("markdownlint", names)
+        self.assertNotIn("prettier", names)
+
+        mutations = (
+            lambda manifest, _lock: manifest["devDependencies"].update(
+                {"markdown-it": "14.2.0"}
+            ),
+            lambda _manifest, value: value["packages"][
+                "node_modules/markdown-it"
+            ].update({"version": "14.2.0"}),
+            lambda _manifest, value: value["packages"][
+                "node_modules/markdown-it"
+            ].update({"integrity": "sha512-!!!"}),
+            lambda _manifest, value: value["packages"].pop(
+                "node_modules/uc.micro"
+            ),
+        )
+        for mutate in mutations:
+            with self.subTest(mutation=mutate), tempfile.TemporaryDirectory() as directory:
+                fixture = Path(directory)
+                self._copy_dependency_manifests(fixture)
+                manifest = json.loads((fixture / "package.json").read_text())
+                locked = json.loads((fixture / "package-lock.json").read_text())
+                mutate(manifest, locked)
+                (fixture / "package.json").write_text(json.dumps(manifest))
+                (fixture / "package-lock.json").write_text(json.dumps(locked))
+                with self.assertRaises(source.BootstrapSourceAdmissionError):
+                    source._locked_work_graph_dependency_plan(fixture)
+
+    def test_dependency_acquisition_is_locked_scriptless_and_credential_free(self) -> None:
+        helper = SimpleNamespace(
+            TRUSTED_COMMAND_DIRECTORIES=(Path("/usr/bin"), Path("/bin")),
+        )
+
+        def materialize(arguments, **keywords):
+            locked = json.loads(
+                (Path(keywords["cwd"]) / "package-lock.json").read_text()
+            )
+            for key in locked["packages"]:
+                if not key:
+                    continue
+                package = Path(keywords["cwd"]) / key
+                package.mkdir(parents=True)
+                (package / "package.json").write_text("{}\n")
+            return subprocess.CompletedProcess(arguments, 0)
+
+        hostile = {
+            "NODE_PATH": "/tmp/node_modules",
+            "NPM_CONFIG_REGISTRY": "https://attacker.invalid/",
+            "NPM_TOKEN": "secret",
+            "GH_TOKEN": "github-secret",
+            "GITHUB_TOKEN": "github-secret-2",
+        }
+        with (
+            mock.patch.dict(os.environ, hostile, clear=False),
+            mock.patch.object(
+                source,
+                "_trusted_dependency_executable",
+                side_effect=lambda _helper, name: f"/usr/bin/{name}",
+            ),
+            mock.patch.object(source.subprocess, "run", side_effect=materialize) as run,
+            source._authenticated_work_graph_dependencies(Path.cwd(), helper) as runtime,
+        ):
+            self.assertEqual(set(runtime), {"NODE_OPTIONS"})
+            self.assertNotIn("NODE_PATH", runtime)
+        arguments, keywords = run.call_args
+        self.assertEqual(
+            arguments,
+            (["/usr/bin/npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],),
+        )
+        self.assertFalse(keywords.get("shell", False))
+        self.assertEqual(keywords["env"]["NPM_CONFIG_IGNORE_SCRIPTS"], "true")
+        self.assertEqual(keywords["env"]["NPM_CONFIG_REGISTRY"], source._NPM_REGISTRY)
+        for key in hostile:
+            if key != "NPM_CONFIG_REGISTRY":
+                self.assertNotIn(key, keywords["env"])
+
+    def test_missing_malformed_or_symlinked_dependency_materialization_fails_closed(
+        self,
+    ) -> None:
+        helper = SimpleNamespace(
+            TRUSTED_COMMAND_DIRECTORIES=(Path("/usr/bin"), Path("/bin")),
+        )
+        with (
+            mock.patch.object(
+                source,
+                "_trusted_dependency_executable",
+                side_effect=lambda _helper, name: f"/usr/bin/{name}",
+            ),
+            mock.patch.object(
+                source.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess([], 0),
+            ),
+            self.assertRaisesRegex(
+                source.BootstrapSourceAdmissionError, "materialization"
+            ),
+        ):
+            with source._authenticated_work_graph_dependencies(Path.cwd(), helper):
+                self.fail("missing dependencies must not execute")
+
+        with tempfile.TemporaryDirectory() as directory:
+            modules = Path(directory) / "node_modules"
+            modules.mkdir()
+            (modules / "markdown-it").symlink_to("/tmp/node_modules")
+            with self.assertRaisesRegex(
+                source.BootstrapSourceAdmissionError, "symlink"
+            ):
+                source._dependency_file_snapshot(modules)
+
+    def test_guard_ignores_ambient_modules_and_rejects_escape_or_changed_bytes(self) -> None:
+        helper = source.authority._load_trusted_command_helper()
+        node = source._trusted_dependency_executable(helper, "node")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_root = root / "private" / "source"
+            dependency_root = root / "runtime"
+            trusted_package = dependency_root / "node_modules" / "markdown-it"
+            ambient = root / "private" / "node_modules"
+            for package in (trusted_package, ambient / "markdown-it", ambient / "unrelated"):
+                package.mkdir(parents=True)
+                (package / "package.json").write_text(
+                    json.dumps({"main": "index.js"})
+                )
+            (trusted_package / "index.js").write_text("module.exports='trusted';\n")
+            (ambient / "markdown-it" / "index.js").write_text(
+                "module.exports='ambient';\n"
+            )
+            (ambient / "unrelated" / "index.js").write_text(
+                "module.exports='ambient-unrelated';\n"
+            )
+            source_root.mkdir()
+            snapshot = source._dependency_file_snapshot(
+                dependency_root / "node_modules"
+            )
+            guard = dependency_root / "runtime-guard.cjs"
+            guard.write_text(
+                source._node_runtime_guard(
+                    source_root,
+                    dependency_root,
+                    node,
+                    ("markdown-it",),
+                    snapshot,
+                )
+            )
+            environment = {
+                "PATH": "/usr/bin:/bin",
+                "NODE_OPTIONS": f"--require={guard}",
+                "NODE_PATH": str(ambient),
+            }
+            trusted = subprocess.run(
+                [node, "-e", "process.stdout.write(require('markdown-it'))"],
+                cwd=source_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual((trusted.returncode, trusted.stdout), (0, "trusted"))
+            for expression in (
+                "require('unrelated')",
+                f"require({str((ambient / 'unrelated' / 'index.js'))!r})",
+            ):
+                rejected = subprocess.run(
+                    [node, "-e", expression], cwd=source_root, env=environment,
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertNotEqual(rejected.returncode, 0)
+
+            (trusted_package / "index.js").write_text("module.exports='changed';\n")
+            changed = subprocess.run(
+                [node, "-e", "require('markdown-it')"], cwd=source_root,
+                env=environment, capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(changed.returncode, 0)
+
+    def test_real_guarded_runtime_preserves_canonical_work_graph_semantics(self) -> None:
+        helper = source.authority._load_trusted_command_helper()
+        node = source._trusted_dependency_executable(helper, "node")
+        real_run = subprocess.run
+
+        def materialize(arguments, **keywords):
+            if Path(arguments[0]).name == "npm":
+                locked = json.loads(
+                    (Path(keywords["cwd"]) / "package-lock.json").read_text()
+                )
+                for key in locked["packages"]:
+                    if not key:
+                        continue
+                    source_package = Path.cwd() / key
+                    shutil.copytree(source_package, Path(keywords["cwd"]) / key)
+                return subprocess.CompletedProcess(arguments, 0)
+            return real_run(arguments, **keywords)
+
+        with (
+            mock.patch.object(source.subprocess, "run", side_effect=materialize),
+            source._authenticated_work_graph_dependencies(Path.cwd(), helper) as runtime,
+        ):
+            parsed = acceptance_criteria.parse(
+                [
+                    "# Acceptance Criteria\n\n- complete\n",
+                    "# Acceptance Criteria\n\n",
+                ],
+                node_executable=node,
+                environment=runtime,
+            )
+        self.assertEqual(
+            [item.has_acceptance_criteria for item in parsed], [True, False]
         )
 
     def test_only_closed_operational_inputs_reach_the_fixed_command(self) -> None:
