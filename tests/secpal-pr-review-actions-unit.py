@@ -7948,6 +7948,39 @@ class FastPathTests(TestCase):
         self.assertEqual(normalized["prior_delivery_head_sha"], remediation_head)
         self.assertEqual(normalized["reviewed_state_digest"], reviewed.state_digest)
 
+    def test_ready_integration_remediation_review_binding_fails_closed(self) -> None:
+        reviewed = fast_feedback()
+        original = ready_integration_evidence(reviewed, validated_tree="a" * 40)
+        original.update(
+            schema_version="1.2",
+            reviewed_head_sha=reviewed.head_sha,
+            prior_delivery_head_sha="9" * 40,
+            ordered_parent_shas=["9" * 40, reviewed.base_sha],
+        )
+        cases = {
+            "missing_reviewed_head": lambda item: item.pop("reviewed_head_sha"),
+            "substituted_reviewed_head": lambda item: item.__setitem__(
+                "reviewed_head_sha", "8" * 40
+            ),
+            "downgraded_schema": lambda item: item.__setitem__(
+                "schema_version", "1.1"
+            ),
+        }
+
+        for case, mutate in cases.items():
+            candidate = copy.deepcopy(original)
+            mutate(candidate)
+            with self.subTest(case=case), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                fast_path.normalize_ready_integration_evidence(
+                    candidate,
+                    repository="SecPal/.github",
+                    reviewed_state=reviewed,
+                    registry=fast_registry(),
+                    validated_tree_sha="a" * 40,
+                )
+
     def test_ready_integration_explicit_selection_rejects_issue_or_signer_substitution(
         self,
     ) -> None:
