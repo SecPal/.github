@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-07 - Unify Validation Registry Projection
+
+**Fixed:**
+
+- Derive validation receipt/final-attestation registry identity and fixed-thread
+  resolution identity from one closed `fast_path` projection owner.
+- Bind an admitted pre-enrollment integration policy consistently in both paths
+  while rejecting unknown projection fields instead of silently dropping them.
+- Preserve immutable evidence-time registry reconstruction for historical Ready
+  integration evidence; current policy cannot reinterpret a historical receipt.
+
 ## 2026-09-07 - Close Pre-Enrollment Completion Gaps
 
 **Fixed:**

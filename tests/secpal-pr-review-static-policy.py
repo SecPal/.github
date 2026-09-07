@@ -634,6 +634,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "normalize_ready_integration_prior_authority",
             "normalize_exceptional_recovery_evidence",
             "validate_manual_gate_evidence",
+            "validation_registry_projection",
             "verify_commit_signatures",
             "verify_validation_attestation",
             "_actual_integration_signer",
