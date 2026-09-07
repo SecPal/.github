@@ -9,6 +9,22 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-07 - Authenticate Isolated Work-Graph Dependencies
+
+**Fixed:**
+
+- Derive a minimal `markdown-it` runtime closure from the exact authenticated
+  pre-enrollment source manifest and lockfile, then materialize it outside the
+  immutable source tree with locked integrity verification and install scripts
+  disabled.
+- Run the canonical Work-Graph parser behind an internally derived Node preload
+  guard that verifies dependency bytes and confines module resolution to the
+  authenticated source and dependency roots, without trusting ambient
+  `node_modules` or caller `NODE_PATH` state.
+- Use a private empty npm cache and closed credential-free configuration; live
+  archive retrieval is permitted only under authenticated lockfile URL and
+  integrity authority and fails closed when unavailable.
+
 ## 2026-09-06 - Accept Canonical Completed Codex Status
 
 **Fixed:**
