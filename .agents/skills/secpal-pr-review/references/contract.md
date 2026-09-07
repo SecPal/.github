@@ -803,7 +803,11 @@ when they contain the same secret-like patterns prohibited in forensic plans.
 The sole-parent rule above remains authoritative for remediation and recovery.
 `attest-validation --integration-evidence` is the distinct, explicitly selected
 exception for one already-authorized Ready-PR integration candidate. Its closed
-version-1.1 evidence kind is `TWO_PARENT_READY_INTEGRATION`; it requires explicit
+version-1.1 and version-1.2 evidence kind is `TWO_PARENT_READY_INTEGRATION`.
+Version 1.1 binds reviewed feedback at parent 1. Version 1.2 requires a distinct
+reviewed predecessor and binds its exact state and feedback digests through
+parent 1's independently verified ordinary receipt and final attestation. It
+requires explicit
 delivery-issue, authorization-ID, and signer selectors and authenticates the
 repository, PR, prior Ready head, live current registered default-branch tip,
 exact ordered parents `[prior Ready head, authorized base head]`, combined tree,

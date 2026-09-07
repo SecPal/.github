@@ -93,8 +93,11 @@ exact live open Draft PR whose head equals that initialization. Consequently a
 competing ordinary genesis cannot cross the absence-check-to-push interval;
 the integrated head must become live before its genesis is admissible.
 
-`attest-validation` also exposes a separately selected version-1.1
-`TWO_PARENT_READY_INTEGRATION` evidence path. It authenticates exactly one
+`attest-validation` also exposes separately selected version-1.1 and
+version-1.2 `TWO_PARENT_READY_INTEGRATION` evidence paths. Version 1.2 requires
+and binds a distinct reviewed predecessor to the exact prior ordinary receipt and final
+attestation when parent 1 is its authenticated remediation successor. Both
+versions authenticate exactly one
 signed two-parent candidate whose first parent is the prior Ready delivery head
 and whose second parent is the explicitly authorized live current registered
 `main` tip. The versioned manifest consumes the maintained protected-journal
