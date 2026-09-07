@@ -9,6 +9,30 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-07 - Bind Remediated Ready Integration Review
+
+**Fixed:**
+
+- Allow Ready integration to retain the one authenticated reviewed snapshot
+  when parent 1 is its separately attested remediation successor.
+- Bind the reviewed head and exact reviewed-state and feedback digests through
+  the prior head's verified receipt and final attestation, while preserving
+  live parent, current-main, lifecycle, signer, and provider checks.
+
+## 2026-09-07 - Converge Pending Ready Publication After Remediation
+
+**Fixed:**
+
+- Converge one authenticated pending Draft-to-Ready publication followed by one
+  exact Ready-preserving remediation head, using the two existing lifecycle
+  successors and protected publication CAS operations.
+- Require live Ready chronology, exact sole-parent lineage, signed source
+  authority, finding identities, verifier-sealed validation and attestation,
+  tree, receipt, and maintained signer evidence instead of trusting ancestry.
+- Resume safely from the exact predecessor, midpoint, or complete state with no
+  duplicate GitHub Ready write, counter replay, event kind, journal, or recovery
+  family; ambiguous chronology fails closed.
+
 ## 2026-09-07 - Unify Validation Registry Projection
 
 **Fixed:**

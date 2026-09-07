@@ -2267,6 +2267,7 @@ def issue_lifecycle_authority(
     accepted_event_signers: frozenset[str],
     accepted_authority_signers: frozenset[str],
     signature_verifier: SignatureVerifier,
+    current_head_evidence: VerifiedValidationEvidence | None = None,
 ) -> dict[str, Any]:
     """Verify predecessor/event authority, derive state, and sign one snapshot."""
 
@@ -2306,6 +2307,39 @@ def issue_lifecycle_authority(
             verified.state, event["transition_kind"], event["event_digest"]
         )
     fields = _authority_unsigned_fields(event=event, predecessor=predecessor, state=state)
+    head_changed = (
+        predecessor is not None
+        and event["resulting_head_sha"] != event["predecessor_head_sha"]
+    )
+    if current_head_evidence is not None:
+        if (
+            not head_changed
+            or not is_verified_validation_evidence(current_head_evidence)
+            or current_head_evidence.repository != event["repository"]
+            or (
+                current_head_evidence.delivery_issue_number is not None
+                and current_head_evidence.delivery_issue_number
+                != event["delivery_issue"]
+            )
+            or current_head_evidence.pull_request_number != event["pull_request"]
+            or current_head_evidence.head_sha != event["resulting_head_sha"]
+        ):
+            raise LifecycleAuthorityError(
+                "head-changing successor current evidence is invalid"
+            )
+        fields["current_head_evidence"] = {
+            "head_sha": current_head_evidence.head_sha,
+            "tree_sha": current_head_evidence.tree_sha,
+            "validation_receipt_digest": (
+                current_head_evidence.validation_receipt_digest
+            ),
+            "source_validation_evidence_digest": (
+                current_head_evidence.source_validation_evidence_digest
+            ),
+            "final_attestation_digest": (
+                current_head_evidence.final_attestation_digest
+            ),
+        }
     fields["signer_identity"] = _require_identity(signer_identity, "authority signer")
     if fields["signer_identity"] not in accepted_authority_signers:
         raise LifecycleAuthorityError("authority signer is not independently accepted")
@@ -2326,10 +2360,6 @@ def _verify_authority_shape(
 ) -> dict[str, Any]:
     fields = set(value) if isinstance(value, Mapping) else set()
     has_current_evidence = fields == AUTHORITY_FIELDS | {"current_head_evidence"}
-    if has_current_evidence and not allow_adopted_observations:
-        raise LifecycleAuthorityError(
-            "ordinary lifecycle authority cannot carry adopted current evidence"
-        )
     authority = _require_closed(
         value,
         AUTHORITY_FIELDS | ({"current_head_evidence"} if has_current_evidence else set()),
@@ -2366,19 +2396,19 @@ def _verify_authority_shape(
         current = _require_closed(
             authority["current_head_evidence"],
             CURRENT_HEAD_EVIDENCE_FIELDS,
-            "adopted current-head evidence",
+            "current-head evidence",
         )
         if current["head_sha"] != authority["head_sha"]:
             raise LifecycleAuthorityError(
-                "adopted current-head evidence does not bind authority head"
+                "current-head evidence does not bind authority head"
             )
-        _require_oid(current["tree_sha"], "adopted current tree")
+        _require_oid(current["tree_sha"], "current tree")
         for field in (
             "validation_receipt_digest",
             "source_validation_evidence_digest",
             "final_attestation_digest",
         ):
-            _require_digest(current[field], f"adopted current {field}")
+            _require_digest(current[field], f"current {field}")
     signer = _require_identity(authority["signer_identity"], "authority signer")
     signed = {
         key: copy.deepcopy(item) for key, item in authority.items() if key != "authority_digest"
@@ -2428,6 +2458,10 @@ def _verify_lifecycle_authority_objects(
     previous: dict[str, Any] | None = None
     current_state: dict[str, Any] | None = None
     verified_authority: dict[str, Any] | None = None
+    current_tree: str | None = None
+    current_receipt: str | None = None
+    current_source: str | None = None
+    current_attestation: str | None = None
     for index, raw in enumerate(authority_chain):
         item = _verify_authority_shape(
             raw,
@@ -2487,6 +2521,31 @@ def _verify_lifecycle_authority_objects(
         )
         if item["pull_request"] != resulting_pr:
             raise LifecycleAuthorityError("authority pull-request continuity is invalid")
+        current_evidence = item.get("current_head_evidence")
+        delivery_identity_changed = (
+            event["predecessor_head_sha"] is not None
+            and (
+                event["resulting_head_sha"] != event["predecessor_head_sha"]
+                or (previous is not None and resulting_pr != previous["pull_request"])
+            )
+        )
+        if current_evidence is not None:
+            if (
+                event["predecessor_head_sha"] is None
+                or event["resulting_head_sha"] == event["predecessor_head_sha"]
+            ):
+                raise LifecycleAuthorityError(
+                    "unchanged lifecycle successor cannot replace current evidence"
+                )
+            current_tree = current_evidence["tree_sha"]
+            current_receipt = current_evidence["validation_receipt_digest"]
+            current_source = current_evidence["source_validation_evidence_digest"]
+            current_attestation = current_evidence["final_attestation_digest"]
+        elif delivery_identity_changed:
+            current_tree = None
+            current_receipt = None
+            current_source = None
+            current_attestation = None
         previous = item
         current_state = derived
         verified_authority = item
@@ -2505,6 +2564,10 @@ def _verify_lifecycle_authority_objects(
         head_sha=verified_authority["head_sha"],
         state=copy.deepcopy(current_state),
         authority_signer_identity=verified_authority["signer_identity"],
+        tree_sha=current_tree,
+        validation_receipt_digest=current_receipt,
+        source_validation_evidence_digest=current_source,
+        adoption_source_evidence_digest=current_attestation,
     )
     if expected is not None:
         _compare_expected(result, expected)

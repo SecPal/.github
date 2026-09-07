@@ -558,8 +558,19 @@ class LifecycleAuthorityTests(TestCase):
             fixture_attestation,
             **arguments,
             commit_validation_receipt_digest=fixture_receipt["receipt_digest"],
+            delivery_issue_number=ISSUE,
         )
         self.assertTrue(fast_path.is_verified_validation_evidence(positive))
+        self.assertEqual(positive.delivery_issue_number, ISSUE)
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "delivery issue identity"
+        ):
+            fast_path.verify_validation_attestation(
+                fixture_attestation,
+                **arguments,
+                commit_validation_receipt_digest=fixture_receipt["receipt_digest"],
+                delivery_issue_number=str(ISSUE),
+            )
         self.assertNotIn(
             fixture_receipt["receipt_digest"], (historical, observed_fresh)
         )

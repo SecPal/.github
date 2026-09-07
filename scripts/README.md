@@ -93,8 +93,11 @@ exact live open Draft PR whose head equals that initialization. Consequently a
 competing ordinary genesis cannot cross the absence-check-to-push interval;
 the integrated head must become live before its genesis is admissible.
 
-`attest-validation` also exposes a separately selected version-1.1
-`TWO_PARENT_READY_INTEGRATION` evidence path. It authenticates exactly one
+`attest-validation` also exposes separately selected version-1.1 and
+version-1.2 `TWO_PARENT_READY_INTEGRATION` evidence paths. Version 1.2 requires
+and binds a distinct reviewed predecessor to the exact prior ordinary receipt and final
+attestation when parent 1 is its authenticated remediation successor. Both
+versions authenticate exactly one
 signed two-parent candidate whose first parent is the prior Ready delivery head
 and whose second parent is the explicitly authorized live current registered
 `main` tip. The versioned manifest consumes the maintained protected-journal
@@ -509,6 +512,20 @@ fingerprints, and every detached result is cryptographically verified against
 the accepted policy credential before becoming a `Signer` result. Selection
 keeps the existing closed non-interactive environment and does not use an SSH
 agent, inspect private-key contents, search for keys, or mutate Git config.
+
+The executor additionally converges one fixed publication-lag shape without a
+new lifecycle primitive: an authenticated pending `DRAFT_TO_READY` at H0,
+followed by exactly one authenticated Ready-only `REMEDIATION_COMPLETED` source
+advance to sole-child H1. It requires complete GitHub Ready chronology, the
+existing signed source authorization and findings, verifier-sealed validation
+and attestation evidence, exact tree, live GitHub-valid signature status, and a
+local signature fingerprint matching the maintained key set. It sequentially
+publishes the two existing successors. Predecessor, midpoint, and complete
+re-entry are idempotent; ambiguity and ancestry-only claims fail closed, and
+GitHub is never written again when already Ready. Accepted main exposes this
+fixed operation as `converge_pending_ready_head_advancement`; the closed #810
+first-executor bootstrap remains historical and does not dispatch later
+accepted-main entry points.
 
 ### `secpal_pr_review/lifecycle_publication.py`
 
