@@ -2445,6 +2445,100 @@ class LifecycleAuthorityTests(TestCase):
 
 
 class ValidationEvidenceLossTests(TestCase):
+    def commit_fixture(self, root: Path) -> str:
+        subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(root), "-c", "user.name=Test",
+                        "-c", "user.email=test@example.invalid", "commit", "--quiet",
+                        "-m", "fixture"], check=True)
+        return subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"],
+                                       text=True).strip()
+
+    def test_current_safety_profile_does_not_project_unrelated_repository_tests(self) -> None:
+        helper = self.loss.transport._load_actions_helper()
+        entry = helper.select_repository(helper.load_registry(), REPOSITORY)
+        paths = self.loss._current_validation_harness_paths("HEAD", helper, entry)
+        self.assertEqual(paths, ("tests/pre-enrollment-current-safety.py",))
+
+    def test_current_safety_profile_rejects_implementation_overlay(self) -> None:
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            self.loss._admit_current_safety_path("scripts/secpal_pr_review/fast_path.py")
+
+    def test_historical_candidate_with_current_profile_is_closed_and_isolated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            accepted, source, poison = (Path(directory) / name for name in ("main", "source", "poison"))
+            (accepted / "tests").mkdir(parents=True)
+            source.mkdir()
+            poison.mkdir()
+            (source / "product.py").write_text("VALUE = 'historical'\n")
+            (poison / "product.py").write_text("raise RuntimeError('host import')\n")
+            self.commit_fixture(source)
+            (accepted / "product.py").write_text("VALUE = 'current'\ndef later_api(): pass\n")
+            harness = (
+                "import product, json\n"
+                "def main(arguments):\n"
+                "    assert not arguments\n"
+                "    assert product.VALUE == 'historical'\n"
+                "    assert not hasattr(product, 'later_api')\n"
+                f"    print(json.dumps({list(self.loss.CURRENT_SAFETY_INVARIANTS)!r}))\n"
+                "    return 0\n"
+            )
+            (accepted / self.loss.CURRENT_SAFETY_PATH).write_text(harness)
+            (accepted / "tests/unrelated.py").write_text("import product\nproduct.later_api()\n")
+            main_oid = self.commit_fixture(accepted)
+            old = subprocess.run(
+                [sys.executable, "-I", "-S", "-B", "-c",
+                 "import sys; sys.path.append(sys.argv[1]); import product; product.later_api()",
+                 str(source)], capture_output=True,
+            )
+            self.assertNotEqual(old.returncode, 0)
+            self.assertIn(b"AttributeError", old.stderr)
+            with patch.object(self.loss, "ROOT", accepted), patch.dict(os.environ, {
+                "PYTHONPATH": str(poison), "PYTHONHOME": str(poison),
+            }):
+                profile = self.loss._current_safety_profile(main_oid)
+                with self.loss._current_policy_validation_root(
+                    main_oid, source_root=source, helper=None, entry=None,
+                ) as execution_root:
+                    self.assertFalse((execution_root / "tests/unrelated.py").exists())
+                    self.loss._run_current_safety(main_oid, execution_root, profile)
+                    for key, replacement in (("timeout_seconds", 1),
+                                             ("required_invariants", []),
+                                             ("validation_command_set", []),
+                                             ("validation_command_set_digest", "0" * 64)):
+                        with self.subTest(key=key), self.assertRaises(authority.LifecycleAuthorityError):
+                            self.loss._run_current_safety(main_oid, execution_root,
+                                                         {**profile, key: replacement})
+                for relative, content in (("product.py", "VALUE = 'current'\n"),
+                                          ("third-tree.py", "pass\n"),
+                                          ("tests/unrelated.py", "pass\n"),
+                                          ("product.pyc", "bytecode")):
+                    with self.subTest(relative=relative), self.assertRaises(authority.LifecycleAuthorityError):
+                        with self.loss._current_policy_validation_root(
+                            main_oid, source_root=source, helper=None, entry=None,
+                        ) as execution_root:
+                            (execution_root / relative).write_text(content)
+                with self.assertRaisesRegex(authority.LifecycleAuthorityError, "overlap"):
+                    self.loss._verify_current_safety_root(source, "a" * 40,
+                        "100644 blob " + "b" * 40 + "\tproduct.py\0",
+                        {"product.py": ("100644", "b" * 40, 0)})
+                with patch.object(self.loss.transport, "_run_isolated_python", return_value=
+                                  subprocess.CompletedProcess([], 0, b"[]", b"")):
+                    with self.assertRaisesRegex(authority.LifecycleAuthorityError, "coverage incomplete"):
+                        self.loss._run_current_safety(main_oid, source, profile)
+                for output, expected in (
+                    (b'["complete_feedback"]', "failed: complete_feedback"),
+                    (b'["host-secret"]', "failure report invalid"),
+                    (b'[]', "failure report invalid"),
+                    (b'not-json', "failure report invalid"),
+                ):
+                    with self.subTest(output=output), patch.object(
+                        self.loss.transport, "_run_isolated_python", return_value=
+                        subprocess.CompletedProcess([], 1, output, b"untrusted stderr")
+                    ), self.assertRaisesRegex(authority.LifecycleAuthorityError, expected):
+                        self.loss._run_current_safety(main_oid, source, profile)
+            self.assertEqual((source / "product.py").read_text(), "VALUE = 'historical'\n")
+
     def setUp(self) -> None:
         from scripts.secpal_pr_review import validation_evidence_loss as loss
 
@@ -2620,19 +2714,21 @@ class ValidationEvidenceLossTests(TestCase):
             self.loss, "_source_signature", return_value="3" * 64
         ), patch.object(self.loss.transport, "_exact_trailer", return_value=self.record["historical_validation_receipt_digest"]), patch.object(
             self.loss, "_current_policy_validation_root", return_value=nullcontext(validation_root)
-        ) as current_harness:
-            with patch.object(self.loss, "_prepare_dependencies"), patch.object(self.loss, "_verify_source_bytes"):
+        ) as current_harness, patch.object(
+            self.loss, "_current_safety_profile", return_value={"validation_command_set": []}
+        ), patch.object(self.loss, "_run_current_safety") as safety:
+            with patch.object(self.loss, "_verify_source_bytes"):
                 result = self.loss._acquire(REPOSITORY, 827, execute_validation=True)
             self.assertTrue(result["current_safety"]["successful_result"])
             current_harness.assert_called_once_with(
                 "c" * 40, source_root=ANY, helper=helper, entry=entry,
             )
-            helper._run_registered_validations.assert_called_once_with(entry, validation_root)
-            helper._run_registered_validations.reset_mock()
-            with patch.object(self.loss, "_prepare_dependencies") as prepare, patch.object(self.loss, "_verify_source_bytes"):
+            safety.assert_called_once_with("c" * 40, validation_root, {"validation_command_set": []})
+            safety.reset_mock()
+            with patch.object(self.loss, "_verify_source_bytes"):
                 self.loss._acquire(REPOSITORY, 827, execute_validation=False)
-            prepare.assert_not_called()
             helper._run_registered_validations.assert_not_called()
+            safety.assert_not_called()
 
     def test_source_mutation_cannot_hide_behind_index_flags(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2658,36 +2754,6 @@ class ValidationEvidenceLossTests(TestCase):
             source.symlink_to("/dev/null")
             with self.assertRaises(authority.LifecycleAuthorityError):
                 self.loss._verify_source_bytes(root, tree)
-
-    def test_dependency_setup_is_fixed_locked_and_credential_free(self) -> None:
-        helper = SimpleNamespace(
-            _validation_executable=lambda command, working, root: "/usr/bin/npm",
-            LOCAL_VALIDATION_COMMAND_DIRECTORIES=(Path("/usr/bin"), Path("/bin")),
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            with patch.object(self.loss.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run:
-                self.loss._prepare_dependencies(Path(directory), helper)
-            args, keywords = run.call_args
-            self.assertEqual(args[0], ["/usr/bin/npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"])
-            self.assertFalse(keywords.get("shell", False))
-            self.assertEqual(keywords["timeout"], 600)
-            self.assertEqual(set(keywords["env"]), {
-                "HOME", "PATH", "LANG", "LC_ALL", "NPM_CONFIG_USERCONFIG", "NPM_CONFIG_GLOBALCONFIG",
-            })
-            self.assertNotEqual(keywords["env"]["NPM_CONFIG_USERCONFIG"], keywords["env"]["NPM_CONFIG_GLOBALCONFIG"])
-            for key in ("NPM_CONFIG_USERCONFIG", "NPM_CONFIG_GLOBALCONFIG"):
-                self.assertEqual(Path(keywords["env"][key]).parent, Path(keywords["env"]["HOME"]))
-
-    def test_dependency_environment_is_accepted_by_real_npm(self) -> None:
-        real_run = subprocess.run
-
-        def probe_config(arguments: list[str], **keywords: Any) -> Any:
-            return real_run([arguments[0], "config", "get", "ignore-scripts"], **keywords)
-
-        with tempfile.TemporaryDirectory() as directory, patch.object(
-            self.loss.subprocess, "run", side_effect=probe_config
-        ):
-            self.loss._prepare_dependencies(Path(directory), self.loss.transport._load_actions_helper())
 
     def provider_facts(self) -> list[Any]:
         history = self.record["observed_pre_enrollment_history"]
@@ -3078,7 +3144,7 @@ class ValidationEvidenceLossTests(TestCase):
             for root, marker in ((accepted, "current"), (source, "historical")):
                 (root / "tests").mkdir()
                 (root / "scripts").mkdir()
-                (root / "tests/harness.py").write_text(f"{marker} harness\n")
+                (root / self.loss.CURRENT_SAFETY_PATH).write_text(f"{marker} harness\n")
                 (root / "tests/harness.sh").write_text(
                     "#!/usr/bin/env bash\n"
                     + ("test \"$(cat product.py)\" = \"historical product\"\n" if marker == "current" else "exit 41\n")
@@ -3110,35 +3176,20 @@ class ValidationEvidenceLossTests(TestCase):
                 with self.loss._current_policy_validation_root(
                     accepted_head, source_root=source, helper=helper, entry={},
                 ) as execution_root:
-                    self.assertEqual((execution_root / "tests/harness.py").read_text(), "current harness\n")
-                    self.assertEqual((execution_root / "scripts/preflight.sh").read_text(), "current preflight\n")
-                    self.assertEqual((execution_root / "package.json").read_text(), '{"marker":"current"}\n')
+                    self.assertEqual((execution_root / self.loss.CURRENT_SAFETY_PATH).read_text(), "current harness\n")
+                    self.assertEqual((execution_root / "scripts/preflight.sh").read_text(), "historical preflight\n")
+                    self.assertEqual((execution_root / "package.json").read_text(), '{"marker":"historical"}\n')
                     self.assertEqual((execution_root / "product.py").read_text(), "historical product\n")
                     self.assertEqual(
-                        stat.S_IMODE((execution_root / "tests/harness.py").stat().st_mode), 0o644,
+                        stat.S_IMODE((execution_root / self.loss.CURRENT_SAFETY_PATH).stat().st_mode), 0o644,
                     )
-                    self.assertEqual(
-                        stat.S_IMODE((execution_root / "tests/harness.sh").stat().st_mode), 0o755,
-                    )
-                current_helper = self.loss.transport._load_actions_helper()
-                current_entry = {
-                    "focused_validation": [{
-                        "argv": ["./tests/harness.sh"],
-                        "working_directory": ".",
-                        "purpose": "Exercise accepted-current harness against historical source",
-                    }],
-                    "required_local_validation": [],
-                }
-                with self.loss._current_policy_validation_root(
-                    accepted_head, source_root=source, helper=current_helper, entry=current_entry,
-                ) as execution_root:
-                    self.assertTrue(current_helper._run_registered_validations(current_entry, execution_root))
-                (accepted / "tests/harness.py").write_text("candidate harness\n")
+                    self.assertFalse((execution_root / "tests/harness.sh").exists())
+                (accepted / self.loss.CURRENT_SAFETY_PATH).write_text("candidate harness\n")
                 with self.loss._current_policy_validation_root(
                     accepted_head, source_root=source, helper=helper, entry={},
                 ) as execution_root:
                     self.assertEqual(
-                        (execution_root / "tests/harness.py").read_text(),
+                        (execution_root / self.loss.CURRENT_SAFETY_PATH).read_text(),
                         "current harness\n",
                     )
                 with self.assertRaisesRegex(
@@ -3147,19 +3198,15 @@ class ValidationEvidenceLossTests(TestCase):
                     with self.loss._current_policy_validation_root(
                         accepted_head, source_root=source, helper=helper, entry={},
                     ) as execution_root:
-                        (execution_root / "tests/harness.py").write_text("mutated after copy\n")
+                        (execution_root / self.loss.CURRENT_SAFETY_PATH).write_text("mutated after copy\n")
 
-            self.assertEqual((source / "tests/harness.py").read_text(), "historical harness\n")
+            self.assertEqual((source / self.loss.CURRENT_SAFETY_PATH).read_text(), "historical harness\n")
             self.assertEqual((source / "product.py").read_text(), "historical product\n")
-            unsupported = SimpleNamespace(_complete_validation_commands=lambda entry: (
-                {"argv": ["python3", "historical-validator.py"]},
-            ))
             with patch.object(self.loss, "ROOT", accepted):
-                with self.assertRaisesRegex(authority.LifecycleAuthorityError, "harness-source boundary"):
-                    with self.loss._current_policy_validation_root(
-                        accepted_head, source_root=source, helper=unsupported, entry={},
-                    ):
-                        self.fail("unsupported historical harness command was accepted")
+                profile = self.loss._current_safety_profile(accepted_head)
+                profile["validation_command_set"][0]["argv"] = ["python3", "historical-validator.py"]
+                with self.assertRaisesRegex(authority.LifecycleAuthorityError, "command drift"):
+                    self.loss._run_current_safety(accepted_head, source, profile)
 
     def test_large_authenticated_current_harness_bypasses_external_evidence_transport(self) -> None:
         payload = b"# maintained validation harness\n" + (b"x" * (450 * 1024))
@@ -3171,8 +3218,9 @@ class ValidationEvidenceLossTests(TestCase):
             source = temporary / "source"
             (accepted / "tests").mkdir(parents=True)
             source.mkdir()
-            (accepted / "tests/large_harness.py").write_bytes(payload)
+            (accepted / self.loss.CURRENT_SAFETY_PATH).write_bytes(payload)
             (source / "product.py").write_text("historical product\n")
+            self.commit_fixture(source)
             subprocess.run(["git", "-C", str(accepted), "init", "--quiet"], check=True)
             subprocess.run(["git", "-C", str(accepted), "add", "."], check=True)
             subprocess.run(
@@ -3187,7 +3235,7 @@ class ValidationEvidenceLossTests(TestCase):
                 ["git", "-C", str(accepted), "rev-parse", "HEAD"], text=True,
             ).strip()
             expected_blob = subprocess.check_output(
-                ["git", "-C", str(accepted), "rev-parse", f"{accepted_head}:tests/large_harness.py"],
+                ["git", "-C", str(accepted), "rev-parse", f"{accepted_head}:{self.loss.CURRENT_SAFETY_PATH}"],
                 text=True,
             ).strip()
             self.assertEqual(
@@ -3212,66 +3260,41 @@ class ValidationEvidenceLossTests(TestCase):
                     accepted_head, source_root=source, helper=helper, entry={},
                 ) as execution_root:
                     self.assertEqual(
-                        (execution_root / "tests/large_harness.py").read_bytes(), payload,
+                        (execution_root / self.loss.CURRENT_SAFETY_PATH).read_bytes(), payload,
                     )
                     self.assertEqual(
                         subprocess.check_output(
                             [
                                 "git", "-C", str(accepted), "hash-object", "--no-filters",
-                                "--", str(execution_root / "tests/large_harness.py"),
+                                "--", str(execution_root / self.loss.CURRENT_SAFETY_PATH),
                             ],
                             text=True,
                         ).strip(),
                         expected_blob,
                     )
 
-    def test_827_target_shape_materializes_full_registered_main_harness(self) -> None:
-        self.assertEqual(self.record["delivery_issue"], 827)
-        self.assertEqual(self.record["pull_request"], 830)
-        self.assertEqual(
-            self.record["head_sha"], "7fd0467c321f1c2b9a06494f4a0c46531c9cc006",
-        )
-        self.assertEqual(
-            self.record["tree_sha"], "ab8da939ca30a3b906f22c471031083f7132ff94",
-        )
-        self.assertEqual(
-            self.record["historical_validation_receipt_digest"],
-            "d0905955b07c580930ddf05595372c5c13c74387a074907ede4a33ddf1eafb38",
-        )
-        main_oid = subprocess.check_output(
-            ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], text=True,
-        ).strip()
-        helper = self.loss.transport._load_actions_helper()
-        entry = helper.select_repository(helper.load_registry(), REPOSITORY)
-        paths = self.loss._current_validation_harness_paths(main_oid, helper, entry)
-        bindings = {
-            path: self.loss._current_harness_blob(main_oid, path) for path in paths
-        }
-        large_path, large_binding = max(
-            bindings.items(), key=lambda item: item[1][2],
-        )
-        self.assertGreater(large_binding[2], 400 * 1024)
+    def test_closed_profile_materializes_only_authenticated_harness(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
+            accepted = Path(directory) / "accepted"
+            (accepted / "tests").mkdir(parents=True)
+            (accepted / self.loss.CURRENT_SAFETY_PATH).write_bytes(
+                (REPO_ROOT / self.loss.CURRENT_SAFETY_PATH).read_bytes())
+            main_oid = self.commit_fixture(accepted)
             source = Path(directory) / "historical-source"
             source.mkdir()
             (source / "historical-product.py").write_text("immutable source\n")
-            with self.loss._current_policy_validation_root(
-                main_oid, source_root=source, helper=helper, entry=entry,
-            ) as execution_root:
-                self.assertEqual(
-                    {path for path in paths if (execution_root / path).is_file()},
-                    set(paths),
-                )
-                self.assertEqual(
-                    (execution_root / large_path).read_bytes(),
-                    subprocess.check_output(
-                        ["git", "-C", str(REPO_ROOT), "cat-file", "blob", large_binding[1]],
-                    ),
-                )
-                self.assertEqual(
-                    (execution_root / "historical-product.py").read_text(),
-                    "immutable source\n",
-                )
+            self.commit_fixture(source)
+            with patch.object(self.loss, "ROOT", accepted):
+                profile = self.loss._current_safety_profile(main_oid)
+                self.assertEqual(profile["validation_command_set_digest"],
+                                 authority.digest_json(profile["validation_command_set"]))
+                with self.loss._current_policy_validation_root(
+                    main_oid, source_root=source, helper=None, entry=None,
+                ) as execution_root:
+                    self.assertEqual((execution_root / self.loss.CURRENT_SAFETY_PATH).read_bytes(),
+                                     (accepted / self.loss.CURRENT_SAFETY_PATH).read_bytes())
+                    self.assertEqual((execution_root / "historical-product.py").read_text(),
+                                     "immutable source\n")
 
     def test_current_harness_git_object_boundary_rejects_unsafe_entries(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3411,6 +3434,8 @@ class ValidationEvidenceLossTests(TestCase):
             source = Path(directory) / "source"
             root.mkdir()
             source.mkdir()
+            (source / "product.py").write_text("candidate\n")
+            self.commit_fixture(source)
             (root / "package.json").write_text("{}\n")
             subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
             subprocess.run(["git", "-C", str(root), "add", "."], check=True)
@@ -3570,7 +3595,7 @@ class ValidationEvidenceLossTests(TestCase):
                         process_owners.append((function.name, call.func.attr))
         self.assertEqual(
             process_owners,
-            [("_prepare_dependencies", "run"), ("_copy_current_harness_file", "run")],
+            [("_copy_current_harness_file", "run")],
         )
 
     def test_issuer_uses_existing_migration_role_only_after_acquisition(self) -> None:

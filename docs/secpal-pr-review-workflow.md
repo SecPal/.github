@@ -404,10 +404,21 @@ boundary into canonical typed facts; admission consumes only those facts and doe
 not repeat provider parsing.
 The protected lifecycle journal must prove CURRENT and native admission absent.
 
-Current safety executes the current registered command sequence using accepted-
-current harness bytes over a disposable execution copy of that exact signed
-source. The historical checkout supplies source under validation, never the
-validation harness or command authority. Source bytes are checked
+Current safety executes the closed accepted-main
+`PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_CURRENT_SAFETY` profile, not every later
+repository regression. Its maintained assertions cover the applicable recovery
+and adoption safety contract without requiring unrelated newer implementation
+APIs. Normal repository Complete Validation remains unchanged for the delivery
+that changes this policy.
+
+The profile binds its version, harness Git blob/mode/size, command set and digest,
+120-second bound, exact successful result and required invariant inventory.
+Only `tests/pre-enrollment-current-safety.py` is projected into a disposable
+execution copy. All non-test candidate files retain their exact parked bytes;
+no implementation overlay, dual-version runtime or synthetic integration is
+permitted. Historical tests do not supply assertion authority. The existing
+isolated Python runner excludes environment paths and site initialization, and
+the disposable tree rejects undeclared files, bytecode and symlinks. Source bytes are checked
 independently of index flags before and after execution. Every captured source,
 including resolved/outdated threads, replies, review submissions and conversation
 comments, must match the accepted technical decision inventory. Blocking,
@@ -415,6 +426,11 @@ incomplete or changed decisions reject. This is current safety, not another
 unrestricted review. Source, feedback or accepted-main drift invalidates live
 verification. Fresh safety identity and historical receipt provenance are
 separate bindings and must differ.
+
+The existing version-1 admission binds this profile through its policy and
+command-set digests, with `validated_tree_sha` still naming the parked tree.
+Changed policy cannot authenticate previously signed bytes as evidence for the
+new profile: live verification rederives these bindings and rejects drift.
 
 The version-1 loss admission permits only review 1, remediation 2, Ready
 transitions 0, Draft true, Ready false, no exceptional history and no Cycle 3.
