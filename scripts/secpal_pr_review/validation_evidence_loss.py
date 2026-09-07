@@ -529,30 +529,167 @@ def _current_validation_harness_paths(main: str, helper: Any, entry: Any) -> tup
     return tuple(sorted(paths))
 
 
-def _copy_current_harness_file(main: str, relative: str, destination_root: Path) -> None:
-    path = Path(relative)
-    if path.is_absolute() or ".." in path.parts or not relative:
+def _current_harness_blob(main: str, relative: str) -> tuple[str, str, int]:
+    """Bind one registered path to its exact regular blob in protected main."""
+
+    if not isinstance(relative, str):
         raise authority.LifecycleAuthorityError("current validation harness path is unsafe")
-    source = ROOT / path
-    if source.is_symlink() or not source.is_file():
+    path = Path(relative)
+    if (
+        not relative or path.is_absolute() or ".." in path.parts
+        or path.as_posix() != relative
+    ):
+        raise authority.LifecycleAuthorityError("current validation harness path is unsafe")
+    record = transport._git(
+        ROOT,
+        ["ls-tree", "-z", "--full-tree", main, "--", f":(literal){relative}"],
+    ).stdout
+    if not record.endswith(b"\0") or record.count(b"\0") != 1:
         raise authority.LifecycleAuthorityError("current validation harness file is unavailable")
     try:
-        payload = source.read_bytes()
+        metadata, separator, observed_path = record[:-1].decode("utf-8", "strict").partition("\t")
+    except UnicodeDecodeError as exc:
+        raise authority.LifecycleAuthorityError("current validation harness listing is malformed") from exc
+    fields = metadata.split()
+    if (
+        separator != "\t" or observed_path != relative or len(fields) != 3
+        or fields[0] not in {"100644", "100755"} or fields[1] != "blob"
+    ):
+        raise authority.LifecycleAuthorityError("current validation harness mode is invalid")
+    try:
+        blob_oid = authority._require_oid(fields[2], "current validation harness blob")
+    except authority.LifecycleAuthorityError as exc:
+        raise authority.LifecycleAuthorityError("current validation harness blob is invalid") from exc
+    size_result = transport._git(ROOT, ["cat-file", "-s", blob_oid]).stdout
+    try:
+        size_text = size_result.decode("ascii", "strict").strip()
+    except UnicodeDecodeError as exc:
+        raise authority.LifecycleAuthorityError("current validation harness size is invalid") from exc
+    if not size_text.isdecimal():
+        raise authority.LifecycleAuthorityError("current validation harness size is invalid")
+    return fields[0], blob_oid, int(size_text)
+
+
+def _verify_current_harness_file(
+    destination_root: Path, relative: str, mode: str, blob_oid: str, size: int,
+) -> None:
+    destination = destination_root / relative
+    for parent in destination.parents:
+        if parent == destination_root:
+            break
+        if parent.is_symlink():
+            raise authority.LifecycleAuthorityError("current validation harness path is unsafe")
+    try:
+        metadata = destination.lstat()
     except OSError as exc:
         raise authority.LifecycleAuthorityError("current validation harness file is unavailable") from exc
-    actual = transport._git(ROOT, ["hash-object", "--stdin"], input_bytes=payload).stdout.decode(
-        "ascii", "strict"
+    expected_permissions = 0o755 if mode == "100755" else 0o644
+    if (
+        not stat.S_ISREG(metadata.st_mode) or metadata.st_size != size
+        or stat.S_IMODE(metadata.st_mode) != expected_permissions
+    ):
+        raise authority.LifecycleAuthorityError("current validation harness mode or size changed")
+    actual = transport._git_text(
+        ROOT, ["hash-object", "--no-filters", "--", str(destination)],
     ).strip()
-    expected = transport._git_text(ROOT, ["rev-parse", f"{main}:{relative}"]).strip()
-    if actual != expected:
+    if actual != blob_oid:
         raise authority.LifecycleAuthorityError("current validation harness bytes are not accepted main")
-    tree_entry = transport._git_text(ROOT, ["ls-tree", main, "--", relative]).split()
-    if len(tree_entry) < 3 or tree_entry[0] not in {"100644", "100755"} or tree_entry[1] != "blob":
-        raise authority.LifecycleAuthorityError("current validation harness mode is invalid")
+
+
+def _create_harness_parent(destination_root: Path, relative: Path) -> Path:
+    """Create only real directories below the private disposable root."""
+
+    try:
+        root_metadata = destination_root.lstat()
+    except OSError as exc:
+        raise authority.LifecycleAuthorityError("current validation harness root is unavailable") from exc
+    if not stat.S_ISDIR(root_metadata.st_mode) or destination_root.is_symlink():
+        raise authority.LifecycleAuthorityError("current validation harness root is unsafe")
+    parent = destination_root
+    for part in relative.parent.parts:
+        parent /= part
+        try:
+            metadata = parent.lstat()
+        except FileNotFoundError:
+            try:
+                parent.mkdir(mode=0o755)
+                metadata = parent.lstat()
+            except OSError as exc:
+                raise authority.LifecycleAuthorityError(
+                    "current validation harness path is unavailable"
+                ) from exc
+        except OSError as exc:
+            raise authority.LifecycleAuthorityError(
+                "current validation harness path is unavailable"
+            ) from exc
+        if not stat.S_ISDIR(metadata.st_mode) or parent.is_symlink():
+            raise authority.LifecycleAuthorityError("current validation harness path is unsafe")
+    return parent
+
+
+def _copy_current_harness_file(
+    main: str,
+    relative: str,
+    destination_root: Path,
+    *,
+    registered_paths: frozenset[str],
+) -> tuple[str, str, int]:
+    if relative not in registered_paths:
+        raise authority.LifecycleAuthorityError("current validation harness path is not registered")
+    mode, blob_oid, size = _current_harness_blob(main, relative)
+    path = Path(relative)
     destination = destination_root / path
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_bytes(payload)
-    destination.chmod(0o755 if tree_entry[0] == "100755" else 0o644)
+    destination_parent = _create_harness_parent(destination_root, path)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", dir=destination_parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            try:
+                result = subprocess.run(
+                    [
+                        transport._resolve_bootstrap_executable("git"),
+                        "-C", str(ROOT.resolve(strict=True)),
+                        "cat-file", "blob", blob_oid,
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    stdout=output,
+                    stderr=subprocess.DEVNULL,
+                    env=transport._bootstrap_command_environment("git", ROOT),
+                    timeout=transport._BOOTSTRAP_COMMAND_TIMEOUT_SECONDS,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise authority.LifecycleAuthorityError(
+                    "current validation harness blob is unavailable"
+                ) from exc
+            if result.returncode != 0:
+                raise authority.LifecycleAuthorityError(
+                    "current validation harness blob is unavailable"
+                )
+            output.flush()
+            os.fsync(output.fileno())
+        temporary.chmod(0o755 if mode == "100755" else 0o644)
+        if temporary.stat().st_size != size:
+            raise authority.LifecycleAuthorityError(
+                "current validation harness blob size changed"
+            )
+        actual = transport._git_text(
+            ROOT, ["hash-object", "--no-filters", "--", str(temporary)],
+        ).strip()
+        if actual != blob_oid:
+            raise authority.LifecycleAuthorityError(
+                "current validation harness blob bytes changed"
+            )
+        os.replace(temporary, destination)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+    _verify_current_harness_file(destination_root, relative, mode, blob_oid, size)
+    return mode, blob_oid, size
 
 
 @contextmanager
@@ -569,18 +706,28 @@ def _current_policy_validation_root(
     if not source_root.is_dir():
         raise authority.LifecycleAuthorityError("immutable validation source root is unavailable")
     harness_paths = _current_validation_harness_paths(main, helper, entry)
+    registered_paths = frozenset(harness_paths)
+    if len(registered_paths) != len(harness_paths):
+        raise authority.LifecycleAuthorityError("current validation harness paths are ambiguous")
+    if transport._git(ROOT, ["cat-file", "-t", main]).stdout != b"commit\n":
+        raise authority.LifecycleAuthorityError("current validation harness commit is invalid")
     with tempfile.TemporaryDirectory(prefix="secpal-current-policy-validation-") as directory:
         execution_root = Path(directory) / "source"
+        bindings: dict[str, tuple[str, str, int]] = {}
         try:
             shutil.copytree(source_root, execution_root, symlinks=True)
             tests_root = execution_root / "tests"
             if tests_root.exists():
                 shutil.rmtree(tests_root)
             for relative in harness_paths:
-                _copy_current_harness_file(main, relative, execution_root)
+                bindings[relative] = _copy_current_harness_file(
+                    main, relative, execution_root, registered_paths=registered_paths,
+                )
         except OSError as exc:
             raise authority.LifecycleAuthorityError("current validation harness preparation failed") from exc
         yield execution_root
+        for relative, binding in bindings.items():
+            _verify_current_harness_file(execution_root, relative, *binding)
 
 
 def _acquire(repository: str, issue: int, *, execute_validation: bool) -> dict[str, Any]:

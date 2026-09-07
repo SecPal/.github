@@ -13,6 +13,7 @@ import hashlib
 import inspect
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -2784,6 +2785,12 @@ class ValidationEvidenceLossTests(TestCase):
                     self.assertEqual((execution_root / "scripts/preflight.sh").read_text(), "current preflight\n")
                     self.assertEqual((execution_root / "package.json").read_text(), '{"marker":"current"}\n')
                     self.assertEqual((execution_root / "product.py").read_text(), "historical product\n")
+                    self.assertEqual(
+                        stat.S_IMODE((execution_root / "tests/harness.py").stat().st_mode), 0o644,
+                    )
+                    self.assertEqual(
+                        stat.S_IMODE((execution_root / "tests/harness.sh").stat().st_mode), 0o755,
+                    )
                 current_helper = self.loss.transport._load_actions_helper()
                 current_entry = {
                     "focused_validation": [{
@@ -2798,11 +2805,20 @@ class ValidationEvidenceLossTests(TestCase):
                 ) as execution_root:
                     self.assertTrue(current_helper._run_registered_validations(current_entry, execution_root))
                 (accepted / "tests/harness.py").write_text("candidate harness\n")
-                with self.assertRaisesRegex(authority.LifecycleAuthorityError, "accepted main"):
+                with self.loss._current_policy_validation_root(
+                    accepted_head, source_root=source, helper=helper, entry={},
+                ) as execution_root:
+                    self.assertEqual(
+                        (execution_root / "tests/harness.py").read_text(),
+                        "current harness\n",
+                    )
+                with self.assertRaisesRegex(
+                    authority.LifecycleAuthorityError, "mode or size changed|bytes are not accepted main",
+                ):
                     with self.loss._current_policy_validation_root(
                         accepted_head, source_root=source, helper=helper, entry={},
-                    ):
-                        self.fail("candidate harness bytes were accepted")
+                    ) as execution_root:
+                        (execution_root / "tests/harness.py").write_text("mutated after copy\n")
 
             self.assertEqual((source / "tests/harness.py").read_text(), "historical harness\n")
             self.assertEqual((source / "product.py").read_text(), "historical product\n")
@@ -2815,6 +2831,259 @@ class ValidationEvidenceLossTests(TestCase):
                         accepted_head, source_root=source, helper=unsupported, entry={},
                     ):
                         self.fail("unsupported historical harness command was accepted")
+
+    def test_large_authenticated_current_harness_bypasses_external_evidence_transport(self) -> None:
+        payload = b"# maintained validation harness\n" + (b"x" * (450 * 1024))
+        self.assertGreater(len(payload), 400 * 1024)
+        self.assertEqual(self.loss.transport.MAXIMUM_EVIDENCE_BYTES, 64 * 1024)
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            accepted = temporary / "accepted"
+            source = temporary / "source"
+            (accepted / "tests").mkdir(parents=True)
+            source.mkdir()
+            (accepted / "tests/large_harness.py").write_bytes(payload)
+            (source / "product.py").write_text("historical product\n")
+            subprocess.run(["git", "-C", str(accepted), "init", "--quiet"], check=True)
+            subprocess.run(["git", "-C", str(accepted), "add", "."], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", str(accepted), "-c", "user.name=Test",
+                    "-c", "user.email=test@example.invalid", "commit", "--quiet",
+                    "-m", "accepted harness",
+                ],
+                check=True,
+            )
+            accepted_head = subprocess.check_output(
+                ["git", "-C", str(accepted), "rev-parse", "HEAD"], text=True,
+            ).strip()
+            expected_blob = subprocess.check_output(
+                ["git", "-C", str(accepted), "rev-parse", f"{accepted_head}:tests/large_harness.py"],
+                text=True,
+            ).strip()
+            self.assertEqual(
+                subprocess.check_output(
+                    ["git", "-C", str(accepted), "hash-object", "--stdin"], input=payload,
+                ).decode().strip(),
+                expected_blob,
+            )
+            with self.assertRaisesRegex(
+                self.loss.transport.BootstrapSourceAdmissionError,
+                "input has invalid size",
+            ):
+                self.loss.transport._git(
+                    accepted, ["hash-object", "--stdin"], input_bytes=payload,
+                )
+
+            helper = SimpleNamespace(_complete_validation_commands=lambda entry: (
+                {"argv": ["python3", "-m", "unittest", "tests/large_harness.py"]},
+            ))
+            with patch.object(self.loss, "ROOT", accepted):
+                with self.loss._current_policy_validation_root(
+                    accepted_head, source_root=source, helper=helper, entry={},
+                ) as execution_root:
+                    self.assertEqual(
+                        (execution_root / "tests/large_harness.py").read_bytes(), payload,
+                    )
+                    self.assertEqual(
+                        subprocess.check_output(
+                            [
+                                "git", "-C", str(accepted), "hash-object", "--no-filters",
+                                "--", str(execution_root / "tests/large_harness.py"),
+                            ],
+                            text=True,
+                        ).strip(),
+                        expected_blob,
+                    )
+
+    def test_827_target_shape_materializes_full_registered_main_harness(self) -> None:
+        self.assertEqual(self.record["delivery_issue"], 827)
+        self.assertEqual(self.record["pull_request"], 830)
+        self.assertEqual(
+            self.record["head_sha"], "7fd0467c321f1c2b9a06494f4a0c46531c9cc006",
+        )
+        self.assertEqual(
+            self.record["tree_sha"], "ab8da939ca30a3b906f22c471031083f7132ff94",
+        )
+        self.assertEqual(
+            self.record["historical_validation_receipt_digest"],
+            "d0905955b07c580930ddf05595372c5c13c74387a074907ede4a33ddf1eafb38",
+        )
+        main_oid = subprocess.check_output(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], text=True,
+        ).strip()
+        helper = self.loss.transport._load_actions_helper()
+        entry = helper.select_repository(helper.load_registry(), REPOSITORY)
+        paths = self.loss._current_validation_harness_paths(main_oid, helper, entry)
+        bindings = {
+            path: self.loss._current_harness_blob(main_oid, path) for path in paths
+        }
+        large_path, large_binding = max(
+            bindings.items(), key=lambda item: item[1][2],
+        )
+        self.assertGreater(large_binding[2], 400 * 1024)
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "historical-source"
+            source.mkdir()
+            (source / "historical-product.py").write_text("immutable source\n")
+            with self.loss._current_policy_validation_root(
+                main_oid, source_root=source, helper=helper, entry=entry,
+            ) as execution_root:
+                self.assertEqual(
+                    {path for path in paths if (execution_root / path).is_file()},
+                    set(paths),
+                )
+                self.assertEqual(
+                    (execution_root / large_path).read_bytes(),
+                    subprocess.check_output(
+                        ["git", "-C", str(REPO_ROOT), "cat-file", "blob", large_binding[1]],
+                    ),
+                )
+                self.assertEqual(
+                    (execution_root / "historical-product.py").read_text(),
+                    "immutable source\n",
+                )
+
+    def test_current_harness_git_object_boundary_rejects_unsafe_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "accepted"
+            (root / "tests/tree").mkdir(parents=True)
+            (root / "tests/regular.py").write_text("regular\n")
+            (root / "tests/tree/member.py").write_text("tree member\n")
+            (root / "tests/link.py").symlink_to("regular.py")
+            subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", str(root), "-c", "user.name=Test",
+                    "-c", "user.email=test@example.invalid", "commit", "--quiet",
+                    "-m", "unsafe entries",
+                ],
+                check=True,
+            )
+            head = subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "HEAD"], text=True,
+            ).strip()
+            tree = subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True,
+            ).strip()
+            subprocess.run(
+                [
+                    "git", "-C", str(root), "update-index", "--add", "--cacheinfo",
+                    f"160000,{head},tests/submodule",
+                ],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git", "-C", str(root), "-c", "user.name=Test",
+                    "-c", "user.email=test@example.invalid", "commit", "--quiet",
+                    "-m", "gitlink entry",
+                ],
+                check=True,
+            )
+            gitlink_head = subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "HEAD"], text=True,
+            ).strip()
+
+            with patch.object(self.loss, "ROOT", root):
+                self.assertEqual(
+                    self.loss._current_harness_blob(head, "tests/regular.py")[0],
+                    "100644",
+                )
+                for path, message in (
+                    ("../tests/regular.py", "unsafe"),
+                    ("tests/missing.py", "unavailable"),
+                    ("tests/tree", "mode"),
+                    ("tests/link.py", "mode"),
+                ):
+                    with self.subTest(path=path), self.assertRaisesRegex(
+                        authority.LifecycleAuthorityError, message,
+                    ):
+                        self.loss._current_harness_blob(head, path)
+                with self.assertRaisesRegex(authority.LifecycleAuthorityError, "mode"):
+                    self.loss._current_harness_blob(gitlink_head, "tests/submodule")
+                helper = SimpleNamespace(_complete_validation_commands=lambda entry: (
+                    {"argv": ["python3", "-m", "unittest", "tests/regular.py"]},
+                ))
+                with self.assertRaisesRegex(
+                    authority.LifecycleAuthorityError, "commit is invalid",
+                ):
+                    with self.loss._current_policy_validation_root(
+                        tree, source_root=root, helper=helper, entry={},
+                    ):
+                        self.fail("tree object was accepted as protected-main commit")
+
+                with tempfile.TemporaryDirectory() as destination_directory:
+                    destination = Path(destination_directory)
+                    with self.assertRaisesRegex(
+                        authority.LifecycleAuthorityError, "not registered",
+                    ):
+                        self.loss._copy_current_harness_file(
+                            head,
+                            "tests/regular.py",
+                            destination,
+                            registered_paths=frozenset({"tests/other.py"}),
+                        )
+                    mode, blob_oid, size = self.loss._copy_current_harness_file(
+                        head,
+                        "tests/regular.py",
+                        destination,
+                        registered_paths=frozenset({"tests/regular.py"}),
+                    )
+                    (destination / "tests/regular.py").chmod(0o755)
+                    with self.assertRaisesRegex(
+                        authority.LifecycleAuthorityError, "mode or size changed",
+                    ):
+                        self.loss._verify_current_harness_file(
+                            destination, "tests/regular.py", mode, blob_oid, size,
+                        )
+                    def substitute_blob(*arguments, **keywords):
+                        keywords["stdout"].write(b"substituted bytes")
+                        return subprocess.CompletedProcess(arguments[0], 0, b"", b"")
+
+                    with patch.object(
+                        self.loss.subprocess, "run", side_effect=substitute_blob,
+                    ), self.assertRaisesRegex(
+                        authority.LifecycleAuthorityError, "size changed|bytes changed",
+                    ):
+                        self.loss._copy_current_harness_file(
+                            head,
+                            "tests/regular.py",
+                            destination,
+                            registered_paths=frozenset({"tests/regular.py"}),
+                        )
+
+    def test_current_harness_requires_complete_registered_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "accepted"
+            source = Path(directory) / "source"
+            root.mkdir()
+            source.mkdir()
+            (root / "package.json").write_text("{}\n")
+            subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", str(root), "-c", "user.name=Test",
+                    "-c", "user.email=test@example.invalid", "commit", "--quiet",
+                    "-m", "incomplete harness",
+                ],
+                check=True,
+            )
+            head = subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "HEAD"], text=True,
+            ).strip()
+            helper = SimpleNamespace(_complete_validation_commands=lambda entry: (
+                {"argv": ["npm", "run", "lint:markdown"]},
+            ))
+            with patch.object(self.loss, "ROOT", root), self.assertRaisesRegex(
+                authority.LifecycleAuthorityError, "file is unavailable",
+            ):
+                with self.loss._current_policy_validation_root(
+                    head, source_root=source, helper=helper, entry={},
+                ):
+                    self.fail("incomplete registered harness was accepted")
 
     def test_provider_acquisition_checks_exact_open_draft_history_and_signature(self) -> None:
         self.assertEqual(self.observe(self.provider_facts())[0].head_sha, self.record["head_sha"])
@@ -2948,7 +3217,10 @@ class ValidationEvidenceLossTests(TestCase):
                 if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name):
                     if call.func.value.id == "subprocess":
                         process_owners.append((function.name, call.func.attr))
-        self.assertEqual(process_owners, [("_prepare_dependencies", "run")])
+        self.assertEqual(
+            process_owners,
+            [("_prepare_dependencies", "run"), ("_copy_current_harness_file", "run")],
+        )
 
     def test_issuer_uses_existing_migration_role_only_after_acquisition(self) -> None:
         with patch.object(self.loss, "_acquire", return_value=self.acquired) as acquire, patch.object(
