@@ -110,9 +110,14 @@ EVIDENCE_HELPER_ADMISSION_DIGEST = (
 )
 PRE_ENROLLMENT_ISSUE = 776
 PRE_ENROLLMENT_PR = 779
-PRE_ENROLLMENT_HEAD = "8371bef95afeed854e4892ef1af5ed54467aeb74"
-PRE_ENROLLMENT_TREE = "c2ed276ac00ae2057e048a81a54c92f96569e63c"
-PRE_ENROLLMENT_PARENT = "ad684beb8eb334f83c02e214f7b566f23aeb9ec5"
+PRE_ENROLLMENT_HEAD = "afc22b9ecace257e7fc0d67c414bf40e9153fe26"
+PRE_ENROLLMENT_TREE = "6be7fa33a43971640f90c4490820dd6b9314ac9f"
+PRE_ENROLLMENT_PARENT = "8371bef95afeed854e4892ef1af5ed54467aeb74"
+PRE_ENROLLMENT_BLOB = "10ddb0fd14d33fa28ef9f58391f3558c272eb8ad"
+HISTORICAL_787_HEAD = "8371bef95afeed854e4892ef1af5ed54467aeb74"
+HISTORICAL_787_ADMISSION_DIGEST = (
+    "3690f61e86aaced05576bf7c85fe08fbd530bc08a809776c927980768dc58244"
+)
 PRE_ENROLLMENT_SUBTYPE = "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE"
 PRE_ENROLLMENT_PURPOSE = "PRE_ENROLLMENT_IMPLEMENTATION_BOOTSTRAP"
 PROTECTED_MAIN_HEAD = "a5a7b0704645659a5db7df820b2d448de3859560"
@@ -1572,6 +1577,22 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
                 PRE_ENROLLMENT_PARENT,
             ),
         )
+        self.assertEqual(policy.implementation_blob_oid, PRE_ENROLLMENT_BLOB)
+
+        current_matches = [
+            item
+            for item in self.trust.bootstrap_source_admissions
+            if item.repository == REPOSITORY
+            and item.delivery_issue == PRE_ENROLLMENT_ISSUE
+            and item.subtype == PRE_ENROLLMENT_SUBTYPE
+            and item.purpose == PRE_ENROLLMENT_PURPOSE
+        ]
+        self.assertEqual(len(current_matches), 1)
+        self.assertNotEqual(current_matches[0].source_head_sha, HISTORICAL_787_HEAD)
+        self.assertNotEqual(
+            current_matches[0].admission_digest,
+            HISTORICAL_787_ADMISSION_DIGEST,
+        )
 
     def test_no_generic_branch_execution_trust_exists(self) -> None:
         self.assertEqual(
@@ -1611,6 +1632,12 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
             github_verification_reason="valid",
         )
         return replace(value, **changes)
+
+    def _write_validation_fixtures(self, root: Path, body: str) -> None:
+        for command in self.policy.validation_command_set:
+            validation = root / command["argv"][3]
+            validation.parent.mkdir(parents=True, exist_ok=True)
+            validation.write_text(body, encoding="utf-8")
 
     def test_exact_policy_binds_source_execution_and_validation(self) -> None:
         self.assertEqual(
@@ -1654,6 +1681,14 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
             self.policy.validation_command_set_digest,
         )
         self.assertEqual(
+            [command["argv"][3] for command in self.policy.validation_command_set],
+            [
+                "tests/secpal-pre-enrollment-integration-unit.py",
+                "tests/secpal-lifecycle-authority-unit.py",
+                "tests/secpal-lifecycle-publication-unit.py",
+            ],
+        )
+        self.assertEqual(
             fast_path.digest_json(list(self.policy.validation_results)),
             self.policy.validation_result_digest,
         )
@@ -1680,6 +1715,38 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
         source._admit_github_source(
             self.facts(head_sha="4" * 40), self.policy
         )
+
+    def test_historical_787_source_is_not_currently_selectable(self) -> None:
+        with self.assertRaises(source.BootstrapSourceAdmissionError):
+            source._admit_github_source(
+                self.facts(
+                    head_sha=HISTORICAL_787_HEAD,
+                    commit_sha=HISTORICAL_787_HEAD,
+                    tree_sha="c2ed276ac00ae2057e048a81a54c92f96569e63c",
+                    parent_shas=("ad684beb8eb334f83c02e214f7b566f23aeb9ec5",),
+                ),
+                self.policy,
+            )
+
+    def test_current_selector_rejects_a_second_matching_entry(self) -> None:
+        ambiguous = replace(
+            self.trust,
+            bootstrap_source_admissions=(
+                *self.trust.bootstrap_source_admissions,
+                replace(self.policy, pull_request=780),
+            ),
+        )
+        with self.assertRaisesRegex(
+            source.BootstrapSourceAdmissionError,
+            "not uniquely maintained",
+        ):
+            source._select_policy_from_trust(
+                ambiguous,
+                REPOSITORY,
+                PRE_ENROLLMENT_ISSUE,
+                PRE_ENROLLMENT_SUBTYPE,
+                PRE_ENROLLMENT_PURPOSE,
+            )
 
     def test_wrong_issue_purpose_or_cross_delivery_replay_is_rejected(self) -> None:
         for issue, purpose in (
@@ -1793,9 +1860,8 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
                 f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n",
                 encoding="utf-8",
             )
-            validation = fixture / self.policy.validation_command_set[0]["argv"][3]
-            validation.parent.mkdir(parents=True)
-            validation.write_text(
+            self._write_validation_fixtures(
+                fixture,
                 "from pathlib import Path\n"
                 "import sys\n"
                 "import unittest\n"
@@ -1804,7 +1870,6 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
                 "class FixtureTest(unittest.TestCase):\n"
                 "    def test_fixture(self):\n"
                 "        self.assertTrue(True)\n",
-                encoding="utf-8",
             )
             entrypoint = fixture / self.policy.implementation_path
             entrypoint.parent.mkdir(parents=True)
@@ -1879,13 +1944,11 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
                 f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n",
                 encoding="utf-8",
             )
-            validation = fixture / self.policy.validation_command_set[0]["argv"][3]
-            validation.parent.mkdir(parents=True)
-            validation.write_text(
+            self._write_validation_fixtures(
+                fixture,
                 "import unittest\n"
                 "class FixtureTest(unittest.TestCase):\n"
                 "    def test_fixture(self): self.assertTrue(True)\n",
-                encoding="utf-8",
             )
             with (
                 mock.patch.object(source, "_trusted_python", return_value=sys.executable),
@@ -1899,13 +1962,11 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
             fixture = Path(directory)
             session = fixture / "session"
             session.mkdir(mode=0o700)
-            validation = fixture / self.policy.validation_command_set[0]["argv"][3]
-            validation.parent.mkdir(parents=True)
-            validation.write_text(
+            self._write_validation_fixtures(
+                fixture,
                 "import unittest\n"
                 "class FixtureTest(unittest.TestCase):\n"
                 "    def test_fixture(self): self.assertTrue(True)\n",
-                encoding="utf-8",
             )
             with (
                 mock.patch.object(source, "_trusted_python", return_value=sys.executable),
@@ -2021,9 +2082,8 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory)
             marker = fixture / "validation-environment.json"
-            validation = fixture / self.policy.validation_command_set[0]["argv"][3]
-            validation.parent.mkdir(parents=True)
-            validation.write_text(
+            self._write_validation_fixtures(
+                fixture,
                 "import json, os, unittest\n"
                 "from pathlib import Path\n"
                 "keys = ('HOME','GH_CONFIG_DIR','GH_TOKEN','GITHUB_TOKEN')\n"
@@ -2031,7 +2091,6 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
                 "os.environ.get(key)) for key in keys)))\n"
                 "class FixtureTest(unittest.TestCase):\n"
                 "    def test_fixture(self): self.assertTrue(True)\n",
-                encoding="utf-8",
             )
             helper = SimpleNamespace(
                 TRUSTED_COMMAND_PATH="/usr/bin:/bin",
