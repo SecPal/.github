@@ -5444,7 +5444,7 @@ def _verify_ready_integration_prior_authority(
         raise fast_path.SecurityBlocker(
             "prior delivery pull-request identity changed"
         )
-    if integration_evidence.get("reviewed_head_sha", head) != head and (
+    if integration_evidence["schema_version"] == "1.2" and (
         reviewed.state_digest != integration_evidence["reviewed_state_digest"]
         or reviewed.feedback_digest
         != integration_evidence["reviewed_feedback_digest"]
@@ -5840,7 +5840,11 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             raise fast_path.SecurityBlocker(
                 "pre-enrollment integration selection or Draft head changed"
             )
-        if pre_enrollment_evidence is None and reviewed.head_sha != receipt.get("head_sha"):
+        if (
+            pre_enrollment_evidence is None
+            and integration_evidence_path is None
+            and reviewed.head_sha != receipt.get("head_sha")
+        ):
             raise fast_path.SecurityBlocker(
                 "receipt head does not match reviewed feedback head"
             )
@@ -5871,7 +5875,9 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 ),
             )
         )
-        if receipt != expected_receipt or fast_path.digest_json(receipt_fields) != receipt.get("receipt_digest"):
+        if receipt != expected_receipt or fast_path.digest_json(
+            receipt_fields
+        ) != receipt.get("receipt_digest"):
             raise fast_path.SecurityBlocker("validation receipt is invalid or stale")
         tree = _run_attestation_git(repository_root, ["rev-parse", "HEAD^{tree}"]).stdout.strip()
         integration_evidence = None

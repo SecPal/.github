@@ -871,7 +871,8 @@ Ordinary remediation and recovery continue to require one parent. A separately
 user-authorized mechanical integration into an already-Ready delivery PR uses
 `attest-validation --integration-evidence` and the closed version-1.1 or
 version-1.2 `TWO_PARENT_READY_INTEGRATION` topology. Version 1.1 retains the
-same-head reviewed snapshot. Version 1.2 separately binds the reviewed head so
+same-head reviewed snapshot. Version 1.2 requires and separately binds a
+distinct reviewed predecessor so
 an already-attested remediation successor can remain parent 1 without
 requesting another unrestricted review. In that case the prior ordinary
 receipt and final attestation must authenticate the exact reviewed-state and

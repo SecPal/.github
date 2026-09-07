@@ -94,8 +94,8 @@ competing ordinary genesis cannot cross the absence-check-to-push interval;
 the integrated head must become live before its genesis is admissible.
 
 `attest-validation` also exposes separately selected version-1.1 and
-version-1.2 `TWO_PARENT_READY_INTEGRATION` evidence paths. Version 1.2 binds a
-distinct reviewed head to the exact prior ordinary receipt and final
+version-1.2 `TWO_PARENT_READY_INTEGRATION` evidence paths. Version 1.2 requires
+and binds a distinct reviewed predecessor to the exact prior ordinary receipt and final
 attestation when parent 1 is its authenticated remediation successor. Both
 versions authenticate exactly one
 signed two-parent candidate whose first parent is the prior Ready delivery head

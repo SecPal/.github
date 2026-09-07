@@ -574,7 +574,10 @@ def normalize_ready_integration_evidence(
     )
     if reviewed_head != reviewed_state.head_sha:
         raise SecurityBlocker("integration reviewed head is stale or substituted")
-    if schema_version == "1.1" and prior_head != reviewed_head:
+    if (
+        (schema_version == "1.1" and prior_head != reviewed_head)
+        or (schema_version == "1.2" and prior_head == reviewed_head)
+    ):
         raise SecurityBlocker("integration first parent is stale or substituted")
     prior_authority_digest = _require_digest(
         value.get("prior_authority_digest"), "prior Ready authority digest"
@@ -2107,10 +2110,11 @@ def create_validation_receipt(
     return {**fields, "receipt_digest": digest_json(fields)}
 
 
-def create_validation_attestation(
+def _create_validation_attestation(
     *,
     repository: str,
     head_sha: str,
+    receipt_head_sha: str,
     registry: dict[str, Any],
     command_set: list[dict[str, Any]],
     successful_result: bool,
@@ -2121,7 +2125,7 @@ def create_validation_attestation(
         raise SecurityBlocker("validation receipt is missing")
     expected_receipt = create_validation_receipt(
         repository=repository,
-        head_sha=reviewed_state.head_sha,
+        head_sha=receipt_head_sha,
         validated_tree_sha=validation_receipt.get("validated_tree_sha"),
         registry=registry,
         command_set=command_set,
@@ -2171,6 +2175,30 @@ def create_validation_attestation(
     return {**fields, "attestation_digest": digest_json(fields)}
 
 
+def create_validation_attestation(
+    *,
+    repository: str,
+    head_sha: str,
+    registry: dict[str, Any],
+    command_set: list[dict[str, Any]],
+    successful_result: bool,
+    reviewed_state: StableFeedbackState,
+    validation_receipt: Any,
+) -> dict[str, Any]:
+    """Assemble ordinary validation evidence at the reviewed head."""
+
+    return _create_validation_attestation(
+        repository=repository,
+        head_sha=head_sha,
+        receipt_head_sha=reviewed_state.head_sha,
+        registry=registry,
+        command_set=command_set,
+        successful_result=successful_result,
+        reviewed_state=reviewed_state,
+        validation_receipt=validation_receipt,
+    )
+
+
 def create_ready_integration_attestation(
     *,
     repository: str,
@@ -2188,21 +2216,22 @@ def create_ready_integration_attestation(
             "Ready integration cannot be combined with exceptional recovery"
         )
 
-    ordinary = create_validation_attestation(
-        repository=repository,
-        head_sha=head_sha,
-        registry=registry,
-        command_set=command_set,
-        successful_result=True,
-        reviewed_state=reviewed_state,
-        validation_receipt=validation_receipt,
-    )
     normalized = normalize_ready_integration_evidence(
         integration_evidence,
         repository=repository,
         reviewed_state=reviewed_state,
         registry=registry,
         validated_tree_sha=validation_receipt.get("validated_tree_sha"),
+    )
+    ordinary = _create_validation_attestation(
+        repository=repository,
+        head_sha=head_sha,
+        receipt_head_sha=normalized["prior_delivery_head_sha"],
+        registry=registry,
+        command_set=command_set,
+        successful_result=True,
+        reviewed_state=reviewed_state,
+        validation_receipt=validation_receipt,
     )
     if validation_receipt.get("integration_evidence_digest") != digest_json(normalized):
         raise SecurityBlocker("validation receipt does not bind the Ready integration evidence")

@@ -7597,14 +7597,11 @@ class FastPathTests(TestCase):
                 command_set=binding["validation"], successful_result=True,
                 reviewed_state=prior_reviewed, validation_receipt=prior_receipt,
             )
-            reviewed = fast_path.StableFeedbackState(
-                repository="SecPal/.github", pull_request_number=746,
-                head_sha=prior_head, base_ref="main", base_sha=target, pr_state="OPEN",
-                feedback={"pull_request_reactions": [], "reviews": [], "conversation_comments": [], "threads": []},
-            )
+            reviewed = prior_reviewed
             tree = git("merge-tree", "--write-tree", prior_head, target).splitlines()[0]
             authority = ready_integration_prior_authority(reviewed)
             authority.update(
+                prior_delivery_head_sha=prior_head,
                 prior_delivery_tree_sha=delivery_tree,
                 prior_validation_receipt_digest=prior_receipt["receipt_digest"],
                 prior_final_attestation_digest=prior_attestation["attestation_digest"],
@@ -7617,6 +7614,10 @@ class FastPathTests(TestCase):
                 "rev-parse", "prior-authority^{tag}"
             )
             integration = ready_integration_evidence(reviewed, validated_tree=tree, registry=binding)
+            integration["schema_version"] = "1.2"
+            integration["reviewed_head_sha"] = reviewed.head_sha
+            integration["prior_delivery_head_sha"] = prior_head
+            integration["ordered_parent_shas"][0] = prior_head
             integration["prior_authority_digest"] = authority_digest
             integration["prior_authority_tag_object_sha"] = prior_authority_tag_object
             integration["expected_signer"] = {"kind": "SSH_PRINCIPAL", "identity": principal}
@@ -7626,6 +7627,12 @@ class FastPathTests(TestCase):
                 repository="SecPal/.github", head_sha=prior_head, tree_sha=tree,
                 binding=binding, reviewed=reviewed, manual_gate_evidence=gates,
                 integration_evidence_digest=integration_digest,
+            )
+            self.assertEqual(
+                fast_path.digest_json(
+                    {key: value for key, value in receipt.items() if key != "receipt_digest"}
+                ),
+                receipt["receipt_digest"],
             )
             candidate = git(
                 "commit-tree", "-S", tree, "-p", prior_head, "-p", target,
@@ -7961,6 +7968,9 @@ class FastPathTests(TestCase):
             "missing_reviewed_head": lambda item: item.pop("reviewed_head_sha"),
             "substituted_reviewed_head": lambda item: item.__setitem__(
                 "reviewed_head_sha", "8" * 40
+            ),
+            "same_reviewed_and_parent_head": lambda item: item.__setitem__(
+                "reviewed_head_sha", "9" * 40
             ),
             "downgraded_schema": lambda item: item.__setitem__(
                 "schema_version", "1.1"
