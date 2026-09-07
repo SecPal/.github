@@ -4055,6 +4055,36 @@ class RegistryTests(TestCase):
                 self.assertLessEqual(entry["maximum_comments"], 200)
                 self.assertLessEqual(entry["maximum_reactions"], 50)
 
+    def test_registry_schema_admits_closed_pre_enrollment_integration_policy(
+        self,
+    ) -> None:
+        registry = actions.load_registry()
+        entry = next(
+            item
+            for item in registry["repositories"]
+            if item["repository"] == "SecPal/.github"
+        )
+        entry["pre_enrollment_integration_policy"] = {
+            "schema_version": "1.0",
+            "command": "integrate-pre-enrollment-draft",
+            "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+            "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+            "maximum_candidates": 1,
+            "maximum_pushes": 1,
+            "force_push": False,
+            "automatic_retry": False,
+            "merge_pull_request": False,
+        }
+
+        validated = actions.validate_registry(registry)
+        selected = actions.select_repository(validated, "SecPal/.github")
+        self.assertEqual(
+            actions._fast_registry_binding(selected)[
+                "pre_enrollment_integration_policy"
+            ],
+            entry["pre_enrollment_integration_policy"],
+        )
+
     def test_registry_cases_61_to_69(self) -> None:
         registry = {
             "schema_version": "1.0",
@@ -6699,12 +6729,7 @@ class FastPathTests(TestCase):
             historical_binding["focused_validation"]
         ) + len(historical_binding["required_local_validation"])
         registry_raw = json.dumps(registry)
-        schema = json.loads(
-            actions.REGISTRY_SCHEMA_PATH.read_text(encoding="utf-8")
-        )
-        schema["$defs"]["repository"]["properties"][
-            "pre_enrollment_integration_policy"
-        ] = {"type": "object"}
+        schema = json.loads(actions.REGISTRY_SCHEMA_PATH.read_text(encoding="utf-8"))
 
         def historical_read(
             _root: Path, command: list[str], *, allow_failure: bool = False
@@ -6736,21 +6761,61 @@ class FastPathTests(TestCase):
                 fast_path.validation_registry_projection(current_binding)
             ),
         )
+        prior_root = f"{'a' * 40}:.agents/skills/secpal-pr-review/references/"
         self.assertEqual(
             [call.args[1] for call in git_read.call_args_list],
             [
-                [
-                    "show",
-                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:.agents/skills/"
-                    "secpal-pr-review/references/repositories.json",
-                ],
-                [
-                    "show",
-                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:.agents/skills/"
-                    "secpal-pr-review/references/repositories.schema.json",
-                ],
+                ["show", f"{prior_root}repositories.json"],
+                ["show", f"{prior_root}repositories.schema.json"],
             ],
         )
+
+    def test_historical_registry_and_schema_reject_duplicate_json_keys(self) -> None:
+        registry_raw = actions.REGISTRY_PATH.read_text(encoding="utf-8")
+        schema_raw = actions.REGISTRY_SCHEMA_PATH.read_text(encoding="utf-8")
+        cases = (
+            (
+                registry_raw.replace(
+                    '"schema_version": "1.0",',
+                    '"schema_version": "1.0", "schema_version": "1.0",',
+                    1,
+                ),
+                schema_raw,
+            ),
+            (
+                registry_raw,
+                schema_raw.replace(
+                    '"title": "SecPal PR review workflow repository registry",',
+                    '"title": "SecPal PR review workflow repository registry", '
+                    '"title": "SecPal PR review workflow repository registry",',
+                    1,
+                ),
+            ),
+        )
+        for duplicate_registry, duplicate_schema in cases:
+            responses = iter((duplicate_registry, duplicate_schema))
+
+            def historical_read(
+                _root: Path, _command: list[str], *, allow_failure: bool = False
+            ) -> Any:
+                del allow_failure
+                return SimpleNamespace(
+                    returncode=0, stdout=next(responses), stderr=""
+                )
+
+            with (
+                self.subTest(schema=duplicate_schema != schema_raw),
+                mock.patch.object(
+                    actions, "_run_attestation_git", side_effect=historical_read
+                ),
+                self.assertRaisesRegex(
+                    fast_path.SecurityBlocker,
+                    "prior delivery validation registry is malformed",
+                ),
+            ):
+                actions._prior_delivery_registry_binding(
+                    REPO_ROOT, "a" * 40, "SecPal/.github"
+                )
 
     def test_ready_integration_prior_authority_rejects_delivery_evidence_drift(
         self,

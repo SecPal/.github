@@ -5139,6 +5139,9 @@ def _prior_delivery_registry_binding(
         registry = json.loads(
             registry_result.stdout, object_pairs_hook=_reject_duplicate_json_object
         )
+        json.loads(
+            schema_result.stdout, object_pairs_hook=_reject_duplicate_json_object
+        )
         with tempfile.TemporaryDirectory(
             prefix="secpal-prior-registry-schema-"
         ) as directory:
@@ -5151,8 +5154,7 @@ def _prior_delivery_registry_binding(
     except (
         KeyError,
         TypeError,
-        json.JSONDecodeError,
-        PlanError,
+        ValueError,
         evidence.ContractError,
         OSError,
     ) as exc:

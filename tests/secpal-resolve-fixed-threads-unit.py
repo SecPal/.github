@@ -1257,6 +1257,37 @@ class ResolveFixedThreadsTests(TestCase):
             self.assertIs(MODULE._validation_registry_binding(entry), expected)
         projection.assert_called_once_with(entry)
 
+    def test_resolver_loads_closed_additive_policy_before_projection(self) -> None:
+        registry = json.loads(MODULE.REGISTRY_PATH.read_text(encoding="utf-8"))
+        entry = next(
+            item
+            for item in registry["repositories"]
+            if item["repository"] == "SecPal/.github"
+        )
+        entry["pre_enrollment_integration_policy"] = {
+            "schema_version": "1.0",
+            "command": "integrate-pre-enrollment-draft",
+            "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+            "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+            "maximum_candidates": 1,
+            "maximum_pushes": 1,
+            "force_push": False,
+            "automatic_retry": False,
+            "merge_pull_request": False,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            registry_path = Path(directory) / "repositories.json"
+            registry_path.write_text(json.dumps(registry), encoding="utf-8")
+            with mock.patch.object(MODULE, "REGISTRY_PATH", registry_path):
+                selected = MODULE._load_repository_entry("SecPal/.github")
+
+        self.assertEqual(
+            MODULE._validation_registry_binding(selected)[
+                "pre_enrollment_integration_policy"
+            ],
+            entry["pre_enrollment_integration_policy"],
+        )
+
     def test_validation_registry_projection_matches_attester_with_additive_policy(
         self,
     ) -> None:
