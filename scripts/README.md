@@ -75,6 +75,13 @@ does not relax the ordinary sole-parent path, create or push an integration,
 change Ready state, read post-push checks, or authorize merge automation.
 Historical receipt reconstruction reads the registry blob from the immutable
 prior delivery commit rather than applying a later registry to older evidence.
+Both the validation attester and fixed-thread resolver derive registry identity
+through the same closed `fast_path` projection. An admitted pre-enrollment
+integration policy therefore participates identically in both paths, while an
+unknown authority-bearing repository field fails closed. The shared projection
+rule does not change registry provenance: current evidence uses the authenticated
+current entry, and historical evidence continues to use its immutable
+evidence-time entry.
 When exact thread resolution is required on the integration head,
 `attest-validation` may additionally consume the canonical eligibility
 artifact. That closed combination emits the version-1.2

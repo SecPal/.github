@@ -4412,28 +4412,7 @@ def _command_mutation(arguments: argparse.Namespace) -> int:
 
 
 def _fast_registry_binding(entry: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "repository": entry["repository"],
-        "default_branch": entry["default_branch"],
-        "allowed_base_repositories": copy.deepcopy(
-            entry["allowed_base_repositories"]
-        ),
-        "manual_gates": copy.deepcopy(entry["manual_gates"]),
-        "signature_policy": copy.deepcopy(entry["signature_policy"]),
-        "check_policy": copy.deepcopy(entry["check_policy"]),
-        "limits": {
-            key: entry[key]
-            for key in ("maximum_api_calls", "maximum_items")
-        },
-        "validation": copy.deepcopy(list(_complete_validation_commands(entry))),
-        "focused_only_validation": copy.deepcopy(
-            [
-                command
-                for command in entry["focused_validation"]
-                if command.get("execution_policy") == "focused-only"
-            ]
-        ),
-    }
+    return fast_path.validation_registry_projection(entry)
 
 
 def _load_fast_state(path: str) -> Any:
@@ -5133,9 +5112,9 @@ def _verify_ready_integration_published_authority(
 def _prior_delivery_registry_binding(
     repository_root: Path, head: str, repository: str
 ) -> dict[str, Any]:
-    """Read validation policy from the immutable prior delivery commit."""
+    """Read validation policy and schema from the immutable prior delivery."""
 
-    result = _run_attestation_git(
+    registry_result = _run_attestation_git(
         repository_root,
         [
             "show",
@@ -5143,16 +5122,42 @@ def _prior_delivery_registry_binding(
         ],
         allow_failure=True,
     )
-    if result.returncode != 0:
+    schema_result = _run_attestation_git(
+        repository_root,
+        [
+            "show",
+            f"{head}:.agents/skills/secpal-pr-review/references/"
+            "repositories.schema.json",
+        ],
+        allow_failure=True,
+    )
+    if registry_result.returncode != 0 or schema_result.returncode != 0:
         raise fast_path.SecurityBlocker(
-            "prior delivery validation registry is unavailable"
+            "prior delivery validation registry or schema is unavailable"
         )
     try:
         registry = json.loads(
-            result.stdout, object_pairs_hook=_reject_duplicate_json_object
+            registry_result.stdout, object_pairs_hook=_reject_duplicate_json_object
         )
+        json.loads(
+            schema_result.stdout, object_pairs_hook=_reject_duplicate_json_object
+        )
+        with tempfile.TemporaryDirectory(
+            prefix="secpal-prior-registry-schema-"
+        ) as directory:
+            schema_path = Path(directory) / "repositories.schema.json"
+            schema_path.write_text(schema_result.stdout, encoding="utf-8")
+            evidence.validate_against_authoritative_schema(
+                registry, schema_path, "prior delivery validation registry"
+            )
         entries = registry["repositories"]
-    except (KeyError, TypeError, json.JSONDecodeError, PlanError) as exc:
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        evidence.ContractError,
+        OSError,
+    ) as exc:
         raise fast_path.SecurityBlocker(
             "prior delivery validation registry is malformed"
         ) from exc
