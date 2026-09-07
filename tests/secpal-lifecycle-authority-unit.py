@@ -3038,6 +3038,7 @@ class ValidationEvidenceLossTests(TestCase):
                         self.loss._verify_current_harness_file(
                             destination, "tests/regular.py", mode, blob_oid, size,
                         )
+
                     def substitute_blob(*arguments, **keywords):
                         keywords["stdout"].write(b"substituted bytes")
                         return subprocess.CompletedProcess(arguments[0], 0, b"", b"")
@@ -3053,6 +3054,27 @@ class ValidationEvidenceLossTests(TestCase):
                             destination,
                             registered_paths=frozenset({"tests/regular.py"}),
                         )
+
+    def test_current_harness_observation_normalization_and_admission_are_separate(self) -> None:
+        oid = "a" * 40
+        observation = self.loss.CurrentHarnessBlobObservation(
+            commit_oid="b" * 40,
+            requested_path="tests/large.py",
+            tree_entry=(
+                f"100755 blob {oid} 450000\ttests/large.py\0".encode("ascii")
+            ),
+        )
+        with patch.object(
+            self.loss.transport, "_git", side_effect=AssertionError("external observation")
+        ):
+            facts = self.loss._normalize_current_harness_blob_observation(observation)
+            binding = self.loss._admit_current_harness_blob(observation, facts)
+        self.assertEqual(facts.repository_path, "tests/large.py")
+        self.assertEqual(facts.object_type, "blob")
+        self.assertEqual(binding.commit_oid, "b" * 40)
+        self.assertEqual(binding.mode, "100755")
+        self.assertEqual(binding.blob_oid, oid)
+        self.assertEqual(binding.size, 450000)
 
     def test_current_harness_requires_complete_registered_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

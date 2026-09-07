@@ -89,6 +89,37 @@ class CommitFacts:
 
 
 @dataclass(frozen=True)
+class CurrentHarnessBlobObservation:
+    """Raw Git tree representation captured without deciding conformance."""
+
+    commit_oid: str
+    requested_path: str
+    tree_entry: bytes
+
+
+@dataclass(frozen=True)
+class CurrentHarnessBlobFacts:
+    """Canonical facts normalized from one protected-main tree entry."""
+
+    repository_path: str
+    mode: str
+    object_type: str
+    object_oid: str
+    size: int | None
+
+
+@dataclass(frozen=True)
+class CurrentHarnessBlobBinding:
+    """Admitted exact repository-blob authority for one registered member."""
+
+    commit_oid: str
+    repository_path: str
+    mode: str
+    blob_oid: str
+    size: int
+
+
+@dataclass(frozen=True)
 class SourceCommitFacts:
     head_sha: str
     tree_sha: str
@@ -529,8 +560,8 @@ def _current_validation_harness_paths(main: str, helper: Any, entry: Any) -> tup
     return tuple(sorted(paths))
 
 
-def _current_harness_blob(main: str, relative: str) -> tuple[str, str, int]:
-    """Bind one registered path to its exact regular blob in protected main."""
+def _admit_current_harness_requested_path(relative: str) -> str:
+    """Admit one literal repository-relative harness path without observation."""
 
     if not isinstance(relative, str):
         raise authority.LifecycleAuthorityError("current validation harness path is unsafe")
@@ -540,10 +571,33 @@ def _current_harness_blob(main: str, relative: str) -> tuple[str, str, int]:
         or path.as_posix() != relative
     ):
         raise authority.LifecycleAuthorityError("current validation harness path is unsafe")
+    return relative
+
+
+def _observe_current_harness_blob(
+    main: str, relative: str,
+) -> CurrentHarnessBlobObservation:
+    """Observe one literal tree entry without deciding harness conformance."""
+
     record = transport._git(
         ROOT,
-        ["ls-tree", "-z", "--full-tree", main, "--", f":(literal){relative}"],
+        ["ls-tree", "-lz", "--full-tree", main, "--", f":(literal){relative}"],
     ).stdout
+    return CurrentHarnessBlobObservation(
+        commit_oid=main,
+        requested_path=relative,
+        tree_entry=bytes(record),
+    )
+
+
+def _normalize_current_harness_blob_observation(
+    observation: CurrentHarnessBlobObservation,
+) -> CurrentHarnessBlobFacts:
+    """Normalize one Git tree representation without external observation."""
+
+    if not isinstance(observation, CurrentHarnessBlobObservation):
+        raise authority.LifecycleAuthorityError("current validation harness listing is malformed")
+    record = observation.tree_entry
     if not record.endswith(b"\0") or record.count(b"\0") != 1:
         raise authority.LifecycleAuthorityError("current validation harness file is unavailable")
     try:
@@ -551,23 +605,64 @@ def _current_harness_blob(main: str, relative: str) -> tuple[str, str, int]:
     except UnicodeDecodeError as exc:
         raise authority.LifecycleAuthorityError("current validation harness listing is malformed") from exc
     fields = metadata.split()
-    if (
-        separator != "\t" or observed_path != relative or len(fields) != 3
-        or fields[0] not in {"100644", "100755"} or fields[1] != "blob"
-    ):
-        raise authority.LifecycleAuthorityError("current validation harness mode is invalid")
+    if separator != "\t" or len(fields) != 4:
+        raise authority.LifecycleAuthorityError("current validation harness listing is malformed")
     try:
         blob_oid = authority._require_oid(fields[2], "current validation harness blob")
     except authority.LifecycleAuthorityError as exc:
         raise authority.LifecycleAuthorityError("current validation harness blob is invalid") from exc
-    size_result = transport._git(ROOT, ["cat-file", "-s", blob_oid]).stdout
-    try:
-        size_text = size_result.decode("ascii", "strict").strip()
-    except UnicodeDecodeError as exc:
-        raise authority.LifecycleAuthorityError("current validation harness size is invalid") from exc
-    if not size_text.isdecimal():
+    size_text = fields[3]
+    if size_text != "-" and not size_text.isdecimal():
         raise authority.LifecycleAuthorityError("current validation harness size is invalid")
-    return fields[0], blob_oid, int(size_text)
+    return CurrentHarnessBlobFacts(
+        repository_path=observed_path,
+        mode=fields[0],
+        object_type=fields[1],
+        object_oid=blob_oid,
+        size=None if size_text == "-" else int(size_text),
+    )
+
+
+def _admit_current_harness_blob(
+    observation: CurrentHarnessBlobObservation,
+    facts: CurrentHarnessBlobFacts,
+) -> CurrentHarnessBlobBinding:
+    """Admit canonical tree facts as one exact regular protected-main blob."""
+
+    if (
+        not isinstance(observation, CurrentHarnessBlobObservation)
+        or not isinstance(facts, CurrentHarnessBlobFacts)
+    ):
+        raise authority.LifecycleAuthorityError("current validation harness listing is malformed")
+    commit_oid = authority._require_oid(
+        observation.commit_oid, "current validation harness commit",
+    )
+    requested_path = _admit_current_harness_requested_path(observation.requested_path)
+    if (
+        facts.repository_path != requested_path
+        or facts.mode not in {"100644", "100755"}
+        or facts.object_type != "blob"
+    ):
+        raise authority.LifecycleAuthorityError("current validation harness mode is invalid")
+    if facts.size is None:
+        raise authority.LifecycleAuthorityError("current validation harness size is invalid")
+    return CurrentHarnessBlobBinding(
+        commit_oid=commit_oid,
+        repository_path=requested_path,
+        mode=facts.mode,
+        blob_oid=facts.object_oid,
+        size=facts.size,
+    )
+
+
+def _current_harness_blob(main: str, relative: str) -> tuple[str, str, int]:
+    """Assemble the explicit observation, normalization, and admission stages."""
+
+    relative = _admit_current_harness_requested_path(relative)
+    observation = _observe_current_harness_blob(main, relative)
+    facts = _normalize_current_harness_blob_observation(observation)
+    binding = _admit_current_harness_blob(observation, facts)
+    return binding.mode, binding.blob_oid, binding.size
 
 
 def _verify_current_harness_file(
@@ -687,6 +782,7 @@ def _copy_current_harness_file(
         try:
             temporary.unlink()
         except FileNotFoundError:
+            # Atomic replacement consumes the temporary path on success.
             pass
     _verify_current_harness_file(destination_root, relative, mode, blob_oid, size)
     return mode, blob_oid, size
