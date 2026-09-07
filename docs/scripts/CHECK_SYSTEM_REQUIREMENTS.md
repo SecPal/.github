@@ -229,16 +229,14 @@ cd /path/to/api
 php artisan test
 ```
 
-### "Git commit signing not configured"
+### "GPG commit signing not configured"
 
 ```bash
-git config --global gpg.format ssh
 git config --global commit.gpgsign true
-git config --global user.signingkey "$HOME/.ssh/id_ed25519_secpal_signing"
 ```
 
-For dedicated signing-key generation, public-key-only GitHub registration, and
-the supported OpenPGP alternative, see
+Keep an existing valid SSH or OpenPGP signing configuration unchanged. If no
+valid signing credential is configured, or when creating a new setup, see
 [Signing Commits](../../CONTRIBUTING.md#signing-commits).
 
 ## Future Enhancements

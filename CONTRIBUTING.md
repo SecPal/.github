@@ -373,7 +373,7 @@ ssh-keygen \
 # Configure Git to sign commits with the dedicated private key.
 git config --global gpg.format ssh
 git config --global user.signingkey "$HOME/.ssh/id_ed25519_secpal_signing"
-git config --global commit.gpgSign true
+git config --global commit.gpgsign true
 
 # Register only the corresponding public key with GitHub as a signing key:
 # $HOME/.ssh/id_ed25519_secpal_signing.pub
@@ -398,8 +398,9 @@ gpg --gen-key
 gpg --list-secret-keys --keyid-format LONG
 
 # Configure Git to use your key
+git config --global gpg.format openpgp
 git config --global user.signingkey <YOUR_KEY_ID>
-git config --global commit.gpgSign true
+git config --global commit.gpgsign true
 
 # Add your GPG key to GitHub
 gpg --armor --export <YOUR_KEY_ID>
