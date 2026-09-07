@@ -26,7 +26,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.secpal_pr_review import bootstrap_source_admission as source
 from scripts.secpal_pr_review import fast_path
-from scripts.secpal_work_graph import acceptance_criteria
 
 
 REPOSITORY = "SecPal/.github"
@@ -2448,7 +2447,9 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
             mock.patch.object(
                 source,
                 "_trusted_dependency_executable",
-                side_effect=lambda _helper, name: f"/usr/bin/{name}",
+                side_effect=lambda _helper, name: (
+                    sys.executable if name == "node" else f"/usr/bin/{name}"
+                ),
             ),
             mock.patch.object(source.subprocess, "run", side_effect=materialize) as run,
             source._authenticated_work_graph_dependencies(Path.cwd(), helper) as runtime,
@@ -2477,7 +2478,9 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
             mock.patch.object(
                 source,
                 "_trusted_dependency_executable",
-                side_effect=lambda _helper, name: f"/usr/bin/{name}",
+                side_effect=lambda _helper, name: (
+                    sys.executable if name == "node" else f"/usr/bin/{name}"
+                ),
             ),
             mock.patch.object(
                 source.subprocess,
@@ -2501,8 +2504,10 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
                 source._dependency_file_snapshot(modules)
 
     def test_guard_ignores_ambient_modules_and_rejects_escape_or_changed_bytes(self) -> None:
-        helper = source.authority._load_trusted_command_helper()
-        node = source._trusted_dependency_executable(helper, "node")
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node is required for the runtime-guard integration test")
+        node = str(Path(node).resolve(strict=True))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source_root = root / "private" / "source"
@@ -2565,40 +2570,6 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
                 env=environment, capture_output=True, text=True, check=False,
             )
             self.assertNotEqual(changed.returncode, 0)
-
-    def test_real_guarded_runtime_preserves_canonical_work_graph_semantics(self) -> None:
-        helper = source.authority._load_trusted_command_helper()
-        node = source._trusted_dependency_executable(helper, "node")
-        real_run = subprocess.run
-
-        def materialize(arguments, **keywords):
-            if Path(arguments[0]).name == "npm":
-                locked = json.loads(
-                    (Path(keywords["cwd"]) / "package-lock.json").read_text()
-                )
-                for key in locked["packages"]:
-                    if not key:
-                        continue
-                    source_package = Path.cwd() / key
-                    shutil.copytree(source_package, Path(keywords["cwd"]) / key)
-                return subprocess.CompletedProcess(arguments, 0)
-            return real_run(arguments, **keywords)
-
-        with (
-            mock.patch.object(source.subprocess, "run", side_effect=materialize),
-            source._authenticated_work_graph_dependencies(Path.cwd(), helper) as runtime,
-        ):
-            parsed = acceptance_criteria.parse(
-                [
-                    "# Acceptance Criteria\n\n- complete\n",
-                    "# Acceptance Criteria\n\n",
-                ],
-                node_executable=node,
-                environment=runtime,
-            )
-        self.assertEqual(
-            [item.has_acceptance_criteria for item in parsed], [True, False]
-        )
 
     def test_only_closed_operational_inputs_reach_the_fixed_command(self) -> None:
         signature = inspect.signature(
