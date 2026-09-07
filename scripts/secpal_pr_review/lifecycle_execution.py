@@ -10,8 +10,10 @@ one exact GitHub Ready/Draft mutation and bounded convergence verification.
 
 from __future__ import annotations
 
+import base64
 import copy
 from dataclasses import dataclass
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -715,7 +717,9 @@ def _validate_github_ready_history(
     observed: Any, predecessor_head: str, resulting_head: str
 ) -> None:
     if not isinstance(observed, GitHubLifecycleHistory) or observed.complete is not True:
-        raise LifecycleExecutionError("GitHub Ready history is incomplete")
+        raise LifecycleExecutionError(
+            "GitHub Ready history exceeds the closed timelineItems(first:100) bound"
+        )
     if any(
         not isinstance(event, GitHubLifecycleEvent)
         or event.kind not in {"COMMIT", "READY", "DRAFT", "FORCE_PUSH"}
@@ -774,10 +778,62 @@ def _source_signature_policy(
     policy: authority.LifecycleTrustPolicy,
 ) -> dict[str, Any]:
     return {
-        "require_github_verified": True,
+        # GitHub verification is authenticated independently from the live API
+        # below.  This policy describes only the local commit verifier whose
+        # digest is retained by AuthenticatedIntegrationCommit.
+        "require_github_verified": False,
         "require_local_verified": True,
         "accepted_formats": sorted(policy.accepted_formats),
     }
+
+
+def _ssh_public_key_fingerprint(public_key: str) -> str:
+    if not isinstance(public_key, str):
+        raise LifecycleExecutionError("maintained SSH key is malformed")
+    fields = public_key.strip().split()
+    if len(fields) not in {2, 3} or fields[0] not in {
+        "ssh-ed25519",
+        "ssh-rsa",
+        "ecdsa-sha2-nistp256",
+        "ecdsa-sha2-nistp384",
+        "ecdsa-sha2-nistp521",
+    }:
+        raise LifecycleExecutionError("maintained SSH key is malformed")
+    try:
+        decoded = base64.b64decode(fields[1], validate=True)
+    except (ValueError, TypeError) as exc:
+        raise LifecycleExecutionError("maintained SSH key is malformed") from exc
+    if not decoded:
+        raise LifecycleExecutionError("maintained SSH key is malformed")
+    fingerprint = base64.b64encode(hashlib.sha256(decoded).digest()).decode("ascii")
+    return f"SHA256:{fingerprint.rstrip('=')}"
+
+
+def _verify_live_github_commit_signature(repository: str, head_sha: str) -> None:
+    result = publication._run_gh(
+        [
+            "api",
+            "--hostname",
+            "github.com",
+            f"repos/{repository}/commits/{head_sha}",
+        ]
+    )
+    if result.returncode != 0:
+        raise LifecycleExecutionError("GitHub source signature verification failed")
+    try:
+        payload = json.loads(result.stdout, object_pairs_hook=publication._reject_duplicate_pairs)
+        verification = payload["commit"]["verification"]
+        if (
+            payload["sha"] != head_sha
+            or not isinstance(verification, dict)
+            or verification.get("verified") is not True
+            or verification.get("reason") != "valid"
+        ):
+            raise LifecycleExecutionError("GitHub verification rejected source head")
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise LifecycleExecutionError(
+            "GitHub source signature verification is malformed"
+        ) from exc
 
 
 def _authenticate_source_commit(
@@ -790,6 +846,11 @@ def _authenticate_source_commit(
         signer = policy.signers[signer_identity]
     except (KeyError, authority.LifecycleAuthorityError) as exc:
         raise LifecycleExecutionError("source signer is not maintained") from exc
+    _verify_live_github_commit_signature(repository, head_sha)
+    maintained_ssh_fingerprints = frozenset(
+        _ssh_public_key_fingerprint(public_key)
+        for public_key in signer.ssh_public_keys
+    )
     expected: list[dict[str, str]] = []
     if signer.ssh_public_keys:
         expected.append({"kind": "SSH_PRINCIPAL", "identity": signer_identity})
@@ -798,20 +859,30 @@ def _authenticate_source_commit(
         for fingerprint in signer.openpgp_fingerprints
     )
     authenticated: list[fast_path.AuthenticatedIntegrationCommit] = []
+    rejected_ssh_fingerprint = False
     for expected_signer in expected:
         try:
-            authenticated.append(
-                fast_path.authenticate_integration_commit(
-                    repository_root=Path.cwd(),
-                    repository=repository,
-                    head_sha=head_sha,
-                    expected_signer=expected_signer,
-                    signature_policy=_source_signature_policy(policy),
-                )
+            candidate = fast_path.authenticate_integration_commit(
+                repository_root=Path.cwd(),
+                repository=repository,
+                head_sha=head_sha,
+                expected_signer=expected_signer,
+                signature_policy=_source_signature_policy(policy),
             )
         except (fast_path.RecoverableLocalError, fast_path.SecurityBlocker):
             continue
+        if (
+            candidate.signer_kind == "SSH_PRINCIPAL"
+            and candidate.signature_fingerprint not in maintained_ssh_fingerprints
+        ):
+            rejected_ssh_fingerprint = True
+            continue
+        authenticated.append(candidate)
     if len(authenticated) != 1:
+        if rejected_ssh_fingerprint and not authenticated:
+            raise LifecycleExecutionError(
+                "source head signature does not match a maintained key"
+            )
         raise LifecycleExecutionError("source head signer is invalid or ambiguous")
     return authenticated[0]
 

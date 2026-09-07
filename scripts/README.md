@@ -515,10 +515,14 @@ new lifecycle primitive: an authenticated pending `DRAFT_TO_READY` at H0,
 followed by exactly one authenticated Ready-only `REMEDIATION_COMPLETED` source
 advance to sole-child H1. It requires complete GitHub Ready chronology, the
 existing signed source authorization and findings, verifier-sealed validation
-and attestation evidence, exact tree and signer authentication, and sequential
-protected publication of the two existing successors. Predecessor, midpoint,
-and complete re-entry are idempotent; ambiguity and ancestry-only claims fail
-closed, and GitHub is never written again when already Ready.
+and attestation evidence, exact tree, live GitHub-valid signature status, and a
+local signature fingerprint matching the maintained key set. It sequentially
+publishes the two existing successors. Predecessor, midpoint, and complete
+re-entry are idempotent; ambiguity and ancestry-only claims fail closed, and
+GitHub is never written again when already Ready. Accepted main exposes this
+fixed operation as `converge_pending_ready_head_advancement`; the closed #810
+first-executor bootstrap remains historical and does not dispatch later
+accepted-main entry points.
 
 ### `secpal_pr_review/lifecycle_publication.py`
 

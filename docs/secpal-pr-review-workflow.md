@@ -616,6 +616,15 @@ successor through the ordinary protected CAS boundary. The exact midpoint and
 complete states are resumable and replay-safe; GitHub receives no duplicate
 Ready write.
 
+The maintained accepted-main entry point for that fixed shape is
+`converge_pending_ready_head_advancement`. It accepts the two exact signed
+authorizations and verifier-sealed remediation evidence directly; it is not a
+mode of the single-transition entry point. The immutable #810 first-executor
+bootstrap remains a closed historical bootstrap for its exact admitted source
+and is intentionally not a dispatcher for later accepted-main capabilities.
+Expanding that frozen admission would create new bootstrap authority rather
+than make accepted-main code reachable.
+
 This is autonomous convergence, not a new decision boundary, exactly when all
 intermediate operations are already authenticated, the existing transition
 order is unique, source lineage is exact, and the result equals current GitHub

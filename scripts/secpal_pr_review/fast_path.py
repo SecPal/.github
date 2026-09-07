@@ -2455,7 +2455,11 @@ def _verify_validation_attestation_unsealed(
         "reviewed_feedback_digest": reviewed_state.feedback_digest,
     }
     if delivery_issue_number is not None:
-        if isinstance(delivery_issue_number, bool) or delivery_issue_number <= 0:
+        if (
+            not isinstance(delivery_issue_number, int)
+            or isinstance(delivery_issue_number, bool)
+            or delivery_issue_number <= 0
+        ):
             raise SecurityBlocker("delivery issue identity is invalid")
         source_binding["delivery_issue_number"] = delivery_issue_number
     return _unregistered_validation_evidence(

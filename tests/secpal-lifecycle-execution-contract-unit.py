@@ -366,7 +366,7 @@ def convergence_fixture() -> tuple[
         _verification_seal=object(),
     )
     signature_policy = {
-        "require_github_verified": True,
+        "require_github_verified": False,
         "require_local_verified": True,
         "accepted_formats": ["ssh"],
     }
@@ -1163,12 +1163,101 @@ class LifecycleExecutionTests(TestCase):
                 "Result", (), {"returncode": 0, "stdout": incomplete}
             )(),
         ):
-            with self.assertRaisesRegex(execution.LifecycleExecutionError, "incomplete"):
+            with self.assertRaisesRegex(
+                execution.LifecycleExecutionError, "first:100"
+            ):
                 execution._validate_github_ready_history(
                     execution._read_live_github_history(REPOSITORY, PR),
                     HEAD,
                     "b" * 40,
                 )
+
+    def test_source_authentication_requires_github_and_maintained_ssh_key(self) -> None:
+        fingerprint = execution._ssh_public_key_fingerprint("ssh-ed25519 AAAA")
+        fields = {
+            "repository": REPOSITORY,
+            "head_sha": HEAD,
+            "tree_sha": "b" * 40,
+            "parent_shas": ["c" * 40],
+            "signer_kind": "SSH_PRINCIPAL",
+            "signer_identity": SIGNER,
+            "signature_fingerprint": fingerprint,
+            "signature_classification": "LOCAL_SSH_VERIFIED",
+            "signature_policy_digest": fast_path.digest_json(
+                execution._source_signature_policy(self.policy)
+            ),
+        }
+        authenticated = fast_path.AuthenticatedIntegrationCommit(
+            **{
+                **fields,
+                "parent_shas": tuple(fields["parent_shas"]),
+                "authentication_digest": fast_path.digest_json(fields),
+            }
+        )
+        github = type(
+            "Result",
+            (),
+            {
+                "returncode": 0,
+                "stdout": authority.canonical_json_bytes(
+                    {
+                        "sha": HEAD,
+                        "commit": {
+                            "verification": {"verified": True, "reason": "valid"}
+                        },
+                    }
+                ),
+            },
+        )()
+        with (
+            mock.patch.object(
+                fast_path, "authenticate_integration_commit",
+                return_value=authenticated,
+            ),
+            mock.patch.object(publication, "_run_gh", return_value=github),
+        ):
+            self.assertEqual(
+                execution._authenticate_source_commit(REPOSITORY, HEAD, SIGNER),
+                authenticated,
+            )
+
+        unverified = type(
+            "Result",
+            (),
+            {
+                "returncode": 0,
+                "stdout": authority.canonical_json_bytes(
+                    {
+                        "sha": HEAD,
+                        "commit": {
+                            "verification": {
+                                "verified": False,
+                                "reason": "unknown_key",
+                            }
+                        },
+                    }
+                ),
+            },
+        )()
+        with (
+            mock.patch.object(
+                fast_path, "authenticate_integration_commit",
+                return_value=authenticated,
+            ),
+            mock.patch.object(publication, "_run_gh", return_value=unverified),
+            self.assertRaisesRegex(execution.LifecycleExecutionError, "GitHub verification"),
+        ):
+            execution._authenticate_source_commit(REPOSITORY, HEAD, SIGNER)
+
+        wrong = replace(authenticated, signature_fingerprint="SHA256:wrong")
+        with (
+            mock.patch.object(
+                fast_path, "authenticate_integration_commit", return_value=wrong
+            ),
+            mock.patch.object(publication, "_run_gh", return_value=github),
+            self.assertRaisesRegex(execution.LifecycleExecutionError, "maintained key"),
+        ):
+            execution._authenticate_source_commit(REPOSITORY, HEAD, SIGNER)
 
 
 if __name__ == "__main__":
