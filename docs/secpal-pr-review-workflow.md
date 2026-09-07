@@ -561,8 +561,9 @@ absolute canonical link text directly and does not depend on GNU-specific
 
 `scripts/secpal_pr_review/lifecycle_execution.py` is the maintained execution
 boundary for the two existing user-authorized `DRAFT_TO_READY` and
-`READY_TO_DRAFT` decisions. It accepts only the repository, delivery issue, and
-canonical signed lifecycle-orchestration authorization. It derives the PR,
+`READY_TO_DRAFT` decisions. Its single-transition entry point accepts only the
+repository, delivery issue, and canonical signed lifecycle-orchestration
+authorization. It derives the PR,
 head, operation, predecessor publication, lifecycle authority, signer, scope,
 and intended successor from those authenticated authorities rather than caller
 assertions.
@@ -590,6 +591,48 @@ All other states fail closed. A write is ordered
 independent CURRENT read-back -> final GitHub/CURRENT convergence`. Immediately
 before each write the executor reauthenticates the exact live PR, head, OPEN
 state, CURRENT predecessor, signed authorization, and orchestration decision.
+
+One narrower convergence case extends that boundary without adding an event or
+recovery path. When GitHub already records the authorized Draft-to-Ready event
+at H0, CURRENT is still its exact authenticated Draft predecessor, and one
+independently authorized remediation commit has advanced the same Ready PR from
+H0 directly to H1, the executor publishes the two existing successors in their
+only valid order:
+
+```text
+CURRENT Draft @ H0
+  -> DRAFT_TO_READY @ H0
+  -> REMEDIATION_COMPLETED H0 -> H1
+```
+
+The path requires a complete GitHub timeline proving that Ready occurred while
+H0 was the PR head, with no intervening or later Ready-to-Draft, force-push, or
+additional commit. It separately re-verifies the exact one-use remediation
+authorization and finding identities, verifier-sealed validation receipt and
+final attestation, H1 tree, maintained signer, and sole-parent H1-to-H0 commit
+topology. Ancestry alone supplies no authority. The executor derives both
+states through the existing authority owner and publishes each existing
+successor through the ordinary protected CAS boundary. The exact midpoint and
+complete states are resumable and replay-safe; GitHub receives no duplicate
+Ready write.
+
+The maintained accepted-main entry point for that fixed shape is
+`converge_pending_ready_head_advancement`. It accepts the two exact signed
+authorizations and verifier-sealed remediation evidence directly; it is not a
+mode of the single-transition entry point. The immutable #810 first-executor
+bootstrap remains a closed historical bootstrap for its exact admitted source
+and is intentionally not a dispatcher for later accepted-main capabilities.
+Expanding that frozen admission would create new bootstrap authority rather
+than make accepted-main code reachable.
+
+This is autonomous convergence, not a new decision boundary, exactly when all
+intermediate operations are already authenticated, the existing transition
+order is unique, source lineage is exact, and the result equals current GitHub
+truth. Mechanical lifecycle lag is not Exceptional Recovery; checkpoint
+reordering grants no delivery authority; and authenticated head advancement
+does not permit skipping a missing transition. Ambiguous chronology, a
+Draft-valid source operation, competing source changes, or any non-exact
+midpoint fails closed.
 
 The GitHub write is the fixed non-interactive `gh pr ready` or
 `gh pr ready --undo` form with an exact repository and PR. No executable, host,

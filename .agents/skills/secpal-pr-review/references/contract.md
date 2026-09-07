@@ -577,8 +577,9 @@ detached path remains limited to its exact authenticated disposition allowlist.
 
 The separate `lifecycle_execution.py` boundary executes only an already signed
 and authenticated lifecycle-orchestration authorization for
-`DRAFT_TO_READY` or `READY_TO_DRAFT`. Its public input is exactly repository,
-delivery issue, and canonical authorization bytes. It accepts no caller state,
+`DRAFT_TO_READY` or `READY_TO_DRAFT`. Its single-transition public input is
+exactly repository, delivery issue, and canonical authorization bytes. It
+accepts no caller state,
 counter, CURRENT, predecessor, transition, signer, completion, executable,
 host, retry, force, or verification-bypass assertion.
 
@@ -621,6 +622,34 @@ recovery, integration, and metadata authorities cannot select this executor.
 This owner preserves the useful decision/execution boundary and composes the
 existing authorities without adding a permanent lifecycle concept.
 `NEW_PERMANENT_CONCEPT=NO`.
+
+The executor also owns one closed two-successor convergence shape. A pending,
+authenticated `DRAFT_TO_READY` at H0 may be followed only by one independently
+authenticated `REMEDIATION_COMPLETED` from H0 to its sole-child H1 when a
+complete live GitHub timeline proves the Ready mutation preceded that source
+advance and no Ready-to-Draft, force-push, or additional commit intervened.
+Existing orchestration must reject the remediation against Draft H0 and accept
+it against the derived Ready midpoint, making the order unique. Existing sealed
+validation evidence and signed-commit authentication must bind the exact issue,
+PR, heads, tree, receipt, final attestation, finding IDs, signer, and signature.
+The two ordinary successors publish sequentially through the existing CAS and
+historical read-back boundary; predecessor, midpoint, and final states are
+idempotently resumable without another GitHub Ready write.
+
+The maintained autonomy rule is:
+
+```text
+ALL_INTERMEDIATE_OPERATIONS_ALREADY_AUTHENTICATED
++ UNIQUE_EXISTING_TRANSITION_ORDER
++ EXACT_HEAD_LINEAGE
++ EXACT_FINAL_EXTERNAL_STATE
+-> AUTONOMOUS_LIFECYCLE_CONVERGENCE
+```
+
+Selecting that maintained safe convergence is not a user decision boundary.
+Mechanical lifecycle lag is not Exceptional Recovery, composition creates no
+new lifecycle transition, and authenticated ancestry never permits a missing
+transition to be skipped. Any ambiguous chronology fails closed.
 
 ## Explicit CI and readiness path
 
