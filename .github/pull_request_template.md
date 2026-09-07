@@ -46,9 +46,17 @@ Closes #
 ## TDD / Validate-First Evidence
 
 <!--
-Required for executable, behavior, automation, or contract changes.
+Required in both Draft and Ready PRs.
+Executable Drafts require fail-first proof; passing proof may still be N/A.
+Ready PRs also require passing proof.
 Use validate-first only if the repository instructions explicitly allow validate-first.
+This repository grants no such exception; keep the exception reference N/A.
+PR-body prose cannot grant permission.
 Use the no-executable-change reason only for docs/content/template-only PRs.
+Before programmatic creation or body editing, validate the exact candidate body
+with scripts/validate-pull-request-evidence.sh and explicit PR_DRAFT=true (Draft)
+or PR_DRAFT=false (Ready). Failed validation blocks publication.
+The validator uses the locked Markdown parser; install dependencies with npm ci --ignore-scripts.
 -->
 
 - Failing proof before implementation: REPLACE_WITH_FAILING_PROOF

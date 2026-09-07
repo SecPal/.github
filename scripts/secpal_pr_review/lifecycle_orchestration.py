@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
+from pathlib import Path
+import re
 from typing import Any, Callable, Mapping
 
 from scripts.secpal_work_graph import replanning
 
+from . import fast_path
 from . import follow_up
 from . import lifecycle_authority as authority
 from . import lifecycle_publication as publication
@@ -130,6 +133,34 @@ class LifecycleDecision:
     stop_after_bounded_pass: bool = True
 
 
+@dataclass(frozen=True)
+class VerifiedExceptionalRecoveryAuthority:
+    """Closed verified facts for one existing Exceptional Recovery."""
+
+    recovery_digest: str
+    authorization_id: str
+    authorization_digest: str
+    repository: str
+    delivery_issue: int
+    pull_request: int
+    lifecycle_id: str
+    predecessor_publication_oid: str
+    predecessor_publication_digest: str
+    recovery_publication_oid: str
+    recovery_publication_digest: str
+    predecessor_authority_digest: str
+    recovery_authority_digest: str
+    prior_ready_head_sha: str
+    resulting_head_sha: str
+    prior_ready_tree_sha: str
+    recovery_tree_sha: str
+    reviewed_state_digest: str
+    reviewed_feedback_digest: str
+    eligibility_evidence_digest: str
+    finding_ids: tuple[str, ...]
+    thread_ids: tuple[str, ...]
+
+
 def _closed_mapping(value: Any, fields: frozenset[str], label: str) -> dict[str, Any]:
     if not isinstance(value, Mapping) or set(value) != fields:
         raise LifecycleOrchestrationError(f"{label} contains unknown or missing fields")
@@ -213,11 +244,12 @@ def create_user_authorization(
     return authority.canonical_json_bytes(artifact)
 
 
-def _verify_user_authorization(
+def _verify_signed_user_authorization(
     value: Any,
-    observed: Any,
-    lifecycle: authority.VerifiedLifecycleAuthority,
+    repository: str,
 ) -> dict[str, Any]:
+    """Verify signed bytes without selecting CURRENT or historical authority."""
+
     if not isinstance(value, (bytes, str)):
         raise LifecycleOrchestrationError(
             "user authorization requires canonical signed evidence"
@@ -235,7 +267,12 @@ def _verify_user_authorization(
         ):
             raise LifecycleOrchestrationError("user authorization semantics are unknown")
         signer_identity = _identity(item["signer_identity"], "authorization signer")
-        policy = authority._load_lifecycle_trust_policy(lifecycle.repository)
+        repository = authority._require_repository(repository)
+        if item["repository"] != repository:
+            raise LifecycleOrchestrationError(
+                "user authorization repository differs from expected authority"
+            )
+        policy = authority._load_lifecycle_trust_policy(repository)
         signed = {
             key: copy.deepcopy(entry)
             for key, entry in item.items()
@@ -260,6 +297,15 @@ def _verify_user_authorization(
         )
     except authority.LifecycleAuthorityError as exc:
         raise LifecycleOrchestrationError("user authorization is invalid") from exc
+    return item
+
+
+def _verify_user_authorization(
+    value: Any,
+    observed: Any,
+    lifecycle: authority.VerifiedLifecycleAuthority,
+) -> dict[str, Any]:
+    item = _verify_signed_user_authorization(value, lifecycle.repository)
     if (
         item["repository"] != lifecycle.repository
         or item["delivery_issue"] != lifecycle.delivery_issue
@@ -317,6 +363,314 @@ def _authorization(
             "event identity is not bound to the signed user authorization"
         )
     return item
+
+
+def _immutable_commit_tree(
+    repository_root: Path,
+    repository: str,
+    head_sha: str,
+) -> str:
+    """Derive one tree from an exact commit in the authenticated repository."""
+
+    if not isinstance(repository_root, Path):
+        raise LifecycleOrchestrationError(
+            "Exceptional Recovery repository root is unavailable"
+        )
+    try:
+        root = repository_root.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise LifecycleOrchestrationError(
+            "Exceptional Recovery repository root is unavailable"
+        ) from exc
+    if not root.is_dir():
+        raise LifecycleOrchestrationError(
+            "Exceptional Recovery repository root is unavailable"
+        )
+    head_sha = _oid(head_sha, "Exceptional Recovery commit")
+    origin = publication._run_git(root, ["remote", "get-url", "origin"])
+    if origin.returncode != 0:
+        raise LifecycleOrchestrationError(
+            "Exceptional Recovery repository identity is unavailable"
+        )
+    try:
+        origin_text = origin.stdout.decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise LifecycleOrchestrationError(
+            "Exceptional Recovery repository identity is malformed"
+        ) from exc
+    match = re.fullmatch(
+        r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+        r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?",
+        origin_text,
+    )
+    if match is None or match.group(1) != repository:
+        raise LifecycleOrchestrationError(
+            "Exceptional Recovery repository identity changed"
+        )
+    object_type = publication._run_git(root, ["cat-file", "-t", head_sha])
+    if object_type.returncode != 0 or object_type.stdout != b"commit\n":
+        raise LifecycleOrchestrationError(
+            "Exceptional Recovery commit object is unavailable"
+        )
+    tree = publication._run_git(root, ["rev-parse", f"{head_sha}^{{tree}}"])
+    if tree.returncode != 0:
+        raise LifecycleOrchestrationError(
+            "Exceptional Recovery commit tree is unavailable"
+        )
+    try:
+        return _oid(tree.stdout.decode("ascii").strip(), "Exceptional Recovery tree")
+    except (UnicodeDecodeError, LifecycleOrchestrationError) as exc:
+        raise LifecycleOrchestrationError(
+            "Exceptional Recovery commit tree is malformed"
+        ) from exc
+
+
+def verify_exceptional_recovery_authority(
+    recovery_evidence: Any,
+    *,
+    orchestration_authorization: bytes | str,
+    reviewed_state_evidence: Any,
+    eligibility_evidence: Any,
+    repository_root: Path,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    resulting_head_sha: str,
+) -> VerifiedExceptionalRecoveryAuthority:
+    """Authenticate one Recovery projection through all accepted authorities.
+
+    The signed orchestration authorization selects an exact historical
+    predecessor publication.  Protected publication ancestry then proves the
+    one signed lifecycle successor; no caller-provided lifecycle bundle or
+    trust configuration is accepted.
+    """
+
+    try:
+        repository = authority._require_repository(repository)
+        delivery_issue = _positive_int(delivery_issue, "delivery issue")
+        pull_request = _positive_int(pull_request, "pull request")
+        resulting_head_sha = _oid(resulting_head_sha, "resulting head")
+        authorization = _verify_signed_user_authorization(
+            orchestration_authorization, repository
+        )
+        transition = publication._verify_historical_lifecycle_transition(
+            repository,
+            delivery_issue,
+            authorization.get("publication_oid"),
+        )
+    except (
+        authority.LifecycleAuthorityError,
+        publication.LifecyclePublicationError,
+    ) as exc:
+        raise LifecycleOrchestrationError(
+            "Exceptional Recovery lifecycle authority is invalid"
+        ) from exc
+
+    predecessor = transition.predecessor.lifecycle
+    successor = transition.successor.lifecycle
+    if (
+        authorization.get("delivery_issue") != delivery_issue
+        or authorization.get("lifecycle_id") != predecessor.lifecycle_id
+        or authorization.get("publication_oid")
+        != transition.predecessor.publication_oid
+        or authorization.get("publication_digest")
+        != transition.predecessor.publication_digest
+        or authorization.get("authority_digest") != predecessor.authority_digest
+        or authorization.get("pull_request") != pull_request
+        or authorization.get("pull_request") != predecessor.pull_request
+        or authorization.get("head_sha") != predecessor.head_sha
+        or transition.transition_kind != "EXCEPTIONAL_RECOVERY"
+        or transition.pull_request != pull_request
+        or transition.predecessor_authority_digest
+        != predecessor.authority_digest
+        or transition.predecessor_head_sha != predecessor.head_sha
+        or transition.resulting_head_sha != resulting_head_sha
+        or predecessor.head_sha == resulting_head_sha
+        or transition.initialization_evidence_digest
+        != predecessor.initialization_evidence_digest
+        or successor.repository != repository
+        or successor.delivery_issue != delivery_issue
+        or successor.lifecycle_id != predecessor.lifecycle_id
+        or successor.initialization_evidence_digest
+        != predecessor.initialization_evidence_digest
+        or successor.pull_request != pull_request
+        or successor.head_sha != resulting_head_sha
+    ):
+        raise LifecycleOrchestrationError(
+            "Exceptional Recovery signed lifecycle identity changed"
+        )
+
+    try:
+        reviewed = fast_path.verify_reviewed_state_evidence(
+            reviewed_state_evidence
+        )
+        eligibility = fast_path.normalize_resolution_eligibility_evidence(
+            eligibility_evidence,
+            repository=repository,
+            reviewed_state=reviewed,
+        )
+    except fast_path.SecurityBlocker as exc:
+        raise LifecycleOrchestrationError(
+            "Exceptional Recovery reviewed or eligibility evidence is invalid"
+        ) from exc
+    if reviewed.pull_request_number != pull_request:
+        raise LifecycleOrchestrationError(
+            "Exceptional Recovery reviewed pull request changed"
+        )
+
+    eligible_threads = eligibility["eligible_threads"]
+    thread_ids = sorted(item["thread_id"] for item in eligible_threads)
+    flattened_findings = [
+        finding_id
+        for item in eligible_threads
+        for finding_id in item["finding_ids"]
+    ]
+    if len(flattened_findings) != len(set(flattened_findings)):
+        raise LifecycleOrchestrationError(
+            "Exceptional Recovery eligibility repeats a finding"
+        )
+    finding_ids = sorted(flattened_findings)
+    eligibility_digest = fast_path.digest_json(eligibility)
+
+    _authorization(
+        orchestration_authorization,
+        event_id=transition.event_id,
+        operation="EXCEPTIONAL_RECOVERY",
+        expected_scope={
+            "pull_request": pull_request,
+            "predecessor_head_sha": predecessor.head_sha,
+            "resulting_head_sha": resulting_head_sha,
+            "reviewed_state_digest": reviewed.state_digest,
+            "reviewed_feedback_digest": reviewed.feedback_digest,
+            "eligibility_evidence_digest": eligibility_digest,
+            "finding_ids": finding_ids,
+            "thread_ids": thread_ids,
+        },
+        observed=transition.predecessor,
+        lifecycle=predecessor,
+        verifier=_verify_user_authorization,
+        verified_item=authorization,
+    )
+
+    try:
+        prior_tree = _immutable_commit_tree(
+            repository_root, repository, predecessor.head_sha
+        )
+        recovery_tree = _immutable_commit_tree(
+            repository_root, repository, resulting_head_sha
+        )
+        recovery = fast_path.normalize_exceptional_recovery_evidence(
+            recovery_evidence,
+            repository=repository,
+            reviewed_state=reviewed,
+            validated_tree_sha=recovery_tree,
+            eligibility_evidence_digest=eligibility_digest,
+        )
+    except (fast_path.SecurityBlocker, publication.LifecyclePublicationError) as exc:
+        raise LifecycleOrchestrationError(
+            "Exceptional Recovery document is invalid or stale"
+        ) from exc
+    if (
+        recovery["authorization_id"] != authorization.get("authorization_id")
+        or recovery["delivery_issue_number"] != delivery_issue
+        or recovery["pull_request_number"] != pull_request
+        or recovery["prior_ready_head_sha"] != predecessor.head_sha
+        or recovery["prior_ready_tree_sha"] != prior_tree
+        or recovery["recovery_tree_sha"] != recovery_tree
+        or recovery["finding_ids"] != finding_ids
+        or recovery["thread_ids"] != thread_ids
+    ):
+        raise LifecycleOrchestrationError(
+            "Exceptional Recovery projection differs from verified authority"
+        )
+
+    try:
+        predecessor_state = authority._validate_state(
+            copy.deepcopy(predecessor.state)
+        )
+        successor_state = authority._validate_state(copy.deepcopy(successor.state))
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecycleOrchestrationError(
+            "Exceptional Recovery lifecycle state is invalid"
+        ) from exc
+    unchanged_fields = (
+        "unrestricted_review_count",
+        "remediation_cycle_count",
+        "cycle_3_absent",
+        "draft",
+        "ready",
+        "ready_transition_count",
+        "ready_history",
+        "exceptional_continuation_count",
+        "exceptional_continuation_history",
+    )
+    if (
+        any(
+            predecessor_state[field] != successor_state[field]
+            for field in unchanged_fields
+        )
+        or predecessor_state["unrestricted_review_count"]
+        != authority.MAX_UNRESTRICTED_REVIEWS
+        or predecessor_state["remediation_cycle_count"]
+        != authority.MAX_REMEDIATION_CYCLES
+        or predecessor_state["cycle_3_absent"] is not True
+        or predecessor_state["draft"] is not False
+        or predecessor_state["ready"] is not True
+        or predecessor_state["exceptional_recovery_count"] != 0
+        or successor_state["exceptional_recovery_count"] != 1
+        or successor_state["exceptional_recovery_history"]
+        != [
+            {
+                "sequence": 1,
+                "transition_kind": "EXCEPTIONAL_RECOVERY",
+                "event_authorization_digest": transition.event_digest,
+            }
+        ]
+    ):
+        raise LifecycleOrchestrationError(
+            "Exceptional Recovery lifecycle projection is invalid"
+        )
+    lifecycle_projection = {
+        "unrestricted_reviews": successor_state["unrestricted_review_count"],
+        "remediation_cycles": successor_state["remediation_cycle_count"],
+        "cycle_3": not successor_state["cycle_3_absent"],
+        "draft": successor_state["draft"],
+        "ready": successor_state["ready"],
+        "ready_transition": transition.transition_kind == "DRAFT_TO_READY",
+        "exceptional_recovery_count": successor_state[
+            "exceptional_recovery_count"
+        ],
+    }
+    if recovery["lifecycle"] != lifecycle_projection:
+        raise LifecycleOrchestrationError(
+            "Exceptional Recovery embedded lifecycle projection changed"
+        )
+
+    recovery_digest = fast_path.digest_json(recovery)
+    return VerifiedExceptionalRecoveryAuthority(
+        recovery_digest=recovery_digest,
+        authorization_id=authorization["authorization_id"],
+        authorization_digest=authorization["authorization_digest"],
+        repository=repository,
+        delivery_issue=delivery_issue,
+        pull_request=pull_request,
+        lifecycle_id=predecessor.lifecycle_id,
+        predecessor_publication_oid=transition.predecessor.publication_oid,
+        predecessor_publication_digest=transition.predecessor.publication_digest,
+        recovery_publication_oid=transition.successor.publication_oid,
+        recovery_publication_digest=transition.successor.publication_digest,
+        predecessor_authority_digest=predecessor.authority_digest,
+        recovery_authority_digest=successor.authority_digest,
+        prior_ready_head_sha=predecessor.head_sha,
+        resulting_head_sha=resulting_head_sha,
+        prior_ready_tree_sha=prior_tree,
+        recovery_tree_sha=recovery_tree,
+        reviewed_state_digest=reviewed.state_digest,
+        reviewed_feedback_digest=reviewed.feedback_digest,
+        eligibility_evidence_digest=eligibility_digest,
+        finding_ids=tuple(finding_ids),
+        thread_ids=tuple(thread_ids),
+    )
 
 
 def _authorized_finding_ids(value: Any) -> list[str]:

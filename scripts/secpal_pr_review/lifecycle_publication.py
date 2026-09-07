@@ -85,6 +85,7 @@ class VerifiedLifecyclePublication:
     journal_predecessor_oid: str | None
     predecessor_publication_oid: str | None
     lifecycle: authority.VerifiedLifecycleAuthority
+    serialized_lifecycle_evidence: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,23 @@ class VerifiedPreEnrollmentAbsence:
     publication_branch: str
     observed_tip_oid: str | None
     evidence_digest: str
+
+
+@dataclass(frozen=True)
+class VerifiedLifecyclePublicationTransition:
+    """One exact historical publication successor in protected ancestry."""
+
+    predecessor: VerifiedLifecyclePublication
+    successor: VerifiedLifecyclePublication
+    event_id: str
+    event_digest: str
+    transition_kind: str
+    event_signer_identity: str
+    pull_request: int
+    predecessor_authority_digest: str
+    predecessor_head_sha: str
+    resulting_head_sha: str
+    initialization_evidence_digest: str
 
 
 def _trusted_executable(name: str) -> tuple[str, Any]:
@@ -657,7 +675,11 @@ def _verify_publication_envelope(
     authority._require_identity(document["lifecycle_id"], "lifecycle identity")
     authority._require_positive_int(document["pull_request"], "pull request")
     authority._require_oid(document["head_sha"], "publication head")
-    if document["historical_proof_mode"] not in ABSENCE_PROJECTION_PROOF_MODES:
+    if document["historical_proof_mode"] not in {
+        authority.NATIVE_PROOF_MODE,
+        authority.LEGACY_PROOF_MODE,
+        authority.EXACT_ADOPTION_PROOF_MODE,
+    }:
         raise LifecyclePublicationError("publication historical-proof mode is invalid")
     for field in ("journal_predecessor_oid", "predecessor_publication_oid"):
         if document[field] is not None and not _OID.fullmatch(document[field]):
@@ -714,11 +736,6 @@ def _verify_publication_document(
     repository = document["repository"]
     issue = document["delivery_issue"]
     evidence_raw = canonical_json_bytes(document["lifecycle_evidence"])
-    if document["historical_proof_mode"] not in {
-        authority.NATIVE_PROOF_MODE,
-        authority.LEGACY_PROOF_MODE,
-    }:
-        raise LifecyclePublicationError("publication historical-proof mode is invalid")
     native = document["historical_proof_mode"] == authority.NATIVE_PROOF_MODE
     if native:
         if native_genesis_admission is None:
@@ -759,6 +776,15 @@ def _verify_publication_document(
 
 def _lifecycle_bundle(document: Mapping[str, Any]) -> Mapping[str, Any]:
     evidence = document["lifecycle_evidence"]
+    if (
+        isinstance(evidence, dict)
+        and evidence.get("kind") == authority.EXACT_ADOPTION_EVIDENCE_KIND
+        and set(evidence) == authority.EXACT_ADOPTION_PUBLICATION_FIELDS
+    ):
+        return {
+            "transition_authorizations": evidence["transition_authorizations"],
+            "authority_chain": evidence["authority_chain"],
+        }
     bundle = (
         evidence.get("lifecycle_evidence")
         if isinstance(evidence, dict) and evidence.get("kind") == authority.PUBLICATION_EVIDENCE_KIND
@@ -806,6 +832,19 @@ def _require_exact_successor(
             or new_evidence.get("legacy_adoption_checkpoint") != old_evidence.get("legacy_adoption_checkpoint")
         ):
             raise LifecyclePublicationError("lifecycle enrollment root changed during advancement")
+    if (
+        isinstance(old_evidence, dict)
+        and old_evidence.get("kind") == authority.EXACT_ADOPTION_EVIDENCE_KIND
+    ):
+        if (
+            not isinstance(new_evidence, dict)
+            or new_evidence.get("kind") != authority.EXACT_ADOPTION_EVIDENCE_KIND
+            or new_evidence.get("exact_state_adoption_proof")
+            != old_evidence.get("exact_state_adoption_proof")
+        ):
+            raise LifecyclePublicationError(
+                "exact-state adoption root changed during advancement"
+            )
 
 
 def _publication_fields(
@@ -1207,7 +1246,11 @@ def enroll_existing_lifecycle(
     """Publish one native lifecycle or one explicit legacy migration checkpoint."""
 
     bundle, bundle_raw = _canonical_bundle(serialized_evidence)
-    is_native = not (
+    exact_adoption = (
+        bundle.get("kind") == authority.EXACT_ADOPTION_EVIDENCE_KIND
+        and bundle.get("enrollment_mode") == "EXACT_STATE_ADOPTION"
+    )
+    is_native = not exact_adoption and not (
         bundle.get("kind") == authority.PUBLICATION_EVIDENCE_KIND
         and bundle.get("enrollment_mode") == "LEGACY_ADOPTION_CHECKPOINT"
     )
@@ -1218,6 +1261,10 @@ def enroll_existing_lifecycle(
         if is_native
         else authority.verify_lifecycle_authority_for_publication(bundle_raw)
     )
+    if exact_adoption and bundle["exact_state_adoption_proof"].get("proof_version") == authority.EXACT_ADOPTION_LOSS_VERSION:
+        authority.verify_pre_enrollment_validation_evidence_loss_admission(
+            canonical_json_bytes(bundle["exact_state_adoption_proof"]["validation_evidence_loss_admission"])
+        )
     policy = authority._load_lifecycle_trust_policy(verified.repository)
     _verify_live_protection(policy)
     with _isolated_repository(policy, write=True) as (root, credential_environment):
@@ -1271,7 +1318,7 @@ def enroll_existing_lifecycle(
         )
     return VerifiedLifecyclePublication(
         object_oid, document["publication_digest"], policy.publication_branch,
-        tip, None, lifecycle,
+        tip, None, lifecycle, bundle_raw,
     )
 
 
@@ -1283,13 +1330,22 @@ def advance_current_terminal(
 
     bundle, bundle_raw = _canonical_bundle(serialized_evidence)
     lifecycle_bundle = _lifecycle_bundle({"lifecycle_evidence": bundle})
-    initialization = lifecycle_bundle.get("delivery_initialization")
-    if not isinstance(initialization, dict):
-        raise LifecyclePublicationError("lifecycle initialization is malformed")
-    repository = authority._require_repository(initialization.get("repository"))
-    issue = authority._require_positive_int(
-        initialization.get("delivery_issue"), "delivery issue"
-    )
+    if bundle.get("kind") == authority.EXACT_ADOPTION_EVIDENCE_KIND:
+        proof = bundle.get("exact_state_adoption_proof")
+        if not isinstance(proof, dict):
+            raise LifecyclePublicationError("exact-state adoption proof is malformed")
+        repository = authority._require_repository(proof.get("repository"))
+        issue = authority._require_positive_int(
+            proof.get("delivery_issue"), "delivery issue"
+        )
+    else:
+        initialization = lifecycle_bundle.get("delivery_initialization")
+        if not isinstance(initialization, dict):
+            raise LifecyclePublicationError("lifecycle initialization is malformed")
+        repository = authority._require_repository(initialization.get("repository"))
+        issue = authority._require_positive_int(
+            initialization.get("delivery_issue"), "delivery issue"
+        )
     policy = authority._load_lifecycle_trust_policy(repository)
     _verify_live_protection(policy)
     with _isolated_repository(policy, write=True) as (root, credential_environment):
@@ -1338,8 +1394,25 @@ def advance_current_terminal(
         )
     return VerifiedLifecyclePublication(
         object_oid, document["publication_digest"], policy.publication_branch,
-        tip, predecessor_oid, lifecycle,
+        tip, predecessor_oid, lifecycle, bundle_raw,
     )
+
+
+def require_unenrolled_delivery(repository: str, delivery_issue: int) -> None:
+    """Authenticate absence using the same protected journal as CURRENT selection."""
+
+    issue = authority._require_positive_int(delivery_issue, "delivery issue")
+    policy = authority._load_lifecycle_trust_policy(repository)
+    _verify_live_protection(policy)
+    with _isolated_repository(policy, write=False) as (root, credential_environment):
+        tip = _observe_remote_current_once(
+            root, policy.publication_remote_url, policy.publication_branch,
+            credential_environment=credential_environment,
+        )
+        if tip is not None:
+            _, latest, admissions = _walk_journal(root, tip, policy.publication_branch)
+            if (repository, issue) in latest or (repository, issue) in admissions:
+                raise LifecyclePublicationError("delivery is already enrolled or natively admitted")
 
 
 def verify_current_lifecycle_authority(
@@ -1370,6 +1443,119 @@ def verify_current_lifecycle_authority(
         publication_oid, document["publication_digest"], policy.publication_branch,
         document["journal_predecessor_oid"],
         document["predecessor_publication_oid"], lifecycle,
+        canonical_json_bytes(document["lifecycle_evidence"]),
+    )
+
+
+def _verify_historical_lifecycle_transition(
+    repository: str,
+    delivery_issue: int,
+    predecessor_publication_oid: str,
+) -> VerifiedLifecyclePublicationTransition:
+    """Verify one exact historical successor through protected journal ancestry."""
+
+    repository = authority._require_repository(repository)
+    delivery_issue = authority._require_positive_int(
+        delivery_issue, "delivery issue"
+    )
+    predecessor_publication_oid = authority._require_oid(
+        predecessor_publication_oid, "predecessor publication"
+    )
+    policy = authority._load_lifecycle_trust_policy(repository)
+    _verify_live_protection(policy)
+    with _isolated_repository(policy, write=False) as (root, credential_environment):
+        tip = _observe_remote_current_once(
+            root,
+            policy.publication_remote_url,
+            policy.publication_branch,
+            credential_environment=credential_environment,
+        )
+        if tip is None:
+            raise LifecyclePublicationError(
+                "current lifecycle publication is unavailable"
+            )
+        entries, _, _ = _walk_journal(root, tip, policy.publication_branch)
+
+    delivery_entries = [
+        item
+        for item in entries
+        if item[1]["repository"] == repository
+        and item[1]["delivery_issue"] == delivery_issue
+    ]
+    positions = [
+        index
+        for index, item in enumerate(delivery_entries)
+        if item[0] == predecessor_publication_oid
+    ]
+    if len(positions) != 1 or positions[0] + 1 >= len(delivery_entries):
+        raise LifecyclePublicationError(
+            "historical lifecycle predecessor has no unique published successor"
+        )
+    predecessor_oid, predecessor_document, predecessor_lifecycle = delivery_entries[
+        positions[0]
+    ]
+    successor_oid, successor_document, successor_lifecycle = delivery_entries[
+        positions[0] + 1
+    ]
+    if successor_document["predecessor_publication_oid"] != predecessor_oid:
+        raise LifecyclePublicationError(
+            "historical lifecycle successor is not directly bound to predecessor"
+        )
+    bundle = _lifecycle_bundle(successor_document)
+    events = bundle.get("transition_authorizations")
+    if not isinstance(events, list) or not events or not isinstance(events[-1], dict):
+        raise LifecyclePublicationError(
+            "historical lifecycle successor transition is unavailable"
+        )
+    event = events[-1]
+    predecessor = VerifiedLifecyclePublication(
+        predecessor_oid,
+        predecessor_document["publication_digest"],
+        policy.publication_branch,
+        predecessor_document["journal_predecessor_oid"],
+        predecessor_document["predecessor_publication_oid"],
+        predecessor_lifecycle,
+        canonical_json_bytes(predecessor_document["lifecycle_evidence"]),
+    )
+    successor = VerifiedLifecyclePublication(
+        successor_oid,
+        successor_document["publication_digest"],
+        policy.publication_branch,
+        successor_document["journal_predecessor_oid"],
+        successor_document["predecessor_publication_oid"],
+        successor_lifecycle,
+        canonical_json_bytes(successor_document["lifecycle_evidence"]),
+    )
+    return VerifiedLifecyclePublicationTransition(
+        predecessor=predecessor,
+        successor=successor,
+        event_id=authority._require_identity(event.get("event_id"), "event identity"),
+        event_digest=authority._require_digest(
+            event.get("event_digest"), "event digest"
+        ),
+        transition_kind=authority._require_transition_kind(
+            event.get("transition_kind"), allow_genesis=False
+        ),
+        event_signer_identity=authority._require_identity(
+            event.get("signer_identity"), "event signer"
+        ),
+        pull_request=authority._require_positive_int(
+            event.get("pull_request"), "event pull request"
+        ),
+        predecessor_authority_digest=authority._require_digest(
+            event.get("predecessor_authority_digest"),
+            "predecessor authority digest",
+        ),
+        predecessor_head_sha=authority._require_oid(
+            event.get("predecessor_head_sha"), "predecessor head"
+        ),
+        resulting_head_sha=authority._require_oid(
+            event.get("resulting_head_sha"), "resulting head"
+        ),
+        initialization_evidence_digest=authority._require_digest(
+            event.get("initialization_evidence_digest"),
+            "initialization evidence",
+        ),
     )
 
 

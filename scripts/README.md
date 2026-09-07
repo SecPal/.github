@@ -44,6 +44,10 @@ the PR-wide feedback and exact target reads. Reply targets include their exact
 parent node identity. Registry validation permits only the required direct
 tools, checked-in scripts, and approved project-script forms before any command
 runs. PR-wide feedback must match across two complete bounded projections.
+Normal stable-feedback capture also rejects visible non-terminal, malformed,
+forged, duplicate, or wrong-head Codex status, a Ready PR with no Codex summary,
+and pending Copilot review requests before admission. Provider status is an
+ephemeral gate and is not added to the stable-feedback artifact or digest.
 Resolution plans reject
 unrecorded already-resolved targets, canonical-reference cycles, unsafe
 canonical dispositions, actionable fixes without commit and test proof, and
@@ -86,7 +90,10 @@ signed two-parent candidate whose first parent is the prior Ready delivery head
 and whose second parent is the explicitly authorized live current registered
 `main` tip. The versioned manifest consumes the maintained protected-journal
 lifecycle publication for parent 1, including its persistent identity, current
-authority digest, finite exceptional history, and unused continuation budget.
+authority digest, and finite exceptional history. Ordinary typed integration
+uses `HEAD_ADVANCED` and preserves both exceptional counters exactly; it does
+not consume recovery or continuation budget.
+
 The fresh tree receipt, integration-evidence
 trailer, final attestation, expected signer, stable-feedback and eligibility
 digests, unchanged lifecycle counters, and exact bounded manual tree delta all
@@ -104,6 +111,40 @@ artifact. That closed combination emits the version-1.2
 attestation bind the same eligibility digest. Historical version-1.1
 integration attestations remain valid for their original integration purpose
 but are not thread-resolution authority.
+
+Successful verification of either supported Ready-integration attestation version
+returns the existing verifier-sealed current-head validation evidence only after
+the canonical verifier has run trusted `git verify-commit` itself and the actual
+integration commit signature, signer identity, format, and fingerprint have
+passed policy. The authenticated result also binds the repository, exact signed
+tree and ordered parents, and maintained signature-policy digest. Consumers
+independently re-verify canonical provenance; caller-created, replaced,
+malformed, or cross-context values therefore fail closed without relying on an
+in-process registrar. The canonical source digest retains its historical binding
+to the complete normalized integration package, including delivery, topology,
+current-main, receipt, reviewed-state, expected signer, kind, and version
+identities; actual signer authentication is the additional precondition for
+issuing that compatible sealed result.
+Exact-state-adopted `HEAD_ADVANCED` may consume it, but all independent lifecycle
+authorization and publication preconditions remain mandatory.
+
+The late-feedback boundary also supports one exact accepted-main
+`AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE` recovery for `SecPal/.github`
+issue #810 / PR #821. The complete detached late-authority tuple selects late
+mode. Within that mode, omitting the final eligibility path selects that policy
+record; the verifier then requires the exact zero-thread reviewed state, final
+head and tree, receipt and attestation digests, delivery signer, and actual
+omission of `eligibility_evidence_digest` from both reconstructed receipt and
+attestation. It creates no eligibility manifest. A supplied final eligibility
+path always uses the ordinary manifest verifier, so malformed, stale, or missing
+supplied evidence cannot downgrade to absence recovery. Final eligibility
+evidence outside late mode is rejected.
+
+Classification schemas `1.0` and `1.1` select the invalid/disproven and
+informational/non-actionable decisions respectively. Disposition schemas bind
+both decision and evidence mode: `1.0`/`1.2` are manifest-backed invalid/info,
+while `1.1`/`1.3` are authenticated-absence invalid/info. Cross-wrapping those
+semantic pairs is rejected.
 
 Parent 1 additionally requires a closed prior-authority manifest authenticated
 by a signed annotated tag and independently verified ordinary receipt, final
@@ -145,8 +186,24 @@ bind its allowed classification/disposition and finding evidence to the
 reviewed state. Its canonical digest must be authenticated by the signed
 validation receipt and final attestation, so it cannot be created or changed
 after validation. Together they bind the operation to the caller-provided PR
-head and reviewed target-comment identities, digests, and resolution state. After one
-initial complete target read, it requires two more equal complete target
+head, the complete original ordered target set, and reviewed target-comment
+identities, digests, and resolution state. An exact original target whose
+reviewed state was unresolved may be classified as already satisfied when its
+live state is resolved and every other binding still matches; that authenticated
+postcondition produces no write. An unresolved target also retains the ordinary
+guarded mutation path when its outdated state is exact or changes only from
+authenticated reviewed `false` to live `true`, provided the accepted source-fix
+authority, PR and head, thread and comment identities, bodies and replies,
+eligibility, classification, disposition, and every other binding remain exact.
+This compatibility does not normalize stale targets: `true` to `false`, missing
+or non-boolean outdated state, and every other difference fail closed. A
+Recovery-bound ordinary attestation also retains and passes the existing
+`--delivery-issue`, `--exceptional-recovery-evidence`, and
+`--exceptional-recovery-authorization` artifacts. Ordinary non-Recovery and
+Ready-integration invocations omit that tuple. The shared Recovery verifier may
+authenticate only the installed lifecycle-publication journal protection; it
+does not grant delivery-PR branch-protection or merge-readiness authority. After
+one initial complete target read, the resolver requires two more equal complete target
 projections immediately before each write or successful already-resolved
 report, and keeps thread resolution separate from CI and merge-readiness
 decisions. It accepts
@@ -161,15 +218,23 @@ validation and push hooks remain required. Hosted checks may be read only for a
 current explicit CI/readiness request, using one bounded current-state read with
 no polling, waiting, sleeping, or automatic repetition.
 
-For an exact technically non-blocking thread outside the authenticated final
-feedback boundary and observed on the unchanged delivery head,
+For an exact technically non-blocking target absent from authenticated final
+eligibility and observed on the unchanged delivery head,
 `secpal-create-late-classification.py` verifies the existing final delivery
-evidence and canonical final eligibility artifact, proves the thread absent
-from both final sets, captures only the named live thread, and
-authenticates the explicit classification decision. Then
+evidence and derives `REVIEWED_BUT_INELIGIBLE` or `ABSENT_FROM_BOTH` from
+authenticated final reviewed state. It accepts
+`INFORMATIONAL + NON_ACTIONABLE` for either origin; the existing
+`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` pair remains accepted
+only for `ABSENT_FROM_BOTH`. All require `technically_blocking=false`. The
+creator captures only the named live thread and authenticates the explicit
+classification decision. Then
 `secpal-create-late-disposition.py` verifies that decision, computes its digest
 internally, and creates a canonical detached SSH/OpenPGP-signed artifact without
-a delivery commit. The resolver consumes both signed artifacts through a
+a delivery commit. Ordinary final-delivery evidence remains the default. A
+canonical eligibility-bound Ready-integration source is supplied to both
+creators and the resolver with `--integration-evidence`; all three route it
+through the maintained integration-specific verifier, and authenticated
+attestation shape selects the evidence family. The resolver consumes both signed artifacts through a
 separate explicit eligibility path,
 requires the actual detached signer to match the verified final delivery
 signer, and binds the delivery issue, PR, unchanged head/tree, receipt and
@@ -178,9 +243,9 @@ state, classification, disposition, technical-blocking flag, and guarded
 resolution action. It cannot select arbitrary threads or authorize any other
 GitHub mutation.
 
-This authenticated absence boundary is what “post-push” denotes in the
-resolution lifecycle. It does not use or claim a cryptographic GitHub
-wall-clock push-order proof.
+This authenticated reviewed-state/eligibility boundary is what “post-push”
+denotes in the resolution lifecycle. It does not use or claim a cryptographic
+GitHub wall-clock push-order proof.
 
 See [Simple PR Thread Resolution](../docs/simple-pr-thread-resolution.md) for
 the bounded safety contract and usage.
@@ -223,7 +288,166 @@ other than exactly 40 or 64 lowercase hexadecimal characters fail closed.
 for explicit adoption by later receipts or attestations. Existing delivery
 validation does not call this module and continues to use the ordinary
 one-parent evidence path.
+
+The same enrollment family also defines the versioned exact-state-adoption
+proof. It authenticates normalized pre-enrollment observations and one exact
+finite current state under a separately signed one-use authorization, while
+keeping the ordinary event list empty and starting cryptographic lifecycle
+authority at the real adoption time. The proof uses the maintained adoption
+signer and existing publication/successor machinery; it does not weaken native
+genesis or event-derived state verification and is not available as an ordinary
+delivery escape hatch.
+External facts enter proof assembly only through the canonical verifier-derived
+boundary: the existing receipt/final-attestation verifier derives source
+evidence, signature admission authenticates the commit, and observation
+normalization derives history provenance. Later head-changing successors bind
+fresh verified current-head evidence in the signed ordinary authority while the
+original adoption proof remains immutable.
+
+Existing exact-adoption version 1 remains the provider-review mode. Version 2
+adds a closed, domain-separated
+`PRE_ENROLLMENT_REVIEW_BUDGET_CONSUMPTION_ADMISSION`, signed by the existing
+migration role, for zero-provider-review deliveries whose earlier normal review
+consumption was not persistently authenticated. The admission consumes exactly
+one finite review budget and binds one open delivery, head, tree, validation
+evidence set, provider chronology, intended state, and adoption timestamp. It
+does not claim a historical review result or add verdict/finding evidence.
+Mixed provider-review/admission inputs, replay into another context, resets,
+and using the admission to derive remediation or Ready state fail closed.
 The lifecycle-authority suite is an unconditional registered validation command.
+
+### `secpal_pr_review/validation_evidence_loss.py`
+
+Owns the version-1
+`SECPAL_PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_ADMISSION` consumed only by
+exact-state-adoption version 3. Existing adoption versions 1/2 and ordinary
+commit-bound validation remain unchanged. Its semantic contract is the
+exact-state-adoption section of `docs/secpal-pr-review-workflow.md`.
+
+The maintained entry points are
+`lifecycle_authority.issue_pre_enrollment_validation_evidence_loss_admission(repository, delivery_issue)`
+and
+`lifecycle_authority.verify_pre_enrollment_validation_evidence_loss_admission(serialized)`.
+Issuance requires clean current protected main, not candidate-local policy.
+There is no caller-selected registry, command list, signer, source checkout,
+successful result, feedback snapshot, loss flag or CURRENT selector. Public
+verification authenticates signed bytes and reacquires current source, policy,
+feedback and absence facts without rerunning complete validation. The migration
+signature authenticates the issuer's execution facts.
+
+Acquisition owns provider/Git reads and isolated registered validation.
+`_normalize_provider_representations` purely converts bounded external values
+to canonical typed facts; `_admit_observation` consumes only those facts, and
+`_assemble_source_facts` only assembles admitted facts. These responsibilities
+serve one exact-source contract, not a general source executor. Dependency
+preparation is fixed `npm ci --ignore-scripts --no-audit --no-fund` with a temporary
+HOME, closed credential-free environment and 600-second bound. Accepted-current
+test, script and package harness bytes are verified against protected main and
+overlaid on a disposable copy of the immutable source before the existing
+registered runner executes; historical harness bytes never become policy.
+
+`current_safety.receipt_digest` is the current execution identity under
+`secpal.pre-enrollment-current-safety/v1`, **not** an ordinary validation receipt.
+The target-shaped regression retains the previously observed divergent receipt
+identities; production derives its own current execution identity. No historical
+package bytes or unauthenticated final-attestation identity are reconstructed.
+
+The sealed source enters existing external-evidence authentication with
+`validation_evidence=None` and a separately authenticated review-budget admission.
+Passing both source modes rejects. The existing adoption proof and enrollment
+publication supply durable provenance and the single use. Issuance alone neither
+enrolls nor authorizes review, remediation, Ready, thread resolution or recovery.
+The #787 bootstrap and existing role credential selection remain separate.
+
+### `secpal_pr_review/bootstrap_source_admission.py`
+
+Authenticates exact immutable implementation sources through one accepted-main
+`BOOTSTRAP_SOURCE_ADMISSION` family. Its executable
+`FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE` subtype is the exact PR #812 source
+maintained for #810's first Ready-executor bootstrap. Accepted-main policy fixes the source
+head, tree, parent, receipt, final attestation, signer, implementation path,
+entrypoint, purpose, and source PR base repository/ref. Live provider reads emit
+a representation which is purely normalized before a separate pure admission
+step. Evidence files use the maintained bounded regular-file reader. The
+verifier fetches that object into a private detached tree, independently reuses
+the ordinary receipt/final-attestation verifier, and keeps candidate imports
+inside that tree. Its child launcher reports only closed diagnostic identities;
+it never exposes child stderr or exception text.
+
+The ordinary executable-source path is unchanged: when a historical evidence
+directory is supplied, reviewed state, the byte-semantic receipt reconstructed
+from the immutable delivery registry, and the final attestation must all verify.
+Invalid supplied evidence fails immediately and never falls back. The historical
+receipt reconstruction used by Ready integration remains integration-only and
+does not admit this ordinary source.
+
+For the exact #810 / PR #812 source only, an absent evidence directory selects
+one closed `BOOTSTRAP_SOURCE_EVIDENCE_LOSS_RECOVERY` sub-record in the existing
+accepted-main `bootstrap_source_admissions` policy. It states
+`HISTORICAL_EVIDENCE_UNAVAILABLE_BUT_EXACT_RECOVERY_AUTHORIZED`, binds the
+unchanged source-admission digest, and carries distinct exact-source recovery
+validation and technical/security-gate digests. The verifier re-authenticates
+the signed head, tree, sole parent, receipt trailer, signer, implementation blob,
+path, entrypoint, 40 diagnostic raise sites, non-self-admission property, live
+open Draft PR, `main` base, and the exact canonical stable-feedback inventory
+accepted by the recovery gate. That inventory digest covers review submissions
+and their commit association, conversation comments, review threads, ordered
+thread comments and replies, actors, body digests, reactions, and
+resolved/outdated state through the maintained bounded pagination and duplicate
+identity checks. A new `COMMENTED` review body or same-count feedback
+substitution therefore fails even when the aggregate review decision remains
+unchanged; blocking aggregate review decisions also continue to fail. It also
+reconstructs the immutable source's
+15-command registry only to authenticate the fresh recovery-validation command
+set. It does not synthesize, reconstruct, or claim byte identity for lost
+`reviewed-state.json`, `validation-receipt.json`, or `final-attestation.json`.
+The maintained historical receipt and final-attestation digests remain
+provenance facts, not claims that the unavailable raw artifacts were freshly
+verified.
+
+The closed `PR_REVIEW_EVIDENCE_HELPER_SOURCE` subtype admits only the exact PR
+PR #819 `scripts/secpal-pr-review.py` blob needed by #818. It has no entrypoint,
+launcher, import, or execution authority. The public verifier selects this
+admission only from the exact protected-main registry object, through a closed
+independent `gh`/`git` boundary with concurrent bounded stdout/stderr capture,
+timeout/overflow termination and reap, and rejection of partial output. A
+candidate-local registry or caller-selected executable, path, ref, OID, policy,
+or policy-source value cannot establish the admission. The admitted historical
+commit, tree, parent, signature, validation
+evidence, path, and blob remain immutable after a lawful PR-head advance. The
+live PR independently retains its repository, number, base, state, and exact
+Ready/Draft binding, while one bounded current-head blob observation proves
+that the candidate still consumes the exact admitted helper bytes. That observation
+atomically re-reads the PR head with the blob selected at the initially
+authenticated head, so concurrent advancement fails closed. The mutable
+current PR head is never treated as the immutable admitted source identity.
+
+The executable `PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE` subtype is the one
+exact #776 / PR #779 bootstrap source. Protected-main policy fixes its head,
+tree, predecessor, maintained signer policy, action-helper blob, `main`
+entrypoint, `integrate-pre-enrollment-draft` command, purpose, and one-command
+validation set. Both source commits are verified before the candidate suite
+runs in the detached tree; output is discarded and only canonical command,
+exit-status, and success digests are authority. The historical receipt trailer
+is not treated as reconstructable receipt or final-attestation evidence.
+Authentication, validation, and a final clean-tree check all precede the fixed
+command. Both Python subprocess boundaries use the shared isolated `-I -S`
+startup sequence and an authenticated source root, so a retained `HOME` cannot
+load ambient user-site startup hooks. For repository #776 / PR #779, the closed
+launcher supplies the signer, purpose, command, and entrypoint itself, so
+callers cannot widen the admission.
+This authorizes only execution of the admitted implementation; the downstream
+pre-enrollment verifier still owns candidate-tree, push, and initialization
+evidence.
+
+All source paths return a sealed `VerifiedBootstrapSource` with an explicit
+historical evidence status. The #812-only evidence-loss recovery does not apply
+to the byte-only #819 subtype. Historical P2.1 remains rooted at commit
+`833eef2afc063ae777e7e2b64b2f252e3fe1e49e` and helper blob
+`c0e5dc15879010339cc08b6e2fbcb1ff51f4d4e2`. Source admission alone performs no
+GitHub mutation, lifecycle publication, CURRENT change, genesis operation, or
+work-graph mutation; the admitted executor still requires #810's separate
+signed one-use lifecycle-transition authorization.
 
 ### `secpal_pr_review/lifecycle_orchestration.py`
 
@@ -253,6 +477,23 @@ continues to authenticate commit-bound eligibility and reports the resolution
 as `SAFELY_DISPOSITIONED_TRACKED`, never fixed, implemented, or completed. The
 orchestration suite is an unconditional registered validation command.
 
+### `secpal_pr_review/lifecycle_execution.py`
+
+Executes the maintained authenticated Ready/Draft transitions and supplies the
+local signer bridge used by lifecycle production paths. Signer identities come
+only from installed lifecycle policy. The OS account may add bounded global Git
+configuration values under `secpal.lifecycleSigningCredential`, each containing
+exactly a JSON `identity` and `credential` reference. The identity must already
+be selected by a policy role; the local mapping grants no authority.
+
+Explicit mappings override the compatible routine `user.signingkey` default.
+Distinct legacy-adoption signing has no routine-key fallback. SSH references
+must be normalized absolute paths, OpenPGP references must be full
+fingerprints, and every detached result is cryptographically verified against
+the accepted policy credential before becoming a `Signer` result. Selection
+keeps the existing closed non-interactive environment and does not use an SSH
+agent, inspect private-key contents, search for keys, or mutate Git config.
+
 ### `secpal_pr_review/lifecycle_publication.py`
 
 Publishes lifecycle authority on one protected, append-only global journal
@@ -281,9 +522,12 @@ prevents rollback and deletion.
 
 New native delivery publication is a two-CAS sequence: admission first, then
 enrollment after re-verifying the reachable admission. A branch-local static
-anchor cannot publish. Existing maintained static anchors remain compatibility
-roots only for native enrollments that predate this sequence. One closed issue
-774 repair allowance admits the exact existing issue 736 initialization after
+anchor cannot publish. A separate closed historical-compatibility registry
+binds every retained pre-#774 exception to its repository, issue, PR, initial
+head, initialization digest, proof mode, exact enrollment object OID, and signed
+publication digest. A new publication carrying the same initialization cannot
+inherit that exception. One closed issue 774 repair allowance admits the exact
+existing issue 736 initialization after
 independently verifying its signed initialization and original enrollment; the
 repair appends to rather than rewrites journal history. See
 [`docs/native-lifecycle-genesis-admission.md`](../docs/native-lifecycle-genesis-admission.md).
@@ -334,6 +578,28 @@ Requirements: an authenticated `gh` CLI, Python 3, and `npm ci` so the
 `markdown-it` parser used for structural acceptance-criteria detection is
 present. The tool reads through `gh api graphql` only, performs no mutation, and
 persists no state.
+
+### `secpal-dependabot-manifest-coverage.mjs`
+
+Deterministically discovers tracked dependency manifests and validates either
+the shared `MANIFEST_COVERAGE` assertion or the separate `CADENCE_POLICY`
+assertion. Ecosystem knowledge and upstream provenance come exclusively from
+`policies/dependabot-manifest-catalog-v1.json`. Exact repository exceptions and
+module classifications are usable only from a separately supplied trusted
+protected-history root; subject-branch review strings are never authority.
+
+```bash
+node scripts/secpal-dependabot-manifest-coverage.mjs coverage \
+  --repository SecPal/example --default-branch main \
+  --trusted-policy-root /path/to/protected-baseline --format json
+node scripts/secpal-dependabot-manifest-coverage.mjs cadence \
+  --repository SecPal/example --format text
+```
+
+See
+[`docs/dependabot-manifest-coverage.md`](../docs/dependabot-manifest-coverage.md)
+for discovery, anti-drift, matching, exception, reporting, and reusable-workflow
+semantics.
 
 ### `secpal-pr-advisory.py`
 
@@ -987,6 +1253,29 @@ bash .github/setup-hooks.sh
 ```
 
 ## Adding New Scripts
+
+### `secpal-vulnerability-reevaluation.py`
+
+Pure verification and adaptation boundaries for exact OCI index/platform
+identity, authoritative Syft SPDX association, vendor-native Grype/Trivy
+evidence, database identity/freshness, trusted reviewed-VEX checkout bytes, and
+the versioned re-evaluation run envelope. It rejects noncanonical credentialed
+repository paths outside the authenticated caller's exact GHCR namespace and
+re-derives trusted policy output plus complete required-operation health from
+raw evidence before issue mutation. Its `list-vex` command provides the single
+fail-closed regular-file enumeration used by every reviewed-VEX workflow path;
+`verify-vex` binds declared repository, ancestor commit, document path, bytes,
+and digest to the authenticated checkout. External registry/scanner operations
+remain in the reusable workflow.
+
+### `secpal-vulnerability-triage.py`
+
+Validates the run envelope and normalized policy result, then plans or delivers
+caller-scoped deterministic GitHub issue updates. It searches every exact-subject
+lookup key, retains authenticated historical alias keys on unique updates, fails
+closed on ambiguous matches, reconciles healthy inverse transitions, and
+maintains stable stale-health alerts without reimplementing vulnerability
+policy.
 
 When adding new scripts:
 

@@ -58,6 +58,9 @@ FAST_BATCH_SCHEMA_PATH = (
 )
 EXTERNAL_COMMAND_TIMEOUT_SECONDS = 30
 LOCAL_VALIDATION_TIMEOUT_SECONDS = 600
+# Conflict-bearing integration paths are governance source intended for human
+# review. Bound their aggregate authenticated blob content before Git emits it.
+MAX_INTEGRATION_CONFLICT_CONTENT_BYTES = 4 * 1024 * 1024
 
 
 def _load_evidence_helper() -> Any:
@@ -1517,7 +1520,7 @@ query CurrentReviewFeedback(
 ) {
   repository(owner:$owner, name:$name) {
     pullRequest(number:$number) {
-      id headRefOid baseRefName baseRefOid state
+      id headRefOid baseRefName baseRefOid state isDraft reviewDecision
       reactions(first:100) {
         nodes { id databaseId content user { id databaseId login } }
         pageInfo { hasNextPage }
@@ -1555,6 +1558,17 @@ query CurrentReviewFeedback(
           }
         }
         pageInfo { hasNextPage endCursor }
+      }
+      reviewRequests(first:100) {
+        nodes {
+          requestedReviewer {
+            __typename
+            ... on User { login }
+            ... on Mannequin { login }
+            ... on Team { slug organization { login } }
+          }
+        }
+        pageInfo { hasNextPage }
       }
       reviewThreads(first:100, after:$threadsCursor) {
         nodes {
@@ -1782,6 +1796,133 @@ def _validate_action_command(arguments: list[str]) -> None:
             or not re.fullmatch(r"in_reply_to=[1-9][0-9]*", arguments[10])
         ):
             raise MutationBlocked("inline reply arguments are not exactly allowlisted")
+
+
+_CODEX_REVIEW_SUMMARY_MARKER = "<!-- codex-pull-request-review-summary -->"
+_CODEX_REVIEW_STATUS = re.compile(
+    r"<!--\s*codex-security-review:v1\s+(\{.*?\})\s*-->",
+    re.DOTALL,
+)
+_CODEX_CANONICAL_COMPLETED_STATUS = re.compile(
+    r'✅ \*\*Completed\*\* <relative-time datetime="'
+    r'(?P<datetime>[0-9]{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])'
+    r'|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-9]))'
+    r'T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]'
+    r'(?:\.[0-9]{1,6})?Z)">(?P=datetime)</relative-time>'
+)
+_CODEX_REVIEW_LABELS = {
+    "Code Review": frozenset({"**Code Review**", "📝 **Code Review**"}),
+    "Security Review": frozenset({"**Security Review**", "🔒 **Security Review**"}),
+}
+_COPILOT_REVIEWER_LOGINS = frozenset(
+    {"copilot-pull-request-reviewer", "github-copilot"}
+)
+
+
+def _normalized_reviewer_login(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return re.sub(r"\[bot\]$", "", value.strip().lower())
+
+
+def _is_codex_completed_status(value: str) -> bool:
+    if value == "**Completed**":
+        return True
+    match = _CODEX_CANONICAL_COMPLETED_STATUS.fullmatch(value)
+    if match is None:
+        return False
+    timestamp = match.group("datetime")
+    year = int(timestamp[:4])
+    if year == 0:
+        return False
+    if timestamp[5:10] == "02-29" and not (
+        year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    ):
+        return False
+    return True
+
+
+def _require_review_providers_terminal(pull_request: dict[str, Any]) -> None:
+    """Reject visible non-terminal automated review-provider evidence."""
+
+    head_sha = pull_request.get("headRefOid")
+    comments = _bounded_nodes(
+        pull_request.get("comments"), "review-provider status comments"
+    )
+    summary_comments = [
+        item
+        for item in comments
+        if _CODEX_REVIEW_SUMMARY_MARKER in str(item.get("body") or "")
+    ]
+    if len(summary_comments) > 1:
+        raise MutationBlocked("Codex review provider status is indeterminate")
+    if pull_request.get("isDraft") is False and not summary_comments:
+        raise MutationBlocked("Codex review provider status is indeterminate")
+    if summary_comments:
+        author = summary_comments[0].get("author")
+        if (
+            not isinstance(author, dict)
+            or author.get("login") != "chatgpt-codex-connector"
+        ):
+            raise MutationBlocked("Codex review provider status is indeterminate")
+        body = str(summary_comments[0].get("body") or "")
+        matches = _CODEX_REVIEW_STATUS.findall(body)
+        if len(matches) != 1:
+            raise MutationBlocked("Codex review provider status is indeterminate")
+
+        def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            value: dict[str, Any] = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError("duplicate provider status key")
+                value[key] = item
+            return value
+
+        try:
+            status = json.loads(matches[0], object_pairs_hook=reject_duplicate_keys)
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise MutationBlocked("Codex review provider status is indeterminate") from exc
+        if not isinstance(status, dict) or not {"headSha", "status"} <= set(status):
+            raise MutationBlocked("Codex review provider status is indeterminate")
+        if status.get("headSha") != head_sha:
+            raise MutationBlocked("Codex review provider status is stale for the current head")
+        if status.get("status") != "completed":
+            raise MutationBlocked("Codex review provider is not terminal")
+        for label in ("Code Review", "Security Review"):
+            rows = [
+                line
+                for line in body.splitlines()
+                if f"**{label}**" in line
+            ]
+            if len(rows) != 1:
+                raise MutationBlocked("Codex review provider status is indeterminate")
+            cells = rows[0].split("|")
+            if (
+                len(cells) != 6
+                or cells[0].strip()
+                or cells[-1].strip()
+                or cells[1].strip() not in _CODEX_REVIEW_LABELS[label]
+                or not cells[3].strip()
+                or not cells[4].strip()
+            ):
+                raise MutationBlocked("Codex review provider status is indeterminate")
+            if not _is_codex_completed_status(cells[2].strip()):
+                raise MutationBlocked("Codex review provider is not terminal")
+
+    requests = _bounded_nodes(
+        pull_request.get("reviewRequests"), "review-provider requests"
+    )
+    for request in requests:
+        reviewer = request.get("requestedReviewer")
+        if not isinstance(reviewer, dict):
+            raise MutationBlocked("review-provider request is indeterminate")
+        login = (
+            reviewer.get("slug")
+            if reviewer.get("__typename") == "Team"
+            else reviewer.get("login")
+        )
+        if _normalized_reviewer_login(login) in _COPILOT_REVIEWER_LOGINS:
+            raise MutationBlocked("Copilot Pull Request Review is pending")
 
 
 class ActionCommandRunner:
@@ -2079,8 +2220,13 @@ class LiveGitHub:
                     or pull_request.get("baseRefName") != initial_pull_request.get("baseRefName")
                     or pull_request.get("baseRefOid") != initial_pull_request.get("baseRefOid")
                     or pull_request.get("state") != initial_pull_request.get("state")
+                    or pull_request.get("isDraft") != initial_pull_request.get("isDraft")
+                    or pull_request.get("reviewDecision")
+                    != initial_pull_request.get("reviewDecision")
                     or pull_request.get("reactions")
                     != initial_pull_request.get("reactions")
+                    or pull_request.get("reviewRequests")
+                    != initial_pull_request.get("reviewRequests")
                     or any(
                         pull_request.get(key) != initial_pull_request.get(key)
                         for key in connections
@@ -2111,6 +2257,12 @@ class LiveGitHub:
         reviews = connections["reviews"]
         comments = connections["comments"]
         threads = connections["reviewThreads"]
+        provider_state = dict(pull_request)
+        provider_state["comments"] = {
+            "nodes": comments,
+            "pageInfo": {"hasNextPage": False},
+        }
+        _require_review_providers_terminal(provider_state)
         for label, nodes in (
             ("reviews", reviews),
             ("conversation comments", comments),
@@ -2155,6 +2307,7 @@ class LiveGitHub:
             "base_ref": pull_request.get("baseRefName"),
             "base_sha": pull_request.get("baseRefOid"),
             "pr_state": pull_request.get("state"),
+            "review_decision": pull_request.get("reviewDecision"),
             "feedback": {
                 "pull_request_reactions": _live_reactions(
                     pull_request.get("reactions"), "pull-request reactions"
@@ -3089,13 +3242,17 @@ class FastPathGateway:
             ),
         }
 
-    def capture_stable_feedback(self, repository: str, pull_request_number: int) -> Any:
+    def observe_stable_feedback(
+        self, repository: str, pull_request_number: int
+    ) -> dict[str, Any]:
+        """Return one bounded complete feedback representation without admission."""
+
         try:
             if self.registry_entry.get("repository") != repository:
                 raise fast_path.SecurityBlocker(
                     "selected feedback registry repository does not match the request"
                 )
-            result = self.github._read_current_feedback_once(
+            return self.github._read_current_feedback_once(
                 {"repository": repository, "pull_request_number": pull_request_number},
                 self.registry_entry,
                 {"calls": 0},
@@ -3104,6 +3261,9 @@ class FastPathGateway:
             raise fast_path.TransientReadFailure(str(exc)) from exc
         except (MutationBlocked, RegistryError) as exc:
             raise fast_path.SecurityBlocker(str(exc)) from exc
+
+    def capture_stable_feedback(self, repository: str, pull_request_number: int) -> Any:
+        result = self.observe_stable_feedback(repository, pull_request_number)
         return fast_path.StableFeedbackState.from_payload(
             {
                 "repository": repository,
@@ -4403,7 +4563,8 @@ def _run_attestation_git(
     arguments: list[str],
     *,
     allow_failure: bool = False,
-) -> subprocess.CompletedProcess[str]:
+    raw_output: bool = False,
+) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
     try:
         git_executable = evidence.resolve_trusted_executable("git")
     except evidence.CommandPolicyError as exc:
@@ -4418,9 +4579,9 @@ def _run_attestation_git(
             check=False,
             stdin=subprocess.DEVNULL,
             capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+            text=not raw_output,
+            encoding=None if raw_output else "utf-8",
+            errors=None if raw_output else "replace",
             env=evidence.command_environment("git"),
             timeout=EXTERNAL_COMMAND_TIMEOUT_SECONDS,
         )
@@ -4678,35 +4839,154 @@ def _reject_integration_conflict_markers(
     validated_tree: str,
     conflict_paths: list[str],
 ) -> None:
-    result = _run_attestation_git(
-        repository_root,
-        [
-            "grep",
-            "-n",
-            "-I",
-            "-E",
-            "-e",
-            "^<{7,}( |$)",
-            "-e",
-            "^={7,}$",
-            "-e",
-            "^>{7,}( |$)",
-            "-e",
-            "^\\|{7,}( |$)",
-            validated_tree,
-            "--",
-            *(f":(literal){path}" for path in conflict_paths),
-        ],
-        allow_failure=True,
-    )
-    if result.returncode == 0:
-        raise fast_path.SecurityBlocker(
-            "resolved integration tree retains Git conflict markers"
+    # Git authenticates exact literal tree entries and immutable object sizes.
+    # Python reads only the bounded blobs and owns the sole conflict grammar.
+    blobs: list[tuple[str, str, int]] = []
+    aggregate_size = 0
+    for path in conflict_paths:
+        entry = _run_attestation_git(
+            repository_root,
+            [
+                "ls-tree",
+                "-z",
+                "--full-tree",
+                validated_tree,
+                "--",
+                f":(literal){path}",
+            ],
+            allow_failure=True,
         )
-    if result.returncode != 1:
-        raise fast_path.SecurityBlocker(
-            "resolved integration conflict content cannot be authenticated"
+        if entry.returncode != 0:
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content cannot be authenticated"
+            )
+        if entry.stdout == "":
+            continue
+        if not entry.stdout.endswith("\x00") or entry.stdout.count("\x00") != 1:
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content cannot be authenticated"
+            )
+        record = entry.stdout[:-1]
+        metadata, separator, observed_path = record.partition("\t")
+        parts = metadata.split()
+        if separator != "\t" or len(parts) != 3 or observed_path != path:
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content cannot be authenticated"
+            )
+        mode, object_type, object_oid = parts
+        if mode == "160000" and object_type == "commit":
+            continue
+        if (
+            mode not in {"100644", "100755", "120000"}
+            or object_type != "blob"
+            or not OID_PATTERN.fullmatch(object_oid)
+        ):
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content cannot be authenticated"
+            )
+        size_result = _run_attestation_git(
+            repository_root,
+            ["cat-file", "-s", object_oid],
+            allow_failure=True,
         )
+        size_text = size_result.stdout.strip()
+        if (
+            size_result.returncode != 0
+            or not size_text.isascii()
+            or not size_text.isdecimal()
+        ):
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content cannot be authenticated"
+            )
+        size = int(size_text)
+        aggregate_size += size
+        if aggregate_size > MAX_INTEGRATION_CONFLICT_CONTENT_BYTES:
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content exceeds the authenticated size bound"
+            )
+        blobs.append((path, object_oid.lower(), size))
+
+    for _path, object_oid, expected_size in blobs:
+        result = _run_attestation_git(
+            repository_root,
+            ["cat-file", "blob", object_oid],
+            allow_failure=True,
+            raw_output=True,
+        )
+        if (
+            result.returncode != 0
+            or not isinstance(result.stdout, bytes)
+            or len(result.stdout) != expected_size
+        ):
+            raise fast_path.SecurityBlocker(
+                "resolved integration conflict content cannot be authenticated"
+            )
+        raw_content = result.stdout
+        # Match Git's established binary-file sniff: a NUL in the initial
+        # 8,000-byte inspection window excludes the blob from text scanning.
+        if b"\x00" in raw_content[:8000]:
+            continue
+        content = raw_content.decode("utf-8", "replace")
+        state = "OUTSIDE"
+        for line in content.split("\n"):
+            marker = _integration_conflict_marker_kind(line)
+            if marker is None:
+                continue
+            if state == "OUTSIDE":
+                if marker == "OPEN":
+                    state = "OURS"
+                elif marker == "BASE":
+                    state = "TRUNCATED_BASE"
+                elif marker == "SEPARATOR":
+                    state = "TRUNCATED_THEIRS"
+                continue
+            if state == "TRUNCATED_BASE":
+                if marker == "BASE":
+                    continue
+                if marker == "SEPARATOR":
+                    state = "TRUNCATED_THEIRS"
+                    continue
+            elif state == "TRUNCATED_THEIRS":
+                if marker == "SEPARATOR":
+                    continue
+                if marker == "CLOSE":
+                    raise fast_path.SecurityBlocker(
+                        "resolved integration tree retains Git conflict markers"
+                    )
+            if state == "OURS":
+                if marker == "BASE":
+                    state = "BASE"
+                    continue
+                if marker == "SEPARATOR":
+                    state = "THEIRS"
+                    continue
+            elif state == "BASE" and marker == "SEPARATOR":
+                state = "THEIRS"
+                continue
+            elif state == "THEIRS" and marker == "CLOSE":
+                raise fast_path.SecurityBlocker(
+                    "resolved integration tree retains Git conflict markers"
+                )
+            raise fast_path.SecurityBlocker(
+                "resolved integration tree retains Git conflict markers"
+            )
+        if state in {"OURS", "BASE", "THEIRS"}:
+            raise fast_path.SecurityBlocker(
+                "resolved integration tree retains Git conflict markers"
+            )
+
+
+def _integration_conflict_marker_kind(line: str) -> str | None:
+    line = line.removesuffix("\r")
+    for character, kind in (("<", "OPEN"), ("|", "BASE"), (">", "CLOSE")):
+        run_length = len(line) - len(line.lstrip(character))
+        if run_length >= 7 and (
+            run_length == len(line) or line[run_length] == " "
+        ):
+            return kind
+    if len(line) >= 7 and not line.strip("="):
+        return "SEPARATOR"
+    return None
 
 
 def _verify_integration_tree_delta(
@@ -4755,40 +5035,7 @@ def _verify_integration_signer(
     verification_output: str,
     expected_signer: dict[str, str],
 ) -> None:
-    kind = expected_signer["kind"]
-    identity = expected_signer["identity"]
-    if kind == "SSH_PRINCIPAL":
-        matches = re.findall(
-            r'(?m)^Good "git" signature for ([^\s]+) with ', verification_output
-        )
-    else:
-        status_lines = re.findall(
-            r"(?m)^\[GNUPG:\] VALIDSIG ([^\r\n]+)$",
-            verification_output.upper(),
-        )
-        if len(status_lines) != 1:
-            raise fast_path.SecurityBlocker(
-                "integration OpenPGP signer status is malformed or ambiguous"
-            )
-        fields = status_lines[0].split()
-        if len(fields) not in {9, 10}:
-            raise fast_path.SecurityBlocker(
-                "integration OpenPGP signer status is malformed or ambiguous"
-            )
-        signing_fingerprint = fields[0]
-        primary_fingerprint = fields[9] if len(fields) == 10 else signing_fingerprint
-        if not all(
-            re.fullmatch(r"[0-9A-F]{40,64}", fingerprint)
-            for fingerprint in {signing_fingerprint, primary_fingerprint}
-        ):
-            raise fast_path.SecurityBlocker(
-                "integration OpenPGP signer status is malformed or ambiguous"
-            )
-        matches = [primary_fingerprint]
-    if matches != [identity.upper() if kind == "OPENPGP_FINGERPRINT" else identity]:
-        raise fast_path.SecurityBlocker(
-            "integration commit signer does not match the explicitly accepted identity"
-        )
+    fast_path._actual_integration_signer(verification_output, expected_signer)
 
 
 def _verify_signature_policy_identity(
@@ -5032,7 +5279,7 @@ def _verify_ready_integration_lifecycle_authority(
         or eligibility["exceptional_continuations_before"]
         != lifecycle["exceptional_continuations"]
         or eligibility["exceptional_continuations_after"]
-        != lifecycle["exceptional_continuations"] + 1
+        != lifecycle["exceptional_continuations"]
         or eligibility["draft_before"] != lifecycle["draft"]
         or eligibility["ready_before"] != lifecycle["ready"]
         or eligibility["ready_transition"] is not False
@@ -5044,7 +5291,10 @@ def _verify_ready_integration_lifecycle_authority(
 
 
 def _verify_ready_integration_published_authority(
-    authority_manifest: dict[str, Any], integration_evidence: dict[str, Any]
+    authority_manifest: dict[str, Any],
+    integration_evidence: dict[str, Any],
+    *,
+    verified_source_validation_evidence_digest: str | None = None,
 ) -> None:
     """Bind integration eligibility to the maintained live #750/#752 authority."""
 
@@ -5096,6 +5346,18 @@ def _verify_ready_integration_published_authority(
     ):
         raise fast_path.SecurityBlocker(
             "Ready integration lifecycle publication binding changed"
+        )
+    if published.lifecycle.historical_proof_mode == "exact_state_adoption" and (
+        published.lifecycle.tree_sha != authority_manifest["prior_delivery_tree_sha"]
+        or published.lifecycle.validation_receipt_digest
+        != authority_manifest["prior_validation_receipt_digest"]
+        or published.lifecycle.adoption_source_evidence_digest
+        != authority_manifest["prior_final_attestation_digest"]
+        or published.lifecycle.source_validation_evidence_digest
+        != verified_source_validation_evidence_digest
+    ):
+        raise fast_path.SecurityBlocker(
+            "Ready integration exact-adoption source evidence binding changed"
         )
 
 
@@ -5176,6 +5438,10 @@ def _verify_ready_integration_prior_authority(
     ):
         raise fast_path.SecurityBlocker("Ready integration prior authority identity changed")
     reviewed = _load_fast_state(required_paths[1])
+    if reviewed.pull_request_number != authority["pull_request_number"]:
+        raise fast_path.SecurityBlocker(
+            "prior delivery pull-request identity changed"
+        )
     receipt = _read_json(required_paths[2], "prior validation receipt")
     attestation = _read_json(required_paths[3], "prior validation attestation")
     head = authority["prior_delivery_head_sha"]
@@ -5217,7 +5483,7 @@ def _verify_ready_integration_prior_authority(
         != attestation.get("validation_receipt_digest")
     ):
         raise fast_path.SecurityBlocker("prior delivery receipt identity changed")
-    fast_path.verify_validation_attestation(
+    verified_validation = fast_path.verify_validation_attestation(
         attestation,
         repository=arguments.repo,
         head_sha=head,
@@ -5296,7 +5562,13 @@ def _verify_ready_integration_prior_authority(
         f"{verified_tag.stdout}\n{verified_tag.stderr}",
         authority["expected_signer"],
     )
-    _verify_ready_integration_published_authority(authority, integration_evidence)
+    _verify_ready_integration_published_authority(
+        authority,
+        integration_evidence,
+        verified_source_validation_evidence_digest=(
+            verified_validation.source_validation_evidence_digest
+        ),
+    )
     _verify_ready_integration_lifecycle_authority(authority, integration_evidence)
     if live_observation is not None:
         _verify_ready_integration_live_observation(
@@ -5417,92 +5689,12 @@ def _resolution_eligibility_digest(
     reviewed: Any,
 ) -> str:
     payload = _read_json(path, "resolution eligibility evidence")
-    expected_keys = {
-        "schema_version",
-        "repository",
-        "pull_request_number",
-        "reviewed_head_sha",
-        "reviewed_state_digest",
-        "eligible_threads",
-    }
-    threads = payload.get("eligible_threads") if isinstance(payload, dict) else None
-    if (
-        not isinstance(payload, dict)
-        or set(payload) != expected_keys
-        or payload.get("schema_version") != "1.1"
-        or payload.get("repository") != repository
-        or payload.get("pull_request_number") != reviewed.pull_request_number
-        or isinstance(payload.get("pull_request_number"), bool)
-        or payload.get("reviewed_head_sha") != reviewed.head_sha
-        or payload.get("reviewed_state_digest") != reviewed.state_digest
-        or not isinstance(threads, list)
-    ):
-        raise fast_path.SecurityBlocker(
-            "resolution eligibility evidence is invalid or stale"
-        )
-    reviewed_threads = {
-        item.get("node_id"): item
-        for item in reviewed.feedback.get("threads", [])
-        if isinstance(item, dict)
-    }
-    observed_thread_ids: list[str] = []
-    for item in threads:
-        if not isinstance(item, dict) or set(item) != {
-            "thread_id",
-            "classification",
-            "disposition",
-            "finding_ids",
-            "evidence_digest",
-            "follow_up",
-        }:
-            raise fast_path.SecurityBlocker(
-                "resolution eligibility evidence thread is malformed"
-            )
-        thread_id = item.get("thread_id")
-        classification = item.get("classification")
-        disposition = item.get("disposition")
-        finding_ids = item.get("finding_ids")
-        reviewed_thread = reviewed_threads.get(thread_id)
-        if (
-            not isinstance(thread_id, str)
-            or not re.fullmatch(r"PRRT_[A-Za-z0-9_-]+", thread_id)
-            or not isinstance(classification, str)
-            or disposition
-            not in fast_path.CLASSIFICATION_DISPOSITIONS.get(
-                classification, frozenset()
-            )
-            or not isinstance(finding_ids, list)
-            or not finding_ids
-            or any(
-                not isinstance(finding_id, str)
-                or not fast_path.IDENTITY.fullmatch(finding_id)
-                or fast_path.SECRET_VALUE.search(finding_id)
-                for finding_id in finding_ids
-            )
-            or len(finding_ids) != len(set(finding_ids))
-            or not isinstance(item.get("evidence_digest"), str)
-            or not fast_path.DIGEST.fullmatch(item["evidence_digest"])
-            or not isinstance(reviewed_thread, dict)
-            or reviewed_thread.get("is_resolved") is not False
-        ):
-            raise fast_path.SecurityBlocker(
-                "resolution eligibility evidence thread is ineligible"
-            )
-        if disposition == "TRACKED_AS_FOLLOW_UP":
-            try:
-                follow_up.parse_follow_up(item.get("follow_up"))
-            except follow_up.FollowUpError as exc:
-                raise fast_path.SecurityBlocker(str(exc)) from exc
-        elif item.get("follow_up") is not None:
-            raise fast_path.SecurityBlocker(
-                "only tracked out-of-scope eligibility may carry follow-up identity"
-            )
-        observed_thread_ids.append(thread_id)
-    if len(observed_thread_ids) != len(set(observed_thread_ids)):
-        raise fast_path.SecurityBlocker(
-            "resolution eligibility evidence contains duplicate threads"
-        )
-    return fast_path.digest_json(payload)
+    normalized = fast_path.normalize_resolution_eligibility_evidence(
+        payload,
+        repository=repository,
+        reviewed_state=reviewed,
+    )
+    return fast_path.digest_json(normalized)
 
 
 def _command_attest_validation(arguments: argparse.Namespace) -> int:
@@ -5847,43 +6039,13 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             raise fast_path.SecurityBlocker(
                 "eligibility evidence differs from the validated receipt"
             )
-        commit_object = _run_attestation_git(
-            repository_root, ["cat-file", "commit", head], allow_failure=True
-        )
-        verified_commit = _run_attestation_git(
-            repository_root, ["verify-commit", "--raw", head], allow_failure=True
-        )
-        local_signature = evidence.interpret_local_signature(
-            verified_commit.returncode,
-            f"{verified_commit.stdout}\n{verified_commit.stderr}",
-            signature_format_hint=(
-                evidence._commit_signature_format(commit_object.stdout)
-                if commit_object.returncode == 0
-                else "unknown"
-            ),
-        )
-        local_signature_policy = {
-            **binding["signature_policy"],
-            "require_github_verified": False,
-        }
-        fast_path.verify_commit_signatures(
-            [
-                {
-                    "oid": head,
-                    "source": "USER",
-                    "local_signature": local_signature,
-                    "github_verification": {
-                        "verified": False,
-                        "reason": "not_required",
-                    },
-                }
-            ],
-            local_signature_policy,
-        )
         if integration_evidence is not None:
-            _verify_integration_signer(
-                f"{verified_commit.stdout}\n{verified_commit.stderr}",
-                integration_evidence["expected_signer"],
+            fast_path.authenticate_integration_commit(
+                repository_root=repository_root,
+                repository=arguments.repo,
+                head_sha=head,
+                expected_signer=integration_evidence["expected_signer"],
+                signature_policy=binding["signature_policy"],
             )
             attestation = fast_path.create_ready_integration_attestation(
                 repository=arguments.repo,
@@ -5919,6 +6081,24 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 attestation_id=arguments.final_attestation_id,
             )
         else:
+            commit_object = _run_attestation_git(
+                repository_root, ["cat-file", "commit", head], allow_failure=True
+            )
+            verified_commit = _run_attestation_git(
+                repository_root, ["verify-commit", "--raw", head], allow_failure=True
+            )
+            local_signature = evidence.interpret_local_signature(
+                verified_commit.returncode,
+                f"{verified_commit.stdout}\n{verified_commit.stderr}",
+                signature_format_hint=(
+                    evidence._commit_signature_format(commit_object.stdout)
+                    if commit_object.returncode == 0
+                    else "unknown"
+                ),
+            )
+            _verify_signature_policy_identity(
+                head, local_signature, binding["signature_policy"]
+            )
             attestation = fast_path.create_validation_attestation(
                 repository=arguments.repo,
                 head_sha=head,

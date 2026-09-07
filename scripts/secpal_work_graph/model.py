@@ -42,10 +42,16 @@ def node_key(repository: str, number: int) -> str:
 
 def parse_node_key(reference: str) -> tuple[str, int]:
     """Split a canonical ``owner/repo#number`` identity."""
-    match = _REFERENCE.match(reference.strip())
+    if not isinstance(reference, str):
+        raise ValueError(f"not a repository-qualified issue identity: {reference!r}")
+    match = _REFERENCE.match(reference)
     if match is None:
         raise ValueError(f"not a repository-qualified issue identity: {reference!r}")
-    return match.group("repository"), int(match.group("number"))
+    repository = match.group("repository")
+    number = int(match.group("number"))
+    if number < 1 or reference != node_key(repository, number):
+        raise ValueError(f"not a canonical repository-qualified issue identity: {reference!r}")
+    return repository, number
 
 
 @dataclass(frozen=True, order=True)

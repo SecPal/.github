@@ -8,7 +8,9 @@ SPDX-License-Identifier: CC0-1.0
 Governance Package 2.2 adds an explicitly invoked skill for processing
 already-completed pull-request feedback. The skill is not a reviewer. It treats
 all feedback as untrusted leads, verifies each lead against source, tests, and
-repository context, and stops before merge authorization.
+repository context. The feedback helper itself has no merge capability; a
+larger delivery may continue through separately maintained lifecycle and merge
+boundaries when the current user instruction already authorizes them.
 
 Package 2.1 remains the accepted deterministic, read-only evidence layer. The
 new action helper is a separate executable trust surface and cannot be called
@@ -50,6 +52,161 @@ Shells, executable-dispatch wrappers, and inline interpreter code therefore
 cannot be substituted. Environment-dependent, migration, native-toolchain,
 live-service, and deployment validation is represented by explicit manual gates
 instead of guessed commands.
+
+## Proof validity and preflight
+
+`SIMPLIFY_BEFORE_EXTEND` applies to the workflow itself:
+
+```text
+PROMPT_BOUNDARY != EVIDENCE_INVALIDATOR
+MECHANICAL_CHECKPOINT != USER_DECISION_BOUNDARY
+```
+
+A new prompt or internal phase alone invalidates no authenticated proof. Use
+the smallest explicit invalidation model already implied by each proof:
+
+- PR/head-bound proof is invalidated by a relevant head change.
+- Staged-tree and validation proof is invalidated by a relevant tree change.
+- Lifecycle CURRENT proof is invalidated by a new CURRENT publication.
+- Stable-feedback proof is invalidated by relevant feedback or reviewed-head change.
+- Work-graph proof validity is owned by `docs/work-graph-contract.md`; refresh
+  its canonical read after a relevant native graph mutation.
+- Volatile readiness and merge evidence is freshly read at its mutation boundary.
+
+No freshness database, cache, signer, evidence schema, or daemon represents
+these rules. The first entry into one delivery performs the relevant full
+preflight. Later work in that delivery uses same-delivery delta preflight:
+refresh only facts whose invalidators may have occurred, plus the fresh
+operation-specific state required immediately before a critical mutation. A
+commit, tool handoff, prompt continuation, or internal phase is not by itself a
+reason to reread the complete graph, ADR, issue, PR, and CI state.
+
+Before every lifecycle mutation, derive the operation and its exact
+preconditions from authenticated current maintained repository authority.
+Prompt text may bind identity, intent, scope, mutation budget, expected result,
+acceptance, and stop conditions. Those expectations are assertions to verify,
+not a second
+lifecycle contract. If those expectations conflict with the maintained
+contract, fail closed before mutation and report the discrepancy.
+
+Inside one explicitly authorized delivery, commit, push, receipt and
+attestation binding, lifecycle publication, eligible thread resolution, and
+bounded read-back are mechanical checkpoints. Draft PR creation, an eligible
+Ready transition, bounded provider observation, finding classification,
+in-contract remediation, and an eligible conditionally authorized merge are
+likewise mechanical when the maintained gate selects them. Reaching one does
+not require another prompt. New authority is required for material scope
+expansion, another independently deliverable responsibility, Exceptional
+Recovery, an unresolved material design choice, or an operation not explicitly
+or conditionally authorized by the current instruction.
+
+A current instruction may grant conditional current user authorization for a
+later bounded mutation, for example: evaluate the final maintained merge gate
+and, if and only if it passes for the unchanged authenticated authorized head,
+perform the canonical squash merge; otherwise stop without merge. This retains
+explicit current authority and does not let an earlier instruction, prompt
+expectation, transport, or successful check authorize a mutation.
+
+Native Polyscope PR creation is preferred when available. Its absence is a tool
+transport fact, not a user decision: an already-authorized delivery may use the
+smallest maintained GitHub fallback, preserve repository/base/branch/title/body
+identity, report the actual creation path and association, and continue. The
+fallback gains no lifecycle authority merely by existing.
+
+```text
+POLYSCOPE_NATIVE_PR_UNAVAILABLE != USER_DECISION_BOUNDARY
+```
+
+## Review-provider terminality
+
+For the one bounded external review phase, normalize each relevant configured
+and triggered provider to the existing observable facts `NOT_APPLICABLE`,
+`NOT_TRIGGERED`, `QUEUED`, `PENDING`, `RUNNING`, `COMPLETED_NO_FINDINGS`,
+`COMPLETED_WITH_FINDINGS`, `FAILED`, or `INDETERMINATE`. This normalization is
+ephemeral workflow judgment, not a persistent state machine.
+
+`QUEUED`, `PENDING`, `RUNNING`, `FAILED`, and `INDETERMINATE` are not successful
+terminal review. A provider need not be a branch-protection Required Check to
+block the maintained merge gate. In particular:
+
+```text
+NO_REVIEW_FINDINGS_YET != REVIEW_COMPLETE
+ZERO_THREADS_WHILE_REVIEW_RUNNING != STABLE_FEEDBACK
+CI_GREEN + MERGEABLE + REVIEW_RUNNING = MERGE_FORBIDDEN
+```
+
+Capture stable feedback only when
+`ALL_TRIGGERED_REVIEW_PROVIDERS_TERMINAL = YES`, after the last provider reaches
+`COMPLETED_NO_FINDINGS` or `COMPLETED_WITH_FINDINGS`. Absence of comments never
+proves completion. Capture one complete bounded snapshot for that reviewed head,
+then classify the complete set before remediation. Do not remediate one provider
+at a time while another is running. Relevant later feedback or a reviewed-head
+change invalidates that snapshot.
+
+The existing bounded capture query enforces the visible provider gate before
+admitting stable feedback. It rejects non-terminal, malformed, forged,
+duplicated, or wrong-head Codex summaries, requires a Codex summary for a Ready
+PR, and rejects a pending Copilot review request. The query discards provider
+status after the gate, preserving the existing stable-feedback schema and
+digest. Provider absence remains `NOT_TRIGGERED` only where the maintained
+observable boundary has no affirmative trigger evidence.
+
+When the current instruction authorizes full delivery and the environment can
+wait, observe only maintained review-provider status at bounded intervals of
+approximately 60 to 90 seconds for approximately 30 minutes total. This passive
+observation does not consume another unrestricted review, request a review, or
+poll unrelated hosted CI. Continue automatically once every triggered provider
+has successful terminal evidence. If the full window expires, report
+`REVIEW_NOT_TERMINAL` with the authenticated head and exact non-terminal
+providers, perform no merge, and do not claim that user approval is needed. The
+same workspace may resume when external state changes. No unbounded polling and
+No Cycle 3 are permitted.
+
+The unrestricted external review budget remains one. Remediation never creates
+a second unrestricted external review cycle. Changed remediation requires a
+fresh final-candidate self-review that asks both whether the findings are fixed
+and what new defect, bypass, authority leak, regression, inconsistency, or
+avoidable complexity the correction introduced. Material security or authority remediation
+requires first-principles design reassessment: compare the final design with the
+reviewed design, look for shared flawed abstractions and a smaller replacement,
+and adversarially test the resulting trust boundary. Small ordinary remediation
+does not acquire that heavyweight ceremony.
+
+Immediately before merge, freshly authenticate the exact PR and head, base,
+OPEN/Ready state, mergeability, Required Checks, lifecycle CURRENT, final
+validation receipt/attestation, review submissions, provider terminality,
+stable-feedback validity, unresolved threads, finding dispositions, and current
+merge authority. Apply these hard failures without inference from green CI:
+
+```text
+ANY_TRIGGERED_REVIEW_PROVIDER_NON_TERMINAL -> MERGE_FORBIDDEN
+FINAL_STABLE_FEEDBACK_CAPTURED_BEFORE_PROVIDER_TERMINALITY -> MERGE_FORBIDDEN
+ANY_UNCLASSIFIED_MATERIAL_FINDING -> MERGE_FORBIDDEN
+ANY_VALID_ACTIONABLE_BLOCKING_FINDING_UNREMEDIATED -> MERGE_FORBIDDEN
+ANY_UNRESOLVED_BLOCKING_THREAD -> MERGE_FORBIDDEN
+VALIDATION_OR_LIFECYCLE_OR_CI_OR_MERGEABILITY_GATE_FAILS -> MERGE_FORBIDDEN
+```
+
+Only the canonical merge selected by that complete fresh gate may consume the
+current conditional authority. Never force merge or bypass protection. After
+merge, freshly verify that the PR merged, its delivery issue completed as
+expected, accepted `main` contains the intended validated semantics, relevant
+invariants still pass on accepted main, and no downstream issue was mutated
+unintentionally. Do not report `MERGED_COMPLETE` before that read-back succeeds.
+
+The bounded normal path preserves these explicit self-review conclusions:
+
+```text
+MERGE_WHILE_REVIEW_RUNNING = IMPOSSIBLE
+UNBOUNDED_REVIEW_LOOP = NO
+SECOND_UNRESTRICTED_REVIEW = NO
+NEW_LIFECYCLE_STATE = NO
+NEW_COUNTER = NO
+NEW_TRUST_ROOT = NO
+POLYSCOPE_NATIVE_PR_REQUIRED_FOR_DELIVERY = NO
+MANUAL_PR_CREATION_REQUIRED = NO
+NORMAL_LEAF_CAN_REACH_MERGED_COMPLETE = YES
+```
 
 ## Architecture
 
@@ -179,6 +336,105 @@ does not relabel unavailable old evidence as cryptographically reconstructed.
 Every post-checkpoint change is an ordinary #750 successor, and another legacy
 checkpoint or baseline reset is forbidden.
 
+One separately versioned `EXACT_STATE_ADOPTION` enrollment semantic covers an
+explicitly authorized, previously unenrolled delivery whose independently
+observed platform chronology cannot truthfully be represented as an ordinary
+derived event prefix. Its signed proof binds the exact repository, issue, PR,
+head, tree, signature status, receipt, adoption-time source attestation,
+normalized observations, complete finite state, supporting evidence, and actual
+adoption time. A separately signed authorization binds that complete evidence
+and intended state with exactly one bounded use. The proof is the cryptographic
+genesis and CURRENT baseline; the observed timestamps remain observations and
+`ordinary_lifecycle_events` remains empty. It neither reorders platform history
+nor backdates authority.
+
+Proof assembly accepts only the verifier-derived external-evidence boundary.
+The maintained validation receipt and final-attestation verifier derives the
+source-evidence identity; canonical commit-signature and observation admission
+derives the remaining facts. Callers cannot nominate trusted evidence digests.
+Observation-derived Ready and exceptional history entries bind their canonical
+observation digest and never carry an ordinary event-authorization digest.
+
+Version 1 exact adoption retains its provider-backed review-count semantics.
+Version 2 adds one closed
+`PRE_ENROLLMENT_REVIEW_BUDGET_CONSUMPTION_ADMISSION` mode for a previously
+unenrolled delivery whose historical review-consumption provenance was not
+persisted. The migration role signs a domain-separated admission binding the
+exact open delivery, current head and tree, verified signature and validation
+evidence, canonical provider chronology, complete intended state, and adoption
+time. It conservatively consumes the single normal review budget; it does not
+reconstruct a review, verdict, finding, reviewer, or GitHub
+`ReviewSubmission`. Provider review observations and this admission are
+disjoint modes, and supplying both fails closed. Remediation, Ready, exceptional
+history, and every other state field remain independently observation-derived.
+
+Version 3 adds the distinct
+`SECPAL_PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_ADMISSION` source mode. It does
+not reinterpret versions 1/2. Its sole authority is adoption source truth for an
+exact signed, unenrolled OPEN Draft with unavailable commit-bound validation
+companions and successful fresh current-policy safety validation. Historical
+reviewed-state, receipt, and final-attestation bytes are never synthesized. The
+historical final-attestation identity remains unavailable; PR prose cannot supply
+it. The signed receipt trailer remains provenance, not the missing receipt.
+
+The maintained issuer accepts only repository and issue selectors. Clean current
+protected main selects the exact loss acknowledgment in
+`policies/pre-enrollment-validation-evidence-loss.json`, the existing registry,
+and the existing migration/adoption signer role. That record becomes an
+authenticated acknowledgment only when accepted on protected main; issue prose,
+caller-reported missing files and unsigned loss flags carry no authority. It is
+exact-source policy, not an artifact store or another journal. The issuer
+authenticates the live OPEN/Draft PR, head/tree/sole parent, accepted source
+signature and exact trailer, complete stable feedback and provider chronology.
+Provider reads are first converted by a pure, bounded representation-normalization
+boundary into canonical typed facts; admission consumes only those facts and does
+not repeat provider parsing.
+The protected lifecycle journal must prove CURRENT and native admission absent.
+
+Current safety executes the current registered command sequence using accepted-
+current harness bytes over a disposable execution copy of that exact signed
+source. The historical checkout supplies source under validation, never the
+validation harness or command authority. Source bytes are checked
+independently of index flags before and after execution. Every captured source,
+including resolved/outdated threads, replies, review submissions and conversation
+comments, must match the accepted technical decision inventory. Blocking,
+incomplete or changed decisions reject. This is current safety, not another
+unrestricted review. Source, feedback or accepted-main drift invalidates live
+verification. Fresh safety identity and historical receipt provenance are
+separate bindings and must differ.
+
+The version-1 loss admission permits only review 1, remediation 2, Ready
+transitions 0, Draft true, Ready false, no exceptional history and no Cycle 3.
+The existing review-budget admission remains independently required for review
+1; exactly two normalized `REMEDIATION_HEAD_OBSERVED` entries establish
+remediation 2. Ordinary verified validation and the sealed loss source are
+disjoint inputs: invalid or partially supplied historical evidence cannot
+downgrade to loss mode.
+
+The signed admission becomes immutable provenance in the version-3 adoption
+proof and existing signed one-use adoption authorization. Enrollment rechecks
+live absence and source facts, then uses existing protected publication/CAS
+uniqueness to reject competing enrollment and replay. Historical proof
+verification checks signatures and closed bindings without requiring CURRENT
+to remain absent after enrollment. No new state, signer, counter, journal,
+Ready permission or source-bootstrap authority is introduced. The #827 / PR #830
+case is exercised hermetically; implementation does not enroll or mutate it.
+
+Exact-state adoption reuses the maintained migration signer role, enrollment
+uniqueness, protected publication journal, CAS, lifecycle identity and authority
+digest conventions. Later transitions use the ordinary successor verifier, and
+Ready integration consumes the same published prior-authority manifest/tag
+boundary with the adopted tree, receipt, and adoption-time attestation bound by
+the proof. Native deliveries cannot self-select adoption, a second enrollment
+root remains forbidden, and adoption is not a lifecycle state, Recovery,
+Continuation, or permission to cure ordinary ordering after the fact.
+
+For a later head-changing ordinary successor, the immutable adoption proof
+remains the genesis while the signed successor authority binds verifier-derived
+current-head tree, receipt, final attestation, and source-evidence identity.
+Prior-Ready verification authenticates those current facts and the unchanged
+genesis chain; it never treats genesis evidence as evidence for a later head.
+
 The maintained migration role uses public credential material distinct from
 ordinary, lifecycle-transition, and publication signers; policy loading rejects
 credential overlap even when the duplicate key is assigned another principal.
@@ -187,8 +443,14 @@ continuations and PR rebinding cannot be folded into the migration root.
 
 The maintained registry contains only trust policy: publication, native-genesis
 admission, and migration signer roles; the exact GitHub endpoint, publication
-branch, and live ruleset identity and required protections; historical native
-compatibility roots; and the one closed issue 736 bootstrap-repair identity.
+branch, and live ruleset identity and required protections; static initialization
+roots; exact historical native compatibility-publication identities; and the
+one closed issue 736 bootstrap-repair identity.
+The same maintained bootstrap-source list contains one closed #776 / PR #779
+pre-enrollment implementation admission. It binds the immutable source chain,
+maintained signer policy, fixed action entrypoint/command, and accepted-main
+validation command/result digests. It creates no lifecycle, publication,
+CURRENT, Ready state, or candidate-tree authority; those remain downstream.
 New candidate heads, terminal digests, and current publication objects are not
 registered there. Dynamic events form one signed
 linear journal on `refs/heads/secpal-lifecycle-publications` outside delivery
@@ -203,9 +465,12 @@ selector. Publication Git operations use a controlled bare repository and
 closed environment, preventing ambient URL rewrites and transport overrides.
 For native adoption, a separately signed genesis admission must be reachable in
 journal ancestry before the first lifecycle publication. A branch-local static
-anchor cannot substitute for admission. The already-maintained native roots
-that predate this ordering remain narrow historical compatibility inputs, not a
-future enrollment mechanism. Later journal successors use a private
+anchor cannot substitute for admission. The separately maintained pre-#774
+compatibility registry binds repository, issue, PR, initial head,
+initialization digest, historical proof mode, exact enrollment publication OID,
+and exact signed publication digest. Only those immutable historical enrollment
+objects bypass admission ordering; a later candidate carrying the same
+initialization cannot. Later journal successors use a private
 publication-only verification path for the same initialization root and full
 signed transition chain; authenticated journal ancestry then selects CURRENT.
 The ordinary #750 verifier keeps its static current-tip requirement, and no
@@ -279,6 +544,71 @@ coincidentally matching body and writer. The post-merge installer compares the
 absolute canonical link text directly and does not depend on GNU-specific
 `readlink` options.
 
+## Authenticated Ready/Draft execution
+
+`scripts/secpal_pr_review/lifecycle_execution.py` is the maintained execution
+boundary for the two existing user-authorized `DRAFT_TO_READY` and
+`READY_TO_DRAFT` decisions. It accepts only the repository, delivery issue, and
+canonical signed lifecycle-orchestration authorization. It derives the PR,
+head, operation, predecessor publication, lifecycle authority, signer, scope,
+and intended successor from those authenticated authorities rather than caller
+assertions.
+
+This module owns bounded side-effect composition and final convergence because
+orchestration intentionally owns policy decisions without mutation, lifecycle
+authority owns state derivation, and lifecycle publication owns the protected
+journal and CURRENT. Putting execution into any of those modules would combine
+independent responsibilities. The executor therefore reuses all three and the
+existing trusted `gh` executable/environment boundary; it adds no lifecycle
+state machine, transition, journal, signer role, or persisted transaction state.
+`NEW_PERMANENT_CONCEPT=NO`.
+
+The closed observation cases are:
+
+1. GitHub and CURRENT at the exact predecessor: mutate GitHub once.
+2. GitHub at the target and CURRENT at the exact predecessor: publish the exact
+   successor without replaying GitHub.
+3. Both at the exact target: authenticate the historical transition and return
+   success with zero writes.
+4. CURRENT at the target and GitHub at the predecessor: fail closed.
+
+All other states fail closed. A write is ordered
+`GitHub mutation -> live target read-back -> exact CURRENT CAS publication ->
+independent CURRENT read-back -> final GitHub/CURRENT convergence`. Immediately
+before each write the executor reauthenticates the exact live PR, head, OPEN
+state, CURRENT predecessor, signed authorization, and orchestration decision.
+
+The GitHub write is the fixed non-interactive `gh pr ready` or
+`gh pr ready --undo` form with an exact repository and PR. No executable, host,
+GraphQL document, state assertion, or retry option is caller-controlled. Any
+ambiguous GitHub result receives one live read: target continues, predecessor
+stops incomplete, and anything else fails closed. Any ambiguous publication
+receives one CURRENT read: the exact successor is complete, the exact
+predecessor is publication-pending and resumable, and anything else fails.
+Fresh invocation reconstructs progress solely from live GitHub and protected
+CURRENT; it never creates another execution journal or transaction record.
+
+Production lifecycle signing derives each required identity from the installed
+policy role. The OS account may map that already accepted identity to one local
+credential reference by adding a closed JSON value to the global Git key
+`secpal.lifecycleSigningCredential`, for example:
+
+```text
+{"credential":"/absolute/local/key","identity":"accepted-role@example.test"}
+```
+
+The mapping is only credential selection, never trust policy. Duplicate,
+malformed, relative SSH, unsupported-format, missing distinct-role, unusable,
+and policy-mismatched credentials fail closed. An explicit role mapping takes
+precedence over `user.signingkey`; the latter remains the compatible routine
+default only for ordinary transition, authority, publication, and genesis
+roles where those operations use the routine signer. Every produced signature
+is verified against the selected role's
+accepted policy credential before it is returned. The maintained legacy-
+adoption bridge exposes neither caller-selected identity nor key path and
+supplies the existing exact-state-adoption v2 admission, authorization, and
+proof constructors without changing their domains or payload authority.
+
 ## Finite execution
 
 The default forward spine is:
@@ -298,18 +628,25 @@ INITIALIZE
   → STOP
 ```
 
-One normal invocation uses zero full snapshots, one stable-feedback read, zero
-hosted-CI or Required Check reads, one complete local validation, one holistic
-audit, at most one signed remediation commit and ordinary push, and one
+One accepted candidate uses zero full snapshots, one stable-feedback read, zero
+hosted-CI or Required Check reads, one successful complete local validation,
+one holistic audit per candidate, at most one signed remediation commit and ordinary push, and one
 target-bound simple resolution pass. Package-2.1/2.2 snapshots remain available
 only in explicit forensic mode.
 
-There is no polling, waiting, sleep-and-retry, recursive review loop, automatic
-late-feedback incorporation, review request, Ready transition, merge, or
-auto-merge.
+The feedback-remediation helper has no polling, waiting, recursive review loop,
+automatic late-feedback incorporation, review request, Ready transition, merge,
+or auto-merge capability. The separate bounded provider observation described
+above is available only to a currently authorized full delivery and never
+observes unrelated hosted CI.
 A correctable local error is repaired in the same invocation, and a read-only
 failure may receive one bounded retry. Writes never retry; an unknown write
 result stops with its exact operation identity.
+
+On ordinary success, the normal success report contains only `RESULT`, `HEAD`,
+`MUTATIONS`, `EVIDENCE`, relevant `LIFECYCLE` counters, `BLOCKER`, and
+`NEXT DECISION`. Blockers, exceptional paths, and complex security decisions
+retain the detailed evidence needed for safe diagnosis.
 
 ## Hosted CI authorization
 
@@ -319,10 +656,10 @@ or thread-resolution request does not authorize reading or summarizing hosted
 checks.
 
 Only a current user instruction that explicitly requests CI inspection, check
-status, merge readiness, or merge authorization permits one bounded
-current-state read. Report that state and stop. Never poll, wait, sleep, repeat
-the read automatically, keep the run active for pending checks, or suggest
-monitoring. Merge remains separately user-authorized.
+status, merge readiness, or merge authorization permits fresh operation-bound
+CI reads. Provider-status observation is not authorization to observe unrelated
+hosted CI. Merge remains explicitly current-user-authorized, including bounded
+conditional authorization granted in that same instruction.
 
 ## Classification and technical truth
 
@@ -434,7 +771,17 @@ JSON diagnostic includes `registered_validation_failure` with the command's
 one-based `index`, registry `purpose`, and a safe `category` such as
 `non-zero exit`, `timeout`, or `unavailable executable`. The helper still
 discards the command's stdout and stderr, leaves only the invalidated receipt
-placeholder, and does not run later commands or retry the failed command.
+placeholder, and does not run later commands or retry the failed command on the
+unchanged tree. That candidate is rejected. If the failure is diagnosed, the
+correction stays inside current authority, no external mutation occurred, and
+focused validation plus a repeated holistic audit cover a changed candidate,
+the same invocation may perform one complete validation of that changed final
+candidate. A successful complete validation is never repeated on an unchanged
+tree. If that single corrected candidate also fails, stop without a third
+candidate or attempt in the invocation. The fresh audit replaces the
+invalidated audit for the rejected tree; it does not increment the existing
+one-audit session counter. New authority is required only when the correction
+crosses scope, recovery, or another genuine decision boundary.
 
 `manual-gates.json` is an ordered JSON array with exactly one
 `{"gate": REGISTRY_TEXT, "satisfied": true, "evidence": CONCISE_PROOF}` object
@@ -479,10 +826,14 @@ signed annotated tag on the prior delivery head, and the binder independently
 verifies that head's ordinary receipt, final attestation, tree, signature, and
 accepted signer. It also verifies the maintained #750/#752 protected-journal
 CURRENT publication and binds its lifecycle authority digest, proof mode,
-publication identity, exceptional recovery, and unused exceptional
-continuation. Its claimed receipt must equal the prior commit trailer,
-ordinary receipt reconstructed with the registry committed at that prior head,
-and final-attestation receipt. The mutable tag
+publication identity, and exact exceptional recovery and continuation history.
+Ordinary typed integration is the canonical `HEAD_ADVANCED`
+transition: it preserves the exact authenticated exceptional-recovery and
+exceptional-continuation history and consumes neither budget. A later
+`EXCEPTIONAL_RECOVERY` or `EXCEPTIONAL_CONTINUATION` remains a distinct,
+explicitly authorized lifecycle action. The manifest's claimed receipt must
+equal the prior commit trailer, ordinary receipt reconstructed with the registry
+committed at that prior head, and final-attestation receipt. The mutable tag
 ref is resolved once; target, signature, signer, trailer, and diagnostics all
 use the resulting immutable annotated-tag OID. OpenPGP signing-subkey output is
 accepted only when its authenticated primary fingerprint is the configured
@@ -521,9 +872,13 @@ historical version-1.1 integration attestation remains valid for integration
 authentication but cannot authorize resolution. Other evidence-mode
 combinations remain closed.
 
-The integration evidence proves unchanged unrestricted-review and remediation
-counters, no Cycle 3, no review request, no Ready transition, and preserved
-`Draft=false` / `Ready=true`. It is not remediation and cannot be replayed through
+The integration evidence proves unchanged unrestricted-review, remediation,
+exceptional-recovery, and exceptional-continuation counters, no Cycle 3, no
+review request, no Ready transition, and preserved `Draft=false` / `Ready=true`.
+After the signed integration head is created, its fresh lifecycle authority is
+derived from the authenticated predecessor through `HEAD_ADVANCED` and
+published through the canonical lifecycle-publication boundary. It is not
+remediation and cannot be replayed through
 the remediation path. Conversely, ordinary remediation evidence cannot select
 the integration path. The helper does not create the integration commit, push a
 branch, observe post-push checks, transition the PR, or authorize merging. After
@@ -545,15 +900,34 @@ recursive recovery.
 The simple resolver first verifies the caller-captured reviewed-state digest,
 successful validation attestation, actual local signed commit, and exact
 per-thread eligibility manifest authenticated by the signed validation
-receipt. It then verifies the exact PR head and target identity without reading checks,
-rules, reactions, unrelated feedback, mergeability, or branch protection. It
+receipt. A Recovery-bound ordinary attestation additionally retains and passes
+`--delivery-issue`, `--exceptional-recovery-evidence`, and
+`--exceptional-recovery-authorization` from the accepted Recovery authority.
+The shared verifier alone may authenticate the installed ruleset for
+`refs/heads/secpal-lifecycle-publications`. The resolver then verifies the exact
+PR head and target identity without reading checks, delivery-PR rules,
+reactions, unrelated feedback, mergeability, or merge readiness. It
 reads each target completely and requires its comments to match the
-reviewed-state identities and digests. Immediately before a tracked-follow-up
+reviewed-state identities and digests. The complete original ordered eligibility
+remains authoritative after a partial result: an exact target captured
+unresolved but now resolved is an authenticated zero-write satisfaction, while
+an exact unresolved target follows the ordinary guarded mutation path and all
+other drift fails closed. Immediately before a tracked-follow-up
 mutation it also performs the authenticated, fail-closed live work-graph
 verification described above. Immediately before each mutation or successful
 already-resolved report, it requires two more equal
 complete target projections; every mutation response must confirm the exact
 resolved thread.
+
+Detached late disposition has one narrower alternative final boundary for the
+exact `SecPal/.github` #810 / PR #821 delivery. Accepted-main policy may prove
+that its authenticated zero-thread final reviewed state and final
+receipt/attestation omitted eligibility authentication. The complete detached
+late-authority tuple selects late mode. In that mode only, omitting the final
+eligibility path yields a typed authenticated absence; it does not yield or
+recreate an eligibility manifest. A supplied path selects manifest verification;
+present, null, malformed, or stale eligibility evidence fails and never selects
+absence mode. Final eligibility evidence outside late mode is rejected.
 
 The schema-bound `resolve-batch --apply` path remains available only when the
 current user instruction explicitly requests readiness or merge evaluation. In
@@ -649,10 +1023,15 @@ one canonical detached-signed `late-classification.schema.json` artifact for
 exactly one named thread, then creates one canonical
 `late-disposition.schema.json` artifact for that same thread.
 Creation first verifies the unchanged final delivery head, tree,
-receipt trailer, attestation, canonical final eligibility artifact, origin, and
-accepted commit signature. It proves the named thread absent from both the
-complete authenticated final reviewed state and eligibility set, verifies that
-every eligible thread belongs to the reviewed state, derives the actual
+receipt trailer, attestation, typed final-eligibility boundary, origin, and
+accepted commit signature. That boundary is either the canonical manifest or
+the maintained exact authenticated-absence record; a supplied invalid manifest
+never falls back to absence. It proves the named thread absent from final
+eligibility and derives its origin from authenticated final reviewed state:
+`REVIEWED_BUT_INELIGIBLE` when present there, or `ABSENT_FROM_BOTH` when
+absent. A target already in final eligibility is rejected, and original
+eligibility is never replaced. It verifies that every eligible thread belongs
+to the reviewed state and derives the actual
 delivery signer fingerprint, reads that named thread twice, and signs the
 classification with that same OS-account identity. The disposition creator
 verifies the classification signature and exact live binding and computes its
@@ -661,9 +1040,13 @@ The resolver independently repeats the final-delivery verification, verifies
 both canonical artifacts and detached signatures against the derived signer,
 and compares exact live head, thread, top-level comment node/database identity,
 body digest, reply state, resolved/outdated state, classification, disposition,
-technical-blocking flag, and guarded action before resolving. This path is only
-`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` with
-`technically_blocking=false`; it consumes no review/remediation counter and has
+technical-blocking flag, and guarded action before resolving. The closed path
+accepts `INFORMATIONAL + NON_ACTIONABLE + technically_blocking=false` for
+either origin. Existing
+`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE +
+technically_blocking=false` remains accepted only for `ABSENT_FROM_BOTH`.
+No caller-selected origin, other classification or disposition, or technical
+blocker is accepted. The path consumes no review/remediation counter and has
 no commit, push, Ready, CI, issue, label, review, or merge capability.
 The same origin predicate is independently re-established by disposition
 creation and resolution. “Post-final-push” names this lifecycle boundary; it

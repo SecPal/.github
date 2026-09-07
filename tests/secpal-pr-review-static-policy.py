@@ -99,11 +99,11 @@ ACTION_CALLS = (
             ("capture_output", "True"),
             ("check", "False"),
             ("cwd", "repository_root"),
-            ("encoding", "'utf-8'"),
+            ("encoding", "None if raw_output else 'utf-8'"),
             ("env", "evidence.command_environment('git')"),
-            ("errors", "'replace'"),
+            ("errors", "None if raw_output else 'replace'"),
             ("stdin", "subprocess.DEVNULL"),
-            ("text", "True"),
+            ("text", "not raw_output"),
             ("timeout", "EXTERNAL_COMMAND_TIMEOUT_SECONDS"),
         ),
     ),
@@ -178,6 +178,26 @@ EVIDENCE_CALLS = (
     ),
 )
 
+FAST_PATH_CALLS = (
+    ProcessCall(
+        None,
+        "_run_integration_commit_git",
+        "git_executable",
+        "arguments",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("cwd", "repository_root"),
+            ("encoding", "'utf-8'"),
+            ("env", "environment"),
+            ("errors", "'replace'"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("text", "True"),
+            ("timeout", "EXTERNAL_COMMAND_TIMEOUT_SECONDS"),
+        ),
+    ),
+)
+
 RESOLVER_CALLS = (
     ProcessCall(
         None,
@@ -217,6 +237,21 @@ RESOLVER_CALLS = (
 LATE_DISPOSITION_CALLS = (
     ProcessCall(
         None,
+        "_read_global_git_values",
+        "executable",
+        "arguments",
+        (
+            ("check", "False"),
+            ("env", "environment"),
+            ("stderr", "subprocess.DEVNULL"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("start_new_session", "True"),
+            ("stdout", "output"),
+            ("timeout", "30"),
+        ),
+    ),
+    ProcessCall(
+        None,
         "_read_global_git_value",
         "executable",
         "arguments",
@@ -238,6 +273,7 @@ LATE_DISPOSITION_CALLS = (
             ("check", "False"),
             ("env", "environment"),
             ("stdin", "subprocess.DEVNULL"),
+            ("start_new_session", "True"),
             ("timeout", "30"),
         ),
     ),
@@ -251,6 +287,7 @@ LATE_DISPOSITION_CALLS = (
             ("check", "False"),
             ("env", "environment"),
             ("input", "stdin"),
+            ("start_new_session", "True"),
             ("timeout", "30"),
         ),
     ),
@@ -259,7 +296,7 @@ LATE_DISPOSITION_CALLS = (
 EXPECTED_CALLS = {
     "secpal-pr-review.py": EVIDENCE_CALLS,
     "secpal-pr-review-actions.py": ACTION_CALLS,
-    "fast_path.py": (),
+    "fast_path.py": FAST_PATH_CALLS,
     "follow_up.py": (),
     "secpal-resolve-fixed-threads.py": RESOLVER_CALLS,
     "late_disposition.py": LATE_DISPOSITION_CALLS,
@@ -307,6 +344,7 @@ ALLOWED_IMPORT_ROOTS = {
     "dataclasses",
     "datetime",
     "errno",
+    "enum",
     "functools",
     "hashlib",
     "importlib",
@@ -318,6 +356,7 @@ ALLOWED_IMPORT_ROOTS = {
     "re",
     "secrets",
     "secpal_work_graph",
+    "secpal_pr_review",
     "site",
     "stat",
     "subprocess",
@@ -375,6 +414,7 @@ ALLOWED_IMPORTS = {
         "import json",
         "import os",
         "import re",
+        "import subprocess",
         "import sys",
         "import tempfile",
         "from dataclasses import dataclass, field",
@@ -402,8 +442,10 @@ ALLOWED_IMPORTS = {
         "import subprocess",
         "import sys",
         "from dataclasses import dataclass",
+        "from enum import Enum",
         "from pathlib import Path",
         "from typing import Any, Callable, Sequence",
+        "from secpal_pr_review import lifecycle_orchestration as module",
     },
     "late_disposition.py": {
         "from __future__ import annotations",
@@ -523,13 +565,13 @@ DIRECT_MODULE_ATTRIBUTES = {
     "secpal-resolve-fixed-threads.py": {
         "importlib": {"util"},
         "operator": {"attrgetter"},
-        "sys": {"argv", "modules", "stderr"},
+        "sys": {"argv", "modules", "path", "stderr"},
     },
     "late_disposition.py": {
         "errno": {"EINVAL", "ENOTSUP"},
         "pwd": {"getpwuid"},
         "stat": {"S_ISREG"},
-        "tempfile": {"TemporaryDirectory"},
+        "tempfile": {"TemporaryDirectory", "TemporaryFile"},
     },
     "secpal-create-late-disposition.py": {
         "importlib": {"util"},
@@ -579,6 +621,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "TransientReadFailure",
             "UnknownWriteResult",
             "atomic_write_json",
+            "authenticate_integration_commit",
             "canonical_json_bytes",
             "create_validation_attestation",
             "create_validation_receipt",
@@ -586,12 +629,14 @@ LOADED_MODULE_ATTRIBUTES = {
             "digest_json",
             "execute_resolution_batch",
             "follow_up",
+            "normalize_resolution_eligibility_evidence",
             "normalize_ready_integration_evidence",
             "normalize_ready_integration_prior_authority",
             "normalize_exceptional_recovery_evidence",
             "validate_manual_gate_evidence",
             "verify_commit_signatures",
             "verify_validation_attestation",
+            "_actual_integration_signer",
         },
         "follow_up": {
             "FollowUpError",
@@ -610,6 +655,13 @@ LOADED_MODULE_ATTRIBUTES = {
         },
     },
     "fast_path.py": {
+        "evidence": {
+            "CommandPolicyError",
+            "_commit_signature_format",
+            "command_environment",
+            "interpret_local_signature",
+            "resolve_trusted_executable",
+        },
         "follow_up": {
             "FollowUpError",
             "parse_follow_up",
@@ -637,6 +689,15 @@ LOADED_MODULE_ATTRIBUTES = {
             "verify_live_follow_up",
         },
         "late_disposition": {
+            "ABSENCE_SCHEMA_VERSION",
+            "ABSENT_FROM_BOTH",
+            "DISPOSITION_SCHEMA_VERSION_POLICY",
+            "INFORMATIONAL_ABSENCE_SCHEMA_VERSION",
+            "INFORMATIONAL_DISPOSITION_SCHEMA_VERSION",
+            "INFORMATIONAL_SCHEMA_VERSION",
+            "POST_FREEZE_DECISIONS",
+            "POST_FREEZE_ORIGIN_DECISIONS",
+            "REVIEWED_BUT_INELIGIBLE",
             "CLASSIFICATION_KIND",
             "CLASSIFICATION_PURPOSE",
             "CLASSIFICATION_SIGNATURE_NAMESPACE",
@@ -644,6 +705,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "IDENTITY",
             "MAXIMUM_ARTIFACT_BYTES",
             "SCHEMA_VERSION",
+            "SignerIdentity",
             "TECHNICAL_BLOCKERS",
             "LateDispositionError",
             "_load_canonical_json",
@@ -654,6 +716,12 @@ LOADED_MODULE_ATTRIBUTES = {
             "read_signing_configuration",
             "sign_artifact",
             "signer_from_git_verification",
+            "disposition_schema_version_for_decision",
+            "schema_version_for_decision",
+        },
+        "lifecycle_orchestration": {
+            "LifecycleOrchestrationError",
+            "verify_exceptional_recovery_authority",
         },
     },
     "secpal-create-late-disposition.py": {
@@ -778,6 +846,18 @@ DYNAMIC_IMPORT_CALLS = {
         ),
     },
     "fast_path.py": {
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "importlib.util.spec_from_file_location(module_name, EVIDENCE_HELPER)",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "spec.loader.exec_module(module)",
+        ),
         DynamicImportCall(
             ("_load_follow_up_helper",),
             "importlib.util.spec_from_file_location("
@@ -963,8 +1043,16 @@ SAFE_GETATTR_CALLS = {
             ("_load_fast_path_helper",),
             "getattr(loaded, '__file__', None)",
         ),
+        DynamicImportCall(
+            ("_load_lifecycle_orchestration_helper",),
+            "getattr(module, '__file__', None)",
+        ),
     },
     "fast_path.py": {
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "getattr(loaded, '__file__', None)",
+        ),
         DynamicImportCall(
             ("_load_follow_up_helper",),
             "getattr(loaded, '__file__', None)",
@@ -1033,6 +1121,14 @@ SAFE_SYS_MODULES_CALLS = {
         ),
     },
     "fast_path.py": {
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules.get(module_name)",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules.pop(spec.name, None)",
+        ),
         DynamicImportCall(
             ("_load_follow_up_helper",),
             "sys.modules.get('secpal_pr_review.follow_up')",
@@ -1106,6 +1202,10 @@ SAFE_SYS_MODULES_STORES = {
     },
     "fast_path.py": {
         DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules[spec.name]",
+        ),
+        DynamicImportCall(
             ("_load_follow_up_helper",),
             "sys.modules[spec.name]",
         ),
@@ -1135,15 +1235,16 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_load_follow_up_helper",
     "_load_late_disposition_helper",
     "_load_fast_path_helper",
+    "_load_lifecycle_orchestration_helper",
     "_late_signing_key",
     "_markdown_parser_environment",
+    "_classify_reviewed_target",
     "_matches_late_authorization",
-    "_matches_reviewed_target",
+    "_matches_reviewed_target_identity",
     "_read_authenticated_follow_up",
     "_resolve_trusted_markdown_node",
     "_load_repository_entry",
-    "_expected_validation_attestation",
-    "_expected_validation_receipt",
+    "_load_final_eligibility_absence",
     "_reject_nonfinite_json_constant",
     "_reject_duplicate_json_object",
     "_remote_repository",
@@ -1151,9 +1252,9 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_run_gh",
     "_run_git",
     "_parse_eligibility_payload",
+    "_require_valid_final_feedback_boundary",
     "_tracked_follow_ups_from_payload",
     "_tracked_follow_up_disposition_report",
-    "_validate_manual_gate_evidence",
     "_validation_registry_binding",
     "load_repository_limits",
     "load_eligibility_evidence",
@@ -1162,23 +1263,28 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "load_validation_evidence",
     "create_late_disposition_artifact",
     "create_late_classification_artifact",
+    "derive_post_freeze_origin",
     "main",
     "parse_args",
     "read_stable_target_thread",
     "read_target_thread",
     "require_expected_target",
     "require_late_target_origin",
+    "require_post_freeze_decision",
     "resolve_threads",
     "resolve_late_disposition_threads",
     "validate_expected_targets",
     "validate_request",
     "verify_local_fix_commit",
+    "verify_recovery_bound_source_authority",
     "verify_live_follow_up",
 }
 RESOLVER_CLASS_SHAPES = {
     "ExpectedThreadState": ClassShape((), (), ("dataclass(frozen=True)",)),
     "EligibilityEvidence": ClassShape((), (), ("dataclass(frozen=True)",)),
     "FinalFeedbackBoundary": ClassShape((), (), ("dataclass(frozen=True)",)),
+    "FinalEligibilityAbsence": ClassShape((), (), ("dataclass(frozen=True)",)),
+    "FinalEligibilityMode": ClassShape(("Enum",), (), ()),
     "InvocationBudget": ClassShape((), (), ("dataclass",)),
     "ParsedEligibility": ClassShape((), (), ("dataclass(frozen=True)",)),
     "RepositoryLimits": ClassShape((), (), ("dataclass(frozen=True)",)),
@@ -1203,6 +1309,10 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
         "_reject_nonfinite_json_constant",
     ),
     DynamicImportCall(
+        ("load_validation_evidence",),
+        "_reject_duplicate_json_object",
+    ),
+    DynamicImportCall(
         ("load_eligibility_evidence",),
         "_reject_nonfinite_json_constant",
     ),
@@ -1211,11 +1321,27 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
         "_reject_duplicate_json_object",
     ),
     DynamicImportCall(
+        ("verify_recovery_bound_source_authority",),
+        "_reject_nonfinite_json_constant",
+    ),
+    DynamicImportCall(
+        ("verify_recovery_bound_source_authority",),
+        "_reject_duplicate_json_object",
+    ),
+    DynamicImportCall(
         ("_parse_eligibility_payload",),
         "_reject_nonfinite_json_constant",
     ),
     DynamicImportCall(
         ("_parse_eligibility_payload",),
+        "_reject_duplicate_json_object",
+    ),
+    DynamicImportCall(
+        ("_require_valid_final_feedback_boundary",),
+        "_reject_nonfinite_json_constant",
+    ),
+    DynamicImportCall(
+        ("_require_valid_final_feedback_boundary",),
         "_reject_duplicate_json_object",
     ),
     DynamicImportCall(
@@ -1260,6 +1386,17 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
     ),
 }
 RESOLVER_LOOP_SITES = {
+    LoopSite("for", ("_load_final_eligibility_absence",), "records"),
+    LoopSite(
+        "comprehension",
+        ("_load_final_eligibility_absence",),
+        "record.items()",
+    ),
+    LoopSite(
+        "comprehension",
+        ("_load_final_eligibility_absence",),
+        "normalized",
+    ),
     LoopSite(
         "comprehension",
         ("create_late_classification_artifact",),
@@ -1361,8 +1498,16 @@ RESOLVER_LOOP_SITES = {
     LoopSite("comprehension", ("resolve_threads",), "tracked"),
     LoopSite("comprehension", ("resolve_threads",), "tracked.values()"),
     LoopSite("comprehension", ("resolve_threads",), "remaining_thread_ids"),
-    LoopSite("comprehension", ("_matches_reviewed_target",), "current.comments"),
-    LoopSite("comprehension", ("_matches_reviewed_target",), "reviewed.comments"),
+    LoopSite(
+        "comprehension",
+        ("_matches_reviewed_target_identity",),
+        "current.comments",
+    ),
+    LoopSite(
+        "comprehension",
+        ("_matches_reviewed_target_identity",),
+        "reviewed.comments",
+    ),
     LoopSite("comprehension", ("_reply_state_digest",), "thread.comments"),
     LoopSite("comprehension", ("_matches_late_authorization",), "thread.comments"),
     LoopSite(
@@ -1391,6 +1536,12 @@ RESOLVER_LOOP_SITES = {
         "thread_ids[index + 1:]",
     ),
     LoopSite("comprehension", ("parse_args",), "late_values"),
+    LoopSite(
+        "comprehension",
+        ("verify_recovery_bound_source_authority",),
+        "recovery_inputs",
+    ),
+    LoopSite("comprehension", ("parse_args",), "recovery_values"),
 }
 
 
@@ -1505,7 +1656,15 @@ class PolicyVisitor(ast.NodeVisitor):
                         or isinstance(statement.value, ast.Constant)
                     )
                 )
-                if not safe_docstring and not safe_field:
+                safe_enum_member = (
+                    node.name == "FinalEligibilityMode"
+                    and isinstance(statement, ast.Assign)
+                    and len(statement.targets) == 1
+                    and isinstance(statement.targets[0], ast.Name)
+                    and isinstance(statement.value, ast.Constant)
+                    and isinstance(statement.value.value, str)
+                )
+                if not safe_docstring and not safe_field and not safe_enum_member:
                     self.finding(
                         statement,
                         "resolver class body is outside the data-only allowlist",
