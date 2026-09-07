@@ -28,6 +28,12 @@ KIND = "SECPAL_PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_ADMISSION"
 DOMAIN = "secpal.pre-enrollment-validation-evidence-loss-admission/v1"
 ROOT = Path(__file__).resolve().parents[2]
 POLICY_PATH = "policies/pre-enrollment-validation-evidence-loss.json"
+CURRENT_SAFETY_PATH = "tests/pre-enrollment-current-safety.py"
+CURRENT_SAFETY_INVARIANTS = (
+    "candidate_local_issuer_rejected", "complete_feedback", "context_binding",
+    "historical_bytes_unavailable", "ordinary_prior_ready", "resolved_feedback",
+    "signed_authority_required", "source_history", "wrong_signer",
+)
 _VERIFIED = object()
 _UNSUPPLIED = object()
 FIELDS = frozenset({
@@ -714,63 +720,34 @@ def _verify_source_bytes(root: Path, tree: str, *, expected_listing: str | None 
     return listing
 
 
-def _prepare_dependencies(root: Path, helper: Any) -> None:
-    executable = helper._validation_executable({"argv": ["npm"]}, root, root)
-    with tempfile.TemporaryDirectory(prefix="secpal-loss-dependencies-") as home:
-        user_config = Path(home) / "user.npmrc"
-        global_config = Path(home) / "global.npmrc"
-        user_config.touch(mode=0o600)
-        global_config.touch(mode=0o600)
-        environment = {
-            "HOME": home,
-            "PATH": os.pathsep.join(str(path) for path in helper.LOCAL_VALIDATION_COMMAND_DIRECTORIES),
-            "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
-            "NPM_CONFIG_USERCONFIG": str(user_config), "NPM_CONFIG_GLOBALCONFIG": str(global_config),
-        }
-        try:
-            result = subprocess.run(
-                [executable, "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
-                cwd=root, env=environment, stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                timeout=600, check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise authority.LifecycleAuthorityError("current safety dependency preparation failed") from exc
-        if result.returncode != 0:
-            raise authority.LifecycleAuthorityError("current safety locked dependency installation failed")
-
-
 def _current_validation_harness_paths(main: str, helper: Any, entry: Any) -> tuple[str, ...]:
-    commands = helper._complete_validation_commands(entry)
-    paths: set[str] = set()
-    includes_tests = False
-    for command in commands:
-        arguments = command["argv"]
-        if (
-            arguments[:3] == ["python3", "-m", "unittest"]
-            and len(arguments) > 3
-            and all(path.startswith("tests/") for path in arguments[3:])
-        ) or (len(arguments) == 1 and arguments[0].startswith("./tests/")):
-            includes_tests = True
-        elif arguments == ["./scripts/preflight.sh", "--reuse-tracked-only"]:
-            paths.add("scripts/preflight.sh")
-        elif arguments == ["npm", "run", "lint:markdown"]:
-            paths.update({"package.json", "package-lock.json", ".markdownlint.json"})
-        else:
-            raise authority.LifecycleAuthorityError(
-                "current validation command lacks an accepted harness-source boundary"
-            )
-    if includes_tests:
-        try:
-            tracked_tests = transport._git(ROOT, ["ls-tree", "-rz", "--name-only", main, "tests"]).stdout.decode(
-                "utf-8", "strict"
-            )
-        except UnicodeDecodeError as exc:
-            raise authority.LifecycleAuthorityError("current validation harness listing is malformed") from exc
-        paths.update(path for path in tracked_tests.rstrip("\0").split("\0") if path)
-    if not paths:
-        raise authority.LifecycleAuthorityError("current validation harness has no maintained paths")
-    return tuple(sorted(paths))
+    return (_admit_current_safety_path(CURRENT_SAFETY_PATH),)
+
+
+def _admit_current_safety_path(relative: str) -> str:
+    if relative != "tests/pre-enrollment-current-safety.py":
+        raise authority.LifecycleAuthorityError("current safety path is not maintained")
+    return relative
+
+
+def _current_safety_profile(main: str) -> dict[str, Any]:
+    path = _admit_current_safety_path(CURRENT_SAFETY_PATH)
+    mode, blob, size = _current_harness_blob(main, path)
+    commands = [{
+        "argv": ["python3", path], "working_directory": ".",
+        "purpose": "Validate pre-enrollment evidence-loss current safety",
+    }]
+    return {
+        "schema_version": "1.0",
+        "policy": "PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_CURRENT_SAFETY",
+        "harness": [{"path": path, "mode": mode, "blob_oid": blob, "size": size}],
+        "validation_command_set": commands,
+        "validation_command_set_digest": authority.digest_json(commands),
+        "timeout_seconds": 120,
+        "required_invariants": list(CURRENT_SAFETY_INVARIANTS),
+        "validation_results": [{"command_digest": authority.digest_json(commands[0]),
+                                "exit_status": 0, "successful": True}],
+    }
 
 
 def _admit_current_harness_requested_path(relative: str) -> str:
@@ -1020,23 +997,87 @@ def _current_policy_validation_root(
         raise authority.LifecycleAuthorityError("current validation harness paths are ambiguous")
     if transport._git(ROOT, ["cat-file", "-t", main]).stdout != b"commit\n":
         raise authority.LifecycleAuthorityError("current validation harness commit is invalid")
+    tree = transport._git_text(source_root, ["rev-parse", "HEAD^{tree}"]).strip()
+    listing = _verify_source_bytes(source_root, tree)
+    candidate_listing = "\0".join(
+        item for item in listing.rstrip("\0").split("\0")
+        if not item.partition("\t")[2].startswith("tests/")
+    ) + "\0"
     with tempfile.TemporaryDirectory(prefix="secpal-current-policy-validation-") as directory:
         execution_root = Path(directory) / "source"
         bindings: dict[str, tuple[str, str, int]] = {}
         try:
-            shutil.copytree(source_root, execution_root, symlinks=True)
+            shutil.copytree(source_root, execution_root, symlinks=True,
+                            ignore=shutil.ignore_patterns(".git"))
             tests_root = execution_root / "tests"
             if tests_root.exists():
                 shutil.rmtree(tests_root)
             for relative in harness_paths:
+                _admit_current_safety_path(relative)
                 bindings[relative] = _copy_current_harness_file(
                     main, relative, execution_root, registered_paths=registered_paths,
                 )
         except OSError as exc:
             raise authority.LifecycleAuthorityError("current validation harness preparation failed") from exc
-        yield execution_root
-        for relative, binding in bindings.items():
-            _verify_current_harness_file(execution_root, relative, *binding)
+        _verify_current_safety_root(execution_root, tree, candidate_listing, bindings)
+        try:
+            yield execution_root
+        finally:
+            _verify_current_safety_root(execution_root, tree, candidate_listing, bindings)
+            _verify_source_bytes(source_root, tree, expected_listing=listing)
+
+
+def _verify_current_safety_root(
+    root: Path, tree: str, candidate_listing: str,
+    bindings: Mapping[str, tuple[str, str, int]],
+) -> None:
+    expected = {item.partition("\t")[2]
+                for item in candidate_listing.rstrip("\0").split("\0")}
+    if expected.intersection(bindings):
+        raise authority.LifecycleAuthorityError("candidate and harness ownership overlap")
+    expected.update(bindings)
+    expected_directories = {
+        parent.as_posix() for relative in expected for parent in Path(relative).parents
+        if parent != Path(".")
+    }
+    observed = set()
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise authority.LifecycleAuthorityError("current safety source contains symlink")
+        if path.is_dir():
+            if path.relative_to(root).as_posix() not in expected_directories:
+                raise authority.LifecycleAuthorityError("current safety source contains undeclared directories")
+            continue
+        relative = path.relative_to(root).as_posix()
+        if path.suffix in {".pyc", ".pyo"} or "__pycache__" in path.parts:
+            raise authority.LifecycleAuthorityError("current safety source contains bytecode")
+        observed.add(relative)
+    if observed != expected:
+        raise authority.LifecycleAuthorityError("current safety source contains undeclared files")
+    _verify_source_bytes(root, tree, expected_listing=candidate_listing)
+    for relative, binding in bindings.items():
+        _verify_current_harness_file(root, relative, *binding)
+
+
+def _run_current_safety(main: str, root: Path, profile: Mapping[str, Any]) -> None:
+    if dict(profile) != _current_safety_profile(main):
+        raise authority.LifecycleAuthorityError("current safety profile or command drift")
+    with tempfile.TemporaryDirectory(prefix="secpal-current-safety-home-") as home:
+        environment = transport._closed_validation_environment(
+            authority._load_trusted_command_helper(), Path(home))
+        command = profile["validation_command_set"][0]
+        result = transport._run_isolated_python(
+            transport._isolated_python_command(
+                transport._ISOLATED_SOURCE_LAUNCHER,
+                "ENTRYPOINT", str(root), command["argv"][1], "main",
+            ), cwd=root, timeout=profile["timeout_seconds"], env=environment,
+        )
+    observed = [{"command_digest": authority.digest_json(command),
+                 "exit_status": result.returncode, "successful": result.returncode == 0}]
+    if observed != profile["validation_results"]:
+        raise authority.LifecycleAuthorityError("current safety assertions failed")
+    if authority.loads_closed_json(result.stdout) != profile["required_invariants"]:
+        raise authority.LifecycleAuthorityError("current safety invariant coverage incomplete")
 
 
 def _acquire(repository: str, issue: int, *, execute_validation: bool) -> dict[str, Any]:
@@ -1044,6 +1085,8 @@ def _acquire(repository: str, issue: int, *, execute_validation: bool) -> dict[s
     _, before = _observe(record, entry, trust)
     helper = transport._load_actions_helper()
     binding = helper._fast_registry_binding(entry)
+    profile = _current_safety_profile(main)
+    binding = {"repository_policy": binding, "current_safety_profile": profile}
     with tempfile.TemporaryDirectory(prefix="secpal-pre-enrollment-safety-") as directory:
         root = Path(directory)
         root.chmod(0o700)
@@ -1065,12 +1108,7 @@ def _acquire(repository: str, issue: int, *, execute_validation: bool) -> dict[s
             with _current_policy_validation_root(
                 main, source_root=root, helper=helper, entry=entry,
             ) as validation_root:
-                _prepare_dependencies(validation_root, helper)
-                result = helper._run_registered_validations(entry, validation_root)
-            if not result:
-                raise authority.LifecycleAuthorityError(
-                    f"current registered safety validation failed: {result.failure_report()}"
-                )
+                _run_current_safety(main, validation_root, profile)
         _verify_source_bytes(root, record["tree_sha"], expected_listing=source_listing)
         if (
             transport._git_text(root, ["rev-parse", "HEAD"]).strip() != record["head_sha"]
@@ -1082,7 +1120,7 @@ def _acquire(repository: str, issue: int, *, execute_validation: bool) -> dict[s
         raise authority.LifecycleAuthorityError("current safety feedback is not stable")
     if _accepted_policy(repository, issue)[0] != main:
         raise authority.LifecycleAuthorityError("accepted-main authority changed during admission")
-    return _assemble_source_facts(main, record, binding, helper._complete_validation_commands(entry), after, signature_digest)
+    return _assemble_source_facts(main, record, binding, profile["validation_command_set"], after, signature_digest)
 
 
 def _assemble_source_facts(

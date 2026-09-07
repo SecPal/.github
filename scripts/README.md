@@ -354,16 +354,20 @@ verification authenticates signed bytes and reacquires current source, policy,
 feedback and absence facts without rerunning complete validation. The migration
 signature authenticates the issuer's execution facts.
 
-Acquisition owns provider/Git reads and isolated registered validation.
+Acquisition owns provider/Git reads and isolated current-safety validation.
 `_normalize_provider_representations` purely converts bounded external values
 to canonical typed facts; `_admit_observation` consumes only those facts, and
 `_assemble_source_facts` only assembles admitted facts. These responsibilities
-serve one exact-source contract, not a general source executor. Dependency
-preparation is fixed `npm ci --ignore-scripts --no-audit --no-fund` with a temporary
-HOME, closed credential-free environment and 600-second bound. Accepted-current
-test, script and package harness bytes are verified against protected main and
-overlaid on a disposable copy of the immutable source before the existing
-registered runner executes; historical harness bytes never become policy.
+serve one exact-source contract, not a general source executor. The closed
+`PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_CURRENT_SAFETY` profile uses the existing
+exact-source isolated Python runner (`-I -S -B`), temporary HOME, credential-free
+environment and 120-second bound. Its single maintained harness is
+`tests/pre-enrollment-current-safety.py`; authenticated blob identity, exact
+commands, result semantics and invariant coverage enter the policy binding.
+Historical tests are removed only in the disposable copy. Every non-test source
+file remains exact candidate content, checked before and after execution with
+no extra files or bytecode admitted. No npm installation or implementation
+overlay is needed. Normal repository Complete Validation is unaffected.
 
 `current_safety.receipt_digest` is the current execution identity under
 `secpal.pre-enrollment-current-safety/v1`, **not** an ordinary validation receipt.
