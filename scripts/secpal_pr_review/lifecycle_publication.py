@@ -250,6 +250,82 @@ def _verify_live_protection(policy: authority.LifecycleTrustPolicy) -> int:
     return policy.publication_ruleset_id
 
 
+def _observe_pre_enrollment_pull_request(
+    repository: str, pull_request: int
+) -> dict[str, Any]:
+    result = _run_gh(
+        [
+            "api", "--hostname", "github.com",
+            f"repos/{repository}/pulls/{pull_request}",
+        ]
+    )
+    if result.returncode != 0:
+        raise LifecyclePublicationError(
+            "pre-enrollment delivery PR observation is unavailable"
+        )
+    try:
+        value = json.loads(result.stdout, object_pairs_hook=_reject_duplicate_pairs)
+        head = value["head"]
+        head_repository = head["repo"]
+    except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise LifecyclePublicationError(
+            "pre-enrollment delivery PR observation is malformed"
+        ) from exc
+    return {
+        "repository": head_repository.get("full_name"),
+        "pull_request": value.get("number"),
+        "state": str(value.get("state", "")).upper(),
+        "draft": value.get("draft"),
+        "head_sha": head.get("sha"),
+    }
+
+
+def _verify_pre_enrollment_genesis_boundary(
+    policy: authority.LifecycleTrustPolicy,
+    initialization: Mapping[str, Any],
+) -> None:
+    """Prevent a competing genesis from crossing an admitted Draft integration."""
+
+    matches = [
+        item
+        for item in policy.bootstrap_source_admissions
+        if item.delivery_issue == initialization.get("delivery_issue")
+        and item.subtype == "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE"
+        and item.purpose == "PRE_ENROLLMENT_IMPLEMENTATION_BOOTSTRAP"
+    ]
+    if not matches:
+        return
+    if len(matches) != 1:
+        raise LifecyclePublicationError(
+            "pre-enrollment source admission is ambiguous"
+        )
+    selected = matches[0]
+    proof = initialization.get("initial_head_proof")
+    if (
+        initialization.get("schema_version") != "1.1"
+        or not isinstance(proof, dict)
+        or proof.get("kind")
+        != authority.pre_enrollment_integration.INITIAL_HEAD_PROOF_KIND
+        or initialization.get("pull_request") != selected.pull_request
+    ):
+        raise LifecyclePublicationError(
+            "pre-enrollment delivery genesis requires its typed integrated head"
+        )
+    observed = _observe_pre_enrollment_pull_request(
+        policy.repository, selected.pull_request
+    )
+    if observed != {
+        "repository": policy.repository,
+        "pull_request": selected.pull_request,
+        "state": "OPEN",
+        "draft": True,
+        "head_sha": initialization.get("initial_head_sha"),
+    }:
+        raise LifecyclePublicationError(
+            "pre-enrollment delivery genesis does not match the live PR head"
+        )
+
+
 def _github_token() -> str:
     result = _run_gh(["auth", "token", "--hostname", "github.com"])
     token = result.stdout.decode("utf-8", "strict").strip() if result.returncode == 0 else ""
@@ -1110,6 +1186,7 @@ def admit_native_genesis(
     if not isinstance(initialization, dict):
         raise LifecyclePublicationError("native lifecycle initialization is malformed")
     policy = authority._load_lifecycle_trust_policy(verified.repository)
+    _verify_pre_enrollment_genesis_boundary(policy, initialization)
     _verify_live_protection(policy)
     with _isolated_repository(policy, write=True) as (root, credential_environment):
         tip = _observe_remote_current_once(

@@ -552,6 +552,50 @@ class LifecyclePublicationTests(TestCase):
         self.assertIsNone(absence.observed_tip_oid)
         self.assertRegex(absence.evidence_digest, r"^[0-9a-f]{64}$")
 
+    def test_pre_enrollment_delivery_genesis_requires_typed_live_pr_head(self) -> None:
+        admission = SimpleNamespace(
+            subtype="PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE",
+            purpose="PRE_ENROLLMENT_IMPLEMENTATION_BOOTSTRAP",
+            delivery_issue=ISSUE,
+            pull_request=PR,
+        )
+        policy = replace(
+            self.policy, bootstrap_source_admissions=(admission,)
+        )
+        ordinary = Chain().initialization
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "typed integrated head"
+        ):
+            publication._verify_pre_enrollment_genesis_boundary(policy, ordinary)
+
+        typed = copy.deepcopy(ordinary)
+        typed["schema_version"] = "1.1"
+        typed["initial_head_proof"] = {
+            "kind": "AUTHENTICATED_PRE_ENROLLMENT_DRAFT_INTEGRATION_HEAD"
+        }
+        with patch.object(
+            publication,
+            "_observe_pre_enrollment_pull_request",
+            return_value={
+                "repository": REPOSITORY, "pull_request": PR,
+                "state": "OPEN", "draft": True,
+                "head_sha": typed["initial_head_sha"],
+            },
+        ):
+            publication._verify_pre_enrollment_genesis_boundary(policy, typed)
+
+        with patch.object(
+            publication,
+            "_observe_pre_enrollment_pull_request",
+            return_value={
+                "repository": REPOSITORY, "pull_request": PR,
+                "state": "OPEN", "draft": True, "head_sha": "f" * 40,
+            },
+        ), self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "live PR head"
+        ):
+            publication._verify_pre_enrollment_genesis_boundary(policy, typed)
+
     def test_pre_enrollment_absence_rejects_existing_native_genesis(self) -> None:
         chain = Chain()
         chain.append("INITIALIZED_DRAFT")

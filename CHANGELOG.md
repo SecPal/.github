@@ -9,15 +9,19 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
-## 2026-08-30 - Authenticate Pre-Enrollment Draft Integration
+## 2026-09-07 - Close Pre-Enrollment Completion Gaps
 
-**Added:**
+**Fixed:**
 
-- one explicitly authorized, signed two-parent path for reconciling the exact
-  current registered default branch into an open, unenrolled Draft delivery
-- exact mechanical clean-merge and bounded conflict-resolution evidence,
-  candidate-specific validation receipt, final attestation, and typed initial
-  lifecycle-head handoff without fabricating lifecycle state
+- persist the typed receipt and final attestation before the one irreversible
+  integration push, so an output failure cannot strand an advanced Draft head
+  without its recovery evidence
+- authenticate typed commit evidence before minting an initial-head proof and
+  require an admitted pre-enrollment delivery's native genesis to select its
+  exact live integrated Draft head
+- preserve historical validation bindings for repositories that do not enable
+  pre-enrollment integration, bound typed-CLI failures, and restore changelog
+  ordering
 
 ## 2026-09-07 - Authenticate Isolated Work-Graph Dependencies
 
@@ -278,6 +282,16 @@ Log of notable changes to SecPal organization defaults (newest first).
   preceding native-genesis admission
 - align the mandatory publication contract with admission-first authority and
   make real-SSH regression verification prove the requested signer identity
+
+## 2026-08-30 - Authenticate Pre-Enrollment Draft Integration
+
+**Added:**
+
+- one explicitly authorized, signed two-parent path for reconciling the exact
+  current registered default branch into an open, unenrolled Draft delivery
+- exact mechanical clean-merge and bounded conflict-resolution evidence,
+  candidate-specific validation receipt, final attestation, and typed initial
+  lifecycle-head handoff without fabricating lifecycle state
 
 ## 2026-08-30 - Authenticate Native Genesis Before Lifecycle Publication
 

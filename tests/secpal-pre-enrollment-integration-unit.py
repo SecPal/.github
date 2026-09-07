@@ -8,6 +8,7 @@ import importlib.util
 import copy
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 from unittest import TestCase, main, mock
 
 from scripts.secpal_pr_review import fast_path
@@ -25,6 +26,13 @@ SPEC.loader.exec_module(actions)
 
 
 class PreEnrollmentIntegrationBoundaryTests(TestCase):
+    def test_typed_pre_enrollment_error_is_a_bounded_cli_security_failure(self) -> None:
+        with mock.patch.object(
+            actions, "_command_attest_validation",
+            side_effect=actions.pre_enrollment.PreEnrollmentIntegrationError("bad typed evidence"),
+        ):
+            self.assertEqual(actions.main(["attest-validation", "--repo", "SecPal/.github", "--expected-head", "a" * 40, "--reviewed-state", "reviewed.json", "--output", "out.json"]), 3)
+
     def test_completed_dependency_inventory_does_not_override_canonical_ready(self) -> None:
         graph = {
             "complete": True,
@@ -164,6 +172,62 @@ class PreEnrollmentIntegrationBoundaryTests(TestCase):
             write_report.call_args.args[1]["kind"], integration.RECEIPT_KIND
         )
 
+    def test_attestation_cli_binds_typed_pre_enrollment_commit_signature(self) -> None:
+        reviewed = fast_path.StableFeedbackState(
+            repository="SecPal/.github", pull_request_number=800,
+            head_sha=PARENT_1, base_ref="main", base_sha=PARENT_2,
+            pr_state="OPEN", feedback={"pull_request_reactions": [], "reviews": [], "conversation_comments": [], "threads": []},
+        )
+        selected = integration.normalize_evidence(evidence(), registry=registry())
+        receipt = integration.create_validation_receipt(
+            evidence=selected, registry=registry(), successful_result=True,
+            receipt_id="receipt-001",
+        )
+        arguments = actions.build_parser().parse_args([
+            "attest-validation", "--repo", "SecPal/.github",
+            "--expected-head", CANDIDATE, "--reviewed-state", "reviewed.json",
+            "--output", "attestation.json", "--repo-root", str(ROOT),
+            "--pre-enrollment-integration-evidence", "integration.json",
+            "--delivery-issue", "776", "--integration-authorization-id",
+            "pre-enrollment-776-001", "--expected-integration-signer", SIGNER,
+            "--validation-receipt-id", "receipt-001",
+            "--final-attestation-id", "attestation-001",
+            "--bind-commit", "--receipt", "receipt.json",
+        ])
+        live = {
+            "repository": "SecPal/.github", "pull_request_number": 800,
+            "state": "OPEN", "draft": True, "head_sha": PARENT_1,
+            "base_repository": "SecPal/.github", "base_ref": "main",
+            "head_repository": "SecPal/.github", "base_sha": PARENT_2,
+            "closing_issues": [{"repository": "SecPal/.github", "number": 776, "state": "OPEN"}],
+            "closing_issues_complete": True,
+        }
+        signature = {"format": "ssh", "state": "valid", "verified": True}
+        with (
+            mock.patch.object(actions, "_attestation_local_state", return_value=(CANDIDATE, "")),
+            mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+            mock.patch.object(actions, "load_registry", return_value={}),
+            mock.patch.object(actions, "select_repository", return_value={}),
+            mock.patch.object(actions, "_fast_registry_binding", return_value=registry()),
+            mock.patch.object(actions, "_read_pre_enrollment_json", side_effect=[receipt, selected]),
+            mock.patch.object(actions, "_verify_pre_enrollment_external_authority"),
+            mock.patch.object(actions.LiveGitHub, "observe_ready_integration_authority", return_value=live),
+            mock.patch.object(actions, "_validated_integration_commit_parents", return_value=[PARENT_1, PARENT_2]),
+            mock.patch.object(actions, "_verify_integration_tree_delta"),
+            mock.patch.object(actions, "_run_attestation_git", side_effect=[
+                SimpleNamespace(stdout=TREE, stderr="", returncode=0),
+                SimpleNamespace(stdout="tree record", stderr="", returncode=0),
+                SimpleNamespace(stdout="Good git signature for " + SIGNER, stderr="", returncode=0),
+            ]),
+            mock.patch.object(actions, "_commit_trailer_digest", side_effect=[receipt["receipt_digest"], fast_path.digest_json(selected)]),
+            mock.patch.object(actions.evidence, "interpret_local_signature", return_value=signature),
+            mock.patch.object(actions, "_verify_signature_policy_identity"),
+            mock.patch.object(actions, "_verify_integration_signer"),
+            mock.patch.object(actions, "_write_fast_report") as write_report,
+        ):
+            self.assertEqual(actions._command_attest_validation(arguments), 0)
+        self.assertEqual(write_report.call_args.args[1]["kind"], integration.ATTESTATION_KIND)
+
 
 PARENT_1 = "a" * 40
 PARENT_2 = "b" * 40
@@ -182,10 +246,27 @@ def lifecycle_signer(_payload: bytes, _domain: str) -> dict[str, str]:
     return {"format": "ssh", "signer_identity": SIGNER, "value": "signed"}
 
 
+def verified_candidate() -> object:
+    return integration._seal_verified_candidate_commit(
+        {
+            "head_sha": CANDIDATE,
+            "tree_sha": TREE,
+            "parent_shas": [PARENT_1, PARENT_2],
+            "verified_signer": SIGNER,
+            "signature_format": "ssh",
+        }
+    )
+
+
 def registry() -> dict[str, object]:
     return {
         "repository": "SecPal/.github",
         "default_branch": "main",
+        "signature_policy": {
+            "require_github_verified": True,
+            "require_local_verified": True,
+            "accepted_formats": ["ssh", "openpgp"],
+        },
         "validation": [{"argv": ["./scripts/preflight.sh"]}],
         "pre_enrollment_integration_policy": {
             "schema_version": "1.0",
@@ -379,7 +460,7 @@ class PreEnrollmentIntegrationContractTests(TestCase):
         normalized = self.normalized()
         receipt = integration.create_validation_receipt(evidence=normalized, registry=registry(), successful_result=True, receipt_id="receipt-001")
         attestation = integration.create_final_attestation(evidence=normalized, registry=registry(), receipt=receipt, candidate_head_sha=CANDIDATE, candidate_parent_shas=[PARENT_1, PARENT_2], candidate_tree_sha=TREE, verified_signer=SIGNER, signature_format="ssh", attestation_id="attestation-001")
-        proof = integration.verify_final_attestation(evidence=normalized, registry=registry(), receipt=receipt, attestation=attestation, commit_trailers={"SecPal-Pre-Enrollment-Integration": attestation["integration_evidence_digest"], "SecPal-Pre-Enrollment-Validation-Receipt": receipt["receipt_digest"]})
+        proof = integration.verify_final_attestation(evidence=normalized, registry=registry(), receipt=receipt, attestation=attestation, commit_trailers={"SecPal-Pre-Enrollment-Integration": attestation["integration_evidence_digest"], "SecPal-Pre-Enrollment-Validation-Receipt": receipt["receipt_digest"]}, verified_candidate=verified_candidate())
         self.assertEqual(proof.initial_head_sha, CANDIDATE)
         for mutation in ("receipt", "attestation", "cross-issue", "cross-pr"):
             bad_receipt = copy.deepcopy(receipt); bad_attestation = copy.deepcopy(attestation); bad_evidence = copy.deepcopy(normalized)
@@ -388,7 +469,19 @@ class PreEnrollmentIntegrationContractTests(TestCase):
             elif mutation == "cross-issue": bad_evidence["delivery_issue"] = 777
             else: bad_evidence["pull_request"] = 801
             with self.assertRaises(integration.PreEnrollmentIntegrationError):
-                integration.verify_final_attestation(evidence=bad_evidence, registry=registry(), receipt=bad_receipt, attestation=bad_attestation, commit_trailers={})
+                integration.verify_final_attestation(evidence=bad_evidence, registry=registry(), receipt=bad_receipt, attestation=bad_attestation, commit_trailers={}, verified_candidate=verified_candidate())
+
+        with self.assertRaises(integration.PreEnrollmentIntegrationError):
+            integration.verify_final_attestation(
+                evidence=normalized, registry=registry(), receipt=receipt,
+                attestation=attestation,
+                commit_trailers={"SecPal-Pre-Enrollment-Integration": attestation["integration_evidence_digest"], "SecPal-Pre-Enrollment-Validation-Receipt": receipt["receipt_digest"]},
+                verified_candidate={
+                    "head_sha": CANDIDATE, "tree_sha": TREE,
+                    "parent_shas": [PARENT_1, PARENT_2],
+                    "verified_signer": SIGNER, "signature_format": "ssh",
+                },
+            )
 
     def test_candidate_parent_tree_and_signer_are_exact(self) -> None:
         normalized = self.normalized()
@@ -405,7 +498,7 @@ class PreEnrollmentIntegrationContractTests(TestCase):
         normalized = self.normalized()
         receipt = integration.create_validation_receipt(evidence=normalized, registry=registry(), successful_result=True, receipt_id="receipt-001")
         attestation = integration.create_final_attestation(evidence=normalized, registry=registry(), receipt=receipt, candidate_head_sha=CANDIDATE, candidate_parent_shas=[PARENT_1, PARENT_2], candidate_tree_sha=TREE, verified_signer=SIGNER, signature_format="ssh", attestation_id="attestation-001")
-        proof = integration.verify_final_attestation(evidence=normalized, registry=registry(), receipt=receipt, attestation=attestation, commit_trailers={"SecPal-Pre-Enrollment-Integration": attestation["integration_evidence_digest"], "SecPal-Pre-Enrollment-Validation-Receipt": receipt["receipt_digest"]})
+        proof = integration.verify_final_attestation(evidence=normalized, registry=registry(), receipt=receipt, attestation=attestation, commit_trailers={"SecPal-Pre-Enrollment-Integration": attestation["integration_evidence_digest"], "SecPal-Pre-Enrollment-Validation-Receipt": receipt["receipt_digest"]}, verified_candidate=verified_candidate())
         initialization = lifecycle_authority.create_delivery_initialization(repository="SecPal/.github", delivery_issue=776, pull_request=800, initial_head_sha=CANDIDATE, validation_receipt_digest=receipt["receipt_digest"], final_attestation_digest=attestation["attestation_digest"], signer_identity=SIGNER, signer=lifecycle_signer, initial_head_proof=proof)
         policy = lifecycle_authority.LifecycleTrustPolicy(repository="SecPal/.github", accepted_formats=frozenset({"ssh"}), transition_signer_identities=frozenset({SIGNER}), authority_signer_identities=frozenset({SIGNER}), signers={}, initialization_anchors=())
         verified = lifecycle_authority._verify_delivery_initialization(initialization, policy=policy, signature_verifier=lambda *_: lifecycle_authority.VerifiedSignature(SIGNER, "ssh"), require_maintained_anchor=False)
@@ -469,7 +562,8 @@ class PreEnrollmentIntegrationContractTests(TestCase):
 
     def test_one_shot_execution_observes_creates_and_pushes_once(self) -> None:
         normalized = self.normalized()
-        calls = {"observe": 0, "create": 0, "push": 0, "final": 0}
+        calls = {"observe": 0, "create": 0, "persist": 0, "push": 0, "final": 0}
+        order = []
 
         def observe() -> integration.FrozenObservation:
             calls["observe"] += 1
@@ -484,7 +578,14 @@ class PreEnrollmentIntegrationContractTests(TestCase):
 
         def push(_head: str, _expected_old_head: str) -> bool:
             calls["push"] += 1
+            order.append("push")
             return True
+
+        def persist(receipt: object, attestation: object) -> None:
+            self.assertIsInstance(receipt, dict)
+            self.assertIsInstance(attestation, dict)
+            calls["persist"] += 1
+            order.append("persist")
 
         def final() -> str:
             calls["final"] += 1
@@ -497,11 +598,40 @@ class PreEnrollmentIntegrationContractTests(TestCase):
             derive_tree=lambda _parents, _tree: (TREE, [], [], False),
             run_registered_validation=lambda tree: tree == TREE,
             observe_frozen_state=observe, create_signed_candidate=create,
+            persist_candidate_evidence=persist,
             push_fast_forward=push, observe_final_pr_head=final,
             receipt_id="receipt-001", attestation_id="attestation-001",
         )
         self.assertEqual(result.candidate_head_sha, CANDIDATE)
-        self.assertEqual(calls, {"observe": 1, "create": 1, "push": 1, "final": 1})
+        self.assertEqual(calls, {"observe": 1, "create": 1, "persist": 1, "push": 1, "final": 1})
+        self.assertEqual(order, ["persist", "push"])
+
+    def test_evidence_persistence_failure_blocks_before_push(self) -> None:
+        normalized = self.normalized()
+        pushed = []
+
+        with self.assertRaises(OSError):
+            integration.execute_once(
+                evidence=normalized, registry=registry(),
+                accepted_authorization_signers=frozenset({AUTHORIZER}),
+                authorization_verifier=lambda *_: True,
+                derive_tree=lambda _parents, _tree: (TREE, [], [], False),
+                run_registered_validation=lambda tree: tree == TREE,
+                observe_frozen_state=lambda: integration.FrozenObservation(
+                    normalized["draft_pr"], normalized["current_main"],
+                    normalized["work_graph"], normalized["lifecycle_absence"],
+                ),
+                create_signed_candidate=lambda tree, parents, _trailers, signer: {
+                    "head_sha": CANDIDATE, "tree_sha": tree,
+                    "parent_shas": parents, "verified_signer": signer,
+                    "signature_format": "ssh",
+                },
+                persist_candidate_evidence=lambda *_: (_ for _ in ()).throw(OSError("full")),
+                push_fast_forward=lambda *_: pushed.append(True) or True,
+                observe_final_pr_head=lambda: CANDIDATE,
+                receipt_id="receipt-001", attestation_id="attestation-001",
+            )
+        self.assertEqual(pushed, [])
 
     def test_toctou_drift_stops_before_candidate_or_push_without_retry(self) -> None:
         normalized = self.normalized()
@@ -528,6 +658,7 @@ class PreEnrollmentIntegrationContractTests(TestCase):
                 derive_tree=lambda _parents, _tree: (TREE, [], [], False),
                 run_registered_validation=lambda _tree: True,
                 observe_frozen_state=observe, create_signed_candidate=create,
+                persist_candidate_evidence=lambda *_: None,
                 push_fast_forward=push, observe_final_pr_head=lambda: CANDIDATE,
                 receipt_id="receipt-001", attestation_id="attestation-001",
             )

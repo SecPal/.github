@@ -41,6 +41,7 @@ class PreEnrollmentIntegrationError(ValueError):
 
 
 _VERIFIED_HEAD_TOKEN = object()
+_VERIFIED_CANDIDATE_TOKEN = object()
 
 
 def loads_closed_json(raw: bytes | str) -> Any:
@@ -125,6 +126,41 @@ AUTHORIZATION_FIELDS = frozenset(
         "expected_signer", "signer_identity", "signature", "authorization_digest",
     }
 )
+
+
+@dataclass(frozen=True)
+class VerifiedCandidateCommit:
+    """Opaque commit facts emitted only after the maintained Git verifier runs."""
+
+    head_sha: str
+    tree_sha: str
+    parent_shas: tuple[str, str]
+    verified_signer: str
+    signature_format: str
+    _verification_token: object = field(repr=False, compare=False)
+
+
+def _seal_verified_candidate_commit(value: Mapping[str, Any]) -> VerifiedCandidateCommit:
+    """Seal the closed result of the admitted source's concrete commit verifier."""
+
+    if set(value) != {
+        "head_sha", "tree_sha", "parent_shas", "verified_signer", "signature_format"
+    }:
+        raise PreEnrollmentIntegrationError("verified candidate evidence is ambiguous")
+    parents = value["parent_shas"]
+    if not isinstance(parents, (list, tuple)) or len(parents) != 2:
+        raise PreEnrollmentIntegrationError("verified candidate parent topology is invalid")
+    signature_format = value["signature_format"]
+    if signature_format not in {"ssh", "openpgp"}:
+        raise PreEnrollmentIntegrationError("verified candidate signature is invalid")
+    return VerifiedCandidateCommit(
+        _oid(value["head_sha"], "verified candidate head"),
+        _oid(value["tree_sha"], "verified candidate tree"),
+        (_oid(parents[0], "verified candidate parent"), _oid(parents[1], "verified candidate parent")),
+        _identity(value["verified_signer"], "verified candidate signer"),
+        signature_format,
+        _VERIFIED_CANDIDATE_TOKEN,
+    )
 SIGNATURE_FIELDS = frozenset({"format", "signer_identity", "value"})
 EVIDENCE_FIELDS = frozenset(
     {
@@ -395,12 +431,22 @@ def create_final_attestation(*, evidence: Mapping[str, Any], registry: Mapping[s
     return {**fields, "attestation_digest": digest_json(fields)}
 
 
-def verify_final_attestation(*, evidence: Mapping[str, Any], registry: Mapping[str, Any], receipt: Mapping[str, Any], attestation: Mapping[str, Any], commit_trailers: Mapping[str, str]) -> VerifiedInitialHeadProof:
+def verify_final_attestation(*, evidence: Mapping[str, Any], registry: Mapping[str, Any], receipt: Mapping[str, Any], attestation: Mapping[str, Any], commit_trailers: Mapping[str, str], verified_candidate: VerifiedCandidateCommit) -> VerifiedInitialHeadProof:
+    if (
+        not isinstance(verified_candidate, VerifiedCandidateCommit)
+        or verified_candidate._verification_token is not _VERIFIED_CANDIDATE_TOKEN
+    ):
+        raise PreEnrollmentIntegrationError(
+            "initial-head proof requires independently verified commit evidence"
+        )
     expected = create_final_attestation(
         evidence=evidence, registry=registry, receipt=receipt,
-        candidate_head_sha=attestation.get("candidate_head_sha"), candidate_parent_shas=attestation.get("ordered_parent_shas"),
-        candidate_tree_sha=attestation.get("candidate_tree_sha"), verified_signer=attestation.get("verified_signature", {}).get("signer_identity"),
-        signature_format=attestation.get("verified_signature", {}).get("format"), attestation_id=attestation.get("attestation_id"),
+        candidate_head_sha=verified_candidate.head_sha,
+        candidate_parent_shas=list(verified_candidate.parent_shas),
+        candidate_tree_sha=verified_candidate.tree_sha,
+        verified_signer=verified_candidate.verified_signer,
+        signature_format=verified_candidate.signature_format,
+        attestation_id=attestation.get("attestation_id"),
     )
     if dict(attestation) != expected:
         raise PreEnrollmentIntegrationError("final attestation is stale, replayed, or ambiguous")
@@ -417,6 +463,7 @@ def execute_once(
     run_registered_validation: Callable[[str], bool],
     observe_frozen_state: Callable[[], FrozenObservation],
     create_signed_candidate: Callable[[str, list[str], Mapping[str, str], str], Mapping[str, Any]],
+    persist_candidate_evidence: Callable[[Mapping[str, Any], Mapping[str, Any]], None],
     push_fast_forward: Callable[[str, str], bool],
     observe_final_pr_head: Callable[[], str],
     receipt_id: str, attestation_id: str,
@@ -491,13 +538,16 @@ def execute_once(
         signature_format=candidate["signature_format"],
         attestation_id=attestation_id,
     )
+    verified_candidate = _seal_verified_candidate_commit(candidate)
     proof = verify_final_attestation(
         evidence=normalized,
         registry=registry,
         receipt=receipt,
         attestation=attestation,
         commit_trailers=trailers,
+        verified_candidate=verified_candidate,
     )
+    persist_candidate_evidence(receipt, attestation)
     if not push_fast_forward(proof.initial_head_sha, normalized["draft_pr"]["head_sha"]):
         raise PreEnrollmentIntegrationError(
             "authorized non-force push failed or has an unknown result"

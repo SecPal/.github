@@ -4441,6 +4441,12 @@ class RegistryTests(TestCase):
                 ["npm", "run", "build:android"],
             ],
         )
+
+    def test_fast_binding_omits_pre_enrollment_policy_for_unrelated_repository(self) -> None:
+        binding = actions._fast_registry_binding(
+            actions.select_repository(actions.load_registry(), "SecPal/frontend")
+        )
+        self.assertNotIn("pre_enrollment_integration_policy", binding)
         self.assertEqual(
             [command["argv"] for command in binding["focused_only_validation"]],
             [

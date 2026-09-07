@@ -3156,6 +3156,11 @@ def atomic_write_json(path: Path, value: Any) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary_name, target)
+        directory_descriptor = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
     except BaseException:
         try:
             os.close(descriptor)

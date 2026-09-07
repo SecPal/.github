@@ -4488,7 +4488,7 @@ def _command_mutation(arguments: argparse.Namespace) -> int:
 
 
 def _fast_registry_binding(entry: dict[str, Any]) -> dict[str, Any]:
-    return {
+    binding = {
         "repository": entry["repository"],
         "default_branch": entry["default_branch"],
         "allowed_base_repositories": copy.deepcopy(
@@ -4509,10 +4509,12 @@ def _fast_registry_binding(entry: dict[str, Any]) -> dict[str, Any]:
                 if command.get("execution_policy") == "focused-only"
             ]
         ),
-        "pre_enrollment_integration_policy": copy.deepcopy(
-            entry.get("pre_enrollment_integration_policy")
-        ),
     }
+    if "pre_enrollment_integration_policy" in entry:
+        binding["pre_enrollment_integration_policy"] = copy.deepcopy(
+            entry["pre_enrollment_integration_policy"]
+        )
+    return binding
 
 
 def _load_fast_state(path: str) -> Any:
@@ -5200,8 +5202,7 @@ def _verify_pre_enrollment_external_authority(
         ) from exc
     try:
         graph = json.loads(graph_result.stdout)
-        issue = graph["issue"]
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+    except (json.JSONDecodeError, TypeError) as exc:
         raise fast_path.SecurityBlocker(
             "canonical pre-enrollment work-graph evidence is unavailable"
         ) from exc
@@ -6057,6 +6058,24 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 integration_evidence=integration_evidence,
             )
         elif pre_enrollment_evidence is not None:
+            commit_object = _run_attestation_git(
+                repository_root, ["cat-file", "commit", head], allow_failure=True
+            )
+            verified_commit = _run_attestation_git(
+                repository_root, ["verify-commit", "--raw", head], allow_failure=True
+            )
+            local_signature = evidence.interpret_local_signature(
+                verified_commit.returncode,
+                f"{verified_commit.stdout}\n{verified_commit.stderr}",
+                signature_format_hint=(
+                    evidence._commit_signature_format(commit_object.stdout)
+                    if commit_object.returncode == 0
+                    else "unknown"
+                ),
+            )
+            _verify_signature_policy_identity(
+                head, local_signature, binding["signature_policy"]
+            )
             signature_format = local_signature.get("format")
             _verify_integration_signer(
                 f"{verified_commit.stdout}\n{verified_commit.stderr}",
@@ -6411,6 +6430,10 @@ def _command_integrate_pre_enrollment_draft(arguments: argparse.Namespace) -> in
         raise fast_path.RecoverableLocalError(
             "pre-enrollment integration requires explicit --apply"
         )
+    if not arguments.receipt_output or not arguments.attestation_output:
+        raise fast_path.RecoverableLocalError(
+            "pre-enrollment integration requires durable receipt and attestation outputs"
+        )
     if (
         not arguments.commit_subject.strip()
         or "\n" in arguments.commit_subject
@@ -6671,8 +6694,14 @@ def _command_integrate_pre_enrollment_draft(arguments: argparse.Namespace) -> in
             )
         return str(live.get("head_sha") or "")
 
+    def persist_candidate_evidence(
+        receipt: Mapping[str, Any], attestation: Mapping[str, Any]
+    ) -> None:
+        _write_fast_report(arguments.receipt_output, receipt)
+        _write_fast_report(arguments.attestation_output, attestation)
+
     try:
-        result = pre_enrollment.execute_once(
+        pre_enrollment.execute_once(
             evidence=selected,
             registry=binding,
             accepted_authorization_signers=policy.transition_signer_identities,
@@ -6681,6 +6710,7 @@ def _command_integrate_pre_enrollment_draft(arguments: argparse.Namespace) -> in
             run_registered_validation=run_validation,
             observe_frozen_state=observe_frozen_state,
             create_signed_candidate=create_candidate,
+            persist_candidate_evidence=persist_candidate_evidence,
             push_fast_forward=push_candidate,
             observe_final_pr_head=observe_final_head,
             receipt_id=arguments.validation_receipt_id,
@@ -6688,8 +6718,6 @@ def _command_integrate_pre_enrollment_draft(arguments: argparse.Namespace) -> in
         )
     except pre_enrollment.PreEnrollmentIntegrationError as exc:
         raise fast_path.SecurityBlocker(str(exc)) from exc
-    _write_fast_report(arguments.receipt_output, result.validation_receipt)
-    _write_fast_report(arguments.attestation_output, result.final_attestation)
     return 0
 
 
@@ -6723,7 +6751,7 @@ def main(argv: list[str] | None = None) -> int:
         }
         print(canonical_json_bytes(report).decode("utf-8"), file=sys.stderr, end="")
         return 3
-    except fast_path.SecurityBlocker as exc:
+    except (fast_path.SecurityBlocker, pre_enrollment.PreEnrollmentIntegrationError) as exc:
         report = {
             "status": "BLOCKED_SECURITY",
             "blocker": evidence.redact_diagnostic(str(exc)),

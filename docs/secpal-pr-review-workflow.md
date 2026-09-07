@@ -286,12 +286,25 @@ retained conflict markers. Complete validation binds the frozen tree in
 receipt, evidence digest, signer, current-main observation, and initial Draft
 identity.
 
+The executor persists both typed evidence documents before its sole branch
+push. An unwritable or exhausted output boundary therefore fails before the
+irreversible mutation. Initial-head proof creation also consumes an opaque
+commit-verification result binding the actual two-parent topology, tree,
+signature format, and maintained signer; matching caller-authored attestation
+fields alone are not verification.
+
 This path is not ordinary sole-parent remediation and is not
 `TWO_PARENT_READY_INTEGRATION`: it consumes no Ready authority, review budget,
 remediation budget, recovery, or continuation. One invocation observes one
 final current state, constructs and non-force-pushes at most one candidate,
 verifies exact final head equality, and stops without retry or any merge,
 review-request, Ready-transition, graph, issue, label, or lifecycle mutation.
+
+Native genesis for a delivery still selected by this bootstrap family accepts
+only the schema-1.1 typed initialization whose head is the exact live open
+Draft PR head. This makes a competing ordinary genesis inadmissible between
+the authenticated absence observation and branch push without granting the
+bootstrap executor a journal mutation or reservation operation.
 
 The installed repository registry is the lifecycle trust-policy source. It
 separately assigns transition and authority signer roles, accepted signature

@@ -70,11 +70,14 @@ Complete validation emits
 candidate uses the separate `SecPal-Pre-Enrollment-Integration` and
 `SecPal-Pre-Enrollment-Validation-Receipt` trailers. Binding emits
 `PRE_ENROLLMENT_DRAFT_INTEGRATION_FINAL_ATTESTATION`. The one-shot executor
-constructs and non-force-pushes at most one candidate, verifies final PR-head
-equality, never retries, and has no merge, Ready-transition, review-request,
-issue, label, or lifecycle-publication operation. Its verified initial-head
-proof is the only non-ordinary merge proof accepted by lifecycle initialization.
-It creates no lifecycle event or counter.
+constructs at most one candidate, durably writes its receipt and attestation
+before the irreversible non-force push, verifies final PR-head equality, never
+retries, and has no merge, Ready-transition, review-request, issue, label, or
+lifecycle-publication operation. Its verified initial-head proof additionally
+requires the opaque result of the maintained commit topology and signature
+verifier; caller-authored attestation fields cannot mint that proof. It is the
+only non-ordinary merge proof accepted by lifecycle initialization and creates
+no lifecycle event or counter.
 
 The closed mutation surface is selected explicitly as
 `secpal-pr-review-actions.py integrate-pre-enrollment-draft --apply`. It requires
@@ -83,6 +86,12 @@ expected signer, fresh receipt and attestation IDs, one-line commit subject,
 and separate receipt/attestation outputs. The worktree index must contain the
 exact authenticated resolved tree; the command does not expose a generic ref
 or arbitrary push selector.
+
+For a delivery selected by the maintained pre-enrollment source admission,
+native genesis additionally requires schema-1.1 typed head evidence and an
+exact live open Draft PR whose head equals that initialization. Consequently a
+competing ordinary genesis cannot cross the absence-check-to-push interval;
+the integrated head must become live before its genesis is admissible.
 
 `attest-validation` also exposes a separately selected version-1.1
 `TWO_PARENT_READY_INTEGRATION` evidence path. It authenticates exactly one
