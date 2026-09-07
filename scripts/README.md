@@ -364,6 +364,9 @@ exact-source isolated Python runner (`-I -S -B`), temporary HOME, credential-fre
 environment and 120-second bound. Its single maintained harness is
 `tests/pre-enrollment-current-safety.py`; authenticated blob identity, exact
 commands, result semantics and invariant coverage enter the policy binding.
+Failure reports expose only the closed invariant names, never captured child
+diagnostics. The harness exercises the parked candidate's APIs, which need not
+exist in an unrelated current-main implementation.
 Historical tests are removed only in the disposable copy. Every non-test source
 file remains exact candidate content, checked before and after execution with
 no extra files or bytecode admitted. No npm installation or implementation

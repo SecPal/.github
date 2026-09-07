@@ -2526,6 +2526,17 @@ class ValidationEvidenceLossTests(TestCase):
                                   subprocess.CompletedProcess([], 0, b"[]", b"")):
                     with self.assertRaisesRegex(authority.LifecycleAuthorityError, "coverage incomplete"):
                         self.loss._run_current_safety(main_oid, source, profile)
+                for output, expected in (
+                    (b'["complete_feedback"]', "failed: complete_feedback"),
+                    (b'["host-secret"]', "failure report invalid"),
+                    (b'[]', "failure report invalid"),
+                    (b'not-json', "failure report invalid"),
+                ):
+                    with self.subTest(output=output), patch.object(
+                        self.loss.transport, "_run_isolated_python", return_value=
+                        subprocess.CompletedProcess([], 1, output, b"untrusted stderr")
+                    ), self.assertRaisesRegex(authority.LifecycleAuthorityError, expected):
+                        self.loss._run_current_safety(main_oid, source, profile)
             self.assertEqual((source / "product.py").read_text(), "VALUE = 'historical'\n")
 
     def setUp(self) -> None:

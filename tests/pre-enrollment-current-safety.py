@@ -46,27 +46,51 @@ class CurrentSafety(unittest.TestCase):
     def setUp(self):
         self.registry = {"manual_gates": [], "validation": [],
                          "limits": {"maximum_items": 10000}}
+        actor = {"login": "reviewer", "node_id": "actor", "database_id": 7}
+        def comment(identity, reply=None):
+            return {"node_id": identity, "body_digest": hashlib.sha256(identity.encode()).hexdigest(),
+                    "actor": actor, "reply_to_id": reply, "reactions": []}
+        def reaction(identity):
+            return {"mutation_id": identity, "content": "THUMBS_UP", "actor": actor}
+        reviewed_comment, reply, outdated = comment("comment"), comment("reply", "comment"), comment("old")
+        review = {**comment("review"), "state": "COMMENTED", "commit_oid": HEAD}
+        conversation = {**comment("conversation"), "updated_at": None}
+        pr_reaction, review_reaction, conversation_reaction, thread_reaction = (
+            reaction(identity) for identity in ("pr-reaction", "review-reaction",
+                                               "conversation-reaction", "thread-reaction"))
+        review["reactions"] = [review_reaction]
+        conversation["reactions"] = [conversation_reaction]
+        reviewed_comment["reactions"] = [thread_reaction]
         self.reviewed = fast_path.StableFeedbackState(
             repository=REPOSITORY, pull_request_number=17, head_sha=HEAD,
             base_ref="main", base_sha="c" * 40, pr_state="OPEN",
-            feedback={"pull_request_reactions": [], "reviews": [],
-                      "conversation_comments": [], "threads": [{
+            feedback={"pull_request_reactions": [pr_reaction], "reviews": [review],
+                      "conversation_comments": [conversation], "threads": [{
                           "node_id": "thread", "is_resolved": True,
-                          "is_outdated": False, "comments": [{
-                              "node_id": "comment", "body_digest": "d" * 64,
-                              "actor": {"login": "reviewer", "node_id": "actor",
-                                        "database_id": 7},
-                              "reply_to_id": None, "reactions": [],
-                          }],
+                          "is_outdated": False, "comments": [reviewed_comment, reply],
+                      }, {
+                          "node_id": "outdated", "is_resolved": False,
+                          "is_outdated": True, "comments": [outdated],
                       }]},
         )
+        # Enumerate fixture authority independently of the candidate's collector.
+        sources = [(kind, item["node_id"], item["body_digest"], thread)
+                   for kind, item, thread in (
+                       ("REVIEW", review, None), ("CONVERSATION_COMMENT", conversation, None),
+                       ("THREAD_COMMENT", reviewed_comment, "thread"),
+                       ("THREAD_COMMENT", reply, "thread"), ("THREAD_COMMENT", outdated, "outdated"))]
+        sources += [(kind, item["mutation_id"], authority.digest_json(item), thread)
+                    for kind, item, thread in (
+                        ("PULL_REQUEST_REACTION", pr_reaction, None),
+                        ("REVIEW_REACTION", review_reaction, None),
+                        ("CONVERSATION_REACTION", conversation_reaction, None),
+                        ("THREAD_COMMENT_REACTION", thread_reaction, "thread"))]
         self.findings = [{
-            "finding_id": "decision", "thread_id": "thread",
-            "sources": [{"kind": "THREAD_COMMENT", "node_id": "comment",
-                         "digest": "d" * 64}],
+            "finding_id": identity, "thread_id": thread,
+            "sources": [{"kind": kind, "node_id": identity, "digest": digest}],
             "classification": "INFORMATIONAL", "disposition": "NON_ACTIONABLE",
             "evidence_digest": "e" * 64, "technically_blocking": False,
-        }]
+        } for kind, identity, digest, thread in sources]
         self.receipt = fast_path.create_validation_receipt(
             repository=REPOSITORY, head_sha=HEAD, validated_tree_sha=TREE,
             registry=self.registry, command_set=[], successful_result=True,
@@ -135,6 +159,15 @@ class CurrentSafety(unittest.TestCase):
         fields.update(changes)
         return authority.verify_ready_source_recovery_authorization(document, **fields)
 
+    def resign(self, document):
+        unsigned = {key: value for key, value in document.items()
+                    if key not in {"signature", "authorization_digest"}}
+        document["signature"] = sign(authority.canonical_json_bytes(unsigned),
+                                     authority.READY_SOURCE_RECOVERY_AUTHORIZATION_DOMAIN)
+        document["authorization_digest"] = authority.digest_json(
+            {key: value for key, value in document.items() if key != "authorization_digest"})
+        return document
+
     def test_historical_bytes_unavailable(self):
         document = self.authorization()
         self.verify(document)
@@ -147,7 +180,7 @@ class CurrentSafety(unittest.TestCase):
             self.assertNotIn(key, document)
         document["historical_bytes_reconstructed"] = True
         with self.assertRaises(authority.LifecycleAuthorityError):
-            self.verify(document)
+            self.verify(self.resign(document))
 
     def test_signed_authority_required(self):
         with self.assertRaises(authority.LifecycleAuthorityError):
@@ -159,13 +192,17 @@ class CurrentSafety(unittest.TestCase):
 
     def test_complete_feedback(self):
         self.safety()
+        for omitted in self.findings:
+            with self.subTest(omitted=omitted["finding_id"]), self.assertRaises(fast_path.SecurityBlocker):
+                self.safety(feedback_findings=[item for item in self.findings if item != omitted])
         for findings in ([], self.findings * 2,
                          [{**self.findings[0], "technically_blocking": True}]):
             with self.subTest(findings=findings), self.assertRaises(fast_path.SecurityBlocker):
                 self.safety(feedback_findings=findings)
 
     def test_resolved_feedback(self):
-        self.assertTrue(self.reviewed.feedback["threads"][0]["is_resolved"])
+        self.assertTrue(next(item for item in self.reviewed.feedback["threads"]
+                             if item["node_id"] == "thread")["is_resolved"])
         with self.assertRaises(fast_path.SecurityBlocker):
             self.safety(feedback_findings=[])
         document = self.authorization()
@@ -181,14 +218,8 @@ class CurrentSafety(unittest.TestCase):
                            ("current_publication_oid", "f" * 40)):
             altered = copy.deepcopy(document)
             altered[key] = value
-            unsigned = {name: item for name, item in altered.items()
-                        if name not in {"signature", "authorization_digest"}}
-            altered["signature"] = sign(authority.canonical_json_bytes(unsigned),
-                                         authority.READY_SOURCE_RECOVERY_AUTHORIZATION_DOMAIN)
-            altered["authorization_digest"] = authority.digest_json(
-                {name: item for name, item in altered.items() if name != "authorization_digest"})
             with self.subTest(key=key), self.assertRaises(authority.LifecycleAuthorityError):
-                self.verify(altered)
+                self.verify(self.resign(altered))
         with self.assertRaises(authority.LifecycleAuthorityError):
             self.verify(document, current_publication_oid="f" * 40)
 
@@ -211,11 +242,28 @@ class CurrentSafety(unittest.TestCase):
             authority._ready_source_recovery_state(
                 self.current.state, historical_proof_mode=authority.NATIVE_PROOF_MODE)
         for key, value in (("cycle_3_absent", False), ("remediation_cycle_count", 3),
-                           ("draft", True), ("ready_transition_count", 2)):
+                           ("unrestricted_review_count", 0), ("ready", False),
+                           ("draft", True), ("ready_transition_count", 2),
+                           ("exceptional_recovery_count", 2), ("exceptional_continuation_count", 2)):
             state = {**self.current.state, key: value}
             with self.subTest(key=key), self.assertRaises(authority.LifecycleAuthorityError):
                 authority._ready_source_recovery_state(
                     state, historical_proof_mode=authority.EXACT_ADOPTION_PROOF_MODE)
+        # Existing exceptional histories are preserved, not reset or forbidden (#827).
+        for counter, history, transition in (
+            ("exceptional_recovery_count", "exceptional_recovery_history", "EXCEPTIONAL_RECOVERY"),
+            ("exceptional_continuation_count", "exceptional_continuation_history", "EXCEPTIONAL_CONTINUATION"),
+        ):
+            state = copy.deepcopy(self.current.state)
+            state[counter] = 1
+            state[history] = [{"sequence": 1, "transition_kind": transition,
+                               "event_authorization_digest": "8" * 64}]
+            self.assertEqual(authority._ready_source_recovery_state(
+                state, historical_proof_mode=authority.EXACT_ADOPTION_PROOF_MODE), state)
+            document = self.authorization()
+            document["lifecycle_state"] = state
+            with self.subTest(counter=counter), self.assertRaises(authority.LifecycleAuthorityError):
+                self.verify(self.resign(document))
 
     def test_candidate_local_issuer_rejected(self):
         spec = importlib.util.spec_from_file_location(
@@ -228,6 +276,9 @@ class CurrentSafety(unittest.TestCase):
                           "_validation_runner", "_issuer_source_verifier"):
             self.assertNotIn(forbidden, parameters)
         with patch.object(actions, "_attestation_local_state", return_value=(HEAD, "")):
+            with self.assertRaises(actions.fast_path.SecurityBlocker):
+                actions._verify_recovery_issuer_source("f" * 40)
+        with patch.object(actions, "_attestation_local_state", return_value=("f" * 40, " M issuer.py")):
             with self.assertRaises(actions.fast_path.SecurityBlocker):
                 actions._verify_recovery_issuer_source("f" * 40)
         with (
@@ -265,7 +316,9 @@ class CurrentSafety(unittest.TestCase):
                           "exceptional_continuations": 0, "cycle_3": False},
             "publication": {"object_oid": "3" * 40, "publication_digest": "4" * 64},
         }
-        self.assertEqual(fast_path.normalize_ready_integration_prior_authority(prior), prior)
+        for mode in (authority.NATIVE_PROOF_MODE, authority.EXACT_ADOPTION_PROOF_MODE):
+            prior["lifecycle"]["historical_proof_mode"] = mode
+            self.assertEqual(fast_path.normalize_ready_integration_prior_authority(prior), prior)
         prior["recovery_publication"] = {}
         with self.assertRaises(fast_path.SecurityBlocker):
             fast_path.normalize_ready_integration_prior_authority(prior)
@@ -280,6 +333,9 @@ def main(arguments):
     result = unittest.TextTestRunner(stream=output).run(suite)
     if not result.wasSuccessful() or result.skipped or result.testsRun != len(names):
         sys.stderr.write(output.getvalue())
+        failed = sorted({getattr(test, "test_case", test)._testMethodName.removeprefix("test_")
+                         for test, _ in [*result.failures, *result.errors, *result.skipped]})
+        print(json.dumps(failed))
         return 1
     print(json.dumps([name.removeprefix("test_") for name in names]))
     return 0

@@ -1075,7 +1075,15 @@ def _run_current_safety(main: str, root: Path, profile: Mapping[str, Any]) -> No
     observed = [{"command_digest": authority.digest_json(command),
                  "exit_status": result.returncode, "successful": result.returncode == 0}]
     if observed != profile["validation_results"]:
-        raise authority.LifecycleAuthorityError("current safety assertions failed")
+        try:
+            failed = authority.loads_closed_json(result.stdout)
+            if (not isinstance(failed, list) or not failed
+                or any(not isinstance(item, str) or item not in CURRENT_SAFETY_INVARIANTS for item in failed)
+                or failed != sorted(set(failed))):
+                raise ValueError("invalid failure inventory")
+        except (ValueError, authority.LifecycleAuthorityError) as exc:
+            raise authority.LifecycleAuthorityError("current safety failure report invalid") from exc
+        raise authority.LifecycleAuthorityError("current safety assertions failed: " + ", ".join(failed))
     if authority.loads_closed_json(result.stdout) != profile["required_invariants"]:
         raise authority.LifecycleAuthorityError("current safety invariant coverage incomplete")
 
