@@ -2711,7 +2711,7 @@ class ValidationEvidenceLossTests(TestCase):
 
     def chronology_page(
         self, nodes: list[dict[str, Any]], *, has_next: bool = False,
-        end_cursor: str | None = None, total_count: int | None = None,
+        end_cursor: str | None = None,
     ) -> bytes:
         return json.dumps({
             "data": {"repository": {
@@ -2719,7 +2719,6 @@ class ValidationEvidenceLossTests(TestCase):
                 "pullRequest": {
                     "number": 830,
                     "timelineItems": {
-                        "totalCount": len(nodes) if total_count is None else total_count,
                         "pageInfo": {
                             "hasNextPage": has_next,
                             "endCursor": end_cursor,
@@ -2748,7 +2747,7 @@ class ValidationEvidenceLossTests(TestCase):
             "__typename": "ReadyForReviewEvent",
             "id": "RFR_kwDO_projection",
             "createdAt": "2026-09-01T00:00:00Z",
-        }], total_count=len(full_timeline))
+        }])
 
         with patch.object(
             self.loss.transport,
@@ -2786,9 +2785,9 @@ class ValidationEvidenceLossTests(TestCase):
             "createdAt": "2026-09-02T00:00:00Z",
         }
         first = self.chronology_page(
-            [ready], has_next=True, end_cursor="cursor-page-one", total_count=8,
+            [ready], has_next=True, end_cursor="cursor-page-one",
         )
-        second = self.chronology_page([draft], total_count=8)
+        second = self.chronology_page([draft])
         responses = [
             SimpleNamespace(returncode=0, stdout=first, stderr=b""),
             SimpleNamespace(returncode=0, stdout=second, stderr=b""),
@@ -2818,7 +2817,7 @@ class ValidationEvidenceLossTests(TestCase):
 
     def test_chronology_projection_rejects_missing_or_malformed_pagination(self) -> None:
         first = self.chronology_page(
-            [], has_next=True, end_cursor="cursor-page-one", total_count=80,
+            [], has_next=True, end_cursor="cursor-page-one",
         )
         with patch.object(
             self.loss.transport,
@@ -2839,7 +2838,7 @@ class ValidationEvidenceLossTests(TestCase):
             self.loss._observe_chronology(REPOSITORY, 830)
 
         endless = self.chronology_page(
-            [], has_next=True, end_cursor="same-cursor", total_count=101,
+            [], has_next=True, end_cursor="same-cursor",
         )
         with patch.object(
             self.loss.transport,
@@ -2876,6 +2875,10 @@ class ValidationEvidenceLossTests(TestCase):
                     REPOSITORY,
                     830,
                 )
+        with self.assertRaisesRegex(authority.LifecycleAuthorityError, "malformed"):
+            self.loss._normalize_chronology(
+                self.loss.ChronologyObservation((b"{}",)), REPOSITORY, 830,
+            )
 
     def test_chronology_projection_rejects_replay_substitution_and_acquisition_mutation(self) -> None:
         event = {
@@ -2890,13 +2893,26 @@ class ValidationEvidenceLossTests(TestCase):
             ):
                 self.loss._normalize_chronology(observation, repository, pull_request)
 
+        second_event = {
+            "__typename": "ConvertToDraftEvent",
+            "id": "event-two",
+            "createdAt": event["createdAt"],
+        }
         facts = self.provider_facts()
-        changed = self.loss.ChronologyObservation((self.chronology_page([{
-            **event,
-            "id": "substituted-event",
-        }]),))
-        with self.assertRaisesRegex(authority.LifecycleAuthorityError, "changed during acquisition"):
-            self.observe(facts, chronology_after=changed)
+        facts[3] = self.loss.ChronologyObservation((
+            self.chronology_page([event, second_event]),
+        ))
+        substitutions = {
+            "identity": [{**event, "id": "substituted-event"}, second_event],
+            "kind": [{**event, "__typename": "ConvertToDraftEvent"}, second_event],
+            "provider order": [second_event, event],
+        }
+        for label, nodes in substitutions.items():
+            changed = self.loss.ChronologyObservation((self.chronology_page(nodes),))
+            with self.subTest(label=label), self.assertRaisesRegex(
+                authority.LifecycleAuthorityError, "changed during acquisition",
+            ):
+                self.observe(facts, chronology_after=changed)
 
     def test_chronology_query_and_bounds_are_maintained_not_caller_selected(self) -> None:
         self.assertEqual(

@@ -54,6 +54,27 @@ RECORD_FIELDS = frozenset({
     "historical_bytes_reconstructed", "observed_pre_enrollment_history",
     "feedback_digest", "technical_decisions",
 })
+_CHRONOLOGY_PAGE_SIZE = 50
+_CHRONOLOGY_MAXIMUM_EVENTS = 100
+_CHRONOLOGY_MAXIMUM_PAGES = 2
+_CHRONOLOGY_QUERY = r"""
+query PreEnrollmentChronology($owner:String!, $name:String!, $number:Int!, $cursor:String) {
+  repository(owner:$owner, name:$name) {
+    nameWithOwner
+    pullRequest(number:$number) {
+      number
+      timelineItems(first:50, after:$cursor, itemTypes:[READY_FOR_REVIEW_EVENT,CONVERT_TO_DRAFT_EVENT]) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          __typename
+          ... on ReadyForReviewEvent { id createdAt }
+          ... on ConvertToDraftEvent { id createdAt }
+        }
+      }
+    }
+  }
+}
+"""
 
 
 @dataclass(frozen=True)
@@ -128,11 +149,25 @@ class SourceCommitFacts:
 
 
 @dataclass(frozen=True)
+class ChronologyObservation:
+    """Bounded maintained GitHub projections captured without admission."""
+
+    pages: tuple[bytes, ...]
+
+
+@dataclass(frozen=True)
+class ChronologyEvent:
+    identity: str
+    kind: str
+    occurred_at: str
+
+
+@dataclass(frozen=True)
 class NormalizedProviderFacts:
     pull_request: PullRequestFacts
     issue: IssueFacts
     commits: tuple[CommitFacts, ...]
-    timeline_events: tuple[str | None, ...]
+    timeline_events: tuple[ChronologyEvent, ...]
     source_commit: SourceCommitFacts
 
 
@@ -235,6 +270,157 @@ def _gh_json(endpoint: str) -> Any:
     return authority.loads_closed_json(result.stdout)
 
 
+def _chronology_page_document(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
+    try:
+        document = authority.loads_closed_json(raw)
+        if not isinstance(document, dict) or set(document) != {"data"}:
+            raise authority.LifecycleAuthorityError("chronology provider projection is malformed")
+        data = document["data"]
+        repository = data["repository"]
+        pull_request = repository["pullRequest"]
+        connection = pull_request["timelineItems"]
+        page_info = connection["pageInfo"]
+        if (
+            not isinstance(data, dict) or set(data) != {"repository"}
+            or not isinstance(repository, dict)
+            or set(repository) != {"nameWithOwner", "pullRequest"}
+            or not isinstance(pull_request, dict)
+            or set(pull_request) != {"number", "timelineItems"}
+            or not isinstance(connection, dict)
+            or set(connection) != {"pageInfo", "nodes"}
+            or not isinstance(page_info, dict)
+            or set(page_info) != {"hasNextPage", "endCursor"}
+            or not isinstance(connection["nodes"], list)
+            or len(connection["nodes"]) > _CHRONOLOGY_PAGE_SIZE
+            or type(page_info["hasNextPage"]) is not bool
+            or (
+                page_info["endCursor"] is not None
+                and (
+                    not isinstance(page_info["endCursor"], str)
+                    or not page_info["endCursor"]
+                    or page_info["endCursor"] != page_info["endCursor"].strip()
+                )
+            )
+            or (page_info["hasNextPage"] and page_info["endCursor"] is None)
+        ):
+            raise authority.LifecycleAuthorityError("chronology provider projection is malformed")
+    except authority.LifecycleAuthorityError:
+        raise
+    except (
+        UnicodeDecodeError,
+        KeyError,
+        TypeError,
+        publication.LifecyclePublicationError,
+    ) as exc:
+        raise authority.LifecycleAuthorityError(
+            "chronology provider projection is malformed"
+        ) from exc
+    return repository, connection
+
+
+def _observe_chronology(repository: str, pull_request: int) -> ChronologyObservation:
+    """Observe only the maintained Ready/Draft projection through bounded pages."""
+
+    repository = authority._require_repository(repository)
+    pull_request = authority._require_positive_int(pull_request, "loss pull request")
+    owner, name = repository.split("/", 1)
+    pages: list[bytes] = []
+    cursor: str | None = None
+    seen_cursors: set[str] = set()
+    for _page_number in range(_CHRONOLOGY_MAXIMUM_PAGES):
+        arguments = [
+            "api", "--hostname", "github.com", "graphql",
+            "-f", f"query={_CHRONOLOGY_QUERY}",
+            "-f", f"owner={owner}", "-f", f"name={name}",
+            "-F", f"number={pull_request}",
+        ]
+        if cursor is not None:
+            arguments.extend(["-f", f"cursor={cursor}"])
+        result = transport._run_bootstrap_gh(arguments)
+        if result.returncode != 0:
+            raise authority.LifecycleAuthorityError(
+                "loss admission chronology acquisition failed"
+            )
+        raw = bytes(result.stdout)
+        _repository, connection = _chronology_page_document(raw)
+        pages.append(raw)
+        page_info = connection["pageInfo"]
+        if not page_info["hasNextPage"]:
+            return ChronologyObservation(tuple(pages))
+        cursor = page_info["endCursor"]
+        if cursor in seen_cursors:
+            raise authority.LifecycleAuthorityError(
+                "chronology provider pagination is ambiguous"
+            )
+        seen_cursors.add(cursor)
+    raise authority.LifecycleAuthorityError(
+        "loss source chronology exceeds the maintained bound"
+    )
+
+
+def _normalize_chronology(
+    observation: ChronologyObservation, repository: str, pull_request: int,
+) -> tuple[ChronologyEvent, ...]:
+    """Purely normalize the closed provider projection into chronology facts."""
+
+    if (
+        not isinstance(observation, ChronologyObservation)
+        or not observation.pages
+        or len(observation.pages) > _CHRONOLOGY_MAXIMUM_PAGES
+    ):
+        raise authority.LifecycleAuthorityError("chronology provider projection is malformed")
+    repository = authority._require_repository(repository)
+    pull_request = authority._require_positive_int(pull_request, "loss pull request")
+    names = {
+        "ReadyForReviewEvent": "ready_for_review",
+        "ConvertToDraftEvent": "convert_to_draft",
+    }
+    events: list[ChronologyEvent] = []
+    identities: set[str] = set()
+    for page_number, raw in enumerate(observation.pages):
+        projected_repository, connection = _chronology_page_document(raw)
+        if (
+            projected_repository["nameWithOwner"] != repository
+            or projected_repository["pullRequest"]["number"] != pull_request
+            or connection["pageInfo"]["hasNextPage"]
+            != (page_number + 1 < len(observation.pages))
+        ):
+            raise authority.LifecycleAuthorityError(
+                "chronology provider identity or pagination changed"
+            )
+        for node in connection["nodes"]:
+            if not isinstance(node, dict) or set(node) != {"__typename", "id", "createdAt"}:
+                raise authority.LifecycleAuthorityError("chronology provider event is malformed")
+            typename = node["__typename"]
+            identity = node["id"]
+            occurred_at = node["createdAt"]
+            if (
+                typename not in names
+                or not isinstance(identity, str)
+                or not identity
+                or identity != identity.strip()
+                or identity in identities
+                or not isinstance(occurred_at, str)
+            ):
+                raise authority.LifecycleAuthorityError(
+                    "chronology provider event identity or kind is ambiguous"
+                )
+            authority._parse_adoption_timestamp(occurred_at, "chronology event time")
+            identities.add(identity)
+            events.append(ChronologyEvent(identity, names[typename], occurred_at))
+    if len(events) >= _CHRONOLOGY_MAXIMUM_EVENTS:
+        raise authority.LifecycleAuthorityError(
+            "loss source chronology exceeds the maintained bound"
+        )
+    timestamps = [
+        authority._parse_adoption_timestamp(item.occurred_at, "chronology event time")
+        for item in events
+    ]
+    if timestamps != sorted(timestamps):
+        raise authority.LifecycleAuthorityError("chronology provider ordering is ambiguous")
+    return tuple(events)
+
+
 def _accepted_policy(repository: str, issue: int) -> tuple[str, dict[str, Any], Any, Any]:
     if repository != "SecPal/.github":
         raise authority.LifecycleAuthorityError("loss admission repository is not maintained")
@@ -314,7 +500,8 @@ def _normalize_provider_representations(
     target: Any,
     issue_state: Any,
     commits: Any,
-    timeline: Any,
+    chronology_before: Any,
+    chronology_after: Any,
     source_commit: Any,
 ) -> NormalizedProviderFacts:
     """Purely convert bounded provider representations into canonical facts."""
@@ -324,8 +511,6 @@ def _normalize_provider_representations(
     source_commit = _provider_mapping(source_commit, "source commit")
     if not isinstance(commits, list) or len(commits) > 100:
         raise authority.LifecycleAuthorityError("commit provider representation is malformed")
-    if not isinstance(timeline, list) or len(timeline) > 100:
-        raise authority.LifecycleAuthorityError("timeline provider representation is malformed")
     try:
         normalized_commits = tuple(
             CommitFacts(
@@ -338,9 +523,19 @@ def _normalize_provider_representations(
             )
             for item in commits
         )
-        timeline_events = tuple(
-            _provider_mapping(item, "timeline event").get("event") for item in timeline
+        timeline_events = _normalize_chronology(
+            chronology_before,
+            _provider_value(target, ("base", "repo", "full_name"), "pull request"),
+            _provider_value(target, ("number",), "pull request"),
         )
+        if timeline_events != _normalize_chronology(
+            chronology_after,
+            _provider_value(target, ("base", "repo", "full_name"), "pull request"),
+            _provider_value(target, ("number",), "pull request"),
+        ):
+            raise authority.LifecycleAuthorityError(
+                "loss source chronology changed during acquisition"
+            )
         merged_at = _provider_value(target, ("merged_at",), "pull request")
         if merged_at is not None and not isinstance(merged_at, str):
             raise authority.LifecycleAuthorityError("pull request provider representation is malformed")
@@ -374,6 +569,8 @@ def _normalize_provider_representations(
                 ),
             ),
         )
+    except authority.LifecycleAuthorityError:
+        raise
     except (TypeError, ValueError) as exc:
         raise authority.LifecycleAuthorityError("provider representation is malformed") from exc
 
@@ -386,12 +583,13 @@ def _observe(record: Mapping[str, Any], entry: Any, trust: Any) -> tuple[SourceC
     target = _gh_json(f"repos/{repository}/pulls/{pr}")
     issue_state = _gh_json(f"repos/{repository}/issues/{issue}")
     commits = _gh_json(f"repos/{repository}/pulls/{pr}/commits?per_page=100")
-    timeline = _gh_json(f"repos/{repository}/issues/{pr}/timeline?per_page=100")
+    chronology_before = _observe_chronology(repository, pr)
     helper = transport._load_actions_helper()
     reviewed = helper.FastPathGateway(ROOT, entry).capture_stable_feedback(repository, pr)
+    chronology_after = _observe_chronology(repository, pr)
     source_commit = _gh_json(f"repos/{repository}/commits/{record['head_sha']}")
     normalized = _normalize_provider_representations(
-        target, issue_state, commits, timeline, source_commit,
+        target, issue_state, commits, chronology_before, chronology_after, source_commit,
     )
     return _admit_observation(record, normalized, reviewed)
 
@@ -428,8 +626,8 @@ def _admit_observation(
         timestamp = target.created_at if index == 0 else item.committed_at
         if observations[index]["observed_at"] != timestamp:
             raise authority.LifecycleAuthorityError("loss source history timestamp changed")
-    if len(timeline) >= 100 or any(
-        event in {"ready_for_review", "convert_to_draft"} for event in timeline
+    if any(
+        event.kind in {"ready_for_review", "convert_to_draft"} for event in timeline
     ):
         raise authority.LifecycleAuthorityError("loss source has Ready history or incomplete chronology")
     if reviewed.head_sha != record["head_sha"] or reviewed.pr_state != "OPEN" or reviewed.feedback_digest != record["feedback_digest"]:
