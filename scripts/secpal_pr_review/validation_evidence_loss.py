@@ -327,7 +327,7 @@ def _observe_chronology(repository: str, pull_request: int) -> ChronologyObserva
     pages: list[bytes] = []
     cursor: str | None = None
     seen_cursors: set[str] = set()
-    for _page_number in range(_CHRONOLOGY_MAXIMUM_PAGES):
+    for page_number in range(_CHRONOLOGY_MAXIMUM_PAGES):
         arguments = [
             "api", "--hostname", "github.com", "graphql",
             "-f", f"query={_CHRONOLOGY_QUERY}",
@@ -336,10 +336,15 @@ def _observe_chronology(repository: str, pull_request: int) -> ChronologyObserva
         ]
         if cursor is not None:
             arguments.extend(["-f", f"cursor={cursor}"])
-        result = transport._run_bootstrap_gh(arguments)
+        try:
+            result = transport._run_bootstrap_gh(arguments)
+        except transport.BootstrapSourceAdmissionError as exc:
+            raise authority.LifecycleAuthorityError(
+                f"chronology acquisition page {page_number + 1} transport failed"
+            ) from exc
         if result.returncode != 0:
             raise authority.LifecycleAuthorityError(
-                "loss admission chronology acquisition failed"
+                f"chronology acquisition page {page_number + 1} provider failed"
             )
         raw = bytes(result.stdout)
         _repository, connection = _chronology_page_document(raw)
@@ -583,10 +588,20 @@ def _observe(record: Mapping[str, Any], entry: Any, trust: Any) -> tuple[SourceC
     target = _gh_json(f"repos/{repository}/pulls/{pr}")
     issue_state = _gh_json(f"repos/{repository}/issues/{issue}")
     commits = _gh_json(f"repos/{repository}/pulls/{pr}/commits?per_page=100")
-    chronology_before = _observe_chronology(repository, pr)
+    try:
+        chronology_before = _observe_chronology(repository, pr)
+    except authority.LifecycleAuthorityError as exc:
+        raise authority.LifecycleAuthorityError(
+            f"pre-feedback chronology acquisition failed: {exc}"
+        ) from exc
     helper = transport._load_actions_helper()
     reviewed = helper.FastPathGateway(ROOT, entry).capture_stable_feedback(repository, pr)
-    chronology_after = _observe_chronology(repository, pr)
+    try:
+        chronology_after = _observe_chronology(repository, pr)
+    except authority.LifecycleAuthorityError as exc:
+        raise authority.LifecycleAuthorityError(
+            f"post-feedback chronology acquisition failed: {exc}"
+        ) from exc
     source_commit = _gh_json(f"repos/{repository}/commits/{record['head_sha']}")
     normalized = _normalize_provider_representations(
         target, issue_state, commits, chronology_before, chronology_after, source_commit,
@@ -629,7 +644,7 @@ def _admit_observation(
     if any(
         event.kind in {"ready_for_review", "convert_to_draft"} for event in timeline
     ):
-        raise authority.LifecycleAuthorityError("loss source has Ready history or incomplete chronology")
+        raise authority.LifecycleAuthorityError("loss source has Ready history")
     if reviewed.head_sha != record["head_sha"] or reviewed.pr_state != "OPEN" or reviewed.feedback_digest != record["feedback_digest"]:
         raise authority.LifecycleAuthorityError("loss source stable feedback changed")
     sources = fast_path._classified_feedback_sources(reviewed, include_resolved=True)

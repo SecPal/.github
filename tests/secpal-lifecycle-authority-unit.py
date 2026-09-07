@@ -2847,6 +2847,59 @@ class ValidationEvidenceLossTests(TestCase):
         ), self.assertRaisesRegex(authority.LifecycleAuthorityError, "ambiguous"):
             self.loss._observe_chronology(REPOSITORY, 830)
 
+    def test_chronology_transport_failure_identifies_page_and_acquisition_phase(self) -> None:
+        with patch.object(
+            self.loss.transport,
+            "_run_bootstrap_gh",
+            side_effect=self.loss.transport.BootstrapSourceAdmissionError(
+                "bootstrap source-admission output limit exceeded"
+            ),
+        ), self.assertRaisesRegex(
+            authority.LifecycleAuthorityError,
+            "chronology acquisition page 1 transport failed",
+        ):
+            self.loss._observe_chronology(REPOSITORY, 830)
+
+        facts = self.provider_facts()
+        with patch.object(
+            self.loss, "_observe_chronology",
+            side_effect=authority.LifecycleAuthorityError(
+                "chronology acquisition page 1 transport failed"
+            ),
+        ), patch.object(
+            self.loss, "_gh_json", side_effect=[facts[0], facts[1], facts[2]],
+        ), patch.object(
+            self.loss.publication, "require_unenrolled_delivery",
+        ), self.assertRaisesRegex(
+            authority.LifecycleAuthorityError,
+            "pre-feedback chronology acquisition failed: chronology acquisition page 1",
+        ):
+            self.loss._observe(self.record, {}, self.trust)
+
+        with patch.object(
+            self.loss, "_observe_chronology",
+            side_effect=[
+                facts[3],
+                authority.LifecycleAuthorityError(
+                    "chronology acquisition page 2 transport failed"
+                ),
+            ],
+        ), patch.object(
+            self.loss, "_gh_json", side_effect=[facts[0], facts[1], facts[2]],
+        ), patch.object(
+            self.loss.transport,
+            "_load_actions_helper",
+            return_value=SimpleNamespace(FastPathGateway=lambda root, entry: SimpleNamespace(
+                capture_stable_feedback=lambda repository, pr: self.reviewed_state(),
+            )),
+        ), patch.object(
+            self.loss.publication, "require_unenrolled_delivery",
+        ), self.assertRaisesRegex(
+            authority.LifecycleAuthorityError,
+            "post-feedback chronology acquisition failed: chronology acquisition page 2",
+        ):
+            self.loss._observe(self.record, {}, self.trust)
+
     def test_chronology_projection_rejects_identity_kind_record_and_order_ambiguity(self) -> None:
         ready = {
             "__typename": "ReadyForReviewEvent",
@@ -2928,6 +2981,40 @@ class ValidationEvidenceLossTests(TestCase):
         ):
             with self.subTest(field=field), self.assertRaises(TypeError):
                 self.loss._observe_chronology(REPOSITORY, 830, **{field: "caller"})
+
+    def test_chronology_preserves_the_existing_strict_hundred_event_bound(self) -> None:
+        events = [{
+            "__typename": "ReadyForReviewEvent",
+            "id": f"event-{index}",
+            "createdAt": f"2026-09-{1 + index // 48:02d}T{index % 24:02d}:00:00Z",
+        } for index in range(100)]
+        observation = self.loss.ChronologyObservation((
+            self.chronology_page(
+                events[:50], has_next=True, end_cursor="cursor-page-one",
+            ),
+            self.chronology_page(events[50:]),
+        ))
+
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "exceeds the maintained bound",
+        ):
+            self.loss._normalize_chronology(observation, REPOSITORY, 830)
+
+    def test_ready_history_rejection_does_not_report_completed_chronology_as_incomplete(self) -> None:
+        facts = self.provider_facts()
+        chronology = self.loss.ChronologyObservation((self.chronology_page([{
+            "__typename": "ReadyForReviewEvent",
+            "id": "ready-event",
+            "createdAt": "2026-09-01T00:00:00Z",
+        }]),))
+        provider = self.loss._normalize_provider_representations(
+            facts[0], facts[1], facts[2], chronology, chronology, facts[4],
+        )
+
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, r"^loss source has Ready history$",
+        ):
+            self.loss._admit_observation(self.record, provider, self.reviewed_state())
 
     def reviewed_state(self) -> Any:
         return fast_path.StableFeedbackState(
