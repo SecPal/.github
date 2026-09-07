@@ -2572,7 +2572,9 @@ class ValidationEvidenceLossTests(TestCase):
 
     def test_caller_cannot_select_acquisition_authority(self) -> None:
         for field in ("registry", "validation_commands", "successful_result", "feedback",
-                      "signer", "intended_state", "source_identity", "current", "loss"):
+                      "signer", "intended_state", "source_identity", "current", "loss",
+                      "provider_endpoint", "provider_projection", "timeline_event_subset",
+                      "provider_page_size", "provider_page_count"):
             with self.subTest(field=field), patch.object(self.loss, "_acquire") as acquire:
                 with self.assertRaises(TypeError):
                     self.loss.issue(REPOSITORY, 827, **{field: {}})
@@ -2704,7 +2706,212 @@ class ValidationEvidenceLossTests(TestCase):
             "sha": self.record["head_sha"], "parents": [{"sha": self.record["parent_sha"]}],
             "commit": {"tree": {"sha": self.record["tree_sha"]}, "verification": {"verified": True}},
         }
-        return [target, {"number": 827, "state": "open"}, commits, [], source]
+        chronology = self.loss.ChronologyObservation((self.chronology_page([]),))
+        return [target, {"number": 827, "state": "open"}, commits, chronology, source]
+
+    def chronology_page(
+        self, nodes: list[dict[str, Any]], *, has_next: bool = False,
+        end_cursor: str | None = None, total_count: int | None = None,
+    ) -> bytes:
+        return json.dumps({
+            "data": {"repository": {
+                "nameWithOwner": REPOSITORY,
+                "pullRequest": {
+                    "number": 830,
+                    "timelineItems": {
+                        "totalCount": len(nodes) if total_count is None else total_count,
+                        "pageInfo": {
+                            "hasNextPage": has_next,
+                            "endCursor": end_cursor,
+                        },
+                        "nodes": nodes,
+                    },
+                },
+            }},
+        }, separators=(",", ":")).encode()
+
+    def test_large_irrelevant_timeline_objects_are_projected_before_capture(self) -> None:
+        full_timeline = [
+            {
+                "id": index,
+                "node_id": f"cross-reference-{index}",
+                "event": "cross-referenced",
+                "source": {"issue": {"body": "x" * (18 * 1024)}},
+            }
+            for index in range(4)
+        ] + [{"id": 5, "event": "ready_for_review", "created_at": "2026-09-01T00:00:00Z"}]
+        self.assertGreater(
+            len(json.dumps(full_timeline).encode()),
+            self.loss.transport.MAXIMUM_EVIDENCE_BYTES,
+        )
+        projected = self.chronology_page([{
+            "__typename": "ReadyForReviewEvent",
+            "id": "RFR_kwDO_projection",
+            "createdAt": "2026-09-01T00:00:00Z",
+        }], total_count=len(full_timeline))
+
+        with patch.object(
+            self.loss.transport,
+            "_run_bootstrap_gh",
+            return_value=SimpleNamespace(returncode=0, stdout=projected, stderr=b""),
+        ) as run:
+            observation = self.loss._observe_chronology(REPOSITORY, 830)
+
+        self.assertLess(len(projected), self.loss.transport.MAXIMUM_EVIDENCE_BYTES)
+        arguments = run.call_args.args[0]
+        self.assertEqual(arguments[:4], ["api", "--hostname", "github.com", "graphql"])
+        command = "\n".join(arguments)
+        self.assertIn("READY_FOR_REVIEW_EVENT", command)
+        self.assertIn("CONVERT_TO_DRAFT_EVENT", command)
+        self.assertNotIn("cross-referenced", command)
+        self.assertNotIn("timeline?", command)
+        self.assertEqual(
+            self.loss._normalize_chronology(observation, REPOSITORY, 830),
+            (self.loss.ChronologyEvent(
+                identity="RFR_kwDO_projection",
+                kind="ready_for_review",
+                occurred_at="2026-09-01T00:00:00Z",
+            ),),
+        )
+
+    def test_chronology_projection_retains_ready_draft_and_later_page_order(self) -> None:
+        ready = {
+            "__typename": "ReadyForReviewEvent",
+            "id": "RFR_ready",
+            "createdAt": "2026-09-01T00:00:00Z",
+        }
+        draft = {
+            "__typename": "ConvertToDraftEvent",
+            "id": "CTD_draft",
+            "createdAt": "2026-09-02T00:00:00Z",
+        }
+        first = self.chronology_page(
+            [ready], has_next=True, end_cursor="cursor-page-one", total_count=8,
+        )
+        second = self.chronology_page([draft], total_count=8)
+        responses = [
+            SimpleNamespace(returncode=0, stdout=first, stderr=b""),
+            SimpleNamespace(returncode=0, stdout=second, stderr=b""),
+        ]
+
+        with patch.object(
+            self.loss.transport, "_run_bootstrap_gh", side_effect=responses,
+        ) as run:
+            observation = self.loss._observe_chronology(REPOSITORY, 830)
+
+        self.assertEqual(len(run.call_args_list), 2)
+        first_arguments = run.call_args_list[0].args[0]
+        second_arguments = run.call_args_list[1].args[0]
+        self.assertNotIn("cursor=cursor-page-one", first_arguments)
+        self.assertIn("cursor=cursor-page-one", second_arguments)
+        self.assertEqual(
+            self.loss._normalize_chronology(observation, REPOSITORY, 830),
+            (
+                self.loss.ChronologyEvent(
+                    "RFR_ready", "ready_for_review", "2026-09-01T00:00:00Z",
+                ),
+                self.loss.ChronologyEvent(
+                    "CTD_draft", "convert_to_draft", "2026-09-02T00:00:00Z",
+                ),
+            ),
+        )
+
+    def test_chronology_projection_rejects_missing_or_malformed_pagination(self) -> None:
+        first = self.chronology_page(
+            [], has_next=True, end_cursor="cursor-page-one", total_count=80,
+        )
+        with patch.object(
+            self.loss.transport,
+            "_run_bootstrap_gh",
+            side_effect=[
+                SimpleNamespace(returncode=0, stdout=first, stderr=b""),
+                SimpleNamespace(returncode=1, stdout=b"", stderr=b"unavailable"),
+            ],
+        ), self.assertRaisesRegex(authority.LifecycleAuthorityError, "acquisition"):
+            self.loss._observe_chronology(REPOSITORY, 830)
+
+        no_cursor = self.chronology_page([], has_next=True, end_cursor=None)
+        with patch.object(
+            self.loss.transport,
+            "_run_bootstrap_gh",
+            return_value=SimpleNamespace(returncode=0, stdout=no_cursor, stderr=b""),
+        ), self.assertRaisesRegex(authority.LifecycleAuthorityError, "malformed"):
+            self.loss._observe_chronology(REPOSITORY, 830)
+
+        endless = self.chronology_page(
+            [], has_next=True, end_cursor="same-cursor", total_count=101,
+        )
+        with patch.object(
+            self.loss.transport,
+            "_run_bootstrap_gh",
+            return_value=SimpleNamespace(returncode=0, stdout=endless, stderr=b""),
+        ), self.assertRaisesRegex(authority.LifecycleAuthorityError, "ambiguous"):
+            self.loss._observe_chronology(REPOSITORY, 830)
+
+    def test_chronology_projection_rejects_identity_kind_record_and_order_ambiguity(self) -> None:
+        ready = {
+            "__typename": "ReadyForReviewEvent",
+            "id": "event-one",
+            "createdAt": "2026-09-02T00:00:00Z",
+        }
+        cases = {
+            "duplicate identity": [ready, {**ready, "createdAt": "2026-09-03T00:00:00Z"}],
+            "missing identity": [{key: value for key, value in ready.items() if key != "id"}],
+            "malformed identity": [{**ready, "id": " event-one"}],
+            "unknown kind": [{**ready, "__typename": "ReopenedEvent"}],
+            "malformed timestamp": [{**ready, "createdAt": "yesterday"}],
+            "reordered chronology": [
+                ready,
+                {
+                    "__typename": "ConvertToDraftEvent",
+                    "id": "event-two",
+                    "createdAt": "2026-09-01T00:00:00Z",
+                },
+            ],
+        }
+        for label, nodes in cases.items():
+            with self.subTest(label=label), self.assertRaises(authority.LifecycleAuthorityError):
+                self.loss._normalize_chronology(
+                    self.loss.ChronologyObservation((self.chronology_page(nodes),)),
+                    REPOSITORY,
+                    830,
+                )
+
+    def test_chronology_projection_rejects_replay_substitution_and_acquisition_mutation(self) -> None:
+        event = {
+            "__typename": "ReadyForReviewEvent",
+            "id": "event-one",
+            "createdAt": "2026-09-01T00:00:00Z",
+        }
+        observation = self.loss.ChronologyObservation((self.chronology_page([event]),))
+        for repository, pull_request in (("Example/governance", 830), (REPOSITORY, 831)):
+            with self.subTest(repository=repository, pull_request=pull_request), self.assertRaisesRegex(
+                authority.LifecycleAuthorityError, "identity",
+            ):
+                self.loss._normalize_chronology(observation, repository, pull_request)
+
+        facts = self.provider_facts()
+        changed = self.loss.ChronologyObservation((self.chronology_page([{
+            **event,
+            "id": "substituted-event",
+        }]),))
+        with self.assertRaisesRegex(authority.LifecycleAuthorityError, "changed during acquisition"):
+            self.observe(facts, chronology_after=changed)
+
+    def test_chronology_query_and_bounds_are_maintained_not_caller_selected(self) -> None:
+        self.assertEqual(
+            tuple(inspect.signature(self.loss._observe_chronology).parameters),
+            ("repository", "pull_request"),
+        )
+        self.assertEqual(self.loss._CHRONOLOGY_PAGE_SIZE, 50)
+        self.assertEqual(self.loss._CHRONOLOGY_MAXIMUM_EVENTS, 100)
+        self.assertEqual(self.loss._CHRONOLOGY_MAXIMUM_PAGES, 2)
+        for field in (
+            "endpoint", "projection", "query", "event_subset", "event_kinds",
+            "page_size", "page_count", "cursor",
+        ):
+            with self.subTest(field=field), self.assertRaises(TypeError):
+                self.loss._observe_chronology(REPOSITORY, 830, **{field: "caller"})
 
     def reviewed_state(self) -> Any:
         return fast_path.StableFeedbackState(
@@ -2715,11 +2922,20 @@ class ValidationEvidenceLossTests(TestCase):
             },
         )
 
-    def observe(self, facts: list[Any], *, reviewed: Any = None) -> Any:
+    def observe(
+        self, facts: list[Any], *, reviewed: Any = None,
+        chronology_after: Any = None,
+    ) -> Any:
         helper = SimpleNamespace(FastPathGateway=lambda root, entry: SimpleNamespace(
             capture_stable_feedback=lambda repository, pr: reviewed or self.reviewed_state(),
         ))
-        with patch.object(self.loss, "_gh_json", side_effect=facts), patch.object(
+        target, issue, commits, chronology, source = facts
+        with patch.object(
+            self.loss, "_gh_json", side_effect=[target, issue, commits, source]
+        ), patch.object(
+            self.loss, "_observe_chronology",
+            side_effect=[chronology, chronology if chronology_after is None else chronology_after],
+        ), patch.object(
             self.loss.transport, "_load_actions_helper", return_value=helper
         ), patch.object(self.loss.publication, "require_unenrolled_delivery"):
             return self.loss._observe(self.record, {}, self.trust)
@@ -2730,18 +2946,17 @@ class ValidationEvidenceLossTests(TestCase):
         issue.update({"url": "https://api.github.com/repos/SecPal/.github/issues/827", "labels": []})
         for commit in commits:
             commit.update({"url": f"https://api.github.com/repos/SecPal/.github/commits/{commit['sha']}"})
-        timeline.append({"event": "committed", "sha": commits[-1]["sha"]})
         source.update({"url": f"https://api.github.com/repos/SecPal/.github/commits/{source['sha']}"})
 
         normalized = self.loss._normalize_provider_representations(
-            target, issue, commits, timeline, source,
+            target, issue, commits, timeline, timeline, source,
         )
 
         self.assertIs(type(normalized), self.loss.NormalizedProviderFacts)
         self.assertEqual(normalized.pull_request.head_sha, self.record["head_sha"])
         self.assertEqual(normalized.issue.number, 827)
         self.assertEqual(normalized.commits[-1].head_sha, self.record["head_sha"])
-        self.assertEqual(normalized.timeline_events, ("committed",))
+        self.assertEqual(normalized.timeline_events, ())
         self.assertEqual(normalized.source_commit.tree_sha, self.record["tree_sha"])
 
         with patch.object(self.loss, "_admit_observation", wraps=self.loss._admit_observation) as admit:
