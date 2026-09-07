@@ -55,6 +55,44 @@ operations whose evidence does not match their logical finding. Their initial
 and final heads must also encode exactly one new linear commit per recorded
 signed push, or no commit movement for a no-push session.
 
+`attest-validation --pre-enrollment-integration-evidence` is the distinct
+version-1.0 `PRE_ENROLLMENT_DRAFT_INTEGRATION` path. It applies only to an open
+Draft delivery with no CURRENT publication, native genesis, or lifecycle-aware
+head advancement. A signed one-shot authorization, canonical READY work-graph
+read, protected-journal absence proof, and one final GitHub observation bind
+parent 1 to the exact Draft PR head and parent 2 to the freshly observed
+registered default-branch tip. The clean mechanical merge tree permits no
+delta. A conflict tree binds every conflict path and permits an exact delta on
+those paths only, with no retained conflict markers.
+
+Complete validation emits
+`PRE_ENROLLMENT_DRAFT_INTEGRATION_VALIDATION_RECEIPT`; the signed two-parent
+candidate uses the separate `SecPal-Pre-Enrollment-Integration` and
+`SecPal-Pre-Enrollment-Validation-Receipt` trailers. Binding emits
+`PRE_ENROLLMENT_DRAFT_INTEGRATION_FINAL_ATTESTATION`. The one-shot executor
+constructs at most one candidate, durably writes its receipt and attestation
+before the irreversible non-force push, verifies final PR-head equality, never
+retries, and has no merge, Ready-transition, review-request, issue, label, or
+lifecycle-publication operation. Its verified initial-head proof additionally
+requires the opaque result of the maintained commit topology and signature
+verifier; caller-authored attestation fields cannot mint that proof. It is the
+only non-ordinary merge proof accepted by lifecycle initialization and creates
+no lifecycle event or counter.
+
+The closed mutation surface is selected explicitly as
+`secpal-pr-review-actions.py integrate-pre-enrollment-draft --apply`. It requires
+the repository, PR, delivery issue, signed evidence file, authorization ID,
+expected signer, fresh receipt and attestation IDs, one-line commit subject,
+and separate receipt/attestation outputs. The worktree index must contain the
+exact authenticated resolved tree; the command does not expose a generic ref
+or arbitrary push selector.
+
+For a delivery selected by the maintained pre-enrollment source admission,
+native genesis additionally requires schema-1.1 typed head evidence and an
+exact live open Draft PR whose head equals that initialization. Consequently a
+competing ordinary genesis cannot cross the absence-check-to-push interval;
+the integrated head must become live before its genesis is admissible.
+
 `attest-validation` also exposes a separately selected version-1.1
 `TWO_PARENT_READY_INTEGRATION` evidence path. It authenticates exactly one
 signed two-parent candidate whose first parent is the prior Ready delivery head
