@@ -18,9 +18,10 @@ Log of notable changes to SecPal organization defaults (newest first).
   relation that preserves every predecessor source and accounts for every new
   source.
 - Admit only exact resulting-head provider transport and completely classified
-  non-blocking findings; reject material, unclassified, spoofed, replayed, or
-  predecessor-mutating feedback without requesting another review or changing
-  lifecycle semantics.
+  non-blocking findings authenticated by the existing detached-classification
+  signer trust; reject raw caller labels, material, unclassified, spoofed,
+  replayed, or predecessor-mutating feedback without requesting another review
+  or changing lifecycle semantics.
 
 ## 2026-09-08 - Execute Bounded Exceptional Continuation
 

@@ -29,6 +29,8 @@ SIGNATURE_NAMESPACE = "secpal-late-feedback-disposition-v1"
 CLASSIFICATION_KIND = "LATE_FEEDBACK_CLASSIFICATION"
 CLASSIFICATION_SIGNATURE_NAMESPACE = "secpal-late-feedback-classification-v1"
 CLASSIFICATION_PURPOSE = "AUTHORIZE_LATE_FEEDBACK_DISPOSITION"
+SUCCESSOR_CLASSIFICATION_SCHEMA_VERSION = "1.2"
+SUCCESSOR_CLASSIFICATION_PURPOSE = "AUTHENTICATE_CONTINUATION_SUCCESSOR_SAFETY"
 TECHNICAL_BLOCKERS = frozenset(
     {"P1", "P2", "SECURITY", "AUTHENTICATION", "INTEGRITY", "FAIL_OPEN"}
 )
@@ -134,6 +136,24 @@ class ClassificationEvidence:
     finding_evidence_digest: str
     thread: ThreadAuthorization
     technical_blockers: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SuccessorClassificationEvidence:
+    """Existing classification family extended for exact successor sources."""
+
+    evidence_digest: str
+    repository: str
+    delivery_issue_number: int
+    pull_request_number: int
+    head_sha: str
+    finding_id: str
+    finding_evidence_digest: str
+    thread: ThreadAuthorization
+    technical_blockers: tuple[str, ...]
+    predecessor_state_digest: str
+    resulting_state_digest: str
+    sources: tuple[tuple[str, str, str, str | None], ...]
 
 
 @dataclass
@@ -798,6 +818,192 @@ def parse_classification_artifact(
             classification_evidence_digest=digest,
         ),
         technical_blockers=tuple(blockers),
+    )
+
+
+def parse_successor_classification_artifact(
+    artifact_path: Path,
+    signature_path: Path,
+    *,
+    expected_signer: SignerIdentity,
+    repository: str,
+    delivery_issue_number: int,
+    pull_request_number: int,
+    head_sha: str,
+    predecessor_state_digest: str,
+    resulting_state_digest: str,
+    signature_environment: dict[str, str] | None = None,
+) -> SuccessorClassificationEvidence:
+    """Verify one signed, exact-head Continuation successor classification."""
+
+    canonical = verify_detached_signature(
+        artifact_path,
+        signature_path,
+        expected_signer,
+        environment=signature_environment,
+        signature_namespace=CLASSIFICATION_SIGNATURE_NAMESPACE,
+    )
+    payload, _canonical = _load_canonical_json_bytes(
+        canonical, "successor classification artifact", MAXIMUM_ARTIFACT_BYTES
+    )
+    expected_keys = {
+        "schema_version",
+        "kind",
+        "repository",
+        "delivery_issue_number",
+        "pull_request_number",
+        "head_sha",
+        "predecessor_state_digest",
+        "resulting_state_digest",
+        "delivery_signer",
+        "authorized_purpose",
+        "finding_id",
+        "finding_evidence_digest",
+        "thread",
+        "sources",
+    }
+    signer = payload.get("delivery_signer") if isinstance(payload, dict) else None
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != expected_keys
+        or payload.get("schema_version") != SUCCESSOR_CLASSIFICATION_SCHEMA_VERSION
+        or payload.get("kind") != CLASSIFICATION_KIND
+        or payload.get("repository") != repository
+        or payload.get("delivery_issue_number") != delivery_issue_number
+        or payload.get("pull_request_number") != pull_request_number
+        or payload.get("head_sha") != head_sha.lower()
+        or payload.get("predecessor_state_digest") != predecessor_state_digest
+        or payload.get("resulting_state_digest") != resulting_state_digest
+        or payload.get("authorized_purpose") != SUCCESSOR_CLASSIFICATION_PURPOSE
+        or signer
+        != {
+            "format": expected_signer.signature_format,
+            "fingerprint": expected_signer.fingerprint,
+        }
+        or not isinstance(payload.get("finding_id"), str)
+        or not IDENTITY.fullmatch(payload["finding_id"])
+        or not isinstance(payload.get("finding_evidence_digest"), str)
+        or not DIGEST.fullmatch(payload["finding_evidence_digest"])
+    ):
+        raise LateDispositionError(
+            "successor classification artifact binding is invalid or stale"
+        )
+    item = payload.get("thread")
+    item_keys = {
+        "thread_id",
+        "top_level_comment_node_id",
+        "top_level_comment_database_id",
+        "finding_body_digest",
+        "reply_state_digest",
+        "reply_count",
+        "is_resolved",
+        "is_outdated",
+        "classification",
+        "disposition",
+        "technically_blocking",
+        "technical_blockers",
+    }
+    blockers = item.get("technical_blockers") if isinstance(item, dict) else None
+    thread_bound = isinstance(item, dict) and item.get("thread_id") is not None
+    if (
+        not isinstance(item, dict)
+        or set(item) != item_keys
+        or not isinstance(item.get("reply_state_digest"), str)
+        or not DIGEST.fullmatch(item["reply_state_digest"])
+        or not isinstance(item.get("reply_count"), int)
+        or isinstance(item.get("reply_count"), bool)
+        or item["reply_count"] < 0
+        or not isinstance(blockers, list)
+        or any(value not in TECHNICAL_BLOCKERS for value in blockers)
+        or len(blockers) != len(set(blockers))
+        or item.get("technically_blocking") is not bool(blockers)
+    ):
+        raise LateDispositionError("successor classification thread is malformed")
+    if thread_bound:
+        if (
+            not isinstance(item.get("thread_id"), str)
+            or not THREAD_ID.fullmatch(item["thread_id"])
+            or not isinstance(item.get("top_level_comment_node_id"), str)
+            or not IDENTITY.fullmatch(item["top_level_comment_node_id"])
+            or not _positive_integer(item.get("top_level_comment_database_id"))
+            or not isinstance(item.get("finding_body_digest"), str)
+            or not DIGEST.fullmatch(item["finding_body_digest"])
+            or item.get("is_resolved") is not False
+            or not isinstance(item.get("is_outdated"), bool)
+        ):
+            raise LateDispositionError("successor classification thread is malformed")
+    elif (
+        item.get("thread_id") is not None
+        or item.get("top_level_comment_node_id") is not None
+        or item.get("top_level_comment_database_id") is not None
+        or item.get("finding_body_digest") is not None
+        or item.get("reply_count") != 0
+        or item.get("is_resolved") is not None
+        or item.get("is_outdated") is not None
+    ):
+        raise LateDispositionError("successor source-only classification is malformed")
+    decision = (item.get("classification"), item.get("disposition"))
+    if decision not in POST_FREEZE_DECISIONS:
+        raise LateDispositionError("successor classification decision is unsupported")
+    raw_sources = payload.get("sources")
+    sources: list[tuple[str, str, str, str | None]] = []
+    if not isinstance(raw_sources, list) or not raw_sources:
+        raise LateDispositionError("successor classification sources are missing")
+    for source in raw_sources:
+        if (
+            not isinstance(source, dict)
+            or set(source) != {"kind", "node_id", "digest", "thread_id"}
+            or not isinstance(source.get("kind"), str)
+            or not IDENTITY.fullmatch(source["kind"])
+            or not isinstance(source.get("node_id"), str)
+            or not IDENTITY.fullmatch(source["node_id"])
+            or not isinstance(source.get("digest"), str)
+            or not DIGEST.fullmatch(source["digest"])
+            or (
+                source.get("thread_id") is not None
+                and (
+                    not isinstance(source["thread_id"], str)
+                    or not THREAD_ID.fullmatch(source["thread_id"])
+                )
+            )
+        ):
+            raise LateDispositionError("successor classification source is malformed")
+        normalized = (
+            source["kind"],
+            source["node_id"],
+            source["digest"],
+            source["thread_id"],
+        )
+        if normalized in sources:
+            raise LateDispositionError("successor classification source is repeated")
+        sources.append(normalized)
+    digest = hashlib.sha256(canonical).hexdigest()
+    return SuccessorClassificationEvidence(
+        evidence_digest=digest,
+        repository=repository,
+        delivery_issue_number=delivery_issue_number,
+        pull_request_number=pull_request_number,
+        head_sha=head_sha.lower(),
+        finding_id=payload["finding_id"],
+        finding_evidence_digest=payload["finding_evidence_digest"],
+        thread=ThreadAuthorization(
+            thread_id=item["thread_id"],
+            top_level_comment_node_id=item["top_level_comment_node_id"],
+            top_level_comment_database_id=item["top_level_comment_database_id"],
+            finding_body_digest=item["finding_body_digest"],
+            reply_state_digest=item["reply_state_digest"],
+            reply_count=item["reply_count"],
+            is_resolved=item["is_resolved"],
+            is_outdated=item["is_outdated"],
+            classification=item["classification"],
+            disposition=item["disposition"],
+            technically_blocking=item["technically_blocking"],
+            classification_evidence_digest=digest,
+        ),
+        technical_blockers=tuple(blockers),
+        predecessor_state_digest=predecessor_state_digest,
+        resulting_state_digest=resulting_state_digest,
+        sources=tuple(sources),
     )
 
 

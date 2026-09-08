@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import copy
+import base64
 import inspect
 import json
 import subprocess
@@ -22,6 +23,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from scripts.secpal_pr_review import lifecycle_authority as authority
 from scripts.secpal_pr_review import fast_path
 from scripts.secpal_pr_review import lifecycle_orchestration as orchestration
+from scripts.secpal_pr_review import late_disposition
 
 REPOSITORY = "SecPal/.github"
 ISSUE = 692
@@ -415,6 +417,26 @@ def authenticated_provider_growth() -> tuple[
             bodies["IC_SECURITY_RESULT"],
         ),
     ]
+    classification = fast_path._seal_successor_classification(
+        repository=REPOSITORY,
+        delivery_issue_number=ISSUE,
+        pull_request_number=PR,
+        head_sha=NEXT_HEAD,
+        finding_id="PRRC_RESULTING_HEAD",
+        finding_evidence_digest="b" * 64,
+        thread_id="PRRT_RESULTING_HEAD",
+        top_level_comment_node_id="PRRC_RESULTING_HEAD",
+        finding_body_digest="a" * 64,
+        reply_count=0,
+        is_resolved=False,
+        is_outdated=False,
+        classification="INVALID_FALSE_OR_MISLEADING",
+        disposition="DISPROVEN_WITH_EVIDENCE",
+        technically_blocking=False,
+        technical_blockers=(),
+        classification_evidence_digest="c" * 64,
+        source_bindings=(("THREAD_COMMENT", "PRRC_RESULTING_HEAD", "a" * 64, "PRRT_RESULTING_HEAD"),),
+    )
     evidence: dict[str, object] = {
         "schema_version": "1.0",
         "repository": REPOSITORY,
@@ -447,8 +469,6 @@ def authenticated_provider_growth() -> tuple[
         ],
         "successor_findings": [
             {
-                "finding_id": "PRRC_RESULTING_HEAD",
-                "thread_id": "PRRT_RESULTING_HEAD",
                 "sources": [
                     {
                         "kind": "THREAD_COMMENT",
@@ -456,10 +476,7 @@ def authenticated_provider_growth() -> tuple[
                         "digest": "a" * 64,
                     }
                 ],
-                "classification": "INVALID_FALSE_OR_MISLEADING",
-                "disposition": "DISPROVEN_WITH_EVIDENCE",
-                "technically_blocking": False,
-                "evidence_digest": "b" * 64,
+                "classification_evidence": classification,
             }
         ],
     }
@@ -983,8 +1000,6 @@ class LifecycleOrchestrationTests(TestCase):
                 ],
                 "successor_findings": [
                     {
-                        "finding_id": "PRRC_RESULTING_HEAD",
-                        "thread_id": "PRRT_RESULTING_HEAD",
                         "sources": [
                             {
                                 "kind": "THREAD_COMMENT",
@@ -992,10 +1007,26 @@ class LifecycleOrchestrationTests(TestCase):
                                 "digest": "a" * 64,
                             }
                         ],
-                        "classification": "INVALID_FALSE_OR_MISLEADING",
-                        "disposition": "DISPROVEN_WITH_EVIDENCE",
-                        "technically_blocking": False,
-                        "evidence_digest": "b" * 64,
+                        "classification_evidence": fast_path._seal_successor_classification(
+                            repository=REPOSITORY,
+                            delivery_issue_number=ISSUE,
+                            pull_request_number=PR,
+                            head_sha=NEXT_HEAD,
+                            finding_id="PRRC_RESULTING_HEAD",
+                            finding_evidence_digest="b" * 64,
+                            thread_id="PRRT_RESULTING_HEAD",
+                            top_level_comment_node_id="PRRC_RESULTING_HEAD",
+                            finding_body_digest="a" * 64,
+                            reply_count=0,
+                            is_resolved=False,
+                            is_outdated=False,
+                            classification="INVALID_FALSE_OR_MISLEADING",
+                            disposition="DISPROVEN_WITH_EVIDENCE",
+                            technically_blocking=False,
+                            technical_blockers=(),
+                            classification_evidence_digest="c" * 64,
+                            source_bindings=(("THREAD_COMMENT", "PRRC_RESULTING_HEAD", "a" * 64, "PRRT_RESULTING_HEAD"),),
+                        ),
                     }
                 ],
             },
@@ -1018,16 +1049,21 @@ class LifecycleOrchestrationTests(TestCase):
         )
         request["continuation_evidence"]["successor_safety_evidence"] = successor
 
-        decision = orchestration._orchestrate_event(
-            REPOSITORY,
-            ISSUE,
-            request,
-            current_reader=current_reader(
-                current_lifecycle(exceptional_recoveries=1)
-            ),
-            feedback_reader=lambda _repository, _pull_request: current,
-            authorization_verifier=fixture_authorization_verifier,
-        )
+        with mock.patch.object(
+            orchestration,
+            "_authenticate_successor_safety_evidence",
+            return_value=successor,
+        ):
+            decision = orchestration._orchestrate_event(
+                REPOSITORY,
+                ISSUE,
+                request,
+                current_reader=current_reader(
+                    current_lifecycle(exceptional_recoveries=1)
+                ),
+                feedback_reader=lambda _repository, _pull_request: current,
+                authorization_verifier=fixture_authorization_verifier,
+            )
 
         self.assertEqual(decision.lifecycle_transition, "EXCEPTIONAL_CONTINUATION")
         self.assertFalse(decision.request_review)
@@ -1035,6 +1071,213 @@ class LifecycleOrchestrationTests(TestCase):
             authorization["scope"]["finding_ids"], ["F-CONTINUATION-1"]
         )
         self.assertNotIn("PRRC_RESULTING_HEAD", authorization["scope"]["finding_ids"])
+
+    def test_successor_classification_uses_existing_detached_signature_authority(
+        self,
+    ) -> None:
+        reviewed, current, prepared = authenticated_provider_growth()
+        sealed = prepared["successor_findings"][0]["classification_evidence"]
+        raw = copy.deepcopy(prepared)
+        raw["classification_signer"] = {
+            "kind": "SSH_PRINCIPAL",
+            "identity": "aroviqen@secpal.app",
+        }
+        raw["successor_findings"] = [
+            {
+                "sources": copy.deepcopy(prepared["successor_findings"][0]["sources"]),
+                "classification_artifact": base64.b64encode(b"{}\n").decode(),
+                "classification_signature": base64.b64encode(b"signature").decode(),
+            }
+        ]
+        verified = late_disposition.SuccessorClassificationEvidence(
+            evidence_digest=sealed.classification_evidence_digest,
+            repository=sealed.repository,
+            delivery_issue_number=sealed.delivery_issue_number,
+            pull_request_number=sealed.pull_request_number,
+            head_sha=sealed.head_sha,
+            finding_id=sealed.finding_id,
+            finding_evidence_digest=sealed.finding_evidence_digest,
+            thread=late_disposition.ThreadAuthorization(
+                thread_id=sealed.thread_id,
+                top_level_comment_node_id=sealed.top_level_comment_node_id,
+                top_level_comment_database_id=1,
+                finding_body_digest=sealed.finding_body_digest,
+                reply_state_digest=fast_path.digest_json([]),
+                reply_count=sealed.reply_count,
+                is_resolved=False,
+                is_outdated=sealed.is_outdated,
+                classification=sealed.classification,
+                disposition=sealed.disposition,
+                technically_blocking=False,
+                classification_evidence_digest=sealed.classification_evidence_digest,
+            ),
+            technical_blockers=(),
+            predecessor_state_digest=reviewed.state_digest,
+            resulting_state_digest=current.state_digest,
+            sources=(("THREAD_COMMENT", "PRRC_RESULTING_HEAD", "a" * 64, "PRRT_RESULTING_HEAD"),),
+        )
+        with (
+            mock.patch.object(
+                orchestration,
+                "_successor_classification_signer",
+                return_value=late_disposition.SignerIdentity("ssh", "SHA256:fixture"),
+            ),
+            mock.patch.object(
+                late_disposition,
+                "parse_successor_classification_artifact",
+                return_value=verified,
+            ),
+        ):
+            authenticated = orchestration._authenticate_successor_safety_evidence(
+                raw,
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                pull_request=PR,
+                predecessor_state_digest=reviewed.state_digest,
+                resulting_head_sha=NEXT_HEAD,
+                resulting_state_digest=current.state_digest,
+            )
+        self.assertIsInstance(
+            authenticated["successor_findings"][0]["classification_evidence"],
+            fast_path.VerifiedSuccessorClassification,
+        )
+
+    def test_successor_classification_parser_binds_exact_sources_and_state(self) -> None:
+        signer = late_disposition.SignerIdentity("ssh", "SHA256:fixture")
+        artifact = {
+            "schema_version": "1.2",
+            "kind": "LATE_FEEDBACK_CLASSIFICATION",
+            "repository": REPOSITORY,
+            "delivery_issue_number": ISSUE,
+            "pull_request_number": PR,
+            "head_sha": NEXT_HEAD,
+            "predecessor_state_digest": "1" * 64,
+            "resulting_state_digest": "2" * 64,
+            "delivery_signer": {
+                "format": "ssh",
+                "fingerprint": signer.fingerprint,
+            },
+            "authorized_purpose": "AUTHENTICATE_CONTINUATION_SUCCESSOR_SAFETY",
+            "finding_id": "REA_SUCCESSOR",
+            "finding_evidence_digest": "3" * 64,
+            "thread": {
+                "thread_id": None,
+                "top_level_comment_node_id": None,
+                "top_level_comment_database_id": None,
+                "finding_body_digest": None,
+                "reply_state_digest": fast_path.digest_json([]),
+                "reply_count": 0,
+                "is_resolved": None,
+                "is_outdated": None,
+                "classification": "INFORMATIONAL",
+                "disposition": "NON_ACTIONABLE",
+                "technically_blocking": False,
+                "technical_blockers": [],
+            },
+            "sources": [
+                {
+                    "kind": "CONVERSATION_REACTION",
+                    "node_id": "REA_SUCCESSOR",
+                    "digest": "4" * 64,
+                    "thread_id": None,
+                }
+            ],
+        }
+        canonical = late_disposition.canonical_json_bytes(artifact)
+        with mock.patch.object(
+            late_disposition, "verify_detached_signature", return_value=canonical
+        ):
+            verified = late_disposition.parse_successor_classification_artifact(
+                Path("unused.json"),
+                Path("unused.sig"),
+                expected_signer=signer,
+                repository=REPOSITORY,
+                delivery_issue_number=ISSUE,
+                pull_request_number=PR,
+                head_sha=NEXT_HEAD,
+                predecessor_state_digest="1" * 64,
+                resulting_state_digest="2" * 64,
+            )
+        self.assertEqual(
+            verified.sources,
+            (("CONVERSATION_REACTION", "REA_SUCCESSOR", "4" * 64, None),),
+        )
+
+        changed = copy.deepcopy(artifact)
+        changed["resulting_state_digest"] = "5" * 64
+        with (
+            mock.patch.object(
+                late_disposition,
+                "verify_detached_signature",
+                return_value=late_disposition.canonical_json_bytes(changed),
+            ),
+            self.assertRaises(late_disposition.LateDispositionError),
+        ):
+            late_disposition.parse_successor_classification_artifact(
+                Path("unused.json"),
+                Path("unused.sig"),
+                expected_signer=signer,
+                repository=REPOSITORY,
+                delivery_issue_number=ISSUE,
+                pull_request_number=PR,
+                head_sha=NEXT_HEAD,
+                predecessor_state_digest="1" * 64,
+                resulting_state_digest="2" * 64,
+            )
+
+    def test_authenticated_reaction_growth_preserves_predecessor_comment(self) -> None:
+        reviewed, current, evidence = authenticated_provider_growth()
+        comment = current.feedback["threads"][0]["comments"][0]
+        reaction = {
+            "mutation_id": "REA_SUCCESSOR_CLASSIFIED",
+            "content": "THUMBS_UP",
+            "actor": {
+                "login": "reviewer",
+                "node_id": "ACTOR_REVIEWER",
+                "database_id": 2,
+            },
+        }
+        comment["reactions"].append(reaction)
+        current.refresh_digests()
+        evidence["resulting_state_digest"] = current.state_digest
+        evidence["successor_findings"].append(
+            {
+                "sources": [
+                    {
+                        "kind": "THREAD_COMMENT_REACTION",
+                        "node_id": reaction["mutation_id"],
+                        "digest": fast_path.digest_json(reaction),
+                    }
+                ],
+                "classification_evidence": fast_path._seal_successor_classification(
+                    repository=REPOSITORY,
+                    delivery_issue_number=ISSUE,
+                    pull_request_number=PR,
+                    head_sha=NEXT_HEAD,
+                    finding_id="REA_SUCCESSOR_CLASSIFIED",
+                    finding_evidence_digest="d" * 64,
+                    thread_id=None,
+                    top_level_comment_node_id=None,
+                    finding_body_digest=None,
+                    reply_count=0,
+                    is_resolved=None,
+                    is_outdated=None,
+                    classification="INFORMATIONAL",
+                    disposition="NON_ACTIONABLE",
+                    technically_blocking=False,
+                    technical_blockers=(),
+                    classification_evidence_digest="e" * 64,
+                    source_bindings=(("THREAD_COMMENT_REACTION", "REA_SUCCESSOR_CLASSIFIED", fast_path.digest_json(reaction), "PRRT_CONTINUATION_1"),),
+                ),
+            }
+        )
+        fast_path.verify_stable_feedback_successor(
+            reviewed,
+            current,
+            resulting_head_sha=NEXT_HEAD,
+            authorized_thread_ids=["PRRT_CONTINUATION_1"],
+            successor_safety_evidence=evidence,
+        )
 
     def test_continuation_successor_growth_fails_closed_for_tampering_and_laundering(
         self,
@@ -1127,7 +1370,32 @@ class LifecycleOrchestrationTests(TestCase):
             evidence["successor_findings"] = []
 
         def material_provider_finding(_reviewed, _current, evidence):
-            evidence["successor_findings"][0]["technically_blocking"] = True
+            original = evidence["successor_findings"][0]["classification_evidence"]
+            evidence["successor_findings"][0]["classification_evidence"] = (
+                fast_path._seal_successor_classification(
+                    **{
+                        key: value
+                        for key, value in original.__dict__.items()
+                        if key != "_verification_seal"
+                    }
+                    | {"technically_blocking": True, "technical_blockers": ("P1",)}
+                )
+            )
+
+        def unauthenticated_safe_assertion(_reviewed, _current, evidence):
+            evidence["successor_findings"][0]["classification_evidence"] = {
+                "classification": "INVALID_FALSE_OR_MISLEADING",
+                "disposition": "DISPROVEN_WITH_EVIDENCE",
+                "technically_blocking": False,
+                "evidence_digest": "b" * 64,
+            }
+
+        def deleted_request_actor(_reviewed, current, _evidence):
+            next(
+                item
+                for item in current.feedback["conversation_comments"]
+                if item["node_id"] == "IC_CODE_REQUEST"
+            )["actor"] = {"login": None, "node_id": None, "database_id": None}
 
         def unrelated_concurrent_comment(_reviewed, current, _evidence):
             current.feedback["conversation_comments"].append(
@@ -1160,6 +1428,8 @@ class LifecycleOrchestrationTests(TestCase):
             ("user transport masquerade", user_masquerades_as_provider),
             ("unclassified provider finding", unclassified_provider_finding),
             ("material provider finding", material_provider_finding),
+            ("unauthenticated safe classification", unauthenticated_safe_assertion),
+            ("deleted review requester", deleted_request_actor),
             ("unrelated concurrent feedback", unrelated_concurrent_comment),
         ):
             reject(label, mutate)

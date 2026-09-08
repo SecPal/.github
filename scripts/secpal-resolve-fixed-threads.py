@@ -1857,6 +1857,7 @@ def verify_continuation_bound_source_authority(
     resulting_head_sha: str,
     continuation_evidence_path: Path | None,
     continuation_authorization_path: Path | None,
+    successor_safety_evidence_path: Path | None = None,
 ) -> None:
     """Cross-bind ordinary Continuation evidence to published authority."""
 
@@ -1870,6 +1871,7 @@ def verify_continuation_bound_source_authority(
         if (
             continuation_evidence_path is not None
             or continuation_authorization_path is not None
+            or successor_safety_evidence_path is not None
         ):
             raise ResolutionError(
                 "ordinary source evidence rejects Exceptional Continuation authority"
@@ -1892,6 +1894,15 @@ def verify_continuation_bound_source_authority(
             object_pairs_hook=_reject_duplicate_json_object,
         )
         continuation_authorization = continuation_authorization_path.read_bytes()
+        successor_safety_evidence = (
+            json.loads(
+                successor_safety_evidence_path.read_text(encoding="utf-8"),
+                parse_constant=_reject_nonfinite_json_constant,
+                object_pairs_hook=_reject_duplicate_json_object,
+            )
+            if successor_safety_evidence_path is not None
+            else None
+        )
         eligibility_evidence = json.loads(
             eligibility.canonical_payload,
             parse_constant=_reject_nonfinite_json_constant,
@@ -1902,6 +1913,7 @@ def verify_continuation_bound_source_authority(
             orchestration_authorization=continuation_authorization,
             reviewed_state_evidence=reviewed.payload,
             eligibility_evidence=eligibility_evidence,
+            successor_safety_evidence=successor_safety_evidence,
             repository_root=repository_root,
             repository=repository,
             delivery_issue=delivery_issue,
@@ -3130,6 +3142,7 @@ def resolve_threads(
     exceptional_continuation_delivery_issue: int | None = None,
     exceptional_continuation_evidence_path: Path | str | None = None,
     exceptional_continuation_authorization_path: Path | str | None = None,
+    exceptional_continuation_successor_safety_path: Path | str | None = None,
     **caller_constructed_authorization: Any,
 ) -> dict[str, Any]:
     """Resolve threads only after proving the complete local evidence chain."""
@@ -3216,6 +3229,11 @@ def resolve_threads(
         continuation_authorization_path=(
             Path(exceptional_continuation_authorization_path)
             if exceptional_continuation_authorization_path is not None
+            else None
+        ),
+        successor_safety_evidence_path=(
+            Path(exceptional_continuation_successor_safety_path)
+            if exceptional_continuation_successor_safety_path is not None
             else None
         ),
     )
@@ -3499,6 +3517,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--exceptional-recovery-authorization")
     parser.add_argument("--exceptional-continuation-evidence")
     parser.add_argument("--exceptional-continuation-authorization")
+    parser.add_argument("--exceptional-continuation-successor-safety")
     parser.add_argument("--late-disposition-evidence")
     parser.add_argument("--late-disposition-signature")
     parser.add_argument("--late-classification-evidence")
@@ -3532,6 +3551,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
                 or arguments.exceptional_recovery_authorization is not None
                 or arguments.exceptional_continuation_evidence is not None
                 or arguments.exceptional_continuation_authorization is not None
+                or arguments.exceptional_continuation_successor_safety is not None
             ):
                 raise ResolutionError(
                     "late disposition rejects unrelated authority evidence"
@@ -3574,7 +3594,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             has_recovery = any(value is not None for value in recovery_values)
             has_continuation = any(
                 value is not None for value in continuation_values
-            )
+            ) or arguments.exceptional_continuation_successor_safety is not None
             if (
                 arguments.delivery_issue is not None
                 and not has_recovery
@@ -3689,6 +3709,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                         ),
                         "exceptional_continuation_authorization_path": (
                             arguments.exceptional_continuation_authorization
+                        ),
+                        "exceptional_continuation_successor_safety_path": (
+                            arguments.exceptional_continuation_successor_safety
                         ),
                     }
                     if arguments.exceptional_continuation_evidence is not None

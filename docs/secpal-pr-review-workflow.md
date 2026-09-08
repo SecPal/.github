@@ -1021,10 +1021,16 @@ other. Resulting-head feedback may differ only when a closed
 Continuation-specific safety extension preserves every predecessor source,
 authenticates the canonical provider request/result/review transport, and gives
 every other successor-only source a complete maintained non-blocking
-classification. Material, unclassified, unrelated, spoofed, stale, or ambiguous
-growth blocks. Successor safety does not enter the earlier source-correction
-authorization or resolver scope, and its verification performs no provider
-request.
+classification. Classification reuses the detached
+`LATE_FEEDBACK_CLASSIFICATION` family and signer trust: version 1.2 binds the
+predecessor/resulting Stable State digests, exact source identities and digests,
+thread state, and independently established disposition before signing. Raw
+caller labels and digests have no authority. Material, unclassified, unrelated,
+spoofed, stale, or ambiguous growth blocks. Successor safety does not enter the
+earlier source-correction authorization or resolver scope, and its verification
+performs no provider request. A Continuation-bound resolver receives this
+separate proof through `--exceptional-continuation-successor-safety`; the
+immutable source authorization, receipt, attestation, and commit remain reusable.
 
 The simple resolver first verifies the caller-captured reviewed-state digest,
 successful validation attestation, actual local signed commit, and exact

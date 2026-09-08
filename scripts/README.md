@@ -524,10 +524,15 @@ review. When exact-resulting-head provider acquisition grows Stable Feedback,
 the optional closed successor-safety extension binds both state digests,
 preserves every predecessor source, and accounts for every addition as either
 canonical head-bound provider transport or a source-complete maintained safe
-classification. Missing, ambiguous, spoofed, wrong-head, material, or
-unclassified additions fail closed. The extension proves only candidate safety:
-it does not expand the authorized source-change finding set or request
-providers. Explicit
+classification. The latter is a signed version-1.2 extension of the existing
+`LATE_FEEDBACK_CLASSIFICATION` family, bound to both Stable State digests, every
+exact successor source, the live thread, and the maintained delivery signer.
+Raw classifications are rejected. Missing, ambiguous, spoofed, wrong-head,
+material, or unclassified additions fail closed. The separate
+`--exceptional-continuation-successor-safety` resolver input preserves the
+existing source authorization/receipt/attestation. The extension proves only
+candidate safety: it does not expand the authorized source-change finding set
+or request providers. Explicit
 Ready/Draft changes require their exact separately reasoned authorization.
 Every user-controlled orchestration decision consumes canonical signed evidence
 bound to the exact CURRENT publication, authority, PR, head, operation, reason,

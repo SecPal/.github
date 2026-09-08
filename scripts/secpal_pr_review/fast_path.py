@@ -1575,6 +1575,46 @@ class StableFeedbackState:
 
 
 @dataclass(frozen=True, slots=True)
+class _VerifiedSuccessorClassificationSeal:
+    provenance_digest: str
+
+
+@dataclass(frozen=True)
+class VerifiedSuccessorClassification:
+    """Exact safe successor finding returned by maintained signature verification."""
+
+    repository: str
+    delivery_issue_number: int
+    pull_request_number: int
+    head_sha: str
+    finding_id: str
+    finding_evidence_digest: str
+    thread_id: str | None
+    top_level_comment_node_id: str | None
+    finding_body_digest: str | None
+    reply_count: int
+    is_resolved: bool | None
+    is_outdated: bool | None
+    classification: str
+    disposition: str
+    technically_blocking: bool
+    technical_blockers: tuple[str, ...]
+    classification_evidence_digest: str
+    source_bindings: tuple[tuple[str, str, str, str | None], ...]
+    _verification_seal: object
+
+
+def _seal_successor_classification(**values: Any) -> VerifiedSuccessorClassification:
+    """Internal bridge from the maintained detached-signature verifier."""
+
+    digest = values.get("classification_evidence_digest")
+    return VerifiedSuccessorClassification(
+        **values,
+        _verification_seal=_VerifiedSuccessorClassificationSeal(digest),
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class _VerifiedValidationEvidenceSeal:
     """Carry canonical provenance that consumers independently re-verify."""
 
@@ -2133,6 +2173,7 @@ def _verify_successor_transport(
                 kind != "CONVERSATION_COMMENT"
                 or predecessor is not None
                 or body != expected_body
+                or not isinstance(login, str)
                 or login in {CODEX_PROVIDER_LOGIN, GITHUB_CODE_QUALITY_LOGIN}
             ):
                 raise SecurityBlocker("Codex review request transport is invalid")
@@ -2220,6 +2261,10 @@ def _verify_successor_findings(
     current_sources: dict[
         tuple[str, str], tuple[str, str | None, dict[str, Any]]
     ],
+    repository: str,
+    pull_request_number: int,
+    resulting_head_sha: str,
+    current_threads: dict[str, dict[str, Any]],
 ) -> set[tuple[str, str]]:
     if not isinstance(value, list):
         raise SecurityBlocker("successor finding evidence is malformed")
@@ -2227,24 +2272,35 @@ def _verify_successor_findings(
     finding_ids: set[str] = set()
     for finding in value:
         if not isinstance(finding, dict) or set(finding) != {
-            "finding_id",
-            "thread_id",
             "sources",
-            "classification",
-            "disposition",
-            "technically_blocking",
-            "evidence_digest",
+            "classification_evidence",
         }:
             raise SecurityBlocker("successor finding evidence is malformed")
+        verified_classification = finding.get("classification_evidence")
+        if (
+            not isinstance(verified_classification, VerifiedSuccessorClassification)
+            or not isinstance(
+                verified_classification._verification_seal,
+                _VerifiedSuccessorClassificationSeal,
+            )
+            or verified_classification._verification_seal.provenance_digest
+            != verified_classification.classification_evidence_digest
+            or verified_classification.repository != repository
+            or verified_classification.pull_request_number != pull_request_number
+            or verified_classification.head_sha != resulting_head_sha
+        ):
+            raise SecurityBlocker(
+                "successor finding classification is not authenticated"
+            )
         finding_id = _require_string(
-            finding.get("finding_id"), "successor finding identity"
+            verified_classification.finding_id, "successor finding identity"
         )
         if finding_id in finding_ids:
             raise SecurityBlocker("successor finding identity is repeated")
         finding_ids.add(finding_id)
-        classification = finding.get("classification")
-        disposition = finding.get("disposition")
-        technically_blocking = finding.get("technically_blocking")
+        classification = verified_classification.classification
+        disposition = verified_classification.disposition
+        technically_blocking = verified_classification.technically_blocking
         if technically_blocking is True:
             raise SecurityBlocker("material successor finding blocks continuation")
         if (
@@ -2252,13 +2308,16 @@ def _verify_successor_findings(
             or disposition not in CLASSIFICATION_DISPOSITIONS.get(
                 classification, frozenset()
             )
-            or not isinstance(finding.get("evidence_digest"), str)
-            or not DIGEST.fullmatch(finding["evidence_digest"])
+            or not DIGEST.fullmatch(
+                verified_classification.classification_evidence_digest
+            )
+            or not DIGEST.fullmatch(verified_classification.finding_evidence_digest)
+            or verified_classification.technical_blockers
         ):
             raise SecurityBlocker(
                 "successor finding lacks a complete safe classification"
             )
-        thread_id = finding.get("thread_id")
+        thread_id = verified_classification.thread_id
         if thread_id is not None and (
             not isinstance(thread_id, str)
             or not re.fullmatch(r"PRRT_[A-Za-z0-9_-]+", thread_id)
@@ -2267,6 +2326,12 @@ def _verify_successor_findings(
         sources = finding.get("sources")
         if not isinstance(sources, list) or not sources:
             raise SecurityBlocker("successor finding sources are missing")
+        signed_sources = {
+            (kind, node_id): (digest, source_thread_id)
+            for kind, node_id, digest, source_thread_id in verified_classification.source_bindings
+        }
+        if len(signed_sources) != len(verified_classification.source_bindings):
+            raise SecurityBlocker("successor signed finding source is repeated")
         for source in sources:
             if not isinstance(source, dict) or set(source) != {
                 "kind",
@@ -2276,16 +2341,56 @@ def _verify_successor_findings(
                 raise SecurityBlocker("successor finding source is malformed")
             key = (source.get("kind"), source.get("node_id"))
             observed = current_sources.get(key)
+            signed = signed_sources.get(key)
             if (
                 key in admitted
                 or key in reviewed_sources
                 or observed is None
-                or observed[:2] != (source.get("digest"), thread_id)
+                or signed is None
+                or signed[0] != source.get("digest")
+                or observed[:2] != signed
             ):
                 raise SecurityBlocker(
                     "successor finding source is stale, repeated, or predecessor-owned"
                 )
             admitted.add(key)
+        if set(signed_sources) != {
+            (source["kind"], source["node_id"]) for source in sources
+        }:
+            raise SecurityBlocker("successor signed finding sources are incomplete")
+        if thread_id is None:
+            if (
+                verified_classification.top_level_comment_node_id is not None
+                or verified_classification.finding_body_digest is not None
+                or verified_classification.reply_count != 0
+                or verified_classification.is_resolved is not None
+                or verified_classification.is_outdated is not None
+            ):
+                raise SecurityBlocker(
+                    "successor source-only classification is malformed"
+                )
+        else:
+            top_level = current_sources.get(
+                (
+                    "THREAD_COMMENT",
+                    verified_classification.top_level_comment_node_id,
+                )
+            )
+            thread = current_threads.get(thread_id)
+            if (
+                verified_classification.is_resolved is not False
+                or top_level is None
+                or top_level[:2]
+                != (verified_classification.finding_body_digest, thread_id)
+                or not isinstance(thread, dict)
+                or thread["is_resolved"] != verified_classification.is_resolved
+                or thread["is_outdated"] != verified_classification.is_outdated
+                or len(thread["comments"]) - 1
+                != verified_classification.reply_count
+            ):
+                raise SecurityBlocker(
+                    "successor finding classification does not bind the live finding"
+                )
     return admitted
 
 
@@ -2323,9 +2428,30 @@ def _verify_predecessor_preservation(
                         "provider summary update altered predecessor authority"
                     )
             elif observed != expected:
-                raise SecurityBlocker(
-                    "successor removed or changed predecessor feedback"
-                )
+                if (
+                    category not in {"reviews", "conversation_comments"}
+                    or not isinstance(observed, dict)
+                ):
+                    raise SecurityBlocker(
+                        "successor removed or changed predecessor feedback"
+                    )
+                expected_reactions = {
+                    item["mutation_id"]: item for item in expected["reactions"]
+                }
+                observed_reactions = {
+                    item["mutation_id"]: item for item in observed["reactions"]
+                }
+                if any(
+                    observed_reactions.get(reaction_id) != reaction
+                    for reaction_id, reaction in expected_reactions.items()
+                ):
+                    raise SecurityBlocker("successor changed a predecessor reaction")
+                comparable = copy.deepcopy(observed)
+                comparable["reactions"] = expected["reactions"]
+                if comparable != expected:
+                    raise SecurityBlocker(
+                        "successor removed or changed predecessor feedback"
+                    )
 
     predecessor_threads = {
         item["node_id"]: item for item in reviewed.feedback["threads"]
@@ -2423,6 +2549,12 @@ def _verify_authenticated_feedback_growth(
         successor_evidence["successor_findings"],
         reviewed_sources=reviewed_sources,
         current_sources=current_sources,
+        repository=reviewed.repository,
+        pull_request_number=reviewed.pull_request_number,
+        resulting_head_sha=resulting_head_sha,
+        current_threads={
+            item["node_id"]: item for item in current.feedback["threads"]
+        },
     )
     if transport_additions & finding_additions:
         raise SecurityBlocker("successor feedback has ambiguous authority")
@@ -2443,9 +2575,13 @@ def _verify_authenticated_feedback_growth(
     }
     current_thread_ids = {item["node_id"] for item in current.feedback["threads"]}
     finding_thread_ids = {
-        item.get("thread_id")
+        item["classification_evidence"].thread_id
         for item in successor_evidence["successor_findings"]
-        if isinstance(item, dict) and item.get("thread_id") is not None
+        if isinstance(item, dict)
+        and isinstance(
+            item.get("classification_evidence"), VerifiedSuccessorClassification
+        )
+        and item["classification_evidence"].thread_id is not None
     }
     if current_thread_ids - predecessor_thread_ids != finding_thread_ids - predecessor_thread_ids:
         raise SecurityBlocker(
