@@ -1093,6 +1093,14 @@ SAFE_GETATTR_CALLS = {
 SAFE_SYS_MODULES_CALLS = {
     "secpal-pr-review-actions.py": {
         DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules.get(spec.name)",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules.pop(spec.name, None)",
+        ),
+        DynamicImportCall(
             ("_load_fast_path_helper",),
             "sys.modules.get('secpal_pr_review.fast_path')",
         ),
@@ -1107,6 +1115,10 @@ SAFE_SYS_MODULES_CALLS = {
         DynamicImportCall(
             ("_load_pre_enrollment_integration_helper",),
             "sys.modules.get(module_name)",
+        ),
+        DynamicImportCall(
+            ("_load_pre_enrollment_integration_helper",),
+            "sys.modules.pop(module_name, None)",
         ),
         DynamicImportCall(
             ("_load_lifecycle_publication_helpers",),

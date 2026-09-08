@@ -510,9 +510,48 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             else:
                 sys.modules[name] = previous
 
+    def test_failed_helper_load_does_not_leave_partial_module(self) -> None:
+        for loader_name, module_name, helper_path in (
+            (
+                "_load_evidence_helper",
+                "secpal_pr_review_evidence_shared",
+                actions.EVIDENCE_HELPER,
+            ),
+            (
+                "_load_pre_enrollment_integration_helper",
+                "secpal_pr_review.pre_enrollment_integration",
+                actions.PRE_ENROLLMENT_INTEGRATION_HELPER,
+            ),
+        ):
+            previous = sys.modules.pop(module_name, None)
+            spec = importlib.util.spec_from_file_location(module_name, helper_path)
+            if spec is None or spec.loader is None:
+                self.fail("test helper spec is unavailable")
+            try:
+                with (
+                    self.subTest(loader=loader_name),
+                    mock.patch.object(
+                        actions.importlib.util,
+                        "spec_from_file_location",
+                        return_value=spec,
+                    ),
+                    mock.patch.object(
+                        spec.loader,
+                        "exec_module",
+                        side_effect=RuntimeError("load failed"),
+                    ),
+                    self.assertRaisesRegex(RuntimeError, "load failed"),
+                ):
+                    getattr(actions, loader_name)()
+                self.assertNotIn(module_name, sys.modules)
+            finally:
+                if previous is not None:
+                    sys.modules[module_name] = previous
+
     def test_candidate_root_cannot_alias_executing_tooling(self) -> None:
         with self.assertRaisesRegex(fast_path.SecurityBlocker, "must be distinct"):
             actions._require_distinct_candidate_repository_root(ROOT)
+        actions._require_distinct_candidate_repository_root(ROOT / "scripts")
         actions._require_distinct_candidate_repository_root(ROOT.parent)
 
     def test_accepted_main_blob_rejects_dirty_and_symlinked_tooling(self) -> None:
@@ -540,6 +579,12 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
                 text=True,
             ).stdout.strip()
             actions._require_exact_accepted_main_blob(root, accepted, "tool.py")
+            source.chmod(0o755)
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "tooling provenance"
+            ):
+                actions._require_exact_accepted_main_blob(root, accepted, "tool.py")
+            source.chmod(0o644)
             source.write_text("VALUE = 2\n", encoding="utf-8")
             with self.assertRaisesRegex(
                 fast_path.SecurityBlocker, "tooling provenance"

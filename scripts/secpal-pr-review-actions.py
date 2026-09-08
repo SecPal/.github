@@ -73,7 +73,12 @@ def _load_evidence_helper() -> Any:
         raise RuntimeError(f"Cannot load accepted evidence helper: {EVIDENCE_HELPER}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        if sys.modules.get(spec.name) is module:
+            sys.modules.pop(spec.name, None)
+        raise
     return module
 
 
@@ -132,7 +137,12 @@ def _load_pre_enrollment_integration_helper() -> Any:
         raise RuntimeError("Cannot load pre-enrollment integration helper")
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        if sys.modules.get(module_name) is module:
+            sys.modules.pop(module_name, None)
+        raise
     return module
 
 
@@ -5526,7 +5536,18 @@ def _require_exact_accepted_main_blob(
         ["hash-object", "--no-filters", "--", relative_path],
         allow_failure=True,
     )
-    if actual.returncode != 0 or actual.stdout.strip().lower() != fields[2].lower():
+    expected_executable = fields[0] == "100755"
+    try:
+        actual_executable = bool(path.stat().st_mode & 0o111)
+    except OSError as exc:
+        raise fast_path.SecurityBlocker(
+            "accepted-main bridge tooling provenance is invalid"
+        ) from exc
+    if (
+        actual.returncode != 0
+        or actual.stdout.strip().lower() != fields[2].lower()
+        or actual_executable != expected_executable
+    ):
         raise fast_path.SecurityBlocker(
             "accepted-main bridge tooling provenance is invalid"
         )
