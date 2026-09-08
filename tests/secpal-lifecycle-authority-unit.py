@@ -3568,6 +3568,14 @@ class ValidationEvidenceLossTests(TestCase):
         self.assertNotIn("files", self.loss._ACCEPTED_MAIN_COMMIT_METADATA_PROJECTION)
         self.assertNotIn("patch", self.loss._ACCEPTED_MAIN_COMMIT_METADATA_PROJECTION)
 
+    def test_accepted_main_commit_observer_rejects_unvalidated_identity(self) -> None:
+        with patch.object(
+            self.loss.transport, "_run_bootstrap_gh",
+            return_value=SimpleNamespace(returncode=0, stdout=b"{}", stderr=b""),
+        ) as run, self.assertRaises(authority.LifecycleAuthorityError):
+            self.loss._observe_accepted_main_commit_metadata("caller-shaped")
+        run.assert_not_called()
+
     def test_accepted_main_commit_metadata_rejects_unclosed_or_false_facts(self) -> None:
         main = "c" * 40
         cases = (

@@ -284,9 +284,10 @@ _ACCEPTED_MAIN_COMMIT_METADATA_PROJECTION = (
 def _observe_accepted_main_commit_metadata(main: str) -> bytes:
     """Project maintained commit facts before bounded provider capture."""
 
+    expected = authority._require_oid(main, "protected main")
     result = transport._run_bootstrap_gh([
         "api", "--hostname", "github.com",
-        f"repos/SecPal/.github/commits/{main}",
+        f"repos/SecPal/.github/commits/{expected}",
         "--jq", _ACCEPTED_MAIN_COMMIT_METADATA_PROJECTION,
     ])
     if result.returncode != 0:
