@@ -3624,7 +3624,7 @@ def verify_ready_source_recovery_authorization(
         or item["historical_bytes_reconstructed"] is not False
         or item["bounded_uses"] != 1
         or isinstance(item["bounded_uses"], bool)
-        or item["review_decision"] not in {"NONE", "APPROVED", "REVIEW_REQUIRED"}
+        or item["review_decision"] not in {"NONE", "APPROVED"}
         or not isinstance(parents, list)
         or len(parents) != 1
         or not isinstance(signer, dict)

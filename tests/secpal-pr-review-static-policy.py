@@ -685,6 +685,9 @@ LOADED_MODULE_ATTRIBUTES = {
             "normalize_evidence",
             "verify_authorization",
         },
+        "lifecycle_orchestration": {
+            "_verify_user_authorization",
+        },
     },
     "fast_path.py": {
         "evidence": {

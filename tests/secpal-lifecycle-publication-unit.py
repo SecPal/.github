@@ -903,6 +903,7 @@ class LifecyclePublicationTests(TestCase):
         observation["is_draft"] = False
         gateway = SimpleNamespace(
             observe_stable_feedback=lambda *_: observation,
+            observe_ready_source_recovery_approval_policy=lambda *_: True,
             observe_ready_source_recovery_delivery=lambda *_: commit,
         )
         with (
@@ -937,8 +938,7 @@ class LifecyclePublicationTests(TestCase):
                 historical_final_attestation_digest=(
                     chain.initialization["final_attestation_digest"]
                 ),
-                historical_evidence_loss_proof_digest="7" * 64,
-                authorization_id="ready-source-recovery-1",
+                recovery_user_authorization=b"authorization",
                 expected_commit_signer={
                     "kind": "SSH_PRINCIPAL", "identity": SIGNER,
                 },
@@ -951,6 +951,10 @@ class LifecyclePublicationTests(TestCase):
                 _authorization_factory=(
                     authority._sign_ready_source_recovery_authorization
                 ),
+                _recovery_user_authorization_verifier=lambda *_: {
+                    "authorization_id": "ready-source-recovery-1",
+                    "authorization_digest": "7" * 64,
+                },
             )
 
         with self.assertRaises((
@@ -966,6 +970,7 @@ class LifecyclePublicationTests(TestCase):
         tampered_facts["feedback_findings"][0]["evidence_digest"] = "9" * 64
         tampered_facts["feedback_assessment_digest"] = fast_path.digest_json({
             "review_decision": tampered_facts["review_decision"],
+            "approval_required": tampered_facts["approval_required"],
             "findings": tampered_facts["feedback_findings"],
         })
         unsigned_facts = {

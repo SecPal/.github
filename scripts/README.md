@@ -123,9 +123,15 @@ commands from one independently observed immutable protected-`main` commit,
 captures complete current feedback through the maintained bounded GitHub
 reader, includes resolved and unresolved review threads in the classification
 universe, runs that command set itself against the exact clean head/tree, and
-re-verifies the complete package before signing. Unsigned recovery facts are
-explicitly non-authoritative. The existing signed authorization binds the full
-capture, source-complete technical decisions, tooling policy and command
+re-verifies the complete package before signing. Applicable protected-branch
+rules independently determine whether `NONE` is admissible; `REVIEW_REQUIRED`
+always fails closed. Unsigned recovery facts and caller-selected feedback
+classifications are explicitly non-authoritative. A separately signed exact
+CURRENT-bound user authorization authenticates the complete feedback-assessment
+digest and historical-package-unavailability assertion; its authorization
+digest is the evidence-loss proof identity. The existing signed recovery
+authorization binds the full capture, source-complete technical decisions,
+tooling policy and command
 identity, receipt, exact CURRENT lifecycle/publication, historical
 trailer/digest provenance, accepted commit signature, evidence-loss proof, and
 one bounded use. Callers cannot substitute a reviewed state, unsigned decision,

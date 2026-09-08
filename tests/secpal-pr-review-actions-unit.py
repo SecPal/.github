@@ -7485,8 +7485,133 @@ class FastPathTests(TestCase):
         self.assertNotIn("current_lifecycle", parameters)
         self.assertNotIn("recovery_safety_facts", parameters)
         self.assertNotIn("commit_signature_evidence", parameters)
+        self.assertIn("recovery_user_authorization", parameters)
+        self.assertNotIn("historical_evidence_loss_proof_digest", parameters)
         self.assertFalse(
             hasattr(fast_path, "is_verified_ready_source_recovery_safety")
+        )
+
+    def test_ready_source_recovery_review_decision_requires_authenticated_policy(self) -> None:
+        reviewed = fast_feedback(thread_count=0)
+        registry = fast_registry()
+        receipt = fast_path.create_validation_receipt(
+            repository=reviewed.repository,
+            head_sha=reviewed.head_sha,
+            validated_tree_sha="a" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+        )
+        findings = [{
+            "finding_id": "review-summary",
+            "thread_id": None,
+            "sources": [{
+                "kind": "REVIEW",
+                "node_id": "REVIEW_1",
+                "digest": digest("review summary"),
+            }],
+            "classification": "INFORMATIONAL",
+            "disposition": "NON_ACTIONABLE",
+            "evidence_digest": "1" * 64,
+            "technically_blocking": False,
+        }]
+        arguments = {
+            "tooling_authority_main": "f" * 40,
+            "repository": reviewed.repository,
+            "pull_request_number": reviewed.pull_request_number,
+            "head_sha": reviewed.head_sha,
+            "tree_sha": "a" * 40,
+            "parent_shas": ["9" * 40],
+            "expected_base_ref": reviewed.base_ref,
+            "expected_base_sha": reviewed.base_sha,
+            "reviewed_state": reviewed,
+            "feedback_findings": findings,
+            "fresh_validation_receipt": receipt,
+            "registry": registry,
+            "command_set": registry["validation"],
+        }
+        for review_decision, approval_required in (
+            ("REVIEW_REQUIRED", False),
+            ("NONE", True),
+        ):
+            with self.subTest(
+                review_decision=review_decision,
+                approval_required=approval_required,
+            ), self.assertRaises(fast_path.SecurityBlocker):
+                fast_path.derive_ready_source_recovery_safety_facts(
+                    **arguments,
+                    review_decision=review_decision,
+                    approval_required=approval_required,
+                )
+        for review_decision, approval_required in (
+            ("APPROVED", True),
+            ("NONE", False),
+        ):
+            with self.subTest(
+                review_decision=review_decision,
+                approval_required=approval_required,
+            ):
+                result = fast_path.derive_ready_source_recovery_safety_facts(
+                    **arguments,
+                    review_decision=review_decision,
+                    approval_required=approval_required,
+                )
+                self.assertEqual(result["review_decision"], review_decision)
+                self.assertIs(result["approval_required"], approval_required)
+
+    def test_ready_source_recovery_validation_failure_is_structured(self) -> None:
+        reviewed = fast_feedback(thread_count=0)
+        observation = reviewed.to_dict()
+        observation.update(review_decision="APPROVED", is_draft=False)
+        gateway = mock.Mock()
+        gateway.observe_stable_feedback.return_value = observation
+        gateway.observe_ready_source_recovery_approval_policy.return_value = True
+        failure = actions.RegisteredValidationResult(
+            failure_index=2,
+            failure_purpose="Run recovery security tests",
+            failure_category="NONZERO_EXIT",
+        )
+        with (
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                return_value=(reviewed.head_sha, ""),
+            ),
+            mock.patch.object(
+                actions,
+                "_run_attestation_git",
+                return_value=SimpleNamespace(stdout="a" * 40),
+            ),
+            mock.patch.object(
+                actions, "_validated_commit_parent", return_value="9" * 40
+            ),
+            self.assertRaises(actions.RegisteredValidationFailure) as caught,
+        ):
+            actions._acquire_ready_source_recovery_facts(
+                repository=reviewed.repository,
+                pull_request_number=reviewed.pull_request_number,
+                expected_head_sha=reviewed.head_sha,
+                repository_root=REPO_ROOT,
+                feedback_findings=[],
+                manual_gate_evidence=[],
+                expected_commit_signer={
+                    "kind": "SSH_PRINCIPAL", "identity": "reviewer",
+                },
+                _policy_loader=mock.Mock(
+                    return_value=("f" * 40, registry_entry(reviewed.repository))
+                ),
+                _gateway_factory=mock.Mock(return_value=gateway),
+                _validation_runner=mock.Mock(return_value=failure),
+            )
+        self.assertEqual(
+            caught.exception.report,
+            {
+                "index": 2,
+                "purpose": "Run recovery security tests",
+                "category": "NONZERO_EXIT",
+            },
         )
 
     def test_ready_source_recovery_safety_acquisition_owns_observation_and_execution(self) -> None:
@@ -7512,6 +7637,7 @@ class FastPathTests(TestCase):
         policy_loader = mock.Mock(return_value=("f" * 40, entry))
         gateway = mock.Mock()
         gateway.observe_stable_feedback.return_value = observation
+        gateway.observe_ready_source_recovery_approval_policy.return_value = True
         commit_evidence = {
             "oid": reviewed.head_sha,
             "source": "USER",
@@ -7664,6 +7790,34 @@ class FastPathTests(TestCase):
                     {"kind": "SSH_PRINCIPAL", "identity": "reviewer"},
                 )
 
+    def test_ready_source_recovery_approval_policy_is_maintained(self) -> None:
+        reviewed = fast_feedback(thread_count=0)
+        entry = registry_entry(reviewed.repository)
+        github = mock.Mock()
+        gateway = actions.FastPathGateway(REPO_ROOT, entry, github=github)
+        github.runner.run.side_effect = [[], []]
+        self.assertFalse(
+            gateway.observe_ready_source_recovery_approval_policy(
+                reviewed.repository, reviewed.base_ref
+            )
+        )
+        approval_rule = [{
+            "type": "pull_request",
+            "parameters": {"required_approving_review_count": 1},
+        }]
+        github.runner.run.side_effect = [approval_rule, copy.deepcopy(approval_rule)]
+        self.assertTrue(
+            gateway.observe_ready_source_recovery_approval_policy(
+                reviewed.repository, reviewed.base_ref
+            )
+        )
+        malformed = [{"type": "pull_request", "parameters": {}}]
+        github.runner.run.side_effect = [malformed, copy.deepcopy(malformed)]
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "malformed"):
+            gateway.observe_ready_source_recovery_approval_policy(
+                reviewed.repository, reviewed.base_ref
+            )
+
     def test_ready_source_recovery_rejects_policy_change_after_validation(self) -> None:
         reviewed = fast_feedback(thread_count=0)
         first_entry = registry_entry(reviewed.repository)
@@ -7691,8 +7845,7 @@ class FastPathTests(TestCase):
                 manual_gate_evidence=[],
                 historical_validation_receipt_digest="4" * 64,
                 historical_final_attestation_digest="5" * 64,
-                historical_evidence_loss_proof_digest="6" * 64,
-                authorization_id="recovery-1",
+                recovery_user_authorization=b"authorization",
                 expected_commit_signer={
                     "kind": "SSH_PRINCIPAL", "identity": "reviewer",
                 },
@@ -7706,6 +7859,61 @@ class FastPathTests(TestCase):
                 _issuer_source_verifier=mock.Mock(),
                 _current_lifecycle_loader=mock.Mock(),
                 _authorization_factory=authorization_factory,
+                _recovery_user_authorization_verifier=mock.Mock(),
+            )
+        authorization_factory.assert_not_called()
+
+    def test_ready_source_recovery_rejects_unauthenticated_classification_and_loss(self) -> None:
+        reviewed = fast_feedback(thread_count=0)
+        entry = registry_entry(reviewed.repository)
+        facts = {
+            "head_sha": reviewed.head_sha,
+            "tree_sha": "a" * 40,
+            "reviewed_state_digest": reviewed.state_digest,
+            "reviewed_feedback_digest": reviewed.feedback_digest,
+            "feedback_assessment_digest": "4" * 64,
+        }
+        current = SimpleNamespace(
+            lifecycle=object(),
+            publication_oid="2" * 40,
+            publication_digest="3" * 64,
+        )
+        authorization_factory = mock.Mock()
+        with (
+            mock.patch.object(
+                actions,
+                "_acquire_ready_source_recovery_facts",
+                return_value=(facts, {"oid": reviewed.head_sha}),
+            ),
+            self.assertRaisesRegex(fast_path.SecurityBlocker, "signed user authority"),
+        ):
+            actions._issue_ready_source_recovery_authorization(
+                repository=reviewed.repository,
+                delivery_issue=827,
+                pull_request_number=reviewed.pull_request_number,
+                expected_head_sha=reviewed.head_sha,
+                repository_root=REPO_ROOT,
+                feedback_findings=[],
+                manual_gate_evidence=[],
+                historical_validation_receipt_digest="5" * 64,
+                historical_final_attestation_digest="6" * 64,
+                recovery_user_authorization=b"forged",
+                expected_commit_signer={
+                    "kind": "SSH_PRINCIPAL", "identity": "reviewer",
+                },
+                signer_identity="signer",
+                signer=object(),
+                _policy_loader=mock.Mock(return_value=("f" * 40, entry)),
+                _gateway_factory=mock.Mock(),
+                _validation_runner=mock.Mock(),
+                _issuer_source_verifier=mock.Mock(),
+                _current_lifecycle_loader=mock.Mock(return_value=current),
+                _authorization_factory=authorization_factory,
+                _recovery_user_authorization_verifier=mock.Mock(
+                    side_effect=fast_path.SecurityBlocker(
+                        "Ready-source recovery requires exact signed user authority"
+                    )
+                ),
             )
         authorization_factory.assert_not_called()
 
@@ -7729,6 +7937,7 @@ class FastPathTests(TestCase):
         }]
         gateway = mock.Mock()
         gateway.observe_stable_feedback.return_value = observation
+        gateway.observe_ready_source_recovery_approval_policy.return_value = True
         gateway.observe_ready_source_recovery_delivery.return_value = {
             "oid": reviewed.head_sha,
             "source": "USER",
@@ -7765,8 +7974,8 @@ class FastPathTests(TestCase):
                 feedback_findings=findings, manual_gate_evidence=[],
                 historical_validation_receipt_digest="4" * 64,
                 historical_final_attestation_digest="5" * 64,
-                historical_evidence_loss_proof_digest="6" * 64,
-                authorization_id="recovery-1", expected_commit_signer={
+                recovery_user_authorization=b"authorization",
+                expected_commit_signer={
                     "kind": "SSH_PRINCIPAL", "identity": "reviewer",
                 },
                 signer_identity="signer", signer=object(),
@@ -7779,6 +7988,10 @@ class FastPathTests(TestCase):
                     publication_digest="3" * 64,
                 )),
                 _authorization_factory=authorization_factory,
+                _recovery_user_authorization_verifier=mock.Mock(return_value={
+                    "authorization_id": "recovery-1",
+                    "authorization_digest": "6" * 64,
+                }),
             )
         self.assertEqual(
             result["kind"], "SECPAL_READY_SOURCE_RECOVERY_AUTHORIZATION"
@@ -7798,6 +8011,16 @@ class FastPathTests(TestCase):
         )
         self.assertEqual(
             signed_facts["feedback_findings"], findings
+        )
+        self.assertEqual(
+            authorization_factory.call_args.kwargs[
+                "historical_evidence_loss_proof_digest"
+            ],
+            "6" * 64,
+        )
+        self.assertEqual(
+            authorization_factory.call_args.kwargs["authorization_id"],
+            "recovery-1",
         )
         self.assertNotIn("recovery_safety_facts", inspect.signature(
             actions.issue_ready_source_recovery_authorization
@@ -7836,8 +8059,8 @@ class FastPathTests(TestCase):
                 manual_gate_evidence=[],
                 historical_validation_receipt_digest="1" * 64,
                 historical_final_attestation_digest="2" * 64,
-                historical_evidence_loss_proof_digest="3" * 64,
-                authorization_id="recovery-1", expected_commit_signer={},
+                recovery_user_authorization=b"authorization",
+                expected_commit_signer={},
                 signer_identity="signer", signer=object(),
                 _policy_loader=mock.Mock(return_value=("f" * 40, entry)),
                 _gateway_factory=gateway_factory,
@@ -7847,6 +8070,7 @@ class FastPathTests(TestCase):
                 )),
                 _current_lifecycle_loader=mock.Mock(),
                 _authorization_factory=authorization_factory,
+                _recovery_user_authorization_verifier=mock.Mock(),
             )
         gateway_factory.assert_not_called()
         validation_runner.assert_not_called()

@@ -3056,6 +3056,7 @@ def derive_ready_source_recovery_safety_facts(
     fresh_validation_receipt: Any,
     registry: dict[str, Any],
     command_set: list[dict[str, Any]],
+    approval_required: bool = False,
 ) -> dict[str, Any]:
     """Derive canonical unsigned facts; this result carries no authority."""
 
@@ -3089,7 +3090,15 @@ def derive_ready_source_recovery_safety_facts(
         raise SecurityBlocker(
             "Ready-source recovery reviewed delivery identity changed"
         )
-    if review_decision not in {"NONE", "APPROVED", "REVIEW_REQUIRED"}:
+    if not isinstance(approval_required, bool):
+        raise SecurityBlocker(
+            "Ready-source recovery approval policy is malformed"
+        )
+    if (
+        review_decision == "REVIEW_REQUIRED"
+        or review_decision not in {"NONE", "APPROVED"}
+        or (review_decision == "NONE" and approval_required)
+    ):
         raise SecurityBlocker(
             "Ready-source recovery has a blocking or ambiguous review decision"
         )
@@ -3242,6 +3251,7 @@ def derive_ready_source_recovery_safety_facts(
         )
     assessment = {
         "review_decision": review_decision,
+        "approval_required": approval_required,
         "findings": normalized_findings,
     }
     facts = {
@@ -3257,6 +3267,7 @@ def derive_ready_source_recovery_safety_facts(
         "expected_base_sha": base_sha,
         "reviewed_state": reviewed.to_dict(),
         "review_decision": review_decision,
+        "approval_required": approval_required,
         "feedback_findings": normalized_findings,
         "policy_binding": copy.deepcopy(registry),
         "command_set": copy.deepcopy(command_set),
@@ -3277,7 +3288,8 @@ def verify_ready_source_recovery_safety_facts(value: Any) -> dict[str, Any]:
         "schema_version", "kind", "tooling_authority_main", "repository",
         "pull_request_number", "head_sha", "tree_sha", "parent_shas",
         "expected_base_ref", "expected_base_sha", "reviewed_state",
-        "review_decision", "feedback_findings", "policy_binding", "command_set",
+        "review_decision", "approval_required", "feedback_findings",
+        "policy_binding", "command_set",
         "fresh_validation_receipt", "reviewed_state_digest",
         "reviewed_feedback_digest", "feedback_assessment_digest",
         "fresh_validation_receipt_digest", "validation_execution_origin",
@@ -3308,6 +3320,7 @@ def verify_ready_source_recovery_safety_facts(value: Any) -> dict[str, Any]:
         expected_base_ref=value["expected_base_ref"],
         expected_base_sha=value["expected_base_sha"],
         reviewed_state=reviewed, review_decision=value["review_decision"],
+        approval_required=value["approval_required"],
         feedback_findings=value["feedback_findings"],
         fresh_validation_receipt=value["fresh_validation_receipt"],
         registry=value["policy_binding"], command_set=value["command_set"],

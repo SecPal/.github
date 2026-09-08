@@ -295,7 +295,7 @@ class CurrentSafety(unittest.TestCase):
                     feedback_findings=self.findings, manual_gate_evidence=[],
                     historical_validation_receipt_digest="5" * 64,
                     historical_final_attestation_digest="6" * 64,
-                    historical_evidence_loss_proof_digest="7" * 64, authorization_id="fixture",
+                    recovery_user_authorization=b"authorization",
                     expected_commit_signer={"kind": "SSH_PRINCIPAL", "identity": SIGNER},
                     signer_identity=SIGNER, signer=sign,
                 )

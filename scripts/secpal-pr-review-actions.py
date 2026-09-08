@@ -58,6 +58,9 @@ BOOTSTRAP_SOURCE_ADMISSION_HELPER = (
 LIFECYCLE_PUBLICATION_HELPER = (
     REPOSITORY_ROOT / "scripts/secpal_pr_review/lifecycle_publication.py"
 )
+LIFECYCLE_ORCHESTRATION_HELPER = (
+    REPOSITORY_ROOT / "scripts/secpal_pr_review/lifecycle_orchestration.py"
+)
 FAST_BATCH_SCHEMA_PATH = (
     REPOSITORY_ROOT
     / ".agents/skills/secpal-pr-review/references/fast-path-batch.schema.json"
@@ -162,7 +165,9 @@ def _read_pre_enrollment_json(path: str, label: str) -> Any:
         raise fast_path.RecoverableLocalError(f"cannot read {label}") from exc
 
 
-def _load_lifecycle_publication_helpers() -> tuple[Any, Any]:
+def _load_lifecycle_publication_helpers(
+    *, include_orchestration: bool = False
+) -> tuple[Any, ...]:
     """Load the maintained lifecycle modules from this exact source tree."""
 
     package_name = "secpal_ready_integration_lifecycle"
@@ -189,8 +194,17 @@ def _load_lifecycle_publication_helpers() -> tuple[Any, Any]:
         lifecycle_publication = load(
             "lifecycle_publication", LIFECYCLE_PUBLICATION_HELPER
         )
+        user_authorization_verifier = None
+        if include_orchestration:
+            lifecycle_orchestration = load(
+                "lifecycle_orchestration", LIFECYCLE_ORCHESTRATION_HELPER
+            )
+            user_authorization_verifier = (
+                lifecycle_orchestration._verify_user_authorization
+            )
     except BaseException:
         for module_name in (
+            f"{package_name}.lifecycle_orchestration",
             f"{package_name}.lifecycle_publication",
             f"{package_name}.lifecycle_authority",
             f"{package_name}.fast_path",
@@ -198,7 +212,9 @@ def _load_lifecycle_publication_helpers() -> tuple[Any, Any]:
         ):
             sys.modules.pop(module_name, None)
         raise
-    return lifecycle_authority, lifecycle_publication
+    if user_authorization_verifier is None:
+        return lifecycle_authority, lifecycle_publication
+    return lifecycle_authority, lifecycle_publication, user_authorization_verifier
 
 
 def _load_protected_main_helper() -> Any:
@@ -3460,6 +3476,82 @@ class FastPathGateway:
         except (MutationBlocked, RegistryError) as exc:
             raise fast_path.SecurityBlocker(str(exc)) from exc
 
+    def observe_ready_source_recovery_approval_policy(
+        self, repository: str, base_ref: str
+    ) -> bool:
+        """Derive approval requirements from two equal applicable-rule reads."""
+
+        if self.registry_entry.get("repository") != repository:
+            raise fast_path.SecurityBlocker(
+                "selected approval policy repository does not match the request"
+            )
+        maximum_calls = self.registry_entry.get("maximum_api_calls")
+        maximum_items = self.registry_entry.get("maximum_items")
+        if not isinstance(maximum_calls, int) or not isinstance(maximum_items, int):
+            raise fast_path.SecurityBlocker("registered approval policy limits are invalid")
+        owner, name = repository.split("/", 1)
+        encoded_ref = quote(base_ref, safe="")
+
+        def read_once() -> list[dict[str, Any]]:
+            rules: list[dict[str, Any]] = []
+            for page in range(1, maximum_calls + 1):
+                endpoint = (
+                    f"repos/{owner}/{name}/rules/branches/{encoded_ref}"
+                    f"?per_page=100&page={page}"
+                )
+                try:
+                    response = self.github.runner.run(
+                        [
+                            "gh", "api", "--hostname", "github.com", endpoint,
+                            "--method", "GET",
+                        ]
+                    )
+                except (ActionCommandFailure, MutationFailure) as exc:
+                    raise fast_path.TransientReadFailure(
+                        "approval policy acquisition failed"
+                    ) from exc
+                if not isinstance(response, list) or any(
+                    not isinstance(item, dict) for item in response
+                ):
+                    raise fast_path.SecurityBlocker(
+                        "approval policy provider response is malformed"
+                    )
+                rules.extend(response)
+                if len(rules) > maximum_items:
+                    raise fast_path.SecurityBlocker(
+                        "approval policy evidence exceeds the registered item limit"
+                    )
+                if len(response) < 100:
+                    return rules
+            raise fast_path.SecurityBlocker(
+                "approval policy evidence exceeds the registered API-call limit"
+            )
+
+        first = read_once()
+        second = read_once()
+        if first != second:
+            raise fast_path.SecurityBlocker(
+                "approval policy changed between bounded reads"
+            )
+        approval_required = False
+        for rule in second:
+            if rule.get("type") != "pull_request":
+                continue
+            parameters = rule.get("parameters")
+            required = (
+                parameters.get("required_approving_review_count")
+                if isinstance(parameters, dict)
+                else None
+            )
+            if (
+                not isinstance(required, int)
+                or isinstance(required, bool)
+                or required < 0
+            ):
+                raise fast_path.SecurityBlocker("approval policy rule is malformed")
+            approval_required = approval_required or required > 0
+        return approval_required
+
     def capture_stable_feedback(self, repository: str, pull_request_number: int) -> Any:
         result = self.observe_stable_feedback(repository, pull_request_number)
         return fast_path.StableFeedbackState.from_payload(
@@ -4771,6 +4863,9 @@ def _acquire_ready_source_recovery_facts(
     review_decision = observation.get("review_decision")
     if review_decision is None:
         review_decision = "NONE"
+    approval_required = gateway.observe_ready_source_recovery_approval_policy(
+        repository, observation.get("base_ref")
+    )
     reviewed = fast_path.StableFeedbackState.from_payload(
         {
             "repository": repository,
@@ -4784,8 +4879,12 @@ def _acquire_ready_source_recovery_facts(
         )
     validation_result = _validation_runner(entry, root)
     if not validation_result:
-        raise RegisteredValidationFailure(
-            "registered recovery-safety validation failed"
+        raise RegisteredValidationFailure(validation_result)
+    if gateway.observe_ready_source_recovery_approval_policy(
+        repository, observation.get("base_ref")
+    ) != approval_required:
+        raise fast_path.SecurityBlocker(
+            "Ready-source recovery approval policy changed during validation"
         )
     if _gateway_factory is FastPathGateway:
         final_observation = gateway.observe_stable_feedback(
@@ -4832,6 +4931,7 @@ def _acquire_ready_source_recovery_facts(
         expected_base_sha=reviewed.base_sha,
         reviewed_state=reviewed,
         review_decision=review_decision,
+        approval_required=approval_required,
         feedback_findings=feedback_findings,
         fresh_validation_receipt=receipt,
         registry=binding,
@@ -4846,16 +4946,17 @@ def _issue_ready_source_recovery_authorization(
     manual_gate_evidence: Any,
     historical_validation_receipt_digest: str,
     historical_final_attestation_digest: str,
-    historical_evidence_loss_proof_digest: str, authorization_id: str,
+    recovery_user_authorization: Any,
     expected_commit_signer: Any, signer_identity: str, signer: Any,
     _policy_loader: Any, _gateway_factory: Any, _validation_runner: Any,
     _issuer_source_verifier: Any, _current_lifecycle_loader: Any,
-    _authorization_factory: Any,
+    _authorization_factory: Any, _recovery_user_authorization_verifier: Any,
 ) -> dict[str, Any]:
     """Acquire, reverify, and sign one recovery in one maintained boundary."""
 
     policy_head_sha, policy_entry = _policy_loader(repository)
     _issuer_source_verifier(policy_head_sha)
+    current = _current_lifecycle_loader(repository, delivery_issue)
 
     def accepted_policy(requested_repository: str) -> tuple[str, dict[str, Any]]:
         if requested_repository != repository:
@@ -4876,7 +4977,6 @@ def _issue_ready_source_recovery_authorization(
         _gateway_factory=_gateway_factory,
         _validation_runner=_validation_runner,
     )
-    current = _current_lifecycle_loader(repository, delivery_issue)
     final_policy_head_sha, final_policy_entry = _policy_loader(repository)
     if (
         final_policy_head_sha != policy_head_sha
@@ -4887,16 +4987,46 @@ def _issue_ready_source_recovery_authorization(
             "accepted protected-main recovery policy changed during validation"
         )
     _issuer_source_verifier(final_policy_head_sha)
+    final_current = _current_lifecycle_loader(repository, delivery_issue)
+    if (
+        final_current.publication_oid != current.publication_oid
+        or final_current.publication_digest != current.publication_digest
+        or final_current.lifecycle != current.lifecycle
+    ):
+        raise fast_path.SecurityBlocker(
+            "Ready-source recovery CURRENT changed during validation"
+        )
+    exact_scope = {
+        "pull_request": pull_request_number,
+        "head_sha": facts["head_sha"],
+        "tree_sha": facts["tree_sha"],
+        "reviewed_state_digest": facts["reviewed_state_digest"],
+        "reviewed_feedback_digest": facts["reviewed_feedback_digest"],
+        "feedback_assessment_digest": facts["feedback_assessment_digest"],
+        "historical_validation_receipt_digest": (
+            historical_validation_receipt_digest
+        ),
+        "historical_final_attestation_digest": (
+            historical_final_attestation_digest
+        ),
+        "historical_package_status": "UNAVAILABLE",
+        "historical_bytes_reconstructed": False,
+    }
+    verified_recovery_authorization = _recovery_user_authorization_verifier(
+        recovery_user_authorization, final_current, exact_scope
+    )
     return _authorization_factory(
-        current_lifecycle=current.lifecycle,
-        current_publication_oid=current.publication_oid,
-        current_publication_digest=current.publication_digest,
+        current_lifecycle=final_current.lifecycle,
+        current_publication_oid=final_current.publication_oid,
+        current_publication_digest=final_current.publication_digest,
         recovery_safety_facts=facts,
         commit_signature_evidence=commit_signature_evidence,
         historical_validation_receipt_digest=historical_validation_receipt_digest,
         historical_final_attestation_digest=historical_final_attestation_digest,
-        historical_evidence_loss_proof_digest=historical_evidence_loss_proof_digest,
-        authorization_id=authorization_id,
+        historical_evidence_loss_proof_digest=(
+            verified_recovery_authorization["authorization_digest"]
+        ),
+        authorization_id=verified_recovery_authorization["authorization_id"],
         bounded_uses=1,
         expected_commit_signer=expected_commit_signer,
         signer_identity=signer_identity,
@@ -4910,12 +5040,31 @@ def issue_ready_source_recovery_authorization(
     manual_gate_evidence: Any,
     historical_validation_receipt_digest: str,
     historical_final_attestation_digest: str,
-    historical_evidence_loss_proof_digest: str, authorization_id: str,
+    recovery_user_authorization: Any,
     expected_commit_signer: Any, signer_identity: str, signer: Any,
 ) -> dict[str, Any]:
     """Issue the first trusted recovery artifact through fixed acquisition."""
 
     lifecycle_authority, lifecycle_publication = _load_lifecycle_publication_helpers()
+
+    def verify_recovery_user_authorization(
+        value: Any, observed: Any, expected_scope: dict[str, Any]
+    ) -> dict[str, Any]:
+        _, _, user_authorization_verifier = _load_lifecycle_publication_helpers(
+            include_orchestration=True
+        )
+        item = user_authorization_verifier(value, observed, observed.lifecycle)
+        if (
+            item.get("operation") != "READY_SOURCE_RECOVERY"
+            or item.get("scope") != expected_scope
+            or item.get("bounded_uses") != 1
+            or isinstance(item.get("bounded_uses"), bool)
+        ):
+            raise fast_path.SecurityBlocker(
+                "Ready-source recovery requires exact signed user authority"
+            )
+        return item
+
     return _issue_ready_source_recovery_authorization(
         repository=repository, delivery_issue=delivery_issue,
         pull_request_number=pull_request_number,
@@ -4924,8 +5073,7 @@ def issue_ready_source_recovery_authorization(
         manual_gate_evidence=manual_gate_evidence,
         historical_validation_receipt_digest=historical_validation_receipt_digest,
         historical_final_attestation_digest=historical_final_attestation_digest,
-        historical_evidence_loss_proof_digest=historical_evidence_loss_proof_digest,
-        authorization_id=authorization_id,
+        recovery_user_authorization=recovery_user_authorization,
         expected_commit_signer=expected_commit_signer,
         signer_identity=signer_identity, signer=signer,
         _policy_loader=_load_current_recovery_policy,
@@ -4937,6 +5085,9 @@ def issue_ready_source_recovery_authorization(
         ),
         _authorization_factory=(
             lifecycle_authority._sign_ready_source_recovery_authorization
+        ),
+        _recovery_user_authorization_verifier=(
+            verify_recovery_user_authorization
         ),
     )
 
