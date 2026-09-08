@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-08 - Separate Ready Tooling From Candidate Source
+
+**Fixed:**
+
+- Authenticate the executing adopted-Ready bridge and its authority modules
+  against one signed protected-main commit while reading integration Git objects
+  from a distinct candidate repository.
+- Reject dirty, stale, symlinked, preloaded, or mixed verifier provenance
+  without requiring legitimate candidate implementation bytes to match main.
+
 ## 2026-09-08 - Bridge Adopted Ready Authority
 
 **Fixed:**

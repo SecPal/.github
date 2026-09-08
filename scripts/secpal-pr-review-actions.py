@@ -61,6 +61,10 @@ LOCAL_VALIDATION_TIMEOUT_SECONDS = 600
 # Conflict-bearing integration paths are governance source intended for human
 # review. Bound their aggregate authenticated blob content before Git emits it.
 MAX_INTEGRATION_CONFLICT_CONTENT_BYTES = 4 * 1024 * 1024
+BRIDGE_BYTECODE_CACHE = tempfile.TemporaryDirectory(
+    prefix="secpal-accepted-main-bytecode-"
+)
+sys.pycache_prefix = BRIDGE_BYTECODE_CACHE.name
 
 
 def _load_evidence_helper() -> Any:
@@ -79,13 +83,14 @@ evidence = _load_evidence_helper()
 def _load_fast_path_helper() -> Any:
     loaded = sys.modules.get("secpal_pr_review.fast_path")
     if loaded is not None:
-        loaded_path = getattr(loaded, "__file__", None)
-        if (
-            not isinstance(loaded_path, str)
-            or Path(loaded_path).resolve() != FAST_PATH_HELPER.resolve()
-        ):
+        try:
+            loaded_path = loaded.__file__
+        except AttributeError as exc:
+            raise RuntimeError(
+                "Canonical fast-path module has an unexpected path"
+            ) from exc
+        if Path(loaded_path).absolute() != FAST_PATH_HELPER.absolute():
             raise RuntimeError("Canonical fast-path module has an unexpected path")
-        return loaded
     spec = importlib.util.spec_from_file_location(
         "secpal_pr_review.fast_path", FAST_PATH_HELPER
     )
@@ -110,7 +115,16 @@ def _load_pre_enrollment_integration_helper() -> Any:
     module_name = "secpal_pr_review.pre_enrollment_integration"
     loaded = sys.modules.get(module_name)
     if loaded is not None:
-        return loaded
+        try:
+            loaded_path = loaded.__file__
+        except AttributeError as exc:
+            raise RuntimeError(
+                "Canonical pre-enrollment module has an unexpected path"
+            ) from exc
+        if Path(loaded_path).absolute() != PRE_ENROLLMENT_INTEGRATION_HELPER.absolute():
+            raise RuntimeError(
+                "Canonical pre-enrollment module has an unexpected path"
+            )
     spec = importlib.util.spec_from_file_location(
         module_name, PRE_ENROLLMENT_INTEGRATION_HELPER
     )
@@ -5448,12 +5462,168 @@ def _verified_prior_delivery_commit(
     return {"parent_sha": parent, "tree_sha": tree, "signer": signer}
 
 
-def _require_accepted_main_bridge_source(
-    repository_root: Path,
-    repository: str,
-) -> str:
-    """Reject candidate-local bridge code before it can mint or select authority."""
+def _require_bridge_import_provenance(
+    observed_paths: dict[str, tuple[str, str]], expected_paths: dict[str, Path]
+) -> None:
+    """Prove that loaded authority modules came from exact source files."""
 
+    if set(observed_paths) != set(expected_paths):
+        raise fast_path.SecurityBlocker("mixed verifier provenance is forbidden")
+    for name, (module_file, origin) in observed_paths.items():
+        expected = expected_paths[name].absolute()
+        if (
+            not isinstance(module_file, str)
+            or not isinstance(origin, str)
+            or Path(module_file).absolute() != expected
+            or Path(origin).absolute() != expected
+        ):
+            raise fast_path.SecurityBlocker("mixed verifier provenance is forbidden")
+        try:
+            if expected.resolve(strict=True) != expected or not expected.is_file():
+                raise fast_path.SecurityBlocker(
+                    "mixed verifier provenance is forbidden"
+                )
+        except OSError as exc:
+            raise fast_path.SecurityBlocker(
+                "mixed verifier provenance is forbidden"
+            ) from exc
+
+
+def _require_exact_accepted_main_blob(
+    tooling_root: Path, accepted_main: str, relative_path: str
+) -> None:
+    """Match one regular tooling file to its exact accepted-main Git blob."""
+
+    path = tooling_root / relative_path
+    try:
+        if path.absolute().resolve(strict=True) != path.absolute() or not path.is_file():
+            raise fast_path.SecurityBlocker(
+                "accepted-main bridge tooling provenance is invalid"
+            )
+    except OSError as exc:
+        raise fast_path.SecurityBlocker(
+            "accepted-main bridge tooling provenance is invalid"
+        ) from exc
+    tree = _run_attestation_git(
+        tooling_root,
+        ["ls-tree", accepted_main, "--", relative_path],
+        allow_failure=True,
+    )
+    fields = tree.stdout.rstrip("\n").split(None, 3)
+    if (
+        tree.returncode != 0
+        or len(fields) != 4
+        or fields[0] not in {"100644", "100755"}
+        or fields[1] != "blob"
+        or not OID_PATTERN.fullmatch(fields[2])
+        or fields[3] != relative_path
+    ):
+        raise fast_path.SecurityBlocker(
+            "accepted-main bridge tooling provenance is invalid"
+        )
+    actual = _run_attestation_git(
+        tooling_root,
+        ["hash-object", "--no-filters", "--", relative_path],
+        allow_failure=True,
+    )
+    if actual.returncode != 0 or actual.stdout.strip().lower() != fields[2].lower():
+        raise fast_path.SecurityBlocker(
+            "accepted-main bridge tooling provenance is invalid"
+        )
+
+
+def _require_accepted_main_tooling_blobs(
+    tooling_root: Path, accepted_main: str
+) -> None:
+    """Authenticate the complete maintained verifier package and policies."""
+
+    local_head = _run_attestation_git(
+        tooling_root, ["rev-parse", "HEAD"], allow_failure=True
+    )
+    if (
+        local_head.returncode != 0
+        or local_head.stdout.strip().lower() != accepted_main
+    ):
+        raise fast_path.SecurityBlocker("stale accepted-main bridge tooling is forbidden")
+    package_tree = _run_attestation_git(
+        tooling_root,
+        [
+            "ls-tree",
+            "-r",
+            "--name-only",
+            accepted_main,
+            "--",
+            "scripts/secpal_pr_review",
+        ],
+        allow_failure=True,
+    )
+    package_paths = package_tree.stdout.splitlines()
+    required_paths = {
+        "scripts/secpal-pr-review-actions.py",
+        "scripts/secpal-pr-review.py",
+        ".agents/skills/secpal-pr-review/references/repositories.json",
+        ".agents/skills/secpal-pr-review/references/repositories.schema.json",
+    }
+    if (
+        package_tree.returncode != 0
+        or not package_paths
+        or any(
+            not re.fullmatch(r"scripts/secpal_pr_review/[A-Za-z0-9_]+\.py", path)
+            for path in package_paths
+        )
+    ):
+        raise fast_path.SecurityBlocker(
+            "accepted-main bridge verifier package is unavailable"
+        )
+    for relative_path in sorted(required_paths | set(package_paths)):
+        _require_exact_accepted_main_blob(tooling_root, accepted_main, relative_path)
+
+
+def _require_distinct_candidate_repository_root(candidate_root: Path) -> None:
+    """Keep untrusted candidate objects outside the executing tooling root."""
+
+    try:
+        if candidate_root.resolve(strict=True) == REPOSITORY_ROOT.resolve(strict=True):
+            raise fast_path.SecurityBlocker(
+                "candidate repository root must be distinct from accepted-main tooling"
+            )
+    except OSError as exc:
+        raise fast_path.SecurityBlocker("candidate repository root is unavailable") from exc
+
+
+def _require_accepted_main_bridge_source(
+    repository: str,
+    *,
+    expected_main: str | None = None,
+) -> str:
+    """Authenticate internally derived executing tooling as accepted main."""
+
+    repository_result = _run_bridge_gh(
+        [
+            "api",
+            "--hostname",
+            "github.com",
+            f"repos/{repository}",
+            "--jq",
+            '{"full_name":.full_name,"default_branch":.default_branch}',
+        ]
+    )
+    try:
+        repository_metadata = json.loads(repository_result.stdout)
+    except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise fast_path.SecurityBlocker(
+            "protected-main repository identity is malformed"
+        ) from exc
+    if (
+        repository_result.returncode != 0
+        or not isinstance(repository_metadata, dict)
+        or set(repository_metadata) != {"full_name", "default_branch"}
+        or repository_metadata.get("full_name") != repository
+        or repository_metadata.get("default_branch") != "main"
+    ):
+        raise fast_path.SecurityBlocker(
+            "protected-main repository identity is not authenticated"
+        )
     branch_result = _run_bridge_gh(
         [
             "api",
@@ -5508,43 +5678,31 @@ def _require_accepted_main_bridge_source(
         raise fast_path.SecurityBlocker(
             "protected-main bridge source is not authenticated"
         )
-    package_tree = _run_attestation_git(
-        repository_root,
-        ["ls-tree", "-r", "--name-only", main, "--", "scripts/secpal_pr_review"],
-        allow_failure=True,
-    )
-    package_paths = package_tree.stdout.splitlines()
-    required_paths = {
-        "scripts/secpal-pr-review-actions.py",
-        "scripts/secpal-pr-review.py",
-        ".agents/skills/secpal-pr-review/references/repositories.json",
-        ".agents/skills/secpal-pr-review/references/repositories.schema.json",
-    }
-    if (
-        package_tree.returncode != 0
-        or not package_paths
-        or any(
-            not re.fullmatch(r"scripts/secpal_pr_review/[A-Za-z0-9_]+\.py", path)
-            for path in package_paths
-        )
-    ):
+    if expected_main is not None and main != expected_main:
         raise fast_path.SecurityBlocker(
-            "accepted-main bridge verifier package is unavailable"
+            "accepted main changed during authority composition"
         )
-    for path in sorted(required_paths | set(package_paths)):
-        accepted = _run_attestation_git(
-            repository_root, ["show", f"{main}:{path}"], allow_failure=True
-        )
-        try:
-            local = (repository_root / path).read_text(encoding="utf-8")
-        except OSError as exc:
-            raise fast_path.SecurityBlocker(
-                "accepted-main bridge source is unavailable"
-            ) from exc
-        if accepted.returncode != 0 or accepted.stdout != local:
-            raise fast_path.SecurityBlocker(
-                "candidate-local Ready prior-authority bridge is forbidden"
-            )
+    _require_accepted_main_tooling_blobs(REPOSITORY_ROOT, main)
+    _require_bridge_import_provenance(
+        {
+            "evidence": (evidence.__file__, evidence.__spec__.origin),
+            "fast_path": (fast_path.__file__, fast_path.__spec__.origin),
+            "follow_up": (
+                fast_path.follow_up.__file__,
+                fast_path.follow_up.__spec__.origin,
+            ),
+            "pre_enrollment": (
+                pre_enrollment.__file__,
+                pre_enrollment.__spec__.origin,
+            ),
+        },
+        {
+            "evidence": EVIDENCE_HELPER,
+            "fast_path": FAST_PATH_HELPER,
+            "follow_up": FAST_PATH_HELPER.with_name("follow_up.py"),
+            "pre_enrollment": PRE_ENROLLMENT_INTEGRATION_HELPER,
+        },
+    )
     return main
 
 
@@ -5580,7 +5738,8 @@ def _derive_exact_state_adoption_v3_ready_prior_authority(
 ) -> dict[str, Any]:
     """Derive the v3-adopted source projection from protected CURRENT."""
 
-    _require_accepted_main_bridge_source(repository_root, repository)
+    accepted_main = _require_accepted_main_bridge_source(repository)
+    _require_distinct_candidate_repository_root(repository_root)
     try:
         lifecycle_authority, lifecycle_publication = (
             _load_lifecycle_publication_helpers()
@@ -5589,6 +5748,23 @@ def _derive_exact_state_adoption_v3_ready_prior_authority(
         raise fast_path.SecurityBlocker(
             "maintained lifecycle publication verifier is unavailable"
         ) from exc
+    _require_bridge_import_provenance(
+        {
+            "lifecycle_authority": (
+                lifecycle_authority.__file__,
+                lifecycle_authority.__spec__.origin,
+            ),
+            "lifecycle_publication": (
+                lifecycle_publication.__file__,
+                lifecycle_publication.__spec__.origin,
+            ),
+        },
+        {
+            "lifecycle_authority": LIFECYCLE_AUTHORITY_HELPER,
+            "lifecycle_publication": LIFECYCLE_PUBLICATION_HELPER,
+        },
+    )
+    _require_accepted_main_bridge_source(repository, expected_main=accepted_main)
     try:
         current = lifecycle_publication.verify_current_lifecycle_authority(
             repository, delivery_issue
@@ -5810,7 +5986,9 @@ def _derive_exact_state_adoption_v3_ready_prior_authority(
             "historical_bytes_reconstructed": False,
         },
     }
-    return fast_path.normalize_ready_integration_prior_authority(manifest)
+    normalized = fast_path.normalize_ready_integration_prior_authority(manifest)
+    _require_accepted_main_bridge_source(repository, expected_main=accepted_main)
+    return normalized
 
 
 def _require_exact_adopted_ready_manifest(

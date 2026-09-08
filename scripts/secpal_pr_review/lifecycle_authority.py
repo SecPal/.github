@@ -1705,12 +1705,11 @@ def _load_trusted_command_helper() -> Any:
         loaded_path = getattr(loaded, "__file__", None)
         if (
             not isinstance(loaded_path, str)
-            or Path(loaded_path).resolve() != _EVIDENCE_HELPER.resolve()
+            or Path(loaded_path).absolute() != _EVIDENCE_HELPER.absolute()
         ):
             raise LifecycleAuthorityError(
                 "maintained command trust helper has an unexpected path"
             )
-        return loaded
     spec = importlib.util.spec_from_file_location(module_name, _EVIDENCE_HELPER)
     if spec is None or spec.loader is None:
         raise LifecycleAuthorityError("maintained command trust helper is unavailable")
