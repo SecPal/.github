@@ -182,6 +182,27 @@ EXCEPTIONAL_RECOVERY_KEYS = frozenset(
         "lifecycle",
     }
 )
+EXCEPTIONAL_CONTINUATION_KIND = "READY_EXCEPTIONAL_CONTINUATION"
+EXCEPTIONAL_CONTINUATION_KEYS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "authorization_id",
+        "repository",
+        "delivery_issue_number",
+        "pull_request_number",
+        "prior_ready_head_sha",
+        "prior_ready_tree_sha",
+        "continuation_tree_sha",
+        "reviewed_state_digest",
+        "reviewed_feedback_digest",
+        "eligibility_evidence_digest",
+        "finding_ids",
+        "thread_ids",
+        "expected_signer",
+        "lifecycle",
+    }
+)
 READY_INTEGRATION_KEYS = frozenset(
     {
         "schema_version",
@@ -1037,6 +1058,180 @@ def normalize_exceptional_recovery_evidence(
     }
 
 
+def _exceptional_history(
+    value: Any, kinds: frozenset[str], label: str
+) -> list[dict[str, Any]]:
+    """Normalize history shape while lifecycle_authority remains semantic owner."""
+
+    if not isinstance(value, list) or not value:
+        raise SecurityBlocker(f"{label} history is missing")
+    normalized: list[dict[str, Any]] = []
+    for sequence, item in enumerate(value, start=1):
+        if (
+            not isinstance(item, dict)
+            or set(item)
+            != {"sequence", "transition_kind", "event_authorization_digest"}
+            or item.get("sequence") != sequence
+            or item.get("transition_kind") not in kinds
+        ):
+            raise SecurityBlocker(f"{label} history is malformed")
+        normalized.append(
+            {
+                "sequence": sequence,
+                "transition_kind": item["transition_kind"],
+                "event_authorization_digest": _require_digest(
+                    item.get("event_authorization_digest"), f"{label} event"
+                ),
+            }
+        )
+    return normalized
+
+
+def normalize_exceptional_continuation_evidence(
+    value: Any,
+    *,
+    repository: str,
+    reviewed_state: "StableFeedbackState",
+    validated_tree_sha: str,
+    eligibility_evidence: Any,
+) -> dict[str, Any]:
+    """Normalize one typed source-changing continuation after Recovery."""
+
+    if not isinstance(value, dict) or set(value) != EXCEPTIONAL_CONTINUATION_KEYS:
+        raise SecurityBlocker(
+            "exceptional continuation evidence is malformed or ambiguous"
+        )
+    if any(SECRET_VALUE.search(item) for item in _all_strings(value)):
+        raise SecurityBlocker(
+            "exceptional continuation evidence contains secret-like text"
+        )
+    eligibility = normalize_resolution_eligibility_evidence(
+        eligibility_evidence,
+        repository=repository,
+        reviewed_state=reviewed_state,
+    )
+    eligibility_digest = digest_json(eligibility)
+    if (
+        value.get("schema_version") != "1.0"
+        or value.get("kind") != EXCEPTIONAL_CONTINUATION_KIND
+        or value.get("repository") != repository
+        or reviewed_state.repository != repository
+        or value.get("pull_request_number") != reviewed_state.pull_request_number
+        or reviewed_state.pr_state != "OPEN"
+        or value.get("prior_ready_head_sha") != reviewed_state.head_sha
+        or value.get("reviewed_state_digest") != reviewed_state.state_digest
+        or value.get("reviewed_feedback_digest") != reviewed_state.feedback_digest
+        or value.get("continuation_tree_sha") != validated_tree_sha
+        or value.get("eligibility_evidence_digest") != eligibility_digest
+    ):
+        raise SecurityBlocker("exceptional continuation identity or evidence is stale")
+    finding_ids, thread_ids = continuation_material_finding_projection(
+        reviewed_state, eligibility
+    )
+    if value.get("finding_ids") != finding_ids or value.get("thread_ids") != thread_ids:
+        raise SecurityBlocker(
+            "exceptional continuation findings differ from eligibility authority"
+        )
+    lifecycle = value.get("lifecycle")
+    lifecycle_fields = {
+        "unrestricted_reviews",
+        "remediation_cycles",
+        "cycle_3",
+        "draft",
+        "ready",
+        "ready_transition_count",
+        "ready_history",
+        "exceptional_recovery_count",
+        "exceptional_recovery_history",
+        "exceptional_continuation_predecessor_count",
+        "exceptional_continuation_successor_count",
+    }
+    if not isinstance(lifecycle, dict) or set(lifecycle) != lifecycle_fields:
+        raise SecurityBlocker("exceptional continuation lifecycle is malformed")
+    expected_signer = value.get("expected_signer")
+    if (
+        not isinstance(expected_signer, dict)
+        or set(expected_signer) != {"kind", "identity"}
+        or expected_signer.get("kind")
+        not in {"SSH_PRINCIPAL", "OPENPGP_FINGERPRINT"}
+    ):
+        raise SecurityBlocker("exceptional continuation signer is malformed")
+    signer_identity = _require_string(
+        expected_signer.get("identity"), "exceptional continuation signer"
+    )
+    if expected_signer["kind"] == "OPENPGP_FINGERPRINT" and not re.fullmatch(
+        r"[0-9A-F]{40,64}", signer_identity
+    ):
+        raise SecurityBlocker("exceptional continuation OpenPGP signer is malformed")
+    ready_history = _exceptional_history(
+        lifecycle.get("ready_history"),
+        frozenset({"DRAFT_TO_READY", "READY_TO_DRAFT"}),
+        "Ready transition",
+    )
+    recovery_history = _exceptional_history(
+        lifecycle.get("exceptional_recovery_history"),
+        frozenset({"EXCEPTIONAL_RECOVERY"}),
+        "Exceptional Recovery",
+    )
+    if (
+        lifecycle.get("unrestricted_reviews") != 1
+        or lifecycle.get("remediation_cycles") != 2
+        or lifecycle.get("cycle_3") is not False
+        or lifecycle.get("draft") is not False
+        or lifecycle.get("ready") is not True
+        or lifecycle.get("ready_transition_count")
+        != sum(
+            item["transition_kind"] == "DRAFT_TO_READY" for item in ready_history
+        )
+        or lifecycle.get("exceptional_recovery_count") != 1
+        or len(recovery_history) != 1
+        or lifecycle.get("exceptional_continuation_predecessor_count") != 0
+        or lifecycle.get("exceptional_continuation_successor_count") != 1
+    ):
+        raise SecurityBlocker(
+            "exceptional continuation would alter the finite lifecycle"
+        )
+    return {
+        "schema_version": "1.0",
+        "kind": EXCEPTIONAL_CONTINUATION_KIND,
+        "authorization_id": _require_string(
+            value.get("authorization_id"),
+            "exceptional continuation authorization",
+        ),
+        "repository": repository,
+        "delivery_issue_number": _require_positive_integer(
+            value.get("delivery_issue_number"),
+            "exceptional continuation delivery issue",
+        ),
+        "pull_request_number": reviewed_state.pull_request_number,
+        "prior_ready_head_sha": reviewed_state.head_sha,
+        "prior_ready_tree_sha": _require_oid(
+            value.get("prior_ready_tree_sha"), "prior Ready tree"
+        ),
+        "continuation_tree_sha": _require_oid(
+            validated_tree_sha, "continuation tree"
+        ),
+        "reviewed_state_digest": reviewed_state.state_digest,
+        "reviewed_feedback_digest": reviewed_state.feedback_digest,
+        "eligibility_evidence_digest": eligibility_digest,
+        "finding_ids": finding_ids,
+        "thread_ids": thread_ids,
+        "expected_signer": {
+            "kind": expected_signer["kind"],
+            "identity": signer_identity,
+        },
+        "lifecycle": {
+            **{
+                key: copy.deepcopy(lifecycle[key])
+                for key in lifecycle_fields
+                if key not in {"ready_history", "exceptional_recovery_history"}
+            },
+            "ready_history": ready_history,
+            "exceptional_recovery_history": recovery_history,
+        },
+    }
+
+
 def _actor(value: Any, label: str, *, allow_deleted: bool = False) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise SecurityBlocker(f"{label} actor identity is missing")
@@ -1678,6 +1873,46 @@ def verify_reviewed_state_evidence(value: Any) -> StableFeedbackState:
     return reviewed
 
 
+def verify_stable_feedback_successor(
+    reviewed: StableFeedbackState,
+    current: StableFeedbackState,
+    *,
+    resulting_head_sha: str,
+) -> None:
+    """Authenticate predecessor feedback after one exact source-head advance."""
+
+    resulting_head_sha = _require_oid(resulting_head_sha, "resulting feedback head")
+    if (
+        not isinstance(reviewed, StableFeedbackState)
+        or not isinstance(current, StableFeedbackState)
+        or current.repository != reviewed.repository
+        or current.pull_request_number != reviewed.pull_request_number
+        or current.pr_state != "OPEN"
+        or current.head_sha != resulting_head_sha
+        or current.base_ref != reviewed.base_ref
+        or current.base_sha != reviewed.base_sha
+    ):
+        raise SecurityBlocker(
+            "current stable feedback does not identify the exact source successor"
+        )
+    normalized = copy.deepcopy(current.feedback)
+    reviewed_threads = {
+        item["node_id"]: item for item in reviewed.feedback["threads"]
+    }
+    for thread in normalized["threads"]:
+        expected = reviewed_threads.get(thread["node_id"])
+        if (
+            expected is not None
+            and expected["is_outdated"] is False
+            and thread["is_outdated"] is True
+        ):
+            thread["is_outdated"] = False
+    if digest_json(normalized) != reviewed.feedback_digest:
+        raise SecurityBlocker(
+            "current stable feedback differs from the reviewed predecessor"
+        )
+
+
 def normalize_resolution_eligibility_evidence(
     value: Any,
     *,
@@ -1773,6 +2008,49 @@ def normalize_resolution_eligibility_evidence(
             "resolution eligibility evidence contains duplicate threads"
         )
     return copy.deepcopy(value)
+
+
+def continuation_material_finding_projection(
+    reviewed_state: StableFeedbackState,
+    eligibility: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    """Derive only provider-observed material Continuation finding identities."""
+
+    eligible_threads = eligibility.get("eligible_threads")
+    if not isinstance(eligible_threads, list) or not eligible_threads:
+        raise SecurityBlocker(
+            "exceptional continuation requires material corrected findings"
+        )
+    reviewed_threads = {
+        item["node_id"]: item for item in reviewed_state.feedback["threads"]
+    }
+    finding_ids: list[str] = []
+    thread_ids: list[str] = []
+    for item in eligible_threads:
+        thread = reviewed_threads.get(item["thread_id"])
+        observed_comment_ids = (
+            {comment["node_id"] for comment in thread["comments"]}
+            if isinstance(thread, dict)
+            else set()
+        )
+        if (
+            item["classification"] != "VALID_ACTIONABLE"
+            or item["disposition"] != "CORRECTED_AND_VERIFIED"
+            or item["follow_up"] is not None
+            or not set(item["finding_ids"]).issubset(observed_comment_ids)
+        ):
+            raise SecurityBlocker(
+                "exceptional continuation finding lacks stable feedback authority"
+            )
+        finding_ids.extend(item["finding_ids"])
+        thread_ids.append(item["thread_id"])
+    finding_ids.sort()
+    thread_ids.sort()
+    if len(finding_ids) != len(set(finding_ids)):
+        raise SecurityBlocker(
+            "exceptional continuation finding identities are repeated"
+        )
+    return finding_ids, thread_ids
 
 
 @dataclass
@@ -2229,6 +2507,7 @@ def create_validation_receipt(
     eligibility_evidence_digest: str | None = None,
     integration_evidence_digest: str | None = None,
     exceptional_recovery_evidence_digest: str | None = None,
+    exceptional_continuation_evidence_digest: str | None = None,
 ) -> dict[str, Any]:
     gates = registry.get("manual_gates") if isinstance(registry, dict) else None
     normalized_gates = validate_manual_gate_evidence(manual_gate_evidence, gates)
@@ -2262,6 +2541,18 @@ def create_validation_receipt(
         fields["exceptional_recovery_evidence_digest"] = _require_digest(
             exceptional_recovery_evidence_digest,
             "exceptional recovery evidence digest",
+        )
+    if exceptional_continuation_evidence_digest is not None:
+        fields["exceptional_continuation_evidence_digest"] = _require_digest(
+            exceptional_continuation_evidence_digest,
+            "exceptional continuation evidence digest",
+        )
+    if (
+        exceptional_recovery_evidence_digest is not None
+        and exceptional_continuation_evidence_digest is not None
+    ):
+        raise SecurityBlocker(
+            "Recovery and Continuation evidence kinds are mutually exclusive"
         )
     return {**fields, "receipt_digest": digest_json(fields)}
 
@@ -2297,6 +2588,9 @@ def _create_validation_attestation(
         exceptional_recovery_evidence_digest=validation_receipt.get(
             "exceptional_recovery_evidence_digest"
         ),
+        exceptional_continuation_evidence_digest=validation_receipt.get(
+            "exceptional_continuation_evidence_digest"
+        ),
     )
     if validation_receipt != expected_receipt:
         raise SecurityBlocker("validation receipt is invalid or stale")
@@ -2327,6 +2621,10 @@ def _create_validation_attestation(
     if "exceptional_recovery_evidence_digest" in validation_receipt:
         fields["exceptional_recovery_evidence_digest"] = validation_receipt[
             "exceptional_recovery_evidence_digest"
+        ]
+    if "exceptional_continuation_evidence_digest" in validation_receipt:
+        fields["exceptional_continuation_evidence_digest"] = validation_receipt[
+            "exceptional_continuation_evidence_digest"
         ]
     return {**fields, "attestation_digest": digest_json(fields)}
 
@@ -2370,6 +2668,10 @@ def create_ready_integration_attestation(
     if "exceptional_recovery_evidence_digest" in validation_receipt:
         raise SecurityBlocker(
             "Ready integration cannot be combined with exceptional recovery"
+        )
+    if "exceptional_continuation_evidence_digest" in validation_receipt:
+        raise SecurityBlocker(
+            "Ready integration cannot be combined with exceptional continuation"
         )
 
     normalized = normalize_ready_integration_evidence(
@@ -2625,6 +2927,9 @@ def _verify_validation_attestation_unsealed(
         ),
         exceptional_recovery_evidence_digest=attestation.get(
             "exceptional_recovery_evidence_digest"
+        ),
+        exceptional_continuation_evidence_digest=attestation.get(
+            "exceptional_continuation_evidence_digest"
         ),
     )
     if (

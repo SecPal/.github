@@ -9244,6 +9244,205 @@ class FastPathTests(TestCase):
                     eligibility_evidence_digest=eligibility_digest,
                 )
 
+    def test_exceptional_continuation_evidence_binds_material_findings_and_attestation(
+        self,
+    ) -> None:
+        original = fast_feedback(thread_count=1)
+        feedback = copy.deepcopy(original.feedback)
+        feedback["threads"][0]["node_id"] = "PRRT_CONTINUATION_GENERIC"
+        feedback["threads"][0]["comments"][0][
+            "node_id"
+        ] = "CONTINUATION_FINDING_GENERIC"
+        reviewed = fast_path.StableFeedbackState(
+            repository=original.repository,
+            pull_request_number=884,
+            head_sha=original.head_sha,
+            base_ref=original.base_ref,
+            base_sha=original.base_sha,
+            pr_state="OPEN",
+            feedback=feedback,
+        )
+        eligibility = {
+            "schema_version": "1.1",
+            "repository": "SecPal/.github",
+            "pull_request_number": 884,
+            "reviewed_head_sha": reviewed.head_sha,
+            "reviewed_state_digest": reviewed.state_digest,
+            "eligible_threads": [
+                {
+                    "thread_id": "PRRT_CONTINUATION_GENERIC",
+                    "classification": "VALID_ACTIONABLE",
+                    "disposition": "CORRECTED_AND_VERIFIED",
+                    "finding_ids": ["CONTINUATION_FINDING_GENERIC"],
+                    "evidence_digest": "3" * 64,
+                    "follow_up": None,
+                }
+            ],
+        }
+        value = {
+            "schema_version": "1.0",
+            "kind": "READY_EXCEPTIONAL_CONTINUATION",
+            "authorization_id": "user-authorized-continuation-884-1",
+            "repository": "SecPal/.github",
+            "delivery_issue_number": 883,
+            "pull_request_number": 884,
+            "prior_ready_head_sha": reviewed.head_sha,
+            "prior_ready_tree_sha": "1" * 40,
+            "continuation_tree_sha": "2" * 40,
+            "reviewed_state_digest": reviewed.state_digest,
+            "reviewed_feedback_digest": reviewed.feedback_digest,
+            "eligibility_evidence_digest": fast_path.digest_json(eligibility),
+            "finding_ids": ["CONTINUATION_FINDING_GENERIC"],
+            "thread_ids": ["PRRT_CONTINUATION_GENERIC"],
+            "expected_signer": {
+                "kind": "SSH_PRINCIPAL",
+                "identity": "aroviqen@secpal.app",
+            },
+            "lifecycle": {
+                "unrestricted_reviews": 1,
+                "remediation_cycles": 2,
+                "cycle_3": False,
+                "draft": False,
+                "ready": True,
+                "ready_transition_count": 1,
+                "ready_history": [
+                    {
+                        "sequence": 1,
+                        "transition_kind": "DRAFT_TO_READY",
+                        "event_authorization_digest": "4" * 64,
+                    }
+                ],
+                "exceptional_recovery_count": 1,
+                "exceptional_recovery_history": [
+                    {
+                        "sequence": 1,
+                        "transition_kind": "EXCEPTIONAL_RECOVERY",
+                        "event_authorization_digest": "5" * 64,
+                    }
+                ],
+                "exceptional_continuation_predecessor_count": 0,
+                "exceptional_continuation_successor_count": 1,
+            },
+        }
+        normalized = fast_path.normalize_exceptional_continuation_evidence(
+            value,
+            repository="SecPal/.github",
+            reviewed_state=reviewed,
+            validated_tree_sha="2" * 40,
+            eligibility_evidence=eligibility,
+        )
+        receipt = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            validated_tree_sha="2" * 40,
+            registry=fast_registry(),
+            command_set=fast_registry()["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+            eligibility_evidence_digest=fast_path.digest_json(eligibility),
+            exceptional_continuation_evidence_digest=fast_path.digest_json(
+                normalized
+            ),
+        )
+        attestation = fast_path.create_validation_attestation(
+            repository="SecPal/.github",
+            head_sha="6" * 40,
+            registry=fast_registry(),
+            command_set=fast_registry()["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+        )
+        self.assertEqual(
+            attestation["exceptional_continuation_evidence_digest"],
+            fast_path.digest_json(normalized),
+        )
+        fast_path.verify_validation_attestation(
+            attestation,
+            repository="SecPal/.github",
+            head_sha="6" * 40,
+            registry=fast_registry(),
+            command_set=fast_registry()["validation"],
+            reviewed_state=reviewed,
+            commit_parent_sha=reviewed.head_sha,
+            commit_tree_sha="2" * 40,
+            commit_validation_receipt_digest=receipt["receipt_digest"],
+        )
+        stale_attestation = copy.deepcopy(attestation)
+        stale_attestation["exceptional_continuation_evidence_digest"] = "9" * 64
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "signed commit"):
+            fast_path.verify_validation_attestation(
+                stale_attestation,
+                repository="SecPal/.github",
+                head_sha="6" * 40,
+                registry=fast_registry(),
+                command_set=fast_registry()["validation"],
+                reviewed_state=reviewed,
+                commit_parent_sha=reviewed.head_sha,
+                commit_tree_sha="2" * 40,
+                commit_validation_receipt_digest=receipt["receipt_digest"],
+            )
+
+        for label, mutate in (
+            ("recovery-zero", lambda item: item["lifecycle"].update(exceptional_recovery_count=0)),
+            ("continuation-replay", lambda item: item["lifecycle"].update(exceptional_continuation_predecessor_count=1)),
+            ("cycle-3", lambda item: item["lifecycle"].update(cycle_3=True)),
+            ("finding", lambda item: item.update(finding_ids=["INVENTED"])),
+            ("thread", lambda item: item.update(thread_ids=["PRRT_UNRELATED"])),
+            ("tree", lambda item: item.update(continuation_tree_sha="7" * 40)),
+            ("recovery-kind", lambda item: item.update(kind="READY_EXCEPTIONAL_RECOVERY")),
+            ("unknown", lambda item: item.update(generic_post_limit=True)),
+        ):
+            changed = copy.deepcopy(value)
+            mutate(changed)
+            with self.subTest(label=label), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                fast_path.normalize_exceptional_continuation_evidence(
+                    changed,
+                    repository="SecPal/.github",
+                    reviewed_state=reviewed,
+                    validated_tree_sha="2" * 40,
+                    eligibility_evidence=eligibility,
+                )
+
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "mutually exclusive"
+        ):
+            fast_path.create_validation_receipt(
+                repository="SecPal/.github",
+                head_sha=reviewed.head_sha,
+                validated_tree_sha="2" * 40,
+                registry=fast_registry(),
+                command_set=fast_registry()["validation"],
+                successful_result=True,
+                reviewed_state=reviewed,
+                manual_gate_evidence=[],
+                exceptional_recovery_evidence_digest="8" * 64,
+                exceptional_continuation_evidence_digest="9" * 64,
+            )
+
+        invented_eligibility = copy.deepcopy(eligibility)
+        invented_eligibility["eligible_threads"][0]["finding_ids"] = [
+            "CALLER_INVENTED_FINDING"
+        ]
+        invented = copy.deepcopy(value)
+        invented["finding_ids"] = ["CALLER_INVENTED_FINDING"]
+        invented["eligibility_evidence_digest"] = fast_path.digest_json(
+            invented_eligibility
+        )
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "stable feedback authority"
+        ):
+            fast_path.normalize_exceptional_continuation_evidence(
+                invented,
+                repository="SecPal/.github",
+                reviewed_state=reviewed,
+                validated_tree_sha="2" * 40,
+                eligibility_evidence=invented_eligibility,
+            )
+
     def test_ready_integration_signature_requires_the_explicit_signer(self) -> None:
         actions._verify_integration_signer(
             'Good "git" signature for aroviqen with ED25519 key SHA256:test\n',
