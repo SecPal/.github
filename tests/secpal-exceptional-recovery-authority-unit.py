@@ -682,7 +682,9 @@ class ContinuationFixture:
             parent_shas=(self.heads[3],),
             signer_kind="SSH_PRINCIPAL",
             signer_identity=SIGNER,
-            signature_fingerprint="SHA256:fixture",
+            signature_fingerprint=orchestration._ssh_public_key_fingerprint(
+                "ssh-ed25519 AAAA"
+            ),
             signature_classification="LOCAL_VERIFIED",
             signature_policy_digest="7" * 64,
             authentication_digest="8" * 64,
@@ -1280,7 +1282,9 @@ class ExceptionalContinuationAuthorityTests(TestCase):
             parent_shas=("4" * 40,),
             signer_kind="SSH_PRINCIPAL",
             signer_identity=SIGNER,
-            signature_fingerprint="SHA256:fixture",
+            signature_fingerprint=orchestration._ssh_public_key_fingerprint(
+                "ssh-ed25519 AAAA"
+            ),
             signature_classification="LOCAL_VERIFIED",
             signature_policy_digest="5" * 64,
             authentication_digest="6" * 64,
@@ -1291,6 +1295,26 @@ class ExceptionalContinuationAuthorityTests(TestCase):
             ),
             self.assertRaisesRegex(
                 orchestration.LifecycleOrchestrationError, "exact predecessor"
+            ),
+        ):
+            orchestration._authenticate_continuation_commit(
+                Path(self.directory.name),
+                REPOSITORY,
+                "1" * 40,
+                "2" * 40,
+                expected,
+            )
+        wrong_key = replace(
+            wrong_parent,
+            parent_shas=("1" * 40,),
+            signature_fingerprint="SHA256:caller-controlled-key",
+        )
+        with (
+            patch.object(
+                fast_path, "authenticate_integration_commit", return_value=wrong_key
+            ),
+            self.assertRaisesRegex(
+                orchestration.LifecycleOrchestrationError, "maintained SSH key"
             ),
         ):
             orchestration._authenticate_continuation_commit(

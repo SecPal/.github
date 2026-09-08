@@ -618,6 +618,47 @@ def recovery_validation_payloads(
     return receipt, attestation
 
 
+def continuation_validation_payloads(
+    reviewed: dict[str, Any],
+    eligibility_evidence_digest: str,
+    *,
+    expected_head: str = "c" * 40,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    binding = MODULE._validation_registry_binding(
+        MODULE._load_repository_entry(reviewed["repository"])
+    )
+    stable = MODULE.fast_path.StableFeedbackState.from_payload(reviewed)
+    receipt = MODULE.fast_path.create_validation_receipt(
+        repository=reviewed["repository"],
+        head_sha=reviewed["head_sha"],
+        validated_tree_sha="f" * 40,
+        registry=binding,
+        command_set=binding["validation"],
+        successful_result=True,
+        reviewed_state=stable,
+        manual_gate_evidence=[
+            {
+                "gate": gate,
+                "satisfied": True,
+                "evidence": f"Verified continuation evidence {index}",
+            }
+            for index, gate in enumerate(binding["manual_gates"], start=1)
+        ],
+        eligibility_evidence_digest=eligibility_evidence_digest,
+        exceptional_continuation_evidence_digest="8" * 64,
+    )
+    attestation = MODULE.fast_path.create_validation_attestation(
+        repository=reviewed["repository"],
+        head_sha=expected_head,
+        registry=binding,
+        command_set=binding["validation"],
+        successful_result=True,
+        reviewed_state=stable,
+        validation_receipt=receipt,
+    )
+    return receipt, attestation
+
+
 def integration_validation_payloads(
     reviewed: dict[str, Any],
     eligibility_digest: str,
@@ -2925,6 +2966,39 @@ class ResolveFixedThreadsTests(TestCase):
                     attestation["head_sha"],
                     reviewed,
                 )
+
+    def test_validation_loader_retains_continuation_receipt_digest(self) -> None:
+        thread_id = "PRRT_CONTINUATION_LOADER"
+        reviewed_payload = reviewed_state_payload(thread_id, [])
+        eligibility = eligibility_payload(reviewed_payload, (thread_id,))
+        _receipt, attestation = continuation_validation_payloads(
+            reviewed_payload, MODULE._digest_json(eligibility)
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reviewed_path = root / "reviewed.json"
+            attestation_path = root / "attestation.json"
+            reviewed_path.write_text(json.dumps(reviewed_payload), encoding="utf-8")
+            attestation_path.write_text(json.dumps(attestation), encoding="utf-8")
+            reviewed = MODULE.load_reviewed_state(
+                reviewed_path,
+                reviewed_payload["repository"],
+                reviewed_payload["pull_request_number"],
+                reviewed_payload["state_digest"],
+                (thread_id,),
+            )
+
+            validation = MODULE.load_validation_evidence(
+                attestation_path,
+                reviewed_payload["repository"],
+                attestation["head_sha"],
+                reviewed,
+            )
+
+        self.assertEqual(
+            validation.attestation["exceptional_continuation_evidence_digest"],
+            "8" * 64,
+        )
 
     def test_recovery_authority_consumer_cross_binds_shared_verifier(self) -> None:
         thread_id = "PRRT_RECOVERY_CONSUMER"

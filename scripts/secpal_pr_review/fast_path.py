@@ -1878,10 +1878,23 @@ def verify_stable_feedback_successor(
     current: StableFeedbackState,
     *,
     resulting_head_sha: str,
+    authorized_thread_ids: Iterable[str],
 ) -> None:
     """Authenticate predecessor feedback after one exact source-head advance."""
 
     resulting_head_sha = _require_oid(resulting_head_sha, "resulting feedback head")
+    if (
+        not isinstance(authorized_thread_ids, (list, tuple))
+        or not authorized_thread_ids
+        or any(
+            not isinstance(item, str)
+            or not re.fullmatch(r"PRRT_[A-Za-z0-9_-]+", item)
+            for item in authorized_thread_ids
+        )
+        or len(authorized_thread_ids) != len(set(authorized_thread_ids))
+    ):
+        raise SecurityBlocker("authorized continuation threads are malformed")
+    authorized = set(authorized_thread_ids)
     if (
         not isinstance(reviewed, StableFeedbackState)
         or not isinstance(current, StableFeedbackState)
@@ -1901,6 +1914,13 @@ def verify_stable_feedback_successor(
     }
     for thread in normalized["threads"]:
         expected = reviewed_threads.get(thread["node_id"])
+        if (
+            expected is not None
+            and expected["is_resolved"] is False
+            and thread["is_resolved"] is True
+            and thread["node_id"] in authorized
+        ):
+            thread["is_resolved"] = False
         if (
             expected is not None
             and expected["is_outdated"] is False

@@ -234,6 +234,55 @@ def feedback_successor(
 
 
 class LifecycleOrchestrationTests(TestCase):
+    def test_feedback_capture_uses_explicit_isolated_bounded_repository_root(
+        self,
+    ) -> None:
+        request, _authorization = continuation_inputs()
+        reviewed = request["continuation_evidence"]["reviewed_state_evidence"]
+
+        def run(command, **kwargs):
+            output = Path(command[command.index("--capture-reviewed-state") + 1])
+            output.write_bytes(authority.canonical_json_bytes(reviewed))
+            return SimpleNamespace(returncode=0)
+
+        with mock.patch.object(
+            orchestration.bootstrap_source_admission,
+            "_run_isolated_python",
+            side_effect=run,
+        ) as call:
+            captured = orchestration._capture_current_stable_feedback(
+                REPOSITORY, PR
+            )
+
+        command = call.call_args.args[0]
+        options = call.call_args.kwargs
+        self.assertEqual(captured.state_digest, reviewed["state_digest"])
+        self.assertIn("-I", command)
+        self.assertIn("-B", command)
+        root = str(REPO_ROOT.resolve())
+        self.assertEqual(command[command.index("--repo-root") + 1], root)
+        self.assertEqual(options["cwd"], REPO_ROOT.resolve())
+        self.assertEqual(options["timeout"], 60)
+        self.assertNotIn("PYTHONPATH", options["env"])
+        self.assertNotIn("PYTHONHOME", options["env"])
+
+        with (
+            mock.patch.object(
+                orchestration.bootstrap_source_admission,
+                "_run_isolated_python",
+                side_effect=(
+                    orchestration.bootstrap_source_admission.BootstrapSourceAdmissionError(
+                        "isolated feedback process timed out"
+                    )
+                ),
+            ),
+            self.assertRaisesRegex(
+                orchestration.LifecycleOrchestrationError,
+                "could not be authenticated",
+            ),
+        ):
+            orchestration._capture_current_stable_feedback(REPOSITORY, PR)
+
     def test_signed_user_authorization_binds_exact_current_publication(self) -> None:
         lifecycle = current_lifecycle()
         observed = current_reader(lifecycle)(REPOSITORY, ISSUE)

@@ -6206,6 +6206,9 @@ def _verify_ready_integration_prior_authority(
         exceptional_recovery_evidence_digest=attestation.get(
             "exceptional_recovery_evidence_digest"
         ),
+        exceptional_continuation_evidence_digest=attestation.get(
+            "exceptional_continuation_evidence_digest"
+        ),
     )
     if (
         receipt != expected_prior_receipt

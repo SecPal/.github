@@ -11,17 +11,19 @@ push, polling, or merge.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import copy
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 import re
-import subprocess
-import sys
 import tempfile
 from typing import Any, Callable, Mapping
 
 from scripts.secpal_work_graph import replanning
 
+from . import bootstrap_source_admission
 from . import fast_path
 from . import follow_up
 from . import lifecycle_authority as authority
@@ -215,29 +217,35 @@ def _capture_current_stable_feedback(
 ) -> fast_path.StableFeedbackState:
     """Reuse the maintained bounded provider capture without duplicating it."""
 
-    action = Path(__file__).resolve().parents[1] / "secpal-pr-review-actions.py"
+    repository_root = Path(__file__).resolve().parents[2]
+    action = repository_root / "scripts/secpal-pr-review-actions.py"
     try:
+        environment = bootstrap_source_admission._closed_launcher_environment(
+            authority._load_trusted_command_helper()
+        )
         with tempfile.TemporaryDirectory(
             prefix="secpal-continuation-feedback-"
         ) as directory:
             output = Path(directory) / "reviewed-state.json"
-            result = subprocess.run(
+            result = bootstrap_source_admission._run_isolated_python(
                 [
-                    sys.executable,
+                    bootstrap_source_admission._trusted_python(),
+                    "-I",
+                    "-B",
                     str(action),
                     "resolve-batch",
                     "--repo",
                     repository,
                     "--pr",
                     str(pull_request),
+                    "--repo-root",
+                    str(repository_root),
                     "--capture-reviewed-state",
                     str(output),
                 ],
-                cwd=Path.cwd(),
-                check=False,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                cwd=repository_root,
+                timeout=60,
+                env=environment,
             )
             if result.returncode != 0:
                 raise LifecycleOrchestrationError(
@@ -246,7 +254,12 @@ def _capture_current_stable_feedback(
             return fast_path.verify_reviewed_state_evidence(
                 authority.loads_closed_json(output.read_bytes())
             )
-    except (OSError, authority.LifecycleAuthorityError, fast_path.SecurityBlocker) as exc:
+    except (
+        OSError,
+        authority.LifecycleAuthorityError,
+        bootstrap_source_admission.BootstrapSourceAdmissionError,
+        fast_path.SecurityBlocker,
+    ) as exc:
         raise LifecycleOrchestrationError(
             "current stable feedback could not be authenticated"
         ) from exc
@@ -294,9 +307,15 @@ def _verify_continuation_finding_authority(
             repository=repository,
             reviewed_state=reviewed,
         )
+        finding_ids, thread_ids = fast_path.continuation_material_finding_projection(
+            reviewed, eligibility
+        )
         current = feedback_reader(repository, pull_request)
         fast_path.verify_stable_feedback_successor(
-            reviewed, current, resulting_head_sha=resulting_head_sha
+            reviewed,
+            current,
+            resulting_head_sha=resulting_head_sha,
+            authorized_thread_ids=thread_ids,
         )
     except fast_path.SecurityBlocker as exc:
         raise LifecycleOrchestrationError(
@@ -311,14 +330,6 @@ def _verify_continuation_finding_authority(
         raise LifecycleOrchestrationError(
             "continuation feedback differs from the CURRENT Ready head"
         )
-    try:
-        finding_ids, thread_ids = fast_path.continuation_material_finding_projection(
-            reviewed, eligibility
-        )
-    except fast_path.SecurityBlocker as exc:
-        raise LifecycleOrchestrationError(
-            "continuation requires exact authenticated material findings"
-        ) from exc
     return VerifiedContinuationFindingAuthority(
         reviewed_state_digest=reviewed.state_digest,
         reviewed_feedback_digest=reviewed.feedback_digest,
@@ -889,11 +900,39 @@ def _authenticate_continuation_commit(
         raise LifecycleOrchestrationError(
             "Exceptional Continuation signed source commit is invalid"
         ) from exc
+    if signer_kind == "SSH_PRINCIPAL":
+        try:
+            trusted_fingerprints = {
+                _ssh_public_key_fingerprint(key)
+                for key in policy.signers[signer_identity].ssh_public_keys
+            }
+        except (KeyError, ValueError) as exc:
+            raise LifecycleOrchestrationError(
+                "Exceptional Continuation maintained SSH key is invalid"
+            ) from exc
+        if verified.signature_fingerprint not in trusted_fingerprints:
+            raise LifecycleOrchestrationError(
+                "Exceptional Continuation signature does not match the maintained SSH key"
+            )
     if verified.parent_shas != (predecessor_head_sha,):
         raise LifecycleOrchestrationError(
             "Exceptional Continuation requires one exact predecessor parent"
         )
     return verified
+
+
+def _ssh_public_key_fingerprint(public_key: str) -> str:
+    """Derive the OpenSSH SHA-256 fingerprint for one maintained public key."""
+
+    parts = public_key.split()
+    if len(parts) < 2:
+        raise ValueError("SSH public key is malformed")
+    try:
+        raw = base64.b64decode(parts[1], validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("SSH public key is malformed") from exc
+    digest = base64.b64encode(hashlib.sha256(raw).digest()).decode("ascii")
+    return "SHA256:" + digest.rstrip("=")
 
 
 def verify_exceptional_continuation_authority(

@@ -1107,6 +1107,9 @@ def load_validation_evidence(
             exceptional_recovery_evidence_digest=payload.get(
                 "exceptional_recovery_evidence_digest"
             ),
+            exceptional_continuation_evidence_digest=payload.get(
+                "exceptional_continuation_evidence_digest"
+            ),
         )
         expected_attestation = fast_path.create_validation_attestation(
             repository=repository,

@@ -8886,6 +8886,144 @@ class FastPathTests(TestCase):
                 live_observation=None,
             )
 
+    def test_ready_integration_accepts_continuation_bound_prior_receipt(self) -> None:
+        prior_reviewed = fast_feedback(head_sha="e" * 40)
+        reviewed = fast_feedback(head_sha="d" * 40)
+        registry = fast_registry()
+        tree = "a" * 40
+        continuation_digest = "9" * 64
+        receipt = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=prior_reviewed.head_sha,
+            validated_tree_sha=tree,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=prior_reviewed,
+            manual_gate_evidence=[],
+            exceptional_continuation_evidence_digest=continuation_digest,
+        )
+        attestation = fast_path.create_validation_attestation(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=prior_reviewed,
+            validation_receipt=receipt,
+        )
+        prior_authority = ready_integration_prior_authority(reviewed)
+        prior_authority.update(
+            prior_delivery_tree_sha=tree,
+            prior_validation_receipt_digest=receipt["receipt_digest"],
+            prior_final_attestation_digest=attestation["attestation_digest"],
+        )
+        prior_authority = fast_path.normalize_ready_integration_prior_authority(
+            prior_authority
+        )
+        integration = ready_integration_evidence(reviewed, validated_tree=tree)
+        integration["prior_authority_digest"] = fast_path.digest_json(
+            prior_authority
+        )
+        integration = fast_path.normalize_ready_integration_evidence(
+            integration,
+            repository="SecPal/.github",
+            reviewed_state=reviewed,
+            registry=registry,
+            validated_tree_sha=tree,
+        )
+        arguments = SimpleNamespace(
+            repo="SecPal/.github",
+            delivery_issue=9,
+            prior_authority="authority.json",
+            prior_reviewed_state="prior-reviewed.json",
+            prior_receipt="prior-receipt.json",
+            prior_attestation="prior-attestation.json",
+            prior_authority_tag_ref="refs/tags/prior-authority",
+            expected_prior_authority_signer="aroviqen",
+        )
+
+        def read_json(path: str, _label: str) -> Any:
+            return {
+                "authority.json": prior_authority,
+                "prior-receipt.json": receipt,
+                "prior-attestation.json": attestation,
+            }[path]
+
+        def git_result(
+            _repository_root: Path,
+            command: list[str],
+            *,
+            allow_failure: bool = False,
+        ) -> Any:
+            del allow_failure
+            if command[:2] == ["rev-parse", f"{reviewed.head_sha}^{{tree}}"]:
+                stdout = tree
+            elif command[:2] == ["cat-file", "commit"]:
+                stdout = "tree deadbeef\ngpgsig -----BEGIN SSH SIGNATURE-----\n"
+            elif command[:2] == ["verify-commit", "--raw"]:
+                stdout = 'Good "git" signature for aroviqen with ED25519 key SHA256:test\n'
+            else:
+                raise AssertionError(command)
+            return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+        verified_validation = fast_path.verify_validation_attestation(
+            attestation,
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            registry=registry,
+            command_set=registry["validation"],
+            reviewed_state=prior_reviewed,
+            commit_parent_sha=prior_reviewed.head_sha,
+            commit_tree_sha=tree,
+            commit_validation_receipt_digest=receipt["receipt_digest"],
+        )
+        with (
+            mock.patch.object(actions, "_read_json", side_effect=read_json),
+            mock.patch.object(
+                actions, "_load_fast_state", return_value=prior_reviewed
+            ),
+            mock.patch.object(
+                actions,
+                "_validated_commit_parent",
+                return_value=prior_reviewed.head_sha,
+            ),
+            mock.patch.object(actions, "_run_attestation_git", side_effect=git_result),
+            mock.patch.object(
+                actions, "_prior_delivery_registry_binding", return_value=registry
+            ),
+            mock.patch.object(
+                actions,
+                "_commit_validation_receipt_digest",
+                return_value=receipt["receipt_digest"],
+            ),
+            mock.patch.object(
+                actions.evidence,
+                "interpret_local_signature",
+                return_value=mock.Mock(),
+            ),
+            mock.patch.object(actions, "_verify_signature_policy_identity"),
+            mock.patch.object(actions, "_verify_integration_signer"),
+            mock.patch.object(actions, "_verify_prior_authority_tag"),
+            mock.patch.object(actions, "_verify_ready_integration_published_authority") as published,
+            mock.patch.object(actions, "_verify_ready_integration_lifecycle_authority"),
+        ):
+            result = actions._verify_ready_integration_prior_authority(
+                arguments=arguments,
+                repository_root=REPO_ROOT,
+                binding=registry,
+                integration_evidence=integration,
+                live_observation=None,
+            )
+
+        self.assertEqual(result, prior_authority)
+        self.assertEqual(
+            published.call_args.kwargs[
+                "verified_source_validation_evidence_digest"
+            ],
+            verified_validation.source_validation_evidence_digest,
+        )
+
     def test_ready_integration_openpgp_accepts_authorized_primary_fingerprint(
         self,
     ) -> None:
@@ -9441,6 +9579,51 @@ class FastPathTests(TestCase):
                 reviewed_state=reviewed,
                 validated_tree_sha="2" * 40,
                 eligibility_evidence=invented_eligibility,
+            )
+
+    def test_continuation_feedback_successor_allows_only_authorized_resolutions(
+        self,
+    ) -> None:
+        original = fast_feedback(thread_count=2)
+        reviewed_feedback = copy.deepcopy(original.feedback)
+        reviewed_feedback["threads"][0]["node_id"] = "PRRT_CONTINUATION_1"
+        reviewed_feedback["threads"][1]["node_id"] = "PRRT_CONTINUATION_2"
+        reviewed = fast_path.StableFeedbackState(
+            repository=original.repository,
+            pull_request_number=original.pull_request_number,
+            head_sha=original.head_sha,
+            base_ref=original.base_ref,
+            base_sha=original.base_sha,
+            pr_state=original.pr_state,
+            feedback=reviewed_feedback,
+        )
+        current_feedback = copy.deepcopy(reviewed.feedback)
+        current_feedback["threads"][0]["is_resolved"] = True
+        current_feedback["threads"][0]["is_outdated"] = True
+        current = fast_path.StableFeedbackState(
+            repository=reviewed.repository,
+            pull_request_number=reviewed.pull_request_number,
+            head_sha="9" * 40,
+            base_ref=reviewed.base_ref,
+            base_sha=reviewed.base_sha,
+            pr_state="OPEN",
+            feedback=current_feedback,
+        )
+
+        fast_path.verify_stable_feedback_successor(
+            reviewed,
+            current,
+            resulting_head_sha=current.head_sha,
+            authorized_thread_ids=[reviewed.feedback["threads"][0]["node_id"]],
+        )
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "reviewed predecessor"
+        ):
+            fast_path.verify_stable_feedback_successor(
+                reviewed,
+                current,
+                resulting_head_sha=current.head_sha,
+                authorized_thread_ids=[reviewed.feedback["threads"][1]["node_id"]],
             )
 
     def test_ready_integration_signature_requires_the_explicit_signer(self) -> None:
