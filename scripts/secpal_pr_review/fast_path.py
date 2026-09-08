@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import tempfile
 import importlib.util
 import sys
@@ -20,15 +21,19 @@ from typing import Any, Callable, TypeVar
 
 
 FOLLOW_UP_HELPER = Path(__file__).resolve().with_name("follow_up.py")
+EVIDENCE_HELPER = Path(__file__).resolve().parents[1] / "secpal-pr-review.py"
+EXTERNAL_COMMAND_TIMEOUT_SECONDS = 30
 
 
 def _load_follow_up_helper() -> Any:
     loaded = sys.modules.get("secpal_pr_review.follow_up")
     if loaded is not None:
         loaded_path = getattr(loaded, "__file__", None)
-        if not isinstance(loaded_path, str) or Path(loaded_path).resolve() != FOLLOW_UP_HELPER:
+        if (
+            not isinstance(loaded_path, str)
+            or Path(loaded_path).absolute() != FOLLOW_UP_HELPER.absolute()
+        ):
             raise RuntimeError("Canonical follow-up module has an unexpected path")
-        return loaded
     spec = importlib.util.spec_from_file_location("secpal_pr_review.follow_up", FOLLOW_UP_HELPER)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load follow-up helper: {FOLLOW_UP_HELPER}")
@@ -45,6 +50,29 @@ def _load_follow_up_helper() -> Any:
 follow_up = _load_follow_up_helper()
 
 
+def _load_evidence_helper() -> Any:
+    module_name = "secpal_pr_review.integration_evidence_helper"
+    loaded = sys.modules.get(module_name)
+    if loaded is not None:
+        loaded_path = getattr(loaded, "__file__", None)
+        if (
+            not isinstance(loaded_path, str)
+            or Path(loaded_path).absolute() != EVIDENCE_HELPER.absolute()
+        ):
+            raise RuntimeError("Canonical evidence helper has an unexpected path")
+    spec = importlib.util.spec_from_file_location(module_name, EVIDENCE_HELPER)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load evidence helper: {EVIDENCE_HELPER}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
+    return module
+
+
 OID = re.compile(r"^[0-9a-fA-F]{40,64}$")
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
 IDENTITY = re.compile(r"^[^\x00-\x20\x7f]+$")
@@ -52,6 +80,42 @@ EVIDENCE_TEXT = re.compile(r"^[^\x00-\x1f\x7f]+$")
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SECRET_VALUE = re.compile(
     r"(?i)(?:github_pat_|gh[opsu]_|-----BEGIN [A-Z ]*PRIVATE KEY-----|authorization\s*:\s*bearer)"
+)
+VALIDATION_REGISTRY_ENTRY_FIELDS = frozenset(
+    {
+        "repository",
+        "default_branch",
+        "allowed_base_repositories",
+        "reviewer_identities",
+        "focused_validation",
+        "required_local_validation",
+        "final_eligibility_absence_recoveries",
+        "signature_policy",
+        "lifecycle_authority_policy",
+        "pre_enrollment_integration_policy",
+        "check_policy",
+        "manual_gates",
+        "unsupported_operations",
+        "maximum_api_calls",
+        "maximum_items",
+        "maximum_threads",
+        "maximum_comments",
+        "maximum_reactions",
+    }
+)
+VALIDATION_REGISTRY_PROJECTION_FIELDS = frozenset(
+    {
+        "repository",
+        "default_branch",
+        "allowed_base_repositories",
+        "focused_validation",
+        "required_local_validation",
+        "signature_policy",
+        "check_policy",
+        "manual_gates",
+        "maximum_api_calls",
+        "maximum_items",
+    }
 )
 SUPPORTED_BATCH_CAPABILITIES = frozenset({"THREAD_RESOLUTION"})
 TRANSIENT_PULL_REQUEST_REACTION_CONTENTS = frozenset({"EYES"})
@@ -142,6 +206,7 @@ READY_INTEGRATION_KEYS = frozenset(
         "eligibility",
     }
 )
+READY_INTEGRATION_V12_KEYS = READY_INTEGRATION_KEYS | {"reviewed_head_sha"}
 
 READY_INTEGRATION_PRIOR_AUTHORITY_KEYS = frozenset(
     {
@@ -169,6 +234,10 @@ READY_INTEGRATION_RECOVERY_PUBLICATION_KEYS = frozenset(
         "feedback_assessment_digest", "historical_evidence_loss_proof_digest",
         "historical_bytes_reconstructed",
     }
+)
+READY_INTEGRATION_ADOPTED_PRIOR_AUTHORITY_KEYS = frozenset(
+    READY_INTEGRATION_PRIOR_AUTHORITY_KEYS
+    | {"source_authority_mode", "source_authority", "historical_companions"}
 )
 
 
@@ -200,6 +269,65 @@ def canonical_json_bytes(value: Any) -> bytes:
 
 def digest_json(value: Any) -> str:
     return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
+def validation_registry_projection(entry: Any) -> dict[str, Any]:
+    """Return the one closed registry identity used by validation evidence."""
+
+    if not isinstance(entry, dict):
+        raise SecurityBlocker("validation registry entry is malformed")
+    missing = sorted(VALIDATION_REGISTRY_PROJECTION_FIELDS - entry.keys())
+    unknown = sorted(entry.keys() - VALIDATION_REGISTRY_ENTRY_FIELDS)
+    if missing or unknown:
+        raise SecurityBlocker(
+            "validation registry entry is not a supported closed projection"
+        )
+    focused_validation = entry["focused_validation"]
+    required_validation = entry["required_local_validation"]
+    if not isinstance(focused_validation, list) or not isinstance(
+        required_validation, list
+    ):
+        raise SecurityBlocker("validation registry command set is malformed")
+    validation = [
+        command
+        for command in focused_validation
+        if isinstance(command, dict)
+        and command.get("execution_policy", "always") == "always"
+    ]
+    if any(not isinstance(command, dict) for command in focused_validation) or any(
+        not isinstance(command, dict) for command in required_validation
+    ):
+        raise SecurityBlocker("validation registry command set is malformed")
+    binding = {
+        "repository": entry["repository"],
+        "default_branch": entry["default_branch"],
+        "allowed_base_repositories": copy.deepcopy(
+            entry["allowed_base_repositories"]
+        ),
+        "manual_gates": copy.deepcopy(entry["manual_gates"]),
+        "signature_policy": copy.deepcopy(entry["signature_policy"]),
+        "check_policy": copy.deepcopy(entry["check_policy"]),
+        "limits": {
+            key: entry[key] for key in ("maximum_api_calls", "maximum_items")
+        },
+        "validation": copy.deepcopy(validation + required_validation),
+        "focused_only_validation": copy.deepcopy(
+            [
+                command
+                for command in focused_validation
+                if command.get("execution_policy") == "focused-only"
+            ]
+        ),
+    }
+    if "pre_enrollment_integration_policy" in entry:
+        if not isinstance(entry["pre_enrollment_integration_policy"], dict):
+            raise SecurityBlocker(
+                "pre-enrollment integration registry policy is malformed"
+            )
+        binding["pre_enrollment_integration_policy"] = copy.deepcopy(
+            entry["pre_enrollment_integration_policy"]
+        )
+    return binding
 
 
 def _all_strings(value: Any) -> list[str]:
@@ -315,21 +443,25 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
 
     if not isinstance(value, dict):
         raise SecurityBlocker("Ready integration prior authority is malformed or ambiguous")
-    version = value.get("schema_version")
-    expected_keys = (
-        READY_INTEGRATION_PRIOR_AUTHORITY_KEYS
-        if version == "1.1"
-        else READY_INTEGRATION_RECOVERED_PRIOR_AUTHORITY_KEYS
-        if version == "1.2"
-        else frozenset()
-    )
-    if set(value) != expected_keys:
-        raise SecurityBlocker("Ready integration prior authority is malformed or ambiguous")
     if any(SECRET_VALUE.search(item) for item in _all_strings(value)):
         raise SecurityBlocker("Ready integration prior authority contains secret-like text")
-    if (
-        version not in {"1.1", "1.2"}
-        or value.get("kind") != READY_INTEGRATION_PRIOR_AUTHORITY_KIND
+    schema_version = value.get("schema_version")
+    keys = set(value)
+    authority_mode = (
+        "ORDINARY"
+        if schema_version == "1.1" and keys == READY_INTEGRATION_PRIOR_AUTHORITY_KEYS
+        else "RECOVERED"
+        if schema_version == "1.2"
+        and keys == READY_INTEGRATION_RECOVERED_PRIOR_AUTHORITY_KEYS
+        else "ADOPTED_V3"
+        if schema_version == "1.2"
+        and keys == READY_INTEGRATION_ADOPTED_PRIOR_AUTHORITY_KEYS
+        else None
+    )
+    if authority_mode is None:
+        raise SecurityBlocker("Ready integration prior authority is malformed or ambiguous")
+    if schema_version not in {"1.1", "1.2"} or (
+        value.get("kind") != READY_INTEGRATION_PRIOR_AUTHORITY_KIND
     ):
         raise SecurityBlocker("Ready integration prior authority kind or version is unsupported")
     signer = value.get("expected_signer")
@@ -358,6 +490,13 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         "exceptional_continuations",
         "cycle_3",
     }
+    if authority_mode == "ADOPTED_V3":
+        lifecycle_keys |= {
+            "ready_transition_count",
+            "ready_history",
+            "exceptional_recovery_history",
+            "exceptional_continuation_history",
+        }
     if not isinstance(lifecycle, dict) or set(lifecycle) != lifecycle_keys:
         raise SecurityBlocker("Ready integration prior lifecycle authority is malformed")
     reviews = lifecycle.get("unrestricted_reviews")
@@ -393,6 +532,31 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         or not 0 <= continuations <= 1
     ):
         raise SecurityBlocker("Ready integration prior lifecycle authority is invalid")
+    if authority_mode == "ADOPTED_V3":
+        ready_history = lifecycle.get("ready_history")
+        if (
+            lifecycle.get("historical_proof_mode") != "exact_state_adoption"
+            or isinstance(lifecycle.get("ready_transition_count"), bool)
+            or lifecycle.get("ready_transition_count") != 1
+            or not isinstance(ready_history, list)
+            or len(ready_history) != 1
+            or not isinstance(ready_history[0], dict)
+            or set(ready_history[0])
+            != {"sequence", "transition_kind", "event_authorization_digest"}
+            or ready_history[0].get("sequence") != 1
+            or ready_history[0].get("transition_kind") != "DRAFT_TO_READY"
+            or not _require_digest(
+                ready_history[0].get("event_authorization_digest"),
+                "Ready integration transition authorization",
+            )
+            or lifecycle.get("exceptional_recovery_history") != []
+            or lifecycle.get("exceptional_continuation_history") != []
+            or recoveries != 0
+            or continuations != 0
+        ):
+            raise SecurityBlocker(
+                "adopted Ready integration lifecycle authority is invalid"
+            )
     publication = value.get("publication")
     if not isinstance(publication, dict) or set(publication) != {
         "object_oid",
@@ -400,7 +564,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
     }:
         raise SecurityBlocker("Ready integration lifecycle publication is malformed")
     normalized = {
-        "schema_version": version,
+        "schema_version": schema_version,
         "kind": READY_INTEGRATION_PRIOR_AUTHORITY_KIND,
         "repository": _require_string(value.get("repository"), "prior authority repository"),
         "delivery_issue_number": _require_positive_integer(value.get("delivery_issue_number"), "prior authority delivery issue"),
@@ -408,7 +572,14 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         "prior_delivery_head_sha": _require_oid(value.get("prior_delivery_head_sha"), "prior authority head"),
         "prior_delivery_tree_sha": _require_oid(value.get("prior_delivery_tree_sha"), "prior authority tree"),
         "prior_validation_receipt_digest": _require_digest(value.get("prior_validation_receipt_digest"), "prior validation receipt"),
-        "prior_final_attestation_digest": _require_digest(value.get("prior_final_attestation_digest"), "prior final attestation"),
+        "prior_final_attestation_digest": (
+            _require_digest(
+                value.get("prior_final_attestation_digest"),
+                "prior final attestation",
+            )
+            if authority_mode != "ADOPTED_V3"
+            else value.get("prior_final_attestation_digest")
+        ),
         "expected_signer": {"kind": signer_kind, "identity": signer_identity},
         "lifecycle": copy.deepcopy(lifecycle),
         "publication": {
@@ -422,7 +593,9 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             ),
         },
     }
-    if version == "1.2":
+    if authority_mode == "ORDINARY":
+        return normalized
+    if authority_mode == "RECOVERED":
         recovery = value.get("recovery_publication")
         if (
             not isinstance(recovery, dict)
@@ -462,6 +635,109 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             ),
             "historical_bytes_reconstructed": False,
         }
+        return normalized
+    if normalized["prior_final_attestation_digest"] is not None:
+        raise SecurityBlocker(
+            "adopted Ready authority cannot claim a historical final attestation"
+        )
+    if value.get("source_authority_mode") != "EXACT_STATE_ADOPTION_V3":
+        raise SecurityBlocker("adopted Ready source authority mode is unsupported")
+    companions = value.get("historical_companions")
+    expected_companions = {
+        "reviewed_state_bytes": "UNAVAILABLE",
+        "validation_receipt_bytes": "UNAVAILABLE",
+        "final_attestation_bytes": "UNAVAILABLE",
+        "historical_bytes_reconstructed": False,
+    }
+    if companions != expected_companions:
+        raise SecurityBlocker("adopted Ready historical companion status is invalid")
+    source = value.get("source_authority")
+    source_keys = {
+        "proof_version",
+        "source_parent_sha",
+        "source_signer_identity",
+        "commit_signature_evidence_digest",
+        "historical_receipt_provenance_digest",
+        "current_safety_digest",
+        "observed_history_digest",
+        "intended_state_digest",
+        "head_advanced_count",
+        "head_advanced_history_digest",
+        "loss_admission_id",
+        "loss_admission_digest",
+        "review_budget_admission_id",
+        "review_budget_admission_digest",
+        "adoption_proof_digest",
+        "adoption_authorization_id",
+        "adoption_authorization_digest",
+        "enrollment_publication",
+        "ready_transition",
+    }
+    if not isinstance(source, dict) or set(source) != source_keys:
+        raise SecurityBlocker("adopted Ready source authority is malformed")
+    enrollment = source.get("enrollment_publication")
+    if not isinstance(enrollment, dict) or set(enrollment) != {
+        "object_oid", "publication_digest"
+    }:
+        raise SecurityBlocker("adopted Ready enrollment publication is malformed")
+    transition = source.get("ready_transition")
+    if not isinstance(transition, dict) or set(transition) != {
+        "event_id", "event_digest", "predecessor_authority_digest",
+        "predecessor_head_sha", "resulting_head_sha",
+    }:
+        raise SecurityBlocker("adopted Ready transition authority is malformed")
+    head_advanced_count = source.get("head_advanced_count")
+    if (
+        source.get("proof_version") != "3.0"
+        or _require_oid(source.get("source_parent_sha"), "adopted source parent")
+        == normalized["prior_delivery_head_sha"]
+        or not _require_string(
+            source.get("source_signer_identity"), "adopted source signer"
+        )
+        or isinstance(head_advanced_count, bool)
+        or not isinstance(head_advanced_count, int)
+        or head_advanced_count < 0
+    ):
+        raise SecurityBlocker("adopted Ready source authority is invalid")
+    for field, label in (
+        ("commit_signature_evidence_digest", "adopted commit signature evidence"),
+        ("historical_receipt_provenance_digest", "historical receipt provenance"),
+        ("current_safety_digest", "adopted current safety"),
+        ("observed_history_digest", "adopted observed history"),
+        ("intended_state_digest", "adopted intended state"),
+        ("head_advanced_history_digest", "adopted head history"),
+        ("loss_admission_digest", "validation evidence loss admission"),
+        ("review_budget_admission_digest", "review budget admission"),
+        ("adoption_proof_digest", "exact adoption proof"),
+        ("adoption_authorization_digest", "exact adoption authorization"),
+    ):
+        _require_digest(source.get(field), label)
+    for field, label in (
+        ("loss_admission_id", "validation evidence loss admission identity"),
+        ("review_budget_admission_id", "review budget admission identity"),
+        ("adoption_authorization_id", "exact adoption authorization identity"),
+    ):
+        _require_string(source.get(field), label)
+    _require_oid(enrollment.get("object_oid"), "adopted enrollment publication")
+    _require_digest(
+        enrollment.get("publication_digest"), "adopted enrollment publication"
+    )
+    _require_string(transition.get("event_id"), "adopted Ready transition")
+    for field, label in (
+        ("event_digest", "adopted Ready event"),
+        ("predecessor_authority_digest", "adopted Ready predecessor"),
+    ):
+        _require_digest(transition.get(field), label)
+    for field in ("predecessor_head_sha", "resulting_head_sha"):
+        if _require_oid(transition.get(field), "adopted Ready transition head") != normalized[
+            "prior_delivery_head_sha"
+        ]:
+            raise SecurityBlocker("adopted Ready transition changed the source head")
+    normalized.update(
+        source_authority_mode="EXACT_STATE_ADOPTION_V3",
+        source_authority=copy.deepcopy(source),
+        historical_companions=copy.deepcopy(companions),
+    )
     return normalized
 
 
@@ -475,11 +751,19 @@ def normalize_ready_integration_evidence(
 ) -> dict[str, Any]:
     """Normalize and admit one explicitly authorized Ready-head integration."""
 
-    if not isinstance(value, dict) or set(value) != READY_INTEGRATION_KEYS:
+    if not isinstance(value, dict):
         raise SecurityBlocker("Ready integration evidence is malformed or ambiguous")
     if any(SECRET_VALUE.search(item) for item in _all_strings(value)):
         raise SecurityBlocker("Ready integration evidence contains secret-like text")
-    if value.get("schema_version") != "1.1" or value.get("kind") != READY_INTEGRATION_KIND:
+    schema_version = value.get("schema_version")
+    expected_keys = (
+        READY_INTEGRATION_V12_KEYS
+        if schema_version == "1.2"
+        else READY_INTEGRATION_KEYS
+    )
+    if set(value) != expected_keys:
+        raise SecurityBlocker("Ready integration evidence is malformed or ambiguous")
+    if schema_version not in {"1.1", "1.2"} or value.get("kind") != READY_INTEGRATION_KIND:
         raise SecurityBlocker("Ready integration topology kind or version is unsupported")
     normalized_repository = _require_string(value.get("repository"), "integration repository")
     if normalized_repository != repository or reviewed_state.repository != repository:
@@ -498,11 +782,21 @@ def normalize_ready_integration_evidence(
     prior_head = _require_oid(
         value.get("prior_delivery_head_sha"), "prior delivery head"
     )
+    reviewed_head = (
+        prior_head
+        if schema_version == "1.1"
+        else _require_oid(value.get("reviewed_head_sha"), "integration reviewed head")
+    )
+    if reviewed_head != reviewed_state.head_sha:
+        raise SecurityBlocker("integration reviewed head is stale or substituted")
+    if (
+        (schema_version == "1.1" and prior_head != reviewed_head)
+        or (schema_version == "1.2" and prior_head == reviewed_head)
+    ):
+        raise SecurityBlocker("integration first parent is stale or substituted")
     prior_authority_digest = _require_digest(
         value.get("prior_authority_digest"), "prior Ready authority digest"
     )
-    if prior_head != reviewed_state.head_sha:
-        raise SecurityBlocker("integration first parent is stale or substituted")
     target_base = value.get("target_base")
     if not isinstance(target_base, dict) or set(target_base) != {
         "ref",
@@ -651,7 +945,7 @@ def normalize_ready_integration_evidence(
     ):
         raise SecurityBlocker("integration eligibility or lifecycle continuity is invalid")
     normalized = {
-        "schema_version": "1.1",
+        "schema_version": schema_version,
         "kind": READY_INTEGRATION_KIND,
         "authorization_id": authorization_id,
         "repository": normalized_repository,
@@ -686,6 +980,8 @@ def normalize_ready_integration_evidence(
         },
         "eligibility": copy.deepcopy(eligibility),
     }
+    if schema_version == "1.2":
+        normalized["reviewed_head_sha"] = reviewed_head
     return normalized
 
 
@@ -1036,7 +1332,11 @@ class StableFeedbackState:
         }
 
 
-_VERIFIED_VALIDATION_EVIDENCE = object()
+@dataclass(frozen=True, slots=True)
+class _VerifiedValidationEvidenceSeal:
+    """Carry canonical provenance that consumers independently re-verify."""
+
+    provenance_json: str
 
 
 @dataclass(frozen=True)
@@ -1051,15 +1351,363 @@ class VerifiedValidationEvidence:
     final_attestation_digest: str
     source_validation_evidence_digest: str
     _verification_seal: object
+    delivery_issue_number: int | None = None
 
 
+def _validation_evidence_binding(value: VerifiedValidationEvidence) -> dict[str, Any]:
+    return {
+        "repository": value.repository,
+        "delivery_issue_number": value.delivery_issue_number,
+        "pull_request_number": value.pull_request_number,
+        "head_sha": value.head_sha,
+        "tree_sha": value.tree_sha,
+        "validation_receipt_digest": value.validation_receipt_digest,
+        "final_attestation_digest": value.final_attestation_digest,
+        "source_validation_evidence_digest": value.source_validation_evidence_digest,
+    }
 
-def is_verified_validation_evidence(value: Any) -> bool:
-    """Reject caller-constructed validation summaries at trust boundaries."""
 
-    return (
-        isinstance(value, VerifiedValidationEvidence)
-        and value._verification_seal is _VERIFIED_VALIDATION_EVIDENCE
+@dataclass(frozen=True)
+class AuthenticatedIntegrationCommit:
+    """Exact commit and actual signer proven by the canonical signature verifier."""
+
+    repository: str
+    head_sha: str
+    tree_sha: str
+    parent_shas: tuple[str, ...]
+    signer_kind: str
+    signer_identity: str
+    signature_fingerprint: str
+    signature_classification: str
+    signature_policy_digest: str
+    authentication_digest: str
+
+
+def _integration_commit_authentication_binding(
+    value: AuthenticatedIntegrationCommit,
+) -> dict[str, Any]:
+    return {
+        "repository": value.repository,
+        "head_sha": value.head_sha,
+        "tree_sha": value.tree_sha,
+        "parent_shas": list(value.parent_shas),
+        "signer_kind": value.signer_kind,
+        "signer_identity": value.signer_identity,
+        "signature_fingerprint": value.signature_fingerprint,
+        "signature_classification": value.signature_classification,
+        "signature_policy_digest": value.signature_policy_digest,
+    }
+
+
+def _actual_integration_signer(
+    verification_output: str, expected_signer: dict[str, str]
+) -> tuple[str, str]:
+    if not isinstance(verification_output, str) or not isinstance(
+        expected_signer, dict
+    ):
+        raise SecurityBlocker("integration commit signer evidence is malformed")
+    kind = expected_signer.get("kind")
+    identity = expected_signer.get("identity")
+    if kind == "SSH_PRINCIPAL" and isinstance(identity, str):
+        matches = re.findall(
+            r'(?m)^Good "git" signature for ([^\s]+) with ', verification_output
+        )
+        actual_identity = matches[0] if len(matches) == 1 else None
+    elif kind == "OPENPGP_FINGERPRINT" and isinstance(identity, str):
+        status_lines = re.findall(
+            r"(?m)^\[GNUPG:\] VALIDSIG ([^\r\n]+)$",
+            verification_output.upper(),
+        )
+        fields = status_lines[0].split() if len(status_lines) == 1 else []
+        if len(fields) not in {9, 10}:
+            raise SecurityBlocker(
+                "integration OpenPGP signer status is malformed or ambiguous"
+            )
+        signing_fingerprint = fields[0]
+        primary_fingerprint = fields[9] if len(fields) == 10 else signing_fingerprint
+        if not all(
+            re.fullmatch(r"[0-9A-F]{40,64}", fingerprint)
+            for fingerprint in {signing_fingerprint, primary_fingerprint}
+        ):
+            raise SecurityBlocker(
+                "integration OpenPGP signer status is malformed or ambiguous"
+            )
+        actual_identity = primary_fingerprint
+        identity = identity.upper()
+    else:
+        raise SecurityBlocker("integration expected signer is malformed")
+    if actual_identity != identity:
+        raise SecurityBlocker(
+            "integration commit signer does not match the explicitly accepted identity"
+        )
+    return kind, actual_identity
+
+
+def _actual_signature_fingerprint(
+    verification_output: str, signer_kind: str
+) -> str:
+    if signer_kind == "SSH_PRINCIPAL":
+        matches = re.findall(r"\b(SHA256:[A-Za-z0-9+/=]+)\b", verification_output)
+        if len(set(matches)) == 1:
+            return matches[0]
+    elif signer_kind == "OPENPGP_FINGERPRINT":
+        status_lines = re.findall(
+            r"(?m)^\[GNUPG:\] VALIDSIG ([^\r\n]+)$",
+            verification_output.upper(),
+        )
+        fields = status_lines[0].split() if len(status_lines) == 1 else []
+        if fields and re.fullmatch(r"[0-9A-F]{40,64}", fields[0]):
+            return fields[0]
+    raise SecurityBlocker("integration commit signature fingerprint is unavailable")
+
+
+def _run_integration_commit_git(
+    repository_root: Path, arguments: list[str]
+) -> subprocess.CompletedProcess[str]:
+    evidence = _load_evidence_helper()
+    try:
+        git_executable = evidence.resolve_trusted_executable("git")
+        environment = evidence.command_environment("git")
+    except evidence.CommandPolicyError as exc:
+        raise RecoverableLocalError(
+            "integration commit verification is unavailable"
+        ) from exc
+    try:
+        return subprocess.run(
+            [git_executable, *arguments],
+            cwd=repository_root,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=environment,
+            timeout=EXTERNAL_COMMAND_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RecoverableLocalError(
+            "integration commit verification is unavailable"
+        ) from exc
+
+
+def _repository_from_remote(value: str) -> str | None:
+    match = re.fullmatch(
+        r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+        r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?",
+        value.strip(),
+    )
+    return match.group(1) if match is not None else None
+
+
+def _commit_topology(commit_object: str) -> tuple[str, tuple[str, ...]]:
+    headers = commit_object.split("\n\n", 1)[0].splitlines()
+    trees = [line[5:].lower() for line in headers if line.startswith("tree ")]
+    parents = tuple(
+        line[7:].lower() for line in headers if line.startswith("parent ")
+    )
+    if (
+        len(trees) != 1
+        or not OID.fullmatch(trees[0])
+        or any(not OID.fullmatch(parent) for parent in parents)
+    ):
+        raise SecurityBlocker("integration commit topology is malformed")
+    return trees[0], parents
+
+
+def _authenticate_integration_commit(
+    *,
+    repository_root: Path | str,
+    repository: str,
+    head_sha: str,
+    expected_signer: dict[str, str],
+    signature_policy: dict[str, Any],
+) -> AuthenticatedIntegrationCommit:
+    """Authenticate the signed commit, its topology, signer, and trust context."""
+
+    if not isinstance(repository, str) or not REPOSITORY.fullmatch(repository):
+        raise SecurityBlocker("integration commit repository identity is malformed")
+    head = _require_oid(head_sha, "integration commit")
+    try:
+        root = Path(repository_root).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise RecoverableLocalError(
+            "integration commit repository is unavailable"
+        ) from exc
+    if not root.is_dir():
+        raise RecoverableLocalError("integration commit repository is unavailable")
+    origin = _run_integration_commit_git(root, ["remote", "get-url", "origin"])
+    if origin.returncode != 0 or _repository_from_remote(origin.stdout) != repository:
+        raise SecurityBlocker("integration commit repository identity changed")
+    commit_object = _run_integration_commit_git(root, ["cat-file", "commit", head])
+    if commit_object.returncode != 0:
+        raise SecurityBlocker("integration commit object is unavailable")
+    tree_sha, parent_shas = _commit_topology(commit_object.stdout)
+    verified_commit = _run_integration_commit_git(
+        root, ["verify-commit", "--raw", head]
+    )
+    evidence = _load_evidence_helper()
+    local_signature = evidence.interpret_local_signature(
+        verified_commit.returncode,
+        f"{verified_commit.stdout}\n{verified_commit.stderr}",
+        signature_format_hint=(
+            evidence._commit_signature_format(commit_object.stdout)
+            if commit_object.returncode == 0
+            else "unknown"
+        ),
+    )
+    verified = verify_commit_signatures(
+        [
+            {
+                "oid": head,
+                "source": "USER",
+                "local_signature": local_signature,
+                "github_verification": {
+                    "verified": False,
+                    "reason": "not_required",
+                },
+            }
+        ],
+        {**signature_policy, "require_github_verified": False},
+    )
+    if len(verified) != 1 or verified[0]["oid"] != head:
+        raise SecurityBlocker("integration commit signature identity changed")
+    verification_output = f"{verified_commit.stdout}\n{verified_commit.stderr}"
+    signer_kind, signer_identity = _actual_integration_signer(
+        verification_output, expected_signer
+    )
+    expected_format = "ssh" if signer_kind == "SSH_PRINCIPAL" else "openpgp"
+    if local_signature.get("format") != expected_format:
+        raise SecurityBlocker("integration commit signer format does not match policy")
+    fields = {
+        "repository": repository,
+        "head_sha": head,
+        "tree_sha": tree_sha,
+        "parent_shas": list(parent_shas),
+        "signer_kind": signer_kind,
+        "signer_identity": signer_identity,
+        "signature_fingerprint": _actual_signature_fingerprint(
+            verification_output, signer_kind
+        ),
+        "signature_classification": verified[0]["classification"],
+        "signature_policy_digest": digest_json(signature_policy),
+    }
+    return AuthenticatedIntegrationCommit(
+        **{**fields, "parent_shas": parent_shas},
+        authentication_digest=digest_json(fields),
+    )
+
+
+def authenticate_integration_commit(
+    *,
+    repository_root: Path | str,
+    repository: str,
+    head_sha: str,
+    expected_signer: dict[str, str],
+    signature_policy: dict[str, Any],
+) -> AuthenticatedIntegrationCommit:
+    return _authenticate_integration_commit(
+        repository_root=repository_root,
+        repository=repository,
+        head_sha=head_sha,
+        expected_signer=expected_signer,
+        signature_policy=signature_policy,
+    )
+
+
+def _authenticated_integration_commit_agrees(
+    value: Any,
+    *,
+    repository: str | None = None,
+    head_sha: str,
+    tree_sha: str | None = None,
+    parent_shas: list[str] | tuple[str, ...] | None = None,
+    expected_signer: dict[str, str],
+    signature_policy: dict[str, Any] | None = None,
+) -> bool:
+    try:
+        if not isinstance(value, AuthenticatedIntegrationCommit):
+            return False
+        binding = _integration_commit_authentication_binding(value)
+        if value.authentication_digest != digest_json(binding):
+            return False
+        expected_kind = (
+            expected_signer.get("kind")
+            if isinstance(expected_signer, dict)
+            else None
+        )
+        expected_identity = (
+            expected_signer.get("identity")
+            if isinstance(expected_signer, dict)
+            else None
+        )
+        if expected_kind == "OPENPGP_FINGERPRINT" and isinstance(
+            expected_identity, str
+        ):
+            expected_identity = expected_identity.upper()
+        return (
+            value.head_sha == head_sha.lower()
+            and value.signer_kind == expected_kind
+            and value.signer_identity == expected_identity
+            and (repository is None or value.repository == repository)
+            and (tree_sha is None or value.tree_sha == tree_sha.lower())
+            and (
+                parent_shas is None
+                or value.parent_shas
+                == tuple(parent.lower() for parent in parent_shas)
+            )
+            and (
+                signature_policy is None
+                or value.signature_policy_digest == digest_json(signature_policy)
+            )
+        )
+    except (AttributeError, KeyError, SecurityBlocker, TypeError, ValueError):
+        return False
+
+
+def _unregistered_validation_evidence(
+    *,
+    repository: str,
+    pull_request_number: int,
+    head_sha: str,
+    tree_sha: str,
+    validation_receipt_digest: str,
+    final_attestation_digest: str,
+    source_validation_evidence_digest: str,
+    delivery_issue_number: int | None = None,
+) -> VerifiedValidationEvidence:
+    fields = {
+        "repository": repository,
+        "delivery_issue_number": delivery_issue_number,
+        "pull_request_number": pull_request_number,
+        "head_sha": head_sha,
+        "tree_sha": tree_sha,
+        "validation_receipt_digest": validation_receipt_digest,
+        "final_attestation_digest": final_attestation_digest,
+        "source_validation_evidence_digest": source_validation_evidence_digest,
+    }
+    return VerifiedValidationEvidence(
+        repository=repository,
+        pull_request_number=pull_request_number,
+        head_sha=head_sha,
+        tree_sha=tree_sha,
+        validation_receipt_digest=validation_receipt_digest,
+        final_attestation_digest=final_attestation_digest,
+        source_validation_evidence_digest=source_validation_evidence_digest,
+        _verification_seal=None,
+        delivery_issue_number=delivery_issue_number,
+    )
+
+
+def _seal_validation_evidence(
+    value: VerifiedValidationEvidence, provenance: dict[str, Any]
+) -> VerifiedValidationEvidence:
+    seal = _VerifiedValidationEvidenceSeal(
+        canonical_json_bytes(provenance).decode("utf-8")
+    )
+    return VerifiedValidationEvidence(
+        **_validation_evidence_binding(value),
+        _verification_seal=seal,
     )
 
 
@@ -1677,10 +2325,11 @@ def create_validation_receipt(
     return {**fields, "receipt_digest": digest_json(fields)}
 
 
-def create_validation_attestation(
+def _create_validation_attestation(
     *,
     repository: str,
     head_sha: str,
+    receipt_head_sha: str,
     registry: dict[str, Any],
     command_set: list[dict[str, Any]],
     successful_result: bool,
@@ -1691,7 +2340,7 @@ def create_validation_attestation(
         raise SecurityBlocker("validation receipt is missing")
     expected_receipt = create_validation_receipt(
         repository=repository,
-        head_sha=reviewed_state.head_sha,
+        head_sha=receipt_head_sha,
         validated_tree_sha=validation_receipt.get("validated_tree_sha"),
         registry=registry,
         command_set=command_set,
@@ -1741,6 +2390,30 @@ def create_validation_attestation(
     return {**fields, "attestation_digest": digest_json(fields)}
 
 
+def create_validation_attestation(
+    *,
+    repository: str,
+    head_sha: str,
+    registry: dict[str, Any],
+    command_set: list[dict[str, Any]],
+    successful_result: bool,
+    reviewed_state: StableFeedbackState,
+    validation_receipt: Any,
+) -> dict[str, Any]:
+    """Assemble ordinary validation evidence at the reviewed head."""
+
+    return _create_validation_attestation(
+        repository=repository,
+        head_sha=head_sha,
+        receipt_head_sha=reviewed_state.head_sha,
+        registry=registry,
+        command_set=command_set,
+        successful_result=successful_result,
+        reviewed_state=reviewed_state,
+        validation_receipt=validation_receipt,
+    )
+
+
 def create_ready_integration_attestation(
     *,
     repository: str,
@@ -1758,21 +2431,22 @@ def create_ready_integration_attestation(
             "Ready integration cannot be combined with exceptional recovery"
         )
 
-    ordinary = create_validation_attestation(
-        repository=repository,
-        head_sha=head_sha,
-        registry=registry,
-        command_set=command_set,
-        successful_result=True,
-        reviewed_state=reviewed_state,
-        validation_receipt=validation_receipt,
-    )
     normalized = normalize_ready_integration_evidence(
         integration_evidence,
         repository=repository,
         reviewed_state=reviewed_state,
         registry=registry,
         validated_tree_sha=validation_receipt.get("validated_tree_sha"),
+    )
+    ordinary = _create_validation_attestation(
+        repository=repository,
+        head_sha=head_sha,
+        receipt_head_sha=normalized["prior_delivery_head_sha"],
+        registry=registry,
+        command_set=command_set,
+        successful_result=True,
+        reviewed_state=reviewed_state,
+        validation_receipt=validation_receipt,
     )
     if validation_receipt.get("integration_evidence_digest") != digest_json(normalized):
         raise SecurityBlocker("validation receipt does not bind the Ready integration evidence")
@@ -1837,7 +2511,9 @@ def verify_eligibility_bound_ready_integration_attestation(
     commit_tree_sha: str,
     commit_validation_receipt_digest: str | None,
     commit_integration_evidence_digest: str | None,
-) -> None:
+    repository_root: Path | str,
+    signature_policy: dict[str, Any],
+) -> VerifiedValidationEvidence:
     """Verify the closed integration-resolution attestation kind."""
 
     if (
@@ -1858,7 +2534,7 @@ def verify_eligibility_bound_ready_integration_attestation(
         raise SecurityBlocker(
             "Ready integration receipt and attestation eligibility differ"
         )
-    verify_ready_integration_attestation(
+    return verify_ready_integration_attestation(
         attestation,
         repository=repository,
         head_sha=head_sha,
@@ -1871,10 +2547,12 @@ def verify_eligibility_bound_ready_integration_attestation(
         commit_tree_sha=commit_tree_sha,
         commit_validation_receipt_digest=commit_validation_receipt_digest,
         commit_integration_evidence_digest=commit_integration_evidence_digest,
+        repository_root=repository_root,
+        signature_policy=signature_policy,
     )
 
 
-def verify_ready_integration_attestation(
+def _verify_ready_integration_attestation_unsealed(
     attestation: Any,
     *,
     repository: str,
@@ -1888,7 +2566,10 @@ def verify_ready_integration_attestation(
     commit_tree_sha: str,
     commit_validation_receipt_digest: str | None,
     commit_integration_evidence_digest: str | None,
-) -> None:
+    repository_root: Path | str,
+    signature_policy: dict[str, Any],
+) -> VerifiedValidationEvidence:
+    reviewed_state = _require_reviewed_state_identity(repository, reviewed_state)
     normalized = normalize_ready_integration_evidence(
         integration_evidence,
         repository=repository,
@@ -1896,6 +2577,11 @@ def verify_ready_integration_attestation(
         registry=registry,
         validated_tree_sha=commit_tree_sha,
     )
+    if (
+        not isinstance(signature_policy, dict)
+        or signature_policy != registry.get("signature_policy")
+    ):
+        raise SecurityBlocker("integration signature policy context changed")
     if commit_parent_shas != normalized["ordered_parent_shas"]:
         raise SecurityBlocker("integration attestation ordered parents changed")
     if (
@@ -1914,9 +2600,55 @@ def verify_ready_integration_attestation(
     )
     if not isinstance(attestation, dict) or attestation != expected:
         raise SecurityBlocker("Ready integration attestation is invalid or stale")
+    source_binding = {
+        "repository": normalized["repository"],
+        "delivery_issue_number": normalized["delivery_issue_number"],
+        "pull_request_number": normalized["pull_request_number"],
+        "head_sha": head_sha,
+        "tree_sha": normalized["validated_tree_sha"],
+        "ordered_parent_shas": normalized["ordered_parent_shas"],
+        "current_main": normalized["target_base"],
+        "validation_receipt_digest": validation_receipt["receipt_digest"],
+        "final_attestation_digest": expected["attestation_digest"],
+        "integration_evidence": normalized,
+        "reviewed_state_digest": reviewed_state.state_digest,
+        "reviewed_feedback_digest": reviewed_state.feedback_digest,
+        "expected_signer": normalized["expected_signer"],
+        "evidence_schema_version": normalized["schema_version"],
+        "evidence_kind": normalized["kind"],
+        "attestation_schema_version": expected["schema_version"],
+        "attestation_kind": expected["kind"],
+    }
+    authenticated_integration_commit = authenticate_integration_commit(
+        repository_root=repository_root,
+        repository=repository,
+        head_sha=head_sha,
+        expected_signer=normalized["expected_signer"],
+        signature_policy=signature_policy,
+    )
+    if not _authenticated_integration_commit_agrees(
+        authenticated_integration_commit,
+        repository=repository,
+        head_sha=head_sha,
+        tree_sha=commit_tree_sha,
+        parent_shas=commit_parent_shas,
+        expected_signer=normalized["expected_signer"],
+        signature_policy=signature_policy,
+    ):
+        raise SecurityBlocker("authenticated integration commit is required")
+    return _unregistered_validation_evidence(
+        repository=normalized["repository"],
+        delivery_issue_number=normalized["delivery_issue_number"],
+        pull_request_number=normalized["pull_request_number"],
+        head_sha=head_sha,
+        tree_sha=normalized["validated_tree_sha"],
+        validation_receipt_digest=validation_receipt["receipt_digest"],
+        final_attestation_digest=expected["attestation_digest"],
+        source_validation_evidence_digest=digest_json(source_binding),
+    )
 
 
-def verify_validation_attestation(
+def _verify_validation_attestation_unsealed(
     attestation: Any,
     *,
     repository: str,
@@ -1927,6 +2659,7 @@ def verify_validation_attestation(
     commit_parent_sha: str,
     commit_tree_sha: str,
     commit_validation_receipt_digest: str | None,
+    delivery_issue_number: int | None = None,
 ) -> VerifiedValidationEvidence:
     reviewed_state = _require_reviewed_state_identity(repository, reviewed_state)
     reviewed_pull_request = reviewed_state.pull_request_number
@@ -1983,16 +2716,190 @@ def verify_validation_attestation(
         "reviewed_state_digest": reviewed_state.state_digest,
         "reviewed_feedback_digest": reviewed_state.feedback_digest,
     }
-    return VerifiedValidationEvidence(
+    if delivery_issue_number is not None:
+        if (
+            not isinstance(delivery_issue_number, int)
+            or isinstance(delivery_issue_number, bool)
+            or delivery_issue_number <= 0
+        ):
+            raise SecurityBlocker("delivery issue identity is invalid")
+        source_binding["delivery_issue_number"] = delivery_issue_number
+    return _unregistered_validation_evidence(
         repository=repository,
+        delivery_issue_number=delivery_issue_number,
         pull_request_number=reviewed_pull_request,
         head_sha=head_sha,
         tree_sha=commit_tree_sha,
         validation_receipt_digest=receipt["receipt_digest"],
         final_attestation_digest=expected["attestation_digest"],
         source_validation_evidence_digest=digest_json(source_binding),
-        _verification_seal=_VERIFIED_VALIDATION_EVIDENCE,
     )
+
+
+def verify_ready_integration_attestation(
+    attestation: Any,
+    *,
+    repository: str,
+    head_sha: str,
+    registry: dict[str, Any],
+    command_set: list[dict[str, Any]],
+    reviewed_state: StableFeedbackState,
+    validation_receipt: dict[str, Any],
+    integration_evidence: dict[str, Any],
+    commit_parent_shas: list[str],
+    commit_tree_sha: str,
+    commit_validation_receipt_digest: str | None,
+    commit_integration_evidence_digest: str | None,
+    repository_root: Path | str,
+    signature_policy: dict[str, Any],
+) -> VerifiedValidationEvidence:
+    result = _verify_ready_integration_attestation_unsealed(
+        attestation,
+        repository=repository,
+        head_sha=head_sha,
+        registry=registry,
+        command_set=command_set,
+        reviewed_state=reviewed_state,
+        validation_receipt=validation_receipt,
+        integration_evidence=integration_evidence,
+        commit_parent_shas=commit_parent_shas,
+        commit_tree_sha=commit_tree_sha,
+        commit_validation_receipt_digest=commit_validation_receipt_digest,
+        commit_integration_evidence_digest=commit_integration_evidence_digest,
+        repository_root=repository_root,
+        signature_policy=signature_policy,
+    )
+    provenance = {
+        "kind": "READY_INTEGRATION",
+        "attestation": copy.deepcopy(attestation),
+        "repository": repository,
+        "head_sha": head_sha,
+        "registry": copy.deepcopy(registry),
+        "command_set": copy.deepcopy(command_set),
+        "reviewed_state": reviewed_state.to_dict(),
+        "validation_receipt": copy.deepcopy(validation_receipt),
+        "integration_evidence": copy.deepcopy(integration_evidence),
+        "commit_parent_shas": list(commit_parent_shas),
+        "commit_tree_sha": commit_tree_sha,
+        "commit_validation_receipt_digest": commit_validation_receipt_digest,
+        "commit_integration_evidence_digest": commit_integration_evidence_digest,
+        "repository_root": str(Path(repository_root).resolve()),
+        "signature_policy": copy.deepcopy(signature_policy),
+    }
+    return _seal_validation_evidence(result, provenance)
+
+
+def verify_validation_attestation(
+    attestation: Any,
+    *,
+    repository: str,
+    head_sha: str,
+    registry: dict[str, Any],
+    command_set: list[dict[str, Any]],
+    reviewed_state: StableFeedbackState,
+    commit_parent_sha: str,
+    commit_tree_sha: str,
+    commit_validation_receipt_digest: str | None,
+    delivery_issue_number: int | None = None,
+) -> VerifiedValidationEvidence:
+    result = _verify_validation_attestation_unsealed(
+        attestation,
+        repository=repository,
+        head_sha=head_sha,
+        registry=registry,
+        command_set=command_set,
+        reviewed_state=reviewed_state,
+        commit_parent_sha=commit_parent_sha,
+        commit_tree_sha=commit_tree_sha,
+        commit_validation_receipt_digest=commit_validation_receipt_digest,
+        delivery_issue_number=delivery_issue_number,
+    )
+    provenance = {
+        "kind": "ORDINARY",
+        "attestation": copy.deepcopy(attestation),
+        "repository": repository,
+        "head_sha": head_sha,
+        "registry": copy.deepcopy(registry),
+        "command_set": copy.deepcopy(command_set),
+        "reviewed_state": reviewed_state.to_dict(),
+        "commit_parent_sha": commit_parent_sha,
+        "commit_tree_sha": commit_tree_sha,
+        "commit_validation_receipt_digest": commit_validation_receipt_digest,
+        "delivery_issue_number": delivery_issue_number,
+    }
+    return _seal_validation_evidence(result, provenance)
+
+
+def is_verified_validation_evidence(value: Any) -> bool:
+    """Re-verify canonical provenance instead of trusting caller-held authority."""
+
+    try:
+        if not isinstance(value, VerifiedValidationEvidence) or not isinstance(
+            value._verification_seal, _VerifiedValidationEvidenceSeal
+        ):
+            return False
+        raw = value._verification_seal.provenance_json
+        provenance = json.loads(raw)
+        if (
+            not isinstance(provenance, dict)
+            or canonical_json_bytes(provenance).decode("utf-8") != raw
+        ):
+            return False
+        reviewed_state = StableFeedbackState.from_payload(
+            provenance["reviewed_state"]
+        )
+        kind = provenance.get("kind")
+        if kind == "ORDINARY":
+            verified = _verify_validation_attestation_unsealed(
+                provenance["attestation"],
+                repository=provenance["repository"],
+                head_sha=provenance["head_sha"],
+                registry=provenance["registry"],
+                command_set=provenance["command_set"],
+                reviewed_state=reviewed_state,
+                commit_parent_sha=provenance["commit_parent_sha"],
+                commit_tree_sha=provenance["commit_tree_sha"],
+                commit_validation_receipt_digest=provenance[
+                    "commit_validation_receipt_digest"
+                ],
+                delivery_issue_number=provenance.get("delivery_issue_number"),
+            )
+        elif kind == "READY_INTEGRATION":
+            verified = _verify_ready_integration_attestation_unsealed(
+                provenance["attestation"],
+                repository=provenance["repository"],
+                head_sha=provenance["head_sha"],
+                registry=provenance["registry"],
+                command_set=provenance["command_set"],
+                reviewed_state=reviewed_state,
+                validation_receipt=provenance["validation_receipt"],
+                integration_evidence=provenance["integration_evidence"],
+                commit_parent_shas=provenance["commit_parent_shas"],
+                commit_tree_sha=provenance["commit_tree_sha"],
+                commit_validation_receipt_digest=provenance[
+                    "commit_validation_receipt_digest"
+                ],
+                commit_integration_evidence_digest=provenance[
+                    "commit_integration_evidence_digest"
+                ],
+                repository_root=provenance["repository_root"],
+                signature_policy=provenance["signature_policy"],
+            )
+        else:
+            return False
+        return _validation_evidence_binding(verified) == _validation_evidence_binding(
+            value
+        )
+    except (
+        AttributeError,
+        KeyError,
+        OSError,
+        RecoverableLocalError,
+        SecurityBlocker,
+        TypeError,
+        ValueError,
+    ):
+        return False
 
 
 def verify_commit_signatures(
@@ -2064,8 +2971,17 @@ def verify_commit_signatures(
 def _classified_feedback_sources(
     reviewed_state: StableFeedbackState,
     *,
-    include_resolved_threads: bool = False,
+    include_resolved: bool = False,
+    include_resolved_threads: bool | None = None,
 ) -> dict[tuple[str, str], tuple[str, str | None]]:
+    if include_resolved_threads is not None:
+        if include_resolved is not False or not isinstance(
+            include_resolved_threads, bool
+        ):
+            raise SecurityBlocker(
+                "resolved-feedback selection is malformed or ambiguous"
+            )
+        include_resolved = include_resolved_threads
     expected: dict[tuple[str, str], tuple[str, str | None]] = {}
 
     def add(kind: str, node_id: str, source_digest: str, thread_id: str | None) -> None:
@@ -2105,7 +3021,7 @@ def _classified_feedback_sources(
                 None,
             )
     for thread in reviewed_state.feedback["threads"]:
-        if thread["is_resolved"] is True and not include_resolved_threads:
+        if thread["is_resolved"] is True and not include_resolved:
             continue
         for comment in thread["comments"]:
             add(
@@ -2180,7 +3096,7 @@ def derive_ready_source_recovery_safety_facts(
     if not isinstance(feedback_findings, list):
         raise SecurityBlocker("Ready-source recovery feedback assessment is missing")
     expected_sources = _classified_feedback_sources(
-        reviewed, include_resolved_threads=True
+        reviewed, include_resolved=True
     )
     review_threads = {
         item["node_id"]
@@ -2898,6 +3814,11 @@ def atomic_write_json(path: Path, value: Any) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary_name, target)
+        directory_descriptor = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
     except BaseException:
         try:
             os.close(descriptor)

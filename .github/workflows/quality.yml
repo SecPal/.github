@@ -68,6 +68,9 @@ jobs:
       - name: Run guarded-action unit tests
         run: python3 -m unittest tests/secpal-pr-review-actions-unit.py
 
+      - name: Run adopted Ready prior-authority bridge unit tests
+        run: python3 -m unittest tests/secpal-adopted-ready-prior-authority-unit.py
+
       - name: Run simple resolver unit tests
         run: python3 -m unittest tests/secpal-resolve-fixed-threads-unit.py
 
@@ -75,6 +78,9 @@ jobs:
         run: python3 -m unittest tests/secpal-lifecycle-orchestration-unit.py
       - name: Run authenticated Ready/Draft lifecycle execution tests
         run: python3 -m unittest tests/secpal-lifecycle-execution-contract-unit.py
+
+      - name: Run role-specific lifecycle signing tests
+        run: python3 -m unittest tests/secpal-lifecycle-role-signing-unit.py
 
       - name: Run finite skill policy tests
         run: bash tests/secpal-pr-review-skill-policy.sh

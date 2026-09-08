@@ -15,8 +15,8 @@ decide whether to request reviewers, request another round, or merge.
 normal_complete_snapshots: 0
 normal_stable_feedback_reads: 1
 normal_required_check_reads_before_resolution: 0
-normal_complete_validation_runs: 1
-maximum_holistic_audits: 1
+normal_complete_validation_runs: 1 # successful run for the accepted candidate
+maximum_holistic_audits: 1 # for the current candidate tree
 normal_signed_remediation_commits: 1
 normal_fast_forward_pushes: 1
 maximum_evidence_replies_per_qualifying_invalid_finding: 1
@@ -41,10 +41,38 @@ normal-path prerequisite. The one normal stable-feedback read captures the
 reviewed state before remediation. Pagination needed to finish that bounded
 logical read does not create another read.
 
+The holistic-audit limit remains the existing one-audit session counter. A
+relevant tree change rejects the prior candidate and invalidates its audit; the
+fresh audit for the one permitted corrected candidate replaces that invalidated
+proof rather than incrementing the counter or creating another remediation
+cycle.
+
 Security blockers stop immediately. A recoverable local error may be corrected
 in the same invocation and reruns only its affected focused command. A
 read-only transport or pagination failure may receive one bounded retry. A
 mutation failure or unknown write result is never retried.
+
+Prompt or phase boundaries do not invalidate evidence. PR/head, staged-tree,
+CURRENT, stable-feedback, work-graph, and volatile-readiness proof remain valid
+until their respective head, tree, publication, feedback/reviewed-head, native
+graph, or operation boundary changes. First delivery entry uses full preflight;
+same-delivery continuation refreshes only facts whose invalidators may have
+occurred. No persistent freshness state is created.
+
+Before mutation, the executor derives the exact operation and preconditions
+from authenticated current maintained repository authority. Prompt expectations
+are assertions, not lifecycle authority; disagreement fails closed before the
+write. Commit, push, evidence binding, lifecycle publication, eligible thread
+resolution, and bounded read-back remain mechanical inside current authority.
+A new prompt is required only for new scope, recovery, an unresolved decision,
+or an operation not already explicitly or conditionally authorized.
+
+A current instruction may conditionally authorize a later exact mutation if and
+only if its maintained gate passes for the unchanged authenticated candidate.
+This is current explicit authority, not authority inherited from an earlier
+instruction or from successful evidence. The feedback helper's unsupported
+operation list remains unchanged; a separately maintained executor performs an
+authorized Ready transition or merge.
 
 ## Hosted CI authorization
 
@@ -62,6 +90,21 @@ mergeability, or merge readiness.
 The default remediation path never performs a hosted-CI read. It never waits,
 polls, sleeps, repeats a status read, keeps a run active for CI, or instructs
 the user to start another run because a hosted check is pending.
+
+Review-provider observation is separate from hosted-CI observation. Stable
+feedback may be captured only after every triggered provider has successful
+terminal evidence. `QUEUED`, `PENDING`, `RUNNING`, `FAILED`, and
+`INDETERMINATE` block stable capture and merge; zero comments or threads never
+prove completion. A currently authorized full delivery may observe provider
+status at bounded intervals for about 30 minutes without consuming another
+review or polling unrelated hosted CI. Expiry returns `REVIEW_NOT_TERMINAL` and
+permits the same workspace to resume later.
+
+The normal capture query enforces this boundary before stable-state admission.
+It rejects a visible non-terminal, malformed, forged, duplicate, or wrong-head
+Codex summary; it rejects a Ready PR with no Codex summary and a pending Copilot
+review request. Provider status remains ephemeral and is excluded from the
+stable-feedback artifact, so this adds no evidence family or persistence.
 
 ## Simple resolution-only path
 
@@ -295,13 +338,20 @@ the reviewed head/state and every eligible thread's classification,
 disposition, finding IDs, and evidence digest without referring to the not-yet-
 created fix commit. On entry, the tracked tree, eligibility manifest, and
 holistic-audit result are frozen; independent discovery and audit do not
-continue in or after this state. A failed command produces no receipt; the
-command invalidates any report already at its
-configured output before validation begins, terminates this invocation, and
-permits no tree change or complete-command retry. A new explicit remediation
-invocation must capture fresh state and audit any correction before its single
-complete validation. A successful complete validation is never repeated. Time
-is informational only and cannot determine validity.
+continue for that candidate after this state begins. A failed command produces
+no receipt and rejects that candidate tree. The unchanged failed candidate
+cannot be retried. Output already at the configured path is invalidated before
+validation begins, and failure cannot be represented as successful evidence.
+When the failure is diagnosed, correction remains inside current authority, no
+external mutation occurred, and focused validation plus a fresh holistic audit
+cover a changed tree, the workflow may perform one complete validation of the
+changed candidate in the same invocation. It must repeat the holistic audit for
+that changed candidate. This authorizes exactly one corrected candidate; if its
+complete validation fails, stop without another correction or attempt in this
+invocation. A successful complete validation is never repeated on
+an unchanged tree. A new invocation is required only when correction requires
+new scope, recovery, authority, or another user decision. Time is informational
+only and cannot determine validity.
 
 `IF_TRACKED_TREE_CHANGED` selects only between the proven staged tree and the
 reviewed tree. When remediation changes no tracked source file, it takes
@@ -474,6 +524,14 @@ unknown documents, wrong signers, cross-identity replay, and predecessor/CAS
 drift fail closed. Protected journal ancestry remains the sole dynamic CURRENT
 selector. Zero enrollment remains the valid pre-adoption state.
 
+The version-3 exact-state-adoption source mode consumes the separately signed
+pre-enrollment validation-evidence-loss admission defined in
+`docs/secpal-pr-review-workflow.md`. It reuses ordinary enrollment publication;
+it adds no journal operation or authority to this review-processing skill.
+Review-budget consumption remains a separate authenticated admission. Lost
+historical bytes are not reconstructed, and fresh current safety is not a
+historical receipt or another unrestricted review.
+
 This boundary publishes authority; it does not derive lifecycle semantics,
 implement two-parent integration, or orchestrate the full finite workflow.
 
@@ -519,8 +577,9 @@ detached path remains limited to its exact authenticated disposition allowlist.
 
 The separate `lifecycle_execution.py` boundary executes only an already signed
 and authenticated lifecycle-orchestration authorization for
-`DRAFT_TO_READY` or `READY_TO_DRAFT`. Its public input is exactly repository,
-delivery issue, and canonical authorization bytes. It accepts no caller state,
+`DRAFT_TO_READY` or `READY_TO_DRAFT`. Its single-transition public input is
+exactly repository, delivery issue, and canonical authorization bytes. It
+accepts no caller state,
 counter, CURRENT, predecessor, transition, signer, completion, executable,
 host, retry, force, or verification-bypass assertion.
 
@@ -563,6 +622,34 @@ recovery, integration, and metadata authorities cannot select this executor.
 This owner preserves the useful decision/execution boundary and composes the
 existing authorities without adding a permanent lifecycle concept.
 `NEW_PERMANENT_CONCEPT=NO`.
+
+The executor also owns one closed two-successor convergence shape. A pending,
+authenticated `DRAFT_TO_READY` at H0 may be followed only by one independently
+authenticated `REMEDIATION_COMPLETED` from H0 to its sole-child H1 when a
+complete live GitHub timeline proves the Ready mutation preceded that source
+advance and no Ready-to-Draft, force-push, or additional commit intervened.
+Existing orchestration must reject the remediation against Draft H0 and accept
+it against the derived Ready midpoint, making the order unique. Existing sealed
+validation evidence and signed-commit authentication must bind the exact issue,
+PR, heads, tree, receipt, final attestation, finding IDs, signer, and signature.
+The two ordinary successors publish sequentially through the existing CAS and
+historical read-back boundary; predecessor, midpoint, and final states are
+idempotently resumable without another GitHub Ready write.
+
+The maintained autonomy rule is:
+
+```text
+ALL_INTERMEDIATE_OPERATIONS_ALREADY_AUTHENTICATED
++ UNIQUE_EXISTING_TRANSITION_ORDER
++ EXACT_HEAD_LINEAGE
++ EXACT_FINAL_EXTERNAL_STATE
+-> AUTONOMOUS_LIFECYCLE_CONVERGENCE
+```
+
+Selecting that maintained safe convergence is not a user decision boundary.
+Mechanical lifecycle lag is not Exceptional Recovery, composition creates no
+new lifecycle transition, and authenticated ancestry never permits a missing
+transition to be skipped. Any ambiguous chronology fails closed.
 
 ## Explicit CI and readiness path
 
@@ -716,7 +803,11 @@ when they contain the same secret-like patterns prohibited in forensic plans.
 The sole-parent rule above remains authoritative for remediation and recovery.
 `attest-validation --integration-evidence` is the distinct, explicitly selected
 exception for one already-authorized Ready-PR integration candidate. Its closed
-version-1.1 evidence kind is `TWO_PARENT_READY_INTEGRATION`; it requires explicit
+version-1.1 and version-1.2 evidence kind is `TWO_PARENT_READY_INTEGRATION`.
+Version 1.1 binds reviewed feedback at parent 1. Version 1.2 requires a distinct
+reviewed predecessor and binds its exact state and feedback digests through
+parent 1's independently verified ordinary receipt and final attestation. It
+requires explicit
 delivery-issue, authorization-ID, and signer selectors and authenticates the
 repository, PR, prior Ready head, live current registered default-branch tip,
 exact ordered parents `[prior Ready head, authorized base head]`, combined tree,
@@ -1028,7 +1119,9 @@ security blocker, exhausted transient read, or write failure/unknown result.
 The terminal report must distinguish what changed, what remains untrusted, and
 which user decision is required.
 
-In the explicitly requested readiness path,
-`WAIT_FOR_EXPLICIT_USER_MERGE_AUTHORIZATION` is a stop state. Only the user
-decides whether another review round or a squash merge is requested. The skill
-and helper contain no capability to do those things.
+In the explicitly requested readiness path, absent current merge authority,
+`WAIT_FOR_EXPLICIT_USER_MERGE_AUTHORIZATION` is a stop state. When the current
+instruction already conditionally authorizes the canonical squash merge, the
+separate maintained merge boundary may proceed if and only if its freshly read
+gate passes for the unchanged authorized head. The skill and helper themselves
+still contain no review-request or merge capability.

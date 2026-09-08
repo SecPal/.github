@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Authenticate exact implementation sources admitted by accepted-main policy.
 
-The #810 subtype retains its exact isolated execution boundary.  Byte-only
-subtypes expose no entrypoint or execution mechanism.  Lifecycle orchestration
-and signed one-use transition authorization remain the sole mutation authority.
+The #810 subtype retains its exact isolated execution boundary. The #776
+subtype adds one fixed pre-enrollment action command after the same independent
+authentication. Byte-only subtypes expose no entrypoint or execution mechanism.
+Downstream typed evidence remains the sole candidate and mutation authority.
 """
 
 from __future__ import annotations
@@ -12,13 +13,16 @@ from __future__ import annotations
 import ast
 from contextlib import contextmanager
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import selectors
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -39,6 +43,11 @@ ENTRYPOINT = "execute_lifecycle_transition"
 EVIDENCE_HELPER_ADMISSION_SUBTYPE = "PR_REVIEW_EVIDENCE_HELPER_SOURCE"
 EVIDENCE_HELPER_PURPOSE = "PR_REVIEW_EVIDENCE_HELPER_SOURCE_ADMISSION"
 EVIDENCE_HELPER_IMPLEMENTATION_PATH = "scripts/secpal-pr-review.py"
+PRE_ENROLLMENT_ADMISSION_SUBTYPE = "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE"
+PRE_ENROLLMENT_PURPOSE = "PRE_ENROLLMENT_IMPLEMENTATION_BOOTSTRAP"
+PRE_ENROLLMENT_IMPLEMENTATION_PATH = "scripts/secpal-pr-review-actions.py"
+PRE_ENROLLMENT_ENTRYPOINT = "main"
+PRE_ENROLLMENT_COMMAND = "integrate-pre-enrollment-draft"
 ACCEPTED_MAIN_POLICY_SOURCE = "ACCEPTED_MAIN_REPOSITORY_REGISTRY"
 PROTECTED_MAIN_REPOSITORY = "SecPal/.github"
 PROTECTED_MAIN_DEFAULT_BRANCH = "main"
@@ -52,6 +61,24 @@ _DIGEST = re.compile(r"[0-9a-f]{64}")
 _VERIFIED_SOURCE = object()
 MAXIMUM_EVIDENCE_BYTES = late_disposition.MAXIMUM_ARTIFACT_BYTES
 _BOOTSTRAP_COMMAND_TIMEOUT_SECONDS = 30
+_PRE_ENROLLMENT_EXECUTION_TIMEOUT_SECONDS = 1800
+_WORK_GRAPH_NODE_PACKAGE = "markdown-it"
+_WORK_GRAPH_NODE_PACKAGE_VERSION = "14.3.0"
+_NPM_REGISTRY = "https://registry.npmjs.org/"
+_NPM_INTEGRITY = re.compile(r"sha512-[A-Za-z0-9+/]+={0,2}")
+_NPM_PACKAGE_NAME = re.compile(
+    r"(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*"
+)
+_PRE_ENROLLMENT_DIAGNOSTIC_IDENTITIES = frozenset(
+    {
+        "RECOVERABLE_LOCAL_ERROR",
+        "BLOCKED_TRANSIENT_READ_FAILED",
+        "BLOCKED_SECURITY",
+        "BLOCKED_MUTATION_FAILED",
+        "BLOCKED",
+        "INVALID_OR_UNSAFE_INPUT",
+    }
+)
 _BOOTSTRAP_COMMAND_DIRECTORIES = (
     Path("/usr/bin"),
     Path("/bin"),
@@ -91,6 +118,15 @@ _PROTECTED_MAIN_QUERY = """query($owner:String!,$name:String!){
   repository(owner:$owner,name:$name){
     nameWithOwner
     defaultBranchRef{name target{... on Commit{oid}}}
+  }
+}"""
+_CURRENT_CANDIDATE_BLOB_QUERY = """query(
+  $owner:String!,$name:String!,$number:Int!,$expression:String!
+){
+  repository(owner:$owner,name:$name){
+    nameWithOwner
+    pullRequest(number:$number){number headRefOid}
+    object(expression:$expression){... on Blob{oid}}
   }
 }"""
 _DIAGNOSTIC_RAISE_SITES = (
@@ -200,6 +236,41 @@ else:
 _LAUNCHER = _LAUNCHER_TEMPLATE.replace(
     "__SECPAL_DIAGNOSTIC_RAISE_SITES__", repr(dict(_DIAGNOSTIC_RAISE_SITES))
 )
+_ISOLATED_SOURCE_LAUNCHER = r"""
+import importlib.util
+from pathlib import Path
+import runpy
+import sys
+
+mode = sys.argv[1]
+source_root = Path(sys.argv[2]).resolve(strict=True)
+target = sys.argv[3]
+arguments = sys.argv[4:]
+stdlib = [value for value in sys.path if value and "site-packages" not in value]
+sys.path[:] = [*stdlib, str(source_root)]
+
+if mode == "MODULE":
+    sys.argv = [target, *arguments]
+    runpy.run_module(target, run_name="__main__", alter_sys=False)
+elif mode == "ENTRYPOINT":
+    entrypoint = arguments.pop(0)
+    expected = (source_root / target).resolve(strict=True)
+    if source_root not in expected.parents or not expected.is_file():
+        raise RuntimeError("admitted source entrypoint escaped the immutable tree")
+    spec = importlib.util.spec_from_file_location(
+        "secpal_isolated_admitted_source", expected
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("admitted source entrypoint is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    selected = getattr(module, entrypoint, None)
+    if not callable(selected):
+        raise RuntimeError("admitted source entrypoint changed")
+    raise SystemExit(selected(arguments))
+else:
+    raise RuntimeError("isolated source execution mode is unknown")
+"""
 
 
 class BootstrapSourceAdmissionError(ValueError):
@@ -280,14 +351,19 @@ class VerifiedBootstrapSource:
     head_sha: str
     tree_sha: str
     parent_sha: str
-    validation_receipt_digest: str
-    final_attestation_digest: str
+    validation_receipt_digest: str | None
+    final_attestation_digest: str | None
     signer_identity: str
     implementation_path: str
     implementation_blob_oid: str
     entrypoint: str | None
     purpose: str
     policy_source: str | None
+    signer_policy_identity: str | None
+    command: str | None
+    validation_registry_path: str | None
+    validation_command_set_digest: str | None
+    validation_result_digest: str | None
     admission_digest: str
     historical_evidence_status: str
     recovery_authority_digest: str | None
@@ -856,6 +932,28 @@ def _select_evidence_helper_policy(
     )
 
 
+def _select_pre_enrollment_policy(
+    repository: str, delivery_issue: int
+) -> tuple[authority.LifecycleTrustPolicy, authority.BootstrapSourceAdmissionPolicy]:
+    """Select the executable #776 admission solely from protected main."""
+
+    try:
+        repository = authority._require_repository(repository)
+        delivery_issue = authority._require_positive_int(
+            delivery_issue, "bootstrap delivery issue"
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise BootstrapSourceAdmissionError(str(exc)) from exc
+    trust = _load_protected_main_trust_policy(repository)
+    return _select_policy_from_trust(
+        trust,
+        repository,
+        delivery_issue,
+        PRE_ENROLLMENT_ADMISSION_SUBTYPE,
+        PRE_ENROLLMENT_PURPOSE,
+    )
+
+
 def _verify_materialized_tree(
     root: Path, policy: authority.BootstrapSourceAdmissionPolicy
 ) -> None:
@@ -985,8 +1083,12 @@ def _admit_github_source(
     facts: GitHubSourceFacts,
     policy: authority.BootstrapSourceAdmissionPolicy,
 ) -> None:
-    """Purely admit canonical facts against one exact maintained policy."""
+    """Purely admit current PR identity and immutable source provenance."""
 
+    immutable_source = policy.subtype in {
+        EVIDENCE_HELPER_ADMISSION_SUBTYPE,
+        PRE_ENROLLMENT_ADMISSION_SUBTYPE,
+    }
     valid = (
         isinstance(facts, GitHubSourceFacts)
         and facts.base_repository == policy.repository
@@ -995,7 +1097,7 @@ def _admit_github_source(
         and facts.pull_request == policy.pull_request
         and facts.state == policy.source_pr_state
         and facts.draft is policy.source_pr_draft
-        and facts.head_sha == policy.source_head_sha
+        and (immutable_source or facts.head_sha == policy.source_head_sha)
         and facts.commit_sha == policy.source_head_sha
         and facts.tree_sha == policy.source_tree_sha
         and facts.parent_shas == (policy.source_parent_sha,)
@@ -1008,6 +1110,115 @@ def _admit_github_source(
         )
 
 
+def _observe_current_candidate_blob(
+    policy: authority.BootstrapSourceAdmissionPolicy, current_head_sha: str
+) -> bytes:
+    """Capture one current candidate blob without assigning source identity."""
+
+    try:
+        current_head_sha = authority._require_oid(
+            current_head_sha, "current candidate head"
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise BootstrapSourceAdmissionError(str(exc)) from exc
+    owner, separator, name = policy.repository.partition("/")
+    if separator != "/" or not owner or not name:
+        raise BootstrapSourceAdmissionError(
+            "current candidate repository identity is invalid"
+        )
+    result = _run_bootstrap_gh(
+        [
+            "api",
+            "--hostname",
+            "github.com",
+            "graphql",
+            "-f",
+            f"query={_CURRENT_CANDIDATE_BLOB_QUERY}",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"name={name}",
+            "-F",
+            f"number={policy.pull_request}",
+            "-f",
+            f"expression={current_head_sha}:{policy.implementation_path}",
+        ]
+    )
+    if result.returncode != 0:
+        raise BootstrapSourceAdmissionError(
+            "current candidate GitHub blob is unavailable"
+        )
+    return bytes(result.stdout)
+
+
+def _normalize_current_candidate_blob(
+    raw: bytes, repository: str, pull_request: int
+) -> tuple[str, str]:
+    """Purely normalize the exact current helper blob representation."""
+
+    try:
+        document = _closed_json(raw, "current candidate GitHub blob")
+        observed_repository = document["data"]["repository"]
+        if (
+            set(document) != {"data"}
+            or set(document["data"]) != {"repository"}
+            or not isinstance(observed_repository, dict)
+            or set(observed_repository)
+            != {"nameWithOwner", "pullRequest", "object"}
+            or observed_repository["nameWithOwner"] != repository
+            or not isinstance(observed_repository["pullRequest"], dict)
+            or set(observed_repository["pullRequest"])
+            != {"number", "headRefOid"}
+            or observed_repository["pullRequest"]["number"] != pull_request
+            or not isinstance(observed_repository["object"], dict)
+            or set(observed_repository["object"]) != {"oid"}
+        ):
+            raise BootstrapSourceAdmissionError(
+                "current candidate GitHub blob is malformed"
+            )
+        return (
+            authority._require_oid(
+                observed_repository["pullRequest"]["headRefOid"],
+                "current candidate head",
+            ),
+            authority._require_oid(
+                observed_repository["object"]["oid"],
+                "current candidate helper blob",
+            ),
+        )
+    except BootstrapSourceAdmissionError:
+        raise
+    except (KeyError, TypeError, authority.LifecycleAuthorityError) as exc:
+        raise BootstrapSourceAdmissionError(
+            "current candidate GitHub blob is malformed"
+        ) from exc
+
+
+def _admit_current_candidate_blob(
+    current_head_sha: str,
+    expected_head_sha: str,
+    blob: str,
+    policy: authority.BootstrapSourceAdmissionPolicy,
+) -> None:
+    """Admit only exact helper-byte consumption by the current candidate."""
+
+    valid_source = (
+        policy.subtype == EVIDENCE_HELPER_ADMISSION_SUBTYPE
+        and policy.implementation_path == EVIDENCE_HELPER_IMPLEMENTATION_PATH
+    ) or (
+        policy.subtype == PRE_ENROLLMENT_ADMISSION_SUBTYPE
+        and policy.implementation_path == PRE_ENROLLMENT_IMPLEMENTATION_PATH
+    )
+    if (
+        not valid_source
+        or current_head_sha != expected_head_sha
+        or blob != policy.implementation_blob_oid
+    ):
+        raise BootstrapSourceAdmissionError(
+            "current candidate head or helper bytes differ from immutable admission"
+        )
+
+
 def _authenticate_live_github_source(
     policy: authority.BootstrapSourceAdmissionPolicy,
 ) -> None:
@@ -1016,6 +1227,18 @@ def _authenticate_live_github_source(
     observation = _observe_github(policy)
     facts = _normalize_github_observation(observation)
     _admit_github_source(facts, policy)
+    if policy.subtype in {
+        EVIDENCE_HELPER_ADMISSION_SUBTYPE,
+        PRE_ENROLLMENT_ADMISSION_SUBTYPE,
+    }:
+        current_head_sha, blob = _normalize_current_candidate_blob(
+            _observe_current_candidate_blob(policy, facts.head_sha),
+            policy.repository,
+            policy.pull_request,
+        )
+        _admit_current_candidate_blob(
+            current_head_sha, facts.head_sha, blob, policy
+        )
 
 
 def _observe_recovery_review_state(
@@ -1280,6 +1503,29 @@ def _implementation_blob(root: Path, policy: authority.BootstrapSourceAdmissionP
                 "admitted byte-source path or blob differs from accepted-main policy"
             )
         return fields[2]
+    if policy.subtype == PRE_ENROLLMENT_ADMISSION_SUBTYPE:
+        if (
+            policy.implementation_path != PRE_ENROLLMENT_IMPLEMENTATION_PATH
+            or policy.entrypoint != PRE_ENROLLMENT_ENTRYPOINT
+            or policy.command != PRE_ENROLLMENT_COMMAND
+            or policy.policy_source != ACCEPTED_MAIN_POLICY_SOURCE
+            or fields[2] != policy.implementation_blob_oid
+        ):
+            raise BootstrapSourceAdmissionError(
+                "pre-enrollment source path, entrypoint, command, or blob changed"
+            )
+        self_admission = _run_bootstrap_git(
+            root,
+            [
+                "cat-file", "-e",
+                f"{policy.source_tree_sha}:scripts/secpal_pr_review/bootstrap_source_admission.py",
+            ],
+        )
+        if self_admission.returncode == 0:
+            raise BootstrapSourceAdmissionError(
+                "candidate-local verifier cannot self-admit"
+            )
+        return fields[2]
     if policy.subtype != ADMISSION_SUBTYPE or policy.implementation_blob_oid is not None:
         raise BootstrapSourceAdmissionError("source-admission subtype is not executable")
     raw = _git(root, ["cat-file", "blob", fields[2]]).stdout
@@ -1384,11 +1630,15 @@ def _authenticate_exact_materialized_source(
     ):
         raise BootstrapSourceAdmissionError("source head, tree, or parent changed")
     _verify_commit_signature(root, trust, policy)
-    trailer = _exact_trailer(root, head)
-    if trailer != policy.validation_receipt_digest:
-        raise BootstrapSourceAdmissionError(
-            "source commit validation-receipt trailer changed"
-        )
+    if policy.subtype == PRE_ENROLLMENT_ADMISSION_SUBTYPE:
+        predecessor_policy = replace(policy, source_head_sha=policy.source_parent_sha)
+        _verify_commit_signature(root, trust, predecessor_policy)
+    else:
+        trailer = _exact_trailer(root, head)
+        if trailer != policy.validation_receipt_digest:
+            raise BootstrapSourceAdmissionError(
+                "source commit validation-receipt trailer changed"
+            )
     blob = _implementation_blob(root, policy)
     return head, tree, blob
 
@@ -1417,6 +1667,11 @@ def _verified_bootstrap_source(
         entrypoint=policy.entrypoint,
         purpose=policy.purpose,
         policy_source=policy.policy_source,
+        signer_policy_identity=policy.signer_policy_identity,
+        command=policy.command,
+        validation_registry_path=policy.validation_registry_path,
+        validation_command_set_digest=policy.validation_command_set_digest,
+        validation_result_digest=policy.validation_result_digest,
         admission_digest=policy.admission_digest,
         historical_evidence_status=historical_evidence_status,
         recovery_authority_digest=(
@@ -1524,6 +1779,263 @@ def verify_pr_review_evidence_helper_source(
         return verified
 
 
+def _run_pre_enrollment_source_validation(
+    root: Path, policy: authority.BootstrapSourceAdmissionPolicy
+) -> None:
+    """Run only the accepted-main command set and retain bounded result facts."""
+
+    if (
+        policy.subtype != PRE_ENROLLMENT_ADMISSION_SUBTYPE
+        or policy.validation_command_set_digest
+        != fast_path.digest_json(list(policy.validation_command_set))
+        or policy.validation_result_digest
+        != fast_path.digest_json(list(policy.validation_results))
+    ):
+        raise BootstrapSourceAdmissionError(
+            "pre-enrollment validation policy is invalid"
+        )
+    helper = authority._load_trusted_command_helper()
+    observed: list[dict[str, Any]] = []
+    with tempfile.TemporaryDirectory(
+        prefix="secpal-pre-enrollment-validation-home-"
+    ) as home_directory:
+        validation_environment = _closed_validation_environment(
+            helper, Path(home_directory)
+        )
+        for command in policy.validation_command_set:
+            argv = command.get("argv") if isinstance(command, dict) else None
+            if (
+                not isinstance(argv, list)
+                or not argv
+                or argv[0] != "python3"
+                or not all(isinstance(value, str) and value for value in argv)
+                or command.get("working_directory") != "."
+            ):
+                raise BootstrapSourceAdmissionError(
+                    "pre-enrollment validation command is invalid"
+                )
+            try:
+                completed = _run_isolated_python(
+                    _isolated_python_command(
+                        _ISOLATED_SOURCE_LAUNCHER,
+                        "MODULE", str(root), argv[2], *argv[3:],
+                    ),
+                    cwd=root,
+                    timeout=120,
+                    env=validation_environment,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise BootstrapSourceAdmissionError(
+                    "pre-enrollment source validation failed"
+                ) from exc
+            observed.append(
+                {
+                    "command_digest": fast_path.digest_json(command),
+                    "exit_status": completed.returncode,
+                    "successful": completed.returncode == 0,
+                }
+            )
+            _verify_materialized_tree(root, policy)
+    if tuple(observed) != policy.validation_results:
+        raise BootstrapSourceAdmissionError(
+            "pre-enrollment source validation created no admission"
+        )
+
+
+def verify_pre_enrollment_implementation_source(
+    repository: str, delivery_issue: int
+) -> VerifiedBootstrapSource:
+    """Authenticate and validate only the exact #776 implementation snapshot."""
+
+    trust, policy = _select_pre_enrollment_policy(repository, delivery_issue)
+    _authenticate_live_github_source(policy)
+    with _isolated_source_repository(trust, policy) as root:
+        head, tree, blob = _authenticate_exact_materialized_source(
+            root, trust, policy
+        )
+        _run_pre_enrollment_source_validation(root, policy)
+        _verify_materialized_tree(root, policy)
+        return _verified_bootstrap_source(
+            policy,
+            head=head,
+            tree=tree,
+            blob=blob,
+            historical_evidence_status=policy.historical_evidence_status or "",
+        )
+
+
+def _closed_pre_enrollment_invocation(
+    serialized_invocation: bytes | str,
+) -> dict[str, str]:
+    value = _closed_json(serialized_invocation, "pre-enrollment invocation")
+    fields = {
+        "repository_root", "session_directory", "authorization_id",
+        "validation_receipt_id", "final_attestation_id", "commit_subject",
+    }
+    if set(value) != fields or any(
+        not isinstance(value[field], str)
+        or not value[field]
+        or "\x00" in value[field]
+        for field in fields
+    ):
+        raise BootstrapSourceAdmissionError(
+            "pre-enrollment invocation is not closed"
+        )
+    try:
+        session = Path(value["session_directory"]).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise BootstrapSourceAdmissionError(
+            "pre-enrollment session directory is unavailable"
+        ) from exc
+    session_status = session.stat()
+    if (
+        not session.is_dir()
+        or session_status.st_uid != os.getuid()
+        or session_status.st_mode & 0o777 != 0o700
+    ):
+        raise BootstrapSourceAdmissionError(
+            "pre-enrollment session directory is not private"
+        )
+    return {field: value[field] for field in sorted(fields)}
+
+
+def _execute_pre_enrollment_entrypoint(
+    root: Path,
+    policy: authority.BootstrapSourceAdmissionPolicy,
+    serialized_invocation: bytes | str,
+    *,
+    dependency_environment: Mapping[str, str],
+) -> Mapping[str, Any]:
+    """Invoke the fixed admitted command without exposing candidate-selected argv."""
+
+    selected = _closed_pre_enrollment_invocation(serialized_invocation)
+    session = Path(selected["session_directory"]).resolve(strict=True)
+    arguments = [
+        policy.command or "",
+        "--repo", policy.repository,
+        "--pr", str(policy.pull_request),
+        "--delivery-issue", str(policy.delivery_issue),
+        "--repo-root", selected["repository_root"],
+        "--evidence", str(session / "pre-enrollment-evidence.json"),
+        "--authorization-id", selected["authorization_id"],
+        "--expected-signer", policy.source_signer_identity,
+        "--validation-receipt-id", selected["validation_receipt_id"],
+        "--final-attestation-id", selected["final_attestation_id"],
+        "--commit-subject", selected["commit_subject"],
+        "--receipt-output", str(session / "validation-receipt.json"),
+        "--attestation-output", str(session / "final-attestation.json"),
+        "--apply",
+    ]
+    helper = authority._load_trusted_command_helper()
+    if (
+        set(dependency_environment) != {"NODE_OPTIONS"}
+        or not isinstance(dependency_environment["NODE_OPTIONS"], str)
+        or not dependency_environment["NODE_OPTIONS"].startswith("--require=")
+    ):
+        raise BootstrapSourceAdmissionError(
+            "authenticated Work-Graph dependency environment is invalid"
+        )
+    environment = _closed_launcher_environment(helper)
+    environment.update(dependency_environment)
+    try:
+        completed = _run_isolated_python(
+            _isolated_python_command(
+                _ISOLATED_SOURCE_LAUNCHER,
+                "ENTRYPOINT", str(root), policy.implementation_path,
+                policy.entrypoint or "", *arguments,
+            ),
+            cwd=root,
+            timeout=_PRE_ENROLLMENT_EXECUTION_TIMEOUT_SECONDS,
+            env=environment,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise BootstrapSourceAdmissionError(
+            "admitted pre-enrollment entrypoint failed"
+        ) from exc
+    if completed.returncode != 0:
+        identity = "UNEXPECTED_CLOSED_CHILD_FAILURE"
+        try:
+            failure = json.loads(
+                completed.stderr,
+                object_pairs_hook=publication._reject_duplicate_pairs,
+            )
+            if (
+                isinstance(failure, dict)
+                and failure.get("status") in _PRE_ENROLLMENT_DIAGNOSTIC_IDENTITIES
+            ):
+                identity = failure["status"]
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            pass
+        raise BootstrapSourceAdmissionError(
+            f"admitted pre-enrollment entrypoint failed: {identity}",
+            diagnostic_identity=identity,
+        )
+    return {"status": "COMPLETE", "exit_status": 0}
+
+
+def execute_pre_enrollment_implementation_bootstrap(
+    repository: str,
+    delivery_issue: int,
+    serialized_invocation: bytes | str,
+) -> Mapping[str, Any]:
+    """Execute the fixed #776 command only after accepted-main authentication."""
+
+    trust, policy = _select_pre_enrollment_policy(repository, delivery_issue)
+    _authenticate_live_github_source(policy)
+    with _isolated_source_repository(trust, policy) as root:
+        head, tree, blob = _authenticate_exact_materialized_source(
+            root, trust, policy
+        )
+        _run_pre_enrollment_source_validation(root, policy)
+        verified = _verified_bootstrap_source(
+            policy,
+            head=head,
+            tree=tree,
+            blob=blob,
+            historical_evidence_status=policy.historical_evidence_status or "",
+        )
+        if not is_verified_bootstrap_source(verified):
+            raise BootstrapSourceAdmissionError(
+                "pre-enrollment source admission verification was not retained"
+            )
+        _verify_materialized_tree(root, policy)
+        helper = authority._load_trusted_command_helper()
+        with _authenticated_work_graph_dependencies(root, helper) as dependency_environment:
+            try:
+                result = _execute_pre_enrollment_entrypoint(
+                    root,
+                    policy,
+                    serialized_invocation,
+                    dependency_environment=dependency_environment,
+                )
+            finally:
+                _verify_materialized_tree(root, policy)
+        if result != {"status": "COMPLETE", "exit_status": 0}:
+            raise BootstrapSourceAdmissionError(
+                "admitted pre-enrollment result is not closed"
+            )
+        return {
+            "status": "COMPLETE",
+            "exit_status": 0,
+            "repository": verified.repository,
+            "delivery_issue": verified.delivery_issue,
+            "pull_request": verified.pull_request,
+            "source_head_sha": verified.head_sha,
+            "source_tree_sha": verified.tree_sha,
+            "source_parent_sha": verified.parent_sha,
+            "signer_identity": verified.signer_identity,
+            "signer_policy_identity": verified.signer_policy_identity,
+            "entrypoint": verified.entrypoint,
+            "command": verified.command,
+            "purpose": verified.purpose,
+            "validation_registry_path": verified.validation_registry_path,
+            "validation_command_set_digest": verified.validation_command_set_digest,
+            "validation_result_digest": verified.validation_result_digest,
+            "historical_evidence_status": verified.historical_evidence_status,
+            "admission_digest": verified.admission_digest,
+        }
+
+
 def _trusted_python() -> str:
     helper = authority._load_trusted_command_helper()
     for directory in helper.TRUSTED_COMMAND_DIRECTORIES:
@@ -1535,6 +2047,114 @@ def _trusted_python() -> str:
         if resolved.is_file() and os.access(resolved, os.X_OK):
             return str(resolved)
     raise BootstrapSourceAdmissionError("trusted Python executable is unavailable")
+
+
+def _isolated_python_command(launcher: str, *arguments: str) -> list[str]:
+    """Build the one accepted isolated Python startup sequence."""
+
+    return [_trusted_python(), "-I", "-S", "-B", "-c", launcher, *arguments]
+
+
+def _terminate_isolated_process_group(process: subprocess.Popen[bytes]) -> None:
+    """Terminate and reap the complete isolated child process group."""
+
+    for stop_signal in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(process.pid, stop_signal)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=1)
+            if stop_signal == signal.SIGTERM:
+                # Descendants can outlive their direct parent, so still signal the
+                # process group once more before treating the boundary as closed.
+                continue
+            return
+        except subprocess.TimeoutExpired:
+            continue
+    process.wait()
+
+
+def _run_isolated_python(
+    command: list[str], *, cwd: Path, timeout: float, env: Mapping[str, str]
+) -> subprocess.CompletedProcess[bytes]:
+    """Run one admitted Python command with bounded output and group lifetime."""
+
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        raise BootstrapSourceAdmissionError(
+            "isolated admitted-source process is unavailable"
+        ) from exc
+    selector = selectors.DefaultSelector()
+    output = {"stdout": [], "stderr": []}
+    sizes = {"stdout": 0, "stderr": 0}
+    deadline = time.monotonic() + timeout
+    try:
+        assert process.stdout is not None and process.stderr is not None
+        for label, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ, label)
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_isolated_process_group(process)
+                raise BootstrapSourceAdmissionError(
+                    "isolated admitted-source process timed out"
+                )
+            events = selector.select(min(remaining, 0.1))
+            if not events and process.poll() is not None:
+                events = [
+                    (key, selectors.EVENT_READ)
+                    for key in tuple(selector.get_map().values())
+                ]
+            for key, _mask in events:
+                stream = key.fileobj
+                label = key.data
+                capacity = MAXIMUM_EVIDENCE_BYTES - sizes[label]
+                try:
+                    chunk = os.read(stream.fileno(), min(65536, capacity + 1))
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(stream)
+                    stream.close()
+                    continue
+                if len(chunk) > capacity:
+                    _terminate_isolated_process_group(process)
+                    raise BootstrapSourceAdmissionError(
+                        "isolated admitted-source output limit exceeded"
+                    )
+                output[label].append(chunk)
+                sizes[label] += len(chunk)
+        try:
+            returncode = process.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired as exc:
+            _terminate_isolated_process_group(process)
+            raise BootstrapSourceAdmissionError(
+                "isolated admitted-source process timed out"
+            ) from exc
+        return subprocess.CompletedProcess(
+            command,
+            returncode,
+            b"".join(output["stdout"]),
+            b"".join(output["stderr"]),
+        )
+    finally:
+        selector.close()
+        for stream in (process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
+        if process.poll() is None:
+            _terminate_isolated_process_group(process)
 
 
 def _closed_launcher_environment(helper: Any) -> dict[str, str]:
@@ -1567,6 +2187,414 @@ def _closed_launcher_environment(helper: Any) -> dict[str, str]:
     return environment
 
 
+def _closed_validation_environment(helper: Any, home: Path) -> dict[str, str]:
+    """Build the credential-free environment for admitted source validation."""
+
+    try:
+        home = home.resolve(strict=True)
+        status = home.stat()
+    except (OSError, RuntimeError) as exc:
+        raise BootstrapSourceAdmissionError(
+            "validation home is unavailable"
+        ) from exc
+    command_path = getattr(helper, "TRUSTED_COMMAND_PATH", None)
+    if (
+        not home.is_dir()
+        or status.st_uid != os.getuid()
+        or status.st_mode & 0o077
+        or not isinstance(command_path, str)
+        or not command_path
+    ):
+        raise BootstrapSourceAdmissionError(
+            "validation environment is invalid"
+        )
+    return {
+        "PATH": command_path,
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PAGER": "cat",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+
+
+def _read_authenticated_dependency_json(root: Path, name: str) -> tuple[bytes, Any]:
+    """Read one regular manifest already covered by authenticated source-tree identity."""
+
+    path = root / name
+    try:
+        if path.is_symlink() or not path.is_file():
+            raise OSError
+        payload = path.read_bytes()
+        value = json.loads(payload, object_pairs_hook=publication._reject_duplicate_pairs)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise BootstrapSourceAdmissionError(
+            "authenticated Work-Graph dependency manifest is invalid"
+        ) from exc
+    if not payload or len(payload) > MAXIMUM_EVIDENCE_BYTES or not isinstance(value, dict):
+        raise BootstrapSourceAdmissionError(
+            "authenticated Work-Graph dependency manifest is invalid"
+        )
+    return payload, value
+
+
+def _node_dependency_candidates(importer: str, dependency: str) -> tuple[str, ...]:
+    parts = tuple(Path(importer).parts)
+    dependency_parts = tuple(Path(dependency).parts)
+    candidates = [Path(*parts, "node_modules", *dependency_parts).as_posix()]
+    for index in reversed(
+        [position for position, value in enumerate(parts) if value == "node_modules"]
+    ):
+        candidates.append(
+            Path(*parts[:index], "node_modules", *dependency_parts).as_posix()
+        )
+    return tuple(dict.fromkeys(candidates))
+
+
+def _locked_work_graph_dependency_plan(
+    root: Path,
+) -> tuple[dict[str, Any], dict[str, Any], tuple[str, ...]]:
+    """Derive the narrow npm-ci input from authenticated manifest and lock bytes."""
+
+    _, manifest = _read_authenticated_dependency_json(root, "package.json")
+    _, lock = _read_authenticated_dependency_json(root, "package-lock.json")
+    root_dependencies = manifest.get("devDependencies")
+    lock_packages = lock.get("packages")
+    lock_root = lock_packages.get("") if isinstance(lock_packages, dict) else None
+    if (
+        manifest.get("private") is not True
+        or not isinstance(root_dependencies, dict)
+        or root_dependencies.get(_WORK_GRAPH_NODE_PACKAGE)
+        != _WORK_GRAPH_NODE_PACKAGE_VERSION
+        or lock.get("lockfileVersion") != 3
+        or lock.get("requires") is not True
+        or not isinstance(lock_root, dict)
+        or (lock_root.get("devDependencies") or {}).get(_WORK_GRAPH_NODE_PACKAGE)
+        != _WORK_GRAPH_NODE_PACKAGE_VERSION
+    ):
+        raise BootstrapSourceAdmissionError(
+            "authenticated Work-Graph dependency identity is invalid"
+        )
+
+    package_key = f"node_modules/{_WORK_GRAPH_NODE_PACKAGE}"
+    pending = [package_key]
+    selected: dict[str, dict[str, Any]] = {}
+    while pending:
+        key = pending.pop()
+        if key in selected:
+            continue
+        metadata = lock_packages.get(key)
+        if not isinstance(metadata, dict):
+            raise BootstrapSourceAdmissionError(
+                "authenticated Work-Graph dependency closure is incomplete"
+            )
+        version = metadata.get("version")
+        resolved = metadata.get("resolved")
+        integrity = metadata.get("integrity")
+        dependencies = metadata.get("dependencies", {})
+        if (
+            not isinstance(version, str)
+            or not version
+            or (key == package_key and version != _WORK_GRAPH_NODE_PACKAGE_VERSION)
+            or not isinstance(resolved, str)
+            or not resolved.startswith(_NPM_REGISTRY)
+            or not isinstance(integrity, str)
+            or _NPM_INTEGRITY.fullmatch(integrity) is None
+            or not isinstance(dependencies, dict)
+            or any(
+                not isinstance(name, str)
+                or _NPM_PACKAGE_NAME.fullmatch(name) is None
+                or not isinstance(specification, str)
+                for name, specification in dependencies.items()
+            )
+            or metadata.get("link") is True
+            or metadata.get("inBundle") is True
+        ):
+            raise BootstrapSourceAdmissionError(
+                "authenticated Work-Graph dependency identity is invalid"
+            )
+        selected[key] = copy.deepcopy(metadata)
+        for dependency in dependencies:
+            resolved_key = next(
+                (
+                    candidate
+                    for candidate in _node_dependency_candidates(key, dependency)
+                    if candidate in lock_packages
+                ),
+                None,
+            )
+            if resolved_key is None:
+                raise BootstrapSourceAdmissionError(
+                    "authenticated Work-Graph dependency closure is incomplete"
+                )
+            pending.append(resolved_key)
+
+    package_document = {
+        "name": "secpal-authenticated-work-graph-runtime",
+        "private": True,
+        "dependencies": {_WORK_GRAPH_NODE_PACKAGE: _WORK_GRAPH_NODE_PACKAGE_VERSION},
+    }
+    lock_document = {
+        "name": package_document["name"],
+        "lockfileVersion": 3,
+        "requires": True,
+        "packages": {
+            "": {
+                "name": package_document["name"],
+                "dependencies": package_document["dependencies"],
+            },
+            **{key: selected[key] for key in sorted(selected)},
+        },
+    }
+    package_names = tuple(
+        sorted(
+            {
+                key.rsplit("node_modules/", 1)[1].split("/node_modules/", 1)[0]
+                for key in selected
+            }
+        )
+    )
+    return package_document, lock_document, package_names
+
+
+def _trusted_dependency_executable(helper: Any, name: str) -> str:
+    directories = getattr(helper, "TRUSTED_COMMAND_DIRECTORIES", ())
+    if not isinstance(directories, tuple):
+        raise BootstrapSourceAdmissionError("trusted dependency command policy is invalid")
+    for directory in directories:
+        candidate = Path(directory) / name
+        try:
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+        except OSError:
+            continue
+    raise BootstrapSourceAdmissionError(
+        f"trusted {name} executable is unavailable"
+    )
+
+
+def _dependency_file_snapshot(root: Path) -> dict[str, str]:
+    snapshot: dict[str, str] = {}
+    try:
+        for path in sorted(root.rglob("*")):
+            relative = path.relative_to(root).as_posix()
+            if path.is_symlink():
+                raise BootstrapSourceAdmissionError(
+                    "authenticated Work-Graph dependency contains a symlink"
+                )
+            if path.is_dir():
+                continue
+            if not path.is_file():
+                raise BootstrapSourceAdmissionError(
+                    "authenticated Work-Graph dependency contains a special file"
+                )
+            snapshot[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise BootstrapSourceAdmissionError(
+            "authenticated Work-Graph dependency bytes are unavailable"
+        ) from exc
+    if not snapshot:
+        raise BootstrapSourceAdmissionError(
+            "authenticated Work-Graph dependency materialization is empty"
+        )
+    return snapshot
+
+
+def _node_runtime_guard(
+    source_root: Path,
+    dependency_root: Path,
+    node_executable: str,
+    package_names: tuple[str, ...],
+    snapshot: Mapping[str, str],
+) -> str:
+    values = {
+        "source": str(source_root),
+        "dependency": str(dependency_root),
+        "node": str(Path(node_executable).resolve(strict=True)),
+        "packages": list(package_names),
+        "snapshot": dict(snapshot),
+    }
+    encoded = json.dumps(values, sort_keys=True, separators=(",", ":"))
+    return f"""'use strict';
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const Module = require('node:module');
+const path = require('node:path');
+const policy = {encoded};
+const modules = path.join(policy.dependency, 'node_modules');
+if (fs.realpathSync(process.execPath) !== policy.node) throw new Error('untrusted Node executable');
+const actual = {{}};
+function walk(directory) {{
+  for (const entry of fs.readdirSync(directory, {{withFileTypes:true}})) {{
+    const candidate = path.join(directory, entry.name);
+    const relative = path.relative(modules, candidate).split(path.sep).join('/');
+    if (entry.isSymbolicLink()) throw new Error('dependency symlink rejected');
+    if (entry.isDirectory()) walk(candidate);
+    else if (entry.isFile()) actual[relative] = crypto.createHash('sha256').update(fs.readFileSync(candidate)).digest('hex');
+    else throw new Error('dependency special file rejected');
+  }}
+}}
+walk(modules);
+const actualKeys = Object.keys(actual).sort();
+const expectedKeys = Object.keys(policy.snapshot).sort();
+if (JSON.stringify(actualKeys) !== JSON.stringify(expectedKeys) ||
+    actualKeys.some(key => actual[key] !== policy.snapshot[key])) throw new Error('dependency bytes changed');
+const original = Module._resolveFilename;
+const builtins = new Set(Module.builtinModules.map(value => value.replace(/^node:/, '')));
+const allowed = new Set(policy.packages);
+function inside(candidate, root) {{
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative));
+}}
+function packageName(request) {{
+  if (request.startsWith('@')) return request.split('/').slice(0, 2).join('/');
+  return request.split('/', 1)[0];
+}}
+Module._resolveFilename = function(request, parent, isMain, options) {{
+  if (typeof request !== 'string') throw new Error('invalid module request');
+  const builtin = request.startsWith('node:') || builtins.has(request);
+  let resolved;
+  if (builtin) return original.call(this, request, parent, isMain, options);
+  const bare = !request.startsWith('.') && !path.isAbsolute(request);
+  if (bare) {{
+    const selectedPackage = packageName(request);
+    if (!allowed.has(selectedPackage) ||
+        (parent && typeof parent.filename === 'string' && inside(parent.filename, policy.source) &&
+         selectedPackage !== 'markdown-it')) throw new Error('untrusted bare module rejected');
+    const trustedParent = {{id:'secpal-runtime', filename:path.join(policy.dependency, 'entry.cjs'), paths:[modules]}};
+    resolved = original.call(this, request, trustedParent, isMain);
+  }} else {{
+    resolved = original.call(this, request, parent, isMain, options);
+  }}
+  const real = fs.realpathSync(resolved);
+  if (!inside(real, policy.source) && !inside(real, modules)) throw new Error('module resolution escaped authenticated roots');
+  return real;
+}};
+"""
+
+
+@contextmanager
+def _authenticated_work_graph_dependencies(
+    source_root: Path, helper: Any
+) -> Iterator[dict[str, str]]:
+    """Create the narrow lockfile-authenticated Node boundary outside source.
+
+    The private cache begins empty. Network retrieval is therefore allowed, but
+    only for exact authenticated lockfile URLs and integrity digests; registry
+    metadata, host cache bytes, npm configuration, and credentials are not
+    authority. A missing archive or unavailable network fails this operation.
+    """
+
+    source_root = source_root.resolve(strict=True)
+    package_document, lock_document, package_names = (
+        _locked_work_graph_dependency_plan(source_root)
+    )
+    npm = _trusted_dependency_executable(helper, "npm")
+    node = _trusted_dependency_executable(helper, "node")
+    directories = helper.TRUSTED_COMMAND_DIRECTORIES
+    with tempfile.TemporaryDirectory(
+        prefix="secpal-authenticated-work-graph-dependencies-"
+    ) as directory:
+        private_root = Path(directory)
+        private_root.chmod(0o700)
+        acquisition = private_root / "acquisition"
+        dependency_root = private_root / "runtime"
+        cache = private_root / "cache"
+        home = private_root / "home"
+        for path in (acquisition, dependency_root, cache, home):
+            path.mkdir(mode=0o700)
+        user_config = home / "user.npmrc"
+        global_config = home / "global.npmrc"
+        user_config.write_text("", encoding="utf-8")
+        global_config.write_text("", encoding="utf-8")
+        user_config.chmod(0o600)
+        global_config.chmod(0o600)
+        (acquisition / "package.json").write_text(
+            json.dumps(package_document, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        (acquisition / "package-lock.json").write_text(
+            json.dumps(lock_document, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        environment = {
+            "HOME": str(home),
+            "PATH": os.pathsep.join(str(path) for path in directories),
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "NPM_CONFIG_USERCONFIG": str(user_config),
+            "NPM_CONFIG_GLOBALCONFIG": str(global_config),
+            "NPM_CONFIG_CACHE": str(cache),
+            "NPM_CONFIG_REGISTRY": _NPM_REGISTRY,
+            "NPM_CONFIG_REPLACE_REGISTRY_HOST": "never",
+            "NPM_CONFIG_IGNORE_SCRIPTS": "true",
+            "NPM_CONFIG_AUDIT": "false",
+            "NPM_CONFIG_FUND": "false",
+            "NPM_CONFIG_UPDATE_NOTIFIER": "false",
+            "NPM_CONFIG_STRICT_SSL": "true",
+        }
+        try:
+            completed = subprocess.run(
+                [npm, "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+                cwd=acquisition,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=600,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise BootstrapSourceAdmissionError(
+                "authenticated Work-Graph dependency acquisition failed"
+            ) from exc
+        if completed.returncode != 0:
+            raise BootstrapSourceAdmissionError(
+                "authenticated Work-Graph dependency acquisition failed"
+            )
+        acquired_modules = acquisition / "node_modules"
+        runtime_modules = dependency_root / "node_modules"
+        try:
+            shutil.copytree(
+                acquired_modules,
+                runtime_modules,
+                symlinks=True,
+                ignore=shutil.ignore_patterns(".bin", ".package-lock.json"),
+            )
+        except OSError as exc:
+            raise BootstrapSourceAdmissionError(
+                "authenticated Work-Graph dependency materialization failed"
+            ) from exc
+        snapshot = _dependency_file_snapshot(runtime_modules)
+        guard = dependency_root / "runtime-guard.cjs"
+        try:
+            guard.write_text(
+                _node_runtime_guard(
+                    source_root, dependency_root, node, package_names, snapshot
+                ),
+                encoding="utf-8",
+            )
+            for path in sorted(runtime_modules.rglob("*"), reverse=True):
+                path.chmod(0o500 if path.is_dir() else 0o400)
+            runtime_modules.chmod(0o500)
+            guard.chmod(0o400)
+            dependency_root.chmod(0o500)
+        except OSError as exc:
+            raise BootstrapSourceAdmissionError(
+                "authenticated Work-Graph dependency protection failed"
+            ) from exc
+        try:
+            yield {"NODE_OPTIONS": f"--require={guard}"}
+        finally:
+            if _dependency_file_snapshot(runtime_modules) != snapshot:
+                raise BootstrapSourceAdmissionError(
+                    "authenticated Work-Graph dependency bytes changed during execution"
+                )
+
+
 def _execute_entrypoint(root: Path, serialized_authorization: bytes | str) -> Mapping[str, Any]:
     authorization = (
         serialized_authorization.encode("utf-8")
@@ -1582,7 +2610,7 @@ def _execute_entrypoint(root: Path, serialized_authorization: bytes | str) -> Ma
     environment = _closed_launcher_environment(helper)
     try:
         result = subprocess.run(
-            [_trusted_python(), "-I", "-S", "-c", _LAUNCHER, str(root)],
+            _isolated_python_command(_LAUNCHER, str(root)),
             cwd=root,
             input=authorization,
             stdout=subprocess.PIPE,

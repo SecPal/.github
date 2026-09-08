@@ -25,6 +25,7 @@ LATE_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/late-disposit
 STATIC_POLICY="$REPO_ROOT/tests/secpal-pr-review-static-policy.py"
 POLYSCOPE_TEMPLATE="$REPO_ROOT/templates/polyscope-codex-AGENTS.md"
 WORKFLOW_DOC="$REPO_ROOT/docs/secpal-pr-review-workflow.md"
+WORK_GRAPH_CONTRACT="$REPO_ROOT/docs/work-graph-contract.md"
 SIMPLE_RESOLUTION_DOC="$REPO_ROOT/docs/simple-pr-thread-resolution.md"
 SCRIPT_README="$REPO_ROOT/scripts/README.md"
 POLYSCOPE_INSTALLER="$REPO_ROOT/scripts/install-polyscope-rollout.sh"
@@ -69,7 +70,7 @@ protected_content_matches() {
     "$(normalize_documented_action_pins <<<"$accepted_content")"
 }
 
-normalize_agents_license_branding_overlay() {
+normalize_agents_instruction_overlays() {
   local text
 
   text="$(cat)"
@@ -99,11 +100,20 @@ section = """## Licensing, REUSE, and Branding
   licensing change."""
 overlay = section + "\n\n"
 copyright_line = "SPDX-FileCopyrightText: 2026 SecPal Contributors"
+publication_boundary = """- Before creating or editing a PR body, materialize the exact candidate body,
+  apply the effective PR-template/evidence contract, and run every available
+  local PR-body validator against that exact body and intended Draft/Ready state.
+  Failed validation blocks publication. Evidence completeness follows the
+  canonical lifecycle-aware `scripts/validate-pull-request-evidence.sh` validator.
+"""
 
 if text.count(overlay) != 1 or text.count(copyright_line) != 1:
     raise SystemExit(1)
+if text.count(publication_boundary) != 1:
+    raise SystemExit(1)
 
 text = text.replace(overlay, "", 1)
+text = text.replace(publication_boundary, "", 1)
 text = text.replace(
     copyright_line,
     "SPDX-FileCopyrightText: 2026 SecPal",
@@ -116,9 +126,21 @@ PY
 if sed \
   "s/that SecPal branding optional/that SecPal branding configurable/" \
   "$REPO_ROOT/AGENTS.md" \
-  | normalize_agents_license_branding_overlay >/dev/null; then
+  | normalize_agents_instruction_overlays >/dev/null; then
   fail 'modified licensing and branding instruction overlay was accepted'
 fi
+
+for mutation in \
+  '/^- Before creating or editing a PR body,/,/canonical lifecycle-aware.*validator\./d' \
+  's/exact candidate body/unvalidated summary/' \
+  's/intended Draft\/Ready state/unspecified state/' \
+  's/Failed validation blocks publication/Failed validation allows publication/' \
+  's/validate-pull-request-evidence.sh/alternative-evidence-validator.sh/'; do
+  if sed "$mutation" "$REPO_ROOT/AGENTS.md" \
+    | normalize_agents_instruction_overlays >/dev/null; then
+    fail 'missing or weakened PR pre-publication instruction overlay was accepted'
+  fi
+done
 
 # The work-graph delegation in AGENTS.md is governed by semantic invariants, not
 # by fixed wording. Editorial rewording and rewrapping stay acceptable; changing
@@ -580,18 +602,16 @@ grep -Fq 'normal_complete_snapshots: 0' "$CONTRACT" || fail 'normal snapshot lim
 grep -Fq 'normal_stable_feedback_reads: 1' "$CONTRACT" || fail 'stable feedback read limit drifted'
 grep -Fq 'normal_required_check_reads_before_resolution: 0' "$CONTRACT" || fail 'default remediation still reads Required Checks'
 grep -Fq 'normal_complete_validation_runs: 1' "$CONTRACT" || fail 'complete validation limit drifted'
-grep -Fq 'maximum_holistic_audits: 1' "$CONTRACT" || fail 'holistic audit limit drifted'
+grep -Fq 'maximum_holistic_audits: 1 # for the current candidate tree' "$CONTRACT" \
+  || fail 'holistic audit session limit drifted'
 grep -Fq 'Focused validation must not invoke a complete, repository-wide, or aggregate suite' "$CONTRACT" \
   || fail 'focused validation may still consume the complete validation gate'
 grep -Fq 'A registered focused-only command explicitly authorized by its matching manual gate is the bounded exception.' <<<"$contract_text" \
   || fail 'authorized focused-only aggregate validation has no bounded exception'
-grep -Fq 'A failed command produces no receipt; the command invalidates any report already at its configured output before validation begins, terminates this invocation, and permits no tree change or complete-command retry.' <<<"$contract_text" \
-  || fail 'failed complete validation does not invalidate stale output or terminate'
-grep -Fq 'A new explicit remediation invocation must capture fresh state and audit any correction' <<<"$contract_text" \
-  || fail 'failed complete validation may reuse the prior audit'
-if grep -Fq 'one new complete attempt' "$CONTRACT"; then
-  fail 'contract permits a second complete validation attempt in one invocation'
-fi
+grep -Fq 'A failed command produces no receipt and rejects that candidate tree.' <<<"$contract_text" \
+  || fail 'failed complete validation does not invalidate its candidate'
+grep -Fq 'one complete validation of the changed candidate in the same invocation' <<<"$contract_text" \
+  || fail 'failed complete validation cannot continue after in-contract correction'
 grep -Fq 'normal_signed_remediation_commits: 1' "$CONTRACT" || fail 'commit limit drifted'
 grep -Fq 'normal_fast_forward_pushes: 1' "$CONTRACT" || fail 'push limit drifted'
 grep -Fq 'maximum_evidence_replies_total: 10' "$CONTRACT" || fail 'reply limit drifted'
@@ -611,6 +631,87 @@ grep -Fq 'A normal invocation has one remediation pass.' "$CONTRACT" || fail 'si
 grep -Fq 'never appends unreviewed feedback' "$CONTRACT" || fail 'late-feedback rule missing'
 
 template_text="$(tr '\n' ' ' <"$POLYSCOPE_TEMPLATE" | tr -s '[:space:]' ' ')"
+workflow_text="$(tr '\n' ' ' <"$WORKFLOW_DOC" | tr -s '[:space:]' ' ')"
+
+# Issue #849 keeps workflow checkpoints finite without treating prompts as
+# evidence invalidators or provider activity as completed review.
+for required_text in \
+  'PROMPT_BOUNDARY != EVIDENCE_INVALIDATOR' \
+  'MECHANICAL_CHECKPOINT != USER_DECISION_BOUNDARY' \
+  'A new prompt or internal phase alone invalidates no authenticated proof.' \
+  'PR/head-bound proof is invalidated by a relevant head change.' \
+  'Staged-tree and validation proof is invalidated by a relevant tree change.' \
+  'Lifecycle CURRENT proof is invalidated by a new CURRENT publication.' \
+  'Stable-feedback proof is invalidated by relevant feedback or reviewed-head change.' \
+  'Work-graph proof validity is owned by' \
+  'Volatile readiness and merge evidence is freshly read at its mutation boundary.' \
+  'same-delivery delta preflight' \
+  'derive the operation and its exact preconditions from authenticated current maintained repository authority' \
+  'fail closed before mutation and report the discrepancy' \
+  'conditional current user authorization' \
+  'commit, push, receipt and attestation binding, lifecycle publication, eligible thread resolution, and bounded read-back are mechanical checkpoints' \
+  'normal success report contains only'; do
+  grep -Fq "$required_text" <<<"$workflow_text" \
+    || fail "issue #849 workflow contract is incomplete: $required_text"
+done
+
+for required_text in \
+  'NOT_APPLICABLE' \
+  'NOT_TRIGGERED' \
+  'QUEUED' \
+  'PENDING' \
+  'RUNNING' \
+  'COMPLETED_NO_FINDINGS' \
+  'COMPLETED_WITH_FINDINGS' \
+  'FAILED' \
+  'INDETERMINATE' \
+  'NO_REVIEW_FINDINGS_YET != REVIEW_COMPLETE' \
+  'ZERO_THREADS_WHILE_REVIEW_RUNNING != STABLE_FEEDBACK' \
+  'CI_GREEN + MERGEABLE + REVIEW_RUNNING = MERGE_FORBIDDEN' \
+  'ALL_TRIGGERED_REVIEW_PROVIDERS_TERMINAL = YES' \
+  'approximately 60 to 90 seconds' \
+  'approximately 30 minutes' \
+  'REVIEW_NOT_TERMINAL' \
+  'does not consume another unrestricted review' \
+  'one complete bounded snapshot' \
+  'classify the complete set before remediation' \
+  'POLYSCOPE_NATIVE_PR_UNAVAILABLE != USER_DECISION_BOUNDARY' \
+  'ANY_TRIGGERED_REVIEW_PROVIDER_NON_TERMINAL -> MERGE_FORBIDDEN' \
+  'FINAL_STABLE_FEEDBACK_CAPTURED_BEFORE_PROVIDER_TERMINALITY -> MERGE_FORBIDDEN' \
+  'NORMAL_LEAF_CAN_REACH_MERGED_COMPLETE = YES' \
+  'MERGE_WHILE_REVIEW_RUNNING = IMPOSSIBLE' \
+  'SECOND_UNRESTRICTED_REVIEW = NO' \
+  'NEW_LIFECYCLE_STATE = NO' \
+  'NEW_COUNTER = NO' \
+  'NEW_TRUST_ROOT = NO'; do
+  grep -Fq "$required_text" <<<"$workflow_text" \
+    || fail "review-provider terminality contract is incomplete: $required_text"
+done
+
+grep -Fq 'A failed command produces no receipt and rejects that candidate tree.' <<<"$contract_text" \
+  || fail 'failed complete validation no longer rejects its candidate without a receipt'
+grep -Fq 'The unchanged failed candidate cannot be retried.' <<<"$contract_text" \
+  || fail 'failed unchanged candidate may be blindly retried'
+grep -Fq 'one complete validation of the changed candidate in the same invocation' <<<"$contract_text" \
+  || fail 'in-contract corrected validation cannot continue in the same invocation'
+grep -Fq 'repeat the holistic audit for that changed candidate' <<<"$contract_text" \
+  || fail 'changed corrected candidate can reuse the prior audit'
+grep -Fq 'A successful complete validation is never repeated on an unchanged tree.' <<<"$contract_text" \
+  || fail 'successful complete validation can repeat on an unchanged tree'
+grep -Fq 'This authorizes exactly one corrected candidate' <<<"$contract_text" \
+  || fail 'changed-candidate complete validation is not finitely bounded'
+grep -Fq 'replaces that invalidated proof rather than incrementing the counter' <<<"$contract_text" \
+  || fail 'corrected-candidate audit changes the lifecycle counter'
+grep -Fq 'A canonical work-graph read is invalidated by a relevant native graph mutation.' "$WORK_GRAPH_CONTRACT" \
+  || fail 'work-graph invalidation is not owned by its canonical contract'
+grep -Fq '_require_review_providers_terminal(provider_state)' "$ACTIONS" \
+  || fail 'stable-feedback capture does not enforce provider terminality'
+grep -Fq 'Material security or authority remediation requires first-principles design reassessment' <<<"$workflow_text" \
+  || fail 'material remediation does not trigger design reassessment'
+grep -Fq 'Small ordinary remediation does not acquire that heavyweight ceremony.' <<<"$workflow_text" \
+  || fail 'ordinary remediation is burdened by material-remediation ceremony'
+grep -Fq 'No Cycle 3' <<<"$workflow_text" \
+  || fail 'issue #849 workflow no longer excludes Cycle 3'
 grep -Fq \
   'Do not read, monitor, poll, wait for, summarize, or gate work on GitHub-hosted CI unless the user explicitly requests CI inspection, check status, merge readiness, or merge authorization in the current instruction.' \
   <<<"$template_text" \
@@ -683,13 +784,10 @@ grep -Fq 'Never use a complete, repository-wide, or aggregate suite as focused v
   || fail 'skill does not keep aggregate suites forbidden by default'
 grep -Fq 'A registered focused-only command explicitly authorized by its matching manual gate is the bounded exception.' <<<"$normal_skill_text" \
   || fail 'skill blocks authorized focused-only aggregate validation'
-grep -Fq 'A failed command produces no receipt and is a terminal security blocker for this invocation.' <<<"$normal_skill_text" \
-  || fail 'skill does not terminate after failed complete validation'
-grep -Fq 'Require a new explicit remediation invocation so any correction receives focused validation and a fresh holistic audit' <<<"$normal_skill_text" \
-  || fail 'skill permits correction without a fresh audit'
-if grep -Fq 'one new complete attempt' <<<"$normal_skill_section"; then
-  fail 'skill permits a second complete validation attempt in one invocation'
-fi
+grep -Fq 'A failed command produces no receipt and rejects that candidate tree.' <<<"$normal_skill_text" \
+  || fail 'skill does not reject failed complete-validation candidates'
+grep -Fq 'one complete validation of the changed candidate in the same invocation' <<<"$normal_skill_text" \
+  || fail 'skill cannot continue after in-contract correction'
 if grep -Eq 'Required Checks|mergeability|branch-protection|pull-request reactions' <<<"$normal_skill_section"; then
   fail 'default remediation still gates resolution on unrelated readiness state'
 fi
@@ -878,8 +976,8 @@ for path in "${protected_paths[@]}"; do
     || fail "accepted protected-file baseline is unavailable: $relative_path"
   current_content="$(<"$path")"
   if [ "$relative_path" = "AGENTS.md" ]; then
-    current_content="$(normalize_agents_license_branding_overlay <<<"$current_content")" \
-      || fail 'canonical licensing and branding instruction overlay changed'
+    current_content="$(normalize_agents_instruction_overlays <<<"$current_content")" \
+      || fail 'canonical licensing, branding, or PR-publication instruction overlay changed'
     current_content="$(agents_delegating_units_removed <<<"$current_content")" \
       || fail 'work-graph delegation could not be normalized out of AGENTS.md'
     accepted_content="$(agents_delegating_units_removed <<<"$accepted_content")" \
@@ -945,7 +1043,7 @@ assert publication_policy["bootstrap_genesis_repairs"] == [{
     "enrollment_publication_oid": "0bb379a9af38bb14a49c651104d31149bb6c7f18",
     "enrollment_publication_digest": "44fb6c570d4e875f2655e363bfe667107d69d37eedf62487bbf4551cf9288a9d",
 }]
-assert publication_policy["bootstrap_source_admissions"] == [{
+assert publication_policy["bootstrap_source_admissions"][:2] == [{
     "schema_version": "1.0",
     "kind": "BOOTSTRAP_SOURCE_ADMISSION",
     "subtype": "FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE",
@@ -1013,30 +1111,55 @@ assert publication_policy["bootstrap_source_admissions"] == [{
     "repository": "SecPal/.github",
     "delivery_issue": 818,
     "pull_request": 819,
-    "source_head_sha": "eb3aebf226c3ca215e7021b00207cc996ab06c2e",
-    "source_tree_sha": "d7fca1ea61ea0b4cd78bf18f8555386633e013ea",
-    "source_parent_sha": "f8d58a3acd5d2b5c84824bf9ecba637e91665ee9",
-    "validation_receipt_digest": "cc771a06ed843aa97120033acb079bcc8f5ea40ceeef79bf237f0f44bf2a3293",
-    "final_attestation_digest": "84066ae060977f266754b54a09c665cc9c6ca9868d0bfaaa84c1b7cd7414fbec",
+    "source_head_sha": "e14f7668354763af5033f511097ddf990d6e8ef5",
+    "source_tree_sha": "5065ce77573e9753249de055f6122f14362cbb30",
+    "source_parent_sha": "b297745297b7aa98ba24ef05c011a7906a0a43d8",
+    "validation_receipt_digest": "4a21e7f8b0f3a96bdecf78b97a55cf77c12b9fae7b012c32d3d19d2f1195801e",
+    "final_attestation_digest": "6e17c6e1bb3a9a11538605206ef7b6dd6c8738d9f7dedc03ab1c913303cbd0fd",
     "source_signer_identity": "aroviqen@secpal.app",
     "implementation_path": "scripts/secpal-pr-review.py",
-    "implementation_blob_oid": "b37b30eeb7b44bed26d517d096f92e31aa0dd0ff",
+    "implementation_blob_oid": "130e49df1c6e90c3db1b4286e74639f1d3fc1418",
     "purpose": "PR_REVIEW_EVIDENCE_HELPER_SOURCE_ADMISSION",
     "source_pr_state": "OPEN",
-    "source_pr_draft": True,
+    "source_pr_draft": False,
     "source_base_ref": "main",
     "policy_source": "ACCEPTED_MAIN_REPOSITORY_REGISTRY",
-    "admission_digest": "7c5cf40666c233bb45bea4349414fd6fd9c48cfffe6f6571bf5637c2660ef25d",
+    "admission_digest": "38aa92b53d5289db44063ce4197687c18bb162c344aa37326ee2703013158418",
 }]
+pre_enrollment_source = publication_policy["bootstrap_source_admissions"][2]
+assert set(pre_enrollment_source) == {
+    "schema_version", "kind", "subtype", "repository", "delivery_issue",
+    "pull_request", "source_head_sha", "source_tree_sha", "source_parent_sha",
+    "source_signer_identity", "signer_policy_identity", "implementation_path",
+    "implementation_blob_oid", "entrypoint", "command", "purpose",
+    "source_pr_state", "source_pr_draft", "source_base_ref", "policy_source",
+    "historical_evidence_status", "validation_registry_path",
+    "validation_command_set", "validation_command_set_digest",
+    "validation_results", "validation_result_digest", "admission_digest",
+}
+assert pre_enrollment_source["subtype"] == "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE"
+assert pre_enrollment_source["delivery_issue"] == 776
+assert pre_enrollment_source["pull_request"] == 779
+assert pre_enrollment_source["purpose"] == "PRE_ENROLLMENT_IMPLEMENTATION_BOOTSTRAP"
+assert pre_enrollment_source["command"] == "integrate-pre-enrollment-draft"
+assert pre_enrollment_source["policy_source"] == "ACCEPTED_MAIN_REPOSITORY_REGISTRY"
+assert pre_enrollment_source["historical_evidence_status"] == "HISTORICAL_EVIDENCE_UNAVAILABLE"
 source_variants = schema["$defs"]["lifecycle_authority_policy"]["properties"][
     "bootstrap_source_admissions"
 ]["items"]["oneOf"]
 assert source_variants == [
     {"$ref": "#/$defs/firstReadyExecutorBootstrapSource"},
     {"$ref": "#/$defs/prReviewEvidenceHelperSource"},
+    {"$ref": "#/$defs/preEnrollmentDraftIntegrationSource"},
 ]
 assert "entrypoint" in schema["$defs"]["firstReadyExecutorBootstrapSource"]["required"]
 assert "entrypoint" not in schema["$defs"]["prReviewEvidenceHelperSource"]["properties"]
+assert schema["$defs"]["firstReadyExecutorBootstrapSource"]["properties"][
+    "source_pr_draft"
+] == {"const": True}
+assert schema["$defs"]["prReviewEvidenceHelperSource"]["properties"][
+    "source_pr_draft"
+] == {"type": "boolean"}
 assert publication_policy["historical_compatibility_publications"] == [
     {
         "repository": "SecPal/.github",
@@ -1111,11 +1234,14 @@ assert [
 ] == [
     ["python3", "-m", "unittest", "tests/secpal-resolve-fixed-threads-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-pr-review-actions-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-adopted-ready-prior-authority-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-pre-enrollment-integration-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-authority-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-bootstrap-source-admission-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-publication-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-orchestration-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-execution-contract-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-lifecycle-role-signing-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-exceptional-recovery-authority-unit.py"],
     ["./tests/secpal-pr-review-skill-policy.sh"],
     ["./tests/secpal-pr-review-skill-integration.sh"],

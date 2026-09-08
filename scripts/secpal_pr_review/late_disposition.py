@@ -64,6 +64,13 @@ DISPOSITION_SCHEMA_VERSION_POLICY = {
 }
 MAXIMUM_ARTIFACT_BYTES = 64 * 1024
 MAXIMUM_SIGNATURE_BYTES = 32 * 1024
+MAXIMUM_ROLE_CREDENTIAL_MAPPINGS = 32
+MAXIMUM_ROLE_CREDENTIAL_MAPPING_BYTES = 4096
+MAXIMUM_ROLE_CREDENTIAL_OUTPUT_BYTES = (
+    MAXIMUM_ROLE_CREDENTIAL_MAPPINGS
+    * (MAXIMUM_ROLE_CREDENTIAL_MAPPING_BYTES + 1)
+)
+ROLE_CREDENTIAL_CONFIG_KEY = "secpal.lifecycleSigningCredential"
 OID = re.compile(r"^[0-9a-f]{40}$")
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -71,6 +78,7 @@ THREAD_ID = re.compile(r"^PRRT_[A-Za-z0-9_-]+$")
 IDENTITY = re.compile(r"^[^\x00-\x20\x7f]{1,256}$")
 SSH_FINGERPRINT = re.compile(r"SHA256:[A-Za-z0-9+/]+={0,2}")
 OPENPGP_FINGERPRINT = re.compile(r"[0-9A-Fa-f]{40,64}")
+OPENPGP_CREDENTIAL = re.compile(r"[0-9A-Fa-f]{40,64}!?")
 TRUSTED_COMMAND_DIRECTORIES = tuple(
     Path(value) for value in ("/usr/bin", "/bin", "/usr/local/bin", "/opt/homebrew/bin", "/opt/local/bin")
 )
@@ -365,6 +373,7 @@ def _run_signature_command_without_input(
         stdin=subprocess.DEVNULL,
         capture_output=True,
         env=environment,
+        start_new_session=True,
         timeout=30,
     )
 
@@ -381,6 +390,7 @@ def _run_signature_command_with_input(
         input=stdin,
         capture_output=True,
         env=environment,
+        start_new_session=True,
         timeout=30,
     )
 
@@ -404,6 +414,48 @@ def _read_global_git_value(key: str, environment: dict[str, str]) -> str:
     return completed.stdout.decode("utf-8", errors="replace").strip()
 
 
+def _read_global_git_values(
+    key: str, environment: dict[str, str]
+) -> tuple[str, ...]:
+    executable = _trusted_executable("git")
+    arguments = ("config", "--global", "--null", "--get-all", key)
+    try:
+        with tempfile.TemporaryFile() as output:
+            completed = subprocess.run(
+                [executable, *arguments],
+                check=False,
+                stdin=subprocess.DEVNULL,
+                stdout=output,
+                stderr=subprocess.DEVNULL,
+                env=environment,
+                start_new_session=True,
+                timeout=30,
+            )
+            if output.tell() > MAXIMUM_ROLE_CREDENTIAL_OUTPUT_BYTES:
+                raise LateDispositionError(
+                    "OS-account role credential mapping output limit exceeded"
+                )
+            output.seek(0)
+            raw_output = output.read(MAXIMUM_ROLE_CREDENTIAL_OUTPUT_BYTES + 1)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise LateDispositionError(
+            "OS-account signing configuration is unavailable"
+        ) from exc
+    if completed.returncode not in (0, 1):
+        raise LateDispositionError(
+            "OS-account signing configuration is unavailable"
+        )
+    try:
+        values = raw_output.decode("utf-8").split("\0")
+    except UnicodeDecodeError as exc:
+        raise LateDispositionError(
+            "OS-account role credential mapping is malformed"
+        ) from exc
+    if values and values[-1] == "":
+        values.pop()
+    return tuple(values)
+
+
 def read_signing_configuration(
     *, environment: dict[str, str] | None = None
 ) -> tuple[str, str]:
@@ -417,6 +469,79 @@ def read_signing_configuration(
             "OS-account signing configuration is missing or unsupported"
         )
     return signature_format, signing_key
+
+
+def read_role_signing_configuration(
+    identity: str,
+    *,
+    allow_routine_default: bool,
+    environment: dict[str, str] | None = None,
+) -> tuple[str, str]:
+    """Select one configured credential for an already accepted policy identity."""
+
+    if not isinstance(identity, str) or not IDENTITY.fullmatch(identity):
+        raise LateDispositionError("policy-selected signer identity is malformed")
+    command_environment = signing_environment() if environment is None else environment
+    signature_format = _read_global_git_value(
+        "gpg.format", command_environment
+    ) or "openpgp"
+    if signature_format not in {"ssh", "openpgp"}:
+        raise LateDispositionError("OS-account signing format is unsupported")
+    raw_mappings = _read_global_git_values(
+        ROLE_CREDENTIAL_CONFIG_KEY, command_environment
+    )
+    if len(raw_mappings) > MAXIMUM_ROLE_CREDENTIAL_MAPPINGS:
+        raise LateDispositionError("OS-account role credential mapping is ambiguous")
+    mappings: dict[str, str] = {}
+    for raw in raw_mappings:
+        if not raw or len(raw.encode("utf-8")) > MAXIMUM_ROLE_CREDENTIAL_MAPPING_BYTES:
+            raise LateDispositionError("OS-account role credential mapping is malformed")
+        try:
+            value = json.loads(raw, object_pairs_hook=_reject_duplicate_object)
+        except (TypeError, ValueError) as exc:
+            raise LateDispositionError(
+                "OS-account role credential mapping is malformed"
+            ) from exc
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"identity", "credential"}
+            or not isinstance(value.get("identity"), str)
+            or not IDENTITY.fullmatch(value["identity"])
+            or not isinstance(value.get("credential"), str)
+            or not value["credential"]
+            or "\x00" in value["credential"]
+            or "\n" in value["credential"]
+            or "\r" in value["credential"]
+        ):
+            raise LateDispositionError("OS-account role credential mapping is malformed")
+        mapped_identity = value["identity"]
+        if mapped_identity in mappings:
+            raise LateDispositionError("OS-account role credential mapping is ambiguous")
+        mappings[mapped_identity] = value["credential"]
+    credential = mappings.get(identity)
+    if credential is None:
+        if not allow_routine_default:
+            raise LateDispositionError(
+                "OS-account role credential mapping is missing"
+            )
+        credential = _read_global_git_value(
+            "user.signingkey", command_environment
+        )
+        if not credential:
+            raise LateDispositionError(
+                "OS-account signing configuration is missing"
+            )
+    if signature_format == "ssh":
+        path = Path(credential)
+        if not path.is_absolute() or path != Path(os.path.normpath(credential)):
+            raise LateDispositionError(
+                "OS-account role credential reference is ambiguous"
+            )
+    elif not OPENPGP_CREDENTIAL.fullmatch(credential):
+        raise LateDispositionError(
+            "OS-account role credential reference is ambiguous"
+        )
+    return signature_format, credential
 
 
 def verify_detached_signature(

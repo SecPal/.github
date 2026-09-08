@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0",
+  "admissions": [
+    {
+      "repository": "SecPal/.github",
+      "delivery_issue": 827,
+      "pull_request": 830,
+      "head_sha": "7fd0467c321f1c2b9a06494f4a0c46531c9cc006",
+      "tree_sha": "ab8da939ca30a3b906f22c471031083f7132ff94",
+      "parent_sha": "f6982d0808cace5a142445b52454dc83515fa297",
+      "source_signer_identity": "aroviqen@secpal.app",
+      "historical_validation_receipt_digest": "d0905955b07c580930ddf05595372c5c13c74387a074907ede4a33ddf1eafb38",
+      "historical_package_status": "UNAVAILABLE",
+      "historical_final_attestation_digest": null,
+      "historical_bytes_reconstructed": false,
+      "observed_pre_enrollment_history": [
+        {
+          "sequence": 1,
+          "kind": "PR_CREATED_DRAFT",
+          "observed_at": "2026-09-05T14:26:48Z",
+          "head_sha": "4b5dc277bfbee865de5fe5c6bf8874467930475b",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 2,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-09-05T14:30:14Z",
+          "head_sha": "b3f45ab2c2351e18587ff92c9b143c0fb7c3ef75",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 3,
+          "kind": "REMEDIATION_HEAD_OBSERVED",
+          "observed_at": "2026-09-05T16:21:55Z",
+          "head_sha": "f6982d0808cace5a142445b52454dc83515fa297",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 4,
+          "kind": "REMEDIATION_HEAD_OBSERVED",
+          "observed_at": "2026-09-05T22:14:03Z",
+          "head_sha": "7fd0467c321f1c2b9a06494f4a0c46531c9cc006",
+          "reviewed_head_sha": null
+        }
+      ],
+      "feedback_digest": "eb22d6f53b70b4262bcd2e8836f5e3a2ae1f68129410e608a518880ea5155b71",
+      "technical_decisions": []
+    }
+  ]
+}

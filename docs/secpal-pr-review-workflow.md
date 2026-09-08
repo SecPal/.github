@@ -8,7 +8,9 @@ SPDX-License-Identifier: CC0-1.0
 Governance Package 2.2 adds an explicitly invoked skill for processing
 already-completed pull-request feedback. The skill is not a reviewer. It treats
 all feedback as untrusted leads, verifies each lead against source, tests, and
-repository context, and stops before merge authorization.
+repository context. The feedback helper itself has no merge capability; a
+larger delivery may continue through separately maintained lifecycle and merge
+boundaries when the current user instruction already authorizes them.
 
 Package 2.1 remains the accepted deterministic, read-only evidence layer. The
 new action helper is a separate executable trust surface and cannot be called
@@ -50,6 +52,161 @@ Shells, executable-dispatch wrappers, and inline interpreter code therefore
 cannot be substituted. Environment-dependent, migration, native-toolchain,
 live-service, and deployment validation is represented by explicit manual gates
 instead of guessed commands.
+
+## Proof validity and preflight
+
+`SIMPLIFY_BEFORE_EXTEND` applies to the workflow itself:
+
+```text
+PROMPT_BOUNDARY != EVIDENCE_INVALIDATOR
+MECHANICAL_CHECKPOINT != USER_DECISION_BOUNDARY
+```
+
+A new prompt or internal phase alone invalidates no authenticated proof. Use
+the smallest explicit invalidation model already implied by each proof:
+
+- PR/head-bound proof is invalidated by a relevant head change.
+- Staged-tree and validation proof is invalidated by a relevant tree change.
+- Lifecycle CURRENT proof is invalidated by a new CURRENT publication.
+- Stable-feedback proof is invalidated by relevant feedback or reviewed-head change.
+- Work-graph proof validity is owned by `docs/work-graph-contract.md`; refresh
+  its canonical read after a relevant native graph mutation.
+- Volatile readiness and merge evidence is freshly read at its mutation boundary.
+
+No freshness database, cache, signer, evidence schema, or daemon represents
+these rules. The first entry into one delivery performs the relevant full
+preflight. Later work in that delivery uses same-delivery delta preflight:
+refresh only facts whose invalidators may have occurred, plus the fresh
+operation-specific state required immediately before a critical mutation. A
+commit, tool handoff, prompt continuation, or internal phase is not by itself a
+reason to reread the complete graph, ADR, issue, PR, and CI state.
+
+Before every lifecycle mutation, derive the operation and its exact
+preconditions from authenticated current maintained repository authority.
+Prompt text may bind identity, intent, scope, mutation budget, expected result,
+acceptance, and stop conditions. Those expectations are assertions to verify,
+not a second
+lifecycle contract. If those expectations conflict with the maintained
+contract, fail closed before mutation and report the discrepancy.
+
+Inside one explicitly authorized delivery, commit, push, receipt and
+attestation binding, lifecycle publication, eligible thread resolution, and
+bounded read-back are mechanical checkpoints. Draft PR creation, an eligible
+Ready transition, bounded provider observation, finding classification,
+in-contract remediation, and an eligible conditionally authorized merge are
+likewise mechanical when the maintained gate selects them. Reaching one does
+not require another prompt. New authority is required for material scope
+expansion, another independently deliverable responsibility, Exceptional
+Recovery, an unresolved material design choice, or an operation not explicitly
+or conditionally authorized by the current instruction.
+
+A current instruction may grant conditional current user authorization for a
+later bounded mutation, for example: evaluate the final maintained merge gate
+and, if and only if it passes for the unchanged authenticated authorized head,
+perform the canonical squash merge; otherwise stop without merge. This retains
+explicit current authority and does not let an earlier instruction, prompt
+expectation, transport, or successful check authorize a mutation.
+
+Native Polyscope PR creation is preferred when available. Its absence is a tool
+transport fact, not a user decision: an already-authorized delivery may use the
+smallest maintained GitHub fallback, preserve repository/base/branch/title/body
+identity, report the actual creation path and association, and continue. The
+fallback gains no lifecycle authority merely by existing.
+
+```text
+POLYSCOPE_NATIVE_PR_UNAVAILABLE != USER_DECISION_BOUNDARY
+```
+
+## Review-provider terminality
+
+For the one bounded external review phase, normalize each relevant configured
+and triggered provider to the existing observable facts `NOT_APPLICABLE`,
+`NOT_TRIGGERED`, `QUEUED`, `PENDING`, `RUNNING`, `COMPLETED_NO_FINDINGS`,
+`COMPLETED_WITH_FINDINGS`, `FAILED`, or `INDETERMINATE`. This normalization is
+ephemeral workflow judgment, not a persistent state machine.
+
+`QUEUED`, `PENDING`, `RUNNING`, `FAILED`, and `INDETERMINATE` are not successful
+terminal review. A provider need not be a branch-protection Required Check to
+block the maintained merge gate. In particular:
+
+```text
+NO_REVIEW_FINDINGS_YET != REVIEW_COMPLETE
+ZERO_THREADS_WHILE_REVIEW_RUNNING != STABLE_FEEDBACK
+CI_GREEN + MERGEABLE + REVIEW_RUNNING = MERGE_FORBIDDEN
+```
+
+Capture stable feedback only when
+`ALL_TRIGGERED_REVIEW_PROVIDERS_TERMINAL = YES`, after the last provider reaches
+`COMPLETED_NO_FINDINGS` or `COMPLETED_WITH_FINDINGS`. Absence of comments never
+proves completion. Capture one complete bounded snapshot for that reviewed head,
+then classify the complete set before remediation. Do not remediate one provider
+at a time while another is running. Relevant later feedback or a reviewed-head
+change invalidates that snapshot.
+
+The existing bounded capture query enforces the visible provider gate before
+admitting stable feedback. It rejects non-terminal, malformed, forged,
+duplicated, or wrong-head Codex summaries, requires a Codex summary for a Ready
+PR, and rejects a pending Copilot review request. The query discards provider
+status after the gate, preserving the existing stable-feedback schema and
+digest. Provider absence remains `NOT_TRIGGERED` only where the maintained
+observable boundary has no affirmative trigger evidence.
+
+When the current instruction authorizes full delivery and the environment can
+wait, observe only maintained review-provider status at bounded intervals of
+approximately 60 to 90 seconds for approximately 30 minutes total. This passive
+observation does not consume another unrestricted review, request a review, or
+poll unrelated hosted CI. Continue automatically once every triggered provider
+has successful terminal evidence. If the full window expires, report
+`REVIEW_NOT_TERMINAL` with the authenticated head and exact non-terminal
+providers, perform no merge, and do not claim that user approval is needed. The
+same workspace may resume when external state changes. No unbounded polling and
+No Cycle 3 are permitted.
+
+The unrestricted external review budget remains one. Remediation never creates
+a second unrestricted external review cycle. Changed remediation requires a
+fresh final-candidate self-review that asks both whether the findings are fixed
+and what new defect, bypass, authority leak, regression, inconsistency, or
+avoidable complexity the correction introduced. Material security or authority remediation
+requires first-principles design reassessment: compare the final design with the
+reviewed design, look for shared flawed abstractions and a smaller replacement,
+and adversarially test the resulting trust boundary. Small ordinary remediation
+does not acquire that heavyweight ceremony.
+
+Immediately before merge, freshly authenticate the exact PR and head, base,
+OPEN/Ready state, mergeability, Required Checks, lifecycle CURRENT, final
+validation receipt/attestation, review submissions, provider terminality,
+stable-feedback validity, unresolved threads, finding dispositions, and current
+merge authority. Apply these hard failures without inference from green CI:
+
+```text
+ANY_TRIGGERED_REVIEW_PROVIDER_NON_TERMINAL -> MERGE_FORBIDDEN
+FINAL_STABLE_FEEDBACK_CAPTURED_BEFORE_PROVIDER_TERMINALITY -> MERGE_FORBIDDEN
+ANY_UNCLASSIFIED_MATERIAL_FINDING -> MERGE_FORBIDDEN
+ANY_VALID_ACTIONABLE_BLOCKING_FINDING_UNREMEDIATED -> MERGE_FORBIDDEN
+ANY_UNRESOLVED_BLOCKING_THREAD -> MERGE_FORBIDDEN
+VALIDATION_OR_LIFECYCLE_OR_CI_OR_MERGEABILITY_GATE_FAILS -> MERGE_FORBIDDEN
+```
+
+Only the canonical merge selected by that complete fresh gate may consume the
+current conditional authority. Never force merge or bypass protection. After
+merge, freshly verify that the PR merged, its delivery issue completed as
+expected, accepted `main` contains the intended validated semantics, relevant
+invariants still pass on accepted main, and no downstream issue was mutated
+unintentionally. Do not report `MERGED_COMPLETE` before that read-back succeeds.
+
+The bounded normal path preserves these explicit self-review conclusions:
+
+```text
+MERGE_WHILE_REVIEW_RUNNING = IMPOSSIBLE
+UNBOUNDED_REVIEW_LOOP = NO
+SECOND_UNRESTRICTED_REVIEW = NO
+NEW_LIFECYCLE_STATE = NO
+NEW_COUNTER = NO
+NEW_TRUST_ROOT = NO
+POLYSCOPE_NATIVE_PR_REQUIRED_FOR_DELIVERY = NO
+MANUAL_PR_CREATION_REQUIRED = NO
+NORMAL_LEAF_CAN_REACH_MERGED_COMPLETE = YES
+```
 
 ## Architecture
 
@@ -95,6 +252,59 @@ next state. The closed state records finite review and remediation counters,
 explicit Cycle-3 absence, Draft/Ready state and transition history, and bounded
 exceptional recovery and continuation history. Head advancement and authorized
 PR rebinding preserve every lifecycle fact.
+
+Initialization schema 1.1 additionally accepts exactly one maintained
+`AUTHENTICATED_PRE_ENROLLMENT_DRAFT_INTEGRATION_HEAD` proof. That proof is
+returned only after the separately typed
+`PRE_ENROLLMENT_DRAFT_INTEGRATION` verifier authenticates the signed candidate,
+its two ordered Draft/current-main parents, exact tree, receipt, final
+attestation, signer, PR, issue, repository, and bounded conflict evidence. A
+generic merge commit cannot supply this proof. The resulting lifecycle still
+starts with the ordinary `INITIALIZED_DRAFT` state and zero review,
+remediation, Ready-transition, exceptional-recovery, and
+exceptional-continuation counters; Cycle 3 remains absent. Native genesis is
+then admitted and enrolled through the admission-first publication boundary.
+The integration itself is not a lifecycle transition.
+
+## Pre-enrollment Draft current-main integration
+
+An open Draft delivery that has not entered lifecycle authority may use the
+closed `PRE_ENROLLMENT_DRAFT_INTEGRATION` topology. Its first parent is the
+authenticated live Draft PR head and its second parent is the freshly observed
+registered default-branch head. The canonical work graph must identify the
+delivery as a READY leaf, and the protected lifecycle journal must prove both
+CURRENT and native-genesis absence. A signed authorization fixes the exact
+repository, issue, PR, both parents, expected signer, and operation identity.
+
+The shared Git mechanics derive the mechanical merge tree, canonical conflict
+paths, raw resolution delta, ordered parents, and candidate signature. Clean
+merges require exact mechanical-tree equality. Conflict-bearing merges require
+one exact changed/deleted entry per conflict path, no other path, and no
+retained conflict markers. Complete validation binds the frozen tree in
+`PRE_ENROLLMENT_DRAFT_INTEGRATION_VALIDATION_RECEIPT`; the signed candidate and
+`PRE_ENROLLMENT_DRAFT_INTEGRATION_FINAL_ATTESTATION` bind the final head,
+receipt, evidence digest, signer, current-main observation, and initial Draft
+identity.
+
+The executor persists both typed evidence documents before its sole branch
+push. An unwritable or exhausted output boundary therefore fails before the
+irreversible mutation. Initial-head proof creation also consumes an opaque
+commit-verification result binding the actual two-parent topology, tree,
+signature format, and maintained signer; matching caller-authored attestation
+fields alone are not verification.
+
+This path is not ordinary sole-parent remediation and is not
+`TWO_PARENT_READY_INTEGRATION`: it consumes no Ready authority, review budget,
+remediation budget, recovery, or continuation. One invocation observes one
+final current state, constructs and non-force-pushes at most one candidate,
+verifies exact final head equality, and stops without retry or any merge,
+review-request, Ready-transition, graph, issue, label, or lifecycle mutation.
+
+Native genesis for a delivery still selected by this bootstrap family accepts
+only the schema-1.1 typed initialization whose head is the exact live open
+Draft PR head. This makes a competing ordinary genesis inadmissible between
+the authenticated absence observation and branch push without granting the
+bootstrap executor a journal mutation or reservation operation.
 
 The installed repository registry is the lifecycle trust-policy source. It
 separately assigns transition and authority signer roles, accepted signature
@@ -158,6 +368,95 @@ derives the remaining facts. Callers cannot nominate trusted evidence digests.
 Observation-derived Ready and exceptional history entries bind their canonical
 observation digest and never carry an ordinary event-authorization digest.
 
+Version 1 exact adoption retains its provider-backed review-count semantics.
+Version 2 adds one closed
+`PRE_ENROLLMENT_REVIEW_BUDGET_CONSUMPTION_ADMISSION` mode for a previously
+unenrolled delivery whose historical review-consumption provenance was not
+persisted. The migration role signs a domain-separated admission binding the
+exact open delivery, current head and tree, verified signature and validation
+evidence, canonical provider chronology, complete intended state, and adoption
+time. It conservatively consumes the single normal review budget; it does not
+reconstruct a review, verdict, finding, reviewer, or GitHub
+`ReviewSubmission`. Provider review observations and this admission are
+disjoint modes, and supplying both fails closed. Remediation, Ready, exceptional
+history, and every other state field remain independently observation-derived.
+
+Version 3 adds the distinct
+`SECPAL_PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_ADMISSION` source mode. It does
+not reinterpret versions 1/2. Its sole authority is adoption source truth for an
+exact signed, unenrolled OPEN Draft with unavailable commit-bound validation
+companions and successful fresh current-policy safety validation. Historical
+reviewed-state, receipt, and final-attestation bytes are never synthesized. The
+historical final-attestation identity remains unavailable; PR prose cannot supply
+it. The signed receipt trailer remains provenance, not the missing receipt.
+
+The maintained issuer accepts only repository and issue selectors. Clean current
+protected main selects the exact loss acknowledgment in
+`policies/pre-enrollment-validation-evidence-loss.json`, the existing registry,
+and the existing migration/adoption signer role. That record becomes an
+authenticated acknowledgment only when accepted on protected main; issue prose,
+caller-reported missing files and unsigned loss flags carry no authority. It is
+exact-source policy, not an artifact store or another journal. The issuer
+authenticates the live OPEN/Draft PR, head/tree/sole parent, accepted source
+signature and exact trailer, complete stable feedback and provider chronology.
+Provider reads are first converted by a pure, bounded representation-normalization
+boundary into canonical typed facts; admission consumes only those facts and does
+not repeat provider parsing.
+The protected lifecycle journal must prove CURRENT and native admission absent.
+
+Current safety executes the closed accepted-main
+`PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_CURRENT_SAFETY` profile, not every later
+repository regression. Its maintained assertions cover the applicable recovery
+and adoption safety contract without requiring unrelated newer implementation
+APIs. Normal repository Complete Validation remains unchanged for the delivery
+that changes this policy.
+
+Accepted-main commit authentication first observes the protected branch SHA,
+then uses one fixed maintained provider projection containing only that exact
+commit SHA and GitHub's boolean verification result. Projection occurs before
+the unchanged 64 KiB bootstrap capture; the resulting external bytes still pass
+duplicate-aware closed parsing and exact-SHA admission. The generic provider
+transport, chronology acquisition and authenticated large Git-blob path retain
+their existing distinct bounds.
+
+The profile binds its version, harness Git blob/mode/size, command set and digest,
+120-second bound, exact successful result and required invariant inventory.
+Only `tests/pre-enrollment-current-safety.py` is projected into a disposable
+execution copy. All non-test candidate files retain their exact parked bytes;
+no implementation overlay, dual-version runtime or synthetic integration is
+permitted. Historical tests do not supply assertion authority. The existing
+isolated Python runner excludes environment paths and site initialization, and
+the disposable tree rejects undeclared files, bytecode and symlinks. Source bytes are checked
+independently of index flags before and after execution. Every captured source,
+including resolved/outdated threads, replies, review submissions and conversation
+comments, must match the accepted technical decision inventory. Blocking,
+incomplete or changed decisions reject. This is current safety, not another
+unrestricted review. Source, feedback or accepted-main drift invalidates live
+verification. Fresh safety identity and historical receipt provenance are
+separate bindings and must differ.
+
+The existing version-1 admission binds this profile through its policy and
+command-set digests, with `validated_tree_sha` still naming the parked tree.
+Changed policy cannot authenticate previously signed bytes as evidence for the
+new profile: live verification rederives these bindings and rejects drift.
+
+The version-1 loss admission permits only review 1, remediation 2, Ready
+transitions 0, Draft true, Ready false, no exceptional history and no Cycle 3.
+The existing review-budget admission remains independently required for review
+1; exactly two normalized `REMEDIATION_HEAD_OBSERVED` entries establish
+remediation 2. Ordinary verified validation and the sealed loss source are
+disjoint inputs: invalid or partially supplied historical evidence cannot
+downgrade to loss mode.
+
+The signed admission becomes immutable provenance in the version-3 adoption
+proof and existing signed one-use adoption authorization. Enrollment rechecks
+live absence and source facts, then uses existing protected publication/CAS
+uniqueness to reject competing enrollment and replay. Historical proof
+verification checks signatures and closed bindings without requiring CURRENT
+to remain absent after enrollment. No new state, signer, counter, journal,
+Ready permission or source-bootstrap authority is introduced. The #827 / PR #830
+case is exercised hermetically; implementation does not enroll or mutate it.
+
 Exact-state adoption reuses the maintained migration signer role, enrollment
 uniqueness, protected publication journal, CAS, lifecycle identity and authority
 digest conventions. Later transitions use the ordinary successor verifier, and
@@ -166,6 +465,24 @@ boundary with the adopted tree, receipt, and adoption-time attestation bound by
 the proof. Native deliveries cannot self-select adoption, a second enrollment
 root remains forbidden, and adoption is not a lifecycle state, Recovery,
 Continuation, or permission to cure ordinary ordering after the fact.
+
+After an Exact-State-Adoption v3 delivery completes its first ordinary
+Draft-to-Ready transition, prior-authority manifest schema `1.2` can normalize
+that already-authenticated source into the same Ready-integration input without
+reconstructing unavailable reviewed-state, validation-receipt, or final-
+attestation bytes. The verifier reopens protected CURRENT and the enrollment
+publication, independently verifies the v3 proof, loss and review-budget
+admissions, exact signed sole-parent source, unchanged head/tree, one published
+`DRAFT_TO_READY`, finite counters and empty exceptional histories, and requires
+the canonical existing annotated-tag namespace and exact commit target. Both
+bridge derivation and selection internally derive their executing tooling root,
+authenticate its complete verifier package and policy blobs against one signed
+protected-main commit, and reject mixed module origins. The distinct candidate
+repository supplies only immutable Git objects and may legitimately contain
+different implementation bytes. Protected main is rechecked during authority
+composition so a main transition requires a fresh run. Schema `1.1` remains the
+ordinary companion-backed form;
+malformed or incomplete `1.1` input cannot fall through to `1.2`.
 
 For a later head-changing ordinary successor, the immutable adoption proof
 remains the genesis while the signed successor authority binds verifier-derived
@@ -206,6 +523,11 @@ admission, and migration signer roles; the exact GitHub endpoint, publication
 branch, and live ruleset identity and required protections; static initialization
 roots; exact historical native compatibility-publication identities; and the
 one closed issue 736 bootstrap-repair identity.
+The same maintained bootstrap-source list contains one closed #776 / PR #779
+pre-enrollment implementation admission. It binds the immutable source chain,
+maintained signer policy, fixed action entrypoint/command, and accepted-main
+validation command/result digests. It creates no lifecycle, publication,
+CURRENT, Ready state, or candidate-tree authority; those remain downstream.
 New candidate heads, terminal digests, and current publication objects are not
 registered there. Dynamic events form one signed
 linear journal on `refs/heads/secpal-lifecycle-publications` outside delivery
@@ -303,8 +625,9 @@ absolute canonical link text directly and does not depend on GNU-specific
 
 `scripts/secpal_pr_review/lifecycle_execution.py` is the maintained execution
 boundary for the two existing user-authorized `DRAFT_TO_READY` and
-`READY_TO_DRAFT` decisions. It accepts only the repository, delivery issue, and
-canonical signed lifecycle-orchestration authorization. It derives the PR,
+`READY_TO_DRAFT` decisions. Its single-transition entry point accepts only the
+repository, delivery issue, and canonical signed lifecycle-orchestration
+authorization. It derives the PR,
 head, operation, predecessor publication, lifecycle authority, signer, scope,
 and intended successor from those authenticated authorities rather than caller
 assertions.
@@ -333,6 +656,48 @@ independent CURRENT read-back -> final GitHub/CURRENT convergence`. Immediately
 before each write the executor reauthenticates the exact live PR, head, OPEN
 state, CURRENT predecessor, signed authorization, and orchestration decision.
 
+One narrower convergence case extends that boundary without adding an event or
+recovery path. When GitHub already records the authorized Draft-to-Ready event
+at H0, CURRENT is still its exact authenticated Draft predecessor, and one
+independently authorized remediation commit has advanced the same Ready PR from
+H0 directly to H1, the executor publishes the two existing successors in their
+only valid order:
+
+```text
+CURRENT Draft @ H0
+  -> DRAFT_TO_READY @ H0
+  -> REMEDIATION_COMPLETED H0 -> H1
+```
+
+The path requires a complete GitHub timeline proving that Ready occurred while
+H0 was the PR head, with no intervening or later Ready-to-Draft, force-push, or
+additional commit. It separately re-verifies the exact one-use remediation
+authorization and finding identities, verifier-sealed validation receipt and
+final attestation, H1 tree, maintained signer, and sole-parent H1-to-H0 commit
+topology. Ancestry alone supplies no authority. The executor derives both
+states through the existing authority owner and publishes each existing
+successor through the ordinary protected CAS boundary. The exact midpoint and
+complete states are resumable and replay-safe; GitHub receives no duplicate
+Ready write.
+
+The maintained accepted-main entry point for that fixed shape is
+`converge_pending_ready_head_advancement`. It accepts the two exact signed
+authorizations and verifier-sealed remediation evidence directly; it is not a
+mode of the single-transition entry point. The immutable #810 first-executor
+bootstrap remains a closed historical bootstrap for its exact admitted source
+and is intentionally not a dispatcher for later accepted-main capabilities.
+Expanding that frozen admission would create new bootstrap authority rather
+than make accepted-main code reachable.
+
+This is autonomous convergence, not a new decision boundary, exactly when all
+intermediate operations are already authenticated, the existing transition
+order is unique, source lineage is exact, and the result equals current GitHub
+truth. Mechanical lifecycle lag is not Exceptional Recovery; checkpoint
+reordering grants no delivery authority; and authenticated head advancement
+does not permit skipping a missing transition. Ambiguous chronology, a
+Draft-valid source operation, competing source changes, or any non-exact
+midpoint fails closed.
+
 The GitHub write is the fixed non-interactive `gh pr ready` or
 `gh pr ready --undo` form with an exact repository and PR. No executable, host,
 GraphQL document, state assertion, or retry option is caller-controlled. Any
@@ -342,6 +707,27 @@ receives one CURRENT read: the exact successor is complete, the exact
 predecessor is publication-pending and resumable, and anything else fails.
 Fresh invocation reconstructs progress solely from live GitHub and protected
 CURRENT; it never creates another execution journal or transaction record.
+
+Production lifecycle signing derives each required identity from the installed
+policy role. The OS account may map that already accepted identity to one local
+credential reference by adding a closed JSON value to the global Git key
+`secpal.lifecycleSigningCredential`, for example:
+
+```text
+{"credential":"/absolute/local/key","identity":"accepted-role@example.test"}
+```
+
+The mapping is only credential selection, never trust policy. Duplicate,
+malformed, relative SSH, unsupported-format, missing distinct-role, unusable,
+and policy-mismatched credentials fail closed. An explicit role mapping takes
+precedence over `user.signingkey`; the latter remains the compatible routine
+default only for ordinary transition, authority, publication, and genesis
+roles where those operations use the routine signer. Every produced signature
+is verified against the selected role's
+accepted policy credential before it is returned. The maintained legacy-
+adoption bridge exposes neither caller-selected identity nor key path and
+supplies the existing exact-state-adoption v2 admission, authorization, and
+proof constructors without changing their domains or payload authority.
 
 ## Finite execution
 
@@ -362,18 +748,25 @@ INITIALIZE
   → STOP
 ```
 
-One normal invocation uses zero full snapshots, one stable-feedback read, zero
-hosted-CI or Required Check reads, one complete local validation, one holistic
-audit, at most one signed remediation commit and ordinary push, and one
+One accepted candidate uses zero full snapshots, one stable-feedback read, zero
+hosted-CI or Required Check reads, one successful complete local validation,
+one holistic audit per candidate, at most one signed remediation commit and ordinary push, and one
 target-bound simple resolution pass. Package-2.1/2.2 snapshots remain available
 only in explicit forensic mode.
 
-There is no polling, waiting, sleep-and-retry, recursive review loop, automatic
-late-feedback incorporation, review request, Ready transition, merge, or
-auto-merge.
+The feedback-remediation helper has no polling, waiting, recursive review loop,
+automatic late-feedback incorporation, review request, Ready transition, merge,
+or auto-merge capability. The separate bounded provider observation described
+above is available only to a currently authorized full delivery and never
+observes unrelated hosted CI.
 A correctable local error is repaired in the same invocation, and a read-only
 failure may receive one bounded retry. Writes never retry; an unknown write
 result stops with its exact operation identity.
+
+On ordinary success, the normal success report contains only `RESULT`, `HEAD`,
+`MUTATIONS`, `EVIDENCE`, relevant `LIFECYCLE` counters, `BLOCKER`, and
+`NEXT DECISION`. Blockers, exceptional paths, and complex security decisions
+retain the detailed evidence needed for safe diagnosis.
 
 ## Hosted CI authorization
 
@@ -383,10 +776,10 @@ or thread-resolution request does not authorize reading or summarizing hosted
 checks.
 
 Only a current user instruction that explicitly requests CI inspection, check
-status, merge readiness, or merge authorization permits one bounded
-current-state read. Report that state and stop. Never poll, wait, sleep, repeat
-the read automatically, keep the run active for pending checks, or suggest
-monitoring. Merge remains separately user-authorized.
+status, merge readiness, or merge authorization permits fresh operation-bound
+CI reads. Provider-status observation is not authorization to observe unrelated
+hosted CI. Merge remains explicitly current-user-authorized, including bounded
+conditional authorization granted in that same instruction.
 
 ## Classification and technical truth
 
@@ -498,7 +891,17 @@ JSON diagnostic includes `registered_validation_failure` with the command's
 one-based `index`, registry `purpose`, and a safe `category` such as
 `non-zero exit`, `timeout`, or `unavailable executable`. The helper still
 discards the command's stdout and stderr, leaves only the invalidated receipt
-placeholder, and does not run later commands or retry the failed command.
+placeholder, and does not run later commands or retry the failed command on the
+unchanged tree. That candidate is rejected. If the failure is diagnosed, the
+correction stays inside current authority, no external mutation occurred, and
+focused validation plus a repeated holistic audit cover a changed candidate,
+the same invocation may perform one complete validation of that changed final
+candidate. A successful complete validation is never repeated on an unchanged
+tree. If that single corrected candidate also fails, stop without a third
+candidate or attempt in the invocation. The fresh audit replaces the
+invalidated audit for the rejected tree; it does not increment the existing
+one-audit session counter. New authority is required only when the correction
+crosses scope, recovery, or another genuine decision boundary.
 
 `manual-gates.json` is an ordered JSON array with exactly one
 `{"gate": REGISTRY_TEXT, "satisfied": true, "evidence": CONCISE_PROOF}` object
@@ -530,8 +933,15 @@ already verified final delivery attestation and does not create a new receipt.
 
 Ordinary remediation and recovery continue to require one parent. A separately
 user-authorized mechanical integration into an already-Ready delivery PR uses
-`attest-validation --integration-evidence` and the closed version-1.1
-`TWO_PARENT_READY_INTEGRATION` topology. The invocation also supplies the exact
+`attest-validation --integration-evidence` and the closed version-1.1 or
+version-1.2 `TWO_PARENT_READY_INTEGRATION` topology. Version 1.1 retains the
+same-head reviewed snapshot. Version 1.2 requires and separately binds a
+distinct reviewed predecessor so
+an already-attested remediation successor can remain parent 1 without
+requesting another unrestricted review. In that case the prior ordinary
+receipt and final attestation must authenticate the exact reviewed-state and
+feedback digests; an unrelated or caller-substituted snapshot fails closed.
+The invocation also supplies the exact
 delivery issue, authorization ID, and expected signer. Its evidence fixes parent
 1 to the previously authenticated Ready head and parent 2 to the explicitly
 authenticated current registered `main` snapshot, in that order, and requires
