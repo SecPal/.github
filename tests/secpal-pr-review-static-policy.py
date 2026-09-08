@@ -565,7 +565,15 @@ DIRECT_MODULE_ATTRIBUTES = {
         "importlib": {"util"},
         "pwd": {"getpwuid"},
         "site": {"getusersitepackages"},
-        "sys": {"executable", "modules", "platform", "stderr", "stdout", "version_info"},
+        "sys": {
+            "executable",
+            "modules",
+            "platform",
+            "pycache_prefix",
+            "stderr",
+            "stdout",
+            "version_info",
+        },
         "tempfile": {"TemporaryDirectory"},
         "types": {"ModuleType"},
     },
@@ -601,6 +609,8 @@ DIRECT_MODULE_ATTRIBUTES = {
 LOADED_MODULE_ATTRIBUTES = {
     "secpal-pr-review-actions.py": {
         "evidence": {
+            "__file__",
+            "__spec__",
             "BlockedError",
             "CommandPolicyError",
             "CommandRunner",
@@ -625,6 +635,8 @@ LOADED_MODULE_ATTRIBUTES = {
             "verify_snapshot_evidence",
         },
         "fast_path": {
+            "__file__",
+            "__spec__",
             "BatchRequest",
             "CLASSIFICATION_DISPOSITIONS",
             "DIGEST",
@@ -660,6 +672,8 @@ LOADED_MODULE_ATTRIBUTES = {
             "parse_follow_up",
         },
         "pre_enrollment": {
+            "__file__",
+            "__spec__",
             "FrozenObservation",
             "KIND",
             "PreEnrollmentIntegrationError",
@@ -1079,6 +1093,14 @@ SAFE_GETATTR_CALLS = {
 SAFE_SYS_MODULES_CALLS = {
     "secpal-pr-review-actions.py": {
         DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules.get(spec.name)",
+        ),
+        DynamicImportCall(
+            ("_load_evidence_helper",),
+            "sys.modules.pop(spec.name, None)",
+        ),
+        DynamicImportCall(
             ("_load_fast_path_helper",),
             "sys.modules.get('secpal_pr_review.fast_path')",
         ),
@@ -1093,6 +1115,10 @@ SAFE_SYS_MODULES_CALLS = {
         DynamicImportCall(
             ("_load_pre_enrollment_integration_helper",),
             "sys.modules.get(module_name)",
+        ),
+        DynamicImportCall(
+            ("_load_pre_enrollment_integration_helper",),
+            "sys.modules.pop(module_name, None)",
         ),
         DynamicImportCall(
             ("_load_lifecycle_publication_helpers",),

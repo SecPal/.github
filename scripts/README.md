@@ -186,8 +186,13 @@ publications, and exact finite history from verified authority. Historical
 bytes remain unavailable and unreconstructed. The canonical tag remains
 `secpal-ready-integration-prior-authority-<issue>-<pr>-<head>` and targets the
 exact prior delivery commit. Candidate-local bytes cannot derive or select this
-mode; ordinary schema `1.1` and the single two-parent integration verifier are
-unchanged.
+mode. The bridge derives its tooling root from the executing maintained module,
+authenticates the complete verifier package, imported authority-module origins,
+registry, and schema against the same signed protected-main commit, and rejects
+stale, dirty, symlinked, preloaded, or mixed provenance. Candidate Git objects
+come from a required distinct repository root whose implementation bytes may
+legitimately differ from main. Ordinary schema `1.1` and the single two-parent
+integration verifier are unchanged.
 
 After an explicitly authenticated cycle-limit blocker, a separate user
 authorization may select `--exceptional-recovery-evidence` with exact recovery

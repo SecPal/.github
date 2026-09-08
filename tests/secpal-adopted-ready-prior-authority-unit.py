@@ -10,6 +10,8 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
+import tempfile
 from types import SimpleNamespace
 from unittest import TestCase, main, mock
 
@@ -168,6 +170,10 @@ def transition(current: SimpleNamespace | None = None) -> SimpleNamespace:
 
 
 class AdoptedReadyPriorAuthorityTests(TestCase):
+    def test_authority_imports_ignore_repository_bytecode_caches(self) -> None:
+        cache_root = Path(actions.sys.pycache_prefix).resolve(strict=True)
+        self.assertFalse(cache_root.is_relative_to(ROOT))
+
     def derive(self, current: SimpleNamespace | None = None) -> dict[str, object]:
         current = current or published()
         with (
@@ -195,7 +201,7 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             ),
         ):
             return actions._derive_exact_state_adoption_v3_ready_prior_authority(
-                repository_root=ROOT,
+                repository_root=ROOT.parent,
                 repository=REPOSITORY,
                 delivery_issue=ISSUE,
                 pull_request=PR,
@@ -360,7 +366,7 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             ),
         ), self.assertRaisesRegex(fast_path.SecurityBlocker, "candidate-local"):
             actions._derive_exact_state_adoption_v3_ready_prior_authority(
-                repository_root=ROOT,
+                repository_root=ROOT.parent,
                 repository=REPOSITORY,
                 delivery_issue=ISSUE,
                 pull_request=PR,
@@ -368,34 +374,264 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             )
         load_helpers.assert_not_called()
 
+    def test_accepted_main_tooling_and_candidate_repository_are_distinct(self) -> None:
+        current = published()
+        source = {
+            "parent_sha": PARENT,
+            "tree_sha": TREE,
+            "signer": {"kind": "SSH_PRINCIPAL", "identity": SIGNER},
+        }
+        with (
+            mock.patch.object(
+                actions,
+                "_require_accepted_main_bridge_source",
+                return_value="9" * 40,
+            ) as accepted_source,
+            mock.patch.object(
+                actions,
+                "_load_lifecycle_publication_helpers",
+                return_value=(lifecycle_authority, lifecycle_publication),
+            ),
+            mock.patch.object(
+                lifecycle_publication,
+                "verify_current_lifecycle_authority",
+                return_value=current,
+            ),
+            mock.patch.object(
+                lifecycle_publication,
+                "_verify_historical_lifecycle_transition",
+                return_value=transition(current),
+            ),
+            mock.patch.object(
+                lifecycle_authority,
+                "verify_exact_state_adoption_proof",
+                return_value=current.lifecycle,
+            ),
+            mock.patch.object(
+                actions, "_verified_prior_delivery_commit", return_value=source
+            ) as verify_candidate,
+        ):
+            with tempfile.TemporaryDirectory() as directory:
+                candidate_root = Path(directory)
+                candidate_actions = candidate_root / "scripts/secpal-pr-review-actions.py"
+                candidate_actions.parent.mkdir(parents=True)
+                candidate_actions.write_text(
+                    "# candidate implementation intentionally differs\n",
+                    encoding="utf-8",
+                )
+                self.assertNotEqual(
+                    candidate_actions.read_bytes(),
+                    (ROOT / "scripts/secpal-pr-review-actions.py").read_bytes(),
+                )
+                manifest = actions._derive_exact_state_adoption_v3_ready_prior_authority(
+                    repository_root=candidate_root,
+                    repository=REPOSITORY,
+                    delivery_issue=ISSUE,
+                    pull_request=PR,
+                    binding={"signature_policy": {"accepted_formats": ["ssh"]}},
+                )
+        self.assertEqual(manifest["prior_delivery_tree_sha"], TREE)
+        self.assertTrue(
+            all(call.args[0] == REPOSITORY for call in accepted_source.call_args_list)
+        )
+        verify_candidate.assert_called_once_with(
+            candidate_root, HEAD, SIGNER,
+            mock.ANY,
+        )
+
+    def test_import_provenance_rejects_mixed_module_origin(self) -> None:
+        module = SimpleNamespace(
+            __file__=str(ROOT / "scripts/secpal_pr_review/fast_path.py"),
+            __spec__=SimpleNamespace(
+                origin=str(ROOT / "scripts/secpal_pr_review/fast_path.py"),
+            ),
+        )
+        actions._require_bridge_import_provenance(
+            {"fast_path": (module.__file__, module.__spec__.origin)},
+            {"fast_path": ROOT / "scripts/secpal_pr_review/fast_path.py"},
+        )
+        module.__file__ = "/candidate/scripts/secpal_pr_review/fast_path.py"
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "mixed verifier"):
+            actions._require_bridge_import_provenance(
+                {"fast_path": (module.__file__, module.__spec__.origin)},
+                {"fast_path": ROOT / "scripts/secpal_pr_review/fast_path.py"},
+            )
+
+    def test_import_provenance_rejects_symlinked_module_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.py"
+            source.write_text("VALUE = 1\n", encoding="utf-8")
+            alias = root / "alias.py"
+            alias.symlink_to(source)
+            module = SimpleNamespace(
+                __file__=str(alias),
+                __spec__=SimpleNamespace(
+                    origin=str(alias),
+                ),
+            )
+            with self.assertRaisesRegex(fast_path.SecurityBlocker, "mixed verifier"):
+                actions._require_bridge_import_provenance(
+                    {"module": (module.__file__, module.__spec__.origin)},
+                    {"module": alias},
+                )
+
+    def test_preloaded_candidate_module_is_rejected(self) -> None:
+        name = "secpal_pr_review.pre_enrollment_integration"
+        previous = sys.modules.get(name)
+        candidate = SimpleNamespace(__file__="/candidate/pre_enrollment_integration.py")
+        sys.modules[name] = candidate
+        try:
+            with self.assertRaisesRegex(RuntimeError, "unexpected path"):
+                actions._load_pre_enrollment_integration_helper()
+        finally:
+            if previous is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous
+
+    def test_preloaded_same_path_module_is_reloaded_from_source(self) -> None:
+        name = "secpal_pr_review.pre_enrollment_integration"
+        previous = sys.modules.get(name)
+        candidate = SimpleNamespace(
+            __file__=str(actions.PRE_ENROLLMENT_INTEGRATION_HELPER)
+        )
+        sys.modules[name] = candidate
+        try:
+            loaded = actions._load_pre_enrollment_integration_helper()
+            self.assertIsNot(loaded, candidate)
+            self.assertEqual(
+                Path(loaded.__spec__.origin).absolute(),
+                actions.PRE_ENROLLMENT_INTEGRATION_HELPER.absolute(),
+            )
+        finally:
+            if previous is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous
+
+    def test_failed_helper_load_does_not_leave_partial_module(self) -> None:
+        for loader_name, module_name, helper_path in (
+            (
+                "_load_evidence_helper",
+                "secpal_pr_review_evidence_shared",
+                actions.EVIDENCE_HELPER,
+            ),
+            (
+                "_load_pre_enrollment_integration_helper",
+                "secpal_pr_review.pre_enrollment_integration",
+                actions.PRE_ENROLLMENT_INTEGRATION_HELPER,
+            ),
+        ):
+            previous = sys.modules.pop(module_name, None)
+            spec = importlib.util.spec_from_file_location(module_name, helper_path)
+            if spec is None or spec.loader is None:
+                self.fail("test helper spec is unavailable")
+            try:
+                with (
+                    self.subTest(loader=loader_name),
+                    mock.patch.object(
+                        actions.importlib.util,
+                        "spec_from_file_location",
+                        return_value=spec,
+                    ),
+                    mock.patch.object(
+                        spec.loader,
+                        "exec_module",
+                        side_effect=RuntimeError("load failed"),
+                    ),
+                    self.assertRaisesRegex(RuntimeError, "load failed"),
+                ):
+                    getattr(actions, loader_name)()
+                self.assertNotIn(module_name, sys.modules)
+            finally:
+                if previous is not None:
+                    sys.modules[module_name] = previous
+
+    def test_candidate_root_cannot_alias_executing_tooling(self) -> None:
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "must be distinct"):
+            actions._require_distinct_candidate_repository_root(ROOT)
+        actions._require_distinct_candidate_repository_root(ROOT / "scripts")
+        actions._require_distinct_candidate_repository_root(ROOT.parent)
+
+    def test_accepted_main_blob_rejects_dirty_and_symlinked_tooling(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "config", "user.name", "Test"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(root), "config", "user.email", "test@example.com"],
+                check=True,
+            )
+            source = root / "tool.py"
+            source.write_text("VALUE = 1\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "tool.py"], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "commit", "-qm", "tool"], check=True
+            )
+            accepted = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            actions._require_exact_accepted_main_blob(root, accepted, "tool.py")
+            source.chmod(0o755)
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "tooling provenance"
+            ):
+                actions._require_exact_accepted_main_blob(root, accepted, "tool.py")
+            source.chmod(0o644)
+            source.write_text("VALUE = 2\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "tooling provenance"
+            ):
+                actions._require_exact_accepted_main_blob(root, accepted, "tool.py")
+            source.unlink()
+            target = root / "target.py"
+            target.write_text("VALUE = 1\n", encoding="utf-8")
+            source.symlink_to(target)
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "tooling provenance"
+            ):
+                actions._require_exact_accepted_main_blob(root, accepted, "tool.py")
+
     def test_accepted_main_gate_requires_protection_and_bounded_metadata(self) -> None:
+        repository = subprocess.CompletedProcess(
+            [],
+            0,
+            stdout=json.dumps(
+                {"full_name": REPOSITORY, "default_branch": "main"}
+            ),
+            stderr="",
+        )
         branch = subprocess.CompletedProcess(
             [], 0, stdout=json.dumps({"sha": "9" * 40, "protected": True}), stderr=""
         )
         commit = subprocess.CompletedProcess(
             [], 0, stdout=json.dumps({"sha": "9" * 40, "verified": True}), stderr=""
         )
-        package = subprocess.CompletedProcess(
-            [], 0, stdout="scripts/secpal_pr_review/fast_path.py\n", stderr=""
-        )
-        same = subprocess.CompletedProcess([], 0, stdout="same", stderr="")
         with (
             mock.patch.object(
-                actions, "_run_bridge_gh", side_effect=[branch, commit]
+                actions, "_run_bridge_gh", side_effect=[repository, branch, commit]
             ) as run_gh,
             mock.patch.object(
-                actions, "_run_attestation_git", side_effect=[package, same, same, same, same, same]
+                actions, "_require_accepted_main_tooling_blobs"
             ),
-            mock.patch.object(Path, "read_text", return_value="same"),
+            mock.patch.object(actions, "_require_bridge_import_provenance"),
         ):
             self.assertEqual(
-                actions._require_accepted_main_bridge_source(ROOT, REPOSITORY),
+                actions._require_accepted_main_bridge_source(REPOSITORY),
                 "9" * 40,
             )
         calls = [item.args[0] for item in run_gh.call_args_list]
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 3)
         self.assertIn("--jq", calls[0])
         self.assertIn("--jq", calls[1])
+        self.assertIn("--jq", calls[2])
 
         unprotected = subprocess.CompletedProcess(
             [], 0, stdout=json.dumps({"sha": "9" * 40, "protected": False}), stderr=""
@@ -403,7 +639,21 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
         with mock.patch.object(actions, "_run_bridge_gh", return_value=unprotected), self.assertRaises(
             fast_path.SecurityBlocker
         ):
-            actions._require_accepted_main_bridge_source(ROOT, REPOSITORY)
+            actions._require_accepted_main_bridge_source(REPOSITORY)
+
+        with (
+            mock.patch.object(
+                actions,
+                "_run_bridge_gh",
+                side_effect=[repository, branch, commit],
+            ),
+            mock.patch.object(actions, "_require_accepted_main_tooling_blobs"),
+            mock.patch.object(actions, "_require_bridge_import_provenance"),
+            self.assertRaisesRegex(fast_path.SecurityBlocker, "changed during"),
+        ):
+            actions._require_accepted_main_bridge_source(
+                REPOSITORY, expected_main="a" * 40
+            )
 
     def test_bridge_provider_failures_are_guarded(self) -> None:
         with mock.patch.object(
@@ -411,7 +661,7 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             "_run_bridge_gh",
             side_effect=fast_path.SecurityBlocker("bridge observation unavailable"),
         ), self.assertRaisesRegex(fast_path.SecurityBlocker, "observation unavailable"):
-            actions._require_accepted_main_bridge_source(ROOT, REPOSITORY)
+            actions._require_accepted_main_bridge_source(REPOSITORY)
 
         with (
             mock.patch.object(
@@ -427,7 +677,7 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             ),
         ):
             actions._derive_exact_state_adoption_v3_ready_prior_authority(
-                repository_root=ROOT,
+                repository_root=ROOT.parent,
                 repository=REPOSITORY,
                 delivery_issue=ISSUE,
                 pull_request=PR,

@@ -475,8 +475,13 @@ publication, independently verifies the v3 proof, loss and review-budget
 admissions, exact signed sole-parent source, unchanged head/tree, one published
 `DRAFT_TO_READY`, finite counters and empty exceptional histories, and requires
 the canonical existing annotated-tag namespace and exact commit target. Both
-bridge derivation and selection require byte-identical accepted-main
-implementation. Schema `1.1` remains the ordinary companion-backed form;
+bridge derivation and selection internally derive their executing tooling root,
+authenticate its complete verifier package and policy blobs against one signed
+protected-main commit, and reject mixed module origins. The distinct candidate
+repository supplies only immutable Git objects and may legitimately contain
+different implementation bytes. Protected main is rechecked during authority
+composition so a main transition requires a fresh run. Schema `1.1` remains the
+ordinary companion-backed form;
 malformed or incomplete `1.1` input cannot fall through to `1.2`.
 
 For a later head-changing ordinary successor, the immutable adoption proof

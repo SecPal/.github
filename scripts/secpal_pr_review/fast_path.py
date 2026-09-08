@@ -29,9 +29,11 @@ def _load_follow_up_helper() -> Any:
     loaded = sys.modules.get("secpal_pr_review.follow_up")
     if loaded is not None:
         loaded_path = getattr(loaded, "__file__", None)
-        if not isinstance(loaded_path, str) or Path(loaded_path).resolve() != FOLLOW_UP_HELPER:
+        if (
+            not isinstance(loaded_path, str)
+            or Path(loaded_path).absolute() != FOLLOW_UP_HELPER.absolute()
+        ):
             raise RuntimeError("Canonical follow-up module has an unexpected path")
-        return loaded
     spec = importlib.util.spec_from_file_location("secpal_pr_review.follow_up", FOLLOW_UP_HELPER)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load follow-up helper: {FOLLOW_UP_HELPER}")
@@ -55,10 +57,9 @@ def _load_evidence_helper() -> Any:
         loaded_path = getattr(loaded, "__file__", None)
         if (
             not isinstance(loaded_path, str)
-            or Path(loaded_path).resolve() != EVIDENCE_HELPER
+            or Path(loaded_path).absolute() != EVIDENCE_HELPER.absolute()
         ):
             raise RuntimeError("Canonical evidence helper has an unexpected path")
-        return loaded
     spec = importlib.util.spec_from_file_location(module_name, EVIDENCE_HELPER)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load evidence helper: {EVIDENCE_HELPER}")
