@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-08 - Execute Bounded Exceptional Continuation
+
+**Fixed:**
+
+- Extend finite Ready orchestration with one authenticated source-changing
+  `EXCEPTIONAL_CONTINUATION` after Exceptional Recovery is consumed.
+- Bind exact current-head material findings, signed one-use authorization,
+  single-parent signed source, protected lifecycle publication, validation,
+  attestation, and guarded thread resolution without adding a counter, cycle,
+  journal, signer, trust root, or Ready transition.
+
 ## 2026-09-08 - Separate Ready Tooling From Candidate Source
 
 **Fixed:**

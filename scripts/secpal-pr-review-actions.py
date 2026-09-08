@@ -4371,6 +4371,11 @@ def build_parser() -> argparse.ArgumentParser:
     attestation_parser.add_argument("--exceptional-recovery-evidence")
     attestation_parser.add_argument("--exceptional-recovery-delivery-issue", type=_positive_integer)
     attestation_parser.add_argument("--exceptional-recovery-authorization-id")
+    attestation_parser.add_argument("--exceptional-continuation-evidence")
+    attestation_parser.add_argument(
+        "--exceptional-continuation-delivery-issue", type=_positive_integer
+    )
+    attestation_parser.add_argument("--exceptional-continuation-authorization-id")
     attestation_parser.add_argument("--delivery-issue", type=_positive_integer)
     attestation_parser.add_argument("--integration-authorization-id")
     attestation_parser.add_argument("--expected-integration-signer")
@@ -6201,6 +6206,9 @@ def _verify_ready_integration_prior_authority(
         exceptional_recovery_evidence_digest=attestation.get(
             "exceptional_recovery_evidence_digest"
         ),
+        exceptional_continuation_evidence_digest=attestation.get(
+            "exceptional_continuation_evidence_digest"
+        ),
     )
     if (
         receipt != expected_prior_receipt
@@ -6305,6 +6313,7 @@ def _validation_receipt(
     eligibility_evidence_digest: str | None = None,
     integration_evidence_digest: str | None = None,
     exceptional_recovery_evidence_digest: str | None = None,
+    exceptional_continuation_evidence_digest: str | None = None,
 ) -> dict[str, Any]:
     return fast_path.create_validation_receipt(
         repository=repository,
@@ -6318,6 +6327,9 @@ def _validation_receipt(
         eligibility_evidence_digest=eligibility_evidence_digest,
         integration_evidence_digest=integration_evidence_digest,
         exceptional_recovery_evidence_digest=exceptional_recovery_evidence_digest,
+        exceptional_continuation_evidence_digest=(
+            exceptional_continuation_evidence_digest
+        ),
     )
 
 
@@ -6366,6 +6378,40 @@ def _load_exceptional_recovery_evidence(
             "exceptional recovery and eligibility thread identities differ"
         )
     return recovery
+
+
+def _verify_exceptional_continuation_selection(
+    continuation: dict[str, Any], arguments: argparse.Namespace
+) -> None:
+    if (
+        continuation["delivery_issue_number"]
+        != getattr(arguments, "exceptional_continuation_delivery_issue", None)
+        or continuation["authorization_id"]
+        != getattr(arguments, "exceptional_continuation_authorization_id", None)
+    ):
+        raise fast_path.SecurityBlocker(
+            "exceptional continuation differs from the explicit user authorization"
+        )
+
+
+def _load_exceptional_continuation_evidence(
+    *,
+    path: str,
+    eligibility_path: str,
+    repository: str,
+    reviewed: Any,
+    validated_tree: str,
+) -> dict[str, Any]:
+    eligibility = _read_json(
+        eligibility_path, "exceptional continuation eligibility evidence"
+    )
+    return fast_path.normalize_exceptional_continuation_evidence(
+        _read_json(path, "exceptional continuation evidence"),
+        repository=repository,
+        reviewed_state=reviewed,
+        validated_tree_sha=validated_tree,
+        eligibility_evidence=eligibility,
+    )
 
 
 def _resolution_eligibility_digest(
@@ -6430,6 +6476,9 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
     exceptional_recovery_path = getattr(
         arguments, "exceptional_recovery_evidence", None
     )
+    exceptional_continuation_path = getattr(
+        arguments, "exceptional_continuation_evidence", None
+    )
     integration_selectors = (
         getattr(arguments, "delivery_issue", None),
         getattr(arguments, "integration_authorization_id", None),
@@ -6467,6 +6516,10 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         getattr(arguments, "exceptional_recovery_delivery_issue", None),
         getattr(arguments, "exceptional_recovery_authorization_id", None),
     )
+    continuation_selectors = (
+        getattr(arguments, "exceptional_continuation_delivery_issue", None),
+        getattr(arguments, "exceptional_continuation_authorization_id", None),
+    )
     if not exceptional_recovery_path and any(exceptional_selectors):
         raise fast_path.RecoverableLocalError(
             "exceptional recovery selectors require --exceptional-recovery-evidence"
@@ -6478,6 +6531,20 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
     ):
         raise fast_path.SecurityBlocker(
             "exceptional recovery requires its explicit selectors and eligibility evidence"
+        )
+    if not exceptional_continuation_path and any(continuation_selectors):
+        raise fast_path.RecoverableLocalError(
+            "exceptional continuation selectors require --exceptional-continuation-evidence"
+        )
+    if exceptional_continuation_path and (
+        exceptional_recovery_path
+        or integration_evidence_path
+        or pre_enrollment_evidence_path
+        or not getattr(arguments, "eligibility_evidence", None)
+        or not all(continuation_selectors)
+    ):
+        raise fast_path.SecurityBlocker(
+            "exceptional continuation requires its explicit selectors and eligibility evidence"
         )
     if arguments.bind_commit:
         if not arguments.receipt:
@@ -6549,6 +6616,9 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 exceptional_recovery_evidence_digest=receipt.get(
                     "exceptional_recovery_evidence_digest"
                 ),
+                exceptional_continuation_evidence_digest=receipt.get(
+                    "exceptional_continuation_evidence_digest"
+                ),
             )
         )
         if receipt != expected_receipt or fast_path.digest_json(
@@ -6558,6 +6628,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         tree = _run_attestation_git(repository_root, ["rev-parse", "HEAD^{tree}"]).stdout.strip()
         integration_evidence = None
         exceptional_recovery = None
+        exceptional_continuation = None
         if integration_evidence_path:
             integration_evidence = fast_path.normalize_ready_integration_evidence(
                 _read_json(integration_evidence_path, "Ready integration evidence"),
@@ -6677,9 +6748,35 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                     raise fast_path.SecurityBlocker(
                         "exceptional recovery parent or evidence binding changed"
                     )
+            elif exceptional_continuation_path:
+                exceptional_continuation = _load_exceptional_continuation_evidence(
+                    path=exceptional_continuation_path,
+                    eligibility_path=arguments.eligibility_evidence,
+                    repository=arguments.repo,
+                    reviewed=reviewed,
+                    validated_tree=tree,
+                )
+                _verify_exceptional_continuation_selection(
+                    exceptional_continuation, arguments
+                )
+                parent_tree = _run_attestation_git(
+                    repository_root, ["rev-parse", f"{parent}^{{tree}}"]
+                ).stdout.strip()
+                if (
+                    parent_tree != exceptional_continuation["prior_ready_tree_sha"]
+                    or receipt.get("exceptional_continuation_evidence_digest")
+                    != fast_path.digest_json(exceptional_continuation)
+                ):
+                    raise fast_path.SecurityBlocker(
+                        "exceptional continuation parent or evidence binding changed"
+                    )
             elif "exceptional_recovery_evidence_digest" in receipt:
                 raise fast_path.SecurityBlocker(
                     "exceptional recovery receipt requires explicit recovery evidence"
+                )
+            elif "exceptional_continuation_evidence_digest" in receipt:
+                raise fast_path.SecurityBlocker(
+                    "exceptional continuation receipt requires explicit continuation evidence"
                 )
         if tree != receipt["validated_tree_sha"]:
             raise fast_path.SecurityBlocker(
@@ -6808,6 +6905,11 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             _verify_signature_policy_identity(
                 head, local_signature, binding["signature_policy"]
             )
+            if exceptional_continuation is not None:
+                _verify_integration_signer(
+                    f"{verified_commit.stdout}\n{verified_commit.stderr}",
+                    exceptional_continuation["expected_signer"],
+                )
             attestation = fast_path.create_validation_attestation(
                 repository=arguments.repo,
                 head_sha=head,
@@ -6840,6 +6942,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
     integration_evidence = None
     pre_enrollment_evidence = None
     exceptional_recovery = None
+    exceptional_continuation = None
     if integration_evidence_path:
         integration_evidence = fast_path.normalize_ready_integration_evidence(
             _read_json(integration_evidence_path, "Ready integration evidence"),
@@ -6900,6 +7003,28 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         if prior_tree != exceptional_recovery["prior_ready_tree_sha"]:
             raise fast_path.SecurityBlocker(
                 "exceptional recovery prior Ready tree changed"
+            )
+    if exceptional_continuation_path:
+        if eligibility_evidence_digest is None:
+            raise fast_path.SecurityBlocker(
+                "exceptional continuation requires authenticated eligibility evidence"
+            )
+        exceptional_continuation = _load_exceptional_continuation_evidence(
+            path=exceptional_continuation_path,
+            eligibility_path=eligibility_evidence,
+            repository=arguments.repo,
+            reviewed=reviewed,
+            validated_tree=tree,
+        )
+        _verify_exceptional_continuation_selection(
+            exceptional_continuation, arguments
+        )
+        prior_tree = _run_attestation_git(
+            repository_root, ["rev-parse", "HEAD^{tree}"]
+        ).stdout.strip()
+        if prior_tree != exceptional_continuation["prior_ready_tree_sha"]:
+            raise fast_path.SecurityBlocker(
+                "exceptional continuation prior Ready tree changed"
             )
     if arguments.output:
         _write_fast_report(
@@ -7019,6 +7144,36 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             raise fast_path.SecurityBlocker(
                 "exceptional recovery Ready-head authority drifted"
             )
+    if exceptional_continuation_path:
+        continuation_after = _load_exceptional_continuation_evidence(
+            path=exceptional_continuation_path,
+            eligibility_path=eligibility_evidence,
+            repository=arguments.repo,
+            reviewed=reviewed,
+            validated_tree=tree_after,
+        )
+        _verify_exceptional_continuation_selection(
+            continuation_after, arguments
+        )
+        if continuation_after != exceptional_continuation:
+            raise fast_path.SecurityBlocker(
+                "exceptional continuation evidence changed during complete validation"
+            )
+        continuation_observation = _observe_ready_integration_authority_once(
+            arguments.repo, exceptional_continuation["pull_request_number"]
+        )
+        if (
+            continuation_observation["repository"] != arguments.repo
+            or continuation_observation["pull_request_number"]
+            != exceptional_continuation["pull_request_number"]
+            or continuation_observation["state"] != "OPEN"
+            or continuation_observation["draft"] is not False
+            or continuation_observation["head_sha"]
+            != exceptional_continuation["prior_ready_head_sha"]
+        ):
+            raise fast_path.SecurityBlocker(
+                "exceptional continuation Ready-head authority drifted"
+            )
     receipt = (
         pre_enrollment.create_validation_receipt(
             evidence=pre_enrollment_evidence,
@@ -7043,6 +7198,11 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             exceptional_recovery_evidence_digest=(
                 fast_path.digest_json(exceptional_recovery)
                 if exceptional_recovery is not None
+                else None
+            ),
+            exceptional_continuation_evidence_digest=(
+                fast_path.digest_json(exceptional_continuation)
+                if exceptional_continuation is not None
                 else None
             ),
         )

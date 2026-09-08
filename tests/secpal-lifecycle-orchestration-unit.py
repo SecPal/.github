@@ -20,6 +20,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from scripts.secpal_pr_review import lifecycle_authority as authority
+from scripts.secpal_pr_review import fast_path
 from scripts.secpal_pr_review import lifecycle_orchestration as orchestration
 
 REPOSITORY = "SecPal/.github"
@@ -131,7 +132,157 @@ def fixture_authorization_verifier(value, _observed, _lifecycle):
     return item
 
 
+def continuation_inputs() -> tuple[dict[str, object], dict[str, object]]:
+    reviewed = fast_path.StableFeedbackState(
+        repository=REPOSITORY,
+        pull_request_number=PR,
+        head_sha=HEAD,
+        base_ref="main",
+        base_sha="0" * 40,
+        pr_state="OPEN",
+        feedback={
+            "pull_request_reactions": [],
+            "reviews": [],
+            "conversation_comments": [],
+            "threads": [
+                {
+                    "node_id": "PRRT_CONTINUATION_1",
+                    "is_resolved": False,
+                    "is_outdated": True,
+                    "comments": [
+                        {
+                            "node_id": "F-CONTINUATION-1",
+                            "body_digest": "1" * 64,
+                            "actor": {
+                                "login": "reviewer",
+                                "node_id": "ACTOR_1",
+                                "database_id": 1,
+                            },
+                            "reply_to_id": None,
+                            "reactions": [],
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    eligibility = {
+        "schema_version": "1.1",
+        "repository": REPOSITORY,
+        "pull_request_number": PR,
+        "reviewed_head_sha": HEAD,
+        "reviewed_state_digest": reviewed.state_digest,
+        "eligible_threads": [
+            {
+                "thread_id": "PRRT_CONTINUATION_1",
+                "classification": "VALID_ACTIONABLE",
+                "disposition": "CORRECTED_AND_VERIFIED",
+                "finding_ids": ["F-CONTINUATION-1"],
+                "evidence_digest": "4" * 64,
+                "follow_up": None,
+            }
+        ],
+    }
+    authorization = {
+        "authorization_id": "user-continuation-1",
+        "operation": "EXCEPTIONAL_CONTINUATION",
+        "reason": "Correct one exact authenticated post-Recovery finding",
+        "scope": {
+            "pull_request": PR,
+            "predecessor_head_sha": HEAD,
+            "resulting_head_sha": NEXT_HEAD,
+            "reviewed_state_digest": reviewed.state_digest,
+            "reviewed_feedback_digest": reviewed.feedback_digest,
+            "eligibility_evidence_digest": fast_path.digest_json(eligibility),
+            "finding_ids": ["F-CONTINUATION-1"],
+            "thread_ids": ["PRRT_CONTINUATION_1"],
+        },
+        "bounded_uses": 1,
+    }
+    request = {
+        "event_kind": "CONTINUATION_COMMIT_PUSHED",
+        "event_id": fixture_event_id("user-continuation-1"),
+        "pull_request": PR,
+        "head_sha": NEXT_HEAD,
+        "replacement_pull_request": None,
+        "classification": None,
+        "follow_up": None,
+        "authorization": authorization,
+        "continuation_evidence": {
+            "reviewed_state_evidence": reviewed.to_dict(),
+            "eligibility_evidence": eligibility,
+        },
+    }
+    return request, authorization
+
+
+def feedback_successor(
+    reviewed: fast_path.StableFeedbackState,
+) -> fast_path.StableFeedbackState:
+    feedback = copy.deepcopy(reviewed.feedback)
+    for thread in feedback["threads"]:
+        thread["is_outdated"] = True
+    return fast_path.StableFeedbackState(
+        repository=reviewed.repository,
+        pull_request_number=reviewed.pull_request_number,
+        head_sha=NEXT_HEAD,
+        base_ref=reviewed.base_ref,
+        base_sha=reviewed.base_sha,
+        pr_state="OPEN",
+        feedback=feedback,
+    )
+
+
 class LifecycleOrchestrationTests(TestCase):
+    def test_feedback_capture_uses_explicit_isolated_bounded_repository_root(
+        self,
+    ) -> None:
+        request, _authorization = continuation_inputs()
+        reviewed = request["continuation_evidence"]["reviewed_state_evidence"]
+
+        def run(command, **kwargs):
+            output = Path(command[command.index("--capture-reviewed-state") + 1])
+            output.write_bytes(authority.canonical_json_bytes(reviewed))
+            return SimpleNamespace(returncode=0)
+
+        with mock.patch.object(
+            orchestration.bootstrap_source_admission,
+            "_run_isolated_python",
+            side_effect=run,
+        ) as call:
+            captured = orchestration._capture_current_stable_feedback(
+                REPOSITORY, PR
+            )
+
+        command = call.call_args.args[0]
+        options = call.call_args.kwargs
+        self.assertEqual(captured.state_digest, reviewed["state_digest"])
+        self.assertIn("-I", command)
+        self.assertIn("-B", command)
+        root = str(REPO_ROOT.resolve())
+        self.assertEqual(command[command.index("--repo-root") + 1], root)
+        self.assertEqual(options["cwd"], REPO_ROOT.resolve())
+        self.assertEqual(options["timeout"], 60)
+        self.assertNotIn("PYTHONPATH", options["env"])
+        self.assertNotIn("PYTHONHOME", options["env"])
+
+        with (
+            mock.patch.object(
+                orchestration.bootstrap_source_admission,
+                "_run_isolated_python",
+                side_effect=(
+                    orchestration.bootstrap_source_admission.BootstrapSourceAdmissionError(
+                        "isolated feedback process timed out"
+                    )
+                ),
+            ),
+            self.assertRaisesRegex(
+                orchestration.LifecycleOrchestrationError,
+                "could not be authenticated",
+            ),
+        ):
+            orchestration._capture_current_stable_feedback(REPOSITORY, PR)
+
     def test_signed_user_authorization_binds_exact_current_publication(self) -> None:
         lifecycle = current_lifecycle()
         observed = current_reader(lifecycle)(REPOSITORY, ISSUE)
@@ -328,6 +479,262 @@ class LifecycleOrchestrationTests(TestCase):
         self.assertTrue(decision.requires_fresh_head_evidence)
         self.assertEqual(decision.unrestricted_reviews, 1)
         self.assertEqual(decision.remediation_cycles, 2)
+
+    def test_exhausted_ready_recovery_can_select_one_authenticated_continuation(
+        self,
+    ) -> None:
+        lifecycle = current_lifecycle(exceptional_recoveries=1)
+        reviewed = fast_path.StableFeedbackState(
+            repository=REPOSITORY,
+            pull_request_number=PR,
+            head_sha=HEAD,
+            base_ref="main",
+            base_sha="0" * 40,
+            pr_state="OPEN",
+            feedback={
+                "pull_request_reactions": [],
+                "reviews": [],
+                "conversation_comments": [],
+                "threads": [
+                    {
+                        "node_id": "PRRT_CONTINUATION_1",
+                        "is_resolved": False,
+                        "is_outdated": True,
+                        "comments": [
+                            {
+                                "node_id": "F-CONTINUATION-1",
+                                "body_digest": "1" * 64,
+                                "actor": {
+                                    "login": "reviewer",
+                                    "node_id": "ACTOR_1",
+                                    "database_id": 1,
+                                },
+                                "reply_to_id": None,
+                                "reactions": [],
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+        finding_ids = ["F-CONTINUATION-1"]
+        thread_ids = ["PRRT_CONTINUATION_1"]
+        eligibility = {
+            "schema_version": "1.1",
+            "repository": REPOSITORY,
+            "pull_request_number": PR,
+            "reviewed_head_sha": HEAD,
+            "reviewed_state_digest": reviewed.state_digest,
+            "eligible_threads": [
+                {
+                    "thread_id": thread_ids[0],
+                    "classification": "VALID_ACTIONABLE",
+                    "disposition": "CORRECTED_AND_VERIFIED",
+                    "finding_ids": finding_ids,
+                    "evidence_digest": "4" * 64,
+                    "follow_up": None,
+                }
+            ],
+        }
+        authorization_digest = "6" * 64
+        decision = orchestration._orchestrate_event(
+            REPOSITORY,
+            ISSUE,
+            {
+                "event_kind": "CONTINUATION_COMMIT_PUSHED",
+                "event_id": f"authorization:{authorization_digest}",
+                "pull_request": PR,
+                "head_sha": NEXT_HEAD,
+                "replacement_pull_request": None,
+                "classification": None,
+                "follow_up": None,
+                "authorization": json.dumps({"signed": "fixture"}),
+                "continuation_evidence": {
+                    "reviewed_state_evidence": reviewed.to_dict(),
+                    "eligibility_evidence": eligibility,
+                },
+            },
+            current_reader=current_reader(lifecycle),
+            feedback_reader=lambda _repository, _pull_request: feedback_successor(
+                reviewed
+            ),
+            authorization_verifier=lambda *_args, **_kwargs: {
+                "authorization_id": "user-continuation-1",
+                "operation": "EXCEPTIONAL_CONTINUATION",
+                "reason": "Correct one exact authenticated post-Recovery finding",
+                "scope": {
+                    "pull_request": PR,
+                    "predecessor_head_sha": HEAD,
+                    "resulting_head_sha": NEXT_HEAD,
+                    "reviewed_state_digest": reviewed.state_digest,
+                    "reviewed_feedback_digest": reviewed.feedback_digest,
+                    "eligibility_evidence_digest": fast_path.digest_json(eligibility),
+                    "finding_ids": finding_ids,
+                    "thread_ids": thread_ids,
+                },
+                "bounded_uses": 1,
+                "authorization_digest": authorization_digest,
+            },
+        )
+
+        self.assertEqual(decision.lifecycle_transition, "EXCEPTIONAL_CONTINUATION")
+        self.assertEqual(decision.exceptional_recoveries, 1)
+        self.assertEqual(decision.exceptional_continuations, 0)
+        self.assertEqual(decision.resulting_head_sha, NEXT_HEAD)
+        self.assertTrue(decision.preserve_ready)
+        self.assertFalse(decision.request_review)
+        self.assertFalse(decision.transition_to_draft)
+        self.assertFalse(decision.transition_to_ready)
+
+    def test_continuation_event_fails_closed_for_state_identity_and_finding_drift(
+        self,
+    ) -> None:
+        def reject(
+            request: dict[str, object],
+            lifecycle: authority.VerifiedLifecycleAuthority,
+            reviewed: fast_path.StableFeedbackState,
+        ) -> None:
+            with self.assertRaises(orchestration.LifecycleOrchestrationError):
+                orchestration._orchestrate_event(
+                    REPOSITORY,
+                    ISSUE,
+                    request,
+                    current_reader=current_reader(lifecycle),
+                    feedback_reader=lambda _repository, _pull_request: reviewed,
+                    authorization_verifier=fixture_authorization_verifier,
+                )
+
+        for label in (
+            "recovery_zero",
+            "recovery_over_limit",
+            "continuation_used",
+            "review_unexhausted",
+            "remediation_unexhausted",
+            "remediation_over_limit",
+            "draft",
+            "same_head",
+            "candidate_not_pushed",
+            "conflicting_pr_head",
+            "wrong_result_authorization",
+            "wrong_predecessor_authorization",
+            "wrong_pr",
+            "bounded_uses",
+            "empty_findings",
+            "invented_finding",
+            "coordinated_invented_finding",
+            "fully_coordinated_invention",
+            "cross_head_feedback",
+            "non_material_finding",
+            "unrelated_thread",
+        ):
+            with self.subTest(label=label):
+                request, authorization = continuation_inputs()
+                predecessor_reviewed = fast_path.verify_reviewed_state_evidence(
+                    request["continuation_evidence"]["reviewed_state_evidence"]
+                )
+                live_reviewed = (
+                    predecessor_reviewed
+                    if label == "candidate_not_pushed"
+                    else feedback_successor(predecessor_reviewed)
+                )
+                if label == "conflicting_pr_head":
+                    live_reviewed.head_sha = "7" * 40
+                    live_reviewed.refresh_digests()
+                lifecycle = current_lifecycle(exceptional_recoveries=1)
+                if label == "recovery_zero":
+                    lifecycle = current_lifecycle(exceptional_recoveries=0)
+                elif label == "recovery_over_limit":
+                    lifecycle.state["exceptional_recovery_count"] = 2
+                elif label == "continuation_used":
+                    lifecycle = current_lifecycle(
+                        exceptional_recoveries=1, exceptional_continuations=1
+                    )
+                elif label == "review_unexhausted":
+                    lifecycle.state["unrestricted_review_count"] = 0
+                elif label == "remediation_unexhausted":
+                    lifecycle.state["remediation_cycle_count"] = 1
+                elif label == "remediation_over_limit":
+                    lifecycle.state["remediation_cycle_count"] = 3
+                elif label == "draft":
+                    lifecycle = current_lifecycle(
+                        ready=False, ready_regressed=True, exceptional_recoveries=1
+                    )
+                elif label == "same_head":
+                    request["head_sha"] = HEAD
+                elif label == "wrong_result_authorization":
+                    authorization["scope"]["resulting_head_sha"] = "7" * 40
+                elif label == "wrong_predecessor_authorization":
+                    authorization["scope"]["predecessor_head_sha"] = "7" * 40
+                elif label == "wrong_pr":
+                    request["pull_request"] = PR + 1
+                elif label == "bounded_uses":
+                    authorization["bounded_uses"] = 2
+                elif label == "empty_findings":
+                    request["continuation_evidence"]["eligibility_evidence"][
+                        "eligible_threads"
+                    ] = []
+                elif label == "invented_finding":
+                    authorization["scope"]["finding_ids"] = ["F-INVENTED"]
+                elif label == "coordinated_invented_finding":
+                    eligibility = request["continuation_evidence"][
+                        "eligibility_evidence"
+                    ]
+                    eligibility["eligible_threads"][0]["finding_ids"] = [
+                        "F-INVENTED"
+                    ]
+                    authorization["scope"]["finding_ids"] = ["F-INVENTED"]
+                    authorization["scope"][
+                        "eligibility_evidence_digest"
+                    ] = fast_path.digest_json(eligibility)
+                elif label == "fully_coordinated_invention":
+                    payload = request["continuation_evidence"][
+                        "reviewed_state_evidence"
+                    ]
+                    payload["threads"][0]["comments"][0][
+                        "node_id"
+                    ] = "F-INVENTED"
+                    invented_reviewed = fast_path.StableFeedbackState.from_payload(
+                        payload
+                    )
+                    request["continuation_evidence"][
+                        "reviewed_state_evidence"
+                    ] = invented_reviewed.to_dict()
+                    eligibility = request["continuation_evidence"][
+                        "eligibility_evidence"
+                    ]
+                    eligibility["reviewed_state_digest"] = (
+                        invented_reviewed.state_digest
+                    )
+                    eligibility["eligible_threads"][0]["finding_ids"] = [
+                        "F-INVENTED"
+                    ]
+                    authorization["scope"].update(
+                        reviewed_state_digest=invented_reviewed.state_digest,
+                        reviewed_feedback_digest=invented_reviewed.feedback_digest,
+                        eligibility_evidence_digest=fast_path.digest_json(
+                            eligibility
+                        ),
+                        finding_ids=["F-INVENTED"],
+                    )
+                elif label == "cross_head_feedback":
+                    payload = request["continuation_evidence"][
+                        "reviewed_state_evidence"
+                    ]
+                    payload["head_sha"] = "7" * 40
+                    changed = fast_path.StableFeedbackState.from_payload(payload)
+                    request["continuation_evidence"][
+                        "reviewed_state_evidence"
+                    ] = changed.to_dict()
+                elif label == "non_material_finding":
+                    request["continuation_evidence"]["eligibility_evidence"][
+                        "eligible_threads"
+                    ][0]["classification"] = "INFORMATIONAL"
+                    request["continuation_evidence"]["eligibility_evidence"][
+                        "eligible_threads"
+                    ][0]["disposition"] = "NON_ACTIONABLE"
+                elif label == "unrelated_thread":
+                    authorization["scope"]["thread_ids"] = ["PRRT_UNRELATED"]
+                reject(request, lifecycle, live_reviewed)
 
     def test_bounded_normal_remediation_changes_ready_head_in_place(self) -> None:
         lifecycle = current_lifecycle(remediation_cycles=1)
