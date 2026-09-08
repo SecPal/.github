@@ -1017,7 +1017,14 @@ ordinary receipt/final attestation bind the artifact. The published historical
 transition and signed orchestration authorization bind the resulting head
 without introducing a circular commit hash. Recovery and Continuation artifacts
 are distinct, mutually exclusive receipt modes and cannot authenticate each
-other.
+other. Resulting-head feedback may differ only when a closed
+Continuation-specific safety extension preserves every predecessor source,
+authenticates the canonical provider request/result/review transport, and gives
+every other successor-only source a complete maintained non-blocking
+classification. Material, unclassified, unrelated, spoofed, stale, or ambiguous
+growth blocks. Successor safety does not enter the earlier source-correction
+authorization or resolver scope, and its verification performs no provider
+request.
 
 The simple resolver first verifies the caller-captured reviewed-state digest,
 successful validation attestation, actual local signed commit, and exact

@@ -520,7 +520,14 @@ selects `REMEDIATION_COMPLETED`; both preserve Ready. Once Recovery is consumed,
 canonical stable feedback and eligibility before a signed exact-scope
 authorization may select `EXCEPTIONAL_CONTINUATION`. It preserves Ready and all
 finite history, consumes only the existing Continuation count, and requests no
-review. Explicit
+review. When exact-resulting-head provider acquisition grows Stable Feedback,
+the optional closed successor-safety extension binds both state digests,
+preserves every predecessor source, and accounts for every addition as either
+canonical head-bound provider transport or a source-complete maintained safe
+classification. Missing, ambiguous, spoofed, wrong-head, material, or
+unclassified additions fail closed. The extension proves only candidate safety:
+it does not expand the authorized source-change finding set or request
+providers. Explicit
 Ready/Draft changes require their exact separately reasoned authorization.
 Every user-controlled orchestration decision consumes canonical signed evidence
 bound to the exact CURRENT publication, authority, PR, head, operation, reason,

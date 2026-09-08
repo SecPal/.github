@@ -46,6 +46,9 @@ CONTINUATION_REQUEST_FIELDS = REQUEST_FIELDS | {"continuation_evidence"}
 CONTINUATION_EVIDENCE_FIELDS = frozenset(
     {"reviewed_state_evidence", "eligibility_evidence"}
 )
+CONTINUATION_SUCCESSOR_EVIDENCE_FIELDS = CONTINUATION_EVIDENCE_FIELDS | {
+    "successor_safety_evidence"
+}
 AUTHORIZATION_FIELDS = frozenset(
     {
         "schema_version",
@@ -295,9 +298,18 @@ def _verify_continuation_finding_authority(
 ) -> VerifiedContinuationFindingAuthority:
     """Derive a finite material finding set from maintained feedback evidence."""
 
-    item = _closed_mapping(
-        value, CONTINUATION_EVIDENCE_FIELDS, "continuation finding evidence"
-    )
+    if (
+        not isinstance(value, Mapping)
+        or set(value)
+        not in {
+            CONTINUATION_EVIDENCE_FIELDS,
+            CONTINUATION_SUCCESSOR_EVIDENCE_FIELDS,
+        }
+    ):
+        raise LifecycleOrchestrationError(
+            "continuation finding evidence contains unknown or missing fields"
+        )
+    item = copy.deepcopy(dict(value))
     try:
         reviewed = fast_path.verify_reviewed_state_evidence(
             item["reviewed_state_evidence"]
@@ -316,6 +328,7 @@ def _verify_continuation_finding_authority(
             current,
             resulting_head_sha=resulting_head_sha,
             authorized_thread_ids=thread_ids,
+            successor_safety_evidence=item.get("successor_safety_evidence"),
         )
     except fast_path.SecurityBlocker as exc:
         raise LifecycleOrchestrationError(

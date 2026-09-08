@@ -233,6 +233,239 @@ def feedback_successor(
     )
 
 
+def authenticated_provider_growth() -> tuple[
+    fast_path.StableFeedbackState,
+    fast_path.StableFeedbackState,
+    dict[str, object],
+]:
+    provider = {
+        "login": "chatgpt-codex-connector",
+        "node_id": "BOT_CODEX",
+        "database_id": 199175422,
+    }
+    requester = {
+        "login": "delivery-user",
+        "node_id": "USER_DELIVERY",
+        "database_id": 7,
+    }
+    reviewer = {
+        "login": "reviewer",
+        "node_id": "USER_REVIEWER",
+        "database_id": 8,
+    }
+    code_quality = {
+        "login": "github-code-quality",
+        "node_id": "BOT_CODE_QUALITY",
+        "database_id": 223894421,
+    }
+    predecessor = fast_path.StableFeedbackState(
+        repository=REPOSITORY,
+        pull_request_number=PR,
+        head_sha=HEAD,
+        base_ref="main",
+        base_sha="0" * 40,
+        pr_state="OPEN",
+        feedback={
+            "pull_request_reactions": [],
+            "reviews": [
+                {
+                    "node_id": "PRR_PREDECESSOR",
+                    "body_digest": "1" * 64,
+                    "actor": reviewer,
+                    "state": "COMMENTED",
+                    "commit_oid": HEAD,
+                    "reactions": [],
+                }
+            ],
+            "conversation_comments": [
+                {
+                    "node_id": "IC_CODEX_SUMMARY",
+                    "body_digest": "2" * 64,
+                    "actor": provider,
+                    "updated_at": "2026-09-08T20:00:00Z",
+                    "reactions": [],
+                }
+            ],
+            "threads": [
+                {
+                    "node_id": "PRRT_CONTINUATION_1",
+                    "is_resolved": False,
+                    "is_outdated": False,
+                    "comments": [
+                        {
+                            "node_id": "F-CONTINUATION-1",
+                            "body_digest": "3" * 64,
+                            "actor": reviewer,
+                            "reply_to_id": None,
+                            "reactions": [
+                                {
+                                    "mutation_id": "REACTION_PREDECESSOR",
+                                    "content": "THUMBS_UP",
+                                    "actor": requester,
+                                }
+                            ],
+                        },
+                        {
+                            "node_id": "PRRC_PREDECESSOR_REPLY",
+                            "body_digest": "4" * 64,
+                            "actor": requester,
+                            "reply_to_id": "F-CONTINUATION-1",
+                            "reactions": [],
+                        },
+                    ],
+                }
+            ],
+        },
+    )
+    summary = (
+        "<!-- codex-pull-request-review-summary -->\n"
+        '<!-- codex-security-review:v1 '
+        f'{{"headSha":"{NEXT_HEAD}","status":"completed"}} -->\n'
+        "| Review | Status | Commit | Review trigger |\n"
+        "| --- | --- | --- | --- |\n"
+        "| **Code Review** | **Completed** | head | manual |\n"
+        "| **Security Review** | **Completed** | head | manual |"
+    )
+    current_feedback = copy.deepcopy(predecessor.feedback)
+    current_feedback["pull_request_reactions"].append(
+        {
+            "mutation_id": "REACTION_CODEX_COMPLETE",
+            "content": "THUMBS_UP",
+            "actor": provider,
+        }
+    )
+    current_feedback["conversation_comments"][0].update(
+        body_digest=fast_path.digest_text(summary),
+        updated_at="2026-09-08T22:00:00Z",
+    )
+    bodies = {
+        "IC_CODE_REQUEST": "@codex review",
+        "IC_SECURITY_REQUEST": "@codex security review",
+        "IC_CODE_RESULT": (
+            "Codex Review: Didn't find any major issues.\n\n"
+            f"**Reviewed commit:** `{NEXT_HEAD[:10]}`"
+        ),
+        "IC_SECURITY_RESULT": (
+            "### 🛡️ Codex Security Review\n\n"
+            "No security issues were found in this pull request.\n\n"
+            f"**Reviewed commit:** `{NEXT_HEAD[:10]}`"
+        ),
+    }
+    for node_id, body in bodies.items():
+        current_feedback["conversation_comments"].append(
+            {
+                "node_id": node_id,
+                "body_digest": fast_path.digest_text(body),
+                "actor": requester if "REQUEST" in node_id else provider,
+                "updated_at": None,
+                "reactions": [],
+            }
+        )
+    current_feedback["reviews"].append(
+        {
+            "node_id": "PRR_RESULTING_HEAD",
+            "body_digest": fast_path.digest_text(""),
+            "actor": code_quality,
+            "state": "COMMENTED",
+            "commit_oid": NEXT_HEAD,
+            "reactions": [],
+        }
+    )
+    current_feedback["threads"].append(
+        {
+            "node_id": "PRRT_RESULTING_HEAD",
+            "is_resolved": False,
+            "is_outdated": False,
+            "comments": [
+                {
+                    "node_id": "PRRC_RESULTING_HEAD",
+                    "body_digest": "a" * 64,
+                    "actor": code_quality,
+                    "reply_to_id": None,
+                    "reactions": [],
+                }
+            ],
+        }
+    )
+    current = fast_path.StableFeedbackState(
+        repository=REPOSITORY,
+        pull_request_number=PR,
+        head_sha=NEXT_HEAD,
+        base_ref=predecessor.base_ref,
+        base_sha=predecessor.base_sha,
+        pr_state="OPEN",
+        feedback=current_feedback,
+    )
+    transport = [
+        ("CODEX_SUMMARY_UPDATE", "IC_CODEX_SUMMARY", summary),
+        ("CODEX_REVIEW_REQUEST", "IC_CODE_REQUEST", bodies["IC_CODE_REQUEST"]),
+        (
+            "CODEX_SECURITY_REVIEW_REQUEST",
+            "IC_SECURITY_REQUEST",
+            bodies["IC_SECURITY_REQUEST"],
+        ),
+        (
+            "CODEX_CODE_REVIEW_RESULT",
+            "IC_CODE_RESULT",
+            bodies["IC_CODE_RESULT"],
+        ),
+        (
+            "CODEX_SECURITY_REVIEW_RESULT",
+            "IC_SECURITY_RESULT",
+            bodies["IC_SECURITY_RESULT"],
+        ),
+    ]
+    evidence: dict[str, object] = {
+        "schema_version": "1.0",
+        "repository": REPOSITORY,
+        "pull_request_number": PR,
+        "predecessor_state_digest": predecessor.state_digest,
+        "resulting_head_sha": NEXT_HEAD,
+        "resulting_state_digest": current.state_digest,
+        "provider_transport": [
+            {
+                "role": role,
+                "kind": "CONVERSATION_COMMENT",
+                "node_id": node_id,
+                "body": body,
+            }
+            for role, node_id, body in transport
+        ]
+        + [
+            {
+                "role": "CODEX_COMPLETION_REACTION",
+                "kind": "PULL_REQUEST_REACTION",
+                "node_id": "REACTION_CODEX_COMPLETE",
+                "body": None,
+            },
+            {
+                "role": "GITHUB_CODE_QUALITY_REVIEW",
+                "kind": "REVIEW",
+                "node_id": "PRR_RESULTING_HEAD",
+                "body": None,
+            }
+        ],
+        "successor_findings": [
+            {
+                "finding_id": "PRRC_RESULTING_HEAD",
+                "thread_id": "PRRT_RESULTING_HEAD",
+                "sources": [
+                    {
+                        "kind": "THREAD_COMMENT",
+                        "node_id": "PRRC_RESULTING_HEAD",
+                        "digest": "a" * 64,
+                    }
+                ],
+                "classification": "INVALID_FALSE_OR_MISLEADING",
+                "disposition": "DISPROVEN_WITH_EVIDENCE",
+                "technically_blocking": False,
+                "evidence_digest": "b" * 64,
+            }
+        ],
+    }
+    return predecessor, current, evidence
+
+
 class LifecycleOrchestrationTests(TestCase):
     def test_feedback_capture_uses_explicit_isolated_bounded_repository_root(
         self,
@@ -585,6 +818,351 @@ class LifecycleOrchestrationTests(TestCase):
         self.assertFalse(decision.request_review)
         self.assertFalse(decision.transition_to_draft)
         self.assertFalse(decision.transition_to_ready)
+
+    def test_continuation_successor_accepts_authenticated_provider_growth(
+        self,
+    ) -> None:
+        request, _authorization = continuation_inputs()
+        reviewed = fast_path.verify_reviewed_state_evidence(
+            request["continuation_evidence"]["reviewed_state_evidence"]
+        )
+        provider = {
+            "login": "chatgpt-codex-connector",
+            "node_id": "BOT_CODEX",
+            "database_id": 199175422,
+        }
+        requester = {
+            "login": "delivery-user",
+            "node_id": "USER_DELIVERY",
+            "database_id": 7,
+        }
+        code_quality = {
+            "login": "github-code-quality",
+            "node_id": "BOT_CODE_QUALITY",
+            "database_id": 223894421,
+        }
+        reviewed.feedback["conversation_comments"].append(
+            {
+                "node_id": "IC_CODEX_SUMMARY",
+                "body_digest": "4" * 64,
+                "actor": provider,
+                "updated_at": "2026-09-08T20:00:00Z",
+                "reactions": [],
+            }
+        )
+        reviewed.refresh_digests()
+        current_feedback = copy.deepcopy(reviewed.feedback)
+        current_feedback["reviews"].append(
+            {
+                "node_id": "PRR_RESULTING_HEAD",
+                "body_digest": fast_path.digest_text(""),
+                "actor": code_quality,
+                "state": "COMMENTED",
+                "commit_oid": NEXT_HEAD,
+                "reactions": [],
+            }
+        )
+        summary = (
+            "<!-- codex-pull-request-review-summary -->\n"
+            '<!-- codex-security-review:v1 '
+            f'{{"headSha":"{NEXT_HEAD}","status":"completed"}} -->\n'
+            "| Review | Status | Commit | Review trigger |\n"
+            "| --- | --- | --- | --- |\n"
+            "| **Code Review** | **Completed** | head | manual |\n"
+            "| **Security Review** | **Completed** | head | manual |"
+        )
+        current_feedback["conversation_comments"][0].update(
+            body_digest=fast_path.digest_text(summary),
+            updated_at="2026-09-08T22:00:00Z",
+        )
+        transport_comments = (
+            ("IC_CODE_REQUEST", "@codex review", requester),
+            ("IC_SECURITY_REQUEST", "@codex security review", requester),
+            (
+                "IC_CODE_RESULT",
+                "Codex Review: Didn't find any major issues.\n\n"
+                f"**Reviewed commit:** `{NEXT_HEAD[:10]}`",
+                provider,
+            ),
+            (
+                "IC_SECURITY_RESULT",
+                "### 🛡️ Codex Security Review\n\n"
+                "No security issues were found in this pull request.\n\n"
+                f"**Reviewed commit:** `{NEXT_HEAD[:10]}`",
+                provider,
+            ),
+        )
+        for node_id, body, actor in transport_comments:
+            current_feedback["conversation_comments"].append(
+                {
+                    "node_id": node_id,
+                    "body_digest": fast_path.digest_text(body),
+                    "actor": actor,
+                    "updated_at": None,
+                    "reactions": [],
+                }
+            )
+        current_feedback["threads"].append(
+            {
+                "node_id": "PRRT_RESULTING_HEAD",
+                "is_resolved": False,
+                "is_outdated": False,
+                "comments": [
+                    {
+                        "node_id": "PRRC_RESULTING_HEAD",
+                        "body_digest": "a" * 64,
+                        "actor": code_quality,
+                        "reply_to_id": None,
+                        "reactions": [],
+                    }
+                ],
+            }
+        )
+        current = fast_path.StableFeedbackState(
+            repository=reviewed.repository,
+            pull_request_number=reviewed.pull_request_number,
+            head_sha=NEXT_HEAD,
+            base_ref=reviewed.base_ref,
+            base_sha=reviewed.base_sha,
+            pr_state="OPEN",
+            feedback=current_feedback,
+        )
+
+        fast_path.verify_stable_feedback_successor(
+            reviewed,
+            current,
+            resulting_head_sha=NEXT_HEAD,
+            authorized_thread_ids=["PRRT_CONTINUATION_1"],
+            successor_safety_evidence={
+                "schema_version": "1.0",
+                "repository": REPOSITORY,
+                "pull_request_number": PR,
+                "predecessor_state_digest": reviewed.state_digest,
+                "resulting_head_sha": NEXT_HEAD,
+                "resulting_state_digest": current.state_digest,
+                "provider_transport": [
+                    {
+                        "role": "CODEX_SUMMARY_UPDATE",
+                        "kind": "CONVERSATION_COMMENT",
+                        "node_id": "IC_CODEX_SUMMARY",
+                        "body": summary,
+                    },
+                    {
+                        "role": "CODEX_REVIEW_REQUEST",
+                        "kind": "CONVERSATION_COMMENT",
+                        "node_id": "IC_CODE_REQUEST",
+                        "body": "@codex review",
+                    },
+                    {
+                        "role": "CODEX_SECURITY_REVIEW_REQUEST",
+                        "kind": "CONVERSATION_COMMENT",
+                        "node_id": "IC_SECURITY_REQUEST",
+                        "body": "@codex security review",
+                    },
+                    {
+                        "role": "CODEX_CODE_REVIEW_RESULT",
+                        "kind": "CONVERSATION_COMMENT",
+                        "node_id": "IC_CODE_RESULT",
+                        "body": "Codex Review: Didn't find any major issues.\n\n"
+                        f"**Reviewed commit:** `{NEXT_HEAD[:10]}`",
+                    },
+                    {
+                        "role": "CODEX_SECURITY_REVIEW_RESULT",
+                        "kind": "CONVERSATION_COMMENT",
+                        "node_id": "IC_SECURITY_RESULT",
+                        "body": "### 🛡️ Codex Security Review\n\n"
+                        "No security issues were found in this pull request.\n\n"
+                        f"**Reviewed commit:** `{NEXT_HEAD[:10]}`",
+                    },
+                    {
+                        "role": "GITHUB_CODE_QUALITY_REVIEW",
+                        "kind": "REVIEW",
+                        "node_id": "PRR_RESULTING_HEAD",
+                        "body": None,
+                    },
+                ],
+                "successor_findings": [
+                    {
+                        "finding_id": "PRRC_RESULTING_HEAD",
+                        "thread_id": "PRRT_RESULTING_HEAD",
+                        "sources": [
+                            {
+                                "kind": "THREAD_COMMENT",
+                                "node_id": "PRRC_RESULTING_HEAD",
+                                "digest": "a" * 64,
+                            }
+                        ],
+                        "classification": "INVALID_FALSE_OR_MISLEADING",
+                        "disposition": "DISPROVEN_WITH_EVIDENCE",
+                        "technically_blocking": False,
+                        "evidence_digest": "b" * 64,
+                    }
+                ],
+            },
+        )
+
+    def test_continuation_provider_growth_reaches_orchestration_without_scope_expansion(
+        self,
+    ) -> None:
+        reviewed, current, successor = authenticated_provider_growth()
+        request, authorization = continuation_inputs()
+        request["continuation_evidence"]["reviewed_state_evidence"] = (
+            reviewed.to_dict()
+        )
+        eligibility = request["continuation_evidence"]["eligibility_evidence"]
+        eligibility["reviewed_state_digest"] = reviewed.state_digest
+        authorization["scope"].update(
+            reviewed_state_digest=reviewed.state_digest,
+            reviewed_feedback_digest=reviewed.feedback_digest,
+            eligibility_evidence_digest=fast_path.digest_json(eligibility),
+        )
+        request["continuation_evidence"]["successor_safety_evidence"] = successor
+
+        decision = orchestration._orchestrate_event(
+            REPOSITORY,
+            ISSUE,
+            request,
+            current_reader=current_reader(
+                current_lifecycle(exceptional_recoveries=1)
+            ),
+            feedback_reader=lambda _repository, _pull_request: current,
+            authorization_verifier=fixture_authorization_verifier,
+        )
+
+        self.assertEqual(decision.lifecycle_transition, "EXCEPTIONAL_CONTINUATION")
+        self.assertFalse(decision.request_review)
+        self.assertEqual(
+            authorization["scope"]["finding_ids"], ["F-CONTINUATION-1"]
+        )
+        self.assertNotIn("PRRC_RESULTING_HEAD", authorization["scope"]["finding_ids"])
+
+    def test_continuation_successor_growth_fails_closed_for_tampering_and_laundering(
+        self,
+    ) -> None:
+        def reject(label: str, mutate) -> None:
+            reviewed, current, evidence = authenticated_provider_growth()
+            mutate(reviewed, current, evidence)
+            reviewed.refresh_digests()
+            current.refresh_digests()
+            evidence["predecessor_state_digest"] = reviewed.state_digest
+            evidence["resulting_state_digest"] = current.state_digest
+            with self.subTest(label=label), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                fast_path.verify_stable_feedback_successor(
+                    reviewed,
+                    current,
+                    resulting_head_sha=NEXT_HEAD,
+                    authorized_thread_ids=["PRRT_CONTINUATION_1"],
+                    successor_safety_evidence=evidence,
+                )
+
+        def predecessor_thread_removed(_reviewed, current, _evidence):
+            current.feedback["threads"] = current.feedback["threads"][1:]
+
+        def predecessor_comment_changed(_reviewed, current, _evidence):
+            current.feedback["threads"][0]["comments"][0]["body_digest"] = "f" * 64
+
+        def predecessor_reply_removed(_reviewed, current, _evidence):
+            current.feedback["threads"][0]["comments"] = current.feedback["threads"][0][
+                "comments"
+            ][:1]
+
+        def predecessor_reaction_changed(_reviewed, current, _evidence):
+            current.feedback["threads"][0]["comments"][0]["reactions"][0][
+                "content"
+            ] = "THUMBS_DOWN"
+
+        def predecessor_review_substituted(_reviewed, current, _evidence):
+            current.feedback["reviews"][0]["node_id"] = "PRR_EQUAL_LOOKING_REPLACEMENT"
+
+        def predecessor_source_replaced(_reviewed, current, _evidence):
+            current.feedback["threads"][0]["node_id"] = "PRRT_EQUAL_LOOKING_REPLACEMENT"
+
+        def cross_head(_reviewed, current, evidence):
+            current.head_sha = "7" * 40
+            evidence["resulting_head_sha"] = current.head_sha
+
+        def cross_pr(_reviewed, current, evidence):
+            current.pull_request_number = PR + 1
+            evidence["pull_request_number"] = current.pull_request_number
+
+        def wrong_head_provider(_reviewed, current, _evidence):
+            current.feedback["reviews"][-1]["commit_oid"] = "7" * 40
+
+        def replace_summary(current, evidence, body):
+            current.feedback["conversation_comments"][0]["body_digest"] = (
+                fast_path.digest_text(body)
+            )
+            for transport in evidence["provider_transport"]:
+                if transport["role"] == "CODEX_SUMMARY_UPDATE":
+                    transport["body"] = body
+
+        def malformed_summary(_reviewed, current, evidence):
+            replace_summary(current, evidence, "malformed provider summary")
+
+        def nonterminal_summary(_reviewed, current, evidence):
+            body = evidence["provider_transport"][0]["body"].replace(
+                '"status":"completed"', '"status":"running"'
+            )
+            replace_summary(current, evidence, body)
+
+        def duplicate_provider(_reviewed, _current, evidence):
+            evidence["provider_transport"].append(
+                copy.deepcopy(evidence["provider_transport"][1])
+            )
+
+        def user_masquerades_as_provider(_reviewed, current, _evidence):
+            next(
+                item
+                for item in current.feedback["conversation_comments"]
+                if item["node_id"] == "IC_CODE_RESULT"
+            )["actor"] = {
+                    "login": "delivery-user",
+                    "node_id": "USER_DELIVERY",
+                    "database_id": 7,
+                }
+
+        def unclassified_provider_finding(_reviewed, _current, evidence):
+            evidence["successor_findings"] = []
+
+        def material_provider_finding(_reviewed, _current, evidence):
+            evidence["successor_findings"][0]["technically_blocking"] = True
+
+        def unrelated_concurrent_comment(_reviewed, current, _evidence):
+            current.feedback["conversation_comments"].append(
+                {
+                    "node_id": "IC_UNRELATED",
+                    "body_digest": "e" * 64,
+                    "actor": {
+                        "login": "unrelated-user",
+                        "node_id": "USER_UNRELATED",
+                        "database_id": 9,
+                    },
+                    "updated_at": None,
+                    "reactions": [],
+                }
+            )
+
+        for label, mutate in (
+            ("predecessor thread removed", predecessor_thread_removed),
+            ("predecessor comment body changed", predecessor_comment_changed),
+            ("predecessor reply removed", predecessor_reply_removed),
+            ("predecessor reaction changed", predecessor_reaction_changed),
+            ("predecessor review substituted", predecessor_review_substituted),
+            ("equal-looking predecessor replacement", predecessor_source_replaced),
+            ("cross-head predecessor replay", cross_head),
+            ("cross-PR predecessor replay", cross_pr),
+            ("wrong-head provider review", wrong_head_provider),
+            ("malformed provider summary", malformed_summary),
+            ("nonterminal provider state", nonterminal_summary),
+            ("duplicate provider evidence", duplicate_provider),
+            ("user transport masquerade", user_masquerades_as_provider),
+            ("unclassified provider finding", unclassified_provider_finding),
+            ("material provider finding", material_provider_finding),
+            ("unrelated concurrent feedback", unrelated_concurrent_comment),
+        ):
+            reject(label, mutate)
 
     def test_continuation_event_fails_closed_for_state_identity_and_finding_drift(
         self,

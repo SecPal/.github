@@ -1822,22 +1822,6 @@ def _validate_action_command(arguments: list[str]) -> None:
             raise MutationBlocked("inline reply arguments are not exactly allowlisted")
 
 
-_CODEX_REVIEW_SUMMARY_MARKER = "<!-- codex-pull-request-review-summary -->"
-_CODEX_REVIEW_STATUS = re.compile(
-    r"<!--\s*codex-security-review:v1\s+(\{.*?\})\s*-->",
-    re.DOTALL,
-)
-_CODEX_CANONICAL_COMPLETED_STATUS = re.compile(
-    r'✅ \*\*Completed\*\* <relative-time datetime="'
-    r'(?P<datetime>[0-9]{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])'
-    r'|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-9]))'
-    r'T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]'
-    r'(?:\.[0-9]{1,6})?Z)">(?P=datetime)</relative-time>'
-)
-_CODEX_REVIEW_LABELS = {
-    "Code Review": frozenset({"**Code Review**", "📝 **Code Review**"}),
-    "Security Review": frozenset({"**Security Review**", "🔒 **Security Review**"}),
-}
 _COPILOT_REVIEWER_LOGINS = frozenset(
     {"copilot-pull-request-reviewer", "github-copilot"}
 )
@@ -1847,23 +1831,6 @@ def _normalized_reviewer_login(value: Any) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
     return re.sub(r"\[bot\]$", "", value.strip().lower())
-
-
-def _is_codex_completed_status(value: str) -> bool:
-    if value == "**Completed**":
-        return True
-    match = _CODEX_CANONICAL_COMPLETED_STATUS.fullmatch(value)
-    if match is None:
-        return False
-    timestamp = match.group("datetime")
-    year = int(timestamp[:4])
-    if year == 0:
-        return False
-    if timestamp[5:10] == "02-29" and not (
-        year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
-    ):
-        return False
-    return True
 
 
 def _require_review_providers_terminal(pull_request: dict[str, Any]) -> None:
@@ -1876,7 +1843,7 @@ def _require_review_providers_terminal(pull_request: dict[str, Any]) -> None:
     summary_comments = [
         item
         for item in comments
-        if _CODEX_REVIEW_SUMMARY_MARKER in str(item.get("body") or "")
+        if fast_path.CODEX_REVIEW_SUMMARY_MARKER in str(item.get("body") or "")
     ]
     if len(summary_comments) > 1:
         raise MutationBlocked("Codex review provider status is indeterminate")
@@ -1889,49 +1856,12 @@ def _require_review_providers_terminal(pull_request: dict[str, Any]) -> None:
             or author.get("login") != "chatgpt-codex-connector"
         ):
             raise MutationBlocked("Codex review provider status is indeterminate")
-        body = str(summary_comments[0].get("body") or "")
-        matches = _CODEX_REVIEW_STATUS.findall(body)
-        if len(matches) != 1:
-            raise MutationBlocked("Codex review provider status is indeterminate")
-
-        def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-            value: dict[str, Any] = {}
-            for key, item in pairs:
-                if key in value:
-                    raise ValueError("duplicate provider status key")
-                value[key] = item
-            return value
-
         try:
-            status = json.loads(matches[0], object_pairs_hook=reject_duplicate_keys)
-        except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            raise MutationBlocked("Codex review provider status is indeterminate") from exc
-        if not isinstance(status, dict) or not {"headSha", "status"} <= set(status):
-            raise MutationBlocked("Codex review provider status is indeterminate")
-        if status.get("headSha") != head_sha:
-            raise MutationBlocked("Codex review provider status is stale for the current head")
-        if status.get("status") != "completed":
-            raise MutationBlocked("Codex review provider is not terminal")
-        for label in ("Code Review", "Security Review"):
-            rows = [
-                line
-                for line in body.splitlines()
-                if f"**{label}**" in line
-            ]
-            if len(rows) != 1:
-                raise MutationBlocked("Codex review provider status is indeterminate")
-            cells = rows[0].split("|")
-            if (
-                len(cells) != 6
-                or cells[0].strip()
-                or cells[-1].strip()
-                or cells[1].strip() not in _CODEX_REVIEW_LABELS[label]
-                or not cells[3].strip()
-                or not cells[4].strip()
-            ):
-                raise MutationBlocked("Codex review provider status is indeterminate")
-            if not _is_codex_completed_status(cells[2].strip()):
-                raise MutationBlocked("Codex review provider is not terminal")
+            fast_path.verify_codex_provider_summary(
+                summary_comments[0].get("body"), head_sha=head_sha
+            )
+        except fast_path.SecurityBlocker as exc:
+            raise MutationBlocked(str(exc)) from exc
 
     requests = _bounded_nodes(
         pull_request.get("reviewRequests"), "review-provider requests"
