@@ -276,6 +276,57 @@ def _gh_json(endpoint: str) -> Any:
     return authority.loads_closed_json(result.stdout)
 
 
+_ACCEPTED_MAIN_COMMIT_METADATA_PROJECTION = (
+    '{"sha":.sha,"verified":.commit.verification.verified}'
+)
+
+
+def _observe_accepted_main_commit_metadata(main: str) -> bytes:
+    """Project maintained commit facts before bounded provider capture."""
+
+    expected = authority._require_oid(main, "protected main")
+    result = transport._run_bootstrap_gh([
+        "api", "--hostname", "github.com",
+        f"repos/SecPal/.github/commits/{expected}",
+        "--jq", _ACCEPTED_MAIN_COMMIT_METADATA_PROJECTION,
+    ])
+    if result.returncode != 0:
+        raise authority.LifecycleAuthorityError(
+            "accepted-main commit metadata acquisition failed"
+        )
+    return result.stdout
+
+
+def _normalize_accepted_main_commit_metadata(
+    main: str, observed: bytes,
+) -> dict[str, Any]:
+    """Normalize projected provider bytes without granting them authority."""
+
+    expected = authority._require_oid(main, "protected main")
+    metadata = authority._require_closed(
+        authority.loads_closed_json(observed),
+        {"sha", "verified"}, "accepted-main commit metadata",
+    )
+    if (
+        authority._require_oid(metadata["sha"], "accepted-main commit") != expected
+        or type(metadata["verified"]) is not bool
+        or metadata["verified"] is not True
+    ):
+        raise authority.LifecycleAuthorityError(
+            "accepted-main commit metadata is not verified"
+        )
+    return {"sha": expected, "verified": True}
+
+
+def _accepted_main_commit_metadata(main: str) -> dict[str, Any]:
+    """Observe then admit only the maintained accepted-main commit facts."""
+
+    expected = authority._require_oid(main, "protected main")
+    return _normalize_accepted_main_commit_metadata(
+        expected, _observe_accepted_main_commit_metadata(expected)
+    )
+
+
 def _chronology_page_document(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
     try:
         document = authority.loads_closed_json(raw)
@@ -438,8 +489,8 @@ def _accepted_policy(repository: str, issue: int) -> tuple[str, dict[str, Any], 
     authority._require_positive_int(issue, "loss issue")
     branch = _gh_json("repos/SecPal/.github/branches/main")
     main = authority._require_oid(branch["commit"]["sha"], "protected main")
-    commit = _gh_json(f"repos/SecPal/.github/commits/{main}")
-    if branch["protected"] is not True or commit["sha"] != main or commit["commit"]["verification"]["verified"] is not True:
+    commit = _accepted_main_commit_metadata(main)
+    if branch["protected"] is not True or commit["sha"] != main or commit["verified"] is not True:
         raise authority.LifecycleAuthorityError("loss policy requires authenticated protected main")
     if (
         transport._git_text(ROOT, ["rev-parse", "HEAD"]).strip() != main
