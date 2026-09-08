@@ -355,6 +355,12 @@ feedback and absence facts without rerunning complete validation. The migration
 signature authenticates the issuer's execution facts.
 
 Acquisition owns provider/Git reads and isolated current-safety validation.
+Protected-main commit authentication projects the fixed `{sha, verified}`
+metadata pair through the maintained `gh api --jq` invocation before the
+unchanged 64 KiB bootstrap capture. The projected bytes are then parsed as a
+closed external representation and matched to the independently observed
+protected branch SHA. No caller selects the repository, endpoint, fields or
+projection, and oversized unprojected provider output remains rejected.
 `_normalize_provider_representations` purely converts bounded external values
 to canonical typed facts; `_admit_observation` consumes only those facts, and
 `_assemble_source_facts` only assembles admitted facts. These responsibilities

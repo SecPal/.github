@@ -411,6 +411,14 @@ and adoption safety contract without requiring unrelated newer implementation
 APIs. Normal repository Complete Validation remains unchanged for the delivery
 that changes this policy.
 
+Accepted-main commit authentication first observes the protected branch SHA,
+then uses one fixed maintained provider projection containing only that exact
+commit SHA and GitHub's boolean verification result. Projection occurs before
+the unchanged 64 KiB bootstrap capture; the resulting external bytes still pass
+duplicate-aware closed parsing and exact-SHA admission. The generic provider
+transport, chronology acquisition and authenticated large Git-blob path retain
+their existing distinct bounds.
+
 The profile binds its version, harness Git blob/mode/size, command set and digest,
 120-second bound, exact successful result and required invariant inventory.
 Only `tests/pre-enrollment-current-safety.py` is projected into a disposable

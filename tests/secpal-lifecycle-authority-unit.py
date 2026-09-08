@@ -3535,15 +3535,79 @@ class ValidationEvidenceLossTests(TestCase):
         for protected, head, dirty in ((False, "c" * 40, ""), (True, "a" * 40, ""),
                                        (True, "c" * 40, "modified policy")):
             with self.subTest(protected=protected, head=head, dirty=dirty):
-                responses = [
-                    {"commit": {"sha": "c" * 40}, "protected": protected},
-                    {"sha": "c" * 40, "commit": {"verification": {"verified": True}}},
-                ]
-                with patch.object(self.loss, "_gh_json", side_effect=responses), patch.object(
+                branch = {"commit": {"sha": "c" * 40}, "protected": protected}
+                metadata = {"sha": "c" * 40, "verified": True}
+                with patch.object(self.loss, "_gh_json", return_value=branch), patch.object(
+                    self.loss, "_accepted_main_commit_metadata", return_value=metadata
+                ), patch.object(
                     self.loss.transport, "_git_text", side_effect=lambda root, args: head if args == ["rev-parse", "HEAD"] else dirty
                 ):
                     with self.assertRaises(authority.LifecycleAuthorityError):
                         self.loss._accepted_policy(REPOSITORY, 827)
+
+    def test_accepted_main_commit_metadata_uses_one_fixed_projection(self) -> None:
+        main = "c" * 40
+        projected = authority.canonical_json_bytes({"sha": main, "verified": True})
+        with patch.object(
+            self.loss.transport, "_run_bootstrap_gh",
+            return_value=SimpleNamespace(returncode=0, stdout=projected, stderr=b""),
+        ) as run:
+            self.assertEqual(
+                self.loss._accepted_main_commit_metadata(main),
+                {"sha": main, "verified": True},
+            )
+        run.assert_called_once_with([
+            "api", "--hostname", "github.com",
+            f"repos/SecPal/.github/commits/{main}",
+            "--jq", self.loss._ACCEPTED_MAIN_COMMIT_METADATA_PROJECTION,
+        ])
+        self.assertEqual(
+            tuple(inspect.signature(self.loss._accepted_main_commit_metadata).parameters),
+            ("main",),
+        )
+        self.assertNotIn("files", self.loss._ACCEPTED_MAIN_COMMIT_METADATA_PROJECTION)
+        self.assertNotIn("patch", self.loss._ACCEPTED_MAIN_COMMIT_METADATA_PROJECTION)
+
+    def test_accepted_main_commit_metadata_rejects_unclosed_or_false_facts(self) -> None:
+        main = "c" * 40
+        cases = (
+            {"sha": "d" * 40, "verified": True},
+            {"sha": "malformed", "verified": True},
+            {"sha": main, "verified": False},
+            {"sha": main, "verified": None},
+            {"sha": main},
+            {"sha": main, "verified": True, "files": []},
+            b'{"sha":',
+            b'{"sha":"' + main.encode() + b'","sha":"' + main.encode()
+            + b'","verified":true}\n',
+        )
+        for value in cases:
+            raw = value if isinstance(value, bytes) else authority.canonical_json_bytes(value)
+            with self.subTest(value=value), patch.object(
+                self.loss.transport, "_run_bootstrap_gh",
+                return_value=SimpleNamespace(returncode=0, stdout=raw, stderr=b""),
+            ), self.assertRaises(authority.LifecycleAuthorityError):
+                self.loss._accepted_main_commit_metadata(main)
+
+    def test_accepted_main_projection_reduces_representation_not_transport_bound(self) -> None:
+        main = "c" * 40
+        oversized = authority.canonical_json_bytes({
+            "sha": main, "commit": {"verification": {"verified": True}},
+            "files": [{"patch": "x" * 65536}],
+        })
+        self.assertEqual(self.loss.transport.MAXIMUM_EVIDENCE_BYTES, 65536)
+        self.assertGreater(len(oversized), 65536)
+        with patch.object(
+            self.loss.transport, "_run_bootstrap_gh",
+            side_effect=self.loss.transport.BootstrapSourceAdmissionError(
+                "bootstrap source-admission output limit exceeded"
+            ),
+        ), self.assertRaisesRegex(
+            self.loss.transport.BootstrapSourceAdmissionError, "output limit exceeded"
+        ):
+            self.loss._gh_json(f"repos/SecPal/.github/commits/{main}")
+        projected = authority.canonical_json_bytes({"sha": main, "verified": True})
+        self.assertLess(len(projected), 65536)
 
     def test_unenrolled_check_uses_protected_journal_and_never_treats_failure_as_absence(self) -> None:
         publication = self.loss.publication
