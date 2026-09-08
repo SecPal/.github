@@ -1493,6 +1493,38 @@ query FastPathPreflight($owner:String!, $name:String!, $number:Int!) {
 }
 """
 
+READY_SOURCE_RECOVERY_DELIVERY_QUERY = r"""
+query ReadySourceRecoveryDelivery(
+  $owner:String!, $name:String!, $number:Int!, $head:GitObjectID!
+) {
+  repository(owner:$owner, name:$name) {
+    nameWithOwner
+    pullRequest(number:$number) {
+      number state isDraft headRefOid
+    }
+    object(oid:$head) {
+      __typename
+      ... on Commit {
+        oid
+        committedViaWeb
+        committer { user { login } }
+        signature {
+          __typename
+          isValid
+          state
+          signer {
+            __typename
+            id
+            databaseId
+            login
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
 READY_INTEGRATION_AUTHORITY_QUERY = r"""
 query ReadyIntegrationAuthority($owner:String!, $name:String!, $number:Int!) {
   repository(owner:$owner, name:$name) {
@@ -1750,6 +1782,7 @@ def _validate_action_command(arguments: list[str]) -> None:
             CURRENT_REQUIRED_CHECKS_QUERY,
             FAST_PATH_PREFLIGHT_QUERY,
             READY_INTEGRATION_AUTHORITY_QUERY,
+            READY_SOURCE_RECOVERY_DELIVERY_QUERY,
         }:
             raise MutationBlocked("GraphQL document is not exactly allowlisted")
         variable_arguments = arguments[7:]
@@ -1774,12 +1807,15 @@ def _validate_action_command(arguments: list[str]) -> None:
             CURRENT_REVIEW_FEEDBACK_QUERY,
             FAST_PATH_PREFLIGHT_QUERY,
             READY_INTEGRATION_AUTHORITY_QUERY,
+            READY_SOURCE_RECOVERY_DELIVERY_QUERY,
         }:
             expected_variables = {
                 "owner": "-f",
                 "name": "-f",
                 "number": "-F",
             }
+            if query == READY_SOURCE_RECOVERY_DELIVERY_QUERY:
+                expected_variables["head"] = "-f"
             optional_variables = (
                 {
                     "reviewsCursor": "-f",
@@ -2377,6 +2413,7 @@ class LiveGitHub:
             "base_ref": pull_request.get("baseRefName"),
             "base_sha": pull_request.get("baseRefOid"),
             "pr_state": pull_request.get("state"),
+            "is_draft": pull_request.get("isDraft"),
             "review_decision": pull_request.get("reviewDecision"),
             "feedback": {
                 "pull_request_reactions": _live_reactions(
@@ -2940,24 +2977,115 @@ class FastPathGateway:
         return match.group(1) if match else None
 
     def _local_signature(self, oid: str) -> dict[str, Any]:
+        value, _output = self._local_signature_evidence(oid)
+        return value
+
+    def _local_signature_evidence(
+        self, oid: str
+    ) -> tuple[dict[str, Any], str]:
         commit_object = self._git(["cat-file", "commit", oid], allow_failure=True)
         if commit_object.returncode != 0:
-            return {
-                "state": "object_unavailable",
-                "verified": False,
-                "format": None,
-            }
+            return (
+                {
+                    "state": "object_unavailable",
+                    "verified": False,
+                    "format": None,
+                },
+                "",
+            )
         verified = self._git(["verify-commit", "--raw", oid], allow_failure=True)
+        output = f"{verified.stdout}\n{verified.stderr}"
         value = evidence.interpret_local_signature(
             verified.returncode,
-            f"{verified.stdout}\n{verified.stderr}",
+            output,
             signature_format_hint=evidence._commit_signature_format(commit_object.stdout),
         )
-        return {
-            "state": value["state"],
-            "verified": value["verified"],
-            "format": value["format"],
+        return (
+            {
+                "state": value["state"],
+                "verified": value["verified"],
+                "format": value["format"],
+            },
+            output,
+        )
+
+    def observe_ready_source_recovery_delivery(
+        self,
+        repository: str,
+        pull_request_number: int,
+        expected_head_sha: str,
+        expected_commit_signer: Any,
+    ) -> dict[str, Any]:
+        """Authenticate the live Ready source and its exact commit signature."""
+
+        owner, name = repository.split("/", 1)
+        try:
+            payload = self.github.runner.run(
+                _graphql_arguments(
+                    READY_SOURCE_RECOVERY_DELIVERY_QUERY,
+                    {
+                        "owner": owner,
+                        "name": name,
+                        "number": pull_request_number,
+                        "head": expected_head_sha,
+                    },
+                )
+            )
+            observed_repository = payload["data"]["repository"]
+            pull_request = observed_repository["pullRequest"]
+            commit = observed_repository["object"]
+        except (ActionCommandFailure, KeyError, MutationFailure, TypeError) as exc:
+            raise fast_path.TransientReadFailure(
+                "Ready-source recovery delivery evidence is unavailable"
+            ) from exc
+        if (
+            not isinstance(observed_repository, dict)
+            or observed_repository.get("nameWithOwner") != repository
+            or not isinstance(pull_request, dict)
+            or pull_request.get("number") != pull_request_number
+            or pull_request.get("state") != "OPEN"
+            or pull_request.get("isDraft") is not False
+            or pull_request.get("headRefOid") != expected_head_sha
+            or not isinstance(commit, dict)
+            or commit.get("__typename") != "Commit"
+            or commit.get("oid") != expected_head_sha
+        ):
+            raise fast_path.SecurityBlocker(
+                "Ready-source recovery requires the exact live Ready provider state"
+            )
+        local_signature, verification_output = self._local_signature_evidence(
+            expected_head_sha
+        )
+        signer_kind, signer_identity = fast_path._actual_integration_signer(
+            verification_output, expected_commit_signer
+        )
+        if signer_kind != expected_commit_signer.get("kind"):
+            raise fast_path.SecurityBlocker(
+                "Ready-source recovery commit signer kind changed"
+            )
+        github_signature = evidence.normalize_github_signature(
+            commit.get("signature")
+        )
+        committer = commit.get("committer")
+        committer_user = committer.get("user") if isinstance(committer, dict) else None
+        generated = commit.get("committedViaWeb") is True or (
+            isinstance(committer_user, dict)
+            and committer_user.get("login") == "web-flow"
+        )
+        commit_evidence = {
+            "oid": expected_head_sha,
+            "source": "GITHUB" if generated else "USER",
+            "signer_identity": signer_identity,
+            "local_signature": local_signature,
+            "github_verification": {
+                "verified": github_signature["verified"],
+                "reason": github_signature["reason"],
+            },
         }
+        fast_path.verify_commit_signatures(
+            [commit_evidence], self.registry_entry["signature_policy"]
+        )
+        return commit_evidence
 
     def read_preflight(self, request: Any) -> Any:
         owner, name = request.repository.split("/", 1)
@@ -4605,6 +4733,7 @@ def _acquire_ready_source_recovery_facts(
     repository_root: Path,
     feedback_findings: Any,
     manual_gate_evidence: Any,
+    expected_commit_signer: Any,
     _policy_loader: Any,
     _gateway_factory: Any,
     _validation_runner: Any,
@@ -4635,6 +4764,10 @@ def _acquire_ready_source_recovery_facts(
     observation = gateway.observe_stable_feedback(
         repository, pull_request_number
     )
+    if observation.get("pr_state") != "OPEN" or observation.get("is_draft") is not False:
+        raise fast_path.SecurityBlocker(
+            "Ready-source recovery requires the exact live Ready provider state"
+        )
     review_decision = observation.get("review_decision")
     if review_decision is None:
         review_decision = "NONE"
@@ -4662,6 +4795,12 @@ def _acquire_ready_source_recovery_facts(
             raise fast_path.SecurityBlocker(
                 "Ready-source recovery feedback changed during validation"
             )
+    commit_signature_evidence = gateway.observe_ready_source_recovery_delivery(
+        repository,
+        pull_request_number,
+        head,
+        expected_commit_signer,
+    )
     final_head, final_status = _attestation_local_state(root, repository)
     final_tree = _run_attestation_git(
         root, ["rev-parse", f"{final_head}^{{tree}}"]
@@ -4682,7 +4821,7 @@ def _acquire_ready_source_recovery_facts(
         reviewed=reviewed,
         manual_gate_evidence=manual_gate_evidence,
     )
-    return fast_path.derive_ready_source_recovery_safety_facts(
+    facts = fast_path.derive_ready_source_recovery_safety_facts(
         tooling_authority_main=policy_head_sha,
         repository=repository,
         pull_request_number=pull_request_number,
@@ -4698,12 +4837,13 @@ def _acquire_ready_source_recovery_facts(
         registry=binding,
         command_set=binding["validation"],
     )
+    return facts, commit_signature_evidence
 
 
 def _issue_ready_source_recovery_authorization(
     *, repository: str, delivery_issue: int, pull_request_number: int,
     expected_head_sha: str, repository_root: Path, feedback_findings: Any,
-    manual_gate_evidence: Any, commit_signature_evidence: Any,
+    manual_gate_evidence: Any,
     historical_validation_receipt_digest: str,
     historical_final_attestation_digest: str,
     historical_evidence_loss_proof_digest: str, authorization_id: str,
@@ -4724,18 +4864,29 @@ def _issue_ready_source_recovery_authorization(
             )
         return policy_head_sha, copy.deepcopy(policy_entry)
 
-    facts = _acquire_ready_source_recovery_facts(
+    facts, commit_signature_evidence = _acquire_ready_source_recovery_facts(
         repository=repository,
         pull_request_number=pull_request_number,
         expected_head_sha=expected_head_sha,
         repository_root=repository_root,
         feedback_findings=feedback_findings,
         manual_gate_evidence=manual_gate_evidence,
+        expected_commit_signer=expected_commit_signer,
         _policy_loader=accepted_policy,
         _gateway_factory=_gateway_factory,
         _validation_runner=_validation_runner,
     )
     current = _current_lifecycle_loader(repository, delivery_issue)
+    final_policy_head_sha, final_policy_entry = _policy_loader(repository)
+    if (
+        final_policy_head_sha != policy_head_sha
+        or _fast_registry_binding(final_policy_entry)
+        != _fast_registry_binding(policy_entry)
+    ):
+        raise fast_path.SecurityBlocker(
+            "accepted protected-main recovery policy changed during validation"
+        )
+    _issuer_source_verifier(final_policy_head_sha)
     return _authorization_factory(
         current_lifecycle=current.lifecycle,
         current_publication_oid=current.publication_oid,
@@ -4756,7 +4907,7 @@ def _issue_ready_source_recovery_authorization(
 def issue_ready_source_recovery_authorization(
     *, repository: str, delivery_issue: int, pull_request_number: int,
     expected_head_sha: str, repository_root: Path, feedback_findings: Any,
-    manual_gate_evidence: Any, commit_signature_evidence: Any,
+    manual_gate_evidence: Any,
     historical_validation_receipt_digest: str,
     historical_final_attestation_digest: str,
     historical_evidence_loss_proof_digest: str, authorization_id: str,
@@ -4771,7 +4922,6 @@ def issue_ready_source_recovery_authorization(
         expected_head_sha=expected_head_sha, repository_root=repository_root,
         feedback_findings=feedback_findings,
         manual_gate_evidence=manual_gate_evidence,
-        commit_signature_evidence=commit_signature_evidence,
         historical_validation_receipt_digest=historical_validation_receipt_digest,
         historical_final_attestation_digest=historical_final_attestation_digest,
         historical_evidence_loss_proof_digest=historical_evidence_loss_proof_digest,

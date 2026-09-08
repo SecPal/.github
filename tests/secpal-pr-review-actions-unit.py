@@ -7484,6 +7484,7 @@ class FastPathTests(TestCase):
         self.assertNotIn("current_publication_oid", parameters)
         self.assertNotIn("current_lifecycle", parameters)
         self.assertNotIn("recovery_safety_facts", parameters)
+        self.assertNotIn("commit_signature_evidence", parameters)
         self.assertFalse(
             hasattr(fast_path, "is_verified_ready_source_recovery_safety")
         )
@@ -7492,6 +7493,7 @@ class FastPathTests(TestCase):
         reviewed = fast_feedback(thread_count=0)
         observation = reviewed.to_dict()
         observation["review_decision"] = "APPROVED"
+        observation["is_draft"] = False
         entry = registry_entry(reviewed.repository)
         entry["manual_gates"] = []
         findings = [{
@@ -7510,6 +7512,16 @@ class FastPathTests(TestCase):
         policy_loader = mock.Mock(return_value=("f" * 40, entry))
         gateway = mock.Mock()
         gateway.observe_stable_feedback.return_value = observation
+        commit_evidence = {
+            "oid": reviewed.head_sha,
+            "source": "USER",
+            "signer_identity": "reviewer",
+            "local_signature": {
+                "state": "valid", "verified": True, "format": "ssh",
+            },
+            "github_verification": {"verified": True, "reason": "valid"},
+        }
+        gateway.observe_ready_source_recovery_delivery.return_value = commit_evidence
         gateway_factory = mock.Mock(return_value=gateway)
         validation_runner = mock.Mock(
             return_value=actions.RegisteredValidationResult()
@@ -7532,28 +7544,176 @@ class FastPathTests(TestCase):
                 actions, "_validated_commit_parent", return_value="9" * 40
             ),
         ):
-            safety = actions._acquire_ready_source_recovery_facts(
+            safety, acquired_commit = actions._acquire_ready_source_recovery_facts(
                 repository=reviewed.repository,
                 pull_request_number=reviewed.pull_request_number,
                 expected_head_sha=reviewed.head_sha,
                 repository_root=REPO_ROOT,
                 feedback_findings=findings,
                 manual_gate_evidence=[],
+                expected_commit_signer={
+                    "kind": "SSH_PRINCIPAL", "identity": "reviewer",
+                },
                 _policy_loader=policy_loader,
                 _gateway_factory=gateway_factory,
                 _validation_runner=validation_runner,
             )
         self.assertEqual(safety["head_sha"], reviewed.head_sha)
+        self.assertEqual(acquired_commit, commit_evidence)
         policy_loader.assert_called_once_with(reviewed.repository)
         gateway.observe_stable_feedback.assert_called_once_with(
             reviewed.repository, reviewed.pull_request_number
         )
+        gateway.observe_ready_source_recovery_delivery.assert_called_once_with(
+            reviewed.repository,
+            reviewed.pull_request_number,
+            reviewed.head_sha,
+            {"kind": "SSH_PRINCIPAL", "identity": "reviewer"},
+        )
         validation_runner.assert_called_once_with(entry, REPO_ROOT)
+
+    def test_ready_source_recovery_rejects_open_draft_provider_state(self) -> None:
+        reviewed = fast_feedback(thread_count=0)
+        observation = reviewed.to_dict()
+        observation.update(review_decision="APPROVED", is_draft=True)
+        entry = registry_entry(reviewed.repository)
+        entry["manual_gates"] = []
+        gateway = mock.Mock()
+        gateway.observe_stable_feedback.return_value = observation
+        validation_runner = mock.Mock(return_value=actions.RegisteredValidationResult())
+
+        with (
+            mock.patch.object(actions, "_attestation_local_state",
+                              return_value=(reviewed.head_sha, "")),
+            mock.patch.object(actions, "_run_attestation_git",
+                              return_value=SimpleNamespace(stdout="a" * 40)),
+            mock.patch.object(actions, "_validated_commit_parent",
+                              return_value="9" * 40),
+            self.assertRaisesRegex(fast_path.SecurityBlocker, "Ready provider state"),
+        ):
+            actions._acquire_ready_source_recovery_facts(
+                repository=reviewed.repository,
+                pull_request_number=reviewed.pull_request_number,
+                expected_head_sha=reviewed.head_sha,
+                repository_root=REPO_ROOT,
+                feedback_findings=[],
+                manual_gate_evidence=[],
+                expected_commit_signer={
+                    "kind": "SSH_PRINCIPAL", "identity": "reviewer",
+                },
+                _policy_loader=mock.Mock(return_value=("f" * 40, entry)),
+                _gateway_factory=mock.Mock(return_value=gateway),
+                _validation_runner=validation_runner,
+            )
+        validation_runner.assert_not_called()
+        gateway.observe_ready_source_recovery_delivery.assert_not_called()
+
+    def test_ready_source_recovery_provider_commit_verification_is_maintained(self) -> None:
+        reviewed = fast_feedback(thread_count=0)
+        entry = registry_entry(reviewed.repository)
+        github = mock.Mock()
+        github.runner.run.return_value = {
+            "data": {"repository": {
+                "nameWithOwner": reviewed.repository,
+                "pullRequest": {
+                    "number": reviewed.pull_request_number,
+                    "state": "OPEN",
+                    "isDraft": False,
+                    "headRefOid": reviewed.head_sha,
+                },
+                "object": {
+                    "__typename": "Commit",
+                    "oid": reviewed.head_sha,
+                    "committedViaWeb": False,
+                    "committer": {"user": {"login": "reviewer"}},
+                    "signature": {
+                        "__typename": "SshSignature",
+                        "isValid": True,
+                        "state": "VALID",
+                        "signer": {"login": "reviewer"},
+                    },
+                },
+            }}
+        }
+        gateway = actions.FastPathGateway(REPO_ROOT, entry, github=github)
+        with mock.patch.object(
+            gateway,
+            "_local_signature_evidence",
+            return_value=(
+                {"state": "valid", "verified": True, "format": "ssh"},
+                'Good "git" signature for reviewer with ED25519 key SHA256:test\n',
+            ),
+        ):
+            observed = gateway.observe_ready_source_recovery_delivery(
+                reviewed.repository,
+                reviewed.pull_request_number,
+                reviewed.head_sha,
+                {"kind": "SSH_PRINCIPAL", "identity": "reviewer"},
+            )
+            self.assertTrue(observed["github_verification"]["verified"])
+            github.runner.run.return_value["data"]["repository"]["object"][
+                "signature"
+            ].update(isValid=False, state="INVALID")
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "GitHub verification"
+            ):
+                gateway.observe_ready_source_recovery_delivery(
+                    reviewed.repository,
+                    reviewed.pull_request_number,
+                    reviewed.head_sha,
+                    {"kind": "SSH_PRINCIPAL", "identity": "reviewer"},
+                )
+
+    def test_ready_source_recovery_rejects_policy_change_after_validation(self) -> None:
+        reviewed = fast_feedback(thread_count=0)
+        first_entry = registry_entry(reviewed.repository)
+        second_entry = copy.deepcopy(first_entry)
+        second_entry["default_branch"] = "changed-main"
+        authorization_factory = mock.Mock()
+        with (
+            mock.patch.object(
+                actions,
+                "_acquire_ready_source_recovery_facts",
+                return_value=(
+                    {"head_sha": reviewed.head_sha},
+                    {"oid": reviewed.head_sha},
+                ),
+            ),
+            self.assertRaisesRegex(fast_path.SecurityBlocker, "changed during validation"),
+        ):
+            actions._issue_ready_source_recovery_authorization(
+                repository=reviewed.repository,
+                delivery_issue=827,
+                pull_request_number=reviewed.pull_request_number,
+                expected_head_sha=reviewed.head_sha,
+                repository_root=REPO_ROOT,
+                feedback_findings=[],
+                manual_gate_evidence=[],
+                historical_validation_receipt_digest="4" * 64,
+                historical_final_attestation_digest="5" * 64,
+                historical_evidence_loss_proof_digest="6" * 64,
+                authorization_id="recovery-1",
+                expected_commit_signer={
+                    "kind": "SSH_PRINCIPAL", "identity": "reviewer",
+                },
+                signer_identity="reviewer",
+                signer=object(),
+                _policy_loader=mock.Mock(side_effect=[
+                    ("f" * 40, first_entry), ("e" * 40, second_entry),
+                ]),
+                _gateway_factory=mock.Mock(),
+                _validation_runner=mock.Mock(),
+                _issuer_source_verifier=mock.Mock(),
+                _current_lifecycle_loader=mock.Mock(),
+                _authorization_factory=authorization_factory,
+            )
+        authorization_factory.assert_not_called()
 
     def test_ready_source_recovery_issuer_signs_only_maintained_acquisition(self) -> None:
         reviewed = fast_feedback(thread_count=0)
         observation = reviewed.to_dict()
         observation["review_decision"] = "APPROVED"
+        observation["is_draft"] = False
         entry = registry_entry(reviewed.repository)
         entry["manual_gates"] = []
         findings = [{
@@ -7569,6 +7729,15 @@ class FastPathTests(TestCase):
         }]
         gateway = mock.Mock()
         gateway.observe_stable_feedback.return_value = observation
+        gateway.observe_ready_source_recovery_delivery.return_value = {
+            "oid": reviewed.head_sha,
+            "source": "USER",
+            "signer_identity": "reviewer",
+            "local_signature": {
+                "state": "valid", "verified": True, "format": "ssh",
+            },
+            "github_verification": {"verified": True, "reason": "valid"},
+        }
         gateway_factory = mock.Mock(return_value=gateway)
         validation_runner = mock.Mock(
             return_value=actions.RegisteredValidationResult()
@@ -7594,11 +7763,12 @@ class FastPathTests(TestCase):
                 repository=reviewed.repository, delivery_issue=827, pull_request_number=1,
                 expected_head_sha=reviewed.head_sha, repository_root=REPO_ROOT,
                 feedback_findings=findings, manual_gate_evidence=[],
-                commit_signature_evidence={},
                 historical_validation_receipt_digest="4" * 64,
                 historical_final_attestation_digest="5" * 64,
                 historical_evidence_loss_proof_digest="6" * 64,
-                authorization_id="recovery-1", expected_commit_signer={},
+                authorization_id="recovery-1", expected_commit_signer={
+                    "kind": "SSH_PRINCIPAL", "identity": "reviewer",
+                },
                 signer_identity="signer", signer=object(),
                 _policy_loader=mock.Mock(return_value=("f" * 40, entry)),
                 _gateway_factory=gateway_factory,
@@ -7614,7 +7784,10 @@ class FastPathTests(TestCase):
             result["kind"], "SECPAL_READY_SOURCE_RECOVERY_AUTHORIZATION"
         )
         validation_runner.assert_called_once_with(entry, REPO_ROOT)
-        issuer_source_verifier.assert_called_once_with("f" * 40)
+        self.assertEqual(
+            issuer_source_verifier.call_args_list,
+            [mock.call("f" * 40), mock.call("f" * 40)],
+        )
         signed_facts = authorization_factory.call_args.kwargs[
             "recovery_safety_facts"
         ]
@@ -7660,7 +7833,7 @@ class FastPathTests(TestCase):
                 repository="SecPal/.github", delivery_issue=827,
                 pull_request_number=830, expected_head_sha="a" * 40,
                 repository_root=REPO_ROOT, feedback_findings=[],
-                manual_gate_evidence=[], commit_signature_evidence={},
+                manual_gate_evidence=[],
                 historical_validation_receipt_digest="1" * 64,
                 historical_final_attestation_digest="2" * 64,
                 historical_evidence_loss_proof_digest="3" * 64,

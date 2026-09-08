@@ -900,8 +900,10 @@ class LifecyclePublicationTests(TestCase):
         entry["manual_gates"] = []
         observation = reviewed.to_dict()
         observation["review_decision"] = "APPROVED"
+        observation["is_draft"] = False
         gateway = SimpleNamespace(
-            observe_stable_feedback=lambda *_: observation
+            observe_stable_feedback=lambda *_: observation,
+            observe_ready_source_recovery_delivery=lambda *_: commit,
         )
         with (
             patch.object(
@@ -928,7 +930,7 @@ class LifecyclePublicationTests(TestCase):
                 pull_request_number=PR, expected_head_sha=chain.head,
                 repository_root=Path(self.directory.name),
                 feedback_findings=safety["feedback_findings"],
-                manual_gate_evidence=[], commit_signature_evidence=commit,
+                manual_gate_evidence=[],
                 historical_validation_receipt_digest=(
                     chain.initialization["validation_receipt_digest"]
                 ),
