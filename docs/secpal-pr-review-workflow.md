@@ -466,6 +466,19 @@ the proof. Native deliveries cannot self-select adoption, a second enrollment
 root remains forbidden, and adoption is not a lifecycle state, Recovery,
 Continuation, or permission to cure ordinary ordering after the fact.
 
+After an Exact-State-Adoption v3 delivery completes its first ordinary
+Draft-to-Ready transition, prior-authority manifest schema `1.2` can normalize
+that already-authenticated source into the same Ready-integration input without
+reconstructing unavailable reviewed-state, validation-receipt, or final-
+attestation bytes. The verifier reopens protected CURRENT and the enrollment
+publication, independently verifies the v3 proof, loss and review-budget
+admissions, exact signed sole-parent source, unchanged head/tree, one published
+`DRAFT_TO_READY`, finite counters and empty exceptional histories, and requires
+the canonical existing annotated-tag namespace and exact commit target. Both
+bridge derivation and selection require byte-identical accepted-main
+implementation. Schema `1.1` remains the ordinary companion-backed form;
+malformed or incomplete `1.1` input cannot fall through to `1.2`.
+
 For a later head-changing ordinary successor, the immutable adoption proof
 remains the genesis while the signed successor authority binds verifier-derived
 current-head tree, receipt, final attestation, and source-evidence identity.

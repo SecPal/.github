@@ -177,6 +177,18 @@ command performs one trusted GitHub read and requires the live open Ready PR
 head and registered target-base SHA to equal the two authorized parents; caller-
 supplied `observed_sha` cannot substitute for that read.
 
+Prior-authority schema `1.2` extends this same manifest, annotated-tag, signer,
+target, and normalization boundary for a genuine Exact-State-Adoption v3 source
+that has one protected ordinary Draft-to-Ready successor. It derives the source
+parent/signature, historical receipt provenance, unavailable companion status,
+loss/current-safety/review-budget/adoption identities, enrollment and CURRENT
+publications, and exact finite history from verified authority. Historical
+bytes remain unavailable and unreconstructed. The canonical tag remains
+`secpal-ready-integration-prior-authority-<issue>-<pr>-<head>` and targets the
+exact prior delivery commit. Candidate-local bytes cannot derive or select this
+mode; ordinary schema `1.1` and the single two-parent integration verifier are
+unchanged.
+
 After an explicitly authenticated cycle-limit blocker, a separate user
 authorization may select `--exceptional-recovery-evidence` with exact recovery
 issue/authorization selectors and eligibility evidence. The closed artifact

@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-08 - Bridge Adopted Ready Authority
+
+**Fixed:**
+
+- Normalize one verified Exact-State-Adoption v3 source with one real
+  Draft-to-Ready successor into the existing Ready-integration prior-authority
+  boundary without reconstructing unavailable historical companion bytes.
+- Bind the exact source, admissions, protected lifecycle publications, finite
+  history, signed annotated tag, and accepted-main implementation while
+  preserving ordinary prior authority and the single integration verifier.
+
 ## 2026-09-07 - Bind Remediated Ready Integration Review
 
 **Fixed:**

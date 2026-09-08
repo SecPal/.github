@@ -56,6 +56,16 @@
           "purpose": "Run guarded-action unit tests"
         },
         {
+          "argv": [
+            "python3",
+            "-m",
+            "unittest",
+            "tests/secpal-adopted-ready-prior-authority-unit.py"
+          ],
+          "working_directory": ".",
+          "purpose": "Run adopted Ready prior-authority bridge unit tests"
+        },
+        {
           "argv": ["python3", "-m", "unittest", "tests/secpal-pre-enrollment-integration-unit.py"],
           "working_directory": ".",
           "purpose": "Run pre-enrollment Draft integration unit tests"

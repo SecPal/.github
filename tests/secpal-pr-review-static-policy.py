@@ -109,6 +109,22 @@ ACTION_CALLS = (
     ),
     ProcessCall(
         None,
+        "_run_bridge_gh",
+        "gh_executable",
+        "arguments",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("encoding", "'utf-8'"),
+            ("env", "evidence.command_environment('gh')"),
+            ("errors", "'replace'"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("text", "True"),
+            ("timeout", "EXTERNAL_COMMAND_TIMEOUT_SECONDS"),
+        ),
+    ),
+    ProcessCall(
+        None,
         "_run_pre_enrollment_work_graph",
         "sys.executable",
         "arguments",

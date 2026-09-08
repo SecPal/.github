@@ -223,6 +223,10 @@ READY_INTEGRATION_PRIOR_AUTHORITY_KEYS = frozenset(
         "publication",
     }
 )
+READY_INTEGRATION_ADOPTED_PRIOR_AUTHORITY_KEYS = frozenset(
+    READY_INTEGRATION_PRIOR_AUTHORITY_KEYS
+    | {"source_authority_mode", "source_authority", "historical_companions"}
+)
 
 
 class SecurityBlocker(RuntimeError):
@@ -425,13 +429,20 @@ def _ready_integration_conflict_paths(value: Any) -> list[str]:
 def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
     """Normalize the separately signed authority for the prior Ready head."""
 
-    if not isinstance(value, dict) or set(value) != READY_INTEGRATION_PRIOR_AUTHORITY_KEYS:
+    if not isinstance(value, dict):
         raise SecurityBlocker("Ready integration prior authority is malformed or ambiguous")
     if any(SECRET_VALUE.search(item) for item in _all_strings(value)):
         raise SecurityBlocker("Ready integration prior authority contains secret-like text")
-    if (
-        value.get("schema_version") != "1.1"
-        or value.get("kind") != READY_INTEGRATION_PRIOR_AUTHORITY_KIND
+    schema_version = value.get("schema_version")
+    expected_keys = (
+        READY_INTEGRATION_ADOPTED_PRIOR_AUTHORITY_KEYS
+        if schema_version == "1.2"
+        else READY_INTEGRATION_PRIOR_AUTHORITY_KEYS
+    )
+    if set(value) != expected_keys:
+        raise SecurityBlocker("Ready integration prior authority is malformed or ambiguous")
+    if schema_version not in {"1.1", "1.2"} or (
+        value.get("kind") != READY_INTEGRATION_PRIOR_AUTHORITY_KIND
     ):
         raise SecurityBlocker("Ready integration prior authority kind or version is unsupported")
     signer = value.get("expected_signer")
@@ -460,6 +471,13 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         "exceptional_continuations",
         "cycle_3",
     }
+    if schema_version == "1.2":
+        lifecycle_keys |= {
+            "ready_transition_count",
+            "ready_history",
+            "exceptional_recovery_history",
+            "exceptional_continuation_history",
+        }
     if not isinstance(lifecycle, dict) or set(lifecycle) != lifecycle_keys:
         raise SecurityBlocker("Ready integration prior lifecycle authority is malformed")
     reviews = lifecycle.get("unrestricted_reviews")
@@ -495,14 +513,39 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         or not 0 <= continuations <= 1
     ):
         raise SecurityBlocker("Ready integration prior lifecycle authority is invalid")
+    if schema_version == "1.2":
+        ready_history = lifecycle.get("ready_history")
+        if (
+            lifecycle.get("historical_proof_mode") != "exact_state_adoption"
+            or isinstance(lifecycle.get("ready_transition_count"), bool)
+            or lifecycle.get("ready_transition_count") != 1
+            or not isinstance(ready_history, list)
+            or len(ready_history) != 1
+            or not isinstance(ready_history[0], dict)
+            or set(ready_history[0])
+            != {"sequence", "transition_kind", "event_authorization_digest"}
+            or ready_history[0].get("sequence") != 1
+            or ready_history[0].get("transition_kind") != "DRAFT_TO_READY"
+            or not _require_digest(
+                ready_history[0].get("event_authorization_digest"),
+                "Ready integration transition authorization",
+            )
+            or lifecycle.get("exceptional_recovery_history") != []
+            or lifecycle.get("exceptional_continuation_history") != []
+            or recoveries != 0
+            or continuations != 0
+        ):
+            raise SecurityBlocker(
+                "adopted Ready integration lifecycle authority is invalid"
+            )
     publication = value.get("publication")
     if not isinstance(publication, dict) or set(publication) != {
         "object_oid",
         "publication_digest",
     }:
         raise SecurityBlocker("Ready integration lifecycle publication is malformed")
-    return {
-        "schema_version": "1.1",
+    normalized = {
+        "schema_version": schema_version,
         "kind": READY_INTEGRATION_PRIOR_AUTHORITY_KIND,
         "repository": _require_string(value.get("repository"), "prior authority repository"),
         "delivery_issue_number": _require_positive_integer(value.get("delivery_issue_number"), "prior authority delivery issue"),
@@ -510,7 +553,14 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         "prior_delivery_head_sha": _require_oid(value.get("prior_delivery_head_sha"), "prior authority head"),
         "prior_delivery_tree_sha": _require_oid(value.get("prior_delivery_tree_sha"), "prior authority tree"),
         "prior_validation_receipt_digest": _require_digest(value.get("prior_validation_receipt_digest"), "prior validation receipt"),
-        "prior_final_attestation_digest": _require_digest(value.get("prior_final_attestation_digest"), "prior final attestation"),
+        "prior_final_attestation_digest": (
+            _require_digest(
+                value.get("prior_final_attestation_digest"),
+                "prior final attestation",
+            )
+            if schema_version == "1.1"
+            else value.get("prior_final_attestation_digest")
+        ),
         "expected_signer": {"kind": signer_kind, "identity": signer_identity},
         "lifecycle": copy.deepcopy(lifecycle),
         "publication": {
@@ -524,6 +574,111 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             ),
         },
     }
+    if schema_version == "1.1":
+        return normalized
+    if normalized["prior_final_attestation_digest"] is not None:
+        raise SecurityBlocker(
+            "adopted Ready authority cannot claim a historical final attestation"
+        )
+    if value.get("source_authority_mode") != "EXACT_STATE_ADOPTION_V3":
+        raise SecurityBlocker("adopted Ready source authority mode is unsupported")
+    companions = value.get("historical_companions")
+    expected_companions = {
+        "reviewed_state_bytes": "UNAVAILABLE",
+        "validation_receipt_bytes": "UNAVAILABLE",
+        "final_attestation_bytes": "UNAVAILABLE",
+        "historical_bytes_reconstructed": False,
+    }
+    if companions != expected_companions:
+        raise SecurityBlocker("adopted Ready historical companion status is invalid")
+    source = value.get("source_authority")
+    source_keys = {
+        "proof_version",
+        "source_parent_sha",
+        "source_signer_identity",
+        "commit_signature_evidence_digest",
+        "historical_receipt_provenance_digest",
+        "current_safety_digest",
+        "observed_history_digest",
+        "intended_state_digest",
+        "head_advanced_count",
+        "head_advanced_history_digest",
+        "loss_admission_id",
+        "loss_admission_digest",
+        "review_budget_admission_id",
+        "review_budget_admission_digest",
+        "adoption_proof_digest",
+        "adoption_authorization_id",
+        "adoption_authorization_digest",
+        "enrollment_publication",
+        "ready_transition",
+    }
+    if not isinstance(source, dict) or set(source) != source_keys:
+        raise SecurityBlocker("adopted Ready source authority is malformed")
+    enrollment = source.get("enrollment_publication")
+    if not isinstance(enrollment, dict) or set(enrollment) != {
+        "object_oid", "publication_digest"
+    }:
+        raise SecurityBlocker("adopted Ready enrollment publication is malformed")
+    transition = source.get("ready_transition")
+    if not isinstance(transition, dict) or set(transition) != {
+        "event_id", "event_digest", "predecessor_authority_digest",
+        "predecessor_head_sha", "resulting_head_sha",
+    }:
+        raise SecurityBlocker("adopted Ready transition authority is malformed")
+    head_advanced_count = source.get("head_advanced_count")
+    if (
+        source.get("proof_version") != "3.0"
+        or _require_oid(source.get("source_parent_sha"), "adopted source parent")
+        == normalized["prior_delivery_head_sha"]
+        or not _require_string(
+            source.get("source_signer_identity"), "adopted source signer"
+        )
+        or isinstance(head_advanced_count, bool)
+        or not isinstance(head_advanced_count, int)
+        or head_advanced_count < 0
+    ):
+        raise SecurityBlocker("adopted Ready source authority is invalid")
+    for field, label in (
+        ("commit_signature_evidence_digest", "adopted commit signature evidence"),
+        ("historical_receipt_provenance_digest", "historical receipt provenance"),
+        ("current_safety_digest", "adopted current safety"),
+        ("observed_history_digest", "adopted observed history"),
+        ("intended_state_digest", "adopted intended state"),
+        ("head_advanced_history_digest", "adopted head history"),
+        ("loss_admission_digest", "validation evidence loss admission"),
+        ("review_budget_admission_digest", "review budget admission"),
+        ("adoption_proof_digest", "exact adoption proof"),
+        ("adoption_authorization_digest", "exact adoption authorization"),
+    ):
+        _require_digest(source.get(field), label)
+    for field, label in (
+        ("loss_admission_id", "validation evidence loss admission identity"),
+        ("review_budget_admission_id", "review budget admission identity"),
+        ("adoption_authorization_id", "exact adoption authorization identity"),
+    ):
+        _require_string(source.get(field), label)
+    _require_oid(enrollment.get("object_oid"), "adopted enrollment publication")
+    _require_digest(
+        enrollment.get("publication_digest"), "adopted enrollment publication"
+    )
+    _require_string(transition.get("event_id"), "adopted Ready transition")
+    for field, label in (
+        ("event_digest", "adopted Ready event"),
+        ("predecessor_authority_digest", "adopted Ready predecessor"),
+    ):
+        _require_digest(transition.get(field), label)
+    for field in ("predecessor_head_sha", "resulting_head_sha"):
+        if _require_oid(transition.get(field), "adopted Ready transition head") != normalized[
+            "prior_delivery_head_sha"
+        ]:
+            raise SecurityBlocker("adopted Ready transition changed the source head")
+    normalized.update(
+        source_authority_mode="EXACT_STATE_ADOPTION_V3",
+        source_authority=copy.deepcopy(source),
+        historical_companions=copy.deepcopy(companions),
+    )
+    return normalized
 
 
 def normalize_ready_integration_evidence(
