@@ -9,6 +9,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 from unittest import TestCase, main, mock
 
@@ -227,8 +228,10 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
         cases = {
             "zero Ready transitions": ("ready_transition_count", 0),
             "wrong Ready count": ("ready_transition_count", 2),
+            "boolean Ready count": ("ready_transition_count", True),
             "wrong review count": ("unrestricted_review_count", 2),
-            "wrong remediation count": ("remediation_cycle_count", 1),
+            "boolean review count": ("unrestricted_review_count", True),
+            "negative remediation count": ("remediation_cycle_count", -1),
             "exceptional recovery": ("exceptional_recovery_count", 1),
             "exceptional continuation": ("exceptional_continuation_count", 1),
             "Cycle 3": ("cycle_3_absent", False),
@@ -243,6 +246,24 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
         current.lifecycle.state["ready_history"][0]["transition_kind"] = "READY_TO_DRAFT"
         with self.assertRaises(fast_path.SecurityBlocker):
             self.derive(current)
+
+    def test_preserves_authenticated_finite_remediation_count(self) -> None:
+        for count in (0, 1, 2):
+            current = published()
+            current.lifecycle.state["remediation_cycle_count"] = count
+            with self.subTest(count=count):
+                manifest = self.derive(current)
+                self.assertEqual(manifest["lifecycle"]["remediation_cycles"], count)
+                self.assertEqual(
+                    fast_path.normalize_ready_integration_prior_authority(manifest),
+                    manifest,
+                )
+
+    def test_rejects_boolean_ready_transition_count(self) -> None:
+        manifest = self.derive()
+        manifest["lifecycle"]["ready_transition_count"] = True
+        with self.assertRaises(fast_path.SecurityBlocker):
+            fast_path.normalize_ready_integration_prior_authority(manifest)
 
     def test_rejects_native_v1_v2_and_synthetic_v3_provenance(self) -> None:
         for version in ("1.0", "2.0"):
@@ -330,16 +351,81 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
 
     def test_candidate_local_827_code_cannot_select_bridge(self) -> None:
         with mock.patch.object(
-            actions,
-            "_load_lifecycle_publication_helpers",
-            return_value=(lifecycle_authority, lifecycle_publication),
-        ), mock.patch.object(
+            actions, "_load_lifecycle_publication_helpers"
+        ) as load_helpers, mock.patch.object(
             actions,
             "_require_accepted_main_bridge_source",
             side_effect=fast_path.SecurityBlocker(
                 "candidate-local Ready prior-authority bridge is forbidden"
             ),
         ), self.assertRaisesRegex(fast_path.SecurityBlocker, "candidate-local"):
+            actions._derive_exact_state_adoption_v3_ready_prior_authority(
+                repository_root=ROOT,
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                pull_request=PR,
+                binding={"signature_policy": {"accepted_formats": ["ssh"]}},
+            )
+        load_helpers.assert_not_called()
+
+    def test_accepted_main_gate_requires_protection_and_bounded_metadata(self) -> None:
+        branch = subprocess.CompletedProcess(
+            [], 0, stdout=json.dumps({"sha": "9" * 40, "protected": True}), stderr=""
+        )
+        commit = subprocess.CompletedProcess(
+            [], 0, stdout=json.dumps({"sha": "9" * 40, "verified": True}), stderr=""
+        )
+        package = subprocess.CompletedProcess(
+            [], 0, stdout="scripts/secpal_pr_review/fast_path.py\n", stderr=""
+        )
+        same = subprocess.CompletedProcess([], 0, stdout="same", stderr="")
+        with (
+            mock.patch.object(
+                actions, "_run_bridge_gh", side_effect=[branch, commit]
+            ) as run_gh,
+            mock.patch.object(
+                actions, "_run_attestation_git", side_effect=[package, same, same, same, same, same]
+            ),
+            mock.patch.object(Path, "read_text", return_value="same"),
+        ):
+            self.assertEqual(
+                actions._require_accepted_main_bridge_source(ROOT, REPOSITORY),
+                "9" * 40,
+            )
+        calls = [item.args[0] for item in run_gh.call_args_list]
+        self.assertEqual(len(calls), 2)
+        self.assertIn("--jq", calls[0])
+        self.assertIn("--jq", calls[1])
+
+        unprotected = subprocess.CompletedProcess(
+            [], 0, stdout=json.dumps({"sha": "9" * 40, "protected": False}), stderr=""
+        )
+        with mock.patch.object(actions, "_run_bridge_gh", return_value=unprotected), self.assertRaises(
+            fast_path.SecurityBlocker
+        ):
+            actions._require_accepted_main_bridge_source(ROOT, REPOSITORY)
+
+    def test_bridge_provider_failures_are_guarded(self) -> None:
+        with mock.patch.object(
+            actions,
+            "_run_bridge_gh",
+            side_effect=fast_path.SecurityBlocker("bridge observation unavailable"),
+        ), self.assertRaisesRegex(fast_path.SecurityBlocker, "observation unavailable"):
+            actions._require_accepted_main_bridge_source(ROOT, REPOSITORY)
+
+        with (
+            mock.patch.object(
+                actions, "_require_accepted_main_bridge_source", return_value="9" * 40
+            ),
+            mock.patch.object(
+                actions,
+                "_load_lifecycle_publication_helpers",
+                side_effect=RuntimeError("unavailable"),
+            ),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "publication verifier is unavailable"
+            ),
+        ):
             actions._derive_exact_state_adoption_v3_ready_prior_authority(
                 repository_root=ROOT,
                 repository=REPOSITORY,
@@ -455,7 +541,6 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
         tag.assert_not_called()
 
     def test_invalid_ordinary_evidence_does_not_select_v3_bridge(self) -> None:
-        reviewed = SimpleNamespace(repository=REPOSITORY, pull_request_number=PR)
         ordinary = {
             "schema_version": "1.1",
             "kind": "READY_INTEGRATION_PRIOR_AUTHORITY",

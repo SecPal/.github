@@ -5451,27 +5451,59 @@ def _verified_prior_delivery_commit(
 def _require_accepted_main_bridge_source(
     repository_root: Path,
     repository: str,
-    lifecycle_publication: Any,
 ) -> str:
     """Reject candidate-local bridge code before it can mint or select authority."""
 
-    result = lifecycle_publication._run_gh(
-        ["api", "--hostname", "github.com", f"repos/{repository}/commits/main"]
+    branch_result = _run_bridge_gh(
+        [
+            "api",
+            "--hostname",
+            "github.com",
+            f"repos/{repository}/branches/main",
+            "--jq",
+            '{"sha":.commit.sha,"protected":.protected}',
+        ]
     )
     try:
-        observed = json.loads(result.stdout)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        branch = json.loads(branch_result.stdout)
+    except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise fast_path.SecurityBlocker(
             "protected-main bridge source observation is malformed"
         ) from exc
-    commit = observed.get("commit") if isinstance(observed, dict) else None
-    verification = commit.get("verification") if isinstance(commit, dict) else None
-    main = str(observed.get("sha", "")).lower() if isinstance(observed, dict) else ""
+    main = str(branch.get("sha", "")).lower() if isinstance(branch, dict) else ""
+    if (
+        branch_result.returncode != 0
+        or not isinstance(branch, dict)
+        or set(branch) != {"sha", "protected"}
+        or not OID_PATTERN.fullmatch(main)
+        or branch.get("protected") is not True
+    ):
+        raise fast_path.SecurityBlocker(
+            "protected-main bridge source is not authenticated"
+        )
+    result = _run_bridge_gh(
+        [
+            "api",
+            "--hostname",
+            "github.com",
+            f"repos/{repository}/commits/{main}",
+            "--jq",
+            '{"sha":.sha,"verified":.commit.verification.verified}',
+        ]
+    )
+    try:
+        observed = json.loads(result.stdout)
+    except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise fast_path.SecurityBlocker(
+            "protected-main bridge source observation is malformed"
+        ) from exc
     if (
         result.returncode != 0
+        or not isinstance(observed, dict)
+        or set(observed) != {"sha", "verified"}
         or not OID_PATTERN.fullmatch(main)
-        or not isinstance(verification, dict)
-        or verification.get("verified") is not True
+        or str(observed.get("sha", "")).lower() != main
+        or observed.get("verified") is not True
     ):
         raise fast_path.SecurityBlocker(
             "protected-main bridge source is not authenticated"
@@ -5516,6 +5548,28 @@ def _require_accepted_main_bridge_source(
     return main
 
 
+def _run_bridge_gh(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run one bounded protected-main observation through the trusted CLI."""
+
+    try:
+        gh_executable = evidence.resolve_trusted_executable("gh")
+        return subprocess.run(
+            [gh_executable, *arguments],
+            check=False,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=evidence.command_environment("gh"),
+            timeout=EXTERNAL_COMMAND_TIMEOUT_SECONDS,
+        )
+    except (evidence.CommandPolicyError, OSError, subprocess.TimeoutExpired) as exc:
+        raise fast_path.SecurityBlocker(
+            "protected-main bridge source observation is unavailable"
+        ) from exc
+
+
 def _derive_exact_state_adoption_v3_ready_prior_authority(
     *,
     repository_root: Path,
@@ -5526,10 +5580,15 @@ def _derive_exact_state_adoption_v3_ready_prior_authority(
 ) -> dict[str, Any]:
     """Derive the v3-adopted source projection from protected CURRENT."""
 
-    lifecycle_authority, lifecycle_publication = _load_lifecycle_publication_helpers()
-    _require_accepted_main_bridge_source(
-        repository_root, repository, lifecycle_publication
-    )
+    _require_accepted_main_bridge_source(repository_root, repository)
+    try:
+        lifecycle_authority, lifecycle_publication = (
+            _load_lifecycle_publication_helpers()
+        )
+    except (ImportError, OSError, RuntimeError) as exc:
+        raise fast_path.SecurityBlocker(
+            "maintained lifecycle publication verifier is unavailable"
+        ) from exc
     try:
         current = lifecycle_publication.verify_current_lifecycle_authority(
             repository, delivery_issue
@@ -5576,8 +5635,12 @@ def _derive_exact_state_adoption_v3_ready_prior_authority(
         or len(authorities) != 1
         or state.get("draft") is not False
         or state.get("ready") is not True
+        or isinstance(state.get("unrestricted_review_count"), bool)
         or state.get("unrestricted_review_count") != 1
-        or state.get("remediation_cycle_count") != 2
+        or isinstance(state.get("remediation_cycle_count"), bool)
+        or not isinstance(state.get("remediation_cycle_count"), int)
+        or not 0 <= state.get("remediation_cycle_count") <= 2
+        or isinstance(state.get("ready_transition_count"), bool)
         or state.get("ready_transition_count") != 1
         or not isinstance(ready_history, list)
         or len(ready_history) != 1
@@ -5688,7 +5751,7 @@ def _derive_exact_state_adoption_v3_ready_prior_authority(
             "ready": True,
             "ready_transition": False,
             "unrestricted_reviews": 1,
-            "remediation_cycles": 2,
+            "remediation_cycles": state["remediation_cycle_count"],
             "exceptional_recoveries": 0,
             "exceptional_continuations": 0,
             "cycle_3": False,

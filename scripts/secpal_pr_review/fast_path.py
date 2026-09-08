@@ -517,6 +517,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         ready_history = lifecycle.get("ready_history")
         if (
             lifecycle.get("historical_proof_mode") != "exact_state_adoption"
+            or isinstance(lifecycle.get("ready_transition_count"), bool)
             or lifecycle.get("ready_transition_count") != 1
             or not isinstance(ready_history, list)
             or len(ready_history) != 1
