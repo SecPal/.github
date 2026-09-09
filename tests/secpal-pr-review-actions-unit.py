@@ -7372,7 +7372,7 @@ class FastPathTests(TestCase):
             receipt=None,
             output="attestation.json",
             manual_gate_evidence=None,
-            eligibility_evidence=None,
+            eligibility_evidence="eligibility.json",
             integration_evidence="integration.json",
             delivery_issue=9,
             integration_authorization_id=integration["authorization_id"],
@@ -7386,6 +7386,11 @@ class FastPathTests(TestCase):
             mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
             mock.patch.object(actions, "load_registry", return_value={}),
             mock.patch.object(actions, "select_repository", return_value=entry),
+            mock.patch.object(
+                actions,
+                "_resolution_eligibility_digest",
+                return_value="e" * 64,
+            ),
             mock.patch.object(
                 actions,
                 "_read_json",
@@ -7416,6 +7421,57 @@ class FastPathTests(TestCase):
             ),
             mock.patch.object(actions, "_write_fast_report"),
             self.assertRaises(fast_path.SecurityBlocker),
+        ):
+            actions._command_attest_validation(arguments)
+
+    def test_new_ready_integration_validation_requires_eligibility(self) -> None:
+        reviewed = fast_feedback()
+        entry = registry_entry("SecPal/.github")
+        entry["manual_gates"] = []
+        arguments = SimpleNamespace(
+            expected_head=reviewed.head_sha,
+            repo_root=str(REPO_ROOT),
+            repo="SecPal/.github",
+            reviewed_state="reviewed.json",
+            registry="registry.json",
+            bind_commit=False,
+            receipt=None,
+            output="attestation.json",
+            manual_gate_evidence=None,
+            eligibility_evidence=None,
+            integration_evidence="integration.json",
+            pre_enrollment_integration_evidence=None,
+            exceptional_recovery_evidence=None,
+            exceptional_continuation_evidence=None,
+            delivery_issue=9,
+            integration_authorization_id="ready-integration-authorization-001",
+            expected_integration_signer="aroviqen",
+            prior_authority="prior.json",
+            prior_authority_tag_ref="refs/tags/prior",
+            prior_reviewed_state="prior-reviewed.json",
+            prior_receipt="prior-receipt.json",
+            prior_attestation="prior-attestation.json",
+            expected_prior_authority_signer="aroviqen",
+            validation_receipt_id=None,
+            final_attestation_id=None,
+            exceptional_recovery_delivery_issue=None,
+            exceptional_recovery_authorization_id=None,
+            exceptional_continuation_delivery_issue=None,
+            exceptional_continuation_authorization_id=None,
+        )
+        with (
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                return_value=(reviewed.head_sha, ""),
+            ),
+            mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+            mock.patch.object(actions, "load_registry", return_value={}),
+            mock.patch.object(actions, "select_repository", return_value=entry),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "new Ready integration validation requires authenticated eligibility",
+            ),
         ):
             actions._command_attest_validation(arguments)
 

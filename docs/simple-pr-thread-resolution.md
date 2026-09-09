@@ -265,6 +265,22 @@ current-main identity, integration and receipt trailers, receipt, final
 attestation, reviewed-state and eligibility digests, version mapping, and
 signer/signature bindings.
 
+The same path accepts a historical schema-1.1 Ready integration only when the
+caller supplies its exact original validation receipt with
+`--final-validation-receipt` to each producer and
+`--integration-validation-receipt` to the resolver, while omitting final
+eligibility evidence. The integration-specific verifier authenticates the
+source and requires both receipt and attestation to omit
+`eligibility_evidence_digest`. This derives
+`NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY`; it never makes schema 1.1
+thread-resolution authority. Exact authenticated Stable Feedback derives
+`REVIEWED_BUT_INELIGIBLE` or `ABSENT_FROM_BOTH`, after which signed detached
+classification and disposition remain mandatory. A supplied eligibility
+artifact, a present or null digest, or a schema-1.2 downgrade fails closed.
+New Ready-integration validation requires authenticated eligibility and emits
+schema 1.2, so this source-only compatibility path can consume existing schema
+1.1 evidence but cannot mint more of it.
+
 One accepted-main exact recovery record for `SecPal/.github` issue #810 and
 PR #821 permits the alternative
 `AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE` mode. The complete detached late
@@ -296,12 +312,13 @@ artifact is never its trust root. Artifact and signature outputs must be in the
 private session area outside the delivery repository, so creating the evidence
 cannot alter that worktree or tree.
 
-The closed authorization is exactly
-`INFORMATIONAL + NON_ACTIONABLE + technically_blocking=false` for either
-derived origin. Existing
-`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE +
-technically_blocking=false` remains authorized only for
-`ABSENT_FROM_BOTH`. No other classification, disposition, technical blocker,
+The closed authorization admits the existing exact safe decisions. A
+`REVIEWED_BUT_INELIGIBLE` target may use
+`VALID_ACTIONABLE + CORRECTED_AND_VERIFIED`,
+`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE`, or
+`INFORMATIONAL + NON_ACTIONABLE`; an `ABSENT_FROM_BOTH` target retains only the
+last two. Every pair requires `technically_blocking=false`. No other
+classification, disposition, technical blocker,
 or caller-selected origin is accepted. Classification is independently
 established and recorded in signed exact evidence; no text heuristic exists.
 The signed artifact

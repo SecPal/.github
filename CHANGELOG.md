@@ -9,6 +9,19 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-09 - Compose Historical Ready Source With Detached Thread Authority
+
+**Fixed:**
+
+- Authenticate schema-1.1 Ready integration and its exact receipt as source
+  authority while proving both omit commit-bound eligibility.
+- Derive late target origin from exact Stable Feedback and require the existing
+  signed classification/disposition chain before guarded resolution; schema 1.1
+  remains unable to authorize resolution by itself.
+- Admit the existing corrected/actionable and invalid/disproven decisions for
+  reviewed-but-ineligible targets while preserving technical-blocker rejection,
+  schema-1.2 commit-bound authority, and the special zero-thread absence policy.
+
 ## 2026-09-08 - Authenticate Continuation Feedback Growth
 
 **Fixed:**

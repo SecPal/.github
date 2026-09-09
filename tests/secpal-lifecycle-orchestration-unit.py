@@ -1225,6 +1225,32 @@ class LifecycleOrchestrationTests(TestCase):
                 resulting_state_digest="2" * 64,
             )
 
+        broadened = copy.deepcopy(artifact)
+        broadened["thread"]["classification"] = "VALID_ACTIONABLE"
+        broadened["thread"]["disposition"] = "CORRECTED_AND_VERIFIED"
+        with (
+            mock.patch.object(
+                late_disposition,
+                "verify_detached_signature",
+                return_value=late_disposition.canonical_json_bytes(broadened),
+            ),
+            self.assertRaisesRegex(
+                late_disposition.LateDispositionError,
+                "successor classification decision is unsupported",
+            ),
+        ):
+            late_disposition.parse_successor_classification_artifact(
+                Path("unused.json"),
+                Path("unused.sig"),
+                expected_signer=signer,
+                repository=REPOSITORY,
+                delivery_issue_number=ISSUE,
+                pull_request_number=PR,
+                head_sha=NEXT_HEAD,
+                predecessor_state_digest="1" * 64,
+                resulting_state_digest="2" * 64,
+            )
+
     def test_authenticated_reaction_growth_preserves_predecessor_comment(self) -> None:
         reviewed, current, evidence = authenticated_provider_growth()
         comment = current.feedback["threads"][0]["comments"][0]

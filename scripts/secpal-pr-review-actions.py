@@ -6416,6 +6416,14 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         raise fast_path.SecurityBlocker(
             "repository has no closed pre-enrollment integration policy"
         )
+    if (
+        integration_evidence_path
+        and not arguments.bind_commit
+        and not getattr(arguments, "eligibility_evidence", None)
+    ):
+        raise fast_path.SecurityBlocker(
+            "new Ready integration validation requires authenticated eligibility"
+        )
     exceptional_recovery_path = getattr(
         arguments, "exceptional_recovery_evidence", None
     )

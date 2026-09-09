@@ -661,7 +661,7 @@ def continuation_validation_payloads(
 
 def integration_validation_payloads(
     reviewed: dict[str, Any],
-    eligibility_digest: str,
+    eligibility_digest: str | None,
     *,
     expected_head: str,
     delivery_issue: int = 673,
@@ -961,22 +961,85 @@ def run_late_resolution_fixture(
     signature_error: Exception | None = None,
     classification: str = "INVALID_FALSE_OR_MISLEADING",
     disposition: str = "DISPROVEN_WITH_EVIDENCE",
+    historical_ready_integration: bool = False,
+    historical_source_mutator: Any | None = None,
+    historical_fake_eligibility: bool = False,
 ) -> tuple[dict[str, Any], FakeGh, FakeGit]:
     root = Path(directory)
-    reviewed, attestation, _eligibility, git = (
-        write_authenticated_resolution_inputs(
-            directory,
-            [final_reviewed_thread_id],
-            eligibility_thread_ids=final_eligibility_thread_ids,
+    if historical_ready_integration:
+        reviewed = reviewed_state_payload(final_reviewed_thread_id, [])
+        integration, receipt, attestation = integration_validation_payloads(
+            reviewed,
+            None,
+            expected_head="c" * 40,
+            delivery_issue=724,
         )
-    )
+        if historical_source_mutator is not None:
+            historical_source_mutator(integration, receipt, attestation)
+        (root / "reviewed.json").write_text(
+            json.dumps(reviewed), encoding="utf-8"
+        )
+        (root / "validation.json").write_text(
+            json.dumps(attestation), encoding="utf-8"
+        )
+        (root / "integration.json").write_text(
+            json.dumps(integration), encoding="utf-8"
+        )
+        (root / "receipt.json").write_text(
+            json.dumps(receipt), encoding="utf-8"
+        )
+        if historical_fake_eligibility:
+            (root / "eligibility.json").write_text("{}", encoding="utf-8")
+        git = FakeGit(
+            expected_head=attestation["head_sha"],
+            reviewed_head=reviewed["head_sha"],
+            tree=attestation["validated_tree_sha"],
+            receipt_digest=attestation["validation_receipt_digest"],
+            second_parent=reviewed["base_sha"],
+            integration_digest=receipt["integration_evidence_digest"],
+        )
+    else:
+        reviewed, attestation, _eligibility, git = (
+            write_authenticated_resolution_inputs(
+                directory,
+                [final_reviewed_thread_id],
+                eligibility_thread_ids=final_eligibility_thread_ids,
+            )
+        )
     body = "The reported recovery behavior is not present."
     artifact = late_disposition_payload(
-        attestation,
+        (
+            {**attestation, "eligibility_evidence_digest": "e" * 64}
+            if historical_ready_integration
+            else attestation
+        ),
         body=body,
-        classification=classification,
-        disposition=disposition,
+        classification=(
+            "INVALID_FALSE_OR_MISLEADING"
+            if historical_ready_integration
+            else classification
+        ),
+        disposition=(
+            "DISPROVEN_WITH_EVIDENCE"
+            if historical_ready_integration
+            else disposition
+        ),
     )
+    if historical_ready_integration:
+        artifact["threads"][0]["classification"] = classification
+        artifact["threads"][0]["disposition"] = disposition
+        artifact["schema_version"] = (
+            MODULE.late_disposition.disposition_schema_version_for_decision(
+                classification,
+                disposition,
+                final_eligibility_absent=False,
+                no_commit_bound_ready_integration_eligibility=True,
+            )
+        )
+        artifact.pop("final_eligibility_evidence_digest")
+        artifact["final_eligibility_status"] = (
+            "NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY"
+        )
     classification = {
         "schema_version": MODULE.late_disposition.schema_version_for_decision(
             artifact["threads"][0]["classification"],
@@ -1064,11 +1127,26 @@ def run_late_resolution_fixture(
             final_reviewed_state_path=root / "reviewed.json",
             expected_final_reviewed_state_digest=reviewed["state_digest"],
             final_validation_evidence_path=root / "validation.json",
-            final_eligibility_evidence_path=root / "eligibility.json",
+            final_eligibility_evidence_path=(
+                None
+                if historical_ready_integration
+                and not historical_fake_eligibility
+                else root / "eligibility.json"
+            ),
             late_classification_evidence_path=classification_path,
             late_classification_signature_path=classification_signature_path,
             late_disposition_evidence_path=artifact_path,
             late_disposition_signature_path=signature_path,
+            integration_evidence_path=(
+                root / "integration.json"
+                if historical_ready_integration
+                else None
+            ),
+            integration_validation_receipt_path=(
+                root / "receipt.json"
+                if historical_ready_integration
+                else None
+            ),
         )
     return result, github, git
 
@@ -3653,23 +3731,25 @@ class ResolveFixedThreadsTests(TestCase):
                     integration_path,
                 )
 
-    def test_historical_ready_integration_attestation_cannot_authorize_resolution(
+    def test_historical_ready_integration_requires_exact_receipt_for_source_authority(
         self,
     ) -> None:
         reviewed = reviewed_state_payload(
             "PRRT_HISTORICAL_INTEGRATION",
             [("PRRC_HISTORICAL_INTEGRATION", "Historical finding.", None)],
         )
-        payload = {
-            "schema_version": "1.1",
-            "kind": "READY_INTEGRATION_VALIDATION_ATTESTATION",
-            "head_sha": "c" * 40,
-        }
+        integration, _receipt, payload = integration_validation_payloads(
+            reviewed,
+            None,
+            expected_head="c" * 40,
+        )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "validation.json"
             reviewed_path = Path(directory) / "reviewed.json"
+            integration_path = Path(directory) / "integration.json"
             path.write_text(json.dumps(payload), encoding="utf-8")
             reviewed_path.write_text(json.dumps(reviewed), encoding="utf-8")
+            integration_path.write_text(json.dumps(integration), encoding="utf-8")
             state = MODULE.load_reviewed_state(
                 reviewed_path,
                 "SecPal/api",
@@ -3679,15 +3759,138 @@ class ResolveFixedThreadsTests(TestCase):
             )
             with self.assertRaisesRegex(
                 MODULE.ResolutionError,
-                "historical Ready integration attestation is not resolution authority",
+                "historical Ready integration requires its validation receipt",
             ):
                 MODULE.load_validation_evidence(
                     path,
                     "SecPal/api",
                     "c" * 40,
                     state,
-                    Path(directory) / "integration.json",
+                    integration_path,
                 )
+
+    def test_historical_ready_source_and_detached_authority_resolve_exact_thread(
+        self,
+    ) -> None:
+        decisions = (
+            ("VALID_ACTIONABLE", "CORRECTED_AND_VERIFIED"),
+            ("INVALID_FALSE_OR_MISLEADING", "DISPROVEN_WITH_EVIDENCE"),
+        )
+        for classification, disposition in decisions:
+            with self.subTest(
+                classification=classification,
+                disposition=disposition,
+            ), tempfile.TemporaryDirectory() as directory:
+                result, github, git = run_late_resolution_fixture(
+                    directory,
+                    historical_ready_integration=True,
+                    final_reviewed_thread_id="PRRT_LATE_NON_BLOCKING",
+                    classification=classification,
+                    disposition=disposition,
+                )
+
+                self.assertEqual(result["status"], "success")
+                self.assertEqual(result["resolved"], ["PRRT_LATE_NON_BLOCKING"])
+                self.assertEqual(
+                    result["eligibility_path"], "authenticated_late_disposition"
+                )
+                self.assertEqual(
+                    sum(
+                        f"query={MODULE.RESOLVE_MUTATION}" in call
+                        for call in github.calls
+                    ),
+                    1,
+                )
+                self.assertFalse(
+                    any(call[0] in {"commit", "push"} for call in git.calls)
+                )
+                MODULE.evidence.validate_against_authoritative_schema(
+                    json.loads(
+                        (Path(directory) / "late-classification.json").read_text(
+                            encoding="utf-8"
+                        )
+                    ),
+                    ROOT
+                    / ".agents/skills/secpal-pr-review/references/late-classification.schema.json",
+                    "late classification evidence",
+                )
+                MODULE.evidence.validate_against_authoritative_schema(
+                    json.loads(
+                        (Path(directory) / "late-disposition.json").read_text(
+                            encoding="utf-8"
+                        )
+                    ),
+                    ROOT
+                    / ".agents/skills/secpal-pr-review/references/late-disposition.schema.json",
+                    "late-disposition evidence",
+                )
+
+    def test_historical_ready_source_eligibility_omission_is_exact(self) -> None:
+        mutations = {
+            "receipt null eligibility": lambda _integration, receipt, _attestation: (
+                receipt.update({"eligibility_evidence_digest": None})
+            ),
+            "receipt invented eligibility": lambda _integration, receipt, _attestation: (
+                receipt.update({"eligibility_evidence_digest": "e" * 64})
+            ),
+            "attestation null eligibility": lambda _integration, _receipt, attestation: (
+                attestation.update({"eligibility_evidence_digest": None})
+            ),
+            "attestation invented eligibility": lambda _integration, _receipt, attestation: (
+                attestation.update({"eligibility_evidence_digest": "e" * 64})
+            ),
+        }
+        for label, mutation in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                with self.assertRaises(MODULE.ResolutionError):
+                    run_late_resolution_fixture(
+                        directory,
+                        historical_ready_integration=True,
+                        historical_source_mutator=mutation,
+                    )
+
+    def test_historical_ready_source_is_not_standalone_resolution_authority(
+        self,
+    ) -> None:
+        arguments = [
+            "--repo",
+            "SecPal/api",
+            "--pr",
+            "123",
+            "--repo-root",
+            "/delivery",
+            "--expected-head",
+            "a" * 40,
+            "--reviewed-state",
+            "reviewed.json",
+            "--expected-reviewed-state-digest",
+            "b" * 64,
+            "--validation-evidence",
+            "attestation.json",
+            "--integration-evidence",
+            "integration.json",
+            "--integration-validation-receipt",
+            "receipt.json",
+            "--thread-id",
+            "PRRT_exampleOne",
+        ]
+        with redirect_stderr(StringIO()) as error, self.assertRaises(SystemExit):
+            MODULE.parse_args(arguments)
+        self.assertIn(
+            "historical integration receipt is valid only for late disposition",
+            error.getvalue(),
+        )
+
+    def test_historical_ready_source_rejects_fake_eligibility_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(
+            MODULE.ResolutionError,
+            "rejects supplied eligibility evidence",
+        ):
+            run_late_resolution_fixture(
+                directory,
+                historical_ready_integration=True,
+                historical_fake_eligibility=True,
+            )
 
     def test_eligibility_bound_ready_integration_authorizes_exact_thread(self) -> None:
         thread_id = "PRRT_INTEGRATION_ELIGIBLE"
@@ -4152,15 +4355,18 @@ class ResolveFixedThreadsTests(TestCase):
             "INVALID_FALSE_OR_MISLEADING",
             "DISPROVEN_WITH_EVIDENCE",
         )
+        valid = ("VALID_ACTIONABLE", "CORRECTED_AND_VERIFIED")
         informational = ("INFORMATIONAL", "NON_ACTIONABLE")
         self.assertEqual(
             MODULE.late_disposition.POST_FREEZE_DECISIONS,
-            frozenset({invalid, informational}),
+            frozenset({valid, invalid, informational}),
         )
         self.assertEqual(
             MODULE.late_disposition.POST_FREEZE_ORIGIN_DECISIONS,
             {
-                "REVIEWED_BUT_INELIGIBLE": frozenset({informational}),
+                "REVIEWED_BUT_INELIGIBLE": frozenset(
+                    {valid, invalid, informational}
+                ),
                 "ABSENT_FROM_BOTH": frozenset({invalid, informational}),
             },
         )
@@ -4169,6 +4375,7 @@ class ResolveFixedThreadsTests(TestCase):
             {
                 "1.0": frozenset({invalid}),
                 "1.1": frozenset({informational}),
+                "1.3": frozenset({valid}),
             },
         )
         self.assertEqual(
@@ -4180,12 +4387,17 @@ class ResolveFixedThreadsTests(TestCase):
             "1.1",
         )
         self.assertEqual(
+            MODULE.late_disposition.schema_version_for_decision(*valid),
+            "1.3",
+        )
+        self.assertEqual(
             MODULE.late_disposition.DISPOSITION_SCHEMA_VERSION_POLICY,
             {
                 "1.0": (False, invalid),
                 "1.1": (True, invalid),
                 "1.2": (False, informational),
                 "1.3": (True, informational),
+                "1.7": (False, valid),
             },
         )
         for final_eligibility_absent, decision, schema_version in (
@@ -4193,6 +4405,7 @@ class ResolveFixedThreadsTests(TestCase):
             (True, invalid, "1.1"),
             (False, informational, "1.2"),
             (True, informational, "1.3"),
+            (False, valid, "1.7"),
         ):
             self.assertEqual(
                 MODULE.late_disposition.disposition_schema_version_for_decision(
@@ -4268,12 +4481,6 @@ class ResolveFixedThreadsTests(TestCase):
     def test_cycle2_disposition_reverifies_authenticated_final_origin(self) -> None:
         cases = (
             (
-                "pre-existing",
-                "PRRT_LATE_NON_BLOCKING",
-                (),
-                "unsupported for origin REVIEWED_BUT_INELIGIBLE",
-            ),
-            (
                 "commit-bound",
                 "PRRT_LATE_NON_BLOCKING",
                 ("PRRT_LATE_NON_BLOCKING",),
@@ -4344,12 +4551,6 @@ class ResolveFixedThreadsTests(TestCase):
 
     def test_cycle2_resolver_reverifies_authenticated_final_origin(self) -> None:
         cases = (
-            (
-                "pre-existing",
-                "PRRT_LATE_NON_BLOCKING",
-                (),
-                "unsupported for origin REVIEWED_BUT_INELIGIBLE",
-            ),
             (
                 "commit-bound",
                 "PRRT_LATE_NON_BLOCKING",
@@ -4698,6 +4899,34 @@ class ResolveFixedThreadsTests(TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["pending"], ["PRRT_LATE_NON_BLOCKING"])
         self.assertEqual(len(github.calls), 1)
+
+    def test_reviewed_but_ineligible_corrected_thread_reaches_guarded_dry_run(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result, github, _git = run_late_resolution_fixture(
+                directory,
+                apply=False,
+                final_reviewed_thread_id="PRRT_LATE_NON_BLOCKING",
+                final_eligibility_thread_ids=(),
+                classification="VALID_ACTIONABLE",
+                disposition="CORRECTED_AND_VERIFIED",
+            )
+            artifact = json.loads(
+                (Path(directory) / "late-disposition.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["origin"], "REVIEWED_BUT_INELIGIBLE")
+        self.assertEqual(result["pending"], ["PRRT_LATE_NON_BLOCKING"])
+        self.assertEqual(len(github.calls), 1)
+        MODULE.evidence.validate_against_authoritative_schema(
+            artifact,
+            ROOT
+            / ".agents/skills/secpal-pr-review/references/late-disposition.schema.json",
+            "late disposition evidence",
+        )
 
     def test_post_freeze_informational_resolution_accepts_both_derived_origins(
         self,
@@ -8433,7 +8662,7 @@ class ResolveFixedThreadsTests(TestCase):
                     )
                 self.assertIn(
                     "--integration-evidence requires "
-                    "--final-eligibility-evidence",
+                    "final eligibility or the historical validation receipt",
                     error.getvalue(),
                 )
                 ordinary = producer.parse_args(arguments)
@@ -8448,6 +8677,16 @@ class ResolveFixedThreadsTests(TestCase):
                     ]
                 )
                 self.assertEqual(integration.integration_evidence, "integration.json")
+                historical = producer.parse_args(
+                    [
+                        *arguments,
+                        "--final-validation-receipt",
+                        "receipt.json",
+                        "--integration-evidence",
+                        "integration.json",
+                    ]
+                )
+                self.assertEqual(historical.final_validation_receipt, "receipt.json")
             finally:
                 sys.modules.pop(spec.name, None)
 
@@ -8527,6 +8766,19 @@ class ResolveFixedThreadsTests(TestCase):
         )
         absence = MODULE.parse_args(late)
         self.assertIsNone(absence.final_eligibility_evidence)
+        historical = MODULE.parse_args(
+            [
+                *late,
+                "--integration-evidence",
+                "integration.json",
+                "--integration-validation-receipt",
+                "receipt.json",
+            ]
+        )
+        self.assertEqual(
+            historical.integration_validation_receipt,
+            "receipt.json",
+        )
 
         rejected = (
             (

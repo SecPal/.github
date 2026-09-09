@@ -738,6 +738,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "KIND",
             "IDENTITY",
             "MAXIMUM_ARTIFACT_BYTES",
+            "NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY",
             "SCHEMA_VERSION",
             "SignerIdentity",
             "TECHNICAL_BLOCKERS",

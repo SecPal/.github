@@ -199,23 +199,25 @@ eligibility (`REVIEWED_BUT_INELIGIBLE`), or it is absent from both
 (`ABSENT_FROM_BOTH`). A target present in final eligibility is rejected; the
 path never replaces or amends original eligibility.
 
-The closed authorization is
-`INFORMATIONAL + NON_ACTIONABLE + technically_blocking=false` for either
-derived origin. Existing
-`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE +
-technically_blocking=false` authority remains unchanged and is accepted only
-for `ABSENT_FROM_BOTH`. No other classification, disposition, technical
+The closed authorization admits corrected/actionable, invalid/disproven, and
+informational/non-actionable decisions for `REVIEWED_BUT_INELIGIBLE`.
+`ABSENT_FROM_BOTH` admits only invalid/disproven and
+informational/non-actionable. Every decision requires
+`technically_blocking=false`; no other classification, disposition, technical
 blocker, or caller-selected origin is accepted. Classification is explicit
 independent review judgment and is never inferred from text.
 
 Classification schema `1.0` remains restricted to the original
 `INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` semantics, while
-classification schema `1.1` selects `INFORMATIONAL + NON_ACTIONABLE`.
-Disposition schemas additionally bind the final-eligibility mode: `1.0` and
-`1.2` select manifest-backed invalid and informational decisions respectively;
-`1.1` and `1.3` select authenticated-absence invalid and informational
-decisions. The signed schema version therefore selects one exact evidence-mode
-and decision pair. Formerly rejected bytes do not acquire new authority;
+classification schema `1.1` selects `INFORMATIONAL + NON_ACTIONABLE` and `1.3`
+selects `VALID_ACTIONABLE + CORRECTED_AND_VERIFIED`. Disposition schemas
+additionally bind the final-eligibility mode: `1.0`, `1.2`, and `1.7` select
+manifest-backed invalid, informational, and corrected decisions respectively;
+`1.1` and `1.3` select the maintained authenticated-absence invalid and
+informational decisions; and `1.4`, `1.5`, and `1.6` select the historical
+Ready-integration no-commit-bound mode for those three decisions. The signed
+schema version therefore selects one exact evidence-mode and decision pair.
+Formerly rejected bytes do not acquire a meaning under an existing version;
 unknown versions and cross-version pair substitution fail closed.
 
 This path first independently verifies the existing complete final reviewed
@@ -845,6 +847,16 @@ ordered parents, combined tree, both commit trailers, reviewed state, expected
 signer, and matching receipt/attestation eligibility digest before exposing the
 minimal resolution anchor. Historical version-1.1 integration attestations
 remain valid for their original purpose and are never resolution authority.
+For an existing version-1.1 source on an unchanged final head, the detached
+late path may authenticate that source through the same integration verifier
+only when its exact original receipt and attestation both omit
+`eligibility_evidence_digest`. That proves
+`NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY`, not thread authority. Exact
+authenticated final Stable Feedback derives `REVIEWED_BUT_INELIGIBLE` or
+`ABSENT_FROM_BOTH`; separately signed late classification and disposition then
+supply the only thread authority. New Ready-integration validation requires
+canonical eligibility and therefore emits version 1.2 rather than minting more
+unbound version-1.1 evidence.
 
 Parent 1 and its Ready/lifecycle claims are not caller assertions. A distinct
 closed `READY_INTEGRATION_PRIOR_AUTHORITY` manifest binds the prior delivery

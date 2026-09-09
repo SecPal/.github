@@ -268,10 +268,10 @@ For an exact technically non-blocking target absent from authenticated final
 eligibility and observed on the unchanged delivery head,
 `secpal-create-late-classification.py` verifies the existing final delivery
 evidence and derives `REVIEWED_BUT_INELIGIBLE` or `ABSENT_FROM_BOTH` from
-authenticated final reviewed state. It accepts
-`INFORMATIONAL + NON_ACTIONABLE` for either origin; the existing
-`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` pair remains accepted
-only for `ABSENT_FROM_BOTH`. All require `technically_blocking=false`. The
+authenticated final reviewed state. It accepts the existing corrected/actionable,
+invalid/disproven, and informational/non-actionable pairs for
+`REVIEWED_BUT_INELIGIBLE`; `ABSENT_FROM_BOTH` retains only the last two. All
+require `technically_blocking=false`. The
 creator captures only the named live thread and authenticates the explicit
 classification decision. Then
 `secpal-create-late-disposition.py` verifies that decision, computes its digest
@@ -288,6 +288,16 @@ attestation, exact thread and top-level comment identities, body and reply
 state, classification, disposition, technical-blocking flag, and guarded
 resolution action. It cannot select arbitrary threads or authorize any other
 GitHub mutation.
+
+A historical schema-1.1 Ready integration instead supplies
+`--integration-evidence` and its original `--final-validation-receipt` (or
+`--integration-validation-receipt` to the resolver), with no final eligibility
+artifact. The verifier authenticates that exact integration source and proves
+that both receipt and attestation omit `eligibility_evidence_digest`. This
+derives `NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY`, not resolution
+authority. Exact Stable Feedback derives target origin, and only the same signed
+late-classification/disposition chain can authorize the guarded resolver.
+Schema-1.2 commit-bound behavior is unchanged.
 
 This authenticated reviewed-state/eligibility boundary is what “post-push”
 denotes in the resolution lifecycle. It does not use or claim a cryptographic

@@ -24,6 +24,13 @@ ABSENCE_SCHEMA_VERSION = "1.1"
 INFORMATIONAL_SCHEMA_VERSION = "1.1"
 INFORMATIONAL_DISPOSITION_SCHEMA_VERSION = "1.2"
 INFORMATIONAL_ABSENCE_SCHEMA_VERSION = "1.3"
+READY_INTEGRATION_SCHEMA_VERSION = "1.4"
+INFORMATIONAL_READY_INTEGRATION_SCHEMA_VERSION = "1.5"
+ACTIONABLE_READY_INTEGRATION_SCHEMA_VERSION = "1.6"
+ACTIONABLE_DISPOSITION_SCHEMA_VERSION = "1.7"
+NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY = (
+    "NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY"
+)
 KIND = "LATE_FEEDBACK_DISPOSITION"
 SIGNATURE_NAMESPACE = "secpal-late-feedback-disposition-v1"
 CLASSIFICATION_KIND = "LATE_FEEDBACK_CLASSIFICATION"
@@ -40,17 +47,22 @@ INVALID_DISPROVEN = (
     "INVALID_FALSE_OR_MISLEADING",
     "DISPROVEN_WITH_EVIDENCE",
 )
+VALID_CORRECTED = ("VALID_ACTIONABLE", "CORRECTED_AND_VERIFIED")
 INFORMATIONAL_NON_ACTIONABLE = ("INFORMATIONAL", "NON_ACTIONABLE")
 POST_FREEZE_DECISIONS = frozenset(
+    {VALID_CORRECTED, INVALID_DISPROVEN, INFORMATIONAL_NON_ACTIONABLE}
+)
+SUCCESSOR_SAFE_DECISIONS = frozenset(
     {INVALID_DISPROVEN, INFORMATIONAL_NON_ACTIONABLE}
 )
 POST_FREEZE_ORIGIN_DECISIONS = {
-    REVIEWED_BUT_INELIGIBLE: frozenset({INFORMATIONAL_NON_ACTIONABLE}),
-    ABSENT_FROM_BOTH: POST_FREEZE_DECISIONS,
+    REVIEWED_BUT_INELIGIBLE: POST_FREEZE_DECISIONS,
+    ABSENT_FROM_BOTH: frozenset({INVALID_DISPROVEN, INFORMATIONAL_NON_ACTIONABLE}),
 }
 SCHEMA_VERSION_DECISIONS = {
     SCHEMA_VERSION: frozenset({INVALID_DISPROVEN}),
     INFORMATIONAL_SCHEMA_VERSION: frozenset({INFORMATIONAL_NON_ACTIONABLE}),
+    "1.3": frozenset({VALID_CORRECTED}),
 }
 DISPOSITION_SCHEMA_VERSION_POLICY = {
     SCHEMA_VERSION: (False, INVALID_DISPROVEN),
@@ -59,10 +71,16 @@ DISPOSITION_SCHEMA_VERSION_POLICY = {
         False,
         INFORMATIONAL_NON_ACTIONABLE,
     ),
+    ACTIONABLE_DISPOSITION_SCHEMA_VERSION: (False, VALID_CORRECTED),
     INFORMATIONAL_ABSENCE_SCHEMA_VERSION: (
         True,
         INFORMATIONAL_NON_ACTIONABLE,
     ),
+}
+READY_INTEGRATION_DISPOSITION_SCHEMA_VERSION_POLICY = {
+    READY_INTEGRATION_SCHEMA_VERSION: INVALID_DISPROVEN,
+    INFORMATIONAL_READY_INTEGRATION_SCHEMA_VERSION: INFORMATIONAL_NON_ACTIONABLE,
+    ACTIONABLE_READY_INTEGRATION_SCHEMA_VERSION: VALID_CORRECTED,
 }
 MAXIMUM_ARTIFACT_BYTES = 64 * 1024
 MAXIMUM_SIGNATURE_BYTES = 32 * 1024
@@ -658,10 +676,24 @@ def disposition_schema_version_for_decision(
     disposition: str,
     *,
     final_eligibility_absent: bool,
+    no_commit_bound_ready_integration_eligibility: bool = False,
 ) -> str:
     if not isinstance(classification, str) or not isinstance(disposition, str):
         raise LateDispositionError("late disposition decision fields are malformed")
     decision = (classification, disposition)
+    if no_commit_bound_ready_integration_eligibility:
+        if final_eligibility_absent:
+            raise LateDispositionError(
+                "late disposition eligibility modes are mutually exclusive"
+            )
+        for schema_version, authorized_decision in (
+            READY_INTEGRATION_DISPOSITION_SCHEMA_VERSION_POLICY.items()
+        ):
+            if decision == authorized_decision:
+                return schema_version
+        raise LateDispositionError(
+            "late disposition decision is not schema-authorized"
+        )
     for schema_version, (absence_mode, authorized_decision) in (
         DISPOSITION_SCHEMA_VERSION_POLICY.items()
     ):
@@ -943,7 +975,7 @@ def parse_successor_classification_artifact(
     ):
         raise LateDispositionError("successor source-only classification is malformed")
     decision = (item.get("classification"), item.get("disposition"))
-    if decision not in POST_FREEZE_DECISIONS:
+    if decision not in SUCCESSOR_SAFE_DECISIONS:
         raise LateDispositionError("successor classification decision is unsupported")
     raw_sources = payload.get("sources")
     sources: list[tuple[str, str, str, str | None]] = []
@@ -1022,6 +1054,7 @@ def parse_artifact(
     final_eligibility_evidence_digest: str | None,
     thread_ids: tuple[str, ...],
     final_eligibility_absence_recovery_digest: str | None = None,
+    final_eligibility_status: str | None = None,
     signature_environment: dict[str, str] | None = None,
 ) -> LateDispositionEvidence:
     canonical = verify_detached_signature(
@@ -1056,7 +1089,12 @@ def parse_artifact(
     manifest_mode = (
         isinstance(payload, dict)
         and isinstance(schema_version, str)
-        and schema_version in {SCHEMA_VERSION, INFORMATIONAL_DISPOSITION_SCHEMA_VERSION}
+        and schema_version
+        in {
+            SCHEMA_VERSION,
+            INFORMATIONAL_DISPOSITION_SCHEMA_VERSION,
+            ACTIONABLE_DISPOSITION_SCHEMA_VERSION,
+        }
         and set(payload) == common_keys | {"final_eligibility_evidence_digest"}
         and isinstance(final_eligibility_evidence_digest, str)
         and DIGEST.fullmatch(final_eligibility_evidence_digest)
@@ -1074,7 +1112,22 @@ def parse_artifact(
         }
         and final_eligibility_evidence_digest is None
     )
-    if not manifest_mode and not absence_mode:
+    ready_integration_mode = (
+        isinstance(payload, dict)
+        and isinstance(schema_version, str)
+        and schema_version
+        in {
+            READY_INTEGRATION_SCHEMA_VERSION,
+            INFORMATIONAL_READY_INTEGRATION_SCHEMA_VERSION,
+            ACTIONABLE_READY_INTEGRATION_SCHEMA_VERSION,
+        }
+        and set(payload) == common_keys | {"final_eligibility_status"}
+        and final_eligibility_evidence_digest is None
+        and final_eligibility_absence_recovery_digest is None
+        and final_eligibility_status
+        == NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY
+    )
+    if not manifest_mode and not absence_mode and not ready_integration_mode:
         raise LateDispositionError("late-disposition artifact shape is unsupported")
     declared_signer = payload.get("delivery_signer")
     if (
@@ -1101,6 +1154,11 @@ def parse_artifact(
                 or not isinstance(final_eligibility_absence_recovery_digest, str)
                 or not DIGEST.fullmatch(final_eligibility_absence_recovery_digest)
             )
+        )
+        or (
+            ready_integration_mode
+            and payload.get("final_eligibility_status")
+            != NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY
         )
         or payload.get("authorized_action") != "RESOLVE_EXACT_REVIEW_THREADS"
         or not isinstance(declared_signer, dict)
@@ -1153,8 +1211,15 @@ def parse_artifact(
             or not isinstance(item.get("is_outdated"), bool)
             or not isinstance(classification, str)
             or not isinstance(disposition, str)
-            or DISPOSITION_SCHEMA_VERSION_POLICY.get(schema_version)
-            != (absence_mode, (classification, disposition))
+            or (
+                READY_INTEGRATION_DISPOSITION_SCHEMA_VERSION_POLICY.get(
+                    schema_version
+                )
+                != (classification, disposition)
+                if ready_integration_mode
+                else DISPOSITION_SCHEMA_VERSION_POLICY.get(schema_version)
+                != (absence_mode, (classification, disposition))
+            )
             or item.get("technically_blocking") is not False
             or not isinstance(item.get("classification_evidence_digest"), str)
             or not DIGEST.fullmatch(item["classification_evidence_digest"])

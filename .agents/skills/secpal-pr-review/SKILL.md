@@ -93,10 +93,11 @@ exact authenticated-absence record. A supplied invalid manifest never falls
 back to absence. Derive `REVIEWED_BUT_INELIGIBLE` when the target is present in final
 reviewed state, or `ABSENT_FROM_BOTH` when it is absent; never accept a
 caller-selected origin or amend original eligibility. Require
-`INFORMATIONAL + NON_ACTIONABLE + technically_blocking=false` for either origin.
-Retain `INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE +
-technically_blocking=false` only for `ABSENT_FROM_BOTH`. Reject every other
-decision and every technical blocker. Use
+the canonical corrected/actionable, invalid/disproven, or
+informational/non-actionable pair for `REVIEWED_BUT_INELIGIBLE`;
+`ABSENT_FROM_BOTH` retains only invalid/disproven or
+informational/non-actionable. Require `technically_blocking=false` for every
+pair. Reject every other decision and every technical blocker. Use
 `scripts/secpal-create-late-classification.py` to capture and authenticate the
 exact decision, then use `scripts/secpal-create-late-disposition.py` to verify it
 and create the canonical detached disposition artifact and signature.
@@ -129,6 +130,16 @@ for that input shape and read
 [references/late-disposition.schema.json](references/late-disposition.schema.json)
 for the exact artifact shape. This exception consumes no review/remediation
 counter and has no commit, push, CI, Ready, or merge authority.
+
+For a historical schema-1.1 Ready integration, supply its exact original
+validation receipt as `--final-validation-receipt` to both producers and as
+`--integration-validation-receipt` to the resolver, and omit final eligibility.
+The integration-specific verifier must authenticate the exact source while both
+receipt and attestation omit `eligibility_evidence_digest`. That derives
+`NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY` only; schema 1.1 never directly
+authorizes a thread. The signed classification/disposition chain remains
+mandatory. Never substitute the special final-eligibility-absence recovery,
+invent an eligibility artifact, or downgrade schema 1.2.
 
 “Post-push” is lifecycle shorthand for this authenticated disposition
 boundary. The evidence proves reviewed-state membership or absence and
