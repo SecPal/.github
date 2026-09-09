@@ -635,7 +635,13 @@ is permitted beside the renumber. Python replacements must occur inside string
 or comment tokens, never numeric literals or executable syntax. Limits are 32
 changed paths, 1 MiB per blob,
 4 MiB aggregate old/new bytes and 4096 replacements. Source import separately
-bounds object count, depth and aggregate bytes. Main drift rejects admission.
+bounds every visited object (including already-present objects), depth and
+aggregate bytes. Main drift rejects admission. The implementation delta must
+rename all and only the independently derived version-table keys and owning
+normalizer version literals, never attestation values or another domain's
+version tokens. Retaining an old-version validation branch rejects the entire
+delta. Other changed paths are limited to existing delivery tests or Markdown
+documentation; another runtime implementation cannot enter through this trigger.
 
 `prepare_collision_tree` provides read-only, accepted-main preparation for a
 local renumber tree. Its projection omits the not-yet-created resulting commit

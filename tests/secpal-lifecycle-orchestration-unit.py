@@ -774,6 +774,40 @@ class CollisionCompositionFixture:
 
 
 class LifecycleOrchestrationTests(TestCase):
+    def test_collision_requires_complete_owner_version_identity_change(self) -> None:
+        from scripts.secpal_pr_review import version_collision
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = CollisionCompositionFixture(Path(directory))
+            guard = b'    if schema_version == "1.2":\n        value["authenticated_resolution_delta"]\n'
+            before = fixture.source("1.2", "authenticated_resolution_delta").replace(b"    return value\n", guard + b"    return value\n")
+            partial = fixture.source("1.3", "authenticated_resolution_delta").replace(b"    return value\n", guard + b"    return value\n")
+            predecessor = fixture.commit(fixture.tree(before), "candidate version-selected check", fixture.base)
+
+            def derive(source):
+                resulting = fixture.commit(fixture.tree(source), "renumber", predecessor)
+                return version_collision._derive_collision_from_git(
+                    fixture.root, repository=REPOSITORY, delivery_issue=ISSUE, pull_request=PR,
+                    predecessor_head=predecessor, resulting_head=resulting, protected_main=fixture.main,
+                )
+
+            with self.assertRaisesRegex(version_collision.VersionCollisionError, "version identity"):
+                derive(partial)
+            complete = partial.replace(b'schema_version == "1.2"', b'schema_version == "1.3"')
+            self.assertEqual(derive(complete)["free_version"], "1.3")
+            before += b'other_domain = "1.2"\n'
+            predecessor = fixture.commit(fixture.tree(before), "candidate with unrelated version", fixture.base)
+            with self.assertRaisesRegex(version_collision.VersionCollisionError, "version identity"):
+                derive(complete + b'other_domain = "1.3"\n')
+            runtime = fixture.root / "helper.py"
+            runtime.write_text('other_domain = "1.2"\n')
+            fixture.git("add", "helper.py")
+            predecessor = fixture.commit(fixture.tree(before), "candidate with another runtime source", fixture.base)
+            runtime.write_text('other_domain = "1.3"\n')
+            fixture.git("add", "helper.py")
+            with self.assertRaisesRegex(version_collision.VersionCollisionError, "version identity"):
+                derive(complete + b'other_domain = "1.2"\n')
+
     def test_collision_preserves_authenticated_corrected_predecessor_threads(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = CollisionCompositionFixture(Path(directory), historical_thread=True)
@@ -822,6 +856,16 @@ class LifecycleOrchestrationTests(TestCase):
             version_collision._import_successor(fixture.root, destination, fixture.resulting, fixture.predecessor)
             topology = version_collision._git(destination, ["rev-list", "--parents", "-n", "1", fixture.resulting], 256)
             self.assertEqual(topology.decode().split(), [fixture.resulting, fixture.predecessor])
+            known_source = fixture.git("rev-parse", fixture.predecessor + ":" + version_collision.SOURCE_PATH)
+            known_text = fixture.git("rev-parse", fixture.predecessor + ":unrelated.txt")
+            excessive = fixture.git("mktree", "-z", data=(
+                f"100644 blob {known_source}\ta\0" + f"100644 blob {known_text}\tb\0"
+            ).encode())
+            with mock.patch.object(version_collision, "MAX_IMPORTED_OBJECTS", 2):
+                with self.assertRaisesRegex(version_collision.VersionCollisionError, "object closure"):
+                    version_collision._import_successor(
+                        fixture.root, destination, None, fixture.predecessor, resulting_tree=excessive,
+                    )
             original = version_collision._git(fixture.root, ["cat-file", "commit", fixture.resulting], 65536)
             forged = original + b"extra bytes\n"
             object_bytes = b"commit " + str(len(forged)).encode() + b"\0" + forged
@@ -1266,7 +1310,7 @@ def create_ready_integration_attestation(normalized, eligibility_bound):
                 version_collision.inventory_from_source(changed)
         live = version_collision.inventory_from_source(Path(fast_path.__file__).read_bytes())
         self.assertEqual(live["kind"], version_collision.FAMILY_KIND)
-        self.assertTrue({"1.1", "1.2"} <= set(live["versions"]))
+        self.assertLessEqual({"1.1", "1.2"}, set(live["versions"]))
         for version in ("1.1", "1.2"):
             self.assertEqual(live["versions"][version]["attestations"], inventory["versions"][version]["attestations"])
 

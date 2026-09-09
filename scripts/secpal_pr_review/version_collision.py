@@ -339,6 +339,40 @@ def _expression_is(node: ast.expr, expected: str) -> bool:
     return ast.dump(node) == ast.dump(ast.parse(expected, mode="eval").body)
 
 
+def _verify_owner_renumber(source: bytes, occupied: str, delta: dict[str, Any]) -> None:
+    declarations = _SourceDeclarations(source)
+    identities: list[ast.Constant] = []
+    for name in ("READY_INTEGRATION_KEYS_BY_VERSION", "READY_INTEGRATION_ATTESTATION_BY_VERSION"):
+        assigned = declarations.assignments.get(name, [])
+        if len(assigned) != 1 or not isinstance(assigned[0], ast.Dict):
+            raise VersionCollisionError("candidate version identity table is not explicit")
+        for key in assigned[0].keys:
+            identity = key.elts[0] if isinstance(key, ast.Tuple) and key.elts else key
+            if isinstance(identity, ast.Constant) and identity.value == occupied:
+                identities.append(identity)
+    if len(identities) != 3:
+        raise VersionCollisionError("candidate version identity keys are incomplete")
+    identities.extend(node for node in ast.walk(declarations.function("normalize_ready_integration_evidence"))
+                      if isinstance(node, ast.Constant) and node.value == occupied)
+    starts = [0]
+    for line in source.splitlines(keepends=True):
+        starts.append(starts[-1] + len(line))
+    positions = []
+    for identity in identities:
+        start = starts[identity.lineno - 1] + identity.col_offset
+        end = starts[identity.end_lineno - 1] + identity.end_col_offset
+        if source[start:end] not in {f'"{occupied}"'.encode(), f"'{occupied}'".encode()}:
+            raise VersionCollisionError("candidate version identity literal is not canonical")
+        positions.append(start + 1)
+    owner = [change for change in delta["changes"] if change["path"] == SOURCE_PATH]
+    if len(owner) != 1 or [pair[0] for pair in owner[0]["replacement_offsets"]] != sorted(set(positions)):
+        raise VersionCollisionError("source version identity positions differ from the complete owning dispatch")
+    if any(change["path"] != SOURCE_PATH and not (
+        change["path"].startswith("tests/") or change["path"].endswith(".md")
+    ) for change in delta["changes"]):
+        raise VersionCollisionError("version identity edit extends outside its implementation, tests or documentation")
+
+
 def inventory_from_source(source: bytes) -> dict[str, Any]:
     """Parse the maintained Ready-integration declaration forms without execution.
 
@@ -550,14 +584,15 @@ def _derive_collision_tree(
     base = _oid(bases[0])
     scope = _changed_paths(root, base, predecessor_head, 4096)
     changed = _changed_paths(root, trees[predecessor_head], resulting_tree, MAX_CHANGED_PATHS)
-    inventory = {head: inventory_from_source(_read_source(root, head))
-                 for head in (base, protected_main, predecessor_head, resulting_tree)}
+    sources = {head: _read_source(root, head) for head in (base, protected_main, predecessor_head, resulting_tree)}
+    inventory = {head: inventory_from_source(source) for head, source in sources.items()}
     collision = derive_collision(inventory[base], inventory[protected_main], inventory[predecessor_head], inventory[resulting_tree])
     delta = verify_tree_renumber(
         root, trees[predecessor_head], resulting_tree,
         occupied_version=collision["occupied_version"], free_version=collision["free_version"],
         source_scope=frozenset(scope), authorized_paths=changed,
     )
+    _verify_owner_renumber(sources[predecessor_head], collision["occupied_version"], delta)
     return {
         "trigger": TRIGGER, "repository": repository, "delivery_issue": delivery_issue,
         "pull_request": pull_request, "predecessor_head": predecessor_head,
@@ -590,10 +625,11 @@ def _import_successor(
     def transfer(oid: str, kind: str, depth: int) -> bytes | None:
         nonlocal total_bytes
         _oid(oid)
-        if depth > 64 or len(imported) >= MAX_IMPORTED_OBJECTS:
-            raise VersionCollisionError("source object closure exceeds the bound")
         if oid in imported:
             return None
+        if depth > 64 or len(imported) >= MAX_IMPORTED_OBJECTS:
+            raise VersionCollisionError("source object closure exceeds the bound")
+        imported.add(oid)
         if kind != "commit" and publication._run_git(destination, ["cat-file", "-e", oid]).returncode == 0:
             return None
         size = _git(source, ["cat-file", "-s", oid], 32)
@@ -610,7 +646,6 @@ def _import_successor(
         written = publication._run_git(destination, ["hash-object", "-w", "-t", kind, "--stdin"], input_bytes=raw)
         if written.returncode != 0 or written.stdout != (oid + "\n").encode("ascii"):
             raise VersionCollisionError("verified source object import failed")
-        imported.add(oid)
         if kind == "tree":
             offset = 0
             while offset < len(raw):
