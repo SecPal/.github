@@ -277,6 +277,9 @@ thread-resolution authority. Exact authenticated Stable Feedback derives
 `REVIEWED_BUT_INELIGIBLE` or `ABSENT_FROM_BOTH`, after which signed detached
 classification and disposition remain mandatory. A supplied eligibility
 artifact, a present or null digest, or a schema-1.2 downgrade fails closed.
+New Ready-integration validation requires authenticated eligibility and emits
+schema 1.2, so this source-only compatibility path can consume existing schema
+1.1 evidence but cannot mint more of it.
 
 One accepted-main exact recovery record for `SecPal/.github` issue #810 and
 PR #821 permits the alternative

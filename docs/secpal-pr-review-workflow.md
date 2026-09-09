@@ -972,16 +972,17 @@ canonical non-empty conflict set; every path must be changed or deleted, no
 other path may change, and retained text conflict markers are rejected. The
 synthetic conflict tree itself is never accepted as a resolved candidate.
 
-When the integration must authorize exact reviewed-thread resolution,
-`--eligibility-evidence` may accompany `--integration-evidence`. The receipt
+Every newly produced Ready integration validation must supply
+`--eligibility-evidence` with `--integration-evidence`. The receipt
 binds both digests and binding emits the distinct version-1.2
 `ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION`. The guarded
 resolver accepts that kind only with the canonical integration artifact and
 only after the integration-specific verifier authenticates the ordered parents,
 tree, both trailers, reviewed state, expected signer, and eligibility. The
 historical version-1.1 integration attestation remains valid for integration
-authentication but cannot authorize resolution. Other evidence-mode
-combinations remain closed.
+authentication but cannot authorize resolution. Current production tooling
+cannot mint another unbound version-1.1 integration attestation. Other
+evidence-mode combinations remain closed.
 
 The integration evidence proves unchanged unrestricted-review, remediation,
 exceptional-recovery, and exceptional-continuation counters, no Cycle 3, no

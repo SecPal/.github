@@ -62,7 +62,7 @@
     },
     {
       "if": {
-        "properties": { "schema_version": { "const": "1.6" } },
+        "properties": { "schema_version": { "enum": ["1.6", "1.7"] } },
         "required": ["schema_version"]
       },
       "then": {
@@ -94,7 +94,7 @@
     "threads"
   ],
   "properties": {
-    "schema_version": { "enum": ["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6"] },
+    "schema_version": { "enum": ["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"] },
     "kind": { "const": "LATE_FEEDBACK_DISPOSITION" },
     "repository": {
       "type": "string",
@@ -126,7 +126,7 @@
   },
   "oneOf": [
     {
-      "properties": { "schema_version": { "enum": ["1.0", "1.2"] } },
+      "properties": { "schema_version": { "enum": ["1.0", "1.2", "1.7"] } },
       "required": ["final_eligibility_evidence_digest"],
       "not": {
         "anyOf": [

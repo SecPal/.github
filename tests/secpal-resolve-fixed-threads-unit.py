@@ -4397,6 +4397,7 @@ class ResolveFixedThreadsTests(TestCase):
                 "1.1": (True, invalid),
                 "1.2": (False, informational),
                 "1.3": (True, informational),
+                "1.7": (False, valid),
             },
         )
         for final_eligibility_absent, decision, schema_version in (
@@ -4404,6 +4405,7 @@ class ResolveFixedThreadsTests(TestCase):
             (True, invalid, "1.1"),
             (False, informational, "1.2"),
             (True, informational, "1.3"),
+            (False, valid, "1.7"),
         ):
             self.assertEqual(
                 MODULE.late_disposition.disposition_schema_version_for_decision(
@@ -4897,6 +4899,34 @@ class ResolveFixedThreadsTests(TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["pending"], ["PRRT_LATE_NON_BLOCKING"])
         self.assertEqual(len(github.calls), 1)
+
+    def test_reviewed_but_ineligible_corrected_thread_reaches_guarded_dry_run(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result, github, _git = run_late_resolution_fixture(
+                directory,
+                apply=False,
+                final_reviewed_thread_id="PRRT_LATE_NON_BLOCKING",
+                final_eligibility_thread_ids=(),
+                classification="VALID_ACTIONABLE",
+                disposition="CORRECTED_AND_VERIFIED",
+            )
+            artifact = json.loads(
+                (Path(directory) / "late-disposition.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["origin"], "REVIEWED_BUT_INELIGIBLE")
+        self.assertEqual(result["pending"], ["PRRT_LATE_NON_BLOCKING"])
+        self.assertEqual(len(github.calls), 1)
+        MODULE.evidence.validate_against_authoritative_schema(
+            artifact,
+            ROOT
+            / ".agents/skills/secpal-pr-review/references/late-disposition.schema.json",
+            "late disposition evidence",
+        )
 
     def test_post_freeze_informational_resolution_accepts_both_derived_origins(
         self,

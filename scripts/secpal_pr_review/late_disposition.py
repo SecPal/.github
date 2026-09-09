@@ -27,6 +27,7 @@ INFORMATIONAL_ABSENCE_SCHEMA_VERSION = "1.3"
 READY_INTEGRATION_SCHEMA_VERSION = "1.4"
 INFORMATIONAL_READY_INTEGRATION_SCHEMA_VERSION = "1.5"
 ACTIONABLE_READY_INTEGRATION_SCHEMA_VERSION = "1.6"
+ACTIONABLE_DISPOSITION_SCHEMA_VERSION = "1.7"
 NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY = (
     "NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY"
 )
@@ -51,6 +52,9 @@ INFORMATIONAL_NON_ACTIONABLE = ("INFORMATIONAL", "NON_ACTIONABLE")
 POST_FREEZE_DECISIONS = frozenset(
     {VALID_CORRECTED, INVALID_DISPROVEN, INFORMATIONAL_NON_ACTIONABLE}
 )
+SUCCESSOR_SAFE_DECISIONS = frozenset(
+    {INVALID_DISPROVEN, INFORMATIONAL_NON_ACTIONABLE}
+)
 POST_FREEZE_ORIGIN_DECISIONS = {
     REVIEWED_BUT_INELIGIBLE: POST_FREEZE_DECISIONS,
     ABSENT_FROM_BOTH: frozenset({INVALID_DISPROVEN, INFORMATIONAL_NON_ACTIONABLE}),
@@ -67,6 +71,7 @@ DISPOSITION_SCHEMA_VERSION_POLICY = {
         False,
         INFORMATIONAL_NON_ACTIONABLE,
     ),
+    ACTIONABLE_DISPOSITION_SCHEMA_VERSION: (False, VALID_CORRECTED),
     INFORMATIONAL_ABSENCE_SCHEMA_VERSION: (
         True,
         INFORMATIONAL_NON_ACTIONABLE,
@@ -970,7 +975,7 @@ def parse_successor_classification_artifact(
     ):
         raise LateDispositionError("successor source-only classification is malformed")
     decision = (item.get("classification"), item.get("disposition"))
-    if decision not in POST_FREEZE_DECISIONS:
+    if decision not in SUCCESSOR_SAFE_DECISIONS:
         raise LateDispositionError("successor classification decision is unsupported")
     raw_sources = payload.get("sources")
     sources: list[tuple[str, str, str, str | None]] = []
@@ -1084,7 +1089,12 @@ def parse_artifact(
     manifest_mode = (
         isinstance(payload, dict)
         and isinstance(schema_version, str)
-        and schema_version in {SCHEMA_VERSION, INFORMATIONAL_DISPOSITION_SCHEMA_VERSION}
+        and schema_version
+        in {
+            SCHEMA_VERSION,
+            INFORMATIONAL_DISPOSITION_SCHEMA_VERSION,
+            ACTIONABLE_DISPOSITION_SCHEMA_VERSION,
+        }
         and set(payload) == common_keys | {"final_eligibility_evidence_digest"}
         and isinstance(final_eligibility_evidence_digest, str)
         and DIGEST.fullmatch(final_eligibility_evidence_digest)
