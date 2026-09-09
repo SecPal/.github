@@ -11,18 +11,24 @@ push, polling, or merge.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import copy
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 import re
+import tempfile
 from typing import Any, Callable, Mapping
 
 from scripts.secpal_work_graph import replanning
 
+from . import bootstrap_source_admission
 from . import fast_path
 from . import follow_up
 from . import lifecycle_authority as authority
 from . import lifecycle_publication as publication
+from . import late_disposition
 
 
 REQUEST_FIELDS = frozenset(
@@ -37,6 +43,13 @@ REQUEST_FIELDS = frozenset(
         "authorization",
     }
 )
+CONTINUATION_REQUEST_FIELDS = REQUEST_FIELDS | {"continuation_evidence"}
+CONTINUATION_EVIDENCE_FIELDS = frozenset(
+    {"reviewed_state_evidence", "eligibility_evidence"}
+)
+CONTINUATION_SUCCESSOR_EVIDENCE_FIELDS = CONTINUATION_EVIDENCE_FIELDS | {
+    "successor_safety_evidence"
+}
 AUTHORIZATION_FIELDS = frozenset(
     {
         "schema_version",
@@ -77,6 +90,7 @@ EVENTS = OBSERVATION_EVENTS | frozenset(
         "PR_REPLACED",
         "REMEDIATION_COMMIT_PUSHED",
         "RECOVERY_COMMIT_PUSHED",
+        "CONTINUATION_COMMIT_PUSHED",
         "DRAFT_TO_READY",
         "READY_TO_DRAFT",
         "LATE_FEEDBACK_CLASSIFIED",
@@ -161,10 +175,364 @@ class VerifiedExceptionalRecoveryAuthority:
     thread_ids: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class VerifiedExceptionalContinuationAuthority:
+    """Closed composite authority for one source-changing Continuation."""
+
+    continuation_digest: str
+    authorization_id: str
+    authorization_digest: str
+    repository: str
+    delivery_issue: int
+    pull_request: int
+    lifecycle_id: str
+    predecessor_publication_oid: str
+    predecessor_publication_digest: str
+    continuation_publication_oid: str
+    continuation_publication_digest: str
+    predecessor_authority_digest: str
+    continuation_authority_digest: str
+    prior_ready_head_sha: str
+    resulting_head_sha: str
+    prior_ready_tree_sha: str
+    continuation_tree_sha: str
+    reviewed_state_digest: str
+    reviewed_feedback_digest: str
+    eligibility_evidence_digest: str
+    finding_ids: tuple[str, ...]
+    thread_ids: tuple[str, ...]
+    source_signer_kind: str
+    source_signer_identity: str
+
+
+@dataclass(frozen=True)
+class VerifiedContinuationFindingAuthority:
+    """Finding facts derived from canonical current-head feedback evidence."""
+
+    reviewed_state_digest: str
+    reviewed_feedback_digest: str
+    eligibility_evidence_digest: str
+    finding_ids: tuple[str, ...]
+    thread_ids: tuple[str, ...]
+
+
+def _capture_current_stable_feedback(
+    repository: str, pull_request: int
+) -> fast_path.StableFeedbackState:
+    """Reuse the maintained bounded provider capture without duplicating it."""
+
+    repository_root = Path(__file__).resolve().parents[2]
+    action = repository_root / "scripts/secpal-pr-review-actions.py"
+    try:
+        environment = bootstrap_source_admission._closed_launcher_environment(
+            authority._load_trusted_command_helper()
+        )
+        with tempfile.TemporaryDirectory(
+            prefix="secpal-continuation-feedback-"
+        ) as directory:
+            output = Path(directory) / "reviewed-state.json"
+            result = bootstrap_source_admission._run_isolated_python(
+                [
+                    bootstrap_source_admission._trusted_python(),
+                    "-I",
+                    "-B",
+                    str(action),
+                    "resolve-batch",
+                    "--repo",
+                    repository,
+                    "--pr",
+                    str(pull_request),
+                    "--repo-root",
+                    str(repository_root),
+                    "--capture-reviewed-state",
+                    str(output),
+                ],
+                cwd=repository_root,
+                timeout=60,
+                env=environment,
+            )
+            if result.returncode != 0:
+                raise LifecycleOrchestrationError(
+                    "current stable feedback could not be authenticated"
+                )
+            return fast_path.verify_reviewed_state_evidence(
+                authority.loads_closed_json(output.read_bytes())
+            )
+    except (
+        OSError,
+        authority.LifecycleAuthorityError,
+        bootstrap_source_admission.BootstrapSourceAdmissionError,
+        fast_path.SecurityBlocker,
+    ) as exc:
+        raise LifecycleOrchestrationError(
+            "current stable feedback could not be authenticated"
+        ) from exc
+
+
 def _closed_mapping(value: Any, fields: frozenset[str], label: str) -> dict[str, Any]:
     if not isinstance(value, Mapping) or set(value) != fields:
         raise LifecycleOrchestrationError(f"{label} contains unknown or missing fields")
     return copy.deepcopy(dict(value))
+
+
+def _closed_request(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) not in {
+        REQUEST_FIELDS,
+        CONTINUATION_REQUEST_FIELDS,
+    }:
+        raise LifecycleOrchestrationError(
+            "lifecycle event contains unknown or missing fields"
+        )
+    item = copy.deepcopy(dict(value))
+    item.setdefault("continuation_evidence", None)
+    return item
+
+
+def _successor_classification_signer(
+    repository: str, value: Any
+) -> late_disposition.SignerIdentity:
+    if not isinstance(value, Mapping) or set(value) != {"kind", "identity"}:
+        raise LifecycleOrchestrationError(
+            "successor classification signer selector is malformed"
+        )
+    try:
+        policy = authority._load_lifecycle_trust_policy(repository)
+        kind = value.get("kind")
+        identity = _identity(value.get("identity"), "successor classification signer")
+        if kind == "SSH_PRINCIPAL":
+            if identity not in policy.transition_signer_identities:
+                raise LifecycleOrchestrationError(
+                    "successor classification signer is not authorized"
+                )
+            keys = policy.signers[identity].ssh_public_keys
+            if len(keys) != 1:
+                raise LifecycleOrchestrationError(
+                    "successor classification signer key is ambiguous"
+                )
+            return late_disposition.SignerIdentity(
+                "ssh", _ssh_public_key_fingerprint(keys[0])
+            )
+        if kind == "OPENPGP_FINGERPRINT" and any(
+            signer in policy.transition_signer_identities
+            and identity in policy.signers[signer].openpgp_fingerprints
+            for signer in policy.signers
+        ):
+            return late_disposition.SignerIdentity("openpgp", identity.upper())
+    except (KeyError, ValueError, authority.LifecycleAuthorityError) as exc:
+        raise LifecycleOrchestrationError(
+            "successor classification signer is unavailable"
+        ) from exc
+    raise LifecycleOrchestrationError(
+        "successor classification signer is not authorized"
+    )
+
+
+def _authenticate_successor_safety_evidence(
+    value: Any,
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    predecessor_state_digest: str,
+    resulting_head_sha: str,
+    resulting_state_digest: str,
+) -> Any:
+    if value is None:
+        return None
+    expected_keys = {
+        "schema_version",
+        "repository",
+        "pull_request_number",
+        "predecessor_state_digest",
+        "resulting_head_sha",
+        "resulting_state_digest",
+        "provider_transport",
+        "successor_findings",
+        "classification_signer",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected_keys:
+        raise LifecycleOrchestrationError(
+            "successor safety evidence contains unknown or missing fields"
+        )
+    signer = _successor_classification_signer(
+        repository, value.get("classification_signer")
+    )
+    raw_findings = value.get("successor_findings")
+    if not isinstance(raw_findings, list):
+        raise LifecycleOrchestrationError("successor finding evidence is malformed")
+    findings: list[dict[str, Any]] = []
+    for raw in raw_findings:
+        if not isinstance(raw, Mapping) or set(raw) != {
+            "sources",
+            "classification_artifact",
+            "classification_signature",
+        }:
+            raise LifecycleOrchestrationError(
+                "successor finding evidence is malformed"
+            )
+        encoded_artifact = raw.get("classification_artifact")
+        encoded_signature = raw.get("classification_signature")
+        if (
+            not isinstance(encoded_artifact, str)
+            or len(encoded_artifact)
+            > 4 * late_disposition.MAXIMUM_ARTIFACT_BYTES // 3 + 8
+            or not isinstance(encoded_signature, str)
+            or len(encoded_signature)
+            > 4 * late_disposition.MAXIMUM_SIGNATURE_BYTES // 3 + 8
+        ):
+            raise LifecycleOrchestrationError(
+                "successor finding classification is oversized"
+            )
+        try:
+            artifact = base64.b64decode(
+                encoded_artifact, validate=True
+            )
+            signature = base64.b64decode(
+                encoded_signature, validate=True
+            )
+            with tempfile.TemporaryDirectory(
+                prefix="secpal-successor-classification-"
+            ) as directory:
+                root = Path(directory)
+                artifact_path = root / "classification.json"
+                signature_path = root / "classification.sig"
+                late_disposition._write_private_file(artifact_path, artifact)
+                late_disposition._write_private_file(signature_path, signature)
+                verified = late_disposition.parse_successor_classification_artifact(
+                    artifact_path,
+                    signature_path,
+                    expected_signer=signer,
+                    repository=repository,
+                    delivery_issue_number=delivery_issue,
+                    pull_request_number=pull_request,
+                    head_sha=resulting_head_sha,
+                    predecessor_state_digest=predecessor_state_digest,
+                    resulting_state_digest=resulting_state_digest,
+                )
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            binascii.Error,
+            OSError,
+            late_disposition.LateDispositionError,
+        ) as exc:
+            raise LifecycleOrchestrationError(
+                "successor finding classification is not authenticated"
+            ) from exc
+        signed_sources = [
+            {"kind": kind, "node_id": node_id, "digest": digest}
+            for kind, node_id, digest, _thread_id in verified.sources
+        ]
+        if list(raw["sources"]) != signed_sources:
+            raise LifecycleOrchestrationError(
+                "successor finding sources differ from signed classification"
+            )
+        thread = verified.thread
+        findings.append(
+            {
+                "sources": signed_sources,
+                "classification_evidence": fast_path._seal_successor_classification(
+                    repository=verified.repository,
+                    delivery_issue_number=verified.delivery_issue_number,
+                    pull_request_number=verified.pull_request_number,
+                    head_sha=verified.head_sha,
+                    finding_id=verified.finding_id,
+                    finding_evidence_digest=verified.finding_evidence_digest,
+                    thread_id=thread.thread_id,
+                    top_level_comment_node_id=thread.top_level_comment_node_id,
+                    finding_body_digest=thread.finding_body_digest,
+                    reply_count=thread.reply_count,
+                    is_resolved=thread.is_resolved,
+                    is_outdated=thread.is_outdated,
+                    classification=thread.classification,
+                    disposition=thread.disposition,
+                    technically_blocking=thread.technically_blocking,
+                    technical_blockers=verified.technical_blockers,
+                    classification_evidence_digest=verified.evidence_digest,
+                    source_bindings=verified.sources,
+                ),
+            }
+        )
+    prepared = copy.deepcopy(dict(value))
+    prepared.pop("classification_signer")
+    prepared["successor_findings"] = findings
+    return prepared
+
+
+def _verify_continuation_finding_authority(
+    value: Any,
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    predecessor_head_sha: str,
+    resulting_head_sha: str,
+    feedback_reader: Callable[[str, int], fast_path.StableFeedbackState],
+) -> VerifiedContinuationFindingAuthority:
+    """Derive a finite material finding set from maintained feedback evidence."""
+
+    if (
+        not isinstance(value, Mapping)
+        or set(value)
+        not in {
+            CONTINUATION_EVIDENCE_FIELDS,
+            CONTINUATION_SUCCESSOR_EVIDENCE_FIELDS,
+        }
+    ):
+        raise LifecycleOrchestrationError(
+            "continuation finding evidence contains unknown or missing fields"
+        )
+    item = copy.deepcopy(dict(value))
+    try:
+        reviewed = fast_path.verify_reviewed_state_evidence(
+            item["reviewed_state_evidence"]
+        )
+        eligibility = fast_path.normalize_resolution_eligibility_evidence(
+            item["eligibility_evidence"],
+            repository=repository,
+            reviewed_state=reviewed,
+        )
+        finding_ids, thread_ids = fast_path.continuation_material_finding_projection(
+            reviewed, eligibility
+        )
+        current = feedback_reader(repository, pull_request)
+        successor_safety = _authenticate_successor_safety_evidence(
+            item.get("successor_safety_evidence"),
+            repository=repository,
+            delivery_issue=delivery_issue,
+            pull_request=pull_request,
+            predecessor_state_digest=reviewed.state_digest,
+            resulting_head_sha=resulting_head_sha,
+            resulting_state_digest=current.state_digest,
+        )
+        fast_path.verify_stable_feedback_successor(
+            reviewed,
+            current,
+            resulting_head_sha=resulting_head_sha,
+            authorized_thread_ids=thread_ids,
+            successor_safety_evidence=successor_safety,
+        )
+    except fast_path.SecurityBlocker as exc:
+        raise LifecycleOrchestrationError(
+            "continuation finding evidence is invalid or stale"
+        ) from exc
+    if (
+        reviewed.repository != repository
+        or reviewed.pull_request_number != pull_request
+        or reviewed.head_sha != predecessor_head_sha
+        or reviewed.pr_state != "OPEN"
+    ):
+        raise LifecycleOrchestrationError(
+            "continuation feedback differs from the CURRENT Ready head"
+        )
+    return VerifiedContinuationFindingAuthority(
+        reviewed_state_digest=reviewed.state_digest,
+        reviewed_feedback_digest=reviewed.feedback_digest,
+        eligibility_evidence_digest=fast_path.digest_json(eligibility),
+        finding_ids=tuple(finding_ids),
+        thread_ids=tuple(thread_ids),
+    )
 
 
 def _positive_int(value: Any, label: str) -> int:
@@ -673,6 +1041,344 @@ def verify_exceptional_recovery_authority(
     )
 
 
+def _authenticate_continuation_commit(
+    repository_root: Path,
+    repository: str,
+    predecessor_head_sha: str,
+    resulting_head_sha: str,
+    expected_signer: Any,
+) -> fast_path.AuthenticatedIntegrationCommit:
+    """Reuse the ordinary signed-commit verifier for the one-parent successor."""
+
+    if (
+        not isinstance(expected_signer, Mapping)
+        or set(expected_signer) != {"kind", "identity"}
+    ):
+        raise LifecycleOrchestrationError(
+            "Exceptional Continuation source signer is malformed"
+        )
+    try:
+        policy = authority._load_lifecycle_trust_policy(repository)
+        signer_kind = expected_signer.get("kind")
+        signer_identity = _identity(
+            expected_signer.get("identity"), "continuation source signer"
+        )
+        if signer_kind == "SSH_PRINCIPAL":
+            authorized = signer_identity in policy.transition_signer_identities
+        elif signer_kind == "OPENPGP_FINGERPRINT":
+            authorized = any(
+                identity in policy.transition_signer_identities
+                and signer_identity in policy.signers[identity].openpgp_fingerprints
+                for identity in policy.signers
+            )
+        else:
+            authorized = False
+        if not authorized:
+            raise LifecycleOrchestrationError(
+                "Exceptional Continuation source signer is not authorized"
+            )
+        verified = fast_path.authenticate_integration_commit(
+            repository_root=repository_root,
+            repository=repository,
+            head_sha=resulting_head_sha,
+            expected_signer=dict(expected_signer),
+            signature_policy={
+                "require_github_verified": False,
+                "require_local_verified": True,
+                "accepted_formats": sorted(policy.accepted_formats),
+            },
+        )
+    except (
+        authority.LifecycleAuthorityError,
+        fast_path.RecoverableLocalError,
+        fast_path.SecurityBlocker,
+    ) as exc:
+        raise LifecycleOrchestrationError(
+            "Exceptional Continuation signed source commit is invalid"
+        ) from exc
+    if signer_kind == "SSH_PRINCIPAL":
+        try:
+            trusted_fingerprints = {
+                _ssh_public_key_fingerprint(key)
+                for key in policy.signers[signer_identity].ssh_public_keys
+            }
+        except (KeyError, ValueError) as exc:
+            raise LifecycleOrchestrationError(
+                "Exceptional Continuation maintained SSH key is invalid"
+            ) from exc
+        if verified.signature_fingerprint not in trusted_fingerprints:
+            raise LifecycleOrchestrationError(
+                "Exceptional Continuation signature does not match the maintained SSH key"
+            )
+    if verified.parent_shas != (predecessor_head_sha,):
+        raise LifecycleOrchestrationError(
+            "Exceptional Continuation requires one exact predecessor parent"
+        )
+    return verified
+
+
+def _ssh_public_key_fingerprint(public_key: str) -> str:
+    """Derive the OpenSSH SHA-256 fingerprint for one maintained public key."""
+
+    parts = public_key.split()
+    if len(parts) < 2:
+        raise ValueError("SSH public key is malformed")
+    try:
+        raw = base64.b64decode(parts[1], validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("SSH public key is malformed") from exc
+    digest = base64.b64encode(hashlib.sha256(raw).digest()).decode("ascii")
+    return "SHA256:" + digest.rstrip("=")
+
+
+def verify_exceptional_continuation_authority(
+    continuation_evidence: Any,
+    *,
+    orchestration_authorization: bytes | str,
+    reviewed_state_evidence: Any,
+    eligibility_evidence: Any,
+    successor_safety_evidence: Any = None,
+    repository_root: Path,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    resulting_head_sha: str,
+) -> VerifiedExceptionalContinuationAuthority:
+    """Authenticate one Continuation through publication, findings, and source."""
+
+    try:
+        repository = authority._require_repository(repository)
+        delivery_issue = _positive_int(delivery_issue, "delivery issue")
+        pull_request = _positive_int(pull_request, "pull request")
+        resulting_head_sha = _oid(resulting_head_sha, "resulting head")
+        authorization = _verify_signed_user_authorization(
+            orchestration_authorization, repository
+        )
+        transition = publication._verify_historical_lifecycle_transition(
+            repository,
+            delivery_issue,
+            authorization.get("publication_oid"),
+        )
+    except (
+        authority.LifecycleAuthorityError,
+        publication.LifecyclePublicationError,
+    ) as exc:
+        raise LifecycleOrchestrationError(
+            "Exceptional Continuation lifecycle authority is invalid"
+        ) from exc
+
+    predecessor = transition.predecessor.lifecycle
+    successor = transition.successor.lifecycle
+    if (
+        authorization.get("delivery_issue") != delivery_issue
+        or authorization.get("lifecycle_id") != predecessor.lifecycle_id
+        or authorization.get("publication_oid")
+        != transition.predecessor.publication_oid
+        or authorization.get("publication_digest")
+        != transition.predecessor.publication_digest
+        or authorization.get("authority_digest") != predecessor.authority_digest
+        or authorization.get("pull_request") != pull_request
+        or predecessor.pull_request != pull_request
+        or authorization.get("head_sha") != predecessor.head_sha
+        or transition.transition_kind != "EXCEPTIONAL_CONTINUATION"
+        or transition.pull_request != pull_request
+        or transition.predecessor_authority_digest != predecessor.authority_digest
+        or transition.predecessor_head_sha != predecessor.head_sha
+        or transition.resulting_head_sha != resulting_head_sha
+        or predecessor.head_sha == resulting_head_sha
+        or transition.initialization_evidence_digest
+        != predecessor.initialization_evidence_digest
+        or successor.repository != repository
+        or successor.delivery_issue != delivery_issue
+        or successor.lifecycle_id != predecessor.lifecycle_id
+        or successor.initialization_evidence_digest
+        != predecessor.initialization_evidence_digest
+        or successor.pull_request != pull_request
+        or successor.head_sha != resulting_head_sha
+    ):
+        raise LifecycleOrchestrationError(
+            "Exceptional Continuation signed lifecycle identity changed"
+        )
+
+    findings = _verify_continuation_finding_authority(
+        {
+            "reviewed_state_evidence": reviewed_state_evidence,
+            "eligibility_evidence": eligibility_evidence,
+            **(
+                {"successor_safety_evidence": successor_safety_evidence}
+                if successor_safety_evidence is not None
+                else {}
+            ),
+        },
+        repository=repository,
+        delivery_issue=delivery_issue,
+        pull_request=pull_request,
+        predecessor_head_sha=predecessor.head_sha,
+        resulting_head_sha=resulting_head_sha,
+        feedback_reader=_capture_current_stable_feedback,
+    )
+    _authorization(
+        orchestration_authorization,
+        event_id=transition.event_id,
+        operation="EXCEPTIONAL_CONTINUATION",
+        expected_scope={
+            "pull_request": pull_request,
+            "predecessor_head_sha": predecessor.head_sha,
+            "resulting_head_sha": resulting_head_sha,
+            "reviewed_state_digest": findings.reviewed_state_digest,
+            "reviewed_feedback_digest": findings.reviewed_feedback_digest,
+            "eligibility_evidence_digest": findings.eligibility_evidence_digest,
+            "finding_ids": list(findings.finding_ids),
+            "thread_ids": list(findings.thread_ids),
+        },
+        observed=transition.predecessor,
+        lifecycle=predecessor,
+        verifier=_verify_user_authorization,
+        verified_item=authorization,
+    )
+
+    try:
+        predecessor_state = authority._validate_state(
+            copy.deepcopy(predecessor.state)
+        )
+        successor_state = authority._validate_state(copy.deepcopy(successor.state))
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecycleOrchestrationError(
+            "Exceptional Continuation lifecycle state is invalid"
+        ) from exc
+    unchanged_fields = (
+        "unrestricted_review_count",
+        "remediation_cycle_count",
+        "cycle_3_absent",
+        "draft",
+        "ready",
+        "ready_transition_count",
+        "ready_history",
+        "exceptional_recovery_count",
+        "exceptional_recovery_history",
+    )
+    if (
+        any(
+            predecessor_state[field] != successor_state[field]
+            for field in unchanged_fields
+        )
+        or predecessor_state["unrestricted_review_count"]
+        != authority.MAX_UNRESTRICTED_REVIEWS
+        or predecessor_state["remediation_cycle_count"]
+        != authority.MAX_REMEDIATION_CYCLES
+        or predecessor_state["cycle_3_absent"] is not True
+        or predecessor_state["draft"] is not False
+        or predecessor_state["ready"] is not True
+        or predecessor_state["exceptional_recovery_count"]
+        != authority.MAX_EXCEPTIONAL_RECOVERIES
+        or len(predecessor_state["exceptional_recovery_history"])
+        != authority.MAX_EXCEPTIONAL_RECOVERIES
+        or predecessor_state["exceptional_continuation_count"] != 0
+        or predecessor_state["exceptional_continuation_history"] != []
+        or successor_state["exceptional_continuation_count"] != 1
+        or successor_state["exceptional_continuation_history"]
+        != [
+            {
+                "sequence": 1,
+                "transition_kind": "EXCEPTIONAL_CONTINUATION",
+                "event_authorization_digest": transition.event_digest,
+            }
+        ]
+    ):
+        raise LifecycleOrchestrationError(
+            "Exceptional Continuation lifecycle projection is invalid"
+        )
+
+    try:
+        reviewed = fast_path.verify_reviewed_state_evidence(reviewed_state_evidence)
+        source = _authenticate_continuation_commit(
+            repository_root,
+            repository,
+            predecessor.head_sha,
+            resulting_head_sha,
+            continuation_evidence.get("expected_signer")
+            if isinstance(continuation_evidence, Mapping)
+            else None,
+        )
+        prior_tree = _immutable_commit_tree(
+            repository_root, repository, predecessor.head_sha
+        )
+        continuation = fast_path.normalize_exceptional_continuation_evidence(
+            continuation_evidence,
+            repository=repository,
+            reviewed_state=reviewed,
+            validated_tree_sha=source.tree_sha,
+            eligibility_evidence=eligibility_evidence,
+        )
+    except fast_path.SecurityBlocker as exc:
+        raise LifecycleOrchestrationError(
+            "Exceptional Continuation document is invalid or stale"
+        ) from exc
+    lifecycle_projection = {
+        "unrestricted_reviews": predecessor_state["unrestricted_review_count"],
+        "remediation_cycles": predecessor_state["remediation_cycle_count"],
+        "cycle_3": not predecessor_state["cycle_3_absent"],
+        "draft": predecessor_state["draft"],
+        "ready": predecessor_state["ready"],
+        "ready_transition_count": predecessor_state["ready_transition_count"],
+        "ready_history": predecessor_state["ready_history"],
+        "exceptional_recovery_count": predecessor_state[
+            "exceptional_recovery_count"
+        ],
+        "exceptional_recovery_history": predecessor_state[
+            "exceptional_recovery_history"
+        ],
+        "exceptional_continuation_predecessor_count": 0,
+        "exceptional_continuation_successor_count": 1,
+    }
+    if (
+        continuation["authorization_id"] != authorization.get("authorization_id")
+        or continuation["delivery_issue_number"] != delivery_issue
+        or continuation["pull_request_number"] != pull_request
+        or continuation["prior_ready_head_sha"] != predecessor.head_sha
+        or continuation["prior_ready_tree_sha"] != prior_tree
+        or continuation["continuation_tree_sha"] != source.tree_sha
+        or continuation["reviewed_state_digest"]
+        != findings.reviewed_state_digest
+        or continuation["reviewed_feedback_digest"]
+        != findings.reviewed_feedback_digest
+        or continuation["eligibility_evidence_digest"]
+        != findings.eligibility_evidence_digest
+        or continuation["finding_ids"] != list(findings.finding_ids)
+        or continuation["thread_ids"] != list(findings.thread_ids)
+        or continuation["lifecycle"] != lifecycle_projection
+    ):
+        raise LifecycleOrchestrationError(
+            "Exceptional Continuation projection differs from verified authority"
+        )
+    return VerifiedExceptionalContinuationAuthority(
+        continuation_digest=fast_path.digest_json(continuation),
+        authorization_id=authorization["authorization_id"],
+        authorization_digest=authorization["authorization_digest"],
+        repository=repository,
+        delivery_issue=delivery_issue,
+        pull_request=pull_request,
+        lifecycle_id=predecessor.lifecycle_id,
+        predecessor_publication_oid=transition.predecessor.publication_oid,
+        predecessor_publication_digest=transition.predecessor.publication_digest,
+        continuation_publication_oid=transition.successor.publication_oid,
+        continuation_publication_digest=transition.successor.publication_digest,
+        predecessor_authority_digest=predecessor.authority_digest,
+        continuation_authority_digest=successor.authority_digest,
+        prior_ready_head_sha=predecessor.head_sha,
+        resulting_head_sha=resulting_head_sha,
+        prior_ready_tree_sha=prior_tree,
+        continuation_tree_sha=source.tree_sha,
+        reviewed_state_digest=findings.reviewed_state_digest,
+        reviewed_feedback_digest=findings.reviewed_feedback_digest,
+        eligibility_evidence_digest=findings.eligibility_evidence_digest,
+        finding_ids=findings.finding_ids,
+        thread_ids=findings.thread_ids,
+        source_signer_kind=source.signer_kind,
+        source_signer_identity=source.signer_identity,
+    )
+
+
 def _authorized_finding_ids(value: Any) -> list[str]:
     scope = value.get("scope") if isinstance(value, Mapping) else None
     finding_ids = scope.get("finding_ids") if isinstance(scope, Mapping) else None
@@ -770,6 +1476,9 @@ def _orchestrate_event(
     current_reader: CurrentReader = publication.verify_current_lifecycle_authority,
     follow_up_verifier: FollowUpVerifier = follow_up.verify_live_follow_up,
     authorization_verifier: AuthorizationVerifier = _verify_user_authorization,
+    feedback_reader: Callable[
+        [str, int], fast_path.StableFeedbackState
+    ] = _capture_current_stable_feedback,
 ) -> LifecycleDecision:
     """Authenticate CURRENT state and select one bounded, non-recursive action."""
 
@@ -778,7 +1487,7 @@ def _orchestrate_event(
     except authority.LifecycleAuthorityError as exc:
         raise LifecycleOrchestrationError(str(exc)) from exc
     delivery_issue = _positive_int(delivery_issue, "delivery issue")
-    item = _closed_mapping(request, REQUEST_FIELDS, "lifecycle event")
+    item = _closed_request(request)
     event_kind = item.get("event_kind")
     if event_kind not in EVENTS:
         raise LifecycleOrchestrationError("lifecycle event kind is not allowlisted")
@@ -797,6 +1506,7 @@ def _orchestrate_event(
     follow_up_value = item.get("follow_up")
     authorization_value = item.get("authorization")
     replacement = item.get("replacement_pull_request")
+    continuation_evidence = item.get("continuation_evidence")
 
     if event_kind in OBSERVATION_EVENTS:
         if (
@@ -805,6 +1515,7 @@ def _orchestrate_event(
             or classification_value is not None
             or follow_up_value is not None
             or authorization_value is not None
+            or continuation_evidence is not None
         ):
             raise LifecycleOrchestrationError(
                 "observation event differs from CURRENT lifecycle state"
@@ -815,7 +1526,11 @@ def _orchestrate_event(
         replacement_pr = _positive_int(replacement, "replacement pull request")
         if request_head != lifecycle.head_sha or replacement_pr == lifecycle.pull_request:
             raise LifecycleOrchestrationError("replacement PR binding is invalid")
-        if classification_value is not None or follow_up_value is not None:
+        if (
+            classification_value is not None
+            or follow_up_value is not None
+            or continuation_evidence is not None
+        ):
             raise LifecycleOrchestrationError("replacement cannot carry feedback facts")
         authorization = _authorization(
             authorization_value,
@@ -845,7 +1560,11 @@ def _orchestrate_event(
         raise LifecycleOrchestrationError("only PR replacement may name another PR")
 
     if event_kind == "REMEDIATION_COMMIT_PUSHED":
-        if classification_value is not None or follow_up_value is not None:
+        if (
+            classification_value is not None
+            or follow_up_value is not None
+            or continuation_evidence is not None
+        ):
             raise LifecycleOrchestrationError(
                 "remediation cannot carry feedback classification"
             )
@@ -887,7 +1606,11 @@ def _orchestrate_event(
         )
 
     if event_kind == "RECOVERY_COMMIT_PUSHED":
-        if classification_value is not None or follow_up_value is not None:
+        if (
+            classification_value is not None
+            or follow_up_value is not None
+            or continuation_evidence is not None
+        ):
             raise LifecycleOrchestrationError("recovery cannot carry feedback classification")
         if (
             not state["ready"]
@@ -932,13 +1655,82 @@ def _orchestrate_event(
             requires_authorization_publication=True,
         )
 
+    if event_kind == "CONTINUATION_COMMIT_PUSHED":
+        if classification_value is not None or follow_up_value is not None:
+            raise LifecycleOrchestrationError(
+                "continuation cannot carry caller-classified feedback"
+            )
+        if (
+            state["ready"] is not True
+            or state["draft"] is not False
+            or request_head == lifecycle.head_sha
+            or state["unrestricted_review_count"]
+            != authority.MAX_UNRESTRICTED_REVIEWS
+            or state["remediation_cycle_count"] != authority.MAX_REMEDIATION_CYCLES
+            or state["exceptional_recovery_count"]
+            != authority.MAX_EXCEPTIONAL_RECOVERIES
+            or state["exceptional_continuation_count"] != 0
+            or state["cycle_3_absent"] is not True
+        ):
+            raise LifecycleOrchestrationError(
+                "exceptional continuation requires the exact exhausted Ready predecessor"
+            )
+        findings = _verify_continuation_finding_authority(
+            continuation_evidence,
+            repository=repository,
+            delivery_issue=delivery_issue,
+            pull_request=lifecycle.pull_request,
+            predecessor_head_sha=lifecycle.head_sha,
+            resulting_head_sha=request_head,
+            feedback_reader=feedback_reader,
+        )
+        verified_authorization = authorization_verifier(
+            authorization_value, observed, lifecycle
+        )
+        authorization = _authorization(
+            authorization_value,
+            event_id=event_id,
+            operation="EXCEPTIONAL_CONTINUATION",
+            expected_scope={
+                "pull_request": lifecycle.pull_request,
+                "predecessor_head_sha": lifecycle.head_sha,
+                "resulting_head_sha": request_head,
+                "reviewed_state_digest": findings.reviewed_state_digest,
+                "reviewed_feedback_digest": findings.reviewed_feedback_digest,
+                "eligibility_evidence_digest": findings.eligibility_evidence_digest,
+                "finding_ids": list(findings.finding_ids),
+                "thread_ids": list(findings.thread_ids),
+            },
+            observed=observed,
+            lifecycle=lifecycle,
+            verifier=authorization_verifier,
+            verified_item=verified_authorization,
+        )
+        _prove_transition_is_finite(state, "EXCEPTIONAL_CONTINUATION", event_id)
+        return _base_decision(
+            observed,
+            lifecycle,
+            state,
+            lifecycle_transition="EXCEPTIONAL_CONTINUATION",
+            preserve_ready=True,
+            resulting_head_sha=request_head,
+            requires_fresh_head_evidence=True,
+            merge_ready=False,
+            authorization_digest=authorization["authorization_digest"],
+            requires_authorization_publication=True,
+        )
+
     if request_head != lifecycle.head_sha:
         raise LifecycleOrchestrationError(
             "event head differs from CURRENT lifecycle authority"
         )
 
     if event_kind in {"DRAFT_TO_READY", "READY_TO_DRAFT"}:
-        if classification_value is not None or follow_up_value is not None:
+        if (
+            classification_value is not None
+            or follow_up_value is not None
+            or continuation_evidence is not None
+        ):
             raise LifecycleOrchestrationError("Ready/Draft transition cannot carry feedback facts")
         authorization = _authorization(
             authorization_value,
@@ -966,7 +1758,11 @@ def _orchestrate_event(
         )
 
     if event_kind == "ADDITIONAL_REVIEW_AUTHORIZED":
-        if classification_value is not None or follow_up_value is not None:
+        if (
+            classification_value is not None
+            or follow_up_value is not None
+            or continuation_evidence is not None
+        ):
             raise LifecycleOrchestrationError("additional review cannot carry feedback facts")
         authorization = _authorization(
             authorization_value,
@@ -995,6 +1791,10 @@ def _orchestrate_event(
 
     if event_kind != "LATE_FEEDBACK_CLASSIFIED":
         raise LifecycleOrchestrationError("lifecycle event is not implemented")
+    if continuation_evidence is not None:
+        raise LifecycleOrchestrationError(
+            "late feedback cannot carry continuation evidence"
+        )
     if authorization_value is not None:
         raise LifecycleOrchestrationError(
             "feedback evidence cannot smuggle lifecycle authorization"

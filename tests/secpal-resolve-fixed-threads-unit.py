@@ -618,6 +618,47 @@ def recovery_validation_payloads(
     return receipt, attestation
 
 
+def continuation_validation_payloads(
+    reviewed: dict[str, Any],
+    eligibility_evidence_digest: str,
+    *,
+    expected_head: str = "c" * 40,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    binding = MODULE._validation_registry_binding(
+        MODULE._load_repository_entry(reviewed["repository"])
+    )
+    stable = MODULE.fast_path.StableFeedbackState.from_payload(reviewed)
+    receipt = MODULE.fast_path.create_validation_receipt(
+        repository=reviewed["repository"],
+        head_sha=reviewed["head_sha"],
+        validated_tree_sha="f" * 40,
+        registry=binding,
+        command_set=binding["validation"],
+        successful_result=True,
+        reviewed_state=stable,
+        manual_gate_evidence=[
+            {
+                "gate": gate,
+                "satisfied": True,
+                "evidence": f"Verified continuation evidence {index}",
+            }
+            for index, gate in enumerate(binding["manual_gates"], start=1)
+        ],
+        eligibility_evidence_digest=eligibility_evidence_digest,
+        exceptional_continuation_evidence_digest="8" * 64,
+    )
+    attestation = MODULE.fast_path.create_validation_attestation(
+        repository=reviewed["repository"],
+        head_sha=expected_head,
+        registry=binding,
+        command_set=binding["validation"],
+        successful_result=True,
+        reviewed_state=stable,
+        validation_receipt=receipt,
+    )
+    return receipt, attestation
+
+
 def integration_validation_payloads(
     reviewed: dict[str, Any],
     eligibility_digest: str,
@@ -2926,6 +2967,39 @@ class ResolveFixedThreadsTests(TestCase):
                     reviewed,
                 )
 
+    def test_validation_loader_retains_continuation_receipt_digest(self) -> None:
+        thread_id = "PRRT_CONTINUATION_LOADER"
+        reviewed_payload = reviewed_state_payload(thread_id, [])
+        eligibility = eligibility_payload(reviewed_payload, (thread_id,))
+        _receipt, attestation = continuation_validation_payloads(
+            reviewed_payload, MODULE._digest_json(eligibility)
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reviewed_path = root / "reviewed.json"
+            attestation_path = root / "attestation.json"
+            reviewed_path.write_text(json.dumps(reviewed_payload), encoding="utf-8")
+            attestation_path.write_text(json.dumps(attestation), encoding="utf-8")
+            reviewed = MODULE.load_reviewed_state(
+                reviewed_path,
+                reviewed_payload["repository"],
+                reviewed_payload["pull_request_number"],
+                reviewed_payload["state_digest"],
+                (thread_id,),
+            )
+
+            validation = MODULE.load_validation_evidence(
+                attestation_path,
+                reviewed_payload["repository"],
+                attestation["head_sha"],
+                reviewed,
+            )
+
+        self.assertEqual(
+            validation.attestation["exceptional_continuation_evidence_digest"],
+            "8" * 64,
+        )
+
     def test_recovery_authority_consumer_cross_binds_shared_verifier(self) -> None:
         thread_id = "PRRT_RECOVERY_CONSUMER"
         reviewed_payload = reviewed_state_payload(thread_id, [])
@@ -3050,6 +3124,122 @@ class ResolveFixedThreadsTests(TestCase):
                     resulting_head_sha="a" * 40,
                     recovery_evidence_path=recovery_path,
                     recovery_authorization_path=authorization_path,
+                )
+
+    def test_continuation_authority_consumer_retains_exact_evidence_chain(self) -> None:
+        continuation_digest = "9" * 64
+        validation = MODULE.ValidationEvidence(
+            kind="attestation",
+            evidence_digest="1" * 64,
+            validated_tree_sha="2" * 40,
+            validation_receipt_digest="3" * 64,
+            eligibility_evidence_digest="4" * 64,
+            attestation={
+                "exceptional_continuation_evidence_digest": continuation_digest
+            },
+        )
+        reviewed = MODULE.ReviewedState(
+            head_sha="5" * 40,
+            state_digest="6" * 64,
+            feedback_digest="7" * 64,
+            targets={},
+            thread_ids=frozenset(),
+            payload={"schema_version": "1.0"},
+        )
+        eligibility_payload = {"schema_version": "1.1"}
+        eligibility = MODULE.EligibilityEvidence(
+            MODULE._digest_json(eligibility_payload),
+            MODULE._canonical_json_bytes(eligibility_payload),
+            (),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence_path = root / "continuation.json"
+            authorization_path = root / "authorization.json"
+            successor_path = root / "successor-safety.json"
+            evidence_path.write_text(
+                '{"schema_version":"1.0"}', encoding="utf-8"
+            )
+            authorization_path.write_bytes(b"signed continuation authorization")
+            successor_path.write_text(
+                '{"schema_version":"1.0"}', encoding="utf-8"
+            )
+            verifier = mock.Mock(
+                return_value=mock.Mock(continuation_digest=continuation_digest)
+            )
+            with mock.patch.object(
+                MODULE.lifecycle_orchestration,
+                "verify_exceptional_continuation_authority",
+                verifier,
+            ):
+                MODULE.verify_continuation_bound_source_authority(
+                    validation,
+                    reviewed,
+                    eligibility,
+                    repository_root=root,
+                    repository="SecPal/.github",
+                    delivery_issue=883,
+                    pull_request=884,
+                    resulting_head_sha="8" * 40,
+                    continuation_evidence_path=evidence_path,
+                    continuation_authorization_path=authorization_path,
+                    successor_safety_evidence_path=successor_path,
+                )
+
+        verifier.assert_called_once_with(
+            {"schema_version": "1.0"},
+            orchestration_authorization=b"signed continuation authorization",
+            reviewed_state_evidence={"schema_version": "1.0"},
+            eligibility_evidence=eligibility_payload,
+            successor_safety_evidence={"schema_version": "1.0"},
+            repository_root=root,
+            repository="SecPal/.github",
+            delivery_issue=883,
+            pull_request=884,
+            resulting_head_sha="8" * 40,
+        )
+
+    def test_continuation_authority_consumer_rejects_missing_or_substituted_kind(self) -> None:
+        reviewed = MODULE.ReviewedState(
+            head_sha="5" * 40,
+            state_digest="6" * 64,
+            feedback_digest="7" * 64,
+            targets={},
+            thread_ids=frozenset(),
+            payload={},
+        )
+        eligibility = MODULE.EligibilityEvidence(
+            MODULE._digest_json({}), MODULE._canonical_json_bytes({}), ()
+        )
+        ordinary = MODULE.ValidationEvidence(
+            kind="attestation",
+            evidence_digest="1" * 64,
+            validated_tree_sha="2" * 40,
+            validation_receipt_digest="3" * 64,
+            eligibility_evidence_digest="4" * 64,
+            attestation={"exceptional_recovery_evidence_digest": "9" * 64},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence_path = root / "continuation.json"
+            authorization_path = root / "authorization.json"
+            evidence_path.write_text("{}", encoding="utf-8")
+            authorization_path.write_bytes(b"signed")
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "rejects Exceptional Continuation authority",
+            ):
+                MODULE.verify_continuation_bound_source_authority(
+                    ordinary,
+                    reviewed,
+                    eligibility,
+                    repository_root=root,
+                    repository="SecPal/.github",
+                    delivery_issue=883,
+                    pull_request=884,
+                    resulting_head_sha="8" * 40,
+                    continuation_evidence_path=evidence_path,
+                    continuation_authorization_path=authorization_path,
                 )
 
     def test_recovery_bound_attestation_uses_canonical_source_verifier(self) -> None:

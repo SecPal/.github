@@ -657,13 +657,16 @@ LOADED_MODULE_ATTRIBUTES = {
             "digest_json",
             "execute_resolution_batch",
             "follow_up",
+            "CODEX_REVIEW_SUMMARY_MARKER",
             "normalize_resolution_eligibility_evidence",
             "normalize_ready_integration_evidence",
             "normalize_ready_integration_prior_authority",
             "normalize_exceptional_recovery_evidence",
+            "normalize_exceptional_continuation_evidence",
             "validate_manual_gate_evidence",
             "validation_registry_projection",
             "verify_commit_signatures",
+            "verify_codex_provider_summary",
             "verify_validation_attestation",
             "derive_ready_source_recovery_safety_facts",
             "_actual_integration_signer",
@@ -757,6 +760,7 @@ LOADED_MODULE_ATTRIBUTES = {
         "lifecycle_orchestration": {
             "LifecycleOrchestrationError",
             "verify_exceptional_recovery_authority",
+            "verify_exceptional_continuation_authority",
         },
     },
     "secpal-create-late-disposition.py": {
@@ -994,6 +998,18 @@ SAFE_GETATTR_CALLS = {
         ),
         DynamicImportCall(
             ("_command_attest_validation",),
+            "getattr(arguments, 'exceptional_continuation_evidence', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'exceptional_continuation_delivery_issue', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'exceptional_continuation_authorization_id', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
             "getattr(arguments, 'delivery_issue', None)",
         ),
         DynamicImportCall(
@@ -1071,6 +1087,14 @@ SAFE_GETATTR_CALLS = {
         DynamicImportCall(
             ("_verify_exceptional_recovery_selection",),
             "getattr(arguments, 'exceptional_recovery_authorization_id', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_exceptional_continuation_selection",),
+            "getattr(arguments, 'exceptional_continuation_delivery_issue', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_exceptional_continuation_selection",),
+            "getattr(arguments, 'exceptional_continuation_authorization_id', None)",
         ),
     },
     "secpal-resolve-fixed-threads.py": {
@@ -1360,6 +1384,7 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "validate_request",
     "verify_local_fix_commit",
     "verify_recovery_bound_source_authority",
+    "verify_continuation_bound_source_authority",
     "verify_live_follow_up",
 }
 RESOLVER_CLASS_SHAPES = {
@@ -1409,6 +1434,14 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
     ),
     DynamicImportCall(
         ("verify_recovery_bound_source_authority",),
+        "_reject_duplicate_json_object",
+    ),
+    DynamicImportCall(
+        ("verify_continuation_bound_source_authority",),
+        "_reject_nonfinite_json_constant",
+    ),
+    DynamicImportCall(
+        ("verify_continuation_bound_source_authority",),
         "_reject_duplicate_json_object",
     ),
     DynamicImportCall(
@@ -1625,6 +1658,7 @@ RESOLVER_LOOP_SITES = {
         "recovery_inputs",
     ),
     LoopSite("comprehension", ("parse_args",), "recovery_values"),
+    LoopSite("comprehension", ("parse_args",), "continuation_values"),
 }
 
 

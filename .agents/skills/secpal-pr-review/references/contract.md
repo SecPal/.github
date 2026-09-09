@@ -573,6 +573,18 @@ exact live follow-up verification. Its guarded resolution is recorded only as
 `SAFELY_DISPOSITIONED_TRACKED`, never fixed, implemented, or completed. #724's
 detached path remains limited to its exact authenticated disposition allowlist.
 
+Exceptional Continuation successor safety reuses that maintained detached
+classification family and signer trust without creating disposition or
+resolution authority. Classification schema 1.2 binds the predecessor and
+resulting Stable State digests, exact resulting-head source identities and
+digests, live thread state, independent decision, and evidence digest. Only the
+existing disproven/non-actionable non-blocking decisions are admissible. Raw
+caller classifications, material or unclassified findings, source/thread drift,
+cross-head/PR replay, and unsigned additions fail closed. Provider transport is
+authenticated separately and is never a generic feedback-growth allowance.
+This proof remains separate from the immutable source-correction authorization,
+receipt, attestation, and commit, and verification requests no provider.
+
 ## Authenticated Ready/Draft execution boundary
 
 The separate `lifecycle_execution.py` boundary executes only an already signed

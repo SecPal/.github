@@ -579,8 +579,14 @@ An already-authorized normal remediation commit advances the head with
 `REMEDIATION_COMPLETED` while preserving Ready and requiring fresh evidence.
 Exceptional recovery is available only on an exhausted Ready lifecycle with an
 exact new head, exact finding IDs, and one separately reasoned bounded user
-authorization. It preserves `Draft=false`, requires fresh head-bound evidence,
-and never selects another Ready transition. `Ready -> Draft` and any later
+authorization. After that Recovery is consumed, `CONTINUATION_COMMIT_PUSHED`
+may select only the existing `EXCEPTIONAL_CONTINUATION` transition when CURRENT
+proves Continuation count zero and canonical current-head feedback/eligibility
+proves the exact non-empty material finding/thread set. Its signed existing-family
+authorization binds the PR, predecessor/resulting heads, reviewed-state,
+stable-feedback and eligibility digests, and those exact identities. It preserves
+`Draft=false`, Ready and all prior histories, requires fresh final-tree evidence,
+requests no review, and cannot create Cycle 3. `Ready -> Draft` and any later
 `Draft -> Ready` each require their own exact user authorization and preserve
 the same lifecycle and consumed counters. User-controlled orchestration accepts
 only canonical signed authorization evidence bound to the exact CURRENT
@@ -1024,12 +1030,36 @@ receipt and final attestation carry its digest. This path cannot reset the
 finite lifecycle, manufacture Cycle 3, transition Ready state, or authorize a
 recursive recovery.
 
+The one post-Recovery source-changing sibling is
+`READY_EXCEPTIONAL_CONTINUATION`. It binds the exact prior Ready head/tree,
+frozen continuation tree, current-head material findings/threads, stable
+feedback, eligibility, maintained source signer, preserved Ready and Recovery
+histories, and Continuation `0 -> 1`. The normal signed sole-parent commit and
+ordinary receipt/final attestation bind the artifact. The published historical
+transition and signed orchestration authorization bind the resulting head
+without introducing a circular commit hash. Recovery and Continuation artifacts
+are distinct, mutually exclusive receipt modes and cannot authenticate each
+other. Resulting-head feedback may differ only when a closed
+Continuation-specific safety extension preserves every predecessor source,
+authenticates the canonical provider request/result/review transport, and gives
+every other successor-only source a complete maintained non-blocking
+classification. Classification reuses the detached
+`LATE_FEEDBACK_CLASSIFICATION` family and signer trust: version 1.2 binds the
+predecessor/resulting Stable State digests, exact source identities and digests,
+thread state, and independently established disposition before signing. Raw
+caller labels and digests have no authority. Material, unclassified, unrelated,
+spoofed, stale, or ambiguous growth blocks. Successor safety does not enter the
+earlier source-correction authorization or resolver scope, and its verification
+performs no provider request. A Continuation-bound resolver receives this
+separate proof through `--exceptional-continuation-successor-safety`; the
+immutable source authorization, receipt, attestation, and commit remain reusable.
+
 The simple resolver first verifies the caller-captured reviewed-state digest,
 successful validation attestation, actual local signed commit, and exact
 per-thread eligibility manifest authenticated by the signed validation
-receipt. A Recovery-bound ordinary attestation additionally retains and passes
-`--delivery-issue`, `--exceptional-recovery-evidence`, and
-`--exceptional-recovery-authorization` from the accepted Recovery authority.
+receipt. A Recovery- or Continuation-bound ordinary attestation additionally
+retains and passes `--delivery-issue` plus exactly one typed
+evidence/authorization pair from the corresponding accepted lifecycle authority.
 The shared verifier alone may authenticate the installed ruleset for
 `refs/heads/secpal-lifecycle-publications`. The resolver then verifies the exact
 PR head and target identity without reading checks, delivery-PR rules,

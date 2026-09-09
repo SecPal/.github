@@ -164,9 +164,9 @@ python3 scripts/secpal-resolve-fixed-threads.py \
 
 Repeat `--thread-id` to resolve several fixed threads in one invocation.
 
-For a Recovery-bound ordinary final attestation only, retain the already
-accepted Recovery document and exact signed orchestration authorization and add
-the complete tuple:
+For a Recovery-bound ordinary final attestation, retain the already accepted
+Recovery document and exact signed orchestration authorization and add the
+complete tuple:
 
 ```bash
   --delivery-issue DELIVERY_ISSUE_NUMBER \
@@ -174,8 +174,17 @@ the complete tuple:
   --exceptional-recovery-authorization SIGNED_RECOVERY_AUTHORIZATION.json
 ```
 
-Omit the tuple for ordinary non-Recovery evidence and for Ready-integration
-evidence. The shared verifier authenticates the exact Recovery lifecycle and
+For a Continuation-bound ordinary final attestation, use the distinct pair:
+
+```bash
+  --delivery-issue DELIVERY_ISSUE_NUMBER \
+  --exceptional-continuation-evidence READY_EXCEPTIONAL_CONTINUATION.json \
+  --exceptional-continuation-authorization SIGNED_CONTINUATION_AUTHORIZATION.json
+```
+
+Supply exactly one tuple; omit both for ordinary source evidence and
+Ready-integration evidence. The shared verifier authenticates the exact typed
+lifecycle transition and
 may read only the installed protection for the lifecycle-publication journal;
 this does not authorize delivery-PR branch-protection or merge-readiness reads.
 

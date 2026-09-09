@@ -482,6 +482,246 @@ class RecoveryFixture:
         )
 
 
+class ContinuationFixture:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        transition_kind: str = "EXCEPTIONAL_CONTINUATION",
+        authorization_operation: str = "EXCEPTIONAL_CONTINUATION",
+        authorization_repository: str = REPOSITORY,
+        authorization_delivery_issue: int = DELIVERY_ISSUE,
+        authorization_pull_request: int = PULL_REQUEST,
+        authorization_predecessor_head: str | None = None,
+        authorization_resulting_head: str | None = None,
+        authorization_finding_ids: list[str] | None = None,
+        authorization_thread_ids: list[str] | None = None,
+        authorization_signer: str = SIGNER,
+    ) -> None:
+        recovery = RecoveryFixture(root)
+        self.source = recovery.source
+        self.heads = recovery.heads
+        self.trees = recovery.trees
+        self.chain = recovery.chain
+        self.predecessor = recovery.recovery_publication
+        self.reviewed = fast_path.StableFeedbackState(
+            repository=REPOSITORY,
+            pull_request_number=PULL_REQUEST,
+            head_sha=self.heads[3],
+            base_ref="main",
+            base_sha=self.heads[0],
+            pr_state="OPEN",
+            feedback={
+                "pull_request_reactions": [],
+                "reviews": [],
+                "conversation_comments": [],
+                "threads": [
+                    {
+                        "node_id": THREAD_ID,
+                        "is_resolved": False,
+                        "is_outdated": True,
+                        "comments": [
+                            {
+                                "node_id": FINDING_ID,
+                                "body_digest": "5" * 64,
+                                "actor": {
+                                    "login": "reviewer",
+                                    "node_id": "ACTOR_GENERIC",
+                                    "database_id": 1,
+                                },
+                                "reply_to_id": None,
+                                "reactions": [],
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+        self.eligibility = {
+            "schema_version": "1.1",
+            "repository": REPOSITORY,
+            "pull_request_number": PULL_REQUEST,
+            "reviewed_head_sha": self.reviewed.head_sha,
+            "reviewed_state_digest": self.reviewed.state_digest,
+            "eligible_threads": [
+                {
+                    "thread_id": THREAD_ID,
+                    "classification": "VALID_ACTIONABLE",
+                    "disposition": "CORRECTED_AND_VERIFIED",
+                    "finding_ids": [FINDING_ID],
+                    "evidence_digest": "6" * 64,
+                    "follow_up": None,
+                }
+            ],
+        }
+        current_feedback = copy.deepcopy(self.reviewed.feedback)
+        for thread in current_feedback["threads"]:
+            thread["is_outdated"] = True
+        self.current_feedback = fast_path.StableFeedbackState(
+            repository=REPOSITORY,
+            pull_request_number=PULL_REQUEST,
+            head_sha=self.heads[4],
+            base_ref=self.reviewed.base_ref,
+            base_sha=self.reviewed.base_sha,
+            pr_state="OPEN",
+            feedback=current_feedback,
+        )
+        eligibility_digest = fast_path.digest_json(self.eligibility)
+        authorization_lifecycle = replace(
+            self.predecessor.lifecycle,
+            repository=authorization_repository,
+            delivery_issue=authorization_delivery_issue,
+            pull_request=authorization_pull_request,
+            head_sha=(
+                self.heads[3]
+                if authorization_predecessor_head is None
+                else authorization_predecessor_head
+            ),
+        )
+        self.authorization = orchestration.create_user_authorization(
+            authorization_id="fixture-continuation-authorization",
+            repository=authorization_repository,
+            delivery_issue=authorization_delivery_issue,
+            lifecycle=authorization_lifecycle,
+            publication_oid=self.predecessor.publication_oid,
+            publication_digest=self.predecessor.publication_digest,
+            operation=authorization_operation,
+            reason="Correct the exact post-Recovery material finding",
+            scope={
+                "pull_request": authorization_pull_request,
+                "predecessor_head_sha": (
+                    self.heads[3]
+                    if authorization_predecessor_head is None
+                    else authorization_predecessor_head
+                ),
+                "resulting_head_sha": (
+                    self.heads[4]
+                    if authorization_resulting_head is None
+                    else authorization_resulting_head
+                ),
+                "reviewed_state_digest": self.reviewed.state_digest,
+                "reviewed_feedback_digest": self.reviewed.feedback_digest,
+                "eligibility_evidence_digest": eligibility_digest,
+                "finding_ids": (
+                    [FINDING_ID]
+                    if authorization_finding_ids is None
+                    else authorization_finding_ids
+                ),
+                "thread_ids": (
+                    [THREAD_ID]
+                    if authorization_thread_ids is None
+                    else authorization_thread_ids
+                ),
+            },
+            signer_identity=authorization_signer,
+            signer=signer_for(authorization_signer),
+        )
+        authorization = authority.loads_closed_json(self.authorization)
+        self.chain.append(
+            transition_kind,
+            head=self.heads[4],
+            event_id=f"authorization:{authorization['authorization_digest']}",
+        )
+        self.continuation_publication = publication.advance_current_terminal(
+            self.chain.published(), signer_identity=SIGNER, signer=signer_for()
+        )
+        predecessor_state = self.predecessor.lifecycle.state
+        self.continuation = fast_path.normalize_exceptional_continuation_evidence(
+            {
+                "schema_version": "1.0",
+                "kind": "READY_EXCEPTIONAL_CONTINUATION",
+                "authorization_id": authorization["authorization_id"],
+                "repository": REPOSITORY,
+                "delivery_issue_number": DELIVERY_ISSUE,
+                "pull_request_number": PULL_REQUEST,
+                "prior_ready_head_sha": self.heads[3],
+                "prior_ready_tree_sha": self.trees[3],
+                "continuation_tree_sha": self.trees[4],
+                "reviewed_state_digest": self.reviewed.state_digest,
+                "reviewed_feedback_digest": self.reviewed.feedback_digest,
+                "eligibility_evidence_digest": eligibility_digest,
+                "finding_ids": [FINDING_ID],
+                "thread_ids": [THREAD_ID],
+                "expected_signer": {
+                    "kind": "SSH_PRINCIPAL",
+                    "identity": SIGNER,
+                },
+                "lifecycle": {
+                    "unrestricted_reviews": predecessor_state[
+                        "unrestricted_review_count"
+                    ],
+                    "remediation_cycles": predecessor_state[
+                        "remediation_cycle_count"
+                    ],
+                    "cycle_3": not predecessor_state["cycle_3_absent"],
+                    "draft": predecessor_state["draft"],
+                    "ready": predecessor_state["ready"],
+                    "ready_transition_count": predecessor_state[
+                        "ready_transition_count"
+                    ],
+                    "ready_history": predecessor_state["ready_history"],
+                    "exceptional_recovery_count": predecessor_state[
+                        "exceptional_recovery_count"
+                    ],
+                    "exceptional_recovery_history": predecessor_state[
+                        "exceptional_recovery_history"
+                    ],
+                    "exceptional_continuation_predecessor_count": 0,
+                    "exceptional_continuation_successor_count": 1,
+                },
+            },
+            repository=REPOSITORY,
+            reviewed_state=self.reviewed,
+            validated_tree_sha=self.trees[4],
+            eligibility_evidence=self.eligibility,
+        )
+        self.authenticated_commit = fast_path.AuthenticatedIntegrationCommit(
+            repository=REPOSITORY,
+            head_sha=self.heads[4],
+            tree_sha=self.trees[4],
+            parent_shas=(self.heads[3],),
+            signer_kind="SSH_PRINCIPAL",
+            signer_identity=SIGNER,
+            signature_fingerprint=orchestration._ssh_public_key_fingerprint(
+                "ssh-ed25519 AAAA"
+            ),
+            signature_classification="LOCAL_VERIFIED",
+            signature_policy_digest="7" * 64,
+            authentication_digest="8" * 64,
+        )
+
+    def verify(self, continuation: Any = None, **changes: Any) -> Any:
+        with (
+            patch.object(
+                orchestration,
+                "_authenticate_continuation_commit",
+                return_value=self.authenticated_commit,
+            ),
+            patch.object(
+                orchestration,
+                "_capture_current_stable_feedback",
+                return_value=self.current_feedback,
+            ),
+        ):
+            return orchestration.verify_exceptional_continuation_authority(
+                self.continuation if continuation is None else continuation,
+                orchestration_authorization=changes.get(
+                    "authorization", self.authorization
+                ),
+                reviewed_state_evidence=changes.get(
+                    "reviewed", self.reviewed.to_dict()
+                ),
+                eligibility_evidence=changes.get(
+                    "eligibility", self.eligibility
+                ),
+                repository_root=changes.get("repository_root", self.source),
+                repository=changes.get("repository", REPOSITORY),
+                delivery_issue=changes.get("delivery_issue", DELIVERY_ISSUE),
+                pull_request=changes.get("pull_request", PULL_REQUEST),
+                resulting_head_sha=changes.get("resulting_head_sha", self.heads[4]),
+            )
+
+
 class ExceptionalRecoveryAuthorityTests(TestCase):
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory(
@@ -868,6 +1108,270 @@ class ExceptionalRecoveryAuthorityTests(TestCase):
                 "ready_transition",
             }
         )
+
+
+class ExceptionalContinuationAuthorityTests(TestCase):
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory(
+            prefix="exceptional-continuation-authority-"
+        )
+        root = Path(self.directory.name)
+        self.publication_remote = root / "publication.git"
+        trusted = authority.TrustedSigner(SIGNER, ("ssh-ed25519 AAAA",), ())
+        self.policy = authority.LifecycleTrustPolicy(
+            repository=REPOSITORY,
+            accepted_formats=frozenset({"ssh"}),
+            transition_signer_identities=frozenset({SIGNER}),
+            authority_signer_identities=frozenset({SIGNER}),
+            signers={SIGNER: trusted},
+            initialization_anchors=(),
+            publication_signer_identities=frozenset({SIGNER}),
+            legacy_adoption_signer_identities=frozenset({SIGNER}),
+            publication_branch=PUBLICATION_BRANCH,
+            publication_remote_url=str(self.publication_remote),
+            publication_ruleset_id=PUBLICATION_RULESET,
+            publication_required_rules=frozenset({"deletion", "non_fast_forward"}),
+        )
+        self.patches = (
+            patch.object(
+                authority, "_load_lifecycle_trust_policy", return_value=self.policy
+            ),
+            patch.object(
+                authority, "_policy_signature_verifier", return_value=verify_signature
+            ),
+            patch.object(
+                publication,
+                "_verify_live_protection",
+                return_value=PUBLICATION_RULESET,
+            ),
+        )
+        for active in self.patches:
+            active.start()
+
+    def tearDown(self) -> None:
+        for active in reversed(self.patches):
+            active.stop()
+        self.directory.cleanup()
+
+    def fixture(self, **changes: Any) -> ContinuationFixture:
+        return ContinuationFixture(Path(self.directory.name), **changes)
+
+    def test_exact_continuation_projection_and_signed_authority_succeed(self) -> None:
+        fixture = self.fixture()
+
+        verified = fixture.verify()
+
+        self.assertEqual(
+            verified.continuation_digest,
+            fast_path.digest_json(fixture.continuation),
+        )
+        self.assertEqual(verified.prior_ready_head_sha, fixture.heads[3])
+        self.assertEqual(verified.resulting_head_sha, fixture.heads[4])
+        self.assertEqual(verified.prior_ready_tree_sha, fixture.trees[3])
+        self.assertEqual(verified.continuation_tree_sha, fixture.trees[4])
+        self.assertEqual(verified.finding_ids, (FINDING_ID,))
+        self.assertEqual(verified.thread_ids, (THREAD_ID,))
+        self.assertEqual(verified.source_signer_identity, SIGNER)
+
+    def test_recovery_and_continuation_evidence_are_not_interchangeable(self) -> None:
+        fixture = self.fixture()
+        recovery_shaped = copy.deepcopy(fixture.continuation)
+        recovery_shaped["kind"] = "READY_EXCEPTIONAL_RECOVERY"
+        recovery_shaped["recovery_tree_sha"] = recovery_shaped.pop(
+            "continuation_tree_sha"
+        )
+        recovery_shaped.pop("expected_signer")
+
+        for wrong in (
+            recovery_shaped,
+            {**fixture.continuation, "kind": "READY_EXCEPTIONAL_RECOVERY"},
+        ):
+            with self.subTest(kind=wrong.get("kind")), self.assertRaises(
+                orchestration.LifecycleOrchestrationError
+            ):
+                fixture.verify(wrong)
+
+    def test_signed_authorization_identity_scope_and_transition_mismatch_fail(self) -> None:
+        fixture = self.fixture()
+        variants = {
+            "operation": lambda item: item.update(operation="EXCEPTIONAL_RECOVERY"),
+            "repository": lambda item: item.update(repository="other/project"),
+            "issue": lambda item: item.update(delivery_issue=DELIVERY_ISSUE + 1),
+            "pr": lambda item: item.update(pull_request=PULL_REQUEST + 1),
+            "lifecycle": lambda item: item.update(lifecycle_id="lifecycle:" + "0" * 64),
+            "publication": lambda item: item.update(publication_oid="0" * 40),
+            "publication-digest": lambda item: item.update(
+                publication_digest="0" * 64
+            ),
+            "authority-digest": lambda item: item.update(authority_digest="0" * 64),
+            "bounded-uses": lambda item: item.update(bounded_uses=2),
+            "wrong-signer": lambda item: item.update(
+                signer_identity="attacker@example.invalid"
+            ),
+            "predecessor": lambda item: item["scope"].update(
+                predecessor_head_sha="0" * 40
+            ),
+            "result": lambda item: item["scope"].update(
+                resulting_head_sha="0" * 40
+            ),
+            "finding": lambda item: item["scope"].update(
+                finding_ids=["INVENTED_FINDING"]
+            ),
+            "empty-finding": lambda item: item["scope"].update(finding_ids=[]),
+            "thread": lambda item: item["scope"].update(
+                thread_ids=["PRRT_UNRELATED"]
+            ),
+        }
+        for label, mutate in variants.items():
+            parsed = authority.loads_closed_json(fixture.authorization)
+            unsigned = {
+                key: copy.deepcopy(value)
+                for key, value in parsed.items()
+                if key not in {"signature", "authorization_digest"}
+            }
+            mutate(unsigned)
+            signature = signer_for()(unsigned_bytes := authority.canonical_json_bytes(unsigned), orchestration.AUTHORIZATION_DOMAIN)
+            signed = {**unsigned, "signature": signature}
+            changed = authority.canonical_json_bytes(
+                {
+                    **signed,
+                    "authorization_digest": authority.digest_json(signed),
+                }
+            )
+            self.assertTrue(unsigned_bytes)
+            with self.subTest(label=label), self.assertRaises(
+                orchestration.LifecycleOrchestrationError
+            ):
+                fixture.verify(authorization=changed)
+
+    def test_continuation_projection_rejects_history_counter_and_tree_mutation(self) -> None:
+        fixture = self.fixture()
+        variants = (
+            ("prior_ready_tree_sha", "0" * 40),
+            ("continuation_tree_sha", "0" * 40),
+            ("delivery_issue_number", DELIVERY_ISSUE + 1),
+            ("pull_request_number", PULL_REQUEST + 1),
+        )
+        for field, value in variants:
+            changed = copy.deepcopy(fixture.continuation)
+            changed[field] = value
+            with self.subTest(field=field), self.assertRaises(
+                orchestration.LifecycleOrchestrationError
+            ):
+                fixture.verify(changed)
+        for field, value in (
+            ("exceptional_recovery_count", 0),
+            ("exceptional_continuation_predecessor_count", 1),
+            ("exceptional_continuation_successor_count", 2),
+            ("cycle_3", True),
+            ("ready", False),
+        ):
+            changed = copy.deepcopy(fixture.continuation)
+            changed["lifecycle"][field] = value
+            with self.subTest(field=field), self.assertRaises(
+                orchestration.LifecycleOrchestrationError
+            ):
+                fixture.verify(changed)
+
+    def test_source_commit_requires_authorized_signer_and_one_exact_parent(self) -> None:
+        expected = {"kind": "SSH_PRINCIPAL", "identity": SIGNER}
+        wrong_parent = fast_path.AuthenticatedIntegrationCommit(
+            repository=REPOSITORY,
+            head_sha="2" * 40,
+            tree_sha="3" * 40,
+            parent_shas=("4" * 40,),
+            signer_kind="SSH_PRINCIPAL",
+            signer_identity=SIGNER,
+            signature_fingerprint=orchestration._ssh_public_key_fingerprint(
+                "ssh-ed25519 AAAA"
+            ),
+            signature_classification="LOCAL_VERIFIED",
+            signature_policy_digest="5" * 64,
+            authentication_digest="6" * 64,
+        )
+        with (
+            patch.object(
+                fast_path, "authenticate_integration_commit", return_value=wrong_parent
+            ),
+            self.assertRaisesRegex(
+                orchestration.LifecycleOrchestrationError, "exact predecessor"
+            ),
+        ):
+            orchestration._authenticate_continuation_commit(
+                Path(self.directory.name),
+                REPOSITORY,
+                "1" * 40,
+                "2" * 40,
+                expected,
+            )
+        wrong_key = replace(
+            wrong_parent,
+            parent_shas=("1" * 40,),
+            signature_fingerprint="SHA256:caller-controlled-key",
+        )
+        with (
+            patch.object(
+                fast_path, "authenticate_integration_commit", return_value=wrong_key
+            ),
+            self.assertRaisesRegex(
+                orchestration.LifecycleOrchestrationError, "maintained SSH key"
+            ),
+        ):
+            orchestration._authenticate_continuation_commit(
+                Path(self.directory.name),
+                REPOSITORY,
+                "1" * 40,
+                "2" * 40,
+                expected,
+            )
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "not authorized"
+        ):
+            orchestration._authenticate_continuation_commit(
+                Path(self.directory.name),
+                REPOSITORY,
+                "1" * 40,
+                "2" * 40,
+                {"kind": "SSH_PRINCIPAL", "identity": "attacker@example.invalid"},
+            )
+        with (
+            patch.object(
+                fast_path,
+                "authenticate_integration_commit",
+                side_effect=fast_path.SecurityBlocker(
+                    "commit signature is missing or invalid"
+                ),
+            ),
+            self.assertRaisesRegex(
+                orchestration.LifecycleOrchestrationError,
+                "signed source commit is invalid",
+            ),
+        ):
+            orchestration._authenticate_continuation_commit(
+                Path(self.directory.name),
+                REPOSITORY,
+                "1" * 40,
+                "2" * 40,
+                expected,
+            )
+
+    def test_ready_head_advance_after_continuation_preserves_both_budgets(self) -> None:
+        fixture = self.fixture()
+        before = copy.deepcopy(fixture.continuation_publication.lifecycle.state)
+        after = authority.derive_state(before, "HEAD_ADVANCED", "9" * 64)
+
+        self.assertEqual(after["exceptional_recovery_count"], 1)
+        self.assertEqual(after["exceptional_continuation_count"], 1)
+        self.assertEqual(
+            after["exceptional_recovery_history"],
+            before["exceptional_recovery_history"],
+        )
+        self.assertEqual(
+            after["exceptional_continuation_history"],
+            before["exceptional_continuation_history"],
+        )
+        self.assertTrue(after["ready"])
+        self.assertTrue(after["cycle_3_absent"])
 
 
 if __name__ == "__main__":

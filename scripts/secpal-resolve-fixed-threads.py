@@ -1107,6 +1107,9 @@ def load_validation_evidence(
             exceptional_recovery_evidence_digest=payload.get(
                 "exceptional_recovery_evidence_digest"
             ),
+            exceptional_continuation_evidence_digest=payload.get(
+                "exceptional_continuation_evidence_digest"
+            ),
         )
         expected_attestation = fast_path.create_validation_attestation(
             repository=repository,
@@ -1839,6 +1842,95 @@ def verify_recovery_bound_source_authority(
     if verified.recovery_digest != recovery_digest:
         raise ResolutionError(
             "Recovery-bound source evidence has substituted Recovery authority"
+        )
+
+
+def verify_continuation_bound_source_authority(
+    validation: ValidationEvidence,
+    reviewed: ReviewedState,
+    eligibility: EligibilityEvidence,
+    *,
+    repository_root: Path,
+    repository: str,
+    delivery_issue: int | None,
+    pull_request: int,
+    resulting_head_sha: str,
+    continuation_evidence_path: Path | None,
+    continuation_authorization_path: Path | None,
+    successor_safety_evidence_path: Path | None = None,
+) -> None:
+    """Cross-bind ordinary Continuation evidence to published authority."""
+
+    attestation = validation.attestation
+    continuation_digest = (
+        attestation.get("exceptional_continuation_evidence_digest")
+        if validation.kind == "attestation" and isinstance(attestation, dict)
+        else None
+    )
+    if continuation_digest is None:
+        if (
+            continuation_evidence_path is not None
+            or continuation_authorization_path is not None
+            or successor_safety_evidence_path is not None
+        ):
+            raise ResolutionError(
+                "ordinary source evidence rejects Exceptional Continuation authority"
+            )
+        return
+    if (
+        not isinstance(delivery_issue, int)
+        or isinstance(delivery_issue, bool)
+        or delivery_issue < 1
+        or continuation_evidence_path is None
+        or continuation_authorization_path is None
+    ):
+        raise ResolutionError(
+            "Continuation-bound source evidence requires canonical Continuation authority"
+        )
+    try:
+        continuation_evidence = json.loads(
+            continuation_evidence_path.read_text(encoding="utf-8"),
+            parse_constant=_reject_nonfinite_json_constant,
+            object_pairs_hook=_reject_duplicate_json_object,
+        )
+        continuation_authorization = continuation_authorization_path.read_bytes()
+        successor_safety_evidence = (
+            json.loads(
+                successor_safety_evidence_path.read_text(encoding="utf-8"),
+                parse_constant=_reject_nonfinite_json_constant,
+                object_pairs_hook=_reject_duplicate_json_object,
+            )
+            if successor_safety_evidence_path is not None
+            else None
+        )
+        eligibility_evidence = json.loads(
+            eligibility.canonical_payload,
+            parse_constant=_reject_nonfinite_json_constant,
+            object_pairs_hook=_reject_duplicate_json_object,
+        )
+        verified = lifecycle_orchestration.verify_exceptional_continuation_authority(
+            continuation_evidence,
+            orchestration_authorization=continuation_authorization,
+            reviewed_state_evidence=reviewed.payload,
+            eligibility_evidence=eligibility_evidence,
+            successor_safety_evidence=successor_safety_evidence,
+            repository_root=repository_root,
+            repository=repository,
+            delivery_issue=delivery_issue,
+            pull_request=pull_request,
+            resulting_head_sha=resulting_head_sha,
+        )
+    except (
+        OSError,
+        ValueError,
+        lifecycle_orchestration.LifecycleOrchestrationError,
+    ) as exc:
+        raise ResolutionError(
+            "Continuation-bound source evidence has invalid Continuation authority"
+        ) from exc
+    if verified.continuation_digest != continuation_digest:
+        raise ResolutionError(
+            "Continuation-bound source evidence has substituted Continuation authority"
         )
 
 
@@ -3047,6 +3139,10 @@ def resolve_threads(
     exceptional_recovery_delivery_issue: int | None = None,
     exceptional_recovery_evidence_path: Path | str | None = None,
     exceptional_recovery_authorization_path: Path | str | None = None,
+    exceptional_continuation_delivery_issue: int | None = None,
+    exceptional_continuation_evidence_path: Path | str | None = None,
+    exceptional_continuation_authorization_path: Path | str | None = None,
+    exceptional_continuation_successor_safety_path: Path | str | None = None,
     **caller_constructed_authorization: Any,
 ) -> dict[str, Any]:
     """Resolve threads only after proving the complete local evidence chain."""
@@ -3113,6 +3209,31 @@ def resolve_threads(
         recovery_authorization_path=(
             Path(exceptional_recovery_authorization_path)
             if exceptional_recovery_authorization_path is not None
+            else None
+        ),
+    )
+    verify_continuation_bound_source_authority(
+        validation,
+        reviewed,
+        eligibility,
+        repository_root=Path(repository_root),
+        repository=repository,
+        delivery_issue=exceptional_continuation_delivery_issue,
+        pull_request=number,
+        resulting_head_sha=expected_head,
+        continuation_evidence_path=(
+            Path(exceptional_continuation_evidence_path)
+            if exceptional_continuation_evidence_path is not None
+            else None
+        ),
+        continuation_authorization_path=(
+            Path(exceptional_continuation_authorization_path)
+            if exceptional_continuation_authorization_path is not None
+            else None
+        ),
+        successor_safety_evidence_path=(
+            Path(exceptional_continuation_successor_safety_path)
+            if exceptional_continuation_successor_safety_path is not None
             else None
         ),
     )
@@ -3394,6 +3515,9 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--delivery-issue", type=int)
     parser.add_argument("--exceptional-recovery-evidence")
     parser.add_argument("--exceptional-recovery-authorization")
+    parser.add_argument("--exceptional-continuation-evidence")
+    parser.add_argument("--exceptional-continuation-authorization")
+    parser.add_argument("--exceptional-continuation-successor-safety")
     parser.add_argument("--late-disposition-evidence")
     parser.add_argument("--late-disposition-signature")
     parser.add_argument("--late-classification-evidence")
@@ -3425,6 +3549,9 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             if (
                 arguments.exceptional_recovery_evidence is not None
                 or arguments.exceptional_recovery_authorization is not None
+                or arguments.exceptional_continuation_evidence is not None
+                or arguments.exceptional_continuation_authorization is not None
+                or arguments.exceptional_continuation_successor_safety is not None
             ):
                 raise ResolutionError(
                     "late disposition rejects unrelated authority evidence"
@@ -3457,19 +3584,48 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             )
         else:
             recovery_values = (
-                arguments.delivery_issue,
                 arguments.exceptional_recovery_evidence,
                 arguments.exceptional_recovery_authorization,
             )
-            if any(value is not None for value in recovery_values):
+            continuation_values = (
+                arguments.exceptional_continuation_evidence,
+                arguments.exceptional_continuation_authorization,
+            )
+            has_recovery = any(value is not None for value in recovery_values)
+            has_continuation = any(
+                value is not None for value in continuation_values
+            ) or arguments.exceptional_continuation_successor_safety is not None
+            if (
+                arguments.delivery_issue is not None
+                and not has_recovery
+                and not has_continuation
+            ):
+                raise ResolutionError(
+                    "delivery issue requires typed Exceptional Recovery or Continuation authority"
+                )
+            if has_recovery and has_continuation:
+                raise ResolutionError(
+                    "Exceptional Recovery and Continuation authority are mutually exclusive"
+                )
+            if has_recovery:
                 if arguments.integration_evidence is not None:
                     raise ResolutionError(
                         "Ready integration rejects Exceptional Recovery authority"
                     )
-                if not all(value is not None for value in recovery_values):
+                if arguments.delivery_issue is None or None in recovery_values:
                     raise ResolutionError(
                         "Exceptional Recovery authority requires delivery issue, "
                         "Recovery evidence, and signed authorization"
+                    )
+            if has_continuation:
+                if arguments.integration_evidence is not None:
+                    raise ResolutionError(
+                        "Ready integration rejects Exceptional Continuation authority"
+                    )
+                if arguments.delivery_issue is None or None in continuation_values:
+                    raise ResolutionError(
+                        "Exceptional Continuation authority requires delivery issue, "
+                        "Continuation evidence, and signed authorization"
                     )
     except ResolutionError as exc:
         parser.error(str(exc))
@@ -3541,6 +3697,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                         ),
                     }
                     if arguments.exceptional_recovery_evidence is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "exceptional_continuation_delivery_issue": (
+                            arguments.delivery_issue
+                        ),
+                        "exceptional_continuation_evidence_path": (
+                            arguments.exceptional_continuation_evidence
+                        ),
+                        "exceptional_continuation_authorization_path": (
+                            arguments.exceptional_continuation_authorization
+                        ),
+                        "exceptional_continuation_successor_safety_path": (
+                            arguments.exceptional_continuation_successor_safety
+                        ),
+                    }
+                    if arguments.exceptional_continuation_evidence is not None
                     else {}
                 ),
                 **(

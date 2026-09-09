@@ -9,6 +9,31 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-08 - Authenticate Continuation Feedback Growth
+
+**Fixed:**
+
+- Replace Exceptional Continuation's impossible full-feedback digest equality
+  after mandatory provider acquisition with a closed authenticated successor
+  relation that preserves every predecessor source and accounts for every new
+  source.
+- Admit only exact resulting-head provider transport and completely classified
+  non-blocking findings authenticated by the existing detached-classification
+  signer trust; reject raw caller labels, material, unclassified, spoofed,
+  replayed, or predecessor-mutating feedback without requesting another review
+  or changing lifecycle semantics.
+
+## 2026-09-08 - Execute Bounded Exceptional Continuation
+
+**Fixed:**
+
+- Extend finite Ready orchestration with one authenticated source-changing
+  `EXCEPTIONAL_CONTINUATION` after Exceptional Recovery is consumed.
+- Bind exact current-head material findings, signed one-use authorization,
+  single-parent signed source, protected lifecycle publication, validation,
+  attestation, and guarded thread resolution without adding a counter, cycle,
+  journal, signer, trust root, or Ready transition.
+
 ## 2026-09-08 - Separate Ready Tooling From Candidate Source
 
 **Fixed:**

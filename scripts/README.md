@@ -233,6 +233,14 @@ binds the prior Ready head/tree, new tree, exact reviewed findings/threads,
 digest is carried by the ordinary single-parent receipt and attestation; it is
 not a third remediation cycle or a reusable recovery loop.
 
+After that one Recovery is consumed, `--exceptional-continuation-evidence`
+selects the distinct `READY_EXCEPTIONAL_CONTINUATION` sibling only with exact
+continuation issue/authorization selectors and eligibility evidence. It binds
+the preserved Ready/review/remediation/Recovery histories, Continuation
+`0 -> 1`, exact material findings and threads, final tree, and maintained source
+signer. The ordinary receipt and attestation carry its distinct digest. Recovery
+and Continuation evidence are mutually exclusive and cannot be type-substituted.
+
 ### `secpal-resolve-fixed-threads.py`
 
 Resolves only explicitly named review threads after their findings have already
@@ -264,10 +272,12 @@ authority, PR and head, thread and comment identities, bodies and replies,
 eligibility, classification, disposition, and every other binding remain exact.
 This compatibility does not normalize stale targets: `true` to `false`, missing
 or non-boolean outdated state, and every other difference fail closed. A
-Recovery-bound ordinary attestation also retains and passes the existing
-`--delivery-issue`, `--exceptional-recovery-evidence`, and
-`--exceptional-recovery-authorization` artifacts. Ordinary non-Recovery and
-Ready-integration invocations omit that tuple. The shared Recovery verifier may
+Recovery- or Continuation-bound ordinary attestation also retains and passes
+`--delivery-issue` with exactly one typed evidence/authorization pair:
+`--exceptional-recovery-evidence` and `--exceptional-recovery-authorization`,
+or `--exceptional-continuation-evidence` and
+`--exceptional-continuation-authorization`. Ordinary source and Ready-integration
+invocations omit both tuples. The shared verifier may
 authenticate only the installed lifecycle-publication journal protection; it
 does not grant delivery-PR branch-protection or merge-readiness authority. After
 one initial complete target read, the resolver requires two more equal complete target
@@ -536,7 +546,24 @@ selecting one bounded lifecycle action. It consumes the canonical work-graph
 classification and keeps technical and mechanical blocking independent. PR
 replacement selects `PR_REBOUND`; an explicitly authorized exhausted Ready
 recovery selects `EXCEPTIONAL_RECOVERY`, while bounded normal remediation
-selects `REMEDIATION_COMPLETED`; both preserve Ready. Explicit
+selects `REMEDIATION_COMPLETED`; both preserve Ready. Once Recovery is consumed,
+`CONTINUATION_COMMIT_PUSHED` derives an exact material finding/thread set from
+canonical stable feedback and eligibility before a signed exact-scope
+authorization may select `EXCEPTIONAL_CONTINUATION`. It preserves Ready and all
+finite history, consumes only the existing Continuation count, and requests no
+review. When exact-resulting-head provider acquisition grows Stable Feedback,
+the optional closed successor-safety extension binds both state digests,
+preserves every predecessor source, and accounts for every addition as either
+canonical head-bound provider transport or a source-complete maintained safe
+classification. The latter is a signed version-1.2 extension of the existing
+`LATE_FEEDBACK_CLASSIFICATION` family, bound to both Stable State digests, every
+exact successor source, the live thread, and the maintained delivery signer.
+Raw classifications are rejected. Missing, ambiguous, spoofed, wrong-head,
+material, or unclassified additions fail closed. The separate
+`--exceptional-continuation-successor-safety` resolver input preserves the
+existing source authorization/receipt/attestation. The extension proves only
+candidate safety: it does not expand the authorized source-change finding set
+or request providers. Explicit
 Ready/Draft changes require their exact separately reasoned authorization.
 Every user-controlled orchestration decision consumes canonical signed evidence
 bound to the exact CURRENT publication, authority, PR, head, operation, reason,
