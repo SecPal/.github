@@ -46,6 +46,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--final-reviewed-state", required=True)
     parser.add_argument("--expected-final-reviewed-state-digest", required=True)
     parser.add_argument("--final-validation-evidence", required=True)
+    parser.add_argument("--final-validation-receipt")
     parser.add_argument("--final-eligibility-evidence")
     parser.add_argument("--integration-evidence")
     parser.add_argument("--classification-evidence", required=True)
@@ -56,9 +57,17 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     if (
         arguments.integration_evidence is not None
         and arguments.final_eligibility_evidence is None
+        and arguments.final_validation_receipt is None
     ):
         parser.error(
-            "--integration-evidence requires --final-eligibility-evidence"
+            "--integration-evidence requires final eligibility or the historical validation receipt"
+        )
+    if arguments.final_validation_receipt is not None and (
+        arguments.integration_evidence is None
+        or arguments.final_eligibility_evidence is not None
+    ):
+        parser.error(
+            "--final-validation-receipt is only for historical Ready integration without final eligibility"
         )
     return arguments
 
@@ -85,6 +94,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_path=arguments.output,
             signature_output_path=arguments.signature_output,
             integration_evidence_path=arguments.integration_evidence,
+            integration_validation_receipt_path=(
+                arguments.final_validation_receipt
+            ),
         )
     except resolver.ResolutionError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

@@ -1064,6 +1064,16 @@ recreate an eligibility manifest. A supplied path selects manifest verification;
 present, null, malformed, or stale eligibility evidence fails and never selects
 absence mode. Final eligibility evidence outside late mode is rejected.
 
+A schema-1.1 Ready-integration boundary is distinct from that special recovery.
+It requires the exact original receipt alongside integration evidence and
+proves that both receipt and attestation omit `eligibility_evidence_digest`.
+The derived `NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY` fact supplies no
+thread authority. The existing source verifier authenticates the integration,
+exact Stable Feedback derives origin, and the existing detached signed
+classification/disposition chain supplies the only resolution authority.
+Schema 1.1 alone remains rejected, and schema-1.2 commit-bound behavior is
+unchanged.
+
 The schema-bound `resolve-batch --apply` path remains available only when the
 current user instruction explicitly requests readiness or merge evaluation. In
 that path, volatile readiness performs at most one bounded current-state read.
@@ -1176,10 +1186,10 @@ both canonical artifacts and detached signatures against the derived signer,
 and compares exact live head, thread, top-level comment node/database identity,
 body digest, reply state, resolved/outdated state, classification, disposition,
 technical-blocking flag, and guarded action before resolving. The closed path
-accepts `INFORMATIONAL + NON_ACTIONABLE + technically_blocking=false` for
-either origin. Existing
-`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE +
-technically_blocking=false` remains accepted only for `ABSENT_FROM_BOTH`.
+accepts the canonical corrected/actionable, invalid/disproven, and
+informational/non-actionable pairs for `REVIEWED_BUT_INELIGIBLE`, and retains
+invalid/disproven or informational/non-actionable for `ABSENT_FROM_BOTH`.
+Every pair requires `technically_blocking=false`.
 No caller-selected origin, other classification or disposition, or technical
 blocker is accepted. The path consumes no review/remediation counter and has
 no commit, push, Ready, CI, issue, label, review, or merge capability.

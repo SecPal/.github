@@ -405,6 +405,9 @@ class FinalEligibilityMode(Enum):
     AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE = (
         "AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE"
     )
+    NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY = (
+        "NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY"
+    )
 
 
 _VERIFIED_FINAL_ELIGIBILITY_ABSENCE = object()
@@ -972,6 +975,7 @@ def load_validation_evidence(
     reviewed: ReviewedState,
     integration_evidence_path: Path | None = None,
     *,
+    integration_validation_receipt_path: Path | None = None,
     final_eligibility_absence: FinalEligibilityAbsence | None = None,
 ) -> ValidationEvidence:
     try:
@@ -1008,9 +1012,19 @@ def load_validation_evidence(
             raise ResolutionError(
                 "final eligibility absence recovery rejects Ready integration"
             )
-        if payload.get("kind") != (
-            "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"
-        ) or payload.get("schema_version") != "1.2":
+        historical_source = (
+            payload.get("kind") == "READY_INTEGRATION_VALIDATION_ATTESTATION"
+            and payload.get("schema_version") == "1.1"
+            and "eligibility_evidence_digest" not in payload
+        )
+        eligibility_bound = (
+            payload.get("kind")
+            == "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"
+            and payload.get("schema_version") == "1.2"
+            and isinstance(payload.get("eligibility_evidence_digest"), str)
+            and DIGEST.fullmatch(payload["eligibility_evidence_digest"])
+        )
+        if not historical_source and not eligibility_bound:
             raise ResolutionError(
                 "historical Ready integration attestation is not resolution authority"
             )
@@ -1036,6 +1050,28 @@ def load_validation_evidence(
                     validated_tree_sha=payload.get("validated_tree_sha"),
                 )
             )
+            supplied_receipt = None
+            if historical_source:
+                if integration_validation_receipt_path is None:
+                    raise ResolutionError(
+                        "historical Ready integration requires its validation receipt"
+                    )
+                supplied_receipt = json.loads(
+                    integration_validation_receipt_path.read_text(encoding="utf-8"),
+                    parse_constant=_reject_nonfinite_json_constant,
+                    object_pairs_hook=_reject_duplicate_json_object,
+                )
+                if (
+                    not isinstance(supplied_receipt, dict)
+                    or "eligibility_evidence_digest" in supplied_receipt
+                ):
+                    raise ResolutionError(
+                        "historical Ready integration receipt unexpectedly binds eligibility"
+                    )
+            elif integration_validation_receipt_path is not None:
+                raise ResolutionError(
+                    "eligibility-bound Ready integration rejects a separate receipt"
+                )
             receipt = fast_path.create_validation_receipt(
                 repository=repository,
                 head_sha=reviewed.head_sha,
@@ -1044,7 +1080,11 @@ def load_validation_evidence(
                 command_set=registry_binding["validation"],
                 successful_result=True,
                 reviewed_state=stable_reviewed,
-                manual_gate_evidence=payload.get("manual_gate_evidence"),
+                manual_gate_evidence=(
+                    supplied_receipt.get("manual_gate_evidence")
+                    if supplied_receipt is not None
+                    else payload.get("manual_gate_evidence")
+                ),
                 eligibility_evidence_digest=payload.get(
                     "eligibility_evidence_digest"
                 ),
@@ -1052,20 +1092,30 @@ def load_validation_evidence(
                     integration_evidence
                 ),
             )
+            if supplied_receipt is not None and supplied_receipt != receipt:
+                raise ResolutionError(
+                    "historical Ready integration receipt is invalid or stale"
+                )
         except (OSError, ValueError, fast_path.SecurityBlocker) as exc:
             raise ResolutionError(
                 "integration validation evidence is invalid or stale"
             ) from exc
+        if historical_source and "eligibility_evidence_digest" in receipt:
+            raise ResolutionError(
+                "historical Ready integration receipt unexpectedly binds eligibility"
+            )
         return ValidationEvidence(
-            kind="eligibility-bound-ready-integration",
+            kind=(
+                "ready-integration-source"
+                if historical_source
+                else "eligibility-bound-ready-integration"
+            ),
             evidence_digest=payload.get("attestation_digest", ""),
             validated_tree_sha=payload.get("validated_tree_sha", ""),
             validation_receipt_digest=payload.get(
                 "validation_receipt_digest", ""
             ),
-            eligibility_evidence_digest=payload.get(
-                "eligibility_evidence_digest", ""
-            ),
+            eligibility_evidence_digest=payload.get("eligibility_evidence_digest"),
             attestation=payload,
             validation_receipt=receipt,
             integration_evidence=integration_evidence,
@@ -1176,6 +1226,7 @@ def verify_local_fix_commit(
             "attestation",
             "eligibility-bound-ready-integration",
             "final-eligibility-absence-attestation",
+            "ready-integration-source",
         }
         or not isinstance(validation.evidence_digest, str)
         or not DIGEST.fullmatch(validation.evidence_digest)
@@ -1184,11 +1235,19 @@ def verify_local_fix_commit(
         or not isinstance(validation.validation_receipt_digest, str)
         or not DIGEST.fullmatch(validation.validation_receipt_digest)
         or (
-            validation.kind == "final-eligibility-absence-attestation"
+            validation.kind
+            in {
+                "final-eligibility-absence-attestation",
+                "ready-integration-source",
+            }
             and validation.eligibility_evidence_digest is not None
         )
         or (
-            validation.kind != "final-eligibility-absence-attestation"
+            validation.kind
+            not in {
+                "final-eligibility-absence-attestation",
+                "ready-integration-source",
+            }
             and (
                 not isinstance(validation.eligibility_evidence_digest, str)
                 or not DIGEST.fullmatch(validation.eligibility_evidence_digest)
@@ -1262,7 +1321,10 @@ def verify_local_fix_commit(
             "fix commit validation-receipt trailer does not match evidence"
         )
     integration_trailer: str | None = None
-    if validation.kind == "eligibility-bound-ready-integration":
+    if validation.kind in {
+        "eligibility-bound-ready-integration",
+        "ready-integration-source",
+    }:
         integration_output = effective_runner(
             root,
             (
@@ -1376,7 +1438,12 @@ def verify_local_fix_commit(
                 expected_signer=validation.integration_evidence["expected_signer"],
                 signature_policy=signature_policy,
             )
-            fast_path.verify_eligibility_bound_ready_integration_attestation(
+            integration_verifier = (
+                fast_path.verify_ready_integration_attestation
+                if validation.kind == "ready-integration-source"
+                else fast_path.verify_eligibility_bound_ready_integration_attestation
+            )
+            integration_verifier(
                 validation.attestation,
                 repository=repository,
                 head_sha=expected_head.lower(),
@@ -1738,6 +1805,29 @@ def _require_valid_final_feedback_boundary(
         return
 
     if boundary.eligibility_mode is (
+        FinalEligibilityMode.NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY
+    ):
+        attestation = boundary.validation.attestation
+        receipt = boundary.validation.validation_receipt
+        if (
+            boundary.eligibility is not None
+            or boundary.eligibility_absence is not None
+            or boundary.validation.final_eligibility_absence is not None
+            or boundary.validation.kind != "ready-integration-source"
+            or not isinstance(boundary.validation.integration_evidence, dict)
+            or boundary.validation.eligibility_evidence_digest is not None
+            or attestation.get("schema_version") != "1.1"
+            or attestation.get("kind")
+            != "READY_INTEGRATION_VALIDATION_ATTESTATION"
+            or "eligibility_evidence_digest" in attestation
+            or "eligibility_evidence_digest" in receipt
+        ):
+            raise ResolutionError(
+                "historical Ready integration eligibility absence is invalid"
+            )
+        return
+
+    if boundary.eligibility_mode is (
         FinalEligibilityMode.AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE
     ):
         absence = boundary.eligibility_absence
@@ -1945,6 +2035,7 @@ def load_final_feedback_boundary(
     final_validation_evidence_path: Path,
     final_eligibility_evidence_path: Path | None,
     integration_evidence_path: Path | None = None,
+    integration_validation_receipt_path: Path | None = None,
 ) -> FinalFeedbackBoundary:
     reviewed = load_reviewed_state(
         final_reviewed_state_path,
@@ -1960,7 +2051,14 @@ def load_final_feedback_boundary(
             expected_head,
             reviewed,
             integration_evidence_path,
+            integration_validation_receipt_path=(
+                integration_validation_receipt_path
+            ),
         )
+        if validation.kind == "ready-integration-source":
+            raise ResolutionError(
+                "historical Ready integration rejects supplied eligibility evidence"
+            )
         if (
             validation.kind == "eligibility-bound-ready-integration"
             and (
@@ -1996,6 +2094,38 @@ def load_final_feedback_boundary(
             validation,
             FinalEligibilityMode.AUTHENTICATED_ELIGIBILITY_MANIFEST,
             eligibility,
+            None,
+        )
+        _require_valid_final_feedback_boundary(boundary)
+        return boundary
+    if integration_evidence_path is not None:
+        validation = load_validation_evidence(
+            final_validation_evidence_path,
+            repository,
+            expected_head,
+            reviewed,
+            integration_evidence_path,
+            integration_validation_receipt_path=(
+                integration_validation_receipt_path
+            ),
+        )
+        if validation.kind != "ready-integration-source":
+            raise ResolutionError(
+                "eligibility-bound Ready integration requires final eligibility evidence"
+            )
+        if (
+            not isinstance(validation.integration_evidence, dict)
+            or validation.integration_evidence.get("delivery_issue_number")
+            != delivery_issue
+        ):
+            raise ResolutionError(
+                "integration validation evidence delivery issue is invalid or stale"
+            )
+        boundary = FinalFeedbackBoundary(
+            reviewed,
+            validation,
+            FinalEligibilityMode.NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY,
+            None,
             None,
         )
         _require_valid_final_feedback_boundary(boundary)
@@ -2482,6 +2612,7 @@ def create_late_classification_artifact(
     output_path: Path | str,
     signature_output_path: Path | str,
     integration_evidence_path: Path | str | None = None,
+    integration_validation_receipt_path: Path | str | None = None,
 ) -> dict[str, Any]:
     if (
         not REPOSITORY.fullmatch(repository)
@@ -2537,9 +2668,12 @@ def create_late_classification_artifact(
             if integration_evidence_path is not None
             else None
         ),
+        integration_validation_receipt_path=(
+            Path(integration_validation_receipt_path)
+            if integration_validation_receipt_path is not None
+            else None
+        ),
     )
-    origin = derive_post_freeze_origin(boundary, thread_id)
-    require_post_freeze_decision(origin, classification, disposition)
     root = Path(repository_root)
     try:
         resolved_root = root.resolve(strict=True)
@@ -2553,6 +2687,8 @@ def create_late_classification_artifact(
         boundary.validation,
         require_signer_identity=True,
     )
+    origin = derive_post_freeze_origin(boundary, thread_id)
+    require_post_freeze_decision(origin, classification, disposition)
     limits = load_repository_limits(repository)
     budget = InvocationBudget(
         limits.maximum_api_calls,
@@ -2661,6 +2797,7 @@ def create_late_disposition_artifact(
     output_path: Path | str,
     signature_output_path: Path | str,
     integration_evidence_path: Path | str | None = None,
+    integration_validation_receipt_path: Path | str | None = None,
 ) -> dict[str, Any]:
     if not REPOSITORY.fullmatch(repository):
         raise ResolutionError("repository must use owner/name format")
@@ -2693,6 +2830,11 @@ def create_late_disposition_artifact(
         integration_evidence_path=(
             Path(integration_evidence_path)
             if integration_evidence_path is not None
+            else None
+        ),
+        integration_validation_receipt_path=(
+            Path(integration_validation_receipt_path)
+            if integration_validation_receipt_path is not None
             else None
         ),
     )
@@ -2803,11 +2945,20 @@ def create_late_disposition_artifact(
         if boundary.eligibility_mode
         == FinalEligibilityMode.AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE
         and isinstance(absence, FinalEligibilityAbsence)
-        else {
-            "final_eligibility_evidence_digest": (
-                boundary.validation.eligibility_evidence_digest
-            )
-        }
+        else (
+            {
+                "final_eligibility_status": (
+                    late_disposition.NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY
+                )
+            }
+            if boundary.eligibility_mode
+            == FinalEligibilityMode.NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY
+            else {
+                "final_eligibility_evidence_digest": (
+                    boundary.validation.eligibility_evidence_digest
+                )
+            }
+        )
     )
     artifact = {
         "schema_version": late_disposition.disposition_schema_version_for_decision(
@@ -2816,6 +2967,10 @@ def create_late_disposition_artifact(
             final_eligibility_absent=(
                 boundary.eligibility_mode
                 == FinalEligibilityMode.AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE
+            ),
+            no_commit_bound_ready_integration_eligibility=(
+                boundary.eligibility_mode
+                == FinalEligibilityMode.NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY
             ),
         ),
         "kind": late_disposition.KIND,
@@ -2890,6 +3045,7 @@ def resolve_late_disposition_threads(
     late_disposition_evidence_path: Path | str,
     late_disposition_signature_path: Path | str,
     integration_evidence_path: Path | str | None = None,
+    integration_validation_receipt_path: Path | str | None = None,
 ) -> dict[str, Any]:
     """Resolve only exact late threads authenticated independently of Git history."""
 
@@ -2927,8 +3083,12 @@ def resolve_late_disposition_threads(
             if integration_evidence_path is not None
             else None
         ),
+        integration_validation_receipt_path=(
+            Path(integration_validation_receipt_path)
+            if integration_validation_receipt_path is not None
+            else None
+        ),
     )
-    origin = derive_post_freeze_origin(boundary, thread_ids[0])
     signer = verify_local_fix_commit(
         Path(repository_root),
         repository,
@@ -2937,6 +3097,7 @@ def resolve_late_disposition_threads(
         boundary.validation,
         require_signer_identity=True,
     )
+    origin = derive_post_freeze_origin(boundary, thread_ids[0])
     try:
         authorization = late_disposition.parse_artifact(
             Path(late_disposition_evidence_path),
@@ -2955,6 +3116,12 @@ def resolve_late_disposition_threads(
             final_eligibility_absence_recovery_digest=(
                 boundary.eligibility_absence.recovery_digest
                 if boundary.eligibility_absence is not None
+                else None
+            ),
+            final_eligibility_status=(
+                late_disposition.NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY
+                if boundary.eligibility_mode
+                == FinalEligibilityMode.NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY
                 else None
             ),
             thread_ids=thread_ids,
@@ -3512,6 +3679,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--validation-evidence", required=True)
     parser.add_argument("--eligibility-evidence")
     parser.add_argument("--integration-evidence")
+    parser.add_argument("--integration-validation-receipt")
     parser.add_argument("--delivery-issue", type=int)
     parser.add_argument("--exceptional-recovery-evidence")
     parser.add_argument("--exceptional-recovery-authorization")
@@ -3570,13 +3738,25 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             if (
                 arguments.integration_evidence is not None
                 and arguments.final_eligibility_evidence is None
+                and arguments.integration_validation_receipt is None
             ):
                 raise ResolutionError(
-                    "Ready integration late disposition requires final eligibility evidence"
+                    "Ready integration late disposition requires final eligibility or its historical validation receipt"
+                )
+            if arguments.integration_validation_receipt is not None and (
+                arguments.integration_evidence is None
+                or arguments.final_eligibility_evidence is not None
+            ):
+                raise ResolutionError(
+                    "historical Ready integration receipt is mutually exclusive with final eligibility"
                 )
         elif arguments.final_eligibility_evidence is not None:
             raise ResolutionError(
                 "final eligibility evidence is valid only for late disposition"
+            )
+        elif arguments.integration_validation_receipt is not None:
+            raise ResolutionError(
+                "historical integration receipt is valid only for late disposition"
             )
         elif arguments.eligibility_evidence is None:
             raise ResolutionError(
@@ -3667,6 +3847,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 **(
                     {"integration_evidence_path": arguments.integration_evidence}
                     if arguments.integration_evidence is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "integration_validation_receipt_path": (
+                            arguments.integration_validation_receipt
+                        )
+                    }
+                    if arguments.integration_validation_receipt is not None
                     else {}
                 ),
             )
