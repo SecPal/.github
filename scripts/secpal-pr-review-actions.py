@@ -43,6 +43,9 @@ REGISTRY_PATH = (
     / ".agents/skills/secpal-pr-review/references/repositories.json"
 )
 FAST_PATH_HELPER = REPOSITORY_ROOT / "scripts/secpal_pr_review/fast_path.py"
+EXACT_SOURCE_SAFETY_HELPER = (
+    REPOSITORY_ROOT / "scripts/secpal_pr_review/exact_source_safety.py"
+)
 PRE_ENROLLMENT_INTEGRATION_HELPER = (
     REPOSITORY_ROOT / "scripts/secpal_pr_review/pre_enrollment_integration.py"
 )
@@ -123,6 +126,46 @@ def _load_fast_path_helper() -> Any:
 
 fast_path = _load_fast_path_helper()
 follow_up = fast_path.follow_up
+
+
+def _load_exact_source_safety_helper() -> Any:
+    package_name = "secpal_exact_source_safety"
+    package = types.ModuleType(package_name)
+    package.__path__ = [str(EXACT_SOURCE_SAFETY_HELPER.parent)]
+    sys.modules[package_name] = package
+    spec = importlib.util.spec_from_file_location(
+        f"{package_name}.exact_source_safety", EXACT_SOURCE_SAFETY_HELPER,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Cannot load exact-source safety helper")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        if sys.modules.get(spec.name) is module:
+            sys.modules.pop(spec.name, None)
+        raise
+    return module
+
+
+exact_source_safety = _load_exact_source_safety_helper()
+
+
+READY_SOURCE_RECOVERY_CURRENT_SAFETY_PATH = (
+    "tests/ready-source-recovery-current-safety.py"
+)
+READY_SOURCE_RECOVERY_CURRENT_SAFETY_INVARIANTS = (
+    "candidate_local_issuer_rejected",
+    "complete_feedback",
+    "context_binding",
+    "historical_bytes_unavailable",
+    "ordinary_prior_ready",
+    "resolved_feedback",
+    "signed_authority_required",
+    "source_history",
+    "wrong_signer",
+)
 
 
 def _load_pre_enrollment_integration_helper() -> Any:
@@ -4752,6 +4795,58 @@ def _verify_recovery_issuer_source(policy_head_sha: str) -> None:
         )
 
 
+def _ready_source_recovery_current_safety_profile(
+    policy_head_sha: str,
+) -> dict[str, Any]:
+    """Select the one closed accepted-main Ready-source safety profile."""
+
+    try:
+        return exact_source_safety.build_profile(
+            REPOSITORY_ROOT,
+            policy_head_sha,
+            policy="READY_SOURCE_RECOVERY_CURRENT_SAFETY",
+            harness_paths=(READY_SOURCE_RECOVERY_CURRENT_SAFETY_PATH,),
+            purpose="Validate Ready-source recovery current safety",
+            required_invariants=READY_SOURCE_RECOVERY_CURRENT_SAFETY_INVARIANTS,
+        )
+    except (
+        exact_source_safety.authority.LifecycleAuthorityError,
+        exact_source_safety.transport.BootstrapSourceAdmissionError,
+    ) as exc:
+        raise fast_path.SecurityBlocker(
+            "Ready-source recovery current-safety profile is unavailable"
+        ) from exc
+
+
+def _run_ready_source_recovery_current_safety(
+    policy_head_sha: str,
+    repository_root: Path,
+    profile: dict[str, Any],
+) -> bool:
+    """Run the selected profile without overlaying candidate implementation."""
+
+    expected = _ready_source_recovery_current_safety_profile(policy_head_sha)
+    if profile != expected:
+        raise fast_path.SecurityBlocker(
+            "Ready-source recovery current-safety profile changed"
+        )
+    try:
+        with exact_source_safety.execution_root(
+            REPOSITORY_ROOT,
+            policy_head_sha,
+            source_root=repository_root,
+            profile=profile,
+        ) as root:
+            exact_source_safety.run_profile(
+                root, profile, expected_profile=expected,
+            )
+    except exact_source_safety.authority.LifecycleAuthorityError as exc:
+        raise fast_path.SecurityBlocker(
+            "Ready-source recovery current safety failed"
+        ) from exc
+    return True
+
+
 def _acquire_ready_source_recovery_facts(
     *,
     repository: str,
@@ -4773,7 +4868,16 @@ def _acquire_ready_source_recovery_facts(
         raise fast_path.SecurityBlocker(
             "accepted protected-main policy identity is malformed"
         )
-    binding = _fast_registry_binding(entry)
+    repository_binding = _fast_registry_binding(entry)
+    current_safety_profile = _ready_source_recovery_current_safety_profile(
+        policy_head_sha
+    )
+    binding = {
+        **repository_binding,
+        "ready_source_recovery_current_safety": copy.deepcopy(
+            current_safety_profile
+        ),
+    }
     head, status = _attestation_local_state(root, repository)
     if head != expected_head_sha or status:
         raise fast_path.SecurityBlocker(
@@ -4812,7 +4916,9 @@ def _acquire_ready_source_recovery_facts(
         raise fast_path.SecurityBlocker(
             "Ready-source recovery feedback does not bind the candidate"
         )
-    validation_result = _validation_runner(entry, root)
+    validation_result = _validation_runner(
+        policy_head_sha, root, copy.deepcopy(current_safety_profile)
+    )
     if not validation_result:
         raise RegisteredValidationFailure(validation_result)
     if gateway.observe_ready_source_recovery_approval_policy(
@@ -4852,6 +4958,7 @@ def _acquire_ready_source_recovery_facts(
         head_sha=head,
         tree_sha=tree,
         binding=binding,
+        command_set=current_safety_profile["validation_command_set"],
         reviewed=reviewed,
         manual_gate_evidence=manual_gate_evidence,
     )
@@ -4870,7 +4977,8 @@ def _acquire_ready_source_recovery_facts(
         feedback_findings=feedback_findings,
         fresh_validation_receipt=receipt,
         registry=binding,
-        command_set=binding["validation"],
+        command_set=current_safety_profile["validation_command_set"],
+        current_safety_profile=current_safety_profile,
     )
     return facts, commit_signature_evidence
 
@@ -5013,7 +5121,7 @@ def issue_ready_source_recovery_authorization(
         signer_identity=signer_identity, signer=signer,
         _policy_loader=_load_current_recovery_policy,
         _gateway_factory=FastPathGateway,
-        _validation_runner=_run_registered_validations,
+        _validation_runner=_run_ready_source_recovery_current_safety,
         _issuer_source_verifier=_verify_recovery_issuer_source,
         _current_lifecycle_loader=(
             lifecycle_publication.verify_current_lifecycle_authority
@@ -6962,6 +7070,7 @@ def _validation_receipt(
     binding: dict[str, Any],
     reviewed: Any,
     manual_gate_evidence: Any,
+    command_set: list[dict[str, Any]] | None = None,
     eligibility_evidence_digest: str | None = None,
     integration_evidence_digest: str | None = None,
     exceptional_recovery_evidence_digest: str | None = None,
@@ -6972,7 +7081,7 @@ def _validation_receipt(
         head_sha=head_sha,
         validated_tree_sha=tree_sha,
         registry=binding,
-        command_set=binding["validation"],
+        command_set=(binding["validation"] if command_set is None else command_set),
         successful_result=True,
         reviewed_state=reviewed,
         manual_gate_evidence=manual_gate_evidence,

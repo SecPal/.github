@@ -906,7 +906,34 @@ class LifecyclePublicationTests(TestCase):
             observe_ready_source_recovery_approval_policy=lambda *_: True,
             observe_ready_source_recovery_delivery=lambda *_: commit,
         )
+        harness_path = actions.READY_SOURCE_RECOVERY_CURRENT_SAFETY_PATH
+        safety_command = {
+            "argv": ["python3", harness_path], "working_directory": ".",
+            "purpose": "Validate Ready-source recovery current safety",
+        }
+        current_safety_profile = {
+            "schema_version": "1.0",
+            "policy": "READY_SOURCE_RECOVERY_CURRENT_SAFETY",
+            "harness": [{
+                "path": harness_path, "mode": "100644",
+                "blob_oid": "e" * 40, "size": 1,
+            }],
+            "validation_command_set": [safety_command],
+            "validation_command_set_digest": authority.digest_json([safety_command]),
+            "timeout_seconds": 120,
+            "required_invariants": list(
+                actions.READY_SOURCE_RECOVERY_CURRENT_SAFETY_INVARIANTS
+            ),
+            "validation_results": [{
+                "command_digest": authority.digest_json(safety_command),
+                "exit_status": 0, "successful": True,
+            }],
+        }
         with (
+            patch.object(
+                actions, "_ready_source_recovery_current_safety_profile",
+                return_value=current_safety_profile,
+            ),
             patch.object(
                 actions, "_attestation_local_state",
                 side_effect=[(chain.head, ""), (chain.head, "")],

@@ -15,6 +15,7 @@ REGISTRY_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/repositor
 PLAN_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/mutation-plan.schema.json"
 FAST_SCHEMA="$REPO_ROOT/.agents/skills/secpal-pr-review/references/fast-path-batch.schema.json"
 FAST_PATH="$REPO_ROOT/scripts/secpal_pr_review/fast_path.py"
+EXACT_SOURCE_SAFETY="$REPO_ROOT/scripts/secpal_pr_review/exact_source_safety.py"
 SIMPLE_RESOLVER="$REPO_ROOT/scripts/secpal-resolve-fixed-threads.py"
 FOLLOW_UP="$REPO_ROOT/scripts/secpal_pr_review/follow_up.py"
 LATE_DISPOSITION="$REPO_ROOT/scripts/secpal_pr_review/late_disposition.py"
@@ -575,6 +576,7 @@ for required in \
   "$EVIDENCE" \
   "$ACTIONS" \
   "$FAST_PATH" \
+  "$EXACT_SOURCE_SAFETY" \
   "$SIMPLE_RESOLVER" \
   "$LATE_DISPOSITION" \
   "$LATE_CLASSIFICATION_CREATOR" \
@@ -846,6 +848,7 @@ python3 \
   "$EVIDENCE" \
   "$ACTIONS" \
   "$FAST_PATH" \
+  "$EXACT_SOURCE_SAFETY" \
   "$SIMPLE_RESOLVER" \
   "$FOLLOW_UP" \
   "$LATE_DISPOSITION" \

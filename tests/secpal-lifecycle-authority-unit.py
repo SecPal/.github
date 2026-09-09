@@ -3396,7 +3396,8 @@ class ValidationEvidenceLossTests(TestCase):
                         return subprocess.CompletedProcess(arguments[0], 0, b"", b"")
 
                     with patch.object(
-                        self.loss.subprocess, "run", side_effect=substitute_blob,
+                        self.loss.exact_source_safety.subprocess,
+                        "run", side_effect=substitute_blob,
                     ), self.assertRaisesRegex(
                         authority.LifecycleAuthorityError, "size changed|bytes changed",
                     ):
@@ -3639,7 +3640,7 @@ class ValidationEvidenceLossTests(TestCase):
     def test_loss_execution_static_boundary(self) -> None:
         parsed = ast.parse(inspect.getsource(self.loss))
         imports = {alias.name for node in ast.walk(parsed) if isinstance(node, ast.Import) for alias in node.names}
-        self.assertEqual(imports, {"copy", "os", "re", "shutil", "stat", "subprocess", "tempfile"})
+        self.assertEqual(imports, {"copy", "re", "tempfile"})
         from_imports = {
             (node.level, node.module, tuple(alias.name for alias in node.names))
             for node in ast.walk(parsed) if isinstance(node, ast.ImportFrom)
@@ -3650,6 +3651,7 @@ class ValidationEvidenceLossTests(TestCase):
             (0, "datetime", ("datetime", "timezone")), (0, "pathlib", ("Path",)),
             (0, "typing", ("Any", "Iterator", "Mapping")),
             (1, None, ("bootstrap_source_admission",)), (1, None, ("fast_path",)),
+            (1, None, ("exact_source_safety",)),
             (1, None, ("lifecycle_authority",)), (1, None, ("lifecycle_execution",)),
             (1, None, ("lifecycle_publication",)),
         })
@@ -3665,10 +3667,7 @@ class ValidationEvidenceLossTests(TestCase):
                 if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name):
                     if call.func.value.id == "subprocess":
                         process_owners.append((function.name, call.func.attr))
-        self.assertEqual(
-            process_owners,
-            [("_copy_current_harness_file", "run")],
-        )
+        self.assertEqual(process_owners, [])
 
     def test_issuer_uses_existing_migration_role_only_after_acquisition(self) -> None:
         with patch.object(self.loss, "_acquire", return_value=self.acquired) as acquire, patch.object(

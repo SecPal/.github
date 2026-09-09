@@ -8,16 +8,13 @@ import copy
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import os
 from pathlib import Path
 import re
-import shutil
-import stat
-import subprocess
 import tempfile
 from typing import Any, Iterator, Mapping
 
 from . import bootstrap_source_admission as transport
+from . import exact_source_safety
 from . import fast_path
 from . import lifecycle_authority as authority
 from . import lifecycle_execution as execution
@@ -115,35 +112,9 @@ class CommitFacts:
     committed_at: str
 
 
-@dataclass(frozen=True)
-class CurrentHarnessBlobObservation:
-    """Raw Git tree representation captured without deciding conformance."""
-
-    commit_oid: str
-    requested_path: str
-    tree_entry: bytes
-
-
-@dataclass(frozen=True)
-class CurrentHarnessBlobFacts:
-    """Canonical facts normalized from one protected-main tree entry."""
-
-    repository_path: str
-    mode: str
-    object_type: str
-    object_oid: str
-    size: int | None
-
-
-@dataclass(frozen=True)
-class CurrentHarnessBlobBinding:
-    """Admitted exact repository-blob authority for one registered member."""
-
-    commit_oid: str
-    repository_path: str
-    mode: str
-    blob_oid: str
-    size: int
+CurrentHarnessBlobObservation = exact_source_safety.HarnessBlobObservation
+CurrentHarnessBlobFacts = exact_source_safety.HarnessBlobFacts
+CurrentHarnessBlobBinding = exact_source_safety.HarnessBlobBinding
 
 
 @dataclass(frozen=True)
@@ -739,36 +710,9 @@ def _source_signature(root: Path, record: Mapping[str, Any], trust: Any) -> str:
 
 
 def _verify_source_bytes(root: Path, tree: str, *, expected_listing: str | None = None) -> str:
-    listing = (
-        transport._git_text(root, ["ls-tree", "-rz", "--full-tree", tree])
-        if expected_listing is None else expected_listing
+    return exact_source_safety.verify_source_bytes(
+        root, tree, expected_listing=expected_listing,
     )
-    for entry in listing.rstrip("\0").split("\0"):
-        metadata, separator, name = entry.partition("\t")
-        fields = metadata.split()
-        path = root / name
-        if (
-            not separator or len(fields) != 3 or fields[1] != "blob"
-            or fields[0] not in {"100644", "100755"} or not name
-            or Path(name).is_absolute() or ".." in Path(name).parts
-        ):
-            raise authority.LifecycleAuthorityError("loss source requires regular immutable source bytes")
-        for parent in (path, *path.parents):
-            if parent == root:
-                break
-            if parent.is_symlink():
-                raise authority.LifecycleAuthorityError("loss source bytes contain a symlink")
-        try:
-            mode = path.stat().st_mode
-            matches = (
-                stat.S_ISREG(mode) and bool(mode & stat.S_IXUSR) == (fields[0] == "100755")
-                and transport._git_text(root, ["hash-object", "--no-filters", "--", name]).strip() == fields[2]
-            )
-        except OSError as exc:
-            raise authority.LifecycleAuthorityError("loss source bytes are unavailable") from exc
-        if not matches:
-            raise authority.LifecycleAuthorityError("validation mutated immutable source bytes")
-    return listing
 
 
 def _current_validation_harness_paths(main: str, helper: Any, entry: Any) -> tuple[str, ...]:
@@ -782,52 +726,29 @@ def _admit_current_safety_path(relative: str) -> str:
 
 
 def _current_safety_profile(main: str) -> dict[str, Any]:
-    path = _admit_current_safety_path(CURRENT_SAFETY_PATH)
-    mode, blob, size = _current_harness_blob(main, path)
-    commands = [{
-        "argv": ["python3", path], "working_directory": ".",
-        "purpose": "Validate pre-enrollment evidence-loss current safety",
-    }]
-    return {
-        "schema_version": "1.0",
-        "policy": "PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_CURRENT_SAFETY",
-        "harness": [{"path": path, "mode": mode, "blob_oid": blob, "size": size}],
-        "validation_command_set": commands,
-        "validation_command_set_digest": authority.digest_json(commands),
-        "timeout_seconds": 120,
-        "required_invariants": list(CURRENT_SAFETY_INVARIANTS),
-        "validation_results": [{"command_digest": authority.digest_json(commands[0]),
-                                "exit_status": 0, "successful": True}],
-    }
+    return exact_source_safety.build_profile(
+        ROOT, main,
+        policy="PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_CURRENT_SAFETY",
+        harness_paths=(CURRENT_SAFETY_PATH,),
+        purpose="Validate pre-enrollment evidence-loss current safety",
+        required_invariants=CURRENT_SAFETY_INVARIANTS,
+    )
 
 
 def _admit_current_harness_requested_path(relative: str) -> str:
     """Admit one literal repository-relative harness path without observation."""
-
-    if not isinstance(relative, str):
-        raise authority.LifecycleAuthorityError("current validation harness path is unsafe")
-    path = Path(relative)
-    if (
-        not relative or path.is_absolute() or ".." in path.parts
-        or path.as_posix() != relative
-    ):
-        raise authority.LifecycleAuthorityError("current validation harness path is unsafe")
-    return relative
+    return exact_source_safety.admit_harness_path(
+        relative, allowed_paths=frozenset({relative}) if isinstance(relative, str) else frozenset(),
+    )
 
 
 def _observe_current_harness_blob(
     main: str, relative: str,
 ) -> CurrentHarnessBlobObservation:
     """Observe one literal tree entry without deciding harness conformance."""
-
-    record = transport._git(
-        ROOT,
-        ["ls-tree", "-lz", "--full-tree", main, "--", f":(literal){relative}"],
-    ).stdout
+    observed = exact_source_safety._observe_harness_blob(ROOT, main, relative)
     return CurrentHarnessBlobObservation(
-        commit_oid=main,
-        requested_path=relative,
-        tree_entry=bytes(record),
+        observed.commit_oid, observed.requested_path, observed.tree_entry,
     )
 
 
@@ -835,33 +756,9 @@ def _normalize_current_harness_blob_observation(
     observation: CurrentHarnessBlobObservation,
 ) -> CurrentHarnessBlobFacts:
     """Normalize one Git tree representation without external observation."""
-
     if not isinstance(observation, CurrentHarnessBlobObservation):
         raise authority.LifecycleAuthorityError("current validation harness listing is malformed")
-    record = observation.tree_entry
-    if not record.endswith(b"\0") or record.count(b"\0") != 1:
-        raise authority.LifecycleAuthorityError("current validation harness file is unavailable")
-    try:
-        metadata, separator, observed_path = record[:-1].decode("utf-8", "strict").partition("\t")
-    except UnicodeDecodeError as exc:
-        raise authority.LifecycleAuthorityError("current validation harness listing is malformed") from exc
-    fields = metadata.split()
-    if separator != "\t" or len(fields) != 4:
-        raise authority.LifecycleAuthorityError("current validation harness listing is malformed")
-    try:
-        blob_oid = authority._require_oid(fields[2], "current validation harness blob")
-    except authority.LifecycleAuthorityError as exc:
-        raise authority.LifecycleAuthorityError("current validation harness blob is invalid") from exc
-    size_text = fields[3]
-    if size_text != "-" and not size_text.isdecimal():
-        raise authority.LifecycleAuthorityError("current validation harness size is invalid")
-    return CurrentHarnessBlobFacts(
-        repository_path=observed_path,
-        mode=fields[0],
-        object_type=fields[1],
-        object_oid=blob_oid,
-        size=None if size_text == "-" else int(size_text),
-    )
+    return exact_source_safety._normalize_harness_blob(observation)
 
 
 def _admit_current_harness_blob(
@@ -869,98 +766,36 @@ def _admit_current_harness_blob(
     facts: CurrentHarnessBlobFacts,
 ) -> CurrentHarnessBlobBinding:
     """Admit canonical tree facts as one exact regular protected-main blob."""
-
-    if (
-        not isinstance(observation, CurrentHarnessBlobObservation)
-        or not isinstance(facts, CurrentHarnessBlobFacts)
+    if not isinstance(observation, CurrentHarnessBlobObservation) or not isinstance(
+        facts, CurrentHarnessBlobFacts
     ):
         raise authority.LifecycleAuthorityError("current validation harness listing is malformed")
-    commit_oid = authority._require_oid(
-        observation.commit_oid, "current validation harness commit",
-    )
-    requested_path = _admit_current_harness_requested_path(observation.requested_path)
-    if (
-        facts.repository_path != requested_path
-        or facts.mode not in {"100644", "100755"}
-        or facts.object_type != "blob"
-    ):
-        raise authority.LifecycleAuthorityError("current validation harness mode is invalid")
-    if facts.size is None:
-        raise authority.LifecycleAuthorityError("current validation harness size is invalid")
-    return CurrentHarnessBlobBinding(
-        commit_oid=commit_oid,
-        repository_path=requested_path,
-        mode=facts.mode,
-        blob_oid=facts.object_oid,
-        size=facts.size,
+    return exact_source_safety._admit_harness_blob(
+        observation,
+        facts,
+        allowed_paths=frozenset({observation.requested_path}),
     )
 
 
 def _current_harness_blob(main: str, relative: str) -> tuple[str, str, int]:
     """Assemble the explicit observation, normalization, and admission stages."""
-
-    relative = _admit_current_harness_requested_path(relative)
-    observation = _observe_current_harness_blob(main, relative)
-    facts = _normalize_current_harness_blob_observation(observation)
-    binding = _admit_current_harness_blob(observation, facts)
-    return binding.mode, binding.blob_oid, binding.size
+    return exact_source_safety.harness_blob(
+        ROOT, main, relative,
+        allowed_paths=frozenset({relative}) if isinstance(relative, str) else frozenset(),
+    )
 
 
 def _verify_current_harness_file(
     destination_root: Path, relative: str, mode: str, blob_oid: str, size: int,
 ) -> None:
-    destination = destination_root / relative
-    for parent in destination.parents:
-        if parent == destination_root:
-            break
-        if parent.is_symlink():
-            raise authority.LifecycleAuthorityError("current validation harness path is unsafe")
-    try:
-        metadata = destination.lstat()
-    except OSError as exc:
-        raise authority.LifecycleAuthorityError("current validation harness file is unavailable") from exc
-    expected_permissions = 0o755 if mode == "100755" else 0o644
-    if (
-        not stat.S_ISREG(metadata.st_mode) or metadata.st_size != size
-        or stat.S_IMODE(metadata.st_mode) != expected_permissions
-    ):
-        raise authority.LifecycleAuthorityError("current validation harness mode or size changed")
-    actual = transport._git_text(
-        ROOT, ["hash-object", "--no-filters", "--", str(destination)],
-    ).strip()
-    if actual != blob_oid:
-        raise authority.LifecycleAuthorityError("current validation harness bytes are not accepted main")
+    exact_source_safety._verify_harness_file(
+        ROOT, destination_root, relative, mode, blob_oid, size,
+    )
 
 
 def _create_harness_parent(destination_root: Path, relative: Path) -> Path:
     """Create only real directories below the private disposable root."""
-
-    try:
-        root_metadata = destination_root.lstat()
-    except OSError as exc:
-        raise authority.LifecycleAuthorityError("current validation harness root is unavailable") from exc
-    if not stat.S_ISDIR(root_metadata.st_mode) or destination_root.is_symlink():
-        raise authority.LifecycleAuthorityError("current validation harness root is unsafe")
-    parent = destination_root
-    for part in relative.parent.parts:
-        parent /= part
-        try:
-            metadata = parent.lstat()
-        except FileNotFoundError:
-            try:
-                parent.mkdir(mode=0o755)
-                metadata = parent.lstat()
-            except OSError as exc:
-                raise authority.LifecycleAuthorityError(
-                    "current validation harness path is unavailable"
-                ) from exc
-        except OSError as exc:
-            raise authority.LifecycleAuthorityError(
-                "current validation harness path is unavailable"
-            ) from exc
-        if not stat.S_ISDIR(metadata.st_mode) or parent.is_symlink():
-            raise authority.LifecycleAuthorityError("current validation harness path is unsafe")
-    return parent
+    return exact_source_safety._create_harness_parent(destination_root, relative)
 
 
 def _copy_current_harness_file(
@@ -973,60 +808,11 @@ def _copy_current_harness_file(
     if relative not in registered_paths:
         raise authority.LifecycleAuthorityError("current validation harness path is not registered")
     mode, blob_oid, size = _current_harness_blob(main, relative)
-    path = Path(relative)
-    destination = destination_root / path
-    destination_parent = _create_harness_parent(destination_root, path)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{destination.name}.", dir=destination_parent,
+    return exact_source_safety._copy_harness_file(
+        ROOT, main,
+        {"path": relative, "mode": mode, "blob_oid": blob_oid, "size": size},
+        destination_root, allowed_paths=registered_paths,
     )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as output:
-            try:
-                result = subprocess.run(
-                    [
-                        transport._resolve_bootstrap_executable("git"),
-                        "-C", str(ROOT.resolve(strict=True)),
-                        "cat-file", "blob", blob_oid,
-                    ],
-                    stdin=subprocess.DEVNULL,
-                    stdout=output,
-                    stderr=subprocess.DEVNULL,
-                    env=transport._bootstrap_command_environment("git", ROOT),
-                    timeout=transport._BOOTSTRAP_COMMAND_TIMEOUT_SECONDS,
-                    check=False,
-                )
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                raise authority.LifecycleAuthorityError(
-                    "current validation harness blob is unavailable"
-                ) from exc
-            if result.returncode != 0:
-                raise authority.LifecycleAuthorityError(
-                    "current validation harness blob is unavailable"
-                )
-            output.flush()
-            os.fsync(output.fileno())
-        temporary.chmod(0o755 if mode == "100755" else 0o644)
-        if temporary.stat().st_size != size:
-            raise authority.LifecycleAuthorityError(
-                "current validation harness blob size changed"
-            )
-        actual = transport._git_text(
-            ROOT, ["hash-object", "--no-filters", "--", str(temporary)],
-        ).strip()
-        if actual != blob_oid:
-            raise authority.LifecycleAuthorityError(
-                "current validation harness blob bytes changed"
-            )
-        os.replace(temporary, destination)
-    finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            # Atomic replacement consumes the temporary path on success.
-            pass
-    _verify_current_harness_file(destination_root, relative, mode, blob_oid, size)
-    return mode, blob_oid, size
 
 
 @contextmanager
@@ -1038,105 +824,26 @@ def _current_policy_validation_root(
     entry: Any,
 ) -> Iterator[Path]:
     """Build a disposable target tree with only accepted-main harness bytes overlaid."""
-
-    source_root = source_root.resolve(strict=True)
-    if not source_root.is_dir():
-        raise authority.LifecycleAuthorityError("immutable validation source root is unavailable")
-    harness_paths = _current_validation_harness_paths(main, helper, entry)
-    registered_paths = frozenset(harness_paths)
-    if len(registered_paths) != len(harness_paths):
-        raise authority.LifecycleAuthorityError("current validation harness paths are ambiguous")
-    if transport._git(ROOT, ["cat-file", "-t", main]).stdout != b"commit\n":
-        raise authority.LifecycleAuthorityError("current validation harness commit is invalid")
-    tree = transport._git_text(source_root, ["rev-parse", "HEAD^{tree}"]).strip()
-    listing = _verify_source_bytes(source_root, tree)
-    candidate_listing = "\0".join(
-        item for item in listing.rstrip("\0").split("\0")
-        if not item.partition("\t")[2].startswith("tests/")
-    ) + "\0"
-    with tempfile.TemporaryDirectory(prefix="secpal-current-policy-validation-") as directory:
-        execution_root = Path(directory) / "source"
-        bindings: dict[str, tuple[str, str, int]] = {}
-        try:
-            shutil.copytree(source_root, execution_root, symlinks=True,
-                            ignore=shutil.ignore_patterns(".git"))
-            tests_root = execution_root / "tests"
-            if tests_root.exists():
-                shutil.rmtree(tests_root)
-            for relative in harness_paths:
-                _admit_current_safety_path(relative)
-                bindings[relative] = _copy_current_harness_file(
-                    main, relative, execution_root, registered_paths=registered_paths,
-                )
-        except OSError as exc:
-            raise authority.LifecycleAuthorityError("current validation harness preparation failed") from exc
-        _verify_current_safety_root(execution_root, tree, candidate_listing, bindings)
-        try:
-            yield execution_root
-        finally:
-            _verify_current_safety_root(execution_root, tree, candidate_listing, bindings)
-            _verify_source_bytes(source_root, tree, expected_listing=listing)
+    profile = _current_safety_profile(main)
+    with exact_source_safety.execution_root(
+        ROOT, main, source_root=source_root, profile=profile,
+    ) as prepared:
+        yield prepared
 
 
 def _verify_current_safety_root(
     root: Path, tree: str, candidate_listing: str,
     bindings: Mapping[str, tuple[str, str, int]],
 ) -> None:
-    expected = {item.partition("\t")[2]
-                for item in candidate_listing.rstrip("\0").split("\0")}
-    if expected.intersection(bindings):
-        raise authority.LifecycleAuthorityError("candidate and harness ownership overlap")
-    expected.update(bindings)
-    expected_directories = {
-        parent.as_posix() for relative in expected for parent in Path(relative).parents
-        if parent != Path(".")
-    }
-    observed = set()
-    for path in root.rglob("*"):
-        if path.is_symlink():
-            raise authority.LifecycleAuthorityError("current safety source contains symlink")
-        if path.is_dir():
-            if path.relative_to(root).as_posix() not in expected_directories:
-                raise authority.LifecycleAuthorityError("current safety source contains undeclared directories")
-            continue
-        relative = path.relative_to(root).as_posix()
-        if path.suffix in {".pyc", ".pyo"} or "__pycache__" in path.parts:
-            raise authority.LifecycleAuthorityError("current safety source contains bytecode")
-        observed.add(relative)
-    if observed != expected:
-        raise authority.LifecycleAuthorityError("current safety source contains undeclared files")
-    _verify_source_bytes(root, tree, expected_listing=candidate_listing)
-    for relative, binding in bindings.items():
-        _verify_current_harness_file(root, relative, *binding)
+    exact_source_safety._verify_execution_root(
+        ROOT, root, tree, candidate_listing, bindings,
+    )
 
 
 def _run_current_safety(main: str, root: Path, profile: Mapping[str, Any]) -> None:
-    if dict(profile) != _current_safety_profile(main):
-        raise authority.LifecycleAuthorityError("current safety profile or command drift")
-    with tempfile.TemporaryDirectory(prefix="secpal-current-safety-home-") as home:
-        environment = transport._closed_validation_environment(
-            authority._load_trusted_command_helper(), Path(home))
-        command = profile["validation_command_set"][0]
-        result = transport._run_isolated_python(
-            transport._isolated_python_command(
-                transport._ISOLATED_SOURCE_LAUNCHER,
-                "ENTRYPOINT", str(root), command["argv"][1], "main",
-            ), cwd=root, timeout=profile["timeout_seconds"], env=environment,
-        )
-    observed = [{"command_digest": authority.digest_json(command),
-                 "exit_status": result.returncode, "successful": result.returncode == 0}]
-    if observed != profile["validation_results"]:
-        try:
-            failed = authority.loads_closed_json(result.stdout)
-            if (not isinstance(failed, list) or not failed
-                or any(not isinstance(item, str) or item not in CURRENT_SAFETY_INVARIANTS for item in failed)
-                or failed != sorted(set(failed))):
-                raise ValueError("invalid failure inventory")
-        except (ValueError, authority.LifecycleAuthorityError) as exc:
-            raise authority.LifecycleAuthorityError("current safety failure report invalid") from exc
-        raise authority.LifecycleAuthorityError("current safety assertions failed: " + ", ".join(failed))
-    if authority.loads_closed_json(result.stdout) != profile["required_invariants"]:
-        raise authority.LifecycleAuthorityError("current safety invariant coverage incomplete")
+    exact_source_safety.run_profile(
+        root, profile, expected_profile=_current_safety_profile(main),
+    )
 
 
 def _acquire(repository: str, issue: int, *, execute_validation: bool) -> dict[str, Any]:
