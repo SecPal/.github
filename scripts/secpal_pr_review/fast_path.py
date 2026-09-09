@@ -4108,6 +4108,7 @@ def derive_ready_source_recovery_safety_facts(
     registry: dict[str, Any],
     command_set: list[dict[str, Any]],
     approval_required: bool = False,
+    current_safety_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Derive canonical unsigned facts; this result carries no authority."""
 
@@ -4284,6 +4285,71 @@ def derive_ready_source_recovery_safety_facts(
         raise SecurityBlocker(
             "Ready-source recovery validation receipt claims unrelated authority"
         )
+    if current_safety_profile is None:
+        schema_version = "1.0"
+        validation_execution_origin = "MAINTAINED_REGISTERED_EXECUTION"
+    else:
+        profile_fields = {
+            "schema_version", "policy", "harness", "validation_command_set",
+            "validation_command_set_digest", "timeout_seconds",
+            "required_invariants", "validation_results",
+        }
+        harness = current_safety_profile.get("harness") if isinstance(
+            current_safety_profile, dict
+        ) else None
+        commands = current_safety_profile.get("validation_command_set") if isinstance(
+            current_safety_profile, dict
+        ) else None
+        invariants = current_safety_profile.get("required_invariants") if isinstance(
+            current_safety_profile, dict
+        ) else None
+        results = current_safety_profile.get("validation_results") if isinstance(
+            current_safety_profile, dict
+        ) else None
+        if (
+            not isinstance(current_safety_profile, dict)
+            or set(current_safety_profile) != profile_fields
+            or current_safety_profile.get("schema_version") != "1.0"
+            or current_safety_profile.get("policy")
+            != "READY_SOURCE_RECOVERY_CURRENT_SAFETY"
+            or current_safety_profile.get("timeout_seconds") != 120
+            or not isinstance(harness, list) or len(harness) != 1
+            or set(harness[0]) != {"path", "mode", "blob_oid", "size"}
+            or harness[0].get("path")
+            != "tests/ready-source-recovery-current-safety.py"
+            or harness[0].get("mode") not in {"100644", "100755"}
+            or not isinstance(harness[0].get("size"), int)
+            or isinstance(harness[0].get("size"), bool)
+            or harness[0].get("size") < 1
+            or not isinstance(harness[0].get("blob_oid"), str)
+            or not OID.fullmatch(harness[0]["blob_oid"])
+            or not isinstance(commands, list) or len(commands) != 1
+            or commands[0] != {
+                "argv": ["python3", harness[0]["path"]],
+                "working_directory": ".",
+                "purpose": "Validate Ready-source recovery current safety",
+            }
+            or current_safety_profile.get("validation_command_set_digest")
+            != digest_json(commands)
+            or not isinstance(invariants, list) or not invariants
+            or any(not isinstance(item, str) or not item for item in invariants)
+            or invariants != sorted(set(invariants))
+            or results != [{
+                "command_digest": digest_json(commands[0]),
+                "exit_status": 0,
+                "successful": True,
+            }]
+            or registry.get("ready_source_recovery_current_safety")
+            != current_safety_profile
+            or command_set != commands
+        ):
+            raise SecurityBlocker(
+                "Ready-source recovery current-safety profile is invalid"
+            )
+        schema_version = "1.1"
+        validation_execution_origin = (
+            "ACCEPTED_MAIN_EXACT_SOURCE_CURRENT_SAFETY"
+        )
     expected_receipt = create_validation_receipt(
         repository=repository,
         head_sha=head,
@@ -4306,7 +4372,7 @@ def derive_ready_source_recovery_safety_facts(
         "findings": normalized_findings,
     }
     facts = {
-        "schema_version": "1.0",
+        "schema_version": schema_version,
         "kind": "SECPAL_READY_SOURCE_RECOVERY_SAFETY_FACTS",
         "tooling_authority_main": policy_head,
         "repository": repository,
@@ -4327,7 +4393,7 @@ def derive_ready_source_recovery_safety_facts(
         "reviewed_feedback_digest": reviewed.feedback_digest,
         "feedback_assessment_digest": digest_json(assessment),
         "fresh_validation_receipt_digest": expected_receipt["receipt_digest"],
-        "validation_execution_origin": "MAINTAINED_REGISTERED_EXECUTION",
+        "validation_execution_origin": validation_execution_origin,
     }
     return {**facts, "safety_facts_digest": digest_json(facts)}
 
@@ -4354,11 +4420,15 @@ def verify_ready_source_recovery_safety_facts(value: Any) -> dict[str, Any]:
     }
     if value["safety_facts_digest"] != digest_json(unsigned):
         raise SecurityBlocker("Ready-source recovery safety-facts digest mismatch")
+    version = value["schema_version"]
+    origins = {
+        "1.0": "MAINTAINED_REGISTERED_EXECUTION",
+        "1.1": "ACCEPTED_MAIN_EXACT_SOURCE_CURRENT_SAFETY",
+    }
     if (
-        value["schema_version"] != "1.0"
+        version not in origins
         or value["kind"] != "SECPAL_READY_SOURCE_RECOVERY_SAFETY_FACTS"
-        or value["validation_execution_origin"]
-        != "MAINTAINED_REGISTERED_EXECUTION"
+        or value["validation_execution_origin"] != origins[version]
     ):
         raise SecurityBlocker("Ready-source recovery safety-facts type is invalid")
     reviewed = StableFeedbackState.from_payload(value["reviewed_state"])
@@ -4375,6 +4445,11 @@ def verify_ready_source_recovery_safety_facts(value: Any) -> dict[str, Any]:
         feedback_findings=value["feedback_findings"],
         fresh_validation_receipt=value["fresh_validation_receipt"],
         registry=value["policy_binding"], command_set=value["command_set"],
+        current_safety_profile=(
+            value["policy_binding"].get("ready_source_recovery_current_safety")
+            if version == "1.1" and isinstance(value["policy_binding"], dict)
+            else None
+        ),
     )
     if derived != value:
         raise SecurityBlocker("Ready-source recovery safety facts are inconsistent")

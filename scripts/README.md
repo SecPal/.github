@@ -118,12 +118,21 @@ Historical receipt reconstruction reads the registry blob from the immutable
 prior delivery commit rather than applying a later registry to older evidence.
 For an explicitly authorized unchanged Ready source whose pre-persistence
 package is proven unavailable, `issue_ready_source_recovery_authorization` is
-the only production trust-producing entrypoint. It reads registry and validation
-commands from one independently observed immutable protected-`main` commit,
-captures complete current feedback through the maintained bounded GitHub
-reader, includes resolved and unresolved review threads in the classification
-universe, runs that command set itself against the exact clean head/tree, and
-re-verifies the complete package before signing. Applicable protected-branch
+the only production trust-producing entrypoint. It reads validation policy from
+one independently observed immutable protected-`main` commit, captures complete
+current feedback through the maintained bounded GitHub reader, includes resolved
+and unresolved review threads in the classification universe, and selects the
+closed `READY_SOURCE_RECOVERY_CURRENT_SAFETY` profile itself. That profile binds
+the single `tests/ready-source-recovery-current-safety.py` harness by
+accepted-main blob mode, OID, and size, plus its exact command, invariant
+inventory, and successful result. The source-neutral exact-source runner shared
+with the pre-enrollment safety path copies candidate source into a private
+disposable root, removes candidate test bytes, overlays only the authenticated
+harness, executes through the isolated Python boundary, and authenticates
+candidate production bytes before and after. It never overlays accepted-main
+production implementation and does not replay unrelated current repository
+regressions. The issuer then re-verifies the complete package before signing.
+Applicable protected-branch
 rules independently determine whether `NONE` is admissible; `REVIEW_REQUIRED`
 always fails closed. Unsigned recovery facts and caller-selected feedback
 classifications are explicitly non-authoritative. A separately signed exact
@@ -136,6 +145,9 @@ identity, receipt, exact CURRENT lifecycle/publication, historical
 trailer/digest provenance, accepted commit signature, evidence-loss proof, and
 one bounded use. Callers cannot substitute a reviewed state, unsigned decision,
 registry, command set, or claimed-success receipt as recovery authority.
+Historical version-1.0 recovery safety facts retain their existing registered-
+execution meaning. Newly issued version-1.1 facts bind the source-coherent
+accepted-main profile inside the same Ready-source recovery authority family.
 `publish_ready_source_recovery` appends that signed authority to the existing
 protected lifecycle-publication journal with CAS and authenticated idempotency;
 `verify_current_ready_source_recovery` rejects it after CURRENT changes.

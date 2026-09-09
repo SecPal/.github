@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import copy
+from contextlib import nullcontext
 import hashlib
 import importlib
 import inspect
@@ -12,6 +13,7 @@ import importlib.util
 import inspect
 import io
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -4741,6 +4743,27 @@ def fast_registry() -> dict[str, Any]:
     }
 
 
+def ready_source_current_safety_profile() -> dict[str, Any]:
+    path = actions.READY_SOURCE_RECOVERY_CURRENT_SAFETY_PATH
+    command = {
+        "argv": ["python3", path], "working_directory": ".",
+        "purpose": "Validate Ready-source recovery current safety",
+    }
+    return {
+        "schema_version": "1.0",
+        "policy": "READY_SOURCE_RECOVERY_CURRENT_SAFETY",
+        "harness": [{"path": path, "mode": "100644", "blob_oid": "e" * 40, "size": 1}],
+        "validation_command_set": [command],
+        "validation_command_set_digest": fast_path.digest_json([command]),
+        "timeout_seconds": 120,
+        "required_invariants": list(actions.READY_SOURCE_RECOVERY_CURRENT_SAFETY_INVARIANTS),
+        "validation_results": [{
+            "command_digest": fast_path.digest_json(command),
+            "exit_status": 0, "successful": True,
+        }],
+    }
+
+
 def fast_attestation(reviewed: Any, *, head_sha: str = p21.HEAD) -> dict[str, Any]:
     registry = fast_registry()
     receipt = fast_path.create_validation_receipt(
@@ -7444,6 +7467,11 @@ class FastPathTests(TestCase):
         }
         verified = fast_path.derive_ready_source_recovery_safety_facts(**arguments)
         self.assertEqual(verified["head_sha"], reviewed.head_sha)
+        self.assertEqual(verified["schema_version"], "1.0")
+        self.assertEqual(
+            verified["validation_execution_origin"],
+            "MAINTAINED_REGISTERED_EXECUTION",
+        )
 
         mutations = {
             "wrong head": lambda value: value.update(head_sha="8" * 40),
@@ -7490,6 +7518,113 @@ class FastPathTests(TestCase):
         self.assertFalse(
             hasattr(fast_path, "is_verified_ready_source_recovery_safety")
         )
+
+    def test_ready_source_recovery_public_boundary_selects_current_safety(self) -> None:
+        issued = {"kind": "SECPAL_READY_SOURCE_RECOVERY_AUTHORIZATION"}
+        lifecycle = SimpleNamespace(
+            _sign_ready_source_recovery_authorization=object()
+        )
+        publication = SimpleNamespace(
+            verify_current_lifecycle_authority=object()
+        )
+        with (
+            mock.patch.object(
+                actions, "_load_lifecycle_publication_helpers",
+                return_value=(lifecycle, publication),
+            ),
+            mock.patch.object(
+                actions, "_issue_ready_source_recovery_authorization",
+                return_value=issued,
+            ) as boundary,
+        ):
+            result = actions.issue_ready_source_recovery_authorization(
+                repository="SecPal/.github", delivery_issue=827,
+                pull_request_number=830, expected_head_sha="a" * 40,
+                repository_root=REPO_ROOT, feedback_findings=[],
+                manual_gate_evidence=[], historical_validation_receipt_digest="1" * 64,
+                historical_final_attestation_digest="2" * 64,
+                recovery_user_authorization=b"authorization",
+                expected_commit_signer={"kind": "SSH_PRINCIPAL", "identity": "reviewer"},
+                signer_identity="reviewer", signer=object(),
+            )
+        self.assertIs(result, issued)
+        self.assertIs(
+            boundary.call_args.kwargs["_validation_runner"],
+            actions._run_ready_source_recovery_current_safety,
+        )
+        self.assertIsNot(
+            boundary.call_args.kwargs["_validation_runner"],
+            actions._run_registered_validations,
+        )
+
+    def test_ready_source_runner_normalizes_transport_failure(self) -> None:
+        profile = ready_source_current_safety_profile()
+        with (
+            mock.patch.object(
+                actions, "_ready_source_recovery_current_safety_profile",
+                return_value=profile,
+            ),
+            mock.patch.object(
+                actions.exact_source_safety, "execution_root",
+                return_value=nullcontext(REPO_ROOT),
+            ),
+            mock.patch.object(
+                actions.exact_source_safety, "run_profile",
+                side_effect=actions.exact_source_safety.transport.BootstrapSourceAdmissionError(
+                    "isolated execution failed"
+                ),
+            ),
+            self.assertRaisesRegex(fast_path.SecurityBlocker, "current safety failed"),
+        ):
+            actions._run_ready_source_recovery_current_safety(
+                "f" * 40, REPO_ROOT, profile,
+            )
+
+    def test_exact_source_profile_combines_multi_command_invariants(self) -> None:
+        commands = [
+            {"argv": ["python3", f"tests/harness-{index}.py"],
+             "working_directory": ".", "purpose": "fixture"}
+            for index in (1, 2)
+        ]
+        profile = {
+            "validation_command_set": commands,
+            "validation_results": [
+                {"command_digest": fast_path.digest_json(command),
+                 "exit_status": 0, "successful": True}
+                for command in commands
+            ],
+            "required_invariants": ["first", "second"],
+            "timeout_seconds": 120,
+        }
+        results = [
+            SimpleNamespace(returncode=0, stdout=b'["first", "second"]'),
+            SimpleNamespace(returncode=0, stdout=b'["first", "second"]'),
+        ]
+        helper = actions.exact_source_safety
+        with (
+            mock.patch.object(helper.authority, "_load_trusted_command_helper"),
+            mock.patch.object(helper.transport, "_closed_validation_environment", return_value={}),
+            mock.patch.object(helper.transport, "_isolated_python_command", return_value=["python3"]),
+            mock.patch.object(helper.transport, "_run_isolated_python", side_effect=results),
+        ):
+            helper.run_profile(REPO_ROOT, profile, expected_profile=copy.deepcopy(profile))
+
+    def test_exact_source_loader_cleans_synthetic_package_on_failure(self) -> None:
+        package_name = "secpal_exact_source_safety"
+        previous_package = sys.modules.pop(package_name, None)
+        previous_module = sys.modules.pop(f"{package_name}.exact_source_safety", None)
+        try:
+            with mock.patch.object(
+                actions.importlib.util, "spec_from_file_location", return_value=None,
+            ), self.assertRaisesRegex(RuntimeError, "Cannot load exact-source"):
+                actions._load_exact_source_safety_helper()
+            self.assertNotIn(package_name, sys.modules)
+            self.assertNotIn(f"{package_name}.exact_source_safety", sys.modules)
+        finally:
+            if previous_package is not None:
+                sys.modules[package_name] = previous_package
+            if previous_module is not None:
+                sys.modules[f"{package_name}.exact_source_safety"] = previous_module
 
     def test_ready_source_recovery_review_decision_requires_authenticated_policy(self) -> None:
         reviewed = fast_feedback(thread_count=0)
@@ -7575,6 +7710,10 @@ class FastPathTests(TestCase):
         )
         with (
             mock.patch.object(
+                actions, "_ready_source_recovery_current_safety_profile",
+                return_value=ready_source_current_safety_profile(),
+            ),
+            mock.patch.object(
                 actions,
                 "_attestation_local_state",
                 return_value=(reviewed.head_sha, ""),
@@ -7613,6 +7752,160 @@ class FastPathTests(TestCase):
                 "category": "NONZERO_EXIT",
             },
         )
+
+    def test_ready_source_recovery_historical_source_uses_current_safety_harness(self) -> None:
+        """The real acquisition seam must not replay every later current test."""
+
+        entry = actions.select_repository(actions.load_registry(), "SecPal/.github")
+        entry["manual_gates"] = []
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            accepted = temporary / "accepted"
+            candidate = temporary / "candidate"
+            accepted.mkdir()
+            shutil.copytree(
+                REPO_ROOT / "scripts", accepted / "scripts",
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            )
+            (accepted / "tests").mkdir()
+            shutil.copy2(
+                REPO_ROOT / actions.READY_SOURCE_RECOVERY_CURRENT_SAFETY_PATH,
+                accepted / actions.READY_SOURCE_RECOVERY_CURRENT_SAFETY_PATH,
+            )
+            subprocess.run(["git", "-C", str(accepted), "init", "--quiet"], check=True)
+            subprocess.run(["git", "-C", str(accepted), "add", "-f", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(accepted), "-c", "user.name=Test", "-c",
+                 "user.email=test@example.invalid", "commit", "--quiet", "-m", "accepted"],
+                check=True,
+            )
+            accepted_head = subprocess.check_output(
+                ["git", "-C", str(accepted), "rev-parse", "HEAD"], text=True,
+            ).strip()
+            shutil.copytree(
+                accepted,
+                candidate,
+                ignore=shutil.ignore_patterns(".git", "tests", "__pycache__", "*.pyc"),
+            )
+            subprocess.run(["git", "-C", str(candidate), "init", "--quiet"], check=True)
+            subprocess.run(
+                ["git", "-C", str(candidate), "remote", "add", "origin",
+                 "https://github.com/SecPal/.github.git"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(candidate), "-c", "user.name=Test", "-c",
+                 "user.email=test@example.invalid", "commit", "--quiet", "--allow-empty",
+                 "-m", "base"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(candidate), "add", "-f", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(candidate), "-c", "user.name=Test", "-c",
+                 "user.email=test@example.invalid", "commit", "--quiet", "-m", "historical"],
+                check=True,
+            )
+            head = subprocess.check_output(
+                ["git", "-C", str(candidate), "rev-parse", "HEAD"], text=True,
+            ).strip()
+            tree = subprocess.check_output(
+                ["git", "-C", str(candidate), "rev-parse", "HEAD^{tree}"], text=True,
+            ).strip()
+            reviewed = fast_feedback(thread_count=0, head_sha=head)
+            observation = reviewed.to_dict()
+            observation.update(review_decision="APPROVED", is_draft=False)
+            findings = [{
+                "finding_id": "review-summary", "thread_id": None,
+                "sources": [{"kind": "REVIEW", "node_id": "REVIEW_1",
+                             "digest": digest("review summary")}],
+                "classification": "INFORMATIONAL", "disposition": "NON_ACTIONABLE",
+                "evidence_digest": "1" * 64, "technically_blocking": False,
+            }]
+            gateway = mock.Mock()
+            gateway.observe_stable_feedback.return_value = observation
+            gateway.observe_ready_source_recovery_approval_policy.return_value = True
+            gateway.observe_ready_source_recovery_delivery.return_value = {
+                "oid": head, "source": "USER", "signer_identity": "reviewer",
+                "local_signature": {"state": "valid", "verified": True, "format": "ssh"},
+                "github_verification": {"verified": True, "reason": "valid"},
+            }
+            before = subprocess.check_output(
+                ["git", "-C", str(candidate), "status", "--porcelain=v2"], text=True,
+            )
+            self.assertFalse(actions._run_registered_validations(entry, candidate))
+            with mock.patch.object(actions, "REPOSITORY_ROOT", accepted):
+                profile = actions._ready_source_recovery_current_safety_profile(
+                    accepted_head
+                )
+                substitutions = {
+                    "blob": lambda value: value["harness"][0].update(blob_oid="0" * 40),
+                    "mode": lambda value: value["harness"][0].update(mode="100755"),
+                    "size": lambda value: value["harness"][0].update(size=0),
+                    "missing": lambda value: value.update(harness=[]),
+                    "undeclared": lambda value: value["harness"][0].update(
+                        path="tests/undeclared.py"
+                    ),
+                    "production overlap": lambda value: value["harness"][0].update(
+                        path="scripts/secpal-pr-review-actions.py"
+                    ),
+                    "command": lambda value: value["validation_command_set"][0]["argv"].append(
+                        "caller-selected"
+                    ),
+                    "profile": lambda value: value.update(policy="OTHER"),
+                    "result": lambda value: value["validation_results"][0].update(
+                        successful=False
+                    ),
+                }
+                for case, substitute in substitutions.items():
+                    changed = copy.deepcopy(profile)
+                    substitute(changed)
+                    with self.subTest(case=case), self.assertRaises(
+                        fast_path.SecurityBlocker
+                    ):
+                        actions._run_ready_source_recovery_current_safety(
+                            accepted_head, candidate, changed
+                        )
+                current = SimpleNamespace(
+                    lifecycle=object(), publication_oid="2" * 40,
+                    publication_digest="3" * 64,
+                )
+                safety = actions._issue_ready_source_recovery_authorization(
+                    repository="SecPal/.github", delivery_issue=891,
+                    pull_request_number=reviewed.pull_request_number,
+                    expected_head_sha=head, repository_root=candidate,
+                    feedback_findings=findings, manual_gate_evidence=[],
+                    historical_validation_receipt_digest="4" * 64,
+                    historical_final_attestation_digest="5" * 64,
+                    recovery_user_authorization=b"authorization",
+                    expected_commit_signer={"kind": "SSH_PRINCIPAL", "identity": "reviewer"},
+                    signer_identity="reviewer", signer=object(),
+                    _policy_loader=mock.Mock(return_value=(accepted_head, entry)),
+                    _gateway_factory=mock.Mock(return_value=gateway),
+                    _validation_runner=actions._run_ready_source_recovery_current_safety,
+                    _issuer_source_verifier=mock.Mock(),
+                    _current_lifecycle_loader=mock.Mock(return_value=current),
+                    _authorization_factory=lambda **values: values["recovery_safety_facts"],
+                    _recovery_user_authorization_verifier=lambda *_: {
+                        "authorization_id": "source-coherent-recovery",
+                        "authorization_digest": "6" * 64,
+                    },
+                )
+            self.assertEqual(safety["tree_sha"], tree)
+            self.assertEqual(safety["schema_version"], "1.1")
+            self.assertEqual(
+                safety["validation_execution_origin"],
+                "ACCEPTED_MAIN_EXACT_SOURCE_CURRENT_SAFETY",
+            )
+            self.assertEqual(
+                safety["policy_binding"]["ready_source_recovery_current_safety"],
+                profile,
+            )
+            self.assertEqual(
+                subprocess.check_output(
+                    ["git", "-C", str(candidate), "status", "--porcelain=v2"], text=True,
+                ),
+                before,
+            )
 
     def test_ready_source_recovery_safety_acquisition_owns_observation_and_execution(self) -> None:
         reviewed = fast_feedback(thread_count=0)
@@ -7653,6 +7946,10 @@ class FastPathTests(TestCase):
             return_value=actions.RegisteredValidationResult()
         )
         with (
+            mock.patch.object(
+                actions, "_ready_source_recovery_current_safety_profile",
+                return_value=ready_source_current_safety_profile(),
+            ),
             mock.patch.object(
                 actions,
                 "_attestation_local_state",
@@ -7696,7 +7993,9 @@ class FastPathTests(TestCase):
             reviewed.head_sha,
             {"kind": "SSH_PRINCIPAL", "identity": "reviewer"},
         )
-        validation_runner.assert_called_once_with(entry, REPO_ROOT)
+        validation_runner.assert_called_once_with(
+            "f" * 40, REPO_ROOT, ready_source_current_safety_profile()
+        )
 
     def test_ready_source_recovery_rejects_open_draft_provider_state(self) -> None:
         reviewed = fast_feedback(thread_count=0)
@@ -7709,6 +8008,10 @@ class FastPathTests(TestCase):
         validation_runner = mock.Mock(return_value=actions.RegisteredValidationResult())
 
         with (
+            mock.patch.object(
+                actions, "_ready_source_recovery_current_safety_profile",
+                return_value=ready_source_current_safety_profile(),
+            ),
             mock.patch.object(actions, "_attestation_local_state",
                               return_value=(reviewed.head_sha, "")),
             mock.patch.object(actions, "_run_attestation_git",
@@ -7957,6 +8260,10 @@ class FastPathTests(TestCase):
         issuer_source_verifier = mock.Mock()
         with (
             mock.patch.object(
+                actions, "_ready_source_recovery_current_safety_profile",
+                return_value=ready_source_current_safety_profile(),
+            ),
+            mock.patch.object(
                 actions, "_attestation_local_state",
                 side_effect=[(reviewed.head_sha, ""), (reviewed.head_sha, "")],
             ),
@@ -7996,7 +8303,9 @@ class FastPathTests(TestCase):
         self.assertEqual(
             result["kind"], "SECPAL_READY_SOURCE_RECOVERY_AUTHORIZATION"
         )
-        validation_runner.assert_called_once_with(entry, REPO_ROOT)
+        validation_runner.assert_called_once_with(
+            "f" * 40, REPO_ROOT, ready_source_current_safety_profile()
+        )
         self.assertEqual(
             issuer_source_verifier.call_args_list,
             [mock.call("f" * 40), mock.call("f" * 40)],
@@ -8007,7 +8316,7 @@ class FastPathTests(TestCase):
         self.assertEqual(signed_facts["tooling_authority_main"], "f" * 40)
         self.assertEqual(
             signed_facts["validation_execution_origin"],
-            "MAINTAINED_REGISTERED_EXECUTION",
+            "ACCEPTED_MAIN_EXACT_SOURCE_CURRENT_SAFETY",
         )
         self.assertEqual(
             signed_facts["feedback_findings"], findings

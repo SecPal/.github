@@ -214,6 +214,23 @@ FAST_PATH_CALLS = (
     ),
 )
 
+EXACT_SOURCE_SAFETY_CALLS = (
+    ProcessCall(
+        None,
+        "_copy_harness_file",
+        "executable",
+        "arguments",
+        (
+            ("check", "False"),
+            ("env", "transport._bootstrap_command_environment('git', repository_root)"),
+            ("stderr", "subprocess.DEVNULL"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("stdout", "output"),
+            ("timeout", "transport._BOOTSTRAP_COMMAND_TIMEOUT_SECONDS"),
+        ),
+    ),
+)
+
 RESOLVER_CALLS = (
     ProcessCall(
         None,
@@ -313,6 +330,7 @@ EXPECTED_CALLS = {
     "secpal-pr-review.py": EVIDENCE_CALLS,
     "secpal-pr-review-actions.py": ACTION_CALLS,
     "fast_path.py": FAST_PATH_CALLS,
+    "exact_source_safety.py": EXACT_SOURCE_SAFETY_CALLS,
     "follow_up.py": (),
     "secpal-resolve-fixed-threads.py": RESOLVER_CALLS,
     "late_disposition.py": LATE_DISPOSITION_CALLS,
@@ -354,9 +372,11 @@ SAFE_OS_ATTRIBUTES = {
     "unlink",
 }
 ALLOWED_IMPORT_ROOTS = {
+    "",
     "__future__",
     "argparse",
     "copy",
+    "contextlib",
     "dataclasses",
     "datetime",
     "errno",
@@ -371,6 +391,7 @@ ALLOWED_IMPORT_ROOTS = {
     "pwd",
     "re",
     "secrets",
+    "shutil",
     "secpal_work_graph",
     "secpal_pr_review",
     "site",
@@ -436,6 +457,20 @@ ALLOWED_IMPORTS = {
         "from dataclasses import dataclass, field",
         "from pathlib import Path",
         "from typing import Any, Callable, TypeVar",
+    },
+    "exact_source_safety.py": {
+        "from __future__ import annotations",
+        "from contextlib import contextmanager",
+        "from dataclasses import dataclass",
+        "import os",
+        "from pathlib import Path",
+        "import shutil",
+        "import stat",
+        "import subprocess",
+        "import tempfile",
+        "from typing import Any, Iterator, Mapping, Sequence",
+        "from . import bootstrap_source_admission as transport",
+        "from . import lifecycle_authority as authority",
     },
     "follow_up.py": {
         "from __future__ import annotations",
@@ -582,6 +617,12 @@ DIRECT_MODULE_ATTRIBUTES = {
         "sys": {"modules"},
         "tempfile": {"mkstemp"},
     },
+    "exact_source_safety.py": {
+        "os": {"fdopen", "fsync", "replace"},
+        "shutil": {"copytree", "ignore_patterns", "rmtree"},
+        "stat": {"S_ISDIR", "S_ISREG", "S_IMODE", "S_IXUSR"},
+        "tempfile": {"TemporaryDirectory", "mkstemp"},
+    },
     "follow_up.py": {
         "github": {"GitHubError", "GitHubReadAdapter", "load_snapshot"},
         "resolver": {"ScopeRootUnresolved", "resolve"},
@@ -691,6 +732,9 @@ LOADED_MODULE_ATTRIBUTES = {
         "lifecycle_orchestration": {
             "_verify_user_authorization",
         },
+        "exact_source_safety": {
+            "authority", "build_profile", "execution_root", "run_profile", "transport",
+        },
     },
     "fast_path.py": {
         "evidence": {
@@ -703,6 +747,20 @@ LOADED_MODULE_ATTRIBUTES = {
         "follow_up": {
             "FollowUpError",
             "parse_follow_up",
+        },
+    },
+    "exact_source_safety.py": {
+        "transport": {
+            "_BOOTSTRAP_COMMAND_TIMEOUT_SECONDS",
+            "_ISOLATED_SOURCE_LAUNCHER",
+            "_bootstrap_command_environment",
+            "_closed_validation_environment",
+            "_git", "_git_text", "_isolated_python_command",
+            "_resolve_bootstrap_executable", "_run_isolated_python",
+        },
+        "authority": {
+            "LifecycleAuthorityError", "_load_trusted_command_helper",
+            "_require_oid", "digest_json", "loads_closed_json",
         },
     },
     "secpal-resolve-fixed-threads.py": {
@@ -779,6 +837,19 @@ LOADED_MODULE_ATTRIBUTES = {
 }
 DYNAMIC_IMPORT_CALLS = {
     "secpal-pr-review-actions.py": {
+        DynamicImportCall(
+            ("_load_exact_source_safety_helper",),
+            "importlib.util.spec_from_file_location("
+            "f'{package_name}.exact_source_safety', EXACT_SOURCE_SAFETY_HELPER)",
+        ),
+        DynamicImportCall(
+            ("_load_exact_source_safety_helper",),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_exact_source_safety_helper",),
+            "spec.loader.exec_module(module)",
+        ),
         DynamicImportCall(
             ("_load_evidence_helper",),
             "importlib.util.spec_from_file_location("
@@ -1134,6 +1205,26 @@ SAFE_GETATTR_CALLS = {
 SAFE_SYS_MODULES_CALLS = {
     "secpal-pr-review-actions.py": {
         DynamicImportCall(
+            ("_load_exact_source_safety_helper",),
+            "sys.modules.get(spec.name)",
+        ),
+        DynamicImportCall(
+            ("_load_exact_source_safety_helper",),
+            "sys.modules.pop(spec.name, None)",
+        ),
+        DynamicImportCall(
+            ("_load_exact_source_safety_helper",),
+            "sys.modules.pop(module_name, None)",
+        ),
+        DynamicImportCall(
+            ("_load_exact_source_safety_helper",),
+            "sys.modules.get(package_name)",
+        ),
+        DynamicImportCall(
+            ("_load_exact_source_safety_helper",),
+            "sys.modules.pop(package_name, None)",
+        ),
+        DynamicImportCall(
             ("_load_evidence_helper",),
             "sys.modules.get(spec.name)",
         ),
@@ -1249,6 +1340,14 @@ SAFE_SYS_MODULES_CALLS = {
 }
 SAFE_SYS_MODULES_STORES = {
     "secpal-pr-review-actions.py": {
+        DynamicImportCall(
+            ("_load_exact_source_safety_helper",),
+            "sys.modules[package_name]",
+        ),
+        DynamicImportCall(
+            ("_load_exact_source_safety_helper",),
+            "sys.modules[spec.name]",
+        ),
         DynamicImportCall(
             ("_load_evidence_helper",),
             "sys.modules[spec.name]",
@@ -2527,10 +2626,10 @@ def self_test() -> None:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 9:
+    if len(argv) != 10:
         raise SystemExit(
             "usage: secpal-pr-review-static-policy.py "
-            "EVIDENCE ACTIONS FAST_PATH SIMPLE_RESOLVER FOLLOW_UP "
+            "EVIDENCE ACTIONS FAST_PATH EXACT_SOURCE_SAFETY SIMPLE_RESOLVER FOLLOW_UP "
             "LATE_DISPOSITION LATE_CLASSIFICATION_CREATOR LATE_CREATOR"
         )
     self_test()
