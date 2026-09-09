@@ -152,7 +152,11 @@ class ReadySourceRecoveryCurrentSafety(unittest.TestCase):
 
     def test_lifecycle_history(self):
         state = authority.initial_state()
-        event = authority._history_entry("DRAFT_TO_READY", "3" * 64, 1)
+        event = {
+            "sequence": 1,
+            "transition_kind": "DRAFT_TO_READY",
+            "event_authorization_digest": "3" * 64,
+        }
         state.update(
             unrestricted_review_count=1,
             remediation_cycle_count=2,
@@ -200,6 +204,8 @@ class ReadySourceRecoveryCurrentSafety(unittest.TestCase):
             "ready_source_candidate_actions",
             ROOT / "scripts/secpal-pr-review-actions.py",
         )
+        if spec is None or spec.loader is None:
+            self.fail("candidate actions module has no executable loader")
         actions = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = actions
         spec.loader.exec_module(actions)
