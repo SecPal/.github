@@ -7313,6 +7313,32 @@ class FastPathTests(TestCase):
                     verified_source_validation_evidence_digest="e" * 64,
                 )
 
+    def test_ready_source_validation_binding_preserves_historical_exact_adoption(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        authority = ready_integration_prior_authority(reviewed)
+        authority["lifecycle"]["historical_proof_mode"] = (
+            "exact_state_adoption"
+        )
+        historical_attestation = fast_attestation(reviewed)
+        continuation_attestation = {
+            **historical_attestation,
+            "exceptional_continuation_evidence_digest": "9" * 64,
+        }
+
+        self.assertIsNone(
+            actions._authenticated_source_validation_delivery_issue(
+                authority, historical_attestation
+            )
+        )
+        self.assertEqual(
+            actions._authenticated_source_validation_delivery_issue(
+                authority, continuation_attestation
+            ),
+            authority["delivery_issue_number"],
+        )
+
     def test_ready_integration_rejects_actual_default_branch_sha_drift(self) -> None:
         reviewed = fast_feedback()
         final_head = reviewed.head_sha
