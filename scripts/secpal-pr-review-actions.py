@@ -5109,11 +5109,14 @@ def issue_ready_source_recovery_authorization(
     def verify_recovery_user_authorization(
         value: Any, observed: Any, expected_scope: dict[str, Any]
     ) -> dict[str, Any]:
-        _, _, user_authorization_verifier, _, _ = (
-            _load_lifecycle_publication_helpers(
+        lifecycle_helpers = _load_lifecycle_publication_helpers(
             include_orchestration=True
         )
-        )
+        if len(lifecycle_helpers) != 5:
+            raise fast_path.SecurityBlocker(
+                "maintained lifecycle orchestration helpers are incomplete"
+            )
+        user_authorization_verifier = lifecycle_helpers[2]
         item = user_authorization_verifier(value, observed, observed.lifecycle)
         if (
             item.get("operation") != "READY_SOURCE_RECOVERY"
@@ -7149,18 +7152,36 @@ def _load_exceptional_recovery_evidence(
                 "diagnostic Recovery grants no thread-resolution authority"
             )
         try:
-            (
-                _, lifecycle_publication, _,
-                diagnostic_authenticator, diagnostic_verifier,
-            ) = (
-                _load_lifecycle_publication_helpers(include_orchestration=True)
+            lifecycle_helpers = _load_lifecycle_publication_helpers(
+                include_orchestration=True
             )
+            if len(lifecycle_helpers) != 5:
+                raise fast_path.SecurityBlocker(
+                    "maintained lifecycle orchestration helpers are incomplete"
+                )
+            lifecycle_publication = lifecycle_helpers[1]
+            diagnostic_authenticator = lifecycle_helpers[3]
+            diagnostic_verifier = lifecycle_helpers[4]
             observed = lifecycle_publication.verify_current_lifecycle_authority(
                 repository, delivery_issue
             )
             diagnostic_authenticator()
-            return diagnostic_verifier(value, observed, repository_root)
+            recovery = diagnostic_verifier(value, observed, repository_root)
         except (ImportError, OSError, RuntimeError, ValueError) as exc:
+            raise fast_path.SecurityBlocker(
+                "diagnostic Recovery authority is invalid or stale"
+            ) from exc
+        try:
+            if (
+                recovery["pull_request_number"] != reviewed.pull_request_number
+                or recovery["prior_ready_head_sha"] != reviewed.head_sha
+                or recovery["recovery_tree_sha"] != validated_tree
+            ):
+                raise fast_path.SecurityBlocker(
+                    "diagnostic Recovery reviewed identity or tree changed"
+                )
+            return recovery
+        except (KeyError, TypeError) as exc:
             raise fast_path.SecurityBlocker(
                 "diagnostic Recovery authority is invalid or stale"
             ) from exc
@@ -7559,10 +7580,17 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                     "signed commit does not contain exactly the validated staged tree"
                 )
             if exceptional_recovery_path:
-                eligibility_digest = _resolution_eligibility_digest(
-                    arguments.eligibility_evidence,
-                    arguments.repo,
-                    reviewed,
+                diagnostic_recovery = _is_diagnostic_exceptional_recovery(
+                    exceptional_recovery_path
+                )
+                eligibility_digest = (
+                    None
+                    if diagnostic_recovery
+                    else _resolution_eligibility_digest(
+                        arguments.eligibility_evidence,
+                        arguments.repo,
+                        reviewed,
+                    )
                 )
                 exceptional_recovery = _load_exceptional_recovery_evidence(
                     path=exceptional_recovery_path,

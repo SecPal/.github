@@ -891,6 +891,10 @@ def verify_exceptional_recovery_authority(
         try:
             exceptional_recovery.authenticate_maintained_code()
             recovery = exceptional_recovery.verify_admission(recovery_evidence, transition.predecessor, repository_root)
+            if recovery["authorization_id"] != authorization["authorization_id"]:
+                raise LifecycleOrchestrationError(
+                    "diagnostic Recovery authorization identity changed"
+                )
             exceptional_recovery.require_successor(repository_root, recovery, resulting_head_sha)
             _authorization(
                 orchestration_authorization,
@@ -1703,6 +1707,10 @@ def _orchestrate_event(
             try:
                 exceptional_recovery.authenticate_maintained_code()
                 recovery = exceptional_recovery.verify_admission(scope.get("recovery_evidence"), observed, Path.cwd())
+                if recovery["authorization_id"] != verified_authorization["authorization_id"]:
+                    raise LifecycleOrchestrationError(
+                        "diagnostic Recovery authorization identity changed"
+                    )
                 exceptional_recovery.require_successor(Path.cwd(), recovery, request_head)
                 expected_scope = exceptional_recovery.authorization_scope(
                     recovery, request_head

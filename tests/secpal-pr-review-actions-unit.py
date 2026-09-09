@@ -10754,7 +10754,14 @@ class FastPathTests(TestCase):
             verify_current_lifecycle_authority=mock.Mock(return_value=observed)
         )
         diagnostic_authenticator = mock.Mock()
-        diagnostic_verifier = mock.Mock(return_value=value)
+        reviewed = fast_feedback()
+        verified = {
+            **value,
+            "pull_request_number": reviewed.pull_request_number,
+            "prior_ready_head_sha": reviewed.head_sha,
+            "recovery_tree_sha": "2" * 40,
+        }
+        diagnostic_verifier = mock.Mock(return_value=verified)
         with (
             mock.patch.object(actions, "_read_json", return_value=value),
             mock.patch.object(
@@ -10772,11 +10779,11 @@ class FastPathTests(TestCase):
                 repository="SecPal/.github",
                 delivery_issue=894,
                 repository_root=REPO_ROOT,
-                reviewed=fast_feedback(),
+                reviewed=reviewed,
                 validated_tree="2" * 40,
                 eligibility_digest=None,
             )
-        self.assertEqual(result, value)
+        self.assertEqual(result, verified)
         publication.verify_current_lifecycle_authority.assert_called_once_with(
             "SecPal/.github", 894
         )
@@ -10804,6 +10811,56 @@ class FastPathTests(TestCase):
                 validated_tree="2" * 40,
                 eligibility_digest="3" * 64,
             )
+
+    def test_diagnostic_recovery_loader_binds_reviewed_head_pr_and_tree(self) -> None:
+        reviewed = fast_feedback()
+        value = {
+            "schema_version": "1.1",
+            "admission_kind": "REPRODUCED_MATERIAL_SECURITY_DIAGNOSTIC",
+        }
+        verified = {
+            **value,
+            "pull_request_number": reviewed.pull_request_number,
+            "prior_ready_head_sha": reviewed.head_sha,
+            "recovery_tree_sha": "2" * 40,
+        }
+        publication = SimpleNamespace(
+            verify_current_lifecycle_authority=mock.Mock(
+                return_value=SimpleNamespace(lifecycle=SimpleNamespace())
+            )
+        )
+        for field, replacement in (
+            ("pull_request_number", reviewed.pull_request_number + 1),
+            ("prior_ready_head_sha", "1" * 40),
+            ("recovery_tree_sha", "3" * 40),
+        ):
+            changed = {**verified, field: replacement}
+            with (
+                self.subTest(field=field),
+                mock.patch.object(actions, "_read_json", return_value=value),
+                mock.patch.object(
+                    actions,
+                    "_load_lifecycle_publication_helpers",
+                    return_value=(
+                        SimpleNamespace(), publication, mock.Mock(), mock.Mock(),
+                        mock.Mock(return_value=changed),
+                    ),
+                ),
+                self.assertRaisesRegex(
+                    fast_path.SecurityBlocker,
+                    "diagnostic Recovery reviewed identity or tree changed",
+                ),
+            ):
+                actions._load_exceptional_recovery_evidence(
+                    path="diagnostic.json",
+                    eligibility_path=None,
+                    repository="SecPal/.github",
+                    delivery_issue=894,
+                    repository_root=REPO_ROOT,
+                    reviewed=reviewed,
+                    validated_tree="2" * 40,
+                    eligibility_digest=None,
+                )
 
     def test_exceptional_continuation_evidence_binds_material_findings_and_attestation(
         self,

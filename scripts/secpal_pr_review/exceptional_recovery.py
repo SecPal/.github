@@ -52,6 +52,8 @@ def require_diagnostic_recovery_state(value: Any) -> dict[str, Any]:
         "remediation_cycle_count": 2,
         "exceptional_recovery_count": 0,
         "exceptional_recovery_history": [],
+        "exceptional_continuation_count": 0,
+        "exceptional_continuation_history": [],
         "cycle_3_absent": True,
         "ready": True,
         "draft": False,
@@ -212,7 +214,9 @@ def authenticate_maintained_code() -> str:
         )
         if transport._git_text(root, ["rev-parse", "FETCH_HEAD"]).strip() != facts.head_sha:
             raise DiagnosticRecoveryError("diagnostic maintained source changed")
-        listing = transport._git(root, ["ls-tree", "-rz", facts.head_sha, "--", "scripts"]).stdout
+        listing = transport._git(
+            root, ["ls-tree", "-rz", "-r", facts.head_sha, "--", "scripts"]
+        ).stdout
         maintained_paths = set()
         for entry in listing.rstrip(b"\0").split(b"\0"):
             metadata, relative = entry.decode("utf-8", errors="strict").split("\t")

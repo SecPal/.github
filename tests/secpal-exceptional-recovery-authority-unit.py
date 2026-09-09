@@ -1480,6 +1480,7 @@ class DiagnosticRecoveryTests(TestCase):
             ("review", "unrestricted_review_count", 0),
             ("remediation", "remediation_cycle_count", 1),
             ("recovery", "exceptional_recovery_count", 1),
+            ("continuation", "exceptional_continuation_count", 1),
             ("cycle-three", "cycle_3_absent", False),
             ("draft", "draft", True),
             ("ready", "ready", False),
@@ -1494,6 +1495,14 @@ class DiagnosticRecoveryTests(TestCase):
                         "sequence": 1,
                         "transition_kind": "EXCEPTIONAL_RECOVERY",
                         "event_authorization_digest": "2" * 64,
+                    }
+                ]
+            if field == "exceptional_continuation_count":
+                changed["exceptional_continuation_history"] = [
+                    {
+                        "sequence": 1,
+                        "transition_kind": "EXCEPTIONAL_CONTINUATION",
+                        "event_authorization_digest": "3" * 64,
                     }
                 ]
             with self.subTest(label=label), self.assertRaisesRegex(
