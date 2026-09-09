@@ -6014,6 +6014,16 @@ def _verify_prior_authority_tag(
     )
 
 
+def _authenticated_source_validation_delivery_issue(
+    authority: dict[str, Any], attestation: dict[str, Any]
+) -> int | None:
+    """Select the issue-bound form introduced with Continuation evidence."""
+
+    if "exceptional_continuation_evidence_digest" in attestation:
+        return authority["delivery_issue_number"]
+    return None
+
+
 def _canonical_ready_prior_authority_tag_ref(authority: dict[str, Any]) -> str:
     return (
         "refs/tags/secpal-ready-integration-prior-authority-"
@@ -6157,6 +6167,9 @@ def _verify_ready_integration_prior_authority(
         commit_parent_sha=parent,
         commit_tree_sha=tree,
         commit_validation_receipt_digest=trailer,
+        delivery_issue_number=_authenticated_source_validation_delivery_issue(
+            authority, attestation
+        ),
     )
     commit_object = _run_attestation_git(repository_root, ["cat-file", "commit", head], allow_failure=True)
     verified_commit = _run_attestation_git(repository_root, ["verify-commit", "--raw", head], allow_failure=True)

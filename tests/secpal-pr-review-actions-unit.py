@@ -7313,6 +7313,32 @@ class FastPathTests(TestCase):
                     verified_source_validation_evidence_digest="e" * 64,
                 )
 
+    def test_ready_source_validation_binding_preserves_historical_exact_adoption(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        authority = ready_integration_prior_authority(reviewed)
+        authority["lifecycle"]["historical_proof_mode"] = (
+            "exact_state_adoption"
+        )
+        historical_attestation = fast_attestation(reviewed)
+        continuation_attestation = {
+            **historical_attestation,
+            "exceptional_continuation_evidence_digest": "9" * 64,
+        }
+
+        self.assertIsNone(
+            actions._authenticated_source_validation_delivery_issue(
+                authority, historical_attestation
+            )
+        )
+        self.assertEqual(
+            actions._authenticated_source_validation_delivery_issue(
+                authority, continuation_attestation
+            ),
+            authority["delivery_issue_number"],
+        )
+
     def test_ready_integration_rejects_actual_default_branch_sha_drift(self) -> None:
         reviewed = fast_feedback()
         final_head = reviewed.head_sha
@@ -8912,16 +8938,30 @@ class FastPathTests(TestCase):
             reviewed_state=prior_reviewed,
             validation_receipt=receipt,
         )
-        prior_authority = ready_integration_prior_authority(reviewed)
+        prior_authority = ready_integration_prior_authority(
+            reviewed,
+            remediation_cycles=2,
+            exceptional_recoveries=1,
+            exceptional_continuations=1,
+        )
         prior_authority.update(
             prior_delivery_tree_sha=tree,
             prior_validation_receipt_digest=receipt["receipt_digest"],
             prior_final_attestation_digest=attestation["attestation_digest"],
         )
+        prior_authority["lifecycle"]["historical_proof_mode"] = (
+            "exact_state_adoption"
+        )
         prior_authority = fast_path.normalize_ready_integration_prior_authority(
             prior_authority
         )
-        integration = ready_integration_evidence(reviewed, validated_tree=tree)
+        integration = ready_integration_evidence(
+            reviewed,
+            validated_tree=tree,
+            remediation_cycles=2,
+            exceptional_recoveries=1,
+            exceptional_continuations=1,
+        )
         integration["prior_authority_digest"] = fast_path.digest_json(
             prior_authority
         )
@@ -8977,6 +9017,38 @@ class FastPathTests(TestCase):
             commit_parent_sha=prior_reviewed.head_sha,
             commit_tree_sha=tree,
             commit_validation_receipt_digest=receipt["receipt_digest"],
+            delivery_issue_number=prior_authority["delivery_issue_number"],
+        )
+        verified_lifecycle = SimpleNamespace(
+            authority_digest=prior_authority["lifecycle"][
+                "current_authority_digest"
+            ],
+            lifecycle_id=prior_authority["lifecycle"]["identity"],
+            historical_proof_mode="exact_state_adoption",
+            state={"cycle_3_absent": True},
+            tree_sha=tree,
+            validation_receipt_digest=receipt["receipt_digest"],
+            adoption_source_evidence_digest=attestation["attestation_digest"],
+            source_validation_evidence_digest=(
+                verified_validation.source_validation_evidence_digest
+            ),
+        )
+        published_authority = SimpleNamespace(
+            publication_oid=prior_authority["publication"]["object_oid"],
+            publication_digest=prior_authority["publication"][
+                "publication_digest"
+            ],
+            lifecycle=verified_lifecycle,
+        )
+        lifecycle_authority = SimpleNamespace(
+            ExpectedLifecycle=SimpleNamespace,
+            LifecycleAuthorityError=ValueError,
+        )
+        lifecycle_publication = SimpleNamespace(
+            verify_current_lifecycle_authority=mock.Mock(
+                return_value=published_authority
+            ),
+            LifecyclePublicationError=ValueError,
         )
         with (
             mock.patch.object(actions, "_read_json", side_effect=read_json),
@@ -9005,8 +9077,11 @@ class FastPathTests(TestCase):
             mock.patch.object(actions, "_verify_signature_policy_identity"),
             mock.patch.object(actions, "_verify_integration_signer"),
             mock.patch.object(actions, "_verify_prior_authority_tag"),
-            mock.patch.object(actions, "_verify_ready_integration_published_authority") as published,
-            mock.patch.object(actions, "_verify_ready_integration_lifecycle_authority"),
+            mock.patch.object(
+                actions,
+                "_load_lifecycle_publication_helpers",
+                return_value=(lifecycle_authority, lifecycle_publication),
+            ),
         ):
             result = actions._verify_ready_integration_prior_authority(
                 arguments=arguments,
@@ -9018,9 +9093,7 @@ class FastPathTests(TestCase):
 
         self.assertEqual(result, prior_authority)
         self.assertEqual(
-            published.call_args.kwargs[
-                "verified_source_validation_evidence_digest"
-            ],
+            published_authority.lifecycle.source_validation_evidence_digest,
             verified_validation.source_validation_evidence_digest,
         )
 
