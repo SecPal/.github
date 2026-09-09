@@ -632,7 +632,9 @@ delta permits only modifications of existing regular text blobs, without mode
 changes, additions, deletions or renames. Paired OLD/NEW token offsets must
 normalize to identical bytes: no whitespace, wording, logic or formatting edit
 is permitted beside the renumber. Python replacements must occur inside string
-or comment tokens, never numeric literals or executable syntax. Limits are 32
+or comment tokens, never numeric literals or executable syntax. Interpolated
+Python strings are excluded entirely, including their nested string literals
+and formatted expressions. Limits remain 32
 changed paths, 1 MiB per blob,
 4 MiB aggregate old/new bytes and 4096 replacements. Source import separately
 bounds every visited object (including already-present objects), depth and

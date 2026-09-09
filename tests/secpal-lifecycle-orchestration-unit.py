@@ -774,6 +774,18 @@ class CollisionCompositionFixture:
 
 
 class LifecycleOrchestrationTests(TestCase):
+    def test_collision_python_rejects_interpolated_version_expressions(self) -> None:
+        from scripts.secpal_pr_review import version_collision
+
+        for source in (b"value = f'{1.2}'\n", b'value = f"{1.2:.2f}"\n',
+                       b'value = f"literal 1.2"\n', b'value = f"{\'1.2\'}"\n'):
+            with self.subTest(source=source):
+                offsets = tuple(pair[0] for pair in version_collision.verify_blob_renumber(
+                    source, source.replace(b"1.2", b"1.3"), "1.2", "1.3",
+                ))
+                with self.assertRaisesRegex(version_collision.VersionCollisionError, "Python version token"):
+                    version_collision._verify_python_version_tokens(source, offsets, "1.2")
+
     def test_collision_requires_complete_owner_version_identity_change(self) -> None:
         from scripts.secpal_pr_review import version_collision
 
