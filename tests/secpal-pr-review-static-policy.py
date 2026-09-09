@@ -668,6 +668,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "verify_commit_signatures",
             "verify_codex_provider_summary",
             "verify_validation_attestation",
+            "derive_ready_source_recovery_safety_facts",
             "_actual_integration_signer",
         },
         "follow_up": {
@@ -686,6 +687,9 @@ LOADED_MODULE_ATTRIBUTES = {
             "loads_closed_json",
             "normalize_evidence",
             "verify_authorization",
+        },
+        "lifecycle_orchestration": {
+            "_verify_user_authorization",
         },
     },
     "fast_path.py": {
@@ -824,6 +828,18 @@ DYNAMIC_IMPORT_CALLS = {
         ),
         DynamicImportCall(
             ("_load_lifecycle_publication_helpers", "load"),
+            "spec.loader.exec_module(module)",
+        ),
+        DynamicImportCall(
+            ("_load_protected_main_helper", "load"),
+            "importlib.util.spec_from_file_location(module_name, path)",
+        ),
+        DynamicImportCall(
+            ("_load_protected_main_helper", "load"),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_protected_main_helper", "load"),
             "spec.loader.exec_module(module)",
         ),
     },
@@ -1149,6 +1165,18 @@ SAFE_SYS_MODULES_CALLS = {
             ("_load_lifecycle_publication_helpers",),
             "sys.modules.pop(module_name, None)",
         ),
+        DynamicImportCall(
+            ("_load_protected_main_helper",),
+            "sys.modules.pop(f'{package_name}.{name}', None)",
+        ),
+        DynamicImportCall(
+            ("_load_protected_main_helper",),
+            "sys.modules.pop(f'{package_name}.fast_path', None)",
+        ),
+        DynamicImportCall(
+            ("_load_protected_main_helper",),
+            "sys.modules.pop(package_name, None)",
+        ),
     },
     "secpal-resolve-fixed-threads.py": {
         DynamicImportCall(
@@ -1247,6 +1275,18 @@ SAFE_SYS_MODULES_STORES = {
         ),
         DynamicImportCall(
             ("_load_lifecycle_publication_helpers", "load"),
+            "sys.modules[module_name]",
+        ),
+        DynamicImportCall(
+            ("_load_protected_main_helper",),
+            "sys.modules[package_name]",
+        ),
+        DynamicImportCall(
+            ("_load_protected_main_helper",),
+            "sys.modules[f'{package_name}.fast_path']",
+        ),
+        DynamicImportCall(
+            ("_load_protected_main_helper", "load"),
             "sys.modules[module_name]",
         ),
     },
