@@ -122,6 +122,9 @@ class ReadySourceRecoveryCurrentSafety(unittest.TestCase):
             (("prior_delivery_head_sha",), "invalid"),
             (("prior_delivery_tree_sha",), "invalid"),
             (("publication", "object_oid"), "invalid"),
+            (("lifecycle", "draft"), True),
+            (("lifecycle", "ready"), False),
+            (("lifecycle", "unrestricted_reviews"), 0),
         ):
             changed = copy.deepcopy(self.prior_authority())
             target = changed
