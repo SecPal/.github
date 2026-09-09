@@ -585,7 +585,15 @@ material, or unclassified additions fail closed. The separate
 `--exceptional-continuation-successor-safety` resolver input preserves the
 existing source authorization/receipt/attestation. The extension proves only
 candidate safety: it does not expand the authorized source-change finding set
-or request providers. Explicit
+or request providers. The closed immutable-version-collision trigger reuses this
+same finite transition with schema-1.1 Continuation evidence, an independently
+derived protected-main inventory and an exact byte-only renumber. Its maintained
+`prepare_collision_tree`, `issue_collision_continuation_authorization` and
+`publish_collision_continuation` boundaries compose source preparation, existing
+signed user authority and protected publication without finding/thread IDs or
+thread-resolution authority. See the collision-trigger procedure in
+[`docs/secpal-pr-review-workflow.md`](../docs/secpal-pr-review-workflow.md).
+Explicit
 Ready/Draft changes require their exact separately reasoned authorization.
 Every user-controlled orchestration decision consumes canonical signed evidence
 bound to the exact CURRENT publication, authority, PR, head, operation, reason,

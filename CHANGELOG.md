@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-09 - Authenticate Immutable Version Collisions
+
+**Fixed:**
+
+- Extend the existing one-use Exceptional Continuation with independently
+  authenticated protected-main version-collision evidence, exact signed user
+  authorization and bounded byte-only renumber verification.
+- Preserve historical material-feedback continuations, validation and provider
+  safety, Ready-source recovery and thread-authority isolation; allocate no
+  Ready-integration evidence or attestation version.
+
 ## 2026-09-09 - Compose Historical Ready Source With Detached Thread Authority
 
 **Fixed:**
