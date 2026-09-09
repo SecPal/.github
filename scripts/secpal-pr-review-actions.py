@@ -6157,6 +6157,12 @@ def _verify_ready_integration_prior_authority(
         commit_parent_sha=parent,
         commit_tree_sha=tree,
         commit_validation_receipt_digest=trailer,
+        delivery_issue_number=(
+            authority["delivery_issue_number"]
+            if authority["lifecycle"]["historical_proof_mode"]
+            == "exact_state_adoption"
+            else None
+        ),
     )
     commit_object = _run_attestation_git(repository_root, ["cat-file", "commit", head], allow_failure=True)
     verified_commit = _run_attestation_git(repository_root, ["verify-commit", "--raw", head], allow_failure=True)
