@@ -24,6 +24,7 @@ from typing import Any, Callable, Mapping
 from scripts.secpal_work_graph import replanning
 
 from . import bootstrap_source_admission
+from . import exceptional_recovery
 from . import fast_path
 from . import follow_up
 from . import lifecycle_authority as authority
@@ -168,9 +169,9 @@ class VerifiedExceptionalRecoveryAuthority:
     resulting_head_sha: str
     prior_ready_tree_sha: str
     recovery_tree_sha: str
-    reviewed_state_digest: str
-    reviewed_feedback_digest: str
-    eligibility_evidence_digest: str
+    reviewed_state_digest: str | None
+    reviewed_feedback_digest: str | None
+    eligibility_evidence_digest: str | None
     finding_ids: tuple[str, ...]
     thread_ids: tuple[str, ...]
 
@@ -548,6 +549,22 @@ def _identity(value: Any, label: str) -> str:
         raise LifecycleOrchestrationError(str(exc)) from exc
 
 
+def _authenticate_diagnostic_recovery_source() -> str:
+    """Expose only the closed accepted-main diagnostic authentication boundary."""
+
+    return exceptional_recovery.authenticate_maintained_code()
+
+
+def _verify_diagnostic_recovery_admission(
+    value: Any, observed: Any, repository_root: Path
+) -> dict[str, Any]:
+    """Expose only the closed diagnostic admission verifier to the binder."""
+
+    return exceptional_recovery.verify_admission(
+        value, observed, repository_root
+    )
+
+
 def _oid(value: Any, label: str) -> str:
     try:
         return authority._require_oid(value, label)
@@ -866,6 +883,55 @@ def verify_exceptional_recovery_authority(
     ):
         raise LifecycleOrchestrationError(
             "Exceptional Recovery signed lifecycle identity changed"
+        )
+
+    if isinstance(recovery_evidence, dict) and recovery_evidence.get("schema_version") == "1.1":
+        if reviewed_state_evidence is not None or eligibility_evidence is not None:
+            raise LifecycleOrchestrationError("diagnostic Recovery grants no thread-resolution authority")
+        try:
+            exceptional_recovery.authenticate_maintained_code()
+            recovery = exceptional_recovery.verify_admission(recovery_evidence, transition.predecessor, repository_root)
+            exceptional_recovery.require_successor(repository_root, recovery, resulting_head_sha)
+            _authorization(
+                orchestration_authorization,
+                event_id=transition.event_id,
+                operation="EXCEPTIONAL_RECOVERY",
+                expected_scope=exceptional_recovery.authorization_scope(
+                    recovery, resulting_head_sha
+                ),
+                observed=transition.predecessor,
+                lifecycle=predecessor,
+                verifier=_verify_user_authorization,
+                verified_item=authorization,
+            )
+            expected_state = authority.derive_state(predecessor.state, "EXCEPTIONAL_RECOVERY", transition.event_digest)
+            if successor.state != expected_state or transition.event_signer_identity != authorization["signer_identity"]:
+                raise LifecycleOrchestrationError("diagnostic Recovery lifecycle successor changed")
+        except exceptional_recovery.DiagnosticRecoveryError as exc:
+            raise LifecycleOrchestrationError(str(exc)) from exc
+        return VerifiedExceptionalRecoveryAuthority(
+            recovery_digest=fast_path.digest_json(recovery),
+            authorization_id=authorization["authorization_id"],
+            authorization_digest=authorization["authorization_digest"],
+            repository=repository,
+            delivery_issue=delivery_issue,
+            pull_request=pull_request,
+            lifecycle_id=predecessor.lifecycle_id,
+            predecessor_publication_oid=transition.predecessor.publication_oid,
+            predecessor_publication_digest=transition.predecessor.publication_digest,
+            recovery_publication_oid=transition.successor.publication_oid,
+            recovery_publication_digest=transition.successor.publication_digest,
+            predecessor_authority_digest=predecessor.authority_digest,
+            recovery_authority_digest=successor.authority_digest,
+            prior_ready_head_sha=predecessor.head_sha,
+            resulting_head_sha=resulting_head_sha,
+            prior_ready_tree_sha=recovery["prior_ready_tree_sha"],
+            recovery_tree_sha=recovery["recovery_tree_sha"],
+            reviewed_state_digest=None,
+            reviewed_feedback_digest=None,
+            eligibility_evidence_digest=None,
+            finding_ids=tuple(recovery["finding_ids"]),
+            thread_ids=(),
         )
 
     try:
@@ -1626,16 +1692,28 @@ def _orchestrate_event(
             authorization_value, observed, lifecycle
         )
         finding_ids = _authorized_finding_ids(verified_authorization)
+        scope = verified_authorization.get("scope", {})
+        expected_scope = {
+            "pull_request": lifecycle.pull_request,
+            "predecessor_head_sha": lifecycle.head_sha,
+            "resulting_head_sha": request_head,
+            "finding_ids": finding_ids,
+        }
+        if scope.get("admission_kind") == exceptional_recovery.ADMISSION_KIND:
+            try:
+                exceptional_recovery.authenticate_maintained_code()
+                recovery = exceptional_recovery.verify_admission(scope.get("recovery_evidence"), observed, Path.cwd())
+                exceptional_recovery.require_successor(Path.cwd(), recovery, request_head)
+                expected_scope = exceptional_recovery.authorization_scope(
+                    recovery, request_head
+                )
+            except exceptional_recovery.DiagnosticRecoveryError as exc:
+                raise LifecycleOrchestrationError(str(exc)) from exc
         authorization = _authorization(
             authorization_value,
             event_id=event_id,
             operation="EXCEPTIONAL_RECOVERY",
-            expected_scope={
-                "pull_request": lifecycle.pull_request,
-                "predecessor_head_sha": lifecycle.head_sha,
-                "resulting_head_sha": request_head,
-                "finding_ids": finding_ids,
-            },
+            expected_scope=expected_scope,
             observed=observed,
             lifecycle=lifecycle,
             verifier=authorization_verifier,

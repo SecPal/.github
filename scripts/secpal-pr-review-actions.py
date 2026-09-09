@@ -237,12 +237,20 @@ def _load_lifecycle_publication_helpers(
             "lifecycle_publication", LIFECYCLE_PUBLICATION_HELPER
         )
         user_authorization_verifier = None
+        diagnostic_authenticator = None
+        diagnostic_verifier = None
         if include_orchestration:
             lifecycle_orchestration = load(
                 "lifecycle_orchestration", LIFECYCLE_ORCHESTRATION_HELPER
             )
             user_authorization_verifier = (
                 lifecycle_orchestration._verify_user_authorization
+            )
+            diagnostic_authenticator = (
+                lifecycle_orchestration._authenticate_diagnostic_recovery_source
+            )
+            diagnostic_verifier = (
+                lifecycle_orchestration._verify_diagnostic_recovery_admission
             )
     except BaseException:
         for module_name in (
@@ -256,7 +264,13 @@ def _load_lifecycle_publication_helpers(
         raise
     if user_authorization_verifier is None:
         return lifecycle_authority, lifecycle_publication
-    return lifecycle_authority, lifecycle_publication, user_authorization_verifier
+    return (
+        lifecycle_authority,
+        lifecycle_publication,
+        user_authorization_verifier,
+        diagnostic_authenticator,
+        diagnostic_verifier,
+    )
 
 
 def _load_protected_main_helper() -> Any:
@@ -5095,8 +5109,10 @@ def issue_ready_source_recovery_authorization(
     def verify_recovery_user_authorization(
         value: Any, observed: Any, expected_scope: dict[str, Any]
     ) -> dict[str, Any]:
-        _, _, user_authorization_verifier = _load_lifecycle_publication_helpers(
+        _, _, user_authorization_verifier, _, _ = (
+            _load_lifecycle_publication_helpers(
             include_orchestration=True
+        )
         )
         item = user_authorization_verifier(value, observed, observed.lifecycle)
         if (
@@ -7113,14 +7129,47 @@ def _verify_exceptional_recovery_selection(
 def _load_exceptional_recovery_evidence(
     *,
     path: str,
-    eligibility_path: str,
+    eligibility_path: str | None,
     repository: str,
+    delivery_issue: int,
+    repository_root: Path,
     reviewed: Any,
     validated_tree: str,
-    eligibility_digest: str,
+    eligibility_digest: str | None,
 ) -> dict[str, Any]:
+    value = _read_json(path, "exceptional recovery evidence")
+    if (
+        isinstance(value, dict)
+        and value.get("schema_version") == "1.1"
+        and value.get("admission_kind")
+        == "REPRODUCED_MATERIAL_SECURITY_DIAGNOSTIC"
+    ):
+        if eligibility_path is not None or eligibility_digest is not None:
+            raise fast_path.SecurityBlocker(
+                "diagnostic Recovery grants no thread-resolution authority"
+            )
+        try:
+            (
+                _, lifecycle_publication, _,
+                diagnostic_authenticator, diagnostic_verifier,
+            ) = (
+                _load_lifecycle_publication_helpers(include_orchestration=True)
+            )
+            observed = lifecycle_publication.verify_current_lifecycle_authority(
+                repository, delivery_issue
+            )
+            diagnostic_authenticator()
+            return diagnostic_verifier(value, observed, repository_root)
+        except (ImportError, OSError, RuntimeError, ValueError) as exc:
+            raise fast_path.SecurityBlocker(
+                "diagnostic Recovery authority is invalid or stale"
+            ) from exc
+    if eligibility_path is None or eligibility_digest is None:
+        raise fast_path.SecurityBlocker(
+            "thread-backed exceptional recovery requires eligibility evidence"
+        )
     recovery = fast_path.normalize_exceptional_recovery_evidence(
-        _read_json(path, "exceptional recovery evidence"),
+        value,
         repository=repository,
         reviewed_state=reviewed,
         validated_tree_sha=validated_tree,
@@ -7247,6 +7296,17 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
     exceptional_recovery_path = getattr(
         arguments, "exceptional_recovery_evidence", None
     )
+    diagnostic_recovery = False
+    if exceptional_recovery_path:
+        raw_recovery = _read_json(
+            exceptional_recovery_path, "exceptional recovery evidence"
+        )
+        diagnostic_recovery = (
+            isinstance(raw_recovery, dict)
+            and raw_recovery.get("schema_version") == "1.1"
+            and raw_recovery.get("admission_kind")
+            == "REPRODUCED_MATERIAL_SECURITY_DIAGNOSTIC"
+        )
     exceptional_continuation_path = getattr(
         arguments, "exceptional_continuation_evidence", None
     )
@@ -7297,7 +7357,14 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         )
     if exceptional_recovery_path and (
         (integration_evidence_path or pre_enrollment_evidence_path)
-        or not getattr(arguments, "eligibility_evidence", None)
+        or (
+            not diagnostic_recovery
+            and not getattr(arguments, "eligibility_evidence", None)
+        )
+        or (
+            diagnostic_recovery
+            and getattr(arguments, "eligibility_evidence", None) is not None
+        )
         or not all(exceptional_selectors)
     ):
         raise fast_path.SecurityBlocker(
@@ -7501,6 +7568,8 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                     path=exceptional_recovery_path,
                     eligibility_path=arguments.eligibility_evidence,
                     repository=arguments.repo,
+                    delivery_issue=arguments.exceptional_recovery_delivery_issue,
+                    repository_root=repository_root,
                     reviewed=reviewed,
                     validated_tree=tree,
                     eligibility_digest=eligibility_digest,
@@ -7755,7 +7824,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             repository_root, pre_enrollment_evidence, tree
         )
     if exceptional_recovery_path:
-        if eligibility_evidence_digest is None:
+        if eligibility_evidence_digest is None and not diagnostic_recovery:
             raise fast_path.SecurityBlocker(
                 "exceptional recovery requires authenticated eligibility evidence"
             )
@@ -7763,6 +7832,8 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             path=exceptional_recovery_path,
             eligibility_path=eligibility_evidence,
             repository=arguments.repo,
+            delivery_issue=arguments.exceptional_recovery_delivery_issue,
+            repository_root=repository_root,
             reviewed=reviewed,
             validated_tree=tree,
             eligibility_digest=eligibility_evidence_digest,
@@ -7891,6 +7962,8 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             path=exceptional_recovery_path,
             eligibility_path=eligibility_evidence,
             repository=arguments.repo,
+            delivery_issue=arguments.exceptional_recovery_delivery_issue,
+            repository_root=repository_root,
             reviewed=reviewed,
             validated_tree=tree_after,
             eligibility_digest=eligibility_evidence_digest,

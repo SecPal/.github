@@ -730,6 +730,8 @@ LOADED_MODULE_ATTRIBUTES = {
             "verify_authorization",
         },
         "lifecycle_orchestration": {
+            "_authenticate_diagnostic_recovery_source",
+            "_verify_diagnostic_recovery_admission",
             "_verify_user_authorization",
         },
         "exact_source_safety": {
