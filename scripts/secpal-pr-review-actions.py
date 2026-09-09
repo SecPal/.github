@@ -158,15 +158,12 @@ READY_SOURCE_RECOVERY_CURRENT_SAFETY_PATH = (
     "tests/ready-source-recovery-current-safety.py"
 )
 READY_SOURCE_RECOVERY_CURRENT_SAFETY_INVARIANTS = (
-    "candidate_local_issuer_rejected",
-    "complete_feedback",
-    "context_binding",
-    "historical_bytes_unavailable",
+    "candidate_issuer_separation",
+    "lifecycle_history",
     "ordinary_prior_ready",
-    "resolved_feedback",
-    "signed_authority_required",
-    "source_history",
-    "wrong_signer",
+    "prior_authority_scope",
+    "prior_authority_signer",
+    "stable_feedback_integrity",
 )
 
 
