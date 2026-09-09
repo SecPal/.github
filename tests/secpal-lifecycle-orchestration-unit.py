@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import copy
+import base64
 import inspect
 import json
 import subprocess
@@ -22,6 +23,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from scripts.secpal_pr_review import lifecycle_authority as authority
 from scripts.secpal_pr_review import fast_path
 from scripts.secpal_pr_review import lifecycle_orchestration as orchestration
+from scripts.secpal_pr_review import late_disposition
 
 REPOSITORY = "SecPal/.github"
 ISSUE = 692
@@ -231,6 +233,254 @@ def feedback_successor(
         pr_state="OPEN",
         feedback=feedback,
     )
+
+
+def authenticated_provider_growth() -> tuple[
+    fast_path.StableFeedbackState,
+    fast_path.StableFeedbackState,
+    dict[str, object],
+]:
+    provider = {
+        "login": "chatgpt-codex-connector",
+        "node_id": "BOT_CODEX",
+        "database_id": 199175422,
+    }
+    requester = {
+        "login": "delivery-user",
+        "node_id": "USER_DELIVERY",
+        "database_id": 7,
+    }
+    reviewer = {
+        "login": "reviewer",
+        "node_id": "USER_REVIEWER",
+        "database_id": 8,
+    }
+    code_quality = {
+        "login": "github-code-quality",
+        "node_id": "BOT_CODE_QUALITY",
+        "database_id": 223894421,
+    }
+    predecessor = fast_path.StableFeedbackState(
+        repository=REPOSITORY,
+        pull_request_number=PR,
+        head_sha=HEAD,
+        base_ref="main",
+        base_sha="0" * 40,
+        pr_state="OPEN",
+        feedback={
+            "pull_request_reactions": [],
+            "reviews": [
+                {
+                    "node_id": "PRR_PREDECESSOR",
+                    "body_digest": "1" * 64,
+                    "actor": reviewer,
+                    "state": "COMMENTED",
+                    "commit_oid": HEAD,
+                    "reactions": [],
+                }
+            ],
+            "conversation_comments": [
+                {
+                    "node_id": "IC_CODEX_SUMMARY",
+                    "body_digest": "2" * 64,
+                    "actor": provider,
+                    "updated_at": "2026-09-08T20:00:00Z",
+                    "reactions": [],
+                }
+            ],
+            "threads": [
+                {
+                    "node_id": "PRRT_CONTINUATION_1",
+                    "is_resolved": False,
+                    "is_outdated": False,
+                    "comments": [
+                        {
+                            "node_id": "F-CONTINUATION-1",
+                            "body_digest": "3" * 64,
+                            "actor": reviewer,
+                            "reply_to_id": None,
+                            "reactions": [
+                                {
+                                    "mutation_id": "REACTION_PREDECESSOR",
+                                    "content": "THUMBS_UP",
+                                    "actor": requester,
+                                }
+                            ],
+                        },
+                        {
+                            "node_id": "PRRC_PREDECESSOR_REPLY",
+                            "body_digest": "4" * 64,
+                            "actor": requester,
+                            "reply_to_id": "F-CONTINUATION-1",
+                            "reactions": [],
+                        },
+                    ],
+                }
+            ],
+        },
+    )
+    summary = (
+        "<!-- codex-pull-request-review-summary -->\n"
+        '<!-- codex-security-review:v1 '
+        f'{{"headSha":"{NEXT_HEAD}","status":"completed"}} -->\n'
+        "| Review | Status | Commit | Review trigger |\n"
+        "| --- | --- | --- | --- |\n"
+        "| **Code Review** | **Completed** | head | manual |\n"
+        "| **Security Review** | **Completed** | head | manual |"
+    )
+    current_feedback = copy.deepcopy(predecessor.feedback)
+    current_feedback["pull_request_reactions"].append(
+        {
+            "mutation_id": "REACTION_CODEX_COMPLETE",
+            "content": "THUMBS_UP",
+            "actor": provider,
+        }
+    )
+    current_feedback["conversation_comments"][0].update(
+        body_digest=fast_path.digest_text(summary),
+        updated_at="2026-09-08T22:00:00Z",
+    )
+    bodies = {
+        "IC_CODE_REQUEST": "@codex review",
+        "IC_SECURITY_REQUEST": "@codex security review",
+        "IC_CODE_RESULT": (
+            "Codex Review: Didn't find any major issues.\n\n"
+            f"**Reviewed commit:** `{NEXT_HEAD[:10]}`"
+        ),
+        "IC_SECURITY_RESULT": (
+            "### 🛡️ Codex Security Review\n\n"
+            "No security issues were found in this pull request.\n\n"
+            f"**Reviewed commit:** `{NEXT_HEAD[:10]}`"
+        ),
+    }
+    for node_id, body in bodies.items():
+        current_feedback["conversation_comments"].append(
+            {
+                "node_id": node_id,
+                "body_digest": fast_path.digest_text(body),
+                "actor": requester if "REQUEST" in node_id else provider,
+                "updated_at": None,
+                "reactions": [],
+            }
+        )
+    current_feedback["reviews"].append(
+        {
+            "node_id": "PRR_RESULTING_HEAD",
+            "body_digest": fast_path.digest_text(""),
+            "actor": code_quality,
+            "state": "COMMENTED",
+            "commit_oid": NEXT_HEAD,
+            "reactions": [],
+        }
+    )
+    current_feedback["threads"].append(
+        {
+            "node_id": "PRRT_RESULTING_HEAD",
+            "is_resolved": False,
+            "is_outdated": False,
+            "comments": [
+                {
+                    "node_id": "PRRC_RESULTING_HEAD",
+                    "body_digest": "a" * 64,
+                    "actor": code_quality,
+                    "reply_to_id": None,
+                    "reactions": [],
+                }
+            ],
+        }
+    )
+    current = fast_path.StableFeedbackState(
+        repository=REPOSITORY,
+        pull_request_number=PR,
+        head_sha=NEXT_HEAD,
+        base_ref=predecessor.base_ref,
+        base_sha=predecessor.base_sha,
+        pr_state="OPEN",
+        feedback=current_feedback,
+    )
+    transport = [
+        ("CODEX_SUMMARY_UPDATE", "IC_CODEX_SUMMARY", summary),
+        ("CODEX_REVIEW_REQUEST", "IC_CODE_REQUEST", bodies["IC_CODE_REQUEST"]),
+        (
+            "CODEX_SECURITY_REVIEW_REQUEST",
+            "IC_SECURITY_REQUEST",
+            bodies["IC_SECURITY_REQUEST"],
+        ),
+        (
+            "CODEX_CODE_REVIEW_RESULT",
+            "IC_CODE_RESULT",
+            bodies["IC_CODE_RESULT"],
+        ),
+        (
+            "CODEX_SECURITY_REVIEW_RESULT",
+            "IC_SECURITY_RESULT",
+            bodies["IC_SECURITY_RESULT"],
+        ),
+    ]
+    classification = fast_path._seal_successor_classification(
+        repository=REPOSITORY,
+        delivery_issue_number=ISSUE,
+        pull_request_number=PR,
+        head_sha=NEXT_HEAD,
+        finding_id="PRRC_RESULTING_HEAD",
+        finding_evidence_digest="b" * 64,
+        thread_id="PRRT_RESULTING_HEAD",
+        top_level_comment_node_id="PRRC_RESULTING_HEAD",
+        finding_body_digest="a" * 64,
+        reply_count=0,
+        is_resolved=False,
+        is_outdated=False,
+        classification="INVALID_FALSE_OR_MISLEADING",
+        disposition="DISPROVEN_WITH_EVIDENCE",
+        technically_blocking=False,
+        technical_blockers=(),
+        classification_evidence_digest="c" * 64,
+        source_bindings=(("THREAD_COMMENT", "PRRC_RESULTING_HEAD", "a" * 64, "PRRT_RESULTING_HEAD"),),
+    )
+    evidence: dict[str, object] = {
+        "schema_version": "1.0",
+        "repository": REPOSITORY,
+        "pull_request_number": PR,
+        "predecessor_state_digest": predecessor.state_digest,
+        "resulting_head_sha": NEXT_HEAD,
+        "resulting_state_digest": current.state_digest,
+        "provider_transport": [
+            {
+                "role": role,
+                "kind": "CONVERSATION_COMMENT",
+                "node_id": node_id,
+                "body": body,
+            }
+            for role, node_id, body in transport
+        ]
+        + [
+            {
+                "role": "CODEX_COMPLETION_REACTION",
+                "kind": "PULL_REQUEST_REACTION",
+                "node_id": "REACTION_CODEX_COMPLETE",
+                "body": None,
+            },
+            {
+                "role": "GITHUB_CODE_QUALITY_REVIEW",
+                "kind": "REVIEW",
+                "node_id": "PRR_RESULTING_HEAD",
+                "body": None,
+            }
+        ],
+        "successor_findings": [
+            {
+                "sources": [
+                    {
+                        "kind": "THREAD_COMMENT",
+                        "node_id": "PRRC_RESULTING_HEAD",
+                        "digest": "a" * 64,
+                    }
+                ],
+                "classification_evidence": classification,
+            }
+        ],
+    }
+    return predecessor, current, evidence
 
 
 class LifecycleOrchestrationTests(TestCase):
@@ -585,6 +835,604 @@ class LifecycleOrchestrationTests(TestCase):
         self.assertFalse(decision.request_review)
         self.assertFalse(decision.transition_to_draft)
         self.assertFalse(decision.transition_to_ready)
+
+    def test_continuation_successor_accepts_authenticated_provider_growth(
+        self,
+    ) -> None:
+        request, _authorization = continuation_inputs()
+        reviewed = fast_path.verify_reviewed_state_evidence(
+            request["continuation_evidence"]["reviewed_state_evidence"]
+        )
+        provider = {
+            "login": "chatgpt-codex-connector",
+            "node_id": "BOT_CODEX",
+            "database_id": 199175422,
+        }
+        requester = {
+            "login": "delivery-user",
+            "node_id": "USER_DELIVERY",
+            "database_id": 7,
+        }
+        code_quality = {
+            "login": "github-code-quality",
+            "node_id": "BOT_CODE_QUALITY",
+            "database_id": 223894421,
+        }
+        reviewed.feedback["conversation_comments"].append(
+            {
+                "node_id": "IC_CODEX_SUMMARY",
+                "body_digest": "4" * 64,
+                "actor": provider,
+                "updated_at": "2026-09-08T20:00:00Z",
+                "reactions": [],
+            }
+        )
+        reviewed.refresh_digests()
+        current_feedback = copy.deepcopy(reviewed.feedback)
+        current_feedback["reviews"].append(
+            {
+                "node_id": "PRR_RESULTING_HEAD",
+                "body_digest": fast_path.digest_text(""),
+                "actor": code_quality,
+                "state": "COMMENTED",
+                "commit_oid": NEXT_HEAD,
+                "reactions": [],
+            }
+        )
+        summary = (
+            "<!-- codex-pull-request-review-summary -->\n"
+            '<!-- codex-security-review:v1 '
+            f'{{"headSha":"{NEXT_HEAD}","status":"completed"}} -->\n'
+            "| Review | Status | Commit | Review trigger |\n"
+            "| --- | --- | --- | --- |\n"
+            "| **Code Review** | **Completed** | head | manual |\n"
+            "| **Security Review** | **Completed** | head | manual |"
+        )
+        current_feedback["conversation_comments"][0].update(
+            body_digest=fast_path.digest_text(summary),
+            updated_at="2026-09-08T22:00:00Z",
+        )
+        transport_comments = (
+            ("IC_CODE_REQUEST", "@codex review", requester),
+            ("IC_SECURITY_REQUEST", "@codex security review", requester),
+            (
+                "IC_CODE_RESULT",
+                "Codex Review: Didn't find any major issues.\n\n"
+                f"**Reviewed commit:** `{NEXT_HEAD[:10]}`",
+                provider,
+            ),
+            (
+                "IC_SECURITY_RESULT",
+                "### 🛡️ Codex Security Review\n\n"
+                "No security issues were found in this pull request.\n\n"
+                f"**Reviewed commit:** `{NEXT_HEAD[:10]}`",
+                provider,
+            ),
+        )
+        for node_id, body, actor in transport_comments:
+            current_feedback["conversation_comments"].append(
+                {
+                    "node_id": node_id,
+                    "body_digest": fast_path.digest_text(body),
+                    "actor": actor,
+                    "updated_at": None,
+                    "reactions": [],
+                }
+            )
+        current_feedback["threads"].append(
+            {
+                "node_id": "PRRT_RESULTING_HEAD",
+                "is_resolved": False,
+                "is_outdated": False,
+                "comments": [
+                    {
+                        "node_id": "PRRC_RESULTING_HEAD",
+                        "body_digest": "a" * 64,
+                        "actor": code_quality,
+                        "reply_to_id": None,
+                        "reactions": [],
+                    }
+                ],
+            }
+        )
+        current = fast_path.StableFeedbackState(
+            repository=reviewed.repository,
+            pull_request_number=reviewed.pull_request_number,
+            head_sha=NEXT_HEAD,
+            base_ref=reviewed.base_ref,
+            base_sha=reviewed.base_sha,
+            pr_state="OPEN",
+            feedback=current_feedback,
+        )
+
+        fast_path.verify_stable_feedback_successor(
+            reviewed,
+            current,
+            resulting_head_sha=NEXT_HEAD,
+            authorized_thread_ids=["PRRT_CONTINUATION_1"],
+            successor_safety_evidence={
+                "schema_version": "1.0",
+                "repository": REPOSITORY,
+                "pull_request_number": PR,
+                "predecessor_state_digest": reviewed.state_digest,
+                "resulting_head_sha": NEXT_HEAD,
+                "resulting_state_digest": current.state_digest,
+                "provider_transport": [
+                    {
+                        "role": "CODEX_SUMMARY_UPDATE",
+                        "kind": "CONVERSATION_COMMENT",
+                        "node_id": "IC_CODEX_SUMMARY",
+                        "body": summary,
+                    },
+                    {
+                        "role": "CODEX_REVIEW_REQUEST",
+                        "kind": "CONVERSATION_COMMENT",
+                        "node_id": "IC_CODE_REQUEST",
+                        "body": "@codex review",
+                    },
+                    {
+                        "role": "CODEX_SECURITY_REVIEW_REQUEST",
+                        "kind": "CONVERSATION_COMMENT",
+                        "node_id": "IC_SECURITY_REQUEST",
+                        "body": "@codex security review",
+                    },
+                    {
+                        "role": "CODEX_CODE_REVIEW_RESULT",
+                        "kind": "CONVERSATION_COMMENT",
+                        "node_id": "IC_CODE_RESULT",
+                        "body": "Codex Review: Didn't find any major issues.\n\n"
+                        f"**Reviewed commit:** `{NEXT_HEAD[:10]}`",
+                    },
+                    {
+                        "role": "CODEX_SECURITY_REVIEW_RESULT",
+                        "kind": "CONVERSATION_COMMENT",
+                        "node_id": "IC_SECURITY_RESULT",
+                        "body": "### 🛡️ Codex Security Review\n\n"
+                        "No security issues were found in this pull request.\n\n"
+                        f"**Reviewed commit:** `{NEXT_HEAD[:10]}`",
+                    },
+                    {
+                        "role": "GITHUB_CODE_QUALITY_REVIEW",
+                        "kind": "REVIEW",
+                        "node_id": "PRR_RESULTING_HEAD",
+                        "body": None,
+                    },
+                ],
+                "successor_findings": [
+                    {
+                        "sources": [
+                            {
+                                "kind": "THREAD_COMMENT",
+                                "node_id": "PRRC_RESULTING_HEAD",
+                                "digest": "a" * 64,
+                            }
+                        ],
+                        "classification_evidence": fast_path._seal_successor_classification(
+                            repository=REPOSITORY,
+                            delivery_issue_number=ISSUE,
+                            pull_request_number=PR,
+                            head_sha=NEXT_HEAD,
+                            finding_id="PRRC_RESULTING_HEAD",
+                            finding_evidence_digest="b" * 64,
+                            thread_id="PRRT_RESULTING_HEAD",
+                            top_level_comment_node_id="PRRC_RESULTING_HEAD",
+                            finding_body_digest="a" * 64,
+                            reply_count=0,
+                            is_resolved=False,
+                            is_outdated=False,
+                            classification="INVALID_FALSE_OR_MISLEADING",
+                            disposition="DISPROVEN_WITH_EVIDENCE",
+                            technically_blocking=False,
+                            technical_blockers=(),
+                            classification_evidence_digest="c" * 64,
+                            source_bindings=(("THREAD_COMMENT", "PRRC_RESULTING_HEAD", "a" * 64, "PRRT_RESULTING_HEAD"),),
+                        ),
+                    }
+                ],
+            },
+        )
+
+    def test_continuation_provider_growth_reaches_orchestration_without_scope_expansion(
+        self,
+    ) -> None:
+        reviewed, current, successor = authenticated_provider_growth()
+        request, authorization = continuation_inputs()
+        request["continuation_evidence"]["reviewed_state_evidence"] = (
+            reviewed.to_dict()
+        )
+        eligibility = request["continuation_evidence"]["eligibility_evidence"]
+        eligibility["reviewed_state_digest"] = reviewed.state_digest
+        authorization["scope"].update(
+            reviewed_state_digest=reviewed.state_digest,
+            reviewed_feedback_digest=reviewed.feedback_digest,
+            eligibility_evidence_digest=fast_path.digest_json(eligibility),
+        )
+        request["continuation_evidence"]["successor_safety_evidence"] = successor
+
+        with mock.patch.object(
+            orchestration,
+            "_authenticate_successor_safety_evidence",
+            return_value=successor,
+        ):
+            decision = orchestration._orchestrate_event(
+                REPOSITORY,
+                ISSUE,
+                request,
+                current_reader=current_reader(
+                    current_lifecycle(exceptional_recoveries=1)
+                ),
+                feedback_reader=lambda _repository, _pull_request: current,
+                authorization_verifier=fixture_authorization_verifier,
+            )
+
+        self.assertEqual(decision.lifecycle_transition, "EXCEPTIONAL_CONTINUATION")
+        self.assertFalse(decision.request_review)
+        self.assertEqual(
+            authorization["scope"]["finding_ids"], ["F-CONTINUATION-1"]
+        )
+        self.assertNotIn("PRRC_RESULTING_HEAD", authorization["scope"]["finding_ids"])
+
+    def test_successor_classification_uses_existing_detached_signature_authority(
+        self,
+    ) -> None:
+        reviewed, current, prepared = authenticated_provider_growth()
+        sealed = prepared["successor_findings"][0]["classification_evidence"]
+        raw = copy.deepcopy(prepared)
+        raw["classification_signer"] = {
+            "kind": "SSH_PRINCIPAL",
+            "identity": "aroviqen@secpal.app",
+        }
+        raw["successor_findings"] = [
+            {
+                "sources": copy.deepcopy(prepared["successor_findings"][0]["sources"]),
+                "classification_artifact": base64.b64encode(b"{}\n").decode(),
+                "classification_signature": base64.b64encode(b"signature").decode(),
+            }
+        ]
+        verified = late_disposition.SuccessorClassificationEvidence(
+            evidence_digest=sealed.classification_evidence_digest,
+            repository=sealed.repository,
+            delivery_issue_number=sealed.delivery_issue_number,
+            pull_request_number=sealed.pull_request_number,
+            head_sha=sealed.head_sha,
+            finding_id=sealed.finding_id,
+            finding_evidence_digest=sealed.finding_evidence_digest,
+            thread=late_disposition.ThreadAuthorization(
+                thread_id=sealed.thread_id,
+                top_level_comment_node_id=sealed.top_level_comment_node_id,
+                top_level_comment_database_id=1,
+                finding_body_digest=sealed.finding_body_digest,
+                reply_state_digest=fast_path.digest_json([]),
+                reply_count=sealed.reply_count,
+                is_resolved=False,
+                is_outdated=sealed.is_outdated,
+                classification=sealed.classification,
+                disposition=sealed.disposition,
+                technically_blocking=False,
+                classification_evidence_digest=sealed.classification_evidence_digest,
+            ),
+            technical_blockers=(),
+            predecessor_state_digest=reviewed.state_digest,
+            resulting_state_digest=current.state_digest,
+            sources=(("THREAD_COMMENT", "PRRC_RESULTING_HEAD", "a" * 64, "PRRT_RESULTING_HEAD"),),
+        )
+        with (
+            mock.patch.object(
+                orchestration,
+                "_successor_classification_signer",
+                return_value=late_disposition.SignerIdentity("ssh", "SHA256:fixture"),
+            ),
+            mock.patch.object(
+                late_disposition,
+                "parse_successor_classification_artifact",
+                return_value=verified,
+            ),
+        ):
+            authenticated = orchestration._authenticate_successor_safety_evidence(
+                raw,
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                pull_request=PR,
+                predecessor_state_digest=reviewed.state_digest,
+                resulting_head_sha=NEXT_HEAD,
+                resulting_state_digest=current.state_digest,
+            )
+        self.assertIsInstance(
+            authenticated["successor_findings"][0]["classification_evidence"],
+            fast_path.VerifiedSuccessorClassification,
+        )
+
+    def test_successor_classification_parser_binds_exact_sources_and_state(self) -> None:
+        signer = late_disposition.SignerIdentity("ssh", "SHA256:fixture")
+        artifact = {
+            "schema_version": "1.2",
+            "kind": "LATE_FEEDBACK_CLASSIFICATION",
+            "repository": REPOSITORY,
+            "delivery_issue_number": ISSUE,
+            "pull_request_number": PR,
+            "head_sha": NEXT_HEAD,
+            "predecessor_state_digest": "1" * 64,
+            "resulting_state_digest": "2" * 64,
+            "delivery_signer": {
+                "format": "ssh",
+                "fingerprint": signer.fingerprint,
+            },
+            "authorized_purpose": "AUTHENTICATE_CONTINUATION_SUCCESSOR_SAFETY",
+            "finding_id": "REA_SUCCESSOR",
+            "finding_evidence_digest": "3" * 64,
+            "thread": {
+                "thread_id": None,
+                "top_level_comment_node_id": None,
+                "top_level_comment_database_id": None,
+                "finding_body_digest": None,
+                "reply_state_digest": fast_path.digest_json([]),
+                "reply_count": 0,
+                "is_resolved": None,
+                "is_outdated": None,
+                "classification": "INFORMATIONAL",
+                "disposition": "NON_ACTIONABLE",
+                "technically_blocking": False,
+                "technical_blockers": [],
+            },
+            "sources": [
+                {
+                    "kind": "CONVERSATION_REACTION",
+                    "node_id": "REA_SUCCESSOR",
+                    "digest": "4" * 64,
+                    "thread_id": None,
+                }
+            ],
+        }
+        canonical = late_disposition.canonical_json_bytes(artifact)
+        with mock.patch.object(
+            late_disposition, "verify_detached_signature", return_value=canonical
+        ):
+            verified = late_disposition.parse_successor_classification_artifact(
+                Path("unused.json"),
+                Path("unused.sig"),
+                expected_signer=signer,
+                repository=REPOSITORY,
+                delivery_issue_number=ISSUE,
+                pull_request_number=PR,
+                head_sha=NEXT_HEAD,
+                predecessor_state_digest="1" * 64,
+                resulting_state_digest="2" * 64,
+            )
+        self.assertEqual(
+            verified.sources,
+            (("CONVERSATION_REACTION", "REA_SUCCESSOR", "4" * 64, None),),
+        )
+
+        changed = copy.deepcopy(artifact)
+        changed["resulting_state_digest"] = "5" * 64
+        with (
+            mock.patch.object(
+                late_disposition,
+                "verify_detached_signature",
+                return_value=late_disposition.canonical_json_bytes(changed),
+            ),
+            self.assertRaises(late_disposition.LateDispositionError),
+        ):
+            late_disposition.parse_successor_classification_artifact(
+                Path("unused.json"),
+                Path("unused.sig"),
+                expected_signer=signer,
+                repository=REPOSITORY,
+                delivery_issue_number=ISSUE,
+                pull_request_number=PR,
+                head_sha=NEXT_HEAD,
+                predecessor_state_digest="1" * 64,
+                resulting_state_digest="2" * 64,
+            )
+
+    def test_authenticated_reaction_growth_preserves_predecessor_comment(self) -> None:
+        reviewed, current, evidence = authenticated_provider_growth()
+        comment = current.feedback["threads"][0]["comments"][0]
+        reaction = {
+            "mutation_id": "REA_SUCCESSOR_CLASSIFIED",
+            "content": "THUMBS_UP",
+            "actor": {
+                "login": "reviewer",
+                "node_id": "ACTOR_REVIEWER",
+                "database_id": 2,
+            },
+        }
+        comment["reactions"].append(reaction)
+        current.refresh_digests()
+        evidence["resulting_state_digest"] = current.state_digest
+        evidence["successor_findings"].append(
+            {
+                "sources": [
+                    {
+                        "kind": "THREAD_COMMENT_REACTION",
+                        "node_id": reaction["mutation_id"],
+                        "digest": fast_path.digest_json(reaction),
+                    }
+                ],
+                "classification_evidence": fast_path._seal_successor_classification(
+                    repository=REPOSITORY,
+                    delivery_issue_number=ISSUE,
+                    pull_request_number=PR,
+                    head_sha=NEXT_HEAD,
+                    finding_id="REA_SUCCESSOR_CLASSIFIED",
+                    finding_evidence_digest="d" * 64,
+                    thread_id=None,
+                    top_level_comment_node_id=None,
+                    finding_body_digest=None,
+                    reply_count=0,
+                    is_resolved=None,
+                    is_outdated=None,
+                    classification="INFORMATIONAL",
+                    disposition="NON_ACTIONABLE",
+                    technically_blocking=False,
+                    technical_blockers=(),
+                    classification_evidence_digest="e" * 64,
+                    source_bindings=(("THREAD_COMMENT_REACTION", "REA_SUCCESSOR_CLASSIFIED", fast_path.digest_json(reaction), "PRRT_CONTINUATION_1"),),
+                ),
+            }
+        )
+        fast_path.verify_stable_feedback_successor(
+            reviewed,
+            current,
+            resulting_head_sha=NEXT_HEAD,
+            authorized_thread_ids=["PRRT_CONTINUATION_1"],
+            successor_safety_evidence=evidence,
+        )
+
+    def test_continuation_successor_growth_fails_closed_for_tampering_and_laundering(
+        self,
+    ) -> None:
+        def reject(label: str, mutate) -> None:
+            reviewed, current, evidence = authenticated_provider_growth()
+            mutate(reviewed, current, evidence)
+            reviewed.refresh_digests()
+            current.refresh_digests()
+            evidence["predecessor_state_digest"] = reviewed.state_digest
+            evidence["resulting_state_digest"] = current.state_digest
+            with self.subTest(label=label), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                fast_path.verify_stable_feedback_successor(
+                    reviewed,
+                    current,
+                    resulting_head_sha=NEXT_HEAD,
+                    authorized_thread_ids=["PRRT_CONTINUATION_1"],
+                    successor_safety_evidence=evidence,
+                )
+
+        def predecessor_thread_removed(_reviewed, current, _evidence):
+            current.feedback["threads"] = current.feedback["threads"][1:]
+
+        def predecessor_comment_changed(_reviewed, current, _evidence):
+            current.feedback["threads"][0]["comments"][0]["body_digest"] = "f" * 64
+
+        def predecessor_reply_removed(_reviewed, current, _evidence):
+            current.feedback["threads"][0]["comments"] = current.feedback["threads"][0][
+                "comments"
+            ][:1]
+
+        def predecessor_reaction_changed(_reviewed, current, _evidence):
+            current.feedback["threads"][0]["comments"][0]["reactions"][0][
+                "content"
+            ] = "THUMBS_DOWN"
+
+        def predecessor_review_substituted(_reviewed, current, _evidence):
+            current.feedback["reviews"][0]["node_id"] = "PRR_EQUAL_LOOKING_REPLACEMENT"
+
+        def predecessor_source_replaced(_reviewed, current, _evidence):
+            current.feedback["threads"][0]["node_id"] = "PRRT_EQUAL_LOOKING_REPLACEMENT"
+
+        def cross_head(_reviewed, current, evidence):
+            current.head_sha = "7" * 40
+            evidence["resulting_head_sha"] = current.head_sha
+
+        def cross_pr(_reviewed, current, evidence):
+            current.pull_request_number = PR + 1
+            evidence["pull_request_number"] = current.pull_request_number
+
+        def wrong_head_provider(_reviewed, current, _evidence):
+            current.feedback["reviews"][-1]["commit_oid"] = "7" * 40
+
+        def replace_summary(current, evidence, body):
+            current.feedback["conversation_comments"][0]["body_digest"] = (
+                fast_path.digest_text(body)
+            )
+            for transport in evidence["provider_transport"]:
+                if transport["role"] == "CODEX_SUMMARY_UPDATE":
+                    transport["body"] = body
+
+        def malformed_summary(_reviewed, current, evidence):
+            replace_summary(current, evidence, "malformed provider summary")
+
+        def nonterminal_summary(_reviewed, current, evidence):
+            body = evidence["provider_transport"][0]["body"].replace(
+                '"status":"completed"', '"status":"running"'
+            )
+            replace_summary(current, evidence, body)
+
+        def duplicate_provider(_reviewed, _current, evidence):
+            evidence["provider_transport"].append(
+                copy.deepcopy(evidence["provider_transport"][1])
+            )
+
+        def user_masquerades_as_provider(_reviewed, current, _evidence):
+            next(
+                item
+                for item in current.feedback["conversation_comments"]
+                if item["node_id"] == "IC_CODE_RESULT"
+            )["actor"] = {
+                    "login": "delivery-user",
+                    "node_id": "USER_DELIVERY",
+                    "database_id": 7,
+                }
+
+        def unclassified_provider_finding(_reviewed, _current, evidence):
+            evidence["successor_findings"] = []
+
+        def material_provider_finding(_reviewed, _current, evidence):
+            original = evidence["successor_findings"][0]["classification_evidence"]
+            evidence["successor_findings"][0]["classification_evidence"] = (
+                fast_path._seal_successor_classification(
+                    **{
+                        key: value
+                        for key, value in original.__dict__.items()
+                        if key != "_verification_seal"
+                    }
+                    | {"technically_blocking": True, "technical_blockers": ("P1",)}
+                )
+            )
+
+        def unauthenticated_safe_assertion(_reviewed, _current, evidence):
+            evidence["successor_findings"][0]["classification_evidence"] = {
+                "classification": "INVALID_FALSE_OR_MISLEADING",
+                "disposition": "DISPROVEN_WITH_EVIDENCE",
+                "technically_blocking": False,
+                "evidence_digest": "b" * 64,
+            }
+
+        def deleted_request_actor(_reviewed, current, _evidence):
+            next(
+                item
+                for item in current.feedback["conversation_comments"]
+                if item["node_id"] == "IC_CODE_REQUEST"
+            )["actor"] = {"login": None, "node_id": None, "database_id": None}
+
+        def unrelated_concurrent_comment(_reviewed, current, _evidence):
+            current.feedback["conversation_comments"].append(
+                {
+                    "node_id": "IC_UNRELATED",
+                    "body_digest": "e" * 64,
+                    "actor": {
+                        "login": "unrelated-user",
+                        "node_id": "USER_UNRELATED",
+                        "database_id": 9,
+                    },
+                    "updated_at": None,
+                    "reactions": [],
+                }
+            )
+
+        for label, mutate in (
+            ("predecessor thread removed", predecessor_thread_removed),
+            ("predecessor comment body changed", predecessor_comment_changed),
+            ("predecessor reply removed", predecessor_reply_removed),
+            ("predecessor reaction changed", predecessor_reaction_changed),
+            ("predecessor review substituted", predecessor_review_substituted),
+            ("equal-looking predecessor replacement", predecessor_source_replaced),
+            ("cross-head predecessor replay", cross_head),
+            ("cross-PR predecessor replay", cross_pr),
+            ("wrong-head provider review", wrong_head_provider),
+            ("malformed provider summary", malformed_summary),
+            ("nonterminal provider state", nonterminal_summary),
+            ("duplicate provider evidence", duplicate_provider),
+            ("user transport masquerade", user_masquerades_as_provider),
+            ("unclassified provider finding", unclassified_provider_finding),
+            ("material provider finding", material_provider_finding),
+            ("unauthenticated safe classification", unauthenticated_safe_assertion),
+            ("deleted review requester", deleted_request_actor),
+            ("unrelated concurrent feedback", unrelated_concurrent_comment),
+        ):
+            reject(label, mutate)
 
     def test_continuation_event_fails_closed_for_state_identity_and_finding_drift(
         self,

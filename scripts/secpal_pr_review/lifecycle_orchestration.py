@@ -28,6 +28,7 @@ from . import fast_path
 from . import follow_up
 from . import lifecycle_authority as authority
 from . import lifecycle_publication as publication
+from . import late_disposition
 
 
 REQUEST_FIELDS = frozenset(
@@ -46,6 +47,9 @@ CONTINUATION_REQUEST_FIELDS = REQUEST_FIELDS | {"continuation_evidence"}
 CONTINUATION_EVIDENCE_FIELDS = frozenset(
     {"reviewed_state_evidence", "eligibility_evidence"}
 )
+CONTINUATION_SUCCESSOR_EVIDENCE_FIELDS = CONTINUATION_EVIDENCE_FIELDS | {
+    "successor_safety_evidence"
+}
 AUTHORIZATION_FIELDS = frozenset(
     {
         "schema_version",
@@ -284,10 +288,183 @@ def _closed_request(value: Any) -> dict[str, Any]:
     return item
 
 
+def _successor_classification_signer(
+    repository: str, value: Any
+) -> late_disposition.SignerIdentity:
+    if not isinstance(value, Mapping) or set(value) != {"kind", "identity"}:
+        raise LifecycleOrchestrationError(
+            "successor classification signer selector is malformed"
+        )
+    try:
+        policy = authority._load_lifecycle_trust_policy(repository)
+        kind = value.get("kind")
+        identity = _identity(value.get("identity"), "successor classification signer")
+        if kind == "SSH_PRINCIPAL":
+            if identity not in policy.transition_signer_identities:
+                raise LifecycleOrchestrationError(
+                    "successor classification signer is not authorized"
+                )
+            keys = policy.signers[identity].ssh_public_keys
+            if len(keys) != 1:
+                raise LifecycleOrchestrationError(
+                    "successor classification signer key is ambiguous"
+                )
+            return late_disposition.SignerIdentity(
+                "ssh", _ssh_public_key_fingerprint(keys[0])
+            )
+        if kind == "OPENPGP_FINGERPRINT" and any(
+            signer in policy.transition_signer_identities
+            and identity in policy.signers[signer].openpgp_fingerprints
+            for signer in policy.signers
+        ):
+            return late_disposition.SignerIdentity("openpgp", identity.upper())
+    except (KeyError, ValueError, authority.LifecycleAuthorityError) as exc:
+        raise LifecycleOrchestrationError(
+            "successor classification signer is unavailable"
+        ) from exc
+    raise LifecycleOrchestrationError(
+        "successor classification signer is not authorized"
+    )
+
+
+def _authenticate_successor_safety_evidence(
+    value: Any,
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    predecessor_state_digest: str,
+    resulting_head_sha: str,
+    resulting_state_digest: str,
+) -> Any:
+    if value is None:
+        return None
+    expected_keys = {
+        "schema_version",
+        "repository",
+        "pull_request_number",
+        "predecessor_state_digest",
+        "resulting_head_sha",
+        "resulting_state_digest",
+        "provider_transport",
+        "successor_findings",
+        "classification_signer",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected_keys:
+        raise LifecycleOrchestrationError(
+            "successor safety evidence contains unknown or missing fields"
+        )
+    signer = _successor_classification_signer(
+        repository, value.get("classification_signer")
+    )
+    raw_findings = value.get("successor_findings")
+    if not isinstance(raw_findings, list):
+        raise LifecycleOrchestrationError("successor finding evidence is malformed")
+    findings: list[dict[str, Any]] = []
+    for raw in raw_findings:
+        if not isinstance(raw, Mapping) or set(raw) != {
+            "sources",
+            "classification_artifact",
+            "classification_signature",
+        }:
+            raise LifecycleOrchestrationError(
+                "successor finding evidence is malformed"
+            )
+        encoded_artifact = raw.get("classification_artifact")
+        encoded_signature = raw.get("classification_signature")
+        if (
+            not isinstance(encoded_artifact, str)
+            or len(encoded_artifact)
+            > 4 * late_disposition.MAXIMUM_ARTIFACT_BYTES // 3 + 8
+            or not isinstance(encoded_signature, str)
+            or len(encoded_signature)
+            > 4 * late_disposition.MAXIMUM_SIGNATURE_BYTES // 3 + 8
+        ):
+            raise LifecycleOrchestrationError(
+                "successor finding classification is oversized"
+            )
+        try:
+            artifact = base64.b64decode(
+                encoded_artifact, validate=True
+            )
+            signature = base64.b64decode(
+                encoded_signature, validate=True
+            )
+            with tempfile.TemporaryDirectory(
+                prefix="secpal-successor-classification-"
+            ) as directory:
+                root = Path(directory)
+                artifact_path = root / "classification.json"
+                signature_path = root / "classification.sig"
+                late_disposition._write_private_file(artifact_path, artifact)
+                late_disposition._write_private_file(signature_path, signature)
+                verified = late_disposition.parse_successor_classification_artifact(
+                    artifact_path,
+                    signature_path,
+                    expected_signer=signer,
+                    repository=repository,
+                    delivery_issue_number=delivery_issue,
+                    pull_request_number=pull_request,
+                    head_sha=resulting_head_sha,
+                    predecessor_state_digest=predecessor_state_digest,
+                    resulting_state_digest=resulting_state_digest,
+                )
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            binascii.Error,
+            OSError,
+            late_disposition.LateDispositionError,
+        ) as exc:
+            raise LifecycleOrchestrationError(
+                "successor finding classification is not authenticated"
+            ) from exc
+        signed_sources = [
+            {"kind": kind, "node_id": node_id, "digest": digest}
+            for kind, node_id, digest, _thread_id in verified.sources
+        ]
+        if list(raw["sources"]) != signed_sources:
+            raise LifecycleOrchestrationError(
+                "successor finding sources differ from signed classification"
+            )
+        thread = verified.thread
+        findings.append(
+            {
+                "sources": signed_sources,
+                "classification_evidence": fast_path._seal_successor_classification(
+                    repository=verified.repository,
+                    delivery_issue_number=verified.delivery_issue_number,
+                    pull_request_number=verified.pull_request_number,
+                    head_sha=verified.head_sha,
+                    finding_id=verified.finding_id,
+                    finding_evidence_digest=verified.finding_evidence_digest,
+                    thread_id=thread.thread_id,
+                    top_level_comment_node_id=thread.top_level_comment_node_id,
+                    finding_body_digest=thread.finding_body_digest,
+                    reply_count=thread.reply_count,
+                    is_resolved=thread.is_resolved,
+                    is_outdated=thread.is_outdated,
+                    classification=thread.classification,
+                    disposition=thread.disposition,
+                    technically_blocking=thread.technically_blocking,
+                    technical_blockers=verified.technical_blockers,
+                    classification_evidence_digest=verified.evidence_digest,
+                    source_bindings=verified.sources,
+                ),
+            }
+        )
+    prepared = copy.deepcopy(dict(value))
+    prepared.pop("classification_signer")
+    prepared["successor_findings"] = findings
+    return prepared
+
+
 def _verify_continuation_finding_authority(
     value: Any,
     *,
     repository: str,
+    delivery_issue: int,
     pull_request: int,
     predecessor_head_sha: str,
     resulting_head_sha: str,
@@ -295,9 +472,18 @@ def _verify_continuation_finding_authority(
 ) -> VerifiedContinuationFindingAuthority:
     """Derive a finite material finding set from maintained feedback evidence."""
 
-    item = _closed_mapping(
-        value, CONTINUATION_EVIDENCE_FIELDS, "continuation finding evidence"
-    )
+    if (
+        not isinstance(value, Mapping)
+        or set(value)
+        not in {
+            CONTINUATION_EVIDENCE_FIELDS,
+            CONTINUATION_SUCCESSOR_EVIDENCE_FIELDS,
+        }
+    ):
+        raise LifecycleOrchestrationError(
+            "continuation finding evidence contains unknown or missing fields"
+        )
+    item = copy.deepcopy(dict(value))
     try:
         reviewed = fast_path.verify_reviewed_state_evidence(
             item["reviewed_state_evidence"]
@@ -311,11 +497,21 @@ def _verify_continuation_finding_authority(
             reviewed, eligibility
         )
         current = feedback_reader(repository, pull_request)
+        successor_safety = _authenticate_successor_safety_evidence(
+            item.get("successor_safety_evidence"),
+            repository=repository,
+            delivery_issue=delivery_issue,
+            pull_request=pull_request,
+            predecessor_state_digest=reviewed.state_digest,
+            resulting_head_sha=resulting_head_sha,
+            resulting_state_digest=current.state_digest,
+        )
         fast_path.verify_stable_feedback_successor(
             reviewed,
             current,
             resulting_head_sha=resulting_head_sha,
             authorized_thread_ids=thread_ids,
+            successor_safety_evidence=successor_safety,
         )
     except fast_path.SecurityBlocker as exc:
         raise LifecycleOrchestrationError(
@@ -941,6 +1137,7 @@ def verify_exceptional_continuation_authority(
     orchestration_authorization: bytes | str,
     reviewed_state_evidence: Any,
     eligibility_evidence: Any,
+    successor_safety_evidence: Any = None,
     repository_root: Path,
     repository: str,
     delivery_issue: int,
@@ -1007,8 +1204,14 @@ def verify_exceptional_continuation_authority(
         {
             "reviewed_state_evidence": reviewed_state_evidence,
             "eligibility_evidence": eligibility_evidence,
+            **(
+                {"successor_safety_evidence": successor_safety_evidence}
+                if successor_safety_evidence is not None
+                else {}
+            ),
         },
         repository=repository,
+        delivery_issue=delivery_issue,
         pull_request=pull_request,
         predecessor_head_sha=predecessor.head_sha,
         resulting_head_sha=resulting_head_sha,
@@ -1475,6 +1678,7 @@ def _orchestrate_event(
         findings = _verify_continuation_finding_authority(
             continuation_evidence,
             repository=repository,
+            delivery_issue=delivery_issue,
             pull_request=lifecycle.pull_request,
             predecessor_head_sha=lifecycle.head_sha,
             resulting_head_sha=request_head,

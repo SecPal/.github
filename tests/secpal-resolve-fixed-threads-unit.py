@@ -3156,10 +3156,14 @@ class ResolveFixedThreadsTests(TestCase):
             root = Path(directory)
             evidence_path = root / "continuation.json"
             authorization_path = root / "authorization.json"
+            successor_path = root / "successor-safety.json"
             evidence_path.write_text(
                 '{"schema_version":"1.0"}', encoding="utf-8"
             )
             authorization_path.write_bytes(b"signed continuation authorization")
+            successor_path.write_text(
+                '{"schema_version":"1.0"}', encoding="utf-8"
+            )
             verifier = mock.Mock(
                 return_value=mock.Mock(continuation_digest=continuation_digest)
             )
@@ -3179,6 +3183,7 @@ class ResolveFixedThreadsTests(TestCase):
                     resulting_head_sha="8" * 40,
                     continuation_evidence_path=evidence_path,
                     continuation_authorization_path=authorization_path,
+                    successor_safety_evidence_path=successor_path,
                 )
 
         verifier.assert_called_once_with(
@@ -3186,6 +3191,7 @@ class ResolveFixedThreadsTests(TestCase):
             orchestration_authorization=b"signed continuation authorization",
             reviewed_state_evidence={"schema_version": "1.0"},
             eligibility_evidence=eligibility_payload,
+            successor_safety_evidence={"schema_version": "1.0"},
             repository_root=root,
             repository="SecPal/.github",
             delivery_issue=883,
