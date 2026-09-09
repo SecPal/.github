@@ -454,12 +454,12 @@ def run_profile(
             except authority.LifecycleAuthorityError as exc:
                 raise authority.LifecycleAuthorityError("current safety failure report invalid") from exc
             reports.extend(report if isinstance(report, list) else [])
+    if any(not isinstance(item, str) or item not in invariants for item in reports):
+        raise authority.LifecycleAuthorityError("current safety failure report invalid")
+    covered_invariants = sorted(set(reports))
     if observed != results:
-        if (
-            not reports or any(not isinstance(item, str) or item not in invariants for item in reports)
-            or reports != sorted(set(reports))
-        ):
+        if not reports:
             raise authority.LifecycleAuthorityError("current safety failure report invalid")
         raise authority.LifecycleAuthorityError("current safety assertions failed: " + ", ".join(reports))
-    if reports != list(invariants):
+    if covered_invariants != list(invariants):
         raise authority.LifecycleAuthorityError("current safety invariant coverage incomplete")

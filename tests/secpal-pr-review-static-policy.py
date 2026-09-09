@@ -1213,6 +1213,18 @@ SAFE_SYS_MODULES_CALLS = {
             "sys.modules.pop(spec.name, None)",
         ),
         DynamicImportCall(
+            ("_load_exact_source_safety_helper",),
+            "sys.modules.pop(module_name, None)",
+        ),
+        DynamicImportCall(
+            ("_load_exact_source_safety_helper",),
+            "sys.modules.get(package_name)",
+        ),
+        DynamicImportCall(
+            ("_load_exact_source_safety_helper",),
+            "sys.modules.pop(package_name, None)",
+        ),
+        DynamicImportCall(
             ("_load_evidence_helper",),
             "sys.modules.get(spec.name)",
         ),

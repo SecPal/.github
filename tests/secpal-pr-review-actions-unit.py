@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import copy
+from contextlib import nullcontext
 import hashlib
 import importlib
 import inspect
@@ -7555,6 +7556,75 @@ class FastPathTests(TestCase):
             boundary.call_args.kwargs["_validation_runner"],
             actions._run_registered_validations,
         )
+
+    def test_ready_source_runner_normalizes_transport_failure(self) -> None:
+        profile = ready_source_current_safety_profile()
+        with (
+            mock.patch.object(
+                actions, "_ready_source_recovery_current_safety_profile",
+                return_value=profile,
+            ),
+            mock.patch.object(
+                actions.exact_source_safety, "execution_root",
+                return_value=nullcontext(REPO_ROOT),
+            ),
+            mock.patch.object(
+                actions.exact_source_safety, "run_profile",
+                side_effect=actions.exact_source_safety.transport.BootstrapSourceAdmissionError(
+                    "isolated execution failed"
+                ),
+            ),
+            self.assertRaisesRegex(fast_path.SecurityBlocker, "current safety failed"),
+        ):
+            actions._run_ready_source_recovery_current_safety(
+                "f" * 40, REPO_ROOT, profile,
+            )
+
+    def test_exact_source_profile_combines_multi_command_invariants(self) -> None:
+        commands = [
+            {"argv": ["python3", f"tests/harness-{index}.py"],
+             "working_directory": ".", "purpose": "fixture"}
+            for index in (1, 2)
+        ]
+        profile = {
+            "validation_command_set": commands,
+            "validation_results": [
+                {"command_digest": fast_path.digest_json(command),
+                 "exit_status": 0, "successful": True}
+                for command in commands
+            ],
+            "required_invariants": ["first", "second"],
+            "timeout_seconds": 120,
+        }
+        results = [
+            SimpleNamespace(returncode=0, stdout=b'["first", "second"]'),
+            SimpleNamespace(returncode=0, stdout=b'["first", "second"]'),
+        ]
+        helper = actions.exact_source_safety
+        with (
+            mock.patch.object(helper.authority, "_load_trusted_command_helper"),
+            mock.patch.object(helper.transport, "_closed_validation_environment", return_value={}),
+            mock.patch.object(helper.transport, "_isolated_python_command", return_value=["python3"]),
+            mock.patch.object(helper.transport, "_run_isolated_python", side_effect=results),
+        ):
+            helper.run_profile(REPO_ROOT, profile, expected_profile=copy.deepcopy(profile))
+
+    def test_exact_source_loader_cleans_synthetic_package_on_failure(self) -> None:
+        package_name = "secpal_exact_source_safety"
+        previous_package = sys.modules.pop(package_name, None)
+        previous_module = sys.modules.pop(f"{package_name}.exact_source_safety", None)
+        try:
+            with mock.patch.object(
+                actions.importlib.util, "spec_from_file_location", return_value=None,
+            ), self.assertRaisesRegex(RuntimeError, "Cannot load exact-source"):
+                actions._load_exact_source_safety_helper()
+            self.assertNotIn(package_name, sys.modules)
+            self.assertNotIn(f"{package_name}.exact_source_safety", sys.modules)
+        finally:
+            if previous_package is not None:
+                sys.modules[package_name] = previous_package
+            if previous_module is not None:
+                sys.modules[f"{package_name}.exact_source_safety"] = previous_module
 
     def test_ready_source_recovery_review_decision_requires_authenticated_policy(self) -> None:
         reviewed = fast_feedback(thread_count=0)

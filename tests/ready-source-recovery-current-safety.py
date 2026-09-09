@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 import hashlib
 import importlib.util
 import inspect
@@ -175,10 +176,24 @@ class ReadySourceRecoveryCurrentSafety(unittest.TestCase):
             signer_identity=SIGNER, signer=sign,
         )
 
-    def verify(self, document):
+    def resign(self, document):
+        fields = {
+            key: copy.deepcopy(value) for key, value in document.items()
+            if key not in {"signature", "authorization_digest"}
+        }
+        signature = sign(
+            authority.canonical_json_bytes(fields),
+            authority.READY_SOURCE_RECOVERY_AUTHORIZATION_DOMAIN,
+        )
+        signed = {**fields, "signature": signature}
+        return {**signed, "authorization_digest": authority.digest_json(signed)}
+
+    def verify(self, document, *, current=None, publication_oid="3" * 40,
+               publication_digest="4" * 64):
         return authority.verify_ready_source_recovery_authorization(
-            document, current_lifecycle=self.current,
-            current_publication_oid="3" * 40, current_publication_digest="4" * 64,
+            document, current_lifecycle=current or self.current,
+            current_publication_oid=publication_oid,
+            current_publication_digest=publication_digest,
         )
 
     def test_historical_bytes_unavailable(self):
@@ -189,6 +204,10 @@ class ReadySourceRecoveryCurrentSafety(unittest.TestCase):
             "PROVEN_PRE_PERSISTENCE_PACKAGE_UNAVAILABLE",
         )
         self.assertIs(document["historical_bytes_reconstructed"], False)
+        changed = copy.deepcopy(document)
+        changed["historical_bytes_reconstructed"] = True
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            self.verify(self.resign(changed))
 
     def test_signed_authority_required(self):
         with self.assertRaises(authority.LifecycleAuthorityError):
@@ -202,26 +221,50 @@ class ReadySourceRecoveryCurrentSafety(unittest.TestCase):
         self.safety()
         with self.assertRaises(fast_path.SecurityBlocker):
             self.safety(feedback_findings=self.findings[:-1])
+        duplicate = copy.deepcopy(self.findings)
+        duplicate.append({**copy.deepcopy(duplicate[0]), "finding_id": "duplicate"})
+        with self.assertRaises(fast_path.SecurityBlocker):
+            self.safety(feedback_findings=duplicate)
+        blocking = copy.deepcopy(self.findings)
+        blocking[0]["technically_blocking"] = True
+        with self.assertRaises(fast_path.SecurityBlocker):
+            self.safety(feedback_findings=blocking)
 
     def test_resolved_feedback(self):
         self.assertTrue(next(
             item for item in self.reviewed.feedback["threads"]
             if item["node_id"] == "thread"
         )["is_resolved"])
+        without_resolved = [
+            item for item in self.findings if item["thread_id"] != "thread"
+        ]
         with self.assertRaises(fast_path.SecurityBlocker):
-            self.safety(feedback_findings=[])
+            self.safety(feedback_findings=without_resolved)
 
     def test_context_binding(self):
         document = self.authorization()
         self.verify(document)
         for field, value in (
             ("repository", "other/project"), ("pull_request", 19),
-            ("head_sha", "e" * 40), ("tree_sha", "e" * 40), ("bounded_uses", 2),
+            ("head_sha", "e" * 40), ("tree_sha", "e" * 40),
+            ("bounded_uses", 2),
         ):
             changed = copy.deepcopy(document)
             changed[field] = value
             with self.subTest(field=field), self.assertRaises(authority.LifecycleAuthorityError):
-                self.verify(changed)
+                self.verify(self.resign(changed))
+        contexts = (
+            {"current": replace(self.current, repository="other/project")},
+            {"current": replace(self.current, pull_request=19)},
+            {"current": replace(self.current, head_sha="e" * 40)},
+            {"publication_oid": "e" * 40},
+            {"publication_digest": "e" * 64},
+        )
+        for context in contexts:
+            with self.subTest(context=context), self.assertRaises(
+                authority.LifecycleAuthorityError
+            ):
+                self.verify(document, **context)
 
     def test_wrong_signer(self):
         document = self.authorization()
@@ -236,11 +279,20 @@ class ReadySourceRecoveryCurrentSafety(unittest.TestCase):
         for key, value in (
             ("cycle_3_absent", False), ("remediation_cycle_count", 3),
             ("unrestricted_review_count", 0), ("ready", False), ("draft", True),
+            ("ready_transition_count", 2), ("exceptional_recovery_count", 2),
+            ("exceptional_continuation_count", 2),
         ):
             with self.subTest(key=key), self.assertRaises(authority.LifecycleAuthorityError):
                 authority._ready_source_recovery_state(
                     {**self.current.state, key: value},
                     historical_proof_mode=authority.EXACT_ADOPTION_PROOF_MODE,
+                )
+        for proof_mode in (authority.NATIVE_PROOF_MODE, authority.LEGACY_PROOF_MODE):
+            with self.subTest(proof_mode=proof_mode), self.assertRaises(
+                authority.LifecycleAuthorityError
+            ):
+                authority._ready_source_recovery_state(
+                    self.current.state, historical_proof_mode=proof_mode,
                 )
 
     def test_candidate_local_issuer_rejected(self):
@@ -259,6 +311,11 @@ class ReadySourceRecoveryCurrentSafety(unittest.TestCase):
         with patch.object(actions, "_attestation_local_state", return_value=(HEAD, "")):
             with self.assertRaises(actions.fast_path.SecurityBlocker):
                 actions._verify_recovery_issuer_source("f" * 40)
+        with patch.object(
+            actions, "_attestation_local_state", return_value=(HEAD, " M policy.py")
+        ):
+            with self.assertRaises(actions.fast_path.SecurityBlocker):
+                actions._verify_recovery_issuer_source(HEAD)
 
     def test_ordinary_prior_ready(self):
         prior = {

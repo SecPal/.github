@@ -133,18 +133,20 @@ def _load_exact_source_safety_helper() -> Any:
     package = types.ModuleType(package_name)
     package.__path__ = [str(EXACT_SOURCE_SAFETY_HELPER.parent)]
     sys.modules[package_name] = package
-    spec = importlib.util.spec_from_file_location(
-        f"{package_name}.exact_source_safety", EXACT_SOURCE_SAFETY_HELPER,
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError("Cannot load exact-source safety helper")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
     try:
+        spec = importlib.util.spec_from_file_location(
+            f"{package_name}.exact_source_safety", EXACT_SOURCE_SAFETY_HELPER,
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError("Cannot load exact-source safety helper")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
         spec.loader.exec_module(module)
     except BaseException:
-        if sys.modules.get(spec.name) is module:
-            sys.modules.pop(spec.name, None)
+        module_name = f"{package_name}.exact_source_safety"
+        sys.modules.pop(module_name, None)
+        if sys.modules.get(package_name) is package:
+            sys.modules.pop(package_name, None)
         raise
     return module
 
@@ -4840,7 +4842,10 @@ def _run_ready_source_recovery_current_safety(
             exact_source_safety.run_profile(
                 root, profile, expected_profile=expected,
             )
-    except exact_source_safety.authority.LifecycleAuthorityError as exc:
+    except (
+        exact_source_safety.authority.LifecycleAuthorityError,
+        exact_source_safety.transport.BootstrapSourceAdmissionError,
+    ) as exc:
         raise fast_path.SecurityBlocker(
             "Ready-source recovery current safety failed"
         ) from exc
