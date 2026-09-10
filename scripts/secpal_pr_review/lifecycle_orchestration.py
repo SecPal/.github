@@ -30,6 +30,7 @@ from . import follow_up
 from . import lifecycle_authority as authority
 from . import lifecycle_publication as publication
 from . import late_disposition
+from . import version_collision
 
 
 REQUEST_FIELDS = frozenset(
@@ -51,6 +52,11 @@ CONTINUATION_EVIDENCE_FIELDS = frozenset(
 CONTINUATION_SUCCESSOR_EVIDENCE_FIELDS = CONTINUATION_EVIDENCE_FIELDS | {
     "successor_safety_evidence"
 }
+COLLISION_CONTINUATION_FIELDS = frozenset({
+    "schema_version", "trigger", "repository_root", "reviewed_state_evidence",
+    "eligibility_evidence", "continuation_document", "predecessor_safety_evidence",
+    "successor_safety_evidence", "validation_attestation",
+})
 AUTHORIZATION_FIELDS = frozenset(
     {
         "schema_version",
@@ -1449,6 +1455,304 @@ def verify_exceptional_continuation_authority(
     )
 
 
+def _collision_request(value: Any) -> dict[str, Any]:
+    item = _closed_mapping(value, COLLISION_CONTINUATION_FIELDS, "collision continuation evidence")
+    if (
+        item["schema_version"] != "1.1" or item["trigger"] != version_collision.TRIGGER
+        or not isinstance(item["repository_root"], str) or not 0 < len(item["repository_root"]) <= 4096
+    ):
+        raise LifecycleOrchestrationError("collision continuation evidence has unsupported semantics")
+    return item
+
+
+def _require_continuation_predecessor(state: Mapping[str, Any], predecessor: str, resulting: str) -> None:
+    if (
+        state["ready"] is not True or state["draft"] is not False or resulting == predecessor
+        or state["unrestricted_review_count"] != authority.MAX_UNRESTRICTED_REVIEWS
+        or state["remediation_cycle_count"] != authority.MAX_REMEDIATION_CYCLES
+        or state["exceptional_recovery_count"] != authority.MAX_EXCEPTIONAL_RECOVERIES
+        or state["exceptional_continuation_count"] != 0 or state["cycle_3_absent"] is not True
+    ):
+        raise LifecycleOrchestrationError("exceptional continuation requires the exact exhausted Ready predecessor")
+
+
+def _authenticate_collision_predecessor_safety(
+    value: Any, *, reviewed: fast_path.StableFeedbackState, delivery_issue: int,
+) -> Any:
+    item = copy.deepcopy(value)
+    historical = item.pop("historical_thread_classifications", []) if isinstance(item, dict) else []
+    if not isinstance(historical, list) or len(historical) > 32:
+        raise LifecycleOrchestrationError("historical predecessor classifications exceed the bound")
+    prepared = _authenticate_successor_safety_evidence(
+        item, repository=reviewed.repository, delivery_issue=delivery_issue,
+        pull_request=reviewed.pull_request_number, predecessor_state_digest=reviewed.state_digest,
+        resulting_head_sha=reviewed.head_sha, resulting_state_digest=reviewed.state_digest,
+    )
+    if not historical:
+        return prepared
+    signer = _successor_classification_signer(reviewed.repository, item["classification_signer"])
+    threads = {thread["node_id"]: thread for thread in reviewed.feedback["threads"]}
+    for raw in historical:
+        try:
+            if not isinstance(raw, dict) or set(raw) != {"thread_id", "classification_artifact", "classification_signature"}:
+                raise ValueError("historical classification is not closed")
+            thread = threads.get(raw["thread_id"])
+            if not isinstance(thread, dict) or len(thread["comments"]) != 1 or thread["comments"][0]["reply_to_id"] is not None:
+                raise ValueError("historical classification requires an exact reply-free thread")
+            for key, limit in (("classification_artifact", late_disposition.MAXIMUM_ARTIFACT_BYTES),
+                               ("classification_signature", late_disposition.MAXIMUM_SIGNATURE_BYTES)):
+                if not isinstance(raw[key], str) or len(raw[key]) > 4 * limit // 3 + 8:
+                    raise ValueError("historical classification exceeds the bound")
+            with tempfile.TemporaryDirectory(prefix="secpal-collision-predecessor-") as directory:
+                root = Path(directory)
+                artifact_path, signature_path = root / "classification.json", root / "classification.sig"
+                late_disposition._write_private_file(artifact_path, base64.b64decode(raw["classification_artifact"], validate=True))
+                late_disposition._write_private_file(signature_path, base64.b64decode(raw["classification_signature"], validate=True))
+                verified = late_disposition.parse_classification_artifact(
+                    artifact_path, signature_path, expected_signer=signer, repository=reviewed.repository,
+                    delivery_issue_number=delivery_issue, pull_request_number=reviewed.pull_request_number,
+                    head_sha=reviewed.head_sha, thread_id=raw["thread_id"],
+                )
+            authorized = verified.thread
+            if (
+                authority.loads_closed_json(verified.canonical_payload)["schema_version"] != "1.3"
+                or authorized.classification != "VALID_ACTIONABLE" or authorized.disposition != "CORRECTED_AND_VERIFIED"
+                or authorized.reply_count != 0 or authorized.reply_state_digest != fast_path.digest_json([])
+                or authorized.top_level_comment_node_id != thread["comments"][0]["node_id"]
+                or authorized.finding_body_digest != thread["comments"][0]["body_digest"]
+                or authorized.is_resolved != thread["is_resolved"] or authorized.is_outdated != thread["is_outdated"]
+            ):
+                raise ValueError("historical classification does not bind the current thread")
+        except (KeyError, TypeError, ValueError, OSError, late_disposition.LateDispositionError) as exc:
+            raise LifecycleOrchestrationError("historical predecessor correction is not authenticated") from exc
+        sources = (("THREAD_COMMENT", authorized.top_level_comment_node_id, authorized.finding_body_digest, authorized.thread_id),)
+        prepared["successor_findings"].append({
+            "sources": [{"kind": kind, "node_id": node, "digest": digest} for kind, node, digest, _thread in sources],
+            "classification_evidence": fast_path._seal_successor_classification(
+                repository=verified.repository, delivery_issue_number=verified.delivery_issue_number,
+                pull_request_number=verified.pull_request_number, head_sha=verified.head_sha,
+                finding_id=verified.finding_id, finding_evidence_digest=verified.finding_evidence_digest,
+                thread_id=authorized.thread_id, top_level_comment_node_id=authorized.top_level_comment_node_id,
+                finding_body_digest=authorized.finding_body_digest, reply_count=0,
+                is_resolved=authorized.is_resolved, is_outdated=authorized.is_outdated,
+                classification=authorized.classification, disposition=authorized.disposition,
+                technically_blocking=authorized.technically_blocking, technical_blockers=verified.technical_blockers,
+                classification_evidence_digest=verified.evidence_digest, source_bindings=sources,
+            ),
+        })
+    return prepared
+
+
+def _collision_scope(
+    item: Mapping[str, Any], *, observed: Any, resulting_head: str,
+    collision_reader: Callable[..., version_collision.VerifiedVersionCollision],
+) -> tuple[dict[str, Any], fast_path.StableFeedbackState, fast_path.VerifiedValidationEvidence]:
+    if collision_reader is not version_collision.authenticate_collision_source:
+        return _collision_scope_from_source(item, observed=observed, resulting_head=resulting_head,
+                                            collision_reader=collision_reader)
+    with version_collision._authenticated_source_checkout(
+        Path(item["repository_root"]), observed.lifecycle.head_sha, resulting_head,
+    ) as (root, main):
+        def read_collision(**arguments: Any) -> version_collision.VerifiedVersionCollision:
+            arguments.pop("repository_root")
+            return version_collision._seal_collision(version_collision._derive_collision_from_git(
+                root, protected_main=main, **arguments,
+            ))
+
+        return _collision_scope_from_source(
+            {**item, "repository_root": str(root)}, observed=observed, resulting_head=resulting_head,
+            collision_reader=read_collision,
+        )
+
+
+def _collision_scope_from_source(
+    item: Mapping[str, Any], *, observed: Any, resulting_head: str,
+    collision_reader: Callable[..., version_collision.VerifiedVersionCollision],
+) -> tuple[dict[str, Any], fast_path.StableFeedbackState, fast_path.VerifiedValidationEvidence]:
+    lifecycle = observed.lifecycle
+    _require_continuation_predecessor(lifecycle.state, lifecycle.head_sha, resulting_head)
+    reviewed = fast_path.verify_reviewed_state_evidence(item["reviewed_state_evidence"])
+    if (
+        reviewed.repository != lifecycle.repository or reviewed.pull_request_number != lifecycle.pull_request
+        or reviewed.head_sha != lifecycle.head_sha or reviewed.pr_state != "OPEN"
+    ):
+        raise LifecycleOrchestrationError("collision predecessor feedback differs from CURRENT")
+    root = Path(item["repository_root"]).resolve(strict=True)
+    sealed = collision_reader(
+        repository=lifecycle.repository, delivery_issue=lifecycle.delivery_issue,
+        pull_request=lifecycle.pull_request, predecessor_head=lifecycle.head_sha,
+        resulting_head=resulting_head, repository_root=root,
+    )
+    if not isinstance(sealed, version_collision.VerifiedVersionCollision):
+        raise LifecycleOrchestrationError("collision authority requires a verifier-sealed result")
+    collision = sealed.to_dict()
+    if any(collision.get(key) != value for key, value in {
+        "repository": lifecycle.repository, "delivery_issue": lifecycle.delivery_issue,
+        "pull_request": lifecycle.pull_request, "predecessor_head": lifecycle.head_sha,
+        "resulting_head": resulting_head, "trigger": version_collision.TRIGGER,
+    }.items()):
+        raise LifecycleOrchestrationError("collision authority differs from CURRENT source identity")
+    document = fast_path.normalize_exceptional_continuation_evidence(
+        item["continuation_document"], repository=lifecycle.repository, reviewed_state=reviewed,
+        validated_tree_sha=collision["resulting_tree"], eligibility_evidence=item["eligibility_evidence"],
+    )
+    state = lifecycle.state
+    projection = {
+        "unrestricted_reviews": state["unrestricted_review_count"],
+        "remediation_cycles": state["remediation_cycle_count"], "cycle_3": not state["cycle_3_absent"],
+        "draft": state["draft"], "ready": state["ready"], "ready_transition_count": state["ready_transition_count"],
+        "ready_history": state["ready_history"], "exceptional_recovery_count": state["exceptional_recovery_count"],
+        "exceptional_recovery_history": state["exceptional_recovery_history"],
+        "exceptional_continuation_predecessor_count": 0, "exceptional_continuation_successor_count": 1,
+    }
+    if (
+        document.get("schema_version") != "1.1" or document.get("trigger") != version_collision.TRIGGER
+        or document["delivery_issue_number"] != lifecycle.delivery_issue
+        or document["prior_ready_tree_sha"] != collision["predecessor_tree"]
+        or document["collision_digest"] != fast_path.digest_json(version_collision.validation_collision_projection(collision))
+        or document["lifecycle"] != projection
+    ):
+        raise LifecycleOrchestrationError("continuation evidence differs from authenticated collision")
+    source = _authenticate_continuation_commit(
+        root, lifecycle.repository, lifecycle.head_sha, resulting_head, document["expected_signer"],
+    )
+    if source.tree_sha != collision["resulting_tree"]:
+        raise LifecycleOrchestrationError("collision successor tree differs from signed source")
+    safety = _authenticate_collision_predecessor_safety(
+        item["predecessor_safety_evidence"], reviewed=reviewed, delivery_issue=lifecycle.delivery_issue,
+    )
+    fast_path.verify_clean_feedback_gate(reviewed, safety)
+    raw_registry = authority.loads_closed_json(
+        bootstrap_source_admission._read_protected_main_registry(collision["protected_main"])
+    )
+    entries = [entry for entry in raw_registry.get("repositories", [])
+               if isinstance(entry, dict) and entry.get("repository") == lifecycle.repository]
+    if len(entries) != 1:
+        raise LifecycleOrchestrationError("collision validation has no unique accepted registry")
+    registry = fast_path.validation_registry_projection(entries[0])
+    trailer = publication._run_git(root, ["show", "-s",
+        "--format=%(trailers:key=SecPal-Validation-Receipt,valueonly,separator=%x00)", resulting_head])
+    if trailer.returncode != 0 or len(trailer.stdout) > 256:
+        raise LifecycleOrchestrationError("collision signed validation receipt is unavailable")
+    receipt_digest = trailer.stdout.decode("ascii").strip()
+    if re.fullmatch(r"[0-9a-f]{64}", receipt_digest) is None:
+        raise LifecycleOrchestrationError("collision signed validation receipt is absent or ambiguous")
+    attestation = item["validation_attestation"]
+    validation = fast_path.verify_validation_attestation(
+        attestation, repository=lifecycle.repository, head_sha=resulting_head,
+        registry=registry, command_set=registry["validation"], reviewed_state=reviewed,
+        commit_parent_sha=lifecycle.head_sha, commit_tree_sha=source.tree_sha,
+        commit_validation_receipt_digest=receipt_digest, delivery_issue_number=lifecycle.delivery_issue,
+    )
+    if attestation.get("exceptional_continuation_evidence_digest") != fast_path.digest_json(document):
+        raise LifecycleOrchestrationError("collision validation does not bind continuation evidence")
+    scope = {
+        "trigger": version_collision.TRIGGER, "pull_request": lifecycle.pull_request,
+        "predecessor_head_sha": lifecycle.head_sha, "resulting_head_sha": resulting_head,
+        "collision": collision, "reviewed_state_digest": reviewed.state_digest,
+        "stable_state_digest": reviewed.state_digest, "reviewed_feedback_digest": reviewed.feedback_digest,
+        "predecessor_safety_digest": fast_path.digest_json(item["predecessor_safety_evidence"]),
+        "continuation_evidence_digest": fast_path.digest_json(document),
+        "validation_attestation_digest": attestation["attestation_digest"],
+        "validation_receipt_digest": receipt_digest,
+    }
+    return scope, reviewed, validation
+
+
+def issue_collision_continuation_authorization(
+    *, repository: str, delivery_issue: int, authorization_id: str,
+    reason: str, resulting_head: str, evidence: Mapping[str, Any],
+) -> bytes:
+    """Issue existing-family user authority after fixed live and source acquisition."""
+
+    from . import lifecycle_execution
+
+    item = _collision_request(evidence)
+    if item["successor_safety_evidence"] is not None:
+        raise LifecycleOrchestrationError("collision authorization must precede successor publication")
+    observed, lifecycle, _ = _authenticated_current(repository, delivery_issue, publication.verify_current_lifecycle_authority)
+    live = _capture_current_stable_feedback(repository, lifecycle.pull_request)
+    scope, reviewed, _ = _collision_scope(
+        item, observed=observed, resulting_head=_oid(resulting_head, "collision successor"),
+        collision_reader=version_collision.authenticate_collision_source,
+    )
+    if live.to_dict() != reviewed.to_dict() or item["continuation_document"]["authorization_id"] != authorization_id:
+        raise LifecycleOrchestrationError("collision authorization differs from exact live predecessor")
+    actual_pr = lifecycle_execution._read_live_github(repository, lifecycle.pull_request)
+    if (
+        actual_pr.repository != repository or actual_pr.pull_request != lifecycle.pull_request
+        or actual_pr.head_sha != lifecycle.head_sha or actual_pr.state != "OPEN" or actual_pr.draft is not False
+    ):
+        raise LifecycleOrchestrationError("collision authorization requires the exact live Ready predecessor")
+    final = publication.verify_current_lifecycle_authority(repository, delivery_issue)
+    if (
+        final.publication_oid != observed.publication_oid
+        or final.publication_digest != observed.publication_digest
+        or _capture_current_stable_feedback(repository, lifecycle.pull_request).to_dict() != live.to_dict()
+        or version_collision._observe_main() != scope["collision"]["protected_main"]
+    ):
+        raise LifecycleOrchestrationError("collision predecessor changed before authorization signing")
+    policy = authority._load_lifecycle_trust_policy(repository)
+    identity, signer = lifecycle_execution._policy_role_signer(
+        policy, policy.transition_signer_identities, "transition signer role", allow_routine_default=True,
+    )
+    result = create_user_authorization(
+        authorization_id=authorization_id, repository=repository, delivery_issue=delivery_issue,
+        lifecycle=lifecycle, publication_oid=observed.publication_oid,
+        publication_digest=observed.publication_digest, operation="EXCEPTIONAL_CONTINUATION",
+        reason=reason, scope=scope, signer_identity=identity, signer=signer,
+    )
+    _verify_user_authorization(result, observed, lifecycle)
+    return result
+
+
+def publish_collision_continuation(
+    repository: str, delivery_issue: int, request: Mapping[str, Any],
+) -> publication.VerifiedLifecyclePublication:
+    """Publish one admitted existing transition; no PR or thread mutation is performed."""
+
+    from . import lifecycle_execution
+
+    item = _closed_request(request)
+    if item.get("event_kind") != "CONTINUATION_COMMIT_PUSHED":
+        raise LifecycleOrchestrationError("collision publication requires the continuation event")
+    _collision_request(item.get("continuation_evidence"))
+    observed = publication.verify_current_lifecycle_authority(repository, delivery_issue)
+    validation: list[tuple[fast_path.VerifiedValidationEvidence, str]] = []
+    decision = _orchestrate_event(
+        repository, delivery_issue, item, current_reader=lambda *_args: observed,
+        _collision_validation_output=validation,
+    )
+    if decision.lifecycle_transition != "EXCEPTIONAL_CONTINUATION" or len(validation) != 1:
+        raise LifecycleOrchestrationError("collision publication has no complete admitted transition")
+    authorization = _verify_user_authorization(item["authorization"], observed, observed.lifecycle)
+    signers = lifecycle_execution._production_signing_authorities(repository, authorization["signer_identity"])
+    successor = lifecycle_execution._append_successor_evidence(
+        observed, authorization, signers, resulting_head_sha=item["head_sha"], current_head_evidence=validation[0][0],
+    )
+    current = publication.verify_current_lifecycle_authority(repository, delivery_issue)
+    actual_pr = lifecycle_execution._read_live_github(repository, observed.lifecycle.pull_request)
+    if (
+        current.publication_oid != observed.publication_oid or current.publication_digest != observed.publication_digest
+        or actual_pr.repository != repository or actual_pr.pull_request != observed.lifecycle.pull_request
+        or actual_pr.head_sha != item["head_sha"] or actual_pr.state != "OPEN" or actual_pr.draft is not False
+        or version_collision._observe_main() != authorization["scope"]["collision"]["protected_main"]
+        or _capture_current_stable_feedback(repository, observed.lifecycle.pull_request).state_digest != validation[0][1]
+    ):
+        raise LifecycleOrchestrationError("collision publication predecessor or live Ready successor drifted")
+    published = publication.advance_current_terminal(
+        successor, signer_identity=signers.publication_identity, signer=signers.publication_signer,
+    )
+    readback = publication.verify_current_lifecycle_authority(repository, delivery_issue)
+    if (
+        readback.publication_oid != published.publication_oid or readback.publication_digest != published.publication_digest
+        or readback.lifecycle.head_sha != item["head_sha"]
+        or readback.lifecycle.state["exceptional_continuation_count"] != 1
+    ):
+        raise LifecycleOrchestrationError("collision publication readback is not the exact successor")
+    return readback
+
+
 def _authorized_finding_ids(value: Any) -> list[str]:
     scope = value.get("scope") if isinstance(value, Mapping) else None
     finding_ids = scope.get("finding_ids") if isinstance(scope, Mapping) else None
@@ -1549,6 +1853,8 @@ def _orchestrate_event(
     feedback_reader: Callable[
         [str, int], fast_path.StableFeedbackState
     ] = _capture_current_stable_feedback,
+    collision_reader: Callable[..., version_collision.VerifiedVersionCollision] = version_collision.authenticate_collision_source,
+    _collision_validation_output: list[tuple[fast_path.VerifiedValidationEvidence, str]] | None = None,
 ) -> LifecycleDecision:
     """Authenticate CURRENT state and select one bounded, non-recursive action."""
 
@@ -1746,20 +2052,48 @@ def _orchestrate_event(
             raise LifecycleOrchestrationError(
                 "continuation cannot carry caller-classified feedback"
             )
-        if (
-            state["ready"] is not True
-            or state["draft"] is not False
-            or request_head == lifecycle.head_sha
-            or state["unrestricted_review_count"]
-            != authority.MAX_UNRESTRICTED_REVIEWS
-            or state["remediation_cycle_count"] != authority.MAX_REMEDIATION_CYCLES
-            or state["exceptional_recovery_count"]
-            != authority.MAX_EXCEPTIONAL_RECOVERIES
-            or state["exceptional_continuation_count"] != 0
-            or state["cycle_3_absent"] is not True
-        ):
-            raise LifecycleOrchestrationError(
-                "exceptional continuation requires the exact exhausted Ready predecessor"
+        _require_continuation_predecessor(state, lifecycle.head_sha, request_head)
+        if isinstance(continuation_evidence, Mapping) and continuation_evidence.get("trigger") == version_collision.TRIGGER:
+            collision_item = _collision_request(continuation_evidence)
+            verified_authorization = authorization_verifier(authorization_value, observed, lifecycle)
+            try:
+                scope, reviewed, validation = _collision_scope(
+                    collision_item, observed=observed, resulting_head=request_head,
+                    collision_reader=collision_reader,
+                )
+                if collision_item["continuation_document"]["authorization_id"] != verified_authorization.get("authorization_id"):
+                    raise LifecycleOrchestrationError("collision continuation authorization identity changed")
+                authorization = _authorization(
+                    authorization_value, event_id=event_id, operation="EXCEPTIONAL_CONTINUATION",
+                    expected_scope=scope, observed=observed, lifecycle=lifecycle,
+                    verifier=authorization_verifier, verified_item=verified_authorization,
+                )
+                current = feedback_reader(repository, lifecycle.pull_request)
+                successor = _authenticate_successor_safety_evidence(
+                    collision_item["successor_safety_evidence"], repository=repository,
+                    delivery_issue=delivery_issue, pull_request=lifecycle.pull_request,
+                    predecessor_state_digest=reviewed.state_digest, resulting_head_sha=request_head,
+                    resulting_state_digest=current.state_digest,
+                )
+                if successor is None or not any(
+                    isinstance(item, dict) and item.get("role") == "CODEX_SUMMARY_UPDATE"
+                    for item in successor["provider_transport"]
+                ):
+                    raise LifecycleOrchestrationError("collision continuation requires resulting-head providers")
+                fast_path.verify_collision_feedback_successor(
+                    reviewed, current, resulting_head_sha=request_head,
+                    successor_safety_evidence=successor,
+                )
+                _prove_transition_is_finite(state, "EXCEPTIONAL_CONTINUATION", event_id)
+            except (fast_path.SecurityBlocker, version_collision.VersionCollisionError, OSError, ValueError) as exc:
+                raise LifecycleOrchestrationError("collision continuation authentication failed") from exc
+            if _collision_validation_output is not None:
+                _collision_validation_output.append((validation, current.state_digest))
+            return _base_decision(
+                observed, lifecycle, state, lifecycle_transition="EXCEPTIONAL_CONTINUATION",
+                preserve_ready=True, resulting_head_sha=request_head, requires_fresh_head_evidence=True,
+                merge_ready=False, authorization_digest=authorization["authorization_digest"],
+                requires_authorization_publication=True,
             )
         findings = _verify_continuation_finding_authority(
             continuation_evidence,
