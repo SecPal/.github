@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-10 - Authenticate Large Diagnostic Recovery Sources
+
+**Fixed:**
+
+- Authenticate installed diagnostic Recovery Python sources by exact
+  protected-main path, mode, and Git blob identity, including sources larger
+  than the generic 64 KiB external-evidence transport bound.
+- Reuse the existing exact-source Git hashing boundary while preserving the
+  external transport limit and all existing Exceptional Recovery semantics.
+
 ## 2026-09-09 - Authenticate Diagnostic Exceptional Recovery
 
 **Fixed:**
