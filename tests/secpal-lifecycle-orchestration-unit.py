@@ -774,6 +774,40 @@ class CollisionCompositionFixture:
 
 
 class LifecycleOrchestrationTests(TestCase):
+    def test_collision_python_test_tokens_require_inert_expectation_context(self) -> None:
+        from scripts.secpal_pr_review import version_collision
+
+        rejected = (
+            b'class Tests(TestCase):\n    def test_value(self):\n        if "1.2" == "1.3":\n            dangerous()\n',
+            b'class Tests(TestCase):\n    def test_value(self):\n        allowed = "1.2" == current\n',
+            b'class Tests(TestCase):\n    def test_value(self):\n        result = transform("1.2")\n',
+            b'class Tests(TestCase):\n    def test_value(self):\n        expected = "1.2"\n',
+        )
+        for source in rejected:
+            with self.subTest(source=source):
+                offsets = tuple(pair[0] for pair in version_collision.verify_blob_renumber(
+                    source, source.replace(b"1.2", b"1.3"), "1.2", "1.3",
+                ))
+                with self.assertRaisesRegex(
+                    version_collision.VersionCollisionError,
+                    "test version token",
+                ):
+                    version_collision._verify_python_test_version_tokens(
+                        source, offsets, "1.2",
+                    )
+
+        for source in (
+            b'from unittest import TestCase\nclass Tests(TestCase):\n    def test_value(self):\n        self.assertEqual(current, "1.2")\n',
+            b'from unittest import TestCase\nclass Tests(TestCase):\n    def test_value(self):\n        # expected 1.2\n        self.assertTrue(current)\n',
+        ):
+            with self.subTest(source=source):
+                offsets = tuple(pair[0] for pair in version_collision.verify_blob_renumber(
+                    source, source.replace(b"1.2", b"1.3"), "1.2", "1.3",
+                ))
+                version_collision._verify_python_test_version_tokens(
+                    source, offsets, "1.2",
+                )
+
     def test_collision_python_rejects_interpolated_version_expressions(self) -> None:
         from scripts.secpal_pr_review import version_collision
 
@@ -1518,6 +1552,59 @@ def create_ready_integration_attestation(normalized, eligibility_bound):
                     if key != "source_delta_digest"
                 }),
             )
+
+            def test_tree(blob: bytes, name: str = "test_schema.py") -> str:
+                file_blob = git("hash-object", "-w", "--stdin", data=blob).decode()
+                tests = tree([("100644", file_blob, name)])
+                return git(
+                    "mktree", "-z",
+                    data=f"040000 tree {tests}\ttests\0".encode(),
+                ).decode()
+
+            executable_before = (
+                b'from unittest import TestCase\nclass Tests(TestCase):\n'
+                b'    def test_version(self):\n'
+                b'        if "1.2" == "1.3":\n            dangerous()\n'
+            )
+            executable_after = executable_before.replace(b'"1.2"', b'"1.3"', 1)
+            with self.assertRaisesRegex(
+                version_collision.VersionCollisionError,
+                "test version token",
+            ):
+                version_collision.verify_tree_renumber(
+                    root, test_tree(executable_before), test_tree(executable_after),
+                    occupied_version="1.2", free_version="1.3",
+                    source_scope=frozenset({"tests/test_schema.py"}),
+                    authorized_paths=("tests/test_schema.py",),
+                )
+
+            expectation_before = (
+                b'from unittest import TestCase\nclass Tests(TestCase):\n'
+                b'    def test_version(self):\n'
+                b'        self.assertEqual(current, "1.2")\n'
+            )
+            expectation_after = expectation_before.replace(b'"1.2"', b'"1.3"')
+            test_evidence = version_collision.verify_tree_renumber(
+                root, test_tree(expectation_before), test_tree(expectation_after),
+                occupied_version="1.2", free_version="1.3",
+                source_scope=frozenset({"tests/test_schema.py"}),
+                authorized_paths=("tests/test_schema.py",),
+            )
+            self.assertEqual(test_evidence["changed_paths"], ["tests/test_schema.py"])
+
+            with self.assertRaisesRegex(
+                version_collision.VersionCollisionError,
+                "structurally inert profile",
+            ):
+                version_collision.verify_tree_renumber(
+                    root,
+                    test_tree(b'if [ "1.2" = "1.3" ]; then dangerous; fi\n', "test.sh"),
+                    test_tree(b'if [ "1.3" = "1.3" ]; then dangerous; fi\n', "test.sh"),
+                    occupied_version="1.2", free_version="1.3",
+                    source_scope=frozenset({"tests/test.sh"}),
+                    authorized_paths=("tests/test.sh",),
+                )
+
             for resulting_tree, scope, paths in (
                 (successor, frozenset(), ("schema.py",)),
                 (successor, frozenset({"schema.py"}), ()),

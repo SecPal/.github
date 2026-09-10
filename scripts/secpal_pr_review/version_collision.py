@@ -35,6 +35,23 @@ MAX_IMPORTED_BYTES = 8 * 1024 * 1024
 _VERSION = re.compile(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})", re.ASCII)
 _VERSION_BYTES = frozenset(b"0123456789.")
 _OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", re.ASCII)
+_INERT_TEST_ASSERTIONS = frozenset(
+    {
+        "assertCountEqual",
+        "assertDictEqual",
+        "assertEqual",
+        "assertIn",
+        "assertListEqual",
+        "assertMultiLineEqual",
+        "assertNotEqual",
+        "assertNotIn",
+        "assertNotRegex",
+        "assertRegex",
+        "assertSequenceEqual",
+        "assertSetEqual",
+        "assertTupleEqual",
+    }
+)
 SOURCE_PATH = "scripts/secpal_pr_review/fast_path.py"
 FAMILY_KIND = "TWO_PARENT_READY_INTEGRATION"
 TRIGGER = "IMMUTABLE_EVIDENCE_VERSION_COLLISION"
@@ -149,6 +166,136 @@ def _verify_python_version_tokens(blob: bytes, offsets: tuple[int, ...], version
         raise VersionCollisionError("Python version token replacement changes executable syntax")
 
 
+def _verify_python_test_version_tokens(
+    blob: bytes, offsets: tuple[int, ...], version: str,
+) -> None:
+    """Admit only comments and structurally inert unittest expectations."""
+
+    text = blob.decode("utf-8", errors="strict")
+    lines = text.splitlines(keepends=True)
+    starts = [0]
+    for line in lines:
+        starts.append(starts[-1] + len(line.encode("utf-8")))
+
+    def byte_offset(position: tuple[int, int]) -> int:
+        row, column = position
+        return starts[row - 1] + len(lines[row - 1][:column].encode("utf-8"))
+
+    try:
+        module = ast.parse(text)
+        comments = [
+            (byte_offset(token.start), byte_offset(token.end))
+            for token in tokenize.generate_tokens(io.StringIO(text).readline)
+            if token.type == tokenize.COMMENT
+        ]
+    except (tokenize.TokenError, IndentationError, SyntaxError, IndexError) as exc:
+        raise VersionCollisionError("Python test version token source is malformed") from exc
+
+    parents = {
+        child: parent
+        for parent in ast.walk(module)
+        for child in ast.iter_child_nodes(parent)
+    }
+
+    imported_testcase_names = {
+        alias.asname or alias.name
+        for node in module.body
+        if isinstance(node, ast.ImportFrom) and node.module == "unittest"
+        for alias in node.names
+        if alias.name == "TestCase"
+    }
+    imported_unittest_names = {
+        alias.asname or alias.name
+        for node in module.body
+        if isinstance(node, ast.Import)
+        for alias in node.names
+        if alias.name == "unittest"
+    }
+
+    def testcase_class(node: ast.ClassDef) -> bool:
+        for base in node.bases:
+            if isinstance(base, ast.Name) and base.id in imported_testcase_names:
+                return True
+            if (
+                isinstance(base, ast.Attribute)
+                and base.attr == "TestCase"
+                and isinstance(base.value, ast.Name)
+                and base.value.id in imported_unittest_names
+            ):
+                return True
+        return False
+
+    def assignment_targets(node: ast.AST) -> tuple[ast.AST, ...]:
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            return tuple(targets)
+        return ()
+
+    def inert_expectation(node: ast.Constant) -> bool:
+        current: ast.AST = node
+        while isinstance(parents.get(current), (ast.List, ast.Tuple, ast.Set, ast.Dict)):
+            current = parents[current]
+        call = parents.get(current)
+        if (
+            not isinstance(call, ast.Call)
+            or not isinstance(call.func, ast.Attribute)
+            or call.func.attr not in _INERT_TEST_ASSERTIONS
+            or not isinstance(call.func.value, ast.Name)
+            or call.func.value.id != "self"
+            or not isinstance(parents.get(call), ast.Expr)
+        ):
+            return False
+        statement = parents[call]
+        function = parents.get(statement)
+        if (
+            not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
+            or not function.name.startswith("test_")
+            or not function.args.args
+            or function.args.args[0].arg != "self"
+        ):
+            return False
+        owner = parents.get(function)
+        if not isinstance(owner, ast.ClassDef) or not testcase_class(owner):
+            return False
+        forbidden_methods = {call.func.attr, "__getattr__", "__getattribute__"}
+        if any(
+            isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and item.name in forbidden_methods
+            for item in owner.body
+        ):
+            return False
+        return not any(
+            isinstance(target, ast.Attribute)
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "self"
+            and target.attr == call.func.attr
+            for item in ast.walk(function)
+            for target in assignment_targets(item)
+        )
+
+    safe_spans = list(comments)
+    for node in ast.walk(module):
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and hasattr(node, "end_lineno")
+            and inert_expectation(node)
+        ):
+            safe_spans.append(
+                (
+                    starts[node.lineno - 1] + node.col_offset,
+                    starts[node.end_lineno - 1] + node.end_col_offset,
+                )
+            )
+    if any(
+        not any(start <= offset and offset + len(version) <= end for start, end in safe_spans)
+        for offset in offsets
+    ):
+        raise VersionCollisionError(
+            "Python test version token is not a structurally inert expectation"
+        )
+
+
 def _oid(value: str) -> str:
     if not isinstance(value, str) or _OID.fullmatch(value) is None:
         raise VersionCollisionError("source object identity is malformed")
@@ -247,9 +394,20 @@ proves a collision or authorizes a lifecycle transition.
                 raise VersionCollisionError("changed blob size differs from observed object")
             blobs.append(data)
         positions = verify_blob_renumber(blobs[0], blobs[1], occupied_version, free_version)
+        if path.startswith("tests/") and not path.endswith(".py"):
+            raise VersionCollisionError(
+                "test version token source has no structurally inert profile"
+            )
         if path.endswith(".py"):
             _verify_python_version_tokens(blobs[0], tuple(pair[0] for pair in positions), occupied_version)
             _verify_python_version_tokens(blobs[1], tuple(pair[1] for pair in positions), free_version)
+            if path.startswith("tests/"):
+                _verify_python_test_version_tokens(
+                    blobs[0], tuple(pair[0] for pair in positions), occupied_version,
+                )
+                _verify_python_test_version_tokens(
+                    blobs[1], tuple(pair[1] for pair in positions), free_version,
+                )
         total_replacements += len(positions)
         if total_replacements > MAX_REPLACEMENTS:
             raise VersionCollisionError("source delta token count exceeds the bound")
