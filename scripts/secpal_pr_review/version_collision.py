@@ -136,7 +136,7 @@ def _verify_python_version_tokens(blob: bytes, offsets: tuple[int, ...], version
         interpolated = [
             (starts[node.lineno - 1] + node.col_offset,
              starts[node.end_lineno - 1] + node.end_col_offset)
-            for node in ast.walk(ast.parse(blob)) if isinstance(node, ast.JoinedStr)
+            for node in ast.walk(ast.parse(blob.decode("utf-8", errors="strict"))) if isinstance(node, ast.JoinedStr)
         ]
         if any(start <= offset < end for offset in offsets for start, end in interpolated):
             raise VersionCollisionError("Python version token replacement enters an interpolated string")
