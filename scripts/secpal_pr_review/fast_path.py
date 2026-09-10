@@ -1410,10 +1410,43 @@ def normalize_exceptional_continuation_evidence(
                 "exceptional continuation re-anchor identity is invalid or stale"
             )
         if reanchor_authority is not None:
-            authority_binding = {
-                field: copy.deepcopy(getattr(reanchor_authority, field, None))
-                for field in EXCEPTIONAL_CONTINUATION_REANCHOR_FIELDS
-            }
+            try:
+                authority_binding = {
+                    "evidence_digest": reanchor_authority.evidence_digest,
+                    "original_pull_request": reanchor_authority.original_pull_request,
+                    "replacement_pull_request": (
+                        reanchor_authority.replacement_pull_request
+                    ),
+                    "rejected_candidate_head_sha": (
+                        reanchor_authority.rejected_candidate_head_sha
+                    ),
+                    "rejected_candidate_tree_sha": (
+                        reanchor_authority.rejected_candidate_tree_sha
+                    ),
+                    "rejected_validation_receipt_digest": (
+                        reanchor_authority.rejected_validation_receipt_digest
+                    ),
+                    "rejected_final_attestation_digest": (
+                        reanchor_authority.rejected_final_attestation_digest
+                    ),
+                    "rejected_state_digest": reanchor_authority.rejected_state_digest,
+                    "replacement_state_digest": (
+                        reanchor_authority.replacement_state_digest
+                    ),
+                    "material_finding_ids": copy.deepcopy(
+                        reanchor_authority.material_finding_ids
+                    ),
+                    "material_thread_ids": copy.deepcopy(
+                        reanchor_authority.material_thread_ids
+                    ),
+                    "finding_source_digest": (
+                        reanchor_authority.finding_source_digest
+                    ),
+                }
+            except AttributeError as exc:
+                raise SecurityBlocker(
+                    "exceptional continuation re-anchor authority is malformed"
+                ) from exc
             authority_binding["material_finding_ids"] = list(
                 authority_binding["material_finding_ids"] or []
             )
