@@ -942,7 +942,7 @@ class LifecycleOrchestrationTests(TestCase):
             },
         }
 
-        def decide(candidate):
+        def decide(candidate, *, reanchor_authority=reanchor, source_tree="e" * 40):
             with mock.patch.object(
                 fast_path, "verify_reanchored_stable_feedback_successor"
             ):
@@ -953,9 +953,9 @@ class LifecycleOrchestrationTests(TestCase):
                     current_reader=current_reader(lifecycle),
                     feedback_reader=lambda *_args: current,
                     authorization_verifier=fixture_authorization_verifier,
-                    reanchor_verifier=lambda *_args, **_kwargs: reanchor,
+                    reanchor_verifier=lambda *_args, **_kwargs: reanchor_authority,
                     source_commit_verifier=lambda *_args, **_kwargs: SimpleNamespace(
-                        tree_sha="e" * 40,
+                        tree_sha=source_tree,
                     ),
                 )
 
@@ -985,6 +985,30 @@ class LifecycleOrchestrationTests(TestCase):
                 orchestration.LifecycleOrchestrationError
             ):
                 decide(changed)
+
+        rejected_head_reused = orchestration.VerifiedRejectedContinuationReanchor(
+            **{
+                **reanchor.__dict__,
+                "rejected_candidate_head_sha": NEXT_HEAD,
+            }
+        )
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError,
+            "rejected Continuation candidate",
+        ):
+            decide(request, reanchor_authority=rejected_head_reused)
+
+        rejected_tree_reused = orchestration.VerifiedRejectedContinuationReanchor(
+            **{
+                **reanchor.__dict__,
+                "rejected_candidate_tree_sha": "e" * 40,
+            }
+        )
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError,
+            "rejected Continuation candidate",
+        ):
+            decide(request, reanchor_authority=rejected_tree_reused)
 
     def test_clean_replacement_feedback_cannot_use_historical_material_continuation_path(
         self,

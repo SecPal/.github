@@ -690,6 +690,13 @@ def _verify_continuation_finding_authority(
             continuation_tree_sha = _oid(
                 source.tree_sha, "re-anchored Continuation tree"
             )
+            if (
+                resulting_head_sha == reanchor.rejected_candidate_head_sha
+                or continuation_tree_sha == reanchor.rejected_candidate_tree_sha
+            ):
+                raise LifecycleOrchestrationError(
+                    "corrected source reuses the rejected Continuation candidate"
+                )
             finding_ids = list(reanchor.material_finding_ids)
             thread_ids = []
         else:
