@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-10 - Authenticate Large Diagnostic Recovery Sources
+
+**Fixed:**
+
+- Authenticate installed diagnostic Recovery Python sources by exact
+  protected-main path, mode, and Git blob identity, including sources larger
+  than the generic 64 KiB external-evidence transport bound.
+- Reuse the existing exact-source Git hashing boundary while preserving the
+  external transport limit and all existing Exceptional Recovery semantics.
+
 ## 2026-09-09 - Authenticate Immutable Version Collisions
 
 **Fixed:**
@@ -19,6 +29,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 - Preserve historical material-feedback continuations, validation and provider
   safety, Ready-source recovery and thread-authority isolation; allocate no
   Ready-integration evidence or attestation version.
+
+## 2026-09-09 - Authenticate Diagnostic Exceptional Recovery
+
+**Fixed:**
+
+- Admit one independently reproduced material security defect into the existing
+  one-use Exceptional Recovery slot without manufacturing a review thread.
+- Bind exact protected lifecycle authority, prior and correction trees, a
+  maintained deterministic reproduction profile, fail-first and correction
+  results, signed one-use scope, and sole-parent topology while granting no
+  thread-resolution authority.
 
 ## 2026-09-09 - Compose Historical Ready Source With Detached Thread Authority
 

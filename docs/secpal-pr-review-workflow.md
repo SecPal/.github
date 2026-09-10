@@ -1113,6 +1113,27 @@ receipt and final attestation carry its digest. This path cannot reset the
 finite lifecycle, manufacture Cycle 3, transition Ready state, or authorize a
 recursive recovery.
 
+Schema 1.1 is the mutually exclusive diagnostic-backed form of that same
+Recovery family. It is available only for the maintained
+`python-version-token-encoding/v1` material-security profile and independently
+reproduces the exact defect against the authenticated prior Ready tree before
+proving the sole permitted correction on the proposed tree. The artifact binds
+CURRENT publication and lifecycle authority, exact head/tree identities,
+finding and canonical reproduction-evidence digests, deterministic fixture and
+command identity, fail-first and correction results, exhausted finite counters,
+preserved Ready state, and an explicit empty thread list. Its signed one-use
+authorization additionally binds the exact sole-parent successor. Provider
+failure is not diagnostic authority, and this form grants no thread-resolution,
+review-request, Ready/Draft, merge, or unrelated source-write authority. Schema
+1.0 thread-backed bytes and semantics remain unchanged.
+
+Maintained diagnostic Recovery code is authenticated as the exact
+`scripts/*.py` inventory from one immutable protected-main commit. Each
+installed regular file must preserve its accepted mode and raw Git blob OID;
+symlinks, inventory drift, and substituted bytes fail closed. This reuses the
+exact-source Git hashing boundary, so authenticated repository blobs do not pass
+through or weaken the generic 64 KiB external-evidence transport bound.
+
 The one post-Recovery source-changing sibling is
 `READY_EXCEPTIONAL_CONTINUATION`. It binds the exact prior Ready head/tree,
 frozen continuation tree, current-head material findings/threads, stable

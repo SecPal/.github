@@ -9,10 +9,12 @@ import copy
 from dataclasses import replace
 import hashlib
 import inspect
+import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest import TestCase, main
 from unittest.mock import patch
@@ -1372,6 +1374,408 @@ class ExceptionalContinuationAuthorityTests(TestCase):
         )
         self.assertTrue(after["ready"])
         self.assertTrue(after["cycle_3_absent"])
+
+
+class DiagnosticRecoveryTests(TestCase):
+    source = b'''def _verify_python_version_tokens(blob: bytes, offsets: tuple[int, ...], version: str) -> None:
+    lines = blob.decode("utf-8", errors="strict").splitlines(keepends=True)
+    starts = [0]
+    for line in lines:
+        starts.append(starts[-1] + len(line.encode("utf-8")))
+
+    def byte_offset(position: tuple[int, int]) -> int:
+        row, column = position
+        return starts[row - 1] + len(lines[row - 1][:column].encode("utf-8"))
+
+    spans = []
+    try:
+        interpolated = [
+            (starts[node.lineno - 1] + node.col_offset,
+             starts[node.end_lineno - 1] + node.end_col_offset)
+            for node in ast.walk(ast.parse(blob)) if isinstance(node, ast.JoinedStr)
+        ]
+        if any(start <= offset < end for offset in offsets for start, end in interpolated):
+            raise VersionCollisionError("Python version token replacement enters an interpolated string")
+        for token in tokenize.generate_tokens(io.StringIO(blob.decode("utf-8")).readline):
+            if token.type in {tokenize.STRING, tokenize.COMMENT}:
+                spans.append((byte_offset(token.start), byte_offset(token.end)))
+    except (tokenize.TokenError, IndentationError, SyntaxError, IndexError) as exc:
+        raise VersionCollisionError("Python version token source is malformed") from exc
+    if any(not any(start <= offset and offset + len(version) <= end for start, end in spans) for offset in offsets):
+        raise VersionCollisionError("Python version token replacement changes executable syntax")
+'''
+
+    recovery_path = Path("scripts/secpal_pr_review/exceptional_recovery.py")
+    large_path = Path("scripts/secpal-pr-review-actions.py")
+
+    def create_maintained_fixture(
+        self, fixture: Path,
+    ) -> tuple[Path, Path, str]:
+        accepted = fixture / "accepted"
+        installed = fixture / "installed"
+        sources = {
+            self.recovery_path: b"# accepted Recovery authority\n",
+            self.large_path: b"# large accepted source\n"
+            + b"x = 1\n" * (70 * 1024 // 6),
+        }
+        for relative, content in sources.items():
+            for root in (accepted, installed):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+        subprocess.run(["git", "-C", str(accepted), "init", "--quiet"], check=True)
+        subprocess.run(["git", "-C", str(accepted), "add", "."], check=True)
+        subprocess.run(
+            [
+                "git", "-C", str(accepted), "-c", "user.name=Test",
+                "-c", "user.email=test@example.invalid", "commit", "--quiet",
+                "-m", "accepted maintained sources",
+            ],
+            check=True,
+        )
+        main_oid = subprocess.check_output(
+            ["git", "-C", str(accepted), "rev-parse", "HEAD"], text=True,
+        ).strip()
+        return accepted, installed, main_oid
+
+    def authenticate_fixture(
+        self,
+        accepted: Path,
+        installed: Path,
+        main_oid: str,
+        *,
+        branch_oid: str | None = None,
+        listing_transform: Any = None,
+    ) -> str:
+        from scripts.secpal_pr_review import exceptional_recovery as diagnostic
+
+        branch = authority.canonical_json_bytes(
+            {"protected": True, "commit": {"sha": branch_oid or main_oid}}
+        )
+        original_git = diagnostic.transport._git
+
+        def observed_git(root: Path, arguments: list[str], **keywords: Any) -> Any:
+            result = original_git(root, arguments, **keywords)
+            if listing_transform is not None and arguments[:4] == [
+                "ls-tree", "-rz", "-r", main_oid,
+            ]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=listing_transform(result.stdout),
+                    stderr=b"",
+                )
+            return result
+
+        with patch.object(
+            diagnostic, "__file__", str(installed / self.recovery_path),
+        ), patch.object(
+            diagnostic.transport, "PROTECTED_MAIN_REMOTE_URL", str(accepted),
+        ), patch.object(
+            diagnostic.transport, "_observe_protected_main", return_value=object(),
+        ), patch.object(
+            diagnostic.transport, "_normalize_protected_main",
+            return_value=SimpleNamespace(head_sha=main_oid),
+        ), patch.object(
+            diagnostic.transport, "_run_bootstrap_gh",
+            return_value=SimpleNamespace(returncode=0, stdout=branch, stderr=b""),
+        ), patch.object(diagnostic.transport, "_git", side_effect=observed_git):
+            return diagnostic.authenticate_maintained_code()
+
+    def test_large_accepted_main_maintained_source_authenticates_by_blob_identity(
+        self,
+    ) -> None:
+        from scripts.secpal_pr_review import exceptional_recovery as diagnostic
+
+        self.assertEqual(diagnostic.transport.MAXIMUM_EVIDENCE_BYTES, 64 * 1024)
+        with tempfile.TemporaryDirectory() as directory:
+            accepted, installed, main_oid = self.create_maintained_fixture(
+                Path(directory)
+            )
+            self.assertGreater(
+                (installed / self.large_path).stat().st_size,
+                diagnostic.transport.MAXIMUM_EVIDENCE_BYTES,
+            )
+            self.assertEqual(
+                self.authenticate_fixture(accepted, installed, main_oid), main_oid,
+            )
+
+    def test_maintained_source_inventory_and_installed_bytes_fail_closed(self) -> None:
+        from scripts.secpal_pr_review import exceptional_recovery as diagnostic
+
+        cases = (
+            "changed-bytes",
+            "missing-path",
+            "extra-path",
+            "wrong-mode",
+            "symlink",
+            "non-regular",
+            "candidate-recovery-substitution",
+        )
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                accepted, installed, main_oid = self.create_maintained_fixture(
+                    Path(directory)
+                )
+                target = installed / self.large_path
+                if case == "changed-bytes":
+                    target.write_bytes(b"substituted\n")
+                elif case == "missing-path":
+                    target.unlink()
+                elif case == "extra-path":
+                    (installed / "scripts/extra.py").write_text(
+                        "extra = True\n", encoding="utf-8"
+                    )
+                elif case == "wrong-mode":
+                    target.chmod(0o755)
+                elif case == "symlink":
+                    target.unlink()
+                    target.symlink_to(self.recovery_path.name)
+                elif case == "non-regular":
+                    target.unlink()
+                    os.mkfifo(target)
+                else:
+                    (installed / self.recovery_path).write_bytes(b"candidate authority\n")
+                with self.assertRaises(diagnostic.DiagnosticRecoveryError):
+                    self.authenticate_fixture(accepted, installed, main_oid)
+
+    def test_maintained_tree_metadata_and_protected_main_drift_fail_closed(self) -> None:
+        from scripts.secpal_pr_review import exceptional_recovery as diagnostic
+
+        def replace_metadata(index: int, replacement: str) -> Any:
+            def transform(listing: bytes) -> bytes:
+                records = listing.decode("utf-8").rstrip("\0").split("\0")
+                metadata, separator, relative = records[0].partition("\t")
+                fields = metadata.split()
+                fields[index] = replacement
+                records[0] = " ".join(fields) + separator + relative
+                return ("\0".join(records) + "\0").encode("utf-8")
+
+            return transform
+
+        cases = (
+            ("wrong-blob", replace_metadata(2, "f" * 40), None),
+            ("wrong-object-format", replace_metadata(2, "f" * 64), None),
+            ("wrong-mode", replace_metadata(0, "100600"), None),
+            ("non-blob", replace_metadata(1, "tree"), None),
+            ("unsafe-path", lambda value: value.replace(b"scripts/", b"scripts/../", 1), None),
+            ("protected-main-drift", None, "f" * 40),
+        )
+        for case, transform, branch_oid in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                accepted, installed, main_oid = self.create_maintained_fixture(
+                    Path(directory)
+                )
+                with self.assertRaises(diagnostic.DiagnosticRecoveryError):
+                    self.authenticate_fixture(
+                        accepted,
+                        installed,
+                        main_oid,
+                        branch_oid=branch_oid,
+                        listing_transform=transform,
+                    )
+
+    def test_exact_reproduction_and_correction_have_canonical_evidence(self) -> None:
+        from scripts.secpal_pr_review import exceptional_recovery as diagnostic
+
+        result = diagnostic.reproduce_security_diagnostic(self.source, self.source.replace(diagnostic.BEFORE, diagnostic.AFTER))
+        digest = result.pop("evidence_digest")
+        self.assertEqual(digest, authority.digest_json(result))
+        self.assertEqual(result["prior_result"], "EXECUTABLE_TOKEN_ACCEPTED")
+        self.assertEqual(result["correction_result"], "EXECUTABLE_TOKEN_REJECTED")
+        self.assertEqual(result["severity"], "MATERIAL_SECURITY")
+        self.assertNotIn("thread_ids", result)
+
+    def test_reproduction_rejects_uncorrected_and_unrelated_changes(self) -> None:
+        from scripts.secpal_pr_review import exceptional_recovery as diagnostic
+
+        corrected = self.source.replace(diagnostic.BEFORE, diagnostic.AFTER)
+        for proposed in (self.source, corrected + b"\nunrelated = True\n", corrected.replace(b"interpolated string", b"anything")):
+            with self.subTest(proposed=hashlib.sha256(proposed).hexdigest()), self.assertRaisesRegex(ValueError, "exact maintained source delta"):
+                diagnostic.reproduce_security_diagnostic(self.source, proposed)
+
+    def test_reproduction_refuses_substituted_function_and_no_fail_first(self) -> None:
+        from scripts.secpal_pr_review import exceptional_recovery as diagnostic
+
+        for prior in (self.source.replace(diagnostic.BEFORE, diagnostic.AFTER), self.source.replace(b"spans = []", b"spans = []; return")):
+            with self.subTest(prior=hashlib.sha256(prior).hexdigest()), self.assertRaisesRegex(ValueError, "profile"):
+                diagnostic.reproduce_security_diagnostic(prior, prior.replace(diagnostic.BEFORE, diagnostic.AFTER))
+
+    def test_substituted_fixture_cannot_establish_failure(self) -> None:
+        from scripts.secpal_pr_review import exceptional_recovery as diagnostic
+
+        with patch.object(diagnostic, "FIXTURE", b'value = f"{\'1.0\'}"\n'), self.assertRaisesRegex(ValueError, "fail-first"):
+            diagnostic.reproduce_security_diagnostic(self.source, self.source.replace(diagnostic.BEFORE, diagnostic.AFTER))
+
+    def test_encoding_reproduction_is_a_closed_maintained_profile(self) -> None:
+        from scripts.secpal_pr_review import exceptional_recovery
+
+        with self.assertRaisesRegex(ValueError, "profile"):
+            exceptional_recovery.reproduce_security_diagnostic(b"caller assertion", b"fixed")
+
+    def test_diagnostic_recovery_requires_exact_exhausted_ready_state(self) -> None:
+        from scripts.secpal_pr_review import exceptional_recovery
+
+        state = authority.initial_state()
+        with self.assertRaisesRegex(ValueError, "exhausted Ready"):
+            exceptional_recovery.require_diagnostic_recovery_state(state)
+
+    def exhausted_ready_state(self) -> dict[str, Any]:
+        state = authority.initial_state()
+        state.update(
+            {
+                "unrestricted_review_count": 1,
+                "remediation_cycle_count": 2,
+                "draft": False,
+                "ready": True,
+                "ready_transition_count": 1,
+                "ready_history": [
+                    {
+                        "sequence": 1,
+                        "transition_kind": "DRAFT_TO_READY",
+                        "event_authorization_digest": "1" * 64,
+                    }
+                ],
+            }
+        )
+        return state
+
+    def test_exact_exhausted_ready_state_is_required_without_cycle_three(self) -> None:
+        from scripts.secpal_pr_review import exceptional_recovery
+
+        expected = self.exhausted_ready_state()
+        self.assertEqual(
+            exceptional_recovery.require_diagnostic_recovery_state(expected),
+            expected,
+        )
+        mutations = (
+            ("review", "unrestricted_review_count", 0),
+            ("remediation", "remediation_cycle_count", 1),
+            ("recovery", "exceptional_recovery_count", 1),
+            ("continuation", "exceptional_continuation_count", 1),
+            ("cycle-three", "cycle_3_absent", False),
+            ("draft", "draft", True),
+            ("ready", "ready", False),
+            ("ready-count", "ready_transition_count", 2),
+        )
+        for label, field, value in mutations:
+            changed = copy.deepcopy(expected)
+            changed[field] = value
+            if field == "exceptional_recovery_count":
+                changed["exceptional_recovery_history"] = [
+                    {
+                        "sequence": 1,
+                        "transition_kind": "EXCEPTIONAL_RECOVERY",
+                        "event_authorization_digest": "2" * 64,
+                    }
+                ]
+            if field == "exceptional_continuation_count":
+                changed["exceptional_continuation_history"] = [
+                    {
+                        "sequence": 1,
+                        "transition_kind": "EXCEPTIONAL_CONTINUATION",
+                        "event_authorization_digest": "3" * 64,
+                    }
+                ]
+            with self.subTest(label=label), self.assertRaisesRegex(
+                ValueError, "exhausted Ready"
+            ):
+                exceptional_recovery.require_diagnostic_recovery_state(changed)
+
+    def test_authorization_scope_binds_successor_and_zero_thread_authority(self) -> None:
+        from scripts.secpal_pr_review import exceptional_recovery
+
+        evidence = {
+            "pull_request_number": 896,
+            "prior_ready_head_sha": "1" * 40,
+            "finding_ids": [exceptional_recovery.FINDING_ID],
+        }
+        scope = exceptional_recovery.authorization_scope(evidence, "2" * 40)
+        self.assertEqual(scope["resulting_head_sha"], "2" * 40)
+        self.assertEqual(scope["recovery_evidence"], evidence)
+        self.assertNotIn("thread_ids", scope)
+
+    def test_tree_profile_rejects_unrelated_delta_and_wrong_topology(self) -> None:
+        from scripts.secpal_pr_review import exceptional_recovery
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "config", "user.name", "Fixture"],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git", "-C", str(root), "config", "user.email",
+                    "fixture@example.invalid",
+                ],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git", "-C", str(root), "remote", "add", "origin",
+                    f"https://github.com/{REPOSITORY}.git",
+                ],
+                check=True,
+            )
+            source = root / exceptional_recovery.SOURCE_PATH
+            source.parent.mkdir(parents=True)
+            source.write_bytes(self.source)
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "commit", "-qm", "prior"],
+                check=True,
+            )
+            prior_head = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                check=True, capture_output=True, text=True,
+            ).stdout.strip()
+            prior_tree = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"],
+                check=True, capture_output=True, text=True,
+            ).stdout.strip()
+            source.write_bytes(
+                self.source.replace(exceptional_recovery.BEFORE, exceptional_recovery.AFTER)
+            )
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            proposed_tree = subprocess.run(
+                ["git", "-C", str(root), "write-tree"],
+                check=True, capture_output=True, text=True,
+            ).stdout.strip()
+            evidence = exceptional_recovery.reproduce_tree_diagnostic(
+                root, prior_tree, proposed_tree
+            )
+            self.assertEqual(evidence["finding_id"], exceptional_recovery.FINDING_ID)
+            subprocess.run(
+                ["git", "-C", str(root), "commit", "-qm", "recovery"],
+                check=True,
+            )
+            recovery_head = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                check=True, capture_output=True, text=True,
+            ).stdout.strip()
+            recovery = {
+                "repository": REPOSITORY,
+                "recovery_tree_sha": proposed_tree,
+                "prior_ready_head_sha": prior_head,
+            }
+            exceptional_recovery.require_successor(root, recovery, recovery_head)
+            recovery["prior_ready_head_sha"] = "0" * 40
+            with self.assertRaisesRegex(ValueError, "sole-parent"):
+                exceptional_recovery.require_successor(root, recovery, recovery_head)
+
+            (root / "unrelated.txt").write_text("unrelated\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "-C", str(root), "add", "unrelated.txt"], check=True
+            )
+            unrelated_tree = subprocess.run(
+                ["git", "-C", str(root), "write-tree"],
+                check=True, capture_output=True, text=True,
+            ).stdout.strip()
+            with self.assertRaisesRegex(ValueError, "unrelated"):
+                exceptional_recovery.reproduce_tree_diagnostic(
+                    root, prior_tree, unrelated_tree
+                )
 
 
 if __name__ == "__main__":
