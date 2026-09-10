@@ -14,6 +14,7 @@ import tokenize
 from typing import Any
 
 from . import bootstrap_source_admission as transport
+from . import exact_source_safety
 from . import lifecycle_authority as authority
 
 
@@ -217,24 +218,27 @@ def authenticate_maintained_code() -> str:
         listing = transport._git(
             root, ["ls-tree", "-rz", "-r", facts.head_sha, "--", "scripts"]
         ).stdout
-        maintained_paths = set()
-        for entry in listing.rstrip(b"\0").split(b"\0"):
-            metadata, relative = entry.decode("utf-8", errors="strict").split("\t")
-            if not relative.endswith(".py"):
-                continue
-            mode, kind, blob_oid = metadata.split()
-            path = installed / relative
-            if (
-                mode not in {"100644", "100755"}
-                or kind != "blob"
-                or path.is_symlink()
-                or not path.is_file()
-            ):
-                raise DiagnosticRecoveryError("diagnostic candidate cannot supply maintained code")
-            expected = transport._git(root, ["cat-file", "blob", blob_oid]).stdout
-            if path.read_bytes() != expected:
-                raise DiagnosticRecoveryError("diagnostic candidate cannot authenticate its own recovery")
-            maintained_paths.add(relative)
+        try:
+            entries = listing.decode("utf-8", errors="strict").rstrip("\0").split("\0")
+            maintained_entries = [
+                entry for entry in entries if entry.partition("\t")[2].endswith(".py")
+            ]
+            maintained_listing = "\0".join(maintained_entries) + (
+                "\0" if maintained_entries else ""
+            )
+            exact_source_safety.verify_source_bytes(
+                installed,
+                facts.head_sha,
+                hash_repository_root=root,
+                expected_listing=maintained_listing,
+            )
+            maintained_paths = {
+                entry.partition("\t")[2] for entry in maintained_entries
+            }
+        except (UnicodeDecodeError, authority.LifecycleAuthorityError) as exc:
+            raise DiagnosticRecoveryError(
+                "diagnostic candidate cannot authenticate its own recovery"
+            ) from exc
         installed_paths = {
             path.relative_to(installed).as_posix()
             for path in (installed / "scripts").rglob("*.py")

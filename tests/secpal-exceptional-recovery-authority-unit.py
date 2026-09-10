@@ -9,10 +9,12 @@ import copy
 from dataclasses import replace
 import hashlib
 import inspect
+import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest import TestCase, main
 from unittest.mock import patch
@@ -1402,6 +1404,175 @@ class DiagnosticRecoveryTests(TestCase):
     if any(not any(start <= offset and offset + len(version) <= end for start, end in spans) for offset in offsets):
         raise VersionCollisionError("Python version token replacement changes executable syntax")
 '''
+
+    recovery_path = Path("scripts/secpal_pr_review/exceptional_recovery.py")
+    large_path = Path("scripts/secpal-pr-review-actions.py")
+
+    def create_maintained_fixture(
+        self, fixture: Path,
+    ) -> tuple[Path, Path, str]:
+        accepted = fixture / "accepted"
+        installed = fixture / "installed"
+        sources = {
+            self.recovery_path: b"# accepted Recovery authority\n",
+            self.large_path: b"# large accepted source\n"
+            + b"x = 1\n" * (70 * 1024 // 6),
+        }
+        for relative, content in sources.items():
+            for root in (accepted, installed):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+        subprocess.run(["git", "-C", str(accepted), "init", "--quiet"], check=True)
+        subprocess.run(["git", "-C", str(accepted), "add", "."], check=True)
+        subprocess.run(
+            [
+                "git", "-C", str(accepted), "-c", "user.name=Test",
+                "-c", "user.email=test@example.invalid", "commit", "--quiet",
+                "-m", "accepted maintained sources",
+            ],
+            check=True,
+        )
+        main_oid = subprocess.check_output(
+            ["git", "-C", str(accepted), "rev-parse", "HEAD"], text=True,
+        ).strip()
+        return accepted, installed, main_oid
+
+    def authenticate_fixture(
+        self,
+        accepted: Path,
+        installed: Path,
+        main_oid: str,
+        *,
+        branch_oid: str | None = None,
+        listing_transform: Any = None,
+    ) -> str:
+        from scripts.secpal_pr_review import exceptional_recovery as diagnostic
+
+        branch = authority.canonical_json_bytes(
+            {"protected": True, "commit": {"sha": branch_oid or main_oid}}
+        )
+        original_git = diagnostic.transport._git
+
+        def observed_git(root: Path, arguments: list[str], **keywords: Any) -> Any:
+            result = original_git(root, arguments, **keywords)
+            if listing_transform is not None and arguments[:4] == [
+                "ls-tree", "-rz", "-r", main_oid,
+            ]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=listing_transform(result.stdout),
+                    stderr=b"",
+                )
+            return result
+
+        with patch.object(
+            diagnostic, "__file__", str(installed / self.recovery_path),
+        ), patch.object(
+            diagnostic.transport, "PROTECTED_MAIN_REMOTE_URL", str(accepted),
+        ), patch.object(
+            diagnostic.transport, "_observe_protected_main", return_value=object(),
+        ), patch.object(
+            diagnostic.transport, "_normalize_protected_main",
+            return_value=SimpleNamespace(head_sha=main_oid),
+        ), patch.object(
+            diagnostic.transport, "_run_bootstrap_gh",
+            return_value=SimpleNamespace(returncode=0, stdout=branch, stderr=b""),
+        ), patch.object(diagnostic.transport, "_git", side_effect=observed_git):
+            return diagnostic.authenticate_maintained_code()
+
+    def test_large_accepted_main_maintained_source_authenticates_by_blob_identity(
+        self,
+    ) -> None:
+        from scripts.secpal_pr_review import exceptional_recovery as diagnostic
+
+        self.assertEqual(diagnostic.transport.MAXIMUM_EVIDENCE_BYTES, 64 * 1024)
+        with tempfile.TemporaryDirectory() as directory:
+            accepted, installed, main_oid = self.create_maintained_fixture(
+                Path(directory)
+            )
+            self.assertGreater(
+                (installed / self.large_path).stat().st_size,
+                diagnostic.transport.MAXIMUM_EVIDENCE_BYTES,
+            )
+            self.assertEqual(
+                self.authenticate_fixture(accepted, installed, main_oid), main_oid,
+            )
+
+    def test_maintained_source_inventory_and_installed_bytes_fail_closed(self) -> None:
+        from scripts.secpal_pr_review import exceptional_recovery as diagnostic
+
+        cases = (
+            "changed-bytes",
+            "missing-path",
+            "extra-path",
+            "wrong-mode",
+            "symlink",
+            "non-regular",
+            "candidate-recovery-substitution",
+        )
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                accepted, installed, main_oid = self.create_maintained_fixture(
+                    Path(directory)
+                )
+                target = installed / self.large_path
+                if case == "changed-bytes":
+                    target.write_bytes(b"substituted\n")
+                elif case == "missing-path":
+                    target.unlink()
+                elif case == "extra-path":
+                    (installed / "scripts/extra.py").write_text(
+                        "extra = True\n", encoding="utf-8"
+                    )
+                elif case == "wrong-mode":
+                    target.chmod(0o755)
+                elif case == "symlink":
+                    target.unlink()
+                    target.symlink_to(self.recovery_path.name)
+                elif case == "non-regular":
+                    target.unlink()
+                    os.mkfifo(target)
+                else:
+                    (installed / self.recovery_path).write_bytes(b"candidate authority\n")
+                with self.assertRaises(diagnostic.DiagnosticRecoveryError):
+                    self.authenticate_fixture(accepted, installed, main_oid)
+
+    def test_maintained_tree_metadata_and_protected_main_drift_fail_closed(self) -> None:
+        from scripts.secpal_pr_review import exceptional_recovery as diagnostic
+
+        def replace_metadata(index: int, replacement: str) -> Any:
+            def transform(listing: bytes) -> bytes:
+                records = listing.decode("utf-8").rstrip("\0").split("\0")
+                metadata, separator, relative = records[0].partition("\t")
+                fields = metadata.split()
+                fields[index] = replacement
+                records[0] = " ".join(fields) + separator + relative
+                return ("\0".join(records) + "\0").encode("utf-8")
+
+            return transform
+
+        cases = (
+            ("wrong-blob", replace_metadata(2, "f" * 40), None),
+            ("wrong-object-format", replace_metadata(2, "f" * 64), None),
+            ("wrong-mode", replace_metadata(0, "100600"), None),
+            ("non-blob", replace_metadata(1, "tree"), None),
+            ("unsafe-path", lambda value: value.replace(b"scripts/", b"scripts/../", 1), None),
+            ("protected-main-drift", None, "f" * 40),
+        )
+        for case, transform, branch_oid in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                accepted, installed, main_oid = self.create_maintained_fixture(
+                    Path(directory)
+                )
+                with self.assertRaises(diagnostic.DiagnosticRecoveryError):
+                    self.authenticate_fixture(
+                        accepted,
+                        installed,
+                        main_oid,
+                        branch_oid=branch_oid,
+                        listing_transform=transform,
+                    )
 
     def test_exact_reproduction_and_correction_have_canonical_evidence(self) -> None:
         from scripts.secpal_pr_review import exceptional_recovery as diagnostic

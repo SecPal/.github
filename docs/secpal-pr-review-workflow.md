@@ -1045,6 +1045,13 @@ failure is not diagnostic authority, and this form grants no thread-resolution,
 review-request, Ready/Draft, merge, or unrelated source-write authority. Schema
 1.0 thread-backed bytes and semantics remain unchanged.
 
+Maintained diagnostic Recovery code is authenticated as the exact
+`scripts/*.py` inventory from one immutable protected-main commit. Each
+installed regular file must preserve its accepted mode and raw Git blob OID;
+symlinks, inventory drift, and substituted bytes fail closed. This reuses the
+exact-source Git hashing boundary, so authenticated repository blobs do not pass
+through or weaken the generic 64 KiB external-evidence transport bound.
+
 The one post-Recovery source-changing sibling is
 `READY_EXCEPTIONAL_CONTINUATION`. It binds the exact prior Ready head/tree,
 frozen continuation tree, current-head material findings/threads, stable
