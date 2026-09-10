@@ -38,6 +38,10 @@ CLASSIFICATION_SIGNATURE_NAMESPACE = "secpal-late-feedback-classification-v1"
 CLASSIFICATION_PURPOSE = "AUTHORIZE_LATE_FEEDBACK_DISPOSITION"
 SUCCESSOR_CLASSIFICATION_SCHEMA_VERSION = "1.2"
 SUCCESSOR_CLASSIFICATION_PURPOSE = "AUTHENTICATE_CONTINUATION_SUCCESSOR_SAFETY"
+REJECTED_SUCCESSOR_CLASSIFICATION_SCHEMA_VERSION = "1.3"
+REJECTED_SUCCESSOR_CLASSIFICATION_PURPOSE = (
+    "AUTHENTICATE_REJECTED_CONTINUATION_CANDIDATE"
+)
 TECHNICAL_BLOCKERS = frozenset(
     {"P1", "P2", "SECURITY", "AUTHENTICATION", "INTEGRITY", "FAIL_OPEN"}
 )
@@ -853,7 +857,7 @@ def parse_classification_artifact(
     )
 
 
-def parse_successor_classification_artifact(
+def _parse_successor_classification_artifact(
     artifact_path: Path,
     signature_path: Path,
     *,
@@ -864,9 +868,10 @@ def parse_successor_classification_artifact(
     head_sha: str,
     predecessor_state_digest: str,
     resulting_state_digest: str,
+    rejected_candidate: bool,
     signature_environment: dict[str, str] | None = None,
 ) -> SuccessorClassificationEvidence:
-    """Verify one signed, exact-head Continuation successor classification."""
+    """Verify one signed exact-head successor classification family member."""
 
     canonical = verify_detached_signature(
         artifact_path,
@@ -898,7 +903,12 @@ def parse_successor_classification_artifact(
     if (
         not isinstance(payload, dict)
         or set(payload) != expected_keys
-        or payload.get("schema_version") != SUCCESSOR_CLASSIFICATION_SCHEMA_VERSION
+        or payload.get("schema_version")
+        != (
+            REJECTED_SUCCESSOR_CLASSIFICATION_SCHEMA_VERSION
+            if rejected_candidate
+            else SUCCESSOR_CLASSIFICATION_SCHEMA_VERSION
+        )
         or payload.get("kind") != CLASSIFICATION_KIND
         or payload.get("repository") != repository
         or payload.get("delivery_issue_number") != delivery_issue_number
@@ -906,7 +916,12 @@ def parse_successor_classification_artifact(
         or payload.get("head_sha") != head_sha.lower()
         or payload.get("predecessor_state_digest") != predecessor_state_digest
         or payload.get("resulting_state_digest") != resulting_state_digest
-        or payload.get("authorized_purpose") != SUCCESSOR_CLASSIFICATION_PURPOSE
+        or payload.get("authorized_purpose")
+        != (
+            REJECTED_SUCCESSOR_CLASSIFICATION_PURPOSE
+            if rejected_candidate
+            else SUCCESSOR_CLASSIFICATION_PURPOSE
+        )
         or signer
         != {
             "format": expected_signer.signature_format,
@@ -975,7 +990,17 @@ def parse_successor_classification_artifact(
     ):
         raise LateDispositionError("successor source-only classification is malformed")
     decision = (item.get("classification"), item.get("disposition"))
-    if decision not in SUCCESSOR_SAFE_DECISIONS:
+    if rejected_candidate:
+        if (
+            decision
+            != ("IN_CONTRACT_DEFECT", "CANDIDATE_REJECTED_BEFORE_PUBLICATION")
+            or item.get("technically_blocking") is not True
+            or not blockers
+        ):
+            raise LateDispositionError(
+                "rejected successor classification decision is unsupported"
+            )
+    elif decision not in SUCCESSOR_SAFE_DECISIONS:
         raise LateDispositionError("successor classification decision is unsupported")
     raw_sources = payload.get("sources")
     sources: list[tuple[str, str, str, str | None]] = []
@@ -1036,6 +1061,66 @@ def parse_successor_classification_artifact(
         predecessor_state_digest=predecessor_state_digest,
         resulting_state_digest=resulting_state_digest,
         sources=tuple(sources),
+    )
+
+
+def parse_successor_classification_artifact(
+    artifact_path: Path,
+    signature_path: Path,
+    *,
+    expected_signer: SignerIdentity,
+    repository: str,
+    delivery_issue_number: int,
+    pull_request_number: int,
+    head_sha: str,
+    predecessor_state_digest: str,
+    resulting_state_digest: str,
+    signature_environment: dict[str, str] | None = None,
+) -> SuccessorClassificationEvidence:
+    """Verify one signed, exact-head safe Continuation successor finding."""
+
+    return _parse_successor_classification_artifact(
+        artifact_path,
+        signature_path,
+        expected_signer=expected_signer,
+        repository=repository,
+        delivery_issue_number=delivery_issue_number,
+        pull_request_number=pull_request_number,
+        head_sha=head_sha,
+        predecessor_state_digest=predecessor_state_digest,
+        resulting_state_digest=resulting_state_digest,
+        signature_environment=signature_environment,
+        rejected_candidate=False,
+    )
+
+
+def parse_rejected_successor_classification_artifact(
+    artifact_path: Path,
+    signature_path: Path,
+    *,
+    expected_signer: SignerIdentity,
+    repository: str,
+    delivery_issue_number: int,
+    pull_request_number: int,
+    head_sha: str,
+    predecessor_state_digest: str,
+    resulting_state_digest: str,
+    signature_environment: dict[str, str] | None = None,
+) -> SuccessorClassificationEvidence:
+    """Verify material evidence that rejected one unpublished Continuation."""
+
+    return _parse_successor_classification_artifact(
+        artifact_path,
+        signature_path,
+        expected_signer=expected_signer,
+        repository=repository,
+        delivery_issue_number=delivery_issue_number,
+        pull_request_number=pull_request_number,
+        head_sha=head_sha,
+        predecessor_state_digest=predecessor_state_digest,
+        resulting_state_digest=resulting_state_digest,
+        signature_environment=signature_environment,
+        rejected_candidate=True,
     )
 
 

@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-10 - Re-anchor Rejected Continuation Candidates
+
+**Fixed:**
+
+- Reuse the one-use Exceptional Continuation after an unpublished candidate is
+  rejected by authenticated material successor findings and the unchanged
+  lifecycle moves to a replacement PR through authenticated `PR_REBOUND`.
+- Bind both PRs, protected CURRENT, rejected source and validation evidence,
+  exact material finding sources, the corrected sole-parent candidate, and
+  fresh successor safety while granting no cross-PR thread or trust authority.
+
 ## 2026-09-10 - Authenticate Large Diagnostic Recovery Sources
 
 **Fixed:**

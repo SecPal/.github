@@ -51,6 +51,41 @@ CONTINUATION_EVIDENCE_FIELDS = frozenset(
 CONTINUATION_SUCCESSOR_EVIDENCE_FIELDS = CONTINUATION_EVIDENCE_FIELDS | {
     "successor_safety_evidence"
 }
+CONTINUATION_REANCHOR_EVIDENCE_FIELDS = CONTINUATION_SUCCESSOR_EVIDENCE_FIELDS | {
+    "reanchor_evidence",
+    "expected_signer",
+}
+REJECTED_CONTINUATION_REANCHOR_SCHEMA_VERSION = "1.0"
+REJECTED_CONTINUATION_REANCHOR_KIND = (
+    "REJECTED_EXCEPTIONAL_CONTINUATION_REANCHOR"
+)
+REJECTED_CONTINUATION_REANCHOR_FIELDS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "repository",
+        "delivery_issue_number",
+        "original_pull_request_number",
+        "replacement_pull_request_number",
+        "lifecycle_id",
+        "current_publication_oid",
+        "current_publication_digest",
+        "current_authority_digest",
+        "current_head_sha",
+        "current_tree_sha",
+        "rebound_predecessor_publication_oid",
+        "rebound_event_digest",
+        "rejected_candidate_head_sha",
+        "rejected_candidate_tree_sha",
+        "rejected_candidate_expected_signer",
+        "rejected_reviewed_state_evidence",
+        "rejected_candidate_state_evidence",
+        "rejected_successor_safety_evidence",
+        "rejected_validation_receipt",
+        "rejected_final_attestation",
+        "replacement_reviewed_state_evidence",
+    }
+)
 AUTHORIZATION_FIELDS = frozenset(
     {
         "schema_version",
@@ -204,6 +239,12 @@ class VerifiedExceptionalContinuationAuthority:
     thread_ids: tuple[str, ...]
     source_signer_kind: str
     source_signer_identity: str
+    reanchor_evidence_digest: str | None = None
+    original_pull_request: int | None = None
+    rejected_candidate_head_sha: str | None = None
+    rejected_candidate_tree_sha: str | None = None
+    diagnostic_thread_ids: tuple[str, ...] = ()
+    finding_source_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -215,6 +256,72 @@ class VerifiedContinuationFindingAuthority:
     eligibility_evidence_digest: str
     finding_ids: tuple[str, ...]
     thread_ids: tuple[str, ...]
+    reanchor: "VerifiedRejectedContinuationReanchor | None" = None
+    continuation_tree_sha: str | None = None
+    corrected_successor_state_digest: str | None = None
+
+
+@dataclass(frozen=True)
+class VerifiedRejectedContinuationReanchor:
+    """Closed diagnostic authority for one rejected unpublished candidate."""
+
+    evidence_digest: str
+    original_pull_request: int
+    replacement_pull_request: int
+    rejected_candidate_head_sha: str
+    rejected_candidate_tree_sha: str
+    rejected_validation_receipt_digest: str
+    rejected_final_attestation_digest: str
+    rejected_state_digest: str
+    replacement_state_digest: str
+    material_finding_ids: tuple[str, ...]
+    material_thread_ids: tuple[str, ...]
+    finding_source_digest: str
+
+
+def _continuation_authorization_scope(
+    findings: VerifiedContinuationFindingAuthority,
+    *,
+    pull_request: int,
+    predecessor_head_sha: str,
+    resulting_head_sha: str,
+) -> dict[str, Any]:
+    """Own the exact signed scope for both existing Continuation evidence forms."""
+
+    scope = {
+        "pull_request": pull_request,
+        "predecessor_head_sha": predecessor_head_sha,
+        "resulting_head_sha": resulting_head_sha,
+        "reviewed_state_digest": findings.reviewed_state_digest,
+        "reviewed_feedback_digest": findings.reviewed_feedback_digest,
+        "eligibility_evidence_digest": findings.eligibility_evidence_digest,
+        "finding_ids": list(findings.finding_ids),
+        "thread_ids": list(findings.thread_ids),
+    }
+    if findings.reanchor is not None:
+        reanchor = findings.reanchor
+        scope.update(
+            {
+                "original_pull_request": reanchor.original_pull_request,
+                "continuation_tree_sha": findings.continuation_tree_sha,
+                "reanchor_evidence_digest": reanchor.evidence_digest,
+                "rejected_candidate_head_sha": reanchor.rejected_candidate_head_sha,
+                "rejected_candidate_tree_sha": reanchor.rejected_candidate_tree_sha,
+                "rejected_validation_receipt_digest": (
+                    reanchor.rejected_validation_receipt_digest
+                ),
+                "rejected_final_attestation_digest": (
+                    reanchor.rejected_final_attestation_digest
+                ),
+                "rejected_state_digest": reanchor.rejected_state_digest,
+                "replacement_state_digest": reanchor.replacement_state_digest,
+                "finding_source_digest": reanchor.finding_source_digest,
+                "corrected_successor_state_digest": (
+                    findings.corrected_successor_state_digest
+                ),
+            }
+        )
+    return scope
 
 
 def _capture_current_stable_feedback(
@@ -338,6 +445,51 @@ def _authenticate_successor_safety_evidence(
     resulting_head_sha: str,
     resulting_state_digest: str,
 ) -> Any:
+    return _authenticate_successor_safety_evidence_with_policy(
+        value,
+        repository=repository,
+        delivery_issue=delivery_issue,
+        pull_request=pull_request,
+        predecessor_state_digest=predecessor_state_digest,
+        resulting_head_sha=resulting_head_sha,
+        resulting_state_digest=resulting_state_digest,
+        rejected_candidate=False,
+    )
+
+
+def _authenticate_rejected_successor_safety_evidence(
+    value: Any,
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    predecessor_state_digest: str,
+    resulting_head_sha: str,
+    resulting_state_digest: str,
+) -> Any:
+    return _authenticate_successor_safety_evidence_with_policy(
+        value,
+        repository=repository,
+        delivery_issue=delivery_issue,
+        pull_request=pull_request,
+        predecessor_state_digest=predecessor_state_digest,
+        resulting_head_sha=resulting_head_sha,
+        resulting_state_digest=resulting_state_digest,
+        rejected_candidate=True,
+    )
+
+
+def _authenticate_successor_safety_evidence_with_policy(
+    value: Any,
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    predecessor_state_digest: str,
+    resulting_head_sha: str,
+    resulting_state_digest: str,
+    rejected_candidate: bool,
+) -> Any:
     if value is None:
         return None
     expected_keys = {
@@ -399,7 +551,12 @@ def _authenticate_successor_safety_evidence(
                 signature_path = root / "classification.sig"
                 late_disposition._write_private_file(artifact_path, artifact)
                 late_disposition._write_private_file(signature_path, signature)
-                verified = late_disposition.parse_successor_classification_artifact(
+                parser = (
+                    late_disposition.parse_rejected_successor_classification_artifact
+                    if rejected_candidate
+                    else late_disposition.parse_successor_classification_artifact
+                )
+                verified = parser(
                     artifact_path,
                     signature_path,
                     expected_signer=signer,
@@ -470,6 +627,10 @@ def _verify_continuation_finding_authority(
     predecessor_head_sha: str,
     resulting_head_sha: str,
     feedback_reader: Callable[[str, int], fast_path.StableFeedbackState],
+    observed: Any = None,
+    repository_root: Path | None = None,
+    reanchor_verifier: Callable[..., VerifiedRejectedContinuationReanchor] | None = None,
+    source_commit_verifier: Callable[..., fast_path.AuthenticatedIntegrationCommit] | None = None,
 ) -> VerifiedContinuationFindingAuthority:
     """Derive a finite material finding set from maintained feedback evidence."""
 
@@ -479,6 +640,7 @@ def _verify_continuation_finding_authority(
         not in {
             CONTINUATION_EVIDENCE_FIELDS,
             CONTINUATION_SUCCESSOR_EVIDENCE_FIELDS,
+            CONTINUATION_REANCHOR_EVIDENCE_FIELDS,
         }
     ):
         raise LifecycleOrchestrationError(
@@ -494,9 +656,46 @@ def _verify_continuation_finding_authority(
             repository=repository,
             reviewed_state=reviewed,
         )
-        finding_ids, thread_ids = fast_path.continuation_material_finding_projection(
-            reviewed, eligibility
-        )
+        reanchor = None
+        continuation_tree_sha = None
+        if "reanchor_evidence" in item:
+            if reanchor_verifier is None or source_commit_verifier is None:
+                raise LifecycleOrchestrationError(
+                    "rejected Continuation re-anchor verifier is unavailable"
+                )
+            reanchor = reanchor_verifier(
+                item["reanchor_evidence"],
+                observed=observed,
+                repository_root=repository_root,
+            )
+            if not isinstance(reanchor, VerifiedRejectedContinuationReanchor):
+                raise LifecycleOrchestrationError(
+                    "rejected Continuation re-anchor authority is invalid"
+                )
+            if (
+                reanchor.replacement_pull_request != pull_request
+                or reanchor.replacement_state_digest != reviewed.state_digest
+                or eligibility.get("eligible_threads") != []
+            ):
+                raise LifecycleOrchestrationError(
+                    "replacement PR feedback differs from re-anchor authority"
+                )
+            source = source_commit_verifier(
+                repository_root,
+                repository,
+                predecessor_head_sha,
+                resulting_head_sha,
+                item.get("expected_signer"),
+            )
+            continuation_tree_sha = _oid(
+                source.tree_sha, "re-anchored Continuation tree"
+            )
+            finding_ids = list(reanchor.material_finding_ids)
+            thread_ids = []
+        else:
+            finding_ids, thread_ids = fast_path.continuation_material_finding_projection(
+                reviewed, eligibility
+            )
         current = feedback_reader(repository, pull_request)
         successor_safety = _authenticate_successor_safety_evidence(
             item.get("successor_safety_evidence"),
@@ -507,13 +706,21 @@ def _verify_continuation_finding_authority(
             resulting_head_sha=resulting_head_sha,
             resulting_state_digest=current.state_digest,
         )
-        fast_path.verify_stable_feedback_successor(
-            reviewed,
-            current,
-            resulting_head_sha=resulting_head_sha,
-            authorized_thread_ids=thread_ids,
-            successor_safety_evidence=successor_safety,
-        )
+        if reanchor is not None:
+            fast_path.verify_reanchored_stable_feedback_successor(
+                reviewed,
+                current,
+                resulting_head_sha=resulting_head_sha,
+                successor_safety_evidence=successor_safety,
+            )
+        else:
+            fast_path.verify_stable_feedback_successor(
+                reviewed,
+                current,
+                resulting_head_sha=resulting_head_sha,
+                authorized_thread_ids=thread_ids,
+                successor_safety_evidence=successor_safety,
+            )
     except fast_path.SecurityBlocker as exc:
         raise LifecycleOrchestrationError(
             "continuation finding evidence is invalid or stale"
@@ -533,6 +740,11 @@ def _verify_continuation_finding_authority(
         eligibility_evidence_digest=fast_path.digest_json(eligibility),
         finding_ids=tuple(finding_ids),
         thread_ids=tuple(thread_ids),
+        reanchor=reanchor,
+        continuation_tree_sha=continuation_tree_sha,
+        corrected_successor_state_digest=(
+            current.state_digest if reanchor is not None else None
+        ),
     )
 
 
@@ -808,6 +1020,399 @@ def _immutable_commit_tree(
         raise LifecycleOrchestrationError(
             "Exceptional Recovery commit tree is malformed"
         ) from exc
+
+
+def _immutable_commit_receipt(
+    repository_root: Path,
+    repository: str,
+    head_sha: str,
+) -> str:
+    """Read exactly one validation-receipt trailer from an authenticated commit."""
+
+    _immutable_commit_tree(repository_root, repository, head_sha)
+    result = publication._run_git(
+        repository_root.resolve(strict=True),
+        [
+            "show",
+            "-s",
+            "--format=%(trailers:key=SecPal-Validation-Receipt,valueonly,separator=%x00)",
+            head_sha,
+        ],
+    )
+    if result.returncode != 0:
+        raise LifecycleOrchestrationError(
+            "rejected Continuation validation receipt is unavailable"
+        )
+    try:
+        values = [
+            item.strip()
+            for item in result.stdout.decode("utf-8").rstrip("\n").split("\x00")
+            if item.strip()
+        ]
+    except UnicodeDecodeError as exc:
+        raise LifecycleOrchestrationError(
+            "rejected Continuation validation receipt is malformed"
+        ) from exc
+    if len(values) != 1:
+        raise LifecycleOrchestrationError(
+            "rejected Continuation must bind exactly one validation receipt"
+        )
+    try:
+        return authority._require_digest(values[0], "rejected validation receipt")
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecycleOrchestrationError(str(exc)) from exc
+
+
+def _validation_registry_binding(repository: str) -> dict[str, Any]:
+    """Select validation policy only from the maintained accepted-main registry."""
+
+    path = (
+        Path(__file__).resolve().parents[2]
+        / ".agents/skills/secpal-pr-review/references/repositories.json"
+    )
+    try:
+        registry = authority.loads_closed_json(path.read_bytes())
+        entries = registry.get("repositories") if isinstance(registry, dict) else None
+        matches = [
+            item
+            for item in entries
+            if isinstance(item, dict) and item.get("repository") == repository
+        ] if isinstance(entries, list) else []
+        if len(matches) != 1:
+            raise LifecycleOrchestrationError(
+                "maintained validation registry selection is ambiguous"
+            )
+        return fast_path.validation_registry_projection(matches[0])
+    except (
+        OSError,
+        authority.LifecycleAuthorityError,
+        fast_path.SecurityBlocker,
+    ) as exc:
+        raise LifecycleOrchestrationError(
+            "maintained validation registry is unavailable"
+        ) from exc
+
+
+def verify_rejected_continuation_reanchor(
+    value: Any,
+    *,
+    observed: Any,
+    repository_root: Path | None,
+    historical_reader: Callable[
+        [str, int, str], publication.VerifiedLifecyclePublicationTransition
+    ] = publication._verify_historical_lifecycle_transition,
+) -> VerifiedRejectedContinuationReanchor:
+    """Authenticate one rejected candidate as diagnostic-only correction input."""
+
+    item = _closed_mapping(
+        value,
+        REJECTED_CONTINUATION_REANCHOR_FIELDS,
+        "rejected Continuation re-anchor evidence",
+    )
+    if (
+        item.get("schema_version")
+        != REJECTED_CONTINUATION_REANCHOR_SCHEMA_VERSION
+        or item.get("kind") != REJECTED_CONTINUATION_REANCHOR_KIND
+    ):
+        raise LifecycleOrchestrationError(
+            "rejected Continuation re-anchor evidence kind is unsupported"
+        )
+    try:
+        repository = authority._require_repository(item.get("repository"))
+        delivery_issue = _positive_int(
+            item.get("delivery_issue_number"), "re-anchor delivery issue"
+        )
+        original_pr = _positive_int(
+            item.get("original_pull_request_number"), "original pull request"
+        )
+        replacement_pr = _positive_int(
+            item.get("replacement_pull_request_number"), "replacement pull request"
+        )
+        current_publication_oid = _oid(
+            item.get("current_publication_oid"), "CURRENT publication"
+        )
+        current_publication_digest = authority._require_digest(
+            item.get("current_publication_digest"), "CURRENT publication"
+        )
+        current_authority_digest = authority._require_digest(
+            item.get("current_authority_digest"), "CURRENT authority"
+        )
+        current_head = _oid(item.get("current_head_sha"), "CURRENT head")
+        current_tree = _oid(item.get("current_tree_sha"), "CURRENT tree")
+        rebound_predecessor_oid = _oid(
+            item.get("rebound_predecessor_publication_oid"),
+            "PR_REBOUND predecessor publication",
+        )
+        rebound_event_digest = authority._require_digest(
+            item.get("rebound_event_digest"), "PR_REBOUND event"
+        )
+        rejected_head = _oid(
+            item.get("rejected_candidate_head_sha"), "rejected candidate head"
+        )
+        rejected_tree = _oid(
+            item.get("rejected_candidate_tree_sha"), "rejected candidate tree"
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecycleOrchestrationError(str(exc)) from exc
+    if original_pr == replacement_pr or rejected_head == current_head:
+        raise LifecycleOrchestrationError(
+            "rejected Continuation topology is not a replacement sibling"
+        )
+    lifecycle = getattr(observed, "lifecycle", None)
+    if (
+        not isinstance(observed, publication.VerifiedLifecyclePublication)
+        or not isinstance(lifecycle, authority.VerifiedLifecycleAuthority)
+        or observed.publication_oid != current_publication_oid
+        or observed.publication_digest != current_publication_digest
+        or observed.predecessor_publication_oid != rebound_predecessor_oid
+        or lifecycle.repository != repository
+        or lifecycle.delivery_issue != delivery_issue
+        or lifecycle.lifecycle_id != item.get("lifecycle_id")
+        or lifecycle.pull_request != replacement_pr
+        or lifecycle.head_sha != current_head
+        or lifecycle.authority_digest != current_authority_digest
+    ):
+        raise LifecycleOrchestrationError(
+            "rejected Continuation re-anchor differs from CURRENT authority"
+        )
+    try:
+        state = authority._validate_state(copy.deepcopy(lifecycle.state))
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecycleOrchestrationError(
+            "rejected Continuation CURRENT state is invalid"
+        ) from exc
+    if (
+        state["unrestricted_review_count"] != authority.MAX_UNRESTRICTED_REVIEWS
+        or state["remediation_cycle_count"] != authority.MAX_REMEDIATION_CYCLES
+        or state["cycle_3_absent"] is not True
+        or state["draft"] is not False
+        or state["ready"] is not True
+        or state["exceptional_recovery_count"]
+        != authority.MAX_EXCEPTIONAL_RECOVERIES
+        or state["exceptional_continuation_count"] != 0
+        or state["exceptional_continuation_history"] != []
+    ):
+        raise LifecycleOrchestrationError(
+            "rejected Continuation requires the closed unconsumed CURRENT state"
+        )
+    try:
+        rebound = historical_reader(
+            repository, delivery_issue, rebound_predecessor_oid
+        )
+    except (
+        authority.LifecycleAuthorityError,
+        publication.LifecyclePublicationError,
+    ) as exc:
+        raise LifecycleOrchestrationError(
+            "authenticated PR_REBOUND is unavailable"
+        ) from exc
+    if (
+        rebound.transition_kind != "PR_REBOUND"
+        or rebound.event_digest != rebound_event_digest
+        or rebound.predecessor.publication_oid != rebound_predecessor_oid
+        or rebound.successor.publication_oid != observed.publication_oid
+        or rebound.successor.publication_digest != observed.publication_digest
+        or rebound.predecessor.lifecycle.repository != repository
+        or rebound.predecessor.lifecycle.delivery_issue != delivery_issue
+        or rebound.predecessor.lifecycle.lifecycle_id != lifecycle.lifecycle_id
+        or rebound.predecessor.lifecycle.pull_request != original_pr
+        or rebound.predecessor.lifecycle.head_sha != current_head
+        or rebound.resulting_head_sha != current_head
+        or rebound.successor.lifecycle != lifecycle
+        or rebound.predecessor.lifecycle.state != lifecycle.state
+    ):
+        raise LifecycleOrchestrationError(
+            "PR_REBOUND does not preserve the exact lifecycle and CURRENT head"
+        )
+    if repository_root is None:
+        raise LifecycleOrchestrationError(
+            "rejected Continuation repository root is unavailable"
+        )
+    if _immutable_commit_tree(repository_root, repository, current_head) != current_tree:
+        raise LifecycleOrchestrationError("CURRENT tree changed")
+    try:
+        rejected_reviewed = fast_path.verify_reviewed_state_evidence(
+            item.get("rejected_reviewed_state_evidence")
+        )
+        rejected_state = fast_path.verify_reviewed_state_evidence(
+            item.get("rejected_candidate_state_evidence")
+        )
+        replacement_reviewed = fast_path.verify_reviewed_state_evidence(
+            item.get("replacement_reviewed_state_evidence")
+        )
+    except fast_path.SecurityBlocker as exc:
+        raise LifecycleOrchestrationError(
+            "rejected or replacement Stable Feedback evidence is invalid"
+        ) from exc
+    if (
+        rejected_reviewed.repository != repository
+        or rejected_reviewed.pull_request_number != original_pr
+        or rejected_reviewed.head_sha != current_head
+        or rejected_reviewed.pr_state != "OPEN"
+        or rejected_state.repository != repository
+        or rejected_state.pull_request_number != original_pr
+        or rejected_state.head_sha != rejected_head
+        or rejected_state.pr_state != "OPEN"
+        or replacement_reviewed.repository != repository
+        or replacement_reviewed.pull_request_number != replacement_pr
+        or replacement_reviewed.head_sha != current_head
+        or replacement_reviewed.pr_state != "OPEN"
+        or (
+            rejected_reviewed.base_ref,
+            rejected_reviewed.base_sha,
+        )
+        != (rejected_state.base_ref, rejected_state.base_sha)
+        or (
+            replacement_reviewed.base_ref,
+            replacement_reviewed.base_sha,
+        )
+        != (rejected_reviewed.base_ref, rejected_reviewed.base_sha)
+    ):
+        raise LifecycleOrchestrationError(
+            "rejected or replacement Stable Feedback identity changed"
+        )
+    source = _authenticate_continuation_commit(
+        repository_root,
+        repository,
+        current_head,
+        rejected_head,
+        item.get("rejected_candidate_expected_signer"),
+    )
+    if source.tree_sha != rejected_tree:
+        raise LifecycleOrchestrationError("rejected candidate tree changed")
+    receipt_digest = _immutable_commit_receipt(
+        repository_root, repository, rejected_head
+    )
+    registry = _validation_registry_binding(repository)
+    if rejected_reviewed.base_ref != registry["default_branch"]:
+        raise LifecycleOrchestrationError(
+            "rejected Continuation base is not the maintained default branch"
+        )
+    attestation = item.get("rejected_final_attestation")
+    receipt = item.get("rejected_validation_receipt")
+    try:
+        expected_receipt = fast_path.create_validation_receipt(
+            repository=repository,
+            head_sha=current_head,
+            validated_tree_sha=rejected_tree,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=rejected_reviewed,
+            manual_gate_evidence=(
+                receipt.get("manual_gate_evidence")
+                if isinstance(receipt, Mapping)
+                else None
+            ),
+            eligibility_evidence_digest=(
+                receipt.get("eligibility_evidence_digest")
+                if isinstance(receipt, Mapping)
+                else None
+            ),
+            exceptional_recovery_evidence_digest=(
+                receipt.get("exceptional_recovery_evidence_digest")
+                if isinstance(receipt, Mapping)
+                else None
+            ),
+            exceptional_continuation_evidence_digest=(
+                receipt.get("exceptional_continuation_evidence_digest")
+                if isinstance(receipt, Mapping)
+                else None
+            ),
+        )
+        if receipt != expected_receipt or receipt_digest != expected_receipt["receipt_digest"]:
+            raise fast_path.SecurityBlocker(
+                "rejected validation receipt is invalid or stale"
+            )
+        validation = fast_path.verify_validation_attestation(
+            attestation,
+            repository=repository,
+            head_sha=rejected_head,
+            registry=registry,
+            command_set=registry["validation"],
+            reviewed_state=rejected_reviewed,
+            commit_parent_sha=current_head,
+            commit_tree_sha=rejected_tree,
+            commit_validation_receipt_digest=receipt_digest,
+            delivery_issue_number=delivery_issue,
+        )
+    except fast_path.SecurityBlocker as exc:
+        raise LifecycleOrchestrationError(
+            "rejected Continuation validation evidence is invalid"
+        ) from exc
+    prepared_safety = _authenticate_rejected_successor_safety_evidence(
+        item.get("rejected_successor_safety_evidence"),
+        repository=repository,
+        delivery_issue=delivery_issue,
+        pull_request=original_pr,
+        predecessor_state_digest=rejected_reviewed.state_digest,
+        resulting_head_sha=rejected_head,
+        resulting_state_digest=rejected_state.state_digest,
+    )
+    try:
+        material = fast_path.verify_rejected_stable_feedback_successor(
+            rejected_reviewed,
+            rejected_state,
+            resulting_head_sha=rejected_head,
+            rejected_successor_evidence=prepared_safety,
+        )
+    except fast_path.SecurityBlocker as exc:
+        raise LifecycleOrchestrationError(
+            "rejected candidate material findings are invalid"
+        ) from exc
+    source_projection = [
+        {
+            "kind": kind,
+            "node_id": node_id,
+            "digest": digest,
+            "thread_id": thread_id,
+        }
+        for kind, node_id, digest, thread_id in material.source_bindings
+    ]
+    projection = {
+        "schema_version": REJECTED_CONTINUATION_REANCHOR_SCHEMA_VERSION,
+        "kind": REJECTED_CONTINUATION_REANCHOR_KIND,
+        "repository": repository,
+        "delivery_issue_number": delivery_issue,
+        "original_pull_request_number": original_pr,
+        "replacement_pull_request_number": replacement_pr,
+        "lifecycle_id": lifecycle.lifecycle_id,
+        "current_publication_oid": observed.publication_oid,
+        "current_publication_digest": observed.publication_digest,
+        "current_authority_digest": lifecycle.authority_digest,
+        "current_head_sha": current_head,
+        "current_tree_sha": current_tree,
+        "rebound_predecessor_publication_oid": rebound_predecessor_oid,
+        "rebound_event_digest": rebound.event_digest,
+        "rejected_candidate_head_sha": rejected_head,
+        "rejected_candidate_tree_sha": rejected_tree,
+        "rejected_commit_authentication_digest": source.authentication_digest,
+        "rejected_validation_receipt_digest": validation.validation_receipt_digest,
+        "rejected_final_attestation_digest": validation.final_attestation_digest,
+        "rejected_source_reviewed_state_digest": rejected_reviewed.state_digest,
+        "rejected_state_digest": rejected_state.state_digest,
+        "replacement_state_digest": replacement_reviewed.state_digest,
+        "material_finding_ids": list(material.finding_ids),
+        "material_thread_ids": list(material.thread_ids),
+        "finding_sources": source_projection,
+        "classification_evidence_digests": list(
+            material.classification_evidence_digests
+        ),
+    }
+    return VerifiedRejectedContinuationReanchor(
+        evidence_digest=fast_path.digest_json(projection),
+        original_pull_request=original_pr,
+        replacement_pull_request=replacement_pr,
+        rejected_candidate_head_sha=rejected_head,
+        rejected_candidate_tree_sha=rejected_tree,
+        rejected_validation_receipt_digest=validation.validation_receipt_digest,
+        rejected_final_attestation_digest=validation.final_attestation_digest,
+        rejected_state_digest=rejected_state.state_digest,
+        replacement_state_digest=replacement_reviewed.state_digest,
+        material_finding_ids=material.finding_ids,
+        material_thread_ids=material.thread_ids,
+        finding_source_digest=fast_path.digest_json(source_projection),
+    )
 
 
 def verify_exceptional_recovery_authority(
@@ -1208,6 +1813,7 @@ def verify_exceptional_continuation_authority(
     reviewed_state_evidence: Any,
     eligibility_evidence: Any,
     successor_safety_evidence: Any = None,
+    reanchor_evidence: Any = None,
     repository_root: Path,
     repository: str,
     delivery_issue: int,
@@ -1270,37 +1876,50 @@ def verify_exceptional_continuation_authority(
             "Exceptional Continuation signed lifecycle identity changed"
         )
 
+    reanchored = (
+        isinstance(continuation_evidence, Mapping)
+        and continuation_evidence.get("schema_version") == "1.1"
+    )
+    finding_evidence = {
+        "reviewed_state_evidence": reviewed_state_evidence,
+        "eligibility_evidence": eligibility_evidence,
+        **(
+            {"successor_safety_evidence": successor_safety_evidence}
+            if successor_safety_evidence is not None
+            else {}
+        ),
+    }
+    if reanchored:
+        finding_evidence.update(
+            {
+                "successor_safety_evidence": successor_safety_evidence,
+                "reanchor_evidence": reanchor_evidence,
+                "expected_signer": continuation_evidence.get("expected_signer"),
+            }
+        )
     findings = _verify_continuation_finding_authority(
-        {
-            "reviewed_state_evidence": reviewed_state_evidence,
-            "eligibility_evidence": eligibility_evidence,
-            **(
-                {"successor_safety_evidence": successor_safety_evidence}
-                if successor_safety_evidence is not None
-                else {}
-            ),
-        },
+        finding_evidence,
         repository=repository,
         delivery_issue=delivery_issue,
         pull_request=pull_request,
         predecessor_head_sha=predecessor.head_sha,
         resulting_head_sha=resulting_head_sha,
         feedback_reader=_capture_current_stable_feedback,
+        observed=transition.predecessor,
+        repository_root=repository_root,
+        reanchor_verifier=verify_rejected_continuation_reanchor,
+        source_commit_verifier=_authenticate_continuation_commit,
     )
     _authorization(
         orchestration_authorization,
         event_id=transition.event_id,
         operation="EXCEPTIONAL_CONTINUATION",
-        expected_scope={
-            "pull_request": pull_request,
-            "predecessor_head_sha": predecessor.head_sha,
-            "resulting_head_sha": resulting_head_sha,
-            "reviewed_state_digest": findings.reviewed_state_digest,
-            "reviewed_feedback_digest": findings.reviewed_feedback_digest,
-            "eligibility_evidence_digest": findings.eligibility_evidence_digest,
-            "finding_ids": list(findings.finding_ids),
-            "thread_ids": list(findings.thread_ids),
-        },
+        expected_scope=_continuation_authorization_scope(
+            findings,
+            pull_request=pull_request,
+            predecessor_head_sha=predecessor.head_sha,
+            resulting_head_sha=resulting_head_sha,
+        ),
         observed=transition.predecessor,
         lifecycle=predecessor,
         verifier=_verify_user_authorization,
@@ -1379,6 +1998,7 @@ def verify_exceptional_continuation_authority(
             reviewed_state=reviewed,
             validated_tree_sha=source.tree_sha,
             eligibility_evidence=eligibility_evidence,
+            reanchor_authority=findings.reanchor,
         )
     except fast_path.SecurityBlocker as exc:
         raise LifecycleOrchestrationError(
@@ -1416,6 +2036,11 @@ def verify_exceptional_continuation_authority(
         != findings.eligibility_evidence_digest
         or continuation["finding_ids"] != list(findings.finding_ids)
         or continuation["thread_ids"] != list(findings.thread_ids)
+        or (
+            findings.reanchor is not None
+            and continuation.get("reanchor", {}).get("evidence_digest")
+            != findings.reanchor.evidence_digest
+        )
         or continuation["lifecycle"] != lifecycle_projection
     ):
         raise LifecycleOrchestrationError(
@@ -1446,6 +2071,36 @@ def verify_exceptional_continuation_authority(
         thread_ids=findings.thread_ids,
         source_signer_kind=source.signer_kind,
         source_signer_identity=source.signer_identity,
+        reanchor_evidence_digest=(
+            findings.reanchor.evidence_digest
+            if findings.reanchor is not None
+            else None
+        ),
+        original_pull_request=(
+            findings.reanchor.original_pull_request
+            if findings.reanchor is not None
+            else None
+        ),
+        rejected_candidate_head_sha=(
+            findings.reanchor.rejected_candidate_head_sha
+            if findings.reanchor is not None
+            else None
+        ),
+        rejected_candidate_tree_sha=(
+            findings.reanchor.rejected_candidate_tree_sha
+            if findings.reanchor is not None
+            else None
+        ),
+        diagnostic_thread_ids=(
+            findings.reanchor.material_thread_ids
+            if findings.reanchor is not None
+            else ()
+        ),
+        finding_source_digest=(
+            findings.reanchor.finding_source_digest
+            if findings.reanchor is not None
+            else None
+        ),
     )
 
 
@@ -1549,6 +2204,12 @@ def _orchestrate_event(
     feedback_reader: Callable[
         [str, int], fast_path.StableFeedbackState
     ] = _capture_current_stable_feedback,
+    reanchor_verifier: Callable[
+        ..., VerifiedRejectedContinuationReanchor
+    ] | None = None,
+    source_commit_verifier: Callable[
+        ..., fast_path.AuthenticatedIntegrationCommit
+    ] = _authenticate_continuation_commit,
 ) -> LifecycleDecision:
     """Authenticate CURRENT state and select one bounded, non-recursive action."""
 
@@ -1769,24 +2430,29 @@ def _orchestrate_event(
             predecessor_head_sha=lifecycle.head_sha,
             resulting_head_sha=request_head,
             feedback_reader=feedback_reader,
+            observed=observed,
+            repository_root=Path.cwd(),
+            reanchor_verifier=(
+                verify_rejected_continuation_reanchor
+                if reanchor_verifier is None
+                else reanchor_verifier
+            ),
+            source_commit_verifier=source_commit_verifier,
         )
         verified_authorization = authorization_verifier(
             authorization_value, observed, lifecycle
+        )
+        expected_scope = _continuation_authorization_scope(
+            findings,
+            pull_request=lifecycle.pull_request,
+            predecessor_head_sha=lifecycle.head_sha,
+            resulting_head_sha=request_head,
         )
         authorization = _authorization(
             authorization_value,
             event_id=event_id,
             operation="EXCEPTIONAL_CONTINUATION",
-            expected_scope={
-                "pull_request": lifecycle.pull_request,
-                "predecessor_head_sha": lifecycle.head_sha,
-                "resulting_head_sha": request_head,
-                "reviewed_state_digest": findings.reviewed_state_digest,
-                "reviewed_feedback_digest": findings.reviewed_feedback_digest,
-                "eligibility_evidence_digest": findings.eligibility_evidence_digest,
-                "finding_ids": list(findings.finding_ids),
-                "thread_ids": list(findings.thread_ids),
-            },
+            expected_scope=expected_scope,
             observed=observed,
             lifecycle=lifecycle,
             verifier=authorization_verifier,

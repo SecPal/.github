@@ -150,6 +150,15 @@ SUCCESSOR_TRANSPORT_ROLES = frozenset(
         "GITHUB_CODE_QUALITY_REVIEW",
     }
 )
+REQUIRED_CODEX_SUCCESSOR_ROLES = frozenset(
+    {
+        "CODEX_SUMMARY_UPDATE",
+        "CODEX_REVIEW_REQUEST",
+        "CODEX_SECURITY_REVIEW_REQUEST",
+        "CODEX_CODE_REVIEW_RESULT",
+        "CODEX_SECURITY_REVIEW_RESULT",
+    }
+)
 SOURCE_KINDS = frozenset(
     {
         "PULL_REQUEST_REACTION",
@@ -232,6 +241,25 @@ EXCEPTIONAL_CONTINUATION_KEYS = frozenset(
         "thread_ids",
         "expected_signer",
         "lifecycle",
+    }
+)
+EXCEPTIONAL_CONTINUATION_REANCHOR_KEYS = EXCEPTIONAL_CONTINUATION_KEYS | {
+    "reanchor"
+}
+EXCEPTIONAL_CONTINUATION_REANCHOR_FIELDS = frozenset(
+    {
+        "evidence_digest",
+        "original_pull_request",
+        "replacement_pull_request",
+        "rejected_candidate_head_sha",
+        "rejected_candidate_tree_sha",
+        "rejected_validation_receipt_digest",
+        "rejected_final_attestation_digest",
+        "rejected_state_digest",
+        "replacement_state_digest",
+        "material_finding_ids",
+        "material_thread_ids",
+        "finding_source_digest",
     }
 )
 READY_INTEGRATION_KEYS = frozenset(
@@ -1259,10 +1287,18 @@ def normalize_exceptional_continuation_evidence(
     reviewed_state: "StableFeedbackState",
     validated_tree_sha: str,
     eligibility_evidence: Any,
+    reanchor_authority: Any = None,
 ) -> dict[str, Any]:
     """Normalize one typed source-changing continuation after Recovery."""
 
-    if not isinstance(value, dict) or set(value) != EXCEPTIONAL_CONTINUATION_KEYS:
+    reanchored = (
+        isinstance(value, dict)
+        and value.get("schema_version") == "1.1"
+        and set(value) == EXCEPTIONAL_CONTINUATION_REANCHOR_KEYS
+    )
+    if not isinstance(value, dict) or (
+        not reanchored and set(value) != EXCEPTIONAL_CONTINUATION_KEYS
+    ):
         raise SecurityBlocker(
             "exceptional continuation evidence is malformed or ambiguous"
         )
@@ -1277,7 +1313,7 @@ def normalize_exceptional_continuation_evidence(
     )
     eligibility_digest = digest_json(eligibility)
     if (
-        value.get("schema_version") != "1.0"
+        value.get("schema_version") != ("1.1" if reanchored else "1.0")
         or value.get("kind") != EXCEPTIONAL_CONTINUATION_KIND
         or value.get("repository") != repository
         or reviewed_state.repository != repository
@@ -1290,9 +1326,109 @@ def normalize_exceptional_continuation_evidence(
         or value.get("eligibility_evidence_digest") != eligibility_digest
     ):
         raise SecurityBlocker("exceptional continuation identity or evidence is stale")
-    finding_ids, thread_ids = continuation_material_finding_projection(
-        reviewed_state, eligibility
-    )
+    reanchor = None
+    if reanchored:
+        candidate = value.get("reanchor")
+        if (
+            not isinstance(candidate, dict)
+            or set(candidate) != EXCEPTIONAL_CONTINUATION_REANCHOR_FIELDS
+            or any(SECRET_VALUE.search(item) for item in _all_strings(candidate))
+        ):
+            raise SecurityBlocker(
+                "exceptional continuation re-anchor binding is malformed"
+            )
+        reanchor = {
+            "evidence_digest": _require_digest(
+                candidate.get("evidence_digest"), "Continuation re-anchor evidence"
+            ),
+            "original_pull_request": _require_positive_integer(
+                candidate.get("original_pull_request"), "original pull request"
+            ),
+            "replacement_pull_request": _require_positive_integer(
+                candidate.get("replacement_pull_request"), "replacement pull request"
+            ),
+            "rejected_candidate_head_sha": _require_oid(
+                candidate.get("rejected_candidate_head_sha"),
+                "rejected candidate head",
+            ),
+            "rejected_candidate_tree_sha": _require_oid(
+                candidate.get("rejected_candidate_tree_sha"),
+                "rejected candidate tree",
+            ),
+            "rejected_validation_receipt_digest": _require_digest(
+                candidate.get("rejected_validation_receipt_digest"),
+                "rejected validation receipt",
+            ),
+            "rejected_final_attestation_digest": _require_digest(
+                candidate.get("rejected_final_attestation_digest"),
+                "rejected final attestation",
+            ),
+            "rejected_state_digest": _require_digest(
+                candidate.get("rejected_state_digest"),
+                "rejected Stable Feedback state",
+            ),
+            "replacement_state_digest": _require_digest(
+                candidate.get("replacement_state_digest"),
+                "replacement Stable Feedback state",
+            ),
+            "material_finding_ids": copy.deepcopy(
+                candidate.get("material_finding_ids")
+            ),
+            "material_thread_ids": copy.deepcopy(
+                candidate.get("material_thread_ids")
+            ),
+            "finding_source_digest": _require_digest(
+                candidate.get("finding_source_digest"),
+                "rejected finding sources",
+            ),
+        }
+        finding_ids = reanchor["material_finding_ids"]
+        diagnostic_thread_ids = reanchor["material_thread_ids"]
+        if (
+            reanchor["original_pull_request"]
+            == reanchor["replacement_pull_request"]
+            or reanchor["replacement_pull_request"]
+            != reviewed_state.pull_request_number
+            or reanchor["replacement_state_digest"] != reviewed_state.state_digest
+            or not isinstance(finding_ids, list)
+            or not finding_ids
+            or len(finding_ids) != len(set(finding_ids))
+            or any(
+                not isinstance(identity, str) or not IDENTITY.fullmatch(identity)
+                for identity in finding_ids
+            )
+            or not isinstance(diagnostic_thread_ids, list)
+            or len(diagnostic_thread_ids) != len(set(diagnostic_thread_ids))
+            or any(
+                not isinstance(identity, str)
+                or not re.fullmatch(r"PRRT_[A-Za-z0-9_-]+", identity)
+                for identity in diagnostic_thread_ids
+            )
+            or eligibility.get("eligible_threads") != []
+        ):
+            raise SecurityBlocker(
+                "exceptional continuation re-anchor identity is invalid or stale"
+            )
+        if reanchor_authority is not None:
+            authority_binding = {
+                field: copy.deepcopy(getattr(reanchor_authority, field, None))
+                for field in EXCEPTIONAL_CONTINUATION_REANCHOR_FIELDS
+            }
+            authority_binding["material_finding_ids"] = list(
+                authority_binding["material_finding_ids"] or []
+            )
+            authority_binding["material_thread_ids"] = list(
+                authority_binding["material_thread_ids"] or []
+            )
+            if reanchor != authority_binding:
+                raise SecurityBlocker(
+                    "exceptional continuation re-anchor authority changed"
+                )
+        thread_ids = []
+    else:
+        finding_ids, thread_ids = continuation_material_finding_projection(
+            reviewed_state, eligibility
+        )
     if value.get("finding_ids") != finding_ids or value.get("thread_ids") != thread_ids:
         raise SecurityBlocker(
             "exceptional continuation findings differ from eligibility authority"
@@ -1357,7 +1493,7 @@ def normalize_exceptional_continuation_evidence(
             "exceptional continuation would alter the finite lifecycle"
         )
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1" if reanchored else "1.0",
         "kind": EXCEPTIONAL_CONTINUATION_KIND,
         "authorization_id": _require_string(
             value.get("authorization_id"),
@@ -1394,6 +1530,7 @@ def normalize_exceptional_continuation_evidence(
             "ready_history": ready_history,
             "exceptional_recovery_history": recovery_history,
         },
+        **({"reanchor": reanchor} if reanchor is not None else {}),
     }
 
 
@@ -1661,6 +1798,18 @@ class VerifiedSuccessorClassification:
     classification_evidence_digest: str
     source_bindings: tuple[tuple[str, str, str, str | None], ...]
     _verification_seal: object
+
+
+@dataclass(frozen=True)
+class VerifiedRejectedSuccessorFindings:
+    """Material findings that made one exact successor unsafe to publish."""
+
+    predecessor_state_digest: str
+    rejected_state_digest: str
+    finding_ids: tuple[str, ...]
+    thread_ids: tuple[str, ...]
+    source_bindings: tuple[tuple[str, str, str, str | None], ...]
+    classification_evidence_digests: tuple[str, ...]
 
 
 def _seal_successor_classification(**values: Any) -> VerifiedSuccessorClassification:
@@ -2161,12 +2310,14 @@ def _verify_successor_transport(
         tuple[str, str], tuple[str, str | None, dict[str, Any]]
     ],
     resulting_head_sha: str,
+    rejected_candidate: bool = False,
 ) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
     if not isinstance(value, list):
         raise SecurityBlocker("successor provider transport evidence is malformed")
     admitted_additions: set[tuple[str, str]] = set()
     admitted_updates: set[tuple[str, str]] = set()
     roles: list[str] = []
+    rejected_review_kinds: list[str] = []
     for transport in value:
         if not isinstance(transport, dict) or set(transport) != {
             "role",
@@ -2258,7 +2409,32 @@ def _verify_successor_transport(
                 raise SecurityBlocker("Codex review result transport is invalid")
             admitted_additions.add(key)
         elif role == "CODEX_REVIEW":
-            if (
+            if rejected_candidate:
+                reviewed_commit = f"**Reviewed commit:** `{resulting_head_sha[:10]}`"
+                review_kind = (
+                    "SECURITY_REVIEW"
+                    if isinstance(body, str)
+                    and body.lstrip().startswith("### 🛡️ Codex Security Review")
+                    else "CODE_REVIEW"
+                    if isinstance(body, str)
+                    and body.lstrip().startswith("### 💡 Codex Review")
+                    else None
+                )
+                if (
+                    kind != "REVIEW"
+                    or predecessor is not None
+                    or review_kind is None
+                    or body.count(reviewed_commit) != 1
+                    or login != CODEX_PROVIDER_LOGIN
+                    or source.get("state") != "COMMENTED"
+                    or source.get("commit_oid") != resulting_head_sha
+                    or source_digest != digest_text(body)
+                ):
+                    raise SecurityBlocker(
+                        "rejected Codex review transport is not head-bound"
+                    )
+                rejected_review_kinds.append(review_kind)
+            elif (
                 kind != "REVIEW"
                 or predecessor is not None
                 or body is not None
@@ -2296,15 +2472,34 @@ def _verify_successor_transport(
         roles.append(role)
 
     codex_roles = [role for role in roles if role.startswith("CODEX_")]
-    if codex_roles:
-        required = {
-            "CODEX_SUMMARY_UPDATE",
-            "CODEX_REVIEW_REQUEST",
-            "CODEX_SECURITY_REVIEW_REQUEST",
-            "CODEX_CODE_REVIEW_RESULT",
-            "CODEX_SECURITY_REVIEW_RESULT",
-        }
-        if not required.issubset(roles) or any(roles.count(role) != 1 for role in required):
+    if rejected_candidate or codex_roles:
+        required = (
+            frozenset(
+                {
+                    "CODEX_SUMMARY_UPDATE",
+                    "CODEX_REVIEW_REQUEST",
+                    "CODEX_SECURITY_REVIEW_REQUEST",
+                }
+            )
+            if rejected_candidate
+            else REQUIRED_CODEX_SUCCESSOR_ROLES
+        )
+        rejected_results_complete = (
+            roles.count("CODEX_CODE_REVIEW_RESULT")
+            + rejected_review_kinds.count("CODE_REVIEW")
+            == 1
+            and roles.count("CODEX_SECURITY_REVIEW_RESULT")
+            + rejected_review_kinds.count("SECURITY_REVIEW")
+            == 1
+        )
+        if (
+            not required.issubset(roles)
+            or any(roles.count(role) != 1 for role in required)
+            or (
+                rejected_candidate
+                and not rejected_results_complete
+            )
+        ):
             raise SecurityBlocker(
                 "Codex provider acquisition transport is incomplete or ambiguous"
             )
@@ -2324,6 +2519,63 @@ def _verify_successor_findings(
     pull_request_number: int,
     resulting_head_sha: str,
     current_threads: dict[str, dict[str, Any]],
+) -> set[tuple[str, str]]:
+    """Keep ordinary successor safety fail-closed for every material finding."""
+
+    return _verify_successor_findings_with_policy(
+        value,
+        reviewed_sources=reviewed_sources,
+        current_sources=current_sources,
+        repository=repository,
+        pull_request_number=pull_request_number,
+        resulting_head_sha=resulting_head_sha,
+        current_threads=current_threads,
+        rejected_candidate=False,
+    )
+
+
+def _verify_rejected_successor_findings(
+    value: Any,
+    *,
+    reviewed_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    current_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    repository: str,
+    pull_request_number: int,
+    resulting_head_sha: str,
+    current_threads: dict[str, dict[str, Any]],
+) -> set[tuple[str, str]]:
+    """Admit only authenticated material findings for diagnostic re-anchoring."""
+
+    return _verify_successor_findings_with_policy(
+        value,
+        reviewed_sources=reviewed_sources,
+        current_sources=current_sources,
+        repository=repository,
+        pull_request_number=pull_request_number,
+        resulting_head_sha=resulting_head_sha,
+        current_threads=current_threads,
+        rejected_candidate=True,
+    )
+
+
+def _verify_successor_findings_with_policy(
+    value: Any,
+    *,
+    reviewed_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    current_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    repository: str,
+    pull_request_number: int,
+    resulting_head_sha: str,
+    current_threads: dict[str, dict[str, Any]],
+    rejected_candidate: bool,
 ) -> set[tuple[str, str]]:
     if not isinstance(value, list):
         raise SecurityBlocker("successor finding evidence is malformed")
@@ -2360,22 +2612,43 @@ def _verify_successor_findings(
         classification = verified_classification.classification
         disposition = verified_classification.disposition
         technically_blocking = verified_classification.technically_blocking
-        if technically_blocking is True:
-            raise SecurityBlocker("material successor finding blocks continuation")
-        if (
-            technically_blocking is not False
-            or disposition not in CLASSIFICATION_DISPOSITIONS.get(
-                classification, frozenset()
-            )
-            or not DIGEST.fullmatch(
-                verified_classification.classification_evidence_digest
-            )
-            or not DIGEST.fullmatch(verified_classification.finding_evidence_digest)
-            or verified_classification.technical_blockers
-        ):
-            raise SecurityBlocker(
-                "successor finding lacks a complete safe classification"
-            )
+        if rejected_candidate:
+            if (
+                technically_blocking is not True
+                or not verified_classification.technical_blockers
+                or (classification, disposition)
+                != ("IN_CONTRACT_DEFECT", "CANDIDATE_REJECTED_BEFORE_PUBLICATION")
+                or not DIGEST.fullmatch(
+                    verified_classification.classification_evidence_digest
+                )
+                or not DIGEST.fullmatch(
+                    verified_classification.finding_evidence_digest
+                )
+            ):
+                raise SecurityBlocker(
+                    "rejected successor finding is not authenticated material evidence"
+                )
+        else:
+            if technically_blocking is True:
+                raise SecurityBlocker(
+                    "material successor finding blocks continuation"
+                )
+            if (
+                technically_blocking is not False
+                or disposition not in CLASSIFICATION_DISPOSITIONS.get(
+                    classification, frozenset()
+                )
+                or not DIGEST.fullmatch(
+                    verified_classification.classification_evidence_digest
+                )
+                or not DIGEST.fullmatch(
+                    verified_classification.finding_evidence_digest
+                )
+                or verified_classification.technical_blockers
+            ):
+                raise SecurityBlocker(
+                    "successor finding lacks a complete safe classification"
+                )
         thread_id = verified_classification.thread_id
         if thread_id is not None and (
             not isinstance(thread_id, str)
@@ -2571,6 +2844,7 @@ def _verify_authenticated_feedback_growth(
     resulting_head_sha: str,
     authorized_thread_ids: set[str],
     successor_evidence: Any,
+    rejected_candidate: bool = False,
 ) -> None:
     expected_keys = {
         "schema_version",
@@ -2586,7 +2860,8 @@ def _verify_authenticated_feedback_growth(
         not isinstance(successor_evidence, dict)
         or set(successor_evidence) != expected_keys
         or any(SECRET_VALUE.search(item) for item in _all_strings(successor_evidence))
-        or successor_evidence.get("schema_version") != "1.0"
+        or successor_evidence.get("schema_version")
+        != ("1.1" if rejected_candidate else "1.0")
         or successor_evidence.get("repository") != reviewed.repository
         or successor_evidence.get("pull_request_number")
         != reviewed.pull_request_number
@@ -2603,8 +2878,14 @@ def _verify_authenticated_feedback_growth(
         reviewed_sources=reviewed_sources,
         current_sources=current_sources,
         resulting_head_sha=resulting_head_sha,
+        rejected_candidate=rejected_candidate,
     )
-    finding_additions = _verify_successor_findings(
+    finding_verifier = (
+        _verify_rejected_successor_findings
+        if rejected_candidate
+        else _verify_successor_findings
+    )
+    finding_additions = finding_verifier(
         successor_evidence["successor_findings"],
         reviewed_sources=reviewed_sources,
         current_sources=current_sources,
@@ -2715,6 +2996,120 @@ def verify_stable_feedback_successor(
         resulting_head_sha=resulting_head_sha,
         authorized_thread_ids=authorized,
         successor_evidence=successor_safety_evidence,
+    )
+
+
+def verify_reanchored_stable_feedback_successor(
+    reviewed: StableFeedbackState,
+    current: StableFeedbackState,
+    *,
+    resulting_head_sha: str,
+    successor_safety_evidence: Any,
+) -> None:
+    """Require fresh exact-head providers for a re-anchored corrected successor."""
+
+    resulting_head_sha = _require_oid(resulting_head_sha, "resulting feedback head")
+    if (
+        not isinstance(reviewed, StableFeedbackState)
+        or not isinstance(current, StableFeedbackState)
+        or current.repository != reviewed.repository
+        or current.pull_request_number != reviewed.pull_request_number
+        or reviewed.pr_state != "OPEN"
+        or current.pr_state != "OPEN"
+        or reviewed.head_sha == current.head_sha
+        or current.head_sha != resulting_head_sha
+        or current.base_ref != reviewed.base_ref
+        or current.base_sha != reviewed.base_sha
+        or not isinstance(successor_safety_evidence, dict)
+    ):
+        raise SecurityBlocker(
+            "corrected successor feedback does not preserve replacement identity"
+        )
+    transport = successor_safety_evidence.get("provider_transport")
+    roles = {
+        item.get("role")
+        for item in transport
+        if isinstance(item, dict)
+    } if isinstance(transport, list) else set()
+    if not REQUIRED_CODEX_SUCCESSOR_ROLES.issubset(roles):
+        raise SecurityBlocker(
+            "corrected successor exact-head providers are incomplete"
+        )
+    _verify_authenticated_feedback_growth(
+        reviewed,
+        current,
+        resulting_head_sha=resulting_head_sha,
+        authorized_thread_ids=set(),
+        successor_evidence=successor_safety_evidence,
+    )
+
+
+def verify_rejected_stable_feedback_successor(
+    reviewed: StableFeedbackState,
+    rejected: StableFeedbackState,
+    *,
+    resulting_head_sha: str,
+    rejected_successor_evidence: Any,
+) -> VerifiedRejectedSuccessorFindings:
+    """Authenticate material findings on one immutable unpublished successor."""
+
+    resulting_head_sha = _require_oid(
+        resulting_head_sha, "rejected successor feedback head"
+    )
+    if (
+        not isinstance(reviewed, StableFeedbackState)
+        or not isinstance(rejected, StableFeedbackState)
+        or not isinstance(rejected_successor_evidence, dict)
+        or rejected.repository != reviewed.repository
+        or rejected.pull_request_number != reviewed.pull_request_number
+        or reviewed.pr_state != "OPEN"
+        or rejected.pr_state != "OPEN"
+        or rejected.head_sha != resulting_head_sha
+        or rejected.head_sha == reviewed.head_sha
+        or rejected.base_ref != reviewed.base_ref
+        or rejected.base_sha != reviewed.base_sha
+    ):
+        raise SecurityBlocker(
+            "rejected stable feedback does not identify the exact successor"
+        )
+    _verify_authenticated_feedback_growth(
+        reviewed,
+        rejected,
+        resulting_head_sha=resulting_head_sha,
+        authorized_thread_ids=set(),
+        successor_evidence=rejected_successor_evidence,
+        rejected_candidate=True,
+    )
+    findings = rejected_successor_evidence["successor_findings"]
+    classifications = [item["classification_evidence"] for item in findings]
+    finding_ids = tuple(sorted(item.finding_id for item in classifications))
+    if not finding_ids or len(finding_ids) != len(set(finding_ids)):
+        raise SecurityBlocker("rejected successor material findings are missing")
+    thread_ids = tuple(
+        sorted(
+            item.thread_id
+            for item in classifications
+            if item.thread_id is not None
+        )
+    )
+    source_bindings = tuple(
+        sorted(
+            source
+            for item in classifications
+            for source in item.source_bindings
+        )
+    )
+    if len(source_bindings) != len(set(source_bindings)):
+        raise SecurityBlocker("rejected successor finding sources are repeated")
+    return VerifiedRejectedSuccessorFindings(
+        predecessor_state_digest=reviewed.state_digest,
+        rejected_state_digest=rejected.state_digest,
+        finding_ids=finding_ids,
+        thread_ids=thread_ids,
+        source_bindings=source_bindings,
+        classification_evidence_digests=tuple(
+            sorted(item.classification_evidence_digest for item in classifications)
+        ),
     )
 
 
