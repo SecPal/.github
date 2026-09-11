@@ -2516,6 +2516,7 @@ def _verify_successor_transport(
     resulting_head_sha: str,
     rejected_candidate: bool = False,
     reanchored_classified_review: bool = False,
+    require_codex_provider_transport: bool = False,
 ) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
     if not isinstance(value, list):
         raise SecurityBlocker("successor provider transport evidence is malformed")
@@ -2680,7 +2681,12 @@ def _verify_successor_transport(
         roles.append(role)
 
     codex_roles = [role for role in roles if role.startswith("CODEX_")]
-    if rejected_candidate or reanchored_classified_review or codex_roles:
+    if (
+        rejected_candidate
+        or reanchored_classified_review
+        or require_codex_provider_transport
+        or codex_roles
+    ):
         if rejected_candidate:
             required = frozenset(
                 {
@@ -3168,6 +3174,7 @@ def _verify_authenticated_feedback_growth(
     successor_evidence: Any,
     rejected_candidate: bool = False,
     reanchored_classified_review: bool = False,
+    require_codex_provider_transport: bool = False,
 ) -> str | None:
     expected_keys = {
         "schema_version",
@@ -3217,6 +3224,7 @@ def _verify_authenticated_feedback_growth(
         resulting_head_sha=resulting_head_sha,
         rejected_candidate=rejected_candidate,
         reanchored_classified_review=reanchored_classified_review,
+        require_codex_provider_transport=require_codex_provider_transport,
     )
     replacement_ids = None
     if provider_reaction_replacement:
@@ -3242,6 +3250,27 @@ def _verify_authenticated_feedback_growth(
             item["node_id"]: item for item in current.feedback["threads"]
         },
     )
+    if reanchored_classified_review and not any(
+        isinstance(item, dict)
+        and isinstance(
+            item.get("classification_evidence"), VerifiedSuccessorClassification
+        )
+        and item["classification_evidence"].thread_id is not None
+        and (
+            observed := current_sources.get(
+                (
+                    "THREAD_COMMENT",
+                    item["classification_evidence"].top_level_comment_node_id,
+                )
+            )
+        )
+        is not None
+        and _source_actor_login(observed[2]) == CODEX_PROVIDER_LOGIN
+        for item in successor_evidence["successor_findings"]
+    ):
+        raise SecurityBlocker(
+            "classified Codex review has no authenticated suggestion"
+        )
     overlapping_additions = transport_additions & finding_additions
     rejected_review_sources = {
         (item["kind"], item["node_id"])
@@ -3409,6 +3438,7 @@ def verify_reanchored_stable_feedback_successor(
         authorized_thread_ids=set(),
         successor_evidence=successor_safety_evidence,
         reanchored_classified_review=classified_review,
+        require_codex_provider_transport=True,
     )
 
 

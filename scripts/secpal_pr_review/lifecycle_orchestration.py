@@ -756,15 +756,20 @@ def _verify_continuation_finding_authority(
                 reviewed, eligibility
             )
         current = feedback_reader(repository, pull_request)
+        raw_successor_safety = item.get("successor_safety_evidence")
         successor_safety = _authenticate_successor_safety_evidence(
-            item.get("successor_safety_evidence"),
+            raw_successor_safety,
             repository=repository,
             delivery_issue=delivery_issue,
             pull_request=pull_request,
             predecessor_state_digest=reviewed.state_digest,
             resulting_head_sha=resulting_head_sha,
             resulting_state_digest=current.state_digest,
-            reanchored_classified_review=(reanchor is not None),
+            reanchored_classified_review=(
+                reanchor is not None
+                and isinstance(raw_successor_safety, Mapping)
+                and raw_successor_safety.get("schema_version") == "1.1"
+            ),
         )
         if reanchor is not None:
             fast_path.verify_reanchored_stable_feedback_successor(

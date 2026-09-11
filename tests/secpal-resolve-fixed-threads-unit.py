@@ -6462,6 +6462,10 @@ class ResolveFixedThreadsTests(TestCase):
             ):
                 parse()
 
+            signature.write_bytes(b"")
+            with self.assertRaises(MODULE.late_disposition.LateDispositionError):
+                parse()
+
     def test_cycle1_r2_openpgp_verifies_captured_bytes_not_mutable_paths(
         self,
     ) -> None:

@@ -1385,11 +1385,22 @@ class LifecycleOrchestrationTests(TestCase):
             },
         }
 
+        classified_review_modes = []
+
         def decide(candidate, *, reanchor_authority=reanchor, source_tree="e" * 40):
-            with mock.patch.object(
-                fast_path,
-                "verify_reanchored_stable_feedback_successor",
-                return_value=None,
+            with (
+                mock.patch.object(
+                    orchestration,
+                    "_authenticate_successor_safety_evidence",
+                    side_effect=lambda _value, **kwargs: classified_review_modes.append(
+                        kwargs["reanchored_classified_review"]
+                    ),
+                ),
+                mock.patch.object(
+                    fast_path,
+                    "verify_reanchored_stable_feedback_successor",
+                    return_value=None,
+                ),
             ):
                 return orchestration._orchestrate_event(
                     REPOSITORY,
@@ -1411,6 +1422,16 @@ class LifecycleOrchestrationTests(TestCase):
         self.assertEqual(decision.resulting_head_sha, NEXT_HEAD)
         self.assertEqual(decision.exceptional_continuations, 0)
         self.assertFalse(decision.request_review)
+        self.assertIs(classified_review_modes[-1], False)
+
+        classified_request = copy.deepcopy(request)
+        classified_request["continuation_evidence"]["successor_safety_evidence"] = {
+            "schema_version": "1.1"
+        }
+        decision = decide(classified_request)
+        self.assertEqual(decision.lifecycle_transition, "EXCEPTIONAL_CONTINUATION")
+        self.assertIs(classified_review_modes[-1], True)
+
         for field, replacement in (
             ("original_pull_request", PR + 10),
             ("continuation_tree_sha", "f" * 40),
@@ -3572,7 +3593,7 @@ class LifecycleOrchestrationTests(TestCase):
         missing_provider = copy.deepcopy(evidence)
         missing_provider["provider_transport"] = []
         with self.assertRaisesRegex(
-            fast_path.SecurityBlocker, "unauthenticated addition"
+            fast_path.SecurityBlocker, "provider acquisition transport"
         ):
             fast_path.verify_reanchored_stable_feedback_successor(
                 reviewed,
@@ -3606,6 +3627,36 @@ class LifecycleOrchestrationTests(TestCase):
                 current,
                 resulting_head_sha=NEXT_HEAD,
                 successor_safety_evidence=material,
+            )
+
+        unchanged_feedback = fast_path.StableFeedbackState(
+            repository=reviewed.repository,
+            pull_request_number=reviewed.pull_request_number,
+            head_sha=NEXT_HEAD,
+            base_ref=reviewed.base_ref,
+            base_sha=reviewed.base_sha,
+            pr_state="OPEN",
+            feedback=copy.deepcopy(reviewed.feedback),
+        )
+        empty_provider = {
+            "schema_version": "1.0",
+            "repository": reviewed.repository,
+            "pull_request_number": reviewed.pull_request_number,
+            "predecessor_state_digest": reviewed.state_digest,
+            "resulting_head_sha": NEXT_HEAD,
+            "resulting_state_digest": unchanged_feedback.state_digest,
+            "provider_transport": [],
+            "successor_findings": [],
+        }
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker,
+            "provider acquisition transport",
+        ):
+            fast_path.verify_reanchored_stable_feedback_successor(
+                reviewed,
+                unchanged_feedback,
+                resulting_head_sha=NEXT_HEAD,
+                successor_safety_evidence=empty_provider,
             )
 
     def test_reanchored_successor_accepts_pr_905_classified_codex_review(
@@ -3699,6 +3750,10 @@ class LifecycleOrchestrationTests(TestCase):
 
         def missing_finding(_current, evidence):
             evidence["successor_findings"].pop()
+
+        def review_without_suggestions(current, evidence):
+            current.feedback["threads"] = current.feedback["threads"][:-2]
+            evidence["successor_findings"] = []
 
         def extra_invented_finding_source(_current, evidence):
             evidence["successor_findings"][0]["sources"].append(
@@ -3804,6 +3859,67 @@ class LifecycleOrchestrationTests(TestCase):
                 }
             )
 
+        def provider_completion_reaction(current, evidence):
+            current.feedback["pull_request_reactions"].append(
+                {
+                    "mutation_id": "REACTION_SYNTHETIC_COMPLETE",
+                    "content": "THUMBS_UP",
+                    "actor": {
+                        "login": "chatgpt-codex-connector",
+                        "node_id": "BOT_kgDOC98s_g",
+                        "database_id": 199175422,
+                    },
+                }
+            )
+            evidence["provider_transport"].append(
+                {
+                    "role": "CODEX_COMPLETION_REACTION",
+                    "kind": "PULL_REQUEST_REACTION",
+                    "node_id": "REACTION_SYNTHETIC_COMPLETE",
+                    "body": None,
+                }
+            )
+
+        def material_security_review(current, evidence):
+            security_result_id = "IC_kwDOQFR1MM8AAAABUBQgbA"
+            current.feedback["conversation_comments"] = [
+                item
+                for item in current.feedback["conversation_comments"]
+                if item["node_id"] != security_result_id
+            ]
+            evidence["provider_transport"] = [
+                item
+                for item in evidence["provider_transport"]
+                if item["node_id"] != security_result_id
+            ]
+            body = (
+                "\n### 🛡️ Codex Security Review\n\n"
+                "Security finding.\n\n"
+                "**Reviewed commit:** `18a6d02d8c`"
+            )
+            current.feedback["reviews"].append(
+                {
+                    "node_id": "PRR_SECURITY_FINDING",
+                    "body_digest": fast_path.digest_text(body),
+                    "actor": {
+                        "login": "chatgpt-codex-connector",
+                        "node_id": "BOT_kgDOC98s_g",
+                        "database_id": 199175422,
+                    },
+                    "state": "COMMENTED",
+                    "commit_oid": current.head_sha,
+                    "reactions": [],
+                }
+            )
+            evidence["provider_transport"].append(
+                {
+                    "role": "CODEX_REVIEW",
+                    "kind": "REVIEW",
+                    "node_id": "PRR_SECURITY_FINDING",
+                    "body": body,
+                }
+            )
+
         def unclassified_late_addition(current, _evidence):
             current.feedback["threads"].append(
                 {
@@ -3871,6 +3987,7 @@ class LifecycleOrchestrationTests(TestCase):
             ]
 
         for label, mutate in (
+            ("review without suggestions", review_without_suggestions),
             ("missing finding", missing_finding),
             ("caller-invented finding", extra_invented_finding_source),
             ("ambiguous repeated finding", repeated_finding),
@@ -3883,6 +4000,8 @@ class LifecycleOrchestrationTests(TestCase):
             ("missing request provenance", missing_request),
             ("wrong request actor", wrong_request_provenance),
             ("synthetic no-finding result", synthetic_no_finding),
+            ("provider completion reaction", provider_completion_reaction),
+            ("material Security finding", material_security_review),
             ("omitted late provider addition", unclassified_late_addition),
             ("material finding", material_finding),
             ("VALID_ACTIONABLE", actionable_finding),
