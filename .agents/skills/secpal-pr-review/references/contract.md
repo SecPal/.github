@@ -925,17 +925,23 @@ that immutable object. OpenPGP authority matching distinguishes the verified
 signing-subkey fingerprint from its authenticated primary-key fingerprint.
 Integration evidence and its fresh receipt bind the same authority and tag-
 object identities. During receipt creation, one trusted GitHub read must
-also prove that the open Ready PR still has parent 1 as its head and that its
-registered default branch currently resolves to parent 2. The pull request's
-creation-time base OID is not a current-tip authority. Missing authority,
-live-ref drift, or an unavailable observation fails closed without retry.
+prove that the open Ready PR still has parent 1 as its head and that its
+registered default branch currently resolves to parent 2. The final commit-
+binding invocation must independently repeat that trusted observation before
+issuing the attestation. The pull request's creation-time base OID is not a
+current-tip authority. Missing authority, live-ref drift, or an unavailable
+observation fails closed without retry.
 
 For a legitimate unchanged Ready source whose pre-persistence package is
 explicitly proven unavailable, version 1.2 of the same prior-authority manifest
 may select one protected `READY_SOURCE_RECOVERY_PUBLICATION`. It binds the exact
 repository, issue, PR, signed sole-parent head, tree, expected base, CURRENT
 lifecycle publication and complete Ready histories; historical receipt and
-attestation digests remain provenance facts only. Fresh complete feedback and
+attestation digests remain provenance facts only. Its expected base SHA is also
+immutable recovery-time provenance. A later integration authenticates parent 2
+from the protected current tip of the same registered target repository/ref;
+legitimate advancement does not require the historical and current SHAs to be
+equal. Fresh complete feedback and
 validation safety digests plus a separately signed one-use authorization are
 mandatory. The recovery is an ancillary record in the existing protected
 lifecycle journal and never becomes a lifecycle transition or second journal.

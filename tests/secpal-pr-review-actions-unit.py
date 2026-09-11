@@ -6993,6 +6993,7 @@ class FastPathTests(TestCase):
         )
         cases = (
             ("repository", "SecPal/api"),
+            ("base_repository", "SecPal/api"),
             ("pull_request_number", 2),
             ("state", "CLOSED"),
             ("draft", True),
@@ -7408,6 +7409,38 @@ class FastPathTests(TestCase):
                 ),
                 authority_manifest,
             )
+
+            historical_base_sha = "8" * 40
+            recovered.expected_target_base_sha = historical_base_sha
+            self.assertEqual(
+                actions._verify_ready_integration_prior_authority(
+                    arguments=arguments,
+                    repository_root=REPO_ROOT,
+                    binding=fast_registry(),
+                    integration_evidence=integration,
+                    live_observation=None,
+                ),
+                authority_manifest,
+            )
+            self.assertEqual(
+                recovered.expected_target_base_sha, historical_base_sha
+            )
+            self.assertEqual(
+                integration["ordered_parent_shas"][1], reviewed.base_sha
+            )
+
+            recovered.expected_target_base_ref = "release"
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "binding changed"
+            ):
+                actions._verify_ready_integration_prior_authority(
+                    arguments=arguments,
+                    repository_root=REPO_ROOT,
+                    binding=fast_registry(),
+                    integration_evidence=integration,
+                    live_observation=None,
+                )
+            recovered.expected_target_base_ref = reviewed.base_ref
 
             arguments.prior_receipt = "invalid-supplied-history.json"
             with self.assertRaisesRegex(
@@ -9099,7 +9132,28 @@ class FastPathTests(TestCase):
                 ),
             ):
                 self.assertEqual(actions.main(argv), 0)
-            observe.assert_not_called()
+            observe.assert_called_once_with("SecPal/.github", 746)
+
+            substituted_parent_observation = {
+                **observation,
+                "base_sha": "f" * 40,
+            }
+            with (
+                mock.patch.object(
+                    actions,
+                    "_observe_ready_integration_authority_once",
+                    return_value=substituted_parent_observation,
+                ),
+                mock.patch.object(
+                    actions, "_verify_ready_integration_published_authority"
+                ),
+                mock.patch.object(
+                    actions,
+                    "_prior_delivery_registry_binding",
+                    return_value=binding,
+                ),
+            ):
+                self.assertNotEqual(actions.main(argv), 0)
             ordinary = [
                 "attest-validation",
                 "--repo",
@@ -9228,6 +9282,20 @@ class FastPathTests(TestCase):
                 "_run_integration_commit_git",
                 side_effect=lambda root, command: git_result(root, command),
             ),
+            mock.patch.object(
+                actions,
+                "_observe_ready_integration_authority_once",
+                return_value={
+                    "repository": "SecPal/.github",
+                    "pull_request_number": reviewed.pull_request_number,
+                    "state": "OPEN",
+                    "draft": False,
+                    "head_sha": reviewed.head_sha,
+                    "base_repository": "SecPal/.github",
+                    "base_ref": reviewed.base_ref,
+                    "base_sha": reviewed.base_sha,
+                },
+            ) as observe,
             mock.patch.object(actions, "_verify_ready_integration_prior_authority"),
             mock.patch.object(
                 actions,
@@ -9237,6 +9305,9 @@ class FastPathTests(TestCase):
             mock.patch.object(actions, "_write_fast_report") as write_report,
         ):
             self.assertEqual(actions._command_attest_validation(arguments), 0)
+        observe.assert_called_once_with(
+            "SecPal/.github", reviewed.pull_request_number
+        )
         write_report.assert_called_once()
         self.assertEqual(
             write_report.call_args.args[1]["kind"],

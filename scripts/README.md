@@ -161,9 +161,15 @@ protected lifecycle-publication journal with CAS and authenticated idempotency;
 The Ready-integration verifier consumes the resulting version-1.2
 `READY_INTEGRATION_PRIOR_AUTHORITY` without historical companion files. It
 still verifies the immutable commit and annotated authority tag and rejects any
-attempt to supply malformed historical evidence and fall back. These functions
-never synthesize historical bytes, create an integration candidate, add a
-lifecycle state, or mutate feedback.
+attempt to supply malformed historical evidence and fall back. The recovery's
+expected base SHA remains exact historical source provenance; later integration
+independently authenticates the protected current tip of the same registered
+target repository/ref as parent 2, without requiring those two SHAs to match.
+Receipt creation and final commit binding each authenticate that live authority,
+so a caller-supplied, stale, or substituted parent 2 cannot acquire an
+attestation after the protected ref moves.
+These functions never synthesize historical bytes, create an integration
+candidate, add a lifecycle state, or mutate feedback.
 
 Both the validation attester and fixed-thread resolver derive registry identity
 through the same closed `fast_path` projection. An admitted pre-enrollment

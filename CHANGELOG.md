@@ -9,6 +9,19 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-11 - Separate Recovered Base Provenance From Current Main
+
+**Fixed:**
+
+- Preserve a recovered Ready source's exact historical base SHA as immutable
+  provenance while independently authenticating the protected current tip of
+  the same registered target repository/ref as integration parent 2.
+- Allow legitimate target-base advancement without weakening exact current-main,
+  ordered-parent, source, lifecycle, signature, or integration-evidence checks.
+- Reauthenticate the protected current-main tip during final integration
+  attestation binding so stale or caller-substituted parent-2 identities fail
+  closed.
+
 ## 2026-09-11 - Authenticate Remediated Ready Provider Terminality
 
 **Fixed:**
