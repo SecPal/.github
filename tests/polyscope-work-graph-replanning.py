@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "templates" / "polyscope-codex-AGENTS.md"
 CONTRACT = ROOT / "docs" / "work-graph-contract.md"
+EVIDENCE_CONTRACT = ROOT / "docs" / "evidence-architecture-contract.md"
 QUALITY = ROOT / ".github" / "workflows" / "quality.yml"
 PREFLIGHT = ROOT / "scripts" / "preflight.sh"
 COMMANDS = (
@@ -36,6 +37,7 @@ class PolyscopeReplanningContractTest(unittest.TestCase):
             raise AssertionError(f"expected one replanning section, found {len(matches)}")
         cls.section = matches[0].group("body")
         cls.contract = CONTRACT.read_text(encoding="utf-8")
+        cls.evidence_contract = EVIDENCE_CONTRACT.read_text(encoding="utf-8")
 
     def test_graph_mutation_precedes_scope_expansion(self):
         self.assertRegex(self.section, r"before\s+implementation scope expands")
@@ -68,6 +70,40 @@ class PolyscopeReplanningContractTest(unittest.TestCase):
     def test_managed_instructions_only_carry_the_operational_protocol(self):
         self.assertRegex(self.section, r"before\s+implementation scope expands")
         self.assertNotRegex(self.section, r"(?i)P1|P2|security|authentication|integrity|fail-open")
+
+    def test_prerequisite_insertion_requires_canonical_necessity_judgment(self):
+        matches = re.findall(
+            r"^#### Prerequisite Necessity\n(?P<body>.*?)(?=^#{2,4} |\Z)",
+            self.contract,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        self.assertEqual(len(matches), 1)
+        rule = " ".join(matches[0].split())
+
+        for excluded_shortcut in (
+            "ordinary in-contract defect",
+            "invocation boundary",
+            "restored or reacquired",
+            "existing issue already owns",
+        ):
+            self.assertIn(excluded_shortcut, rule)
+        self.assertIn("independent trust or authority boundary", rule)
+        self.assertRegex(
+            rule,
+            re.compile(r"second corrective prerequisite.*independently necessary", re.DOTALL),
+        )
+        self.assertIn("historical classification", rule)
+        self.assertIn("current technical truth", rule)
+        self.assertIn("accepted authority extension", rule)
+        self.assertIn("remove the obsolete native dependency first", rule)
+        self.assertRegex(
+            " ".join(self.contract.split()),
+            r"MISSING_PREREQUISITE.*Prerequisite Necessity.*section 7\.1",
+        )
+        self.assertIn(
+            "Prerequisite Necessity",
+            " ".join(self.evidence_contract.split()),
+        )
 
     def test_required_validation_runs_both_replanning_suites_fail_closed(self):
         workflow = QUALITY.read_text(encoding="utf-8")
