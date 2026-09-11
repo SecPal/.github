@@ -1120,7 +1120,22 @@ and the removal/replacement pair into the re-anchor projection and existing
 signed Continuation authorization scope. Actor or content substitution, missing
 or additional reaction churn, incomplete or nonterminal transport, wrong-head
 or wrong-PR evidence, and replay remain rejected. Corrected-successor safety
-retains its existing schema and predecessor-preservation behavior.
+schema 1.0 retains its historical clean Code/Security no-finding behavior and
+predecessor preservation.
+
+Corrected-successor safety schema 1.1 is the re-anchor-only alternative for one
+terminal exact-head Codex Code Review containing suggestions. It authenticates
+the exact review object, provider identity, reviewed commit, body digest,
+terminal summary, Code/Security request comments, and the existing independently
+terminal Security no-finding result. Completeness is derived from the canonical
+Stable Feedback source inventory: every suggestion source must have an existing
+signed version-1.2 invalid/disproven or informational/non-actionable successor
+classification bound to the repository, PR, exact head, both Stable Feedback
+states, exact finding content, and live thread state. A Code no-finding result
+or completion reaction is incompatible with this representation. Missing,
+additional, ambiguous, stale, cross-boundary, material, actionable, unsafe, or
+unclassified findings remain blocking. The classification proves candidate
+safety only and carries no thread-resolution or lifecycle-transition authority.
 
 The re-anchored artifact carries no resolution-eligible thread identities. Old
 threads remain owned by the original PR, and the resolver rejects schema 1.1

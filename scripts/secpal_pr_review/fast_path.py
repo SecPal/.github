@@ -159,6 +159,15 @@ REQUIRED_CODEX_SUCCESSOR_ROLES = frozenset(
         "CODEX_SECURITY_REVIEW_RESULT",
     }
 )
+REQUIRED_CODEX_CLASSIFIED_REVIEW_ROLES = frozenset(
+    {
+        "CODEX_SUMMARY_UPDATE",
+        "CODEX_REVIEW_REQUEST",
+        "CODEX_SECURITY_REVIEW_REQUEST",
+        "CODEX_REVIEW",
+        "CODEX_SECURITY_REVIEW_RESULT",
+    }
+)
 PROVIDER_COMPLETION_REACTION_REPLACEMENT_FIELDS = frozenset(
     {
         "provider_login",
@@ -193,6 +202,12 @@ CLASSIFICATION_DISPOSITIONS = {
     "OUTSIDE_PR_SCOPE": frozenset({"TRACKED_AS_FOLLOW_UP"}),
     "SECURITY_WEAKENING_SUGGESTION": frozenset({"REJECTED_SECURITY_WEAKENING"}),
 }
+SUCCESSOR_SAFE_CLASSIFICATION_DECISIONS = frozenset(
+    {
+        ("INVALID_FALSE_OR_MISLEADING", "DISPROVEN_WITH_EVIDENCE"),
+        ("INFORMATIONAL", "NON_ACTIONABLE"),
+    }
+)
 FIXED_DISPOSITIONS = frozenset({"CORRECTED_AND_VERIFIED", "PROVEN_EXISTING_FIX"})
 MERGE_STATE_POLICY = {
     "DIRTY": "block",
@@ -2500,13 +2515,14 @@ def _verify_successor_transport(
     ],
     resulting_head_sha: str,
     rejected_candidate: bool = False,
+    reanchored_classified_review: bool = False,
 ) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
     if not isinstance(value, list):
         raise SecurityBlocker("successor provider transport evidence is malformed")
     admitted_additions: set[tuple[str, str]] = set()
     admitted_updates: set[tuple[str, str]] = set()
     roles: list[str] = []
-    rejected_review_kinds: list[str] = []
+    terminal_review_kinds: list[str] = []
     for transport in value:
         if not isinstance(transport, dict) or set(transport) != {
             "role",
@@ -2597,7 +2613,7 @@ def _verify_successor_transport(
                 raise SecurityBlocker("Codex review result transport is invalid")
             admitted_additions.add(key)
         elif role == "CODEX_REVIEW":
-            if rejected_candidate:
+            if rejected_candidate or reanchored_classified_review:
                 reviewed_commit = f"**Reviewed commit:** `{resulting_head_sha[:10]}`"
                 review_kind = (
                     "SECURITY_REVIEW"
@@ -2619,9 +2635,13 @@ def _verify_successor_transport(
                     or source_digest != digest_text(body)
                 ):
                     raise SecurityBlocker(
-                        "rejected Codex review transport is not head-bound"
+                        "Codex findings review transport is not head-bound"
                     )
-                rejected_review_kinds.append(review_kind)
+                if reanchored_classified_review and review_kind != "CODE_REVIEW":
+                    raise SecurityBlocker(
+                        "classified Codex review transport is not a Code Review"
+                    )
+                terminal_review_kinds.append(review_kind)
             elif (
                 kind != "REVIEW"
                 or predecessor is not None
@@ -2660,25 +2680,33 @@ def _verify_successor_transport(
         roles.append(role)
 
     codex_roles = [role for role in roles if role.startswith("CODEX_")]
-    if rejected_candidate or codex_roles:
-        required = (
-            frozenset(
+    if rejected_candidate or reanchored_classified_review or codex_roles:
+        if rejected_candidate:
+            required = frozenset(
                 {
                     "CODEX_SUMMARY_UPDATE",
                     "CODEX_REVIEW_REQUEST",
                     "CODEX_SECURITY_REVIEW_REQUEST",
                 }
             )
-            if rejected_candidate
-            else REQUIRED_CODEX_SUCCESSOR_ROLES
-        )
+        elif reanchored_classified_review:
+            required = REQUIRED_CODEX_CLASSIFIED_REVIEW_ROLES
+        else:
+            required = REQUIRED_CODEX_SUCCESSOR_ROLES
         rejected_results_complete = (
             roles.count("CODEX_CODE_REVIEW_RESULT")
-            + rejected_review_kinds.count("CODE_REVIEW")
+            + terminal_review_kinds.count("CODE_REVIEW")
             == 1
             and roles.count("CODEX_SECURITY_REVIEW_RESULT")
-            + rejected_review_kinds.count("SECURITY_REVIEW")
+            + terminal_review_kinds.count("SECURITY_REVIEW")
             == 1
+        )
+        classified_review_complete = (
+            terminal_review_kinds.count("CODE_REVIEW") == 1
+            and terminal_review_kinds.count("SECURITY_REVIEW") == 0
+            and roles.count("CODEX_CODE_REVIEW_RESULT") == 0
+            and roles.count("CODEX_SECURITY_REVIEW_RESULT") == 1
+            and roles.count("CODEX_COMPLETION_REACTION") == 0
         )
         if (
             not required.issubset(roles)
@@ -2686,6 +2714,10 @@ def _verify_successor_transport(
             or (
                 rejected_candidate
                 and not rejected_results_complete
+            )
+            or (
+                reanchored_classified_review
+                and not classified_review_complete
             )
         ):
             raise SecurityBlocker(
@@ -2919,9 +2951,8 @@ def _verify_successor_findings_with_policy(
                 )
             if (
                 technically_blocking is not False
-                or disposition not in CLASSIFICATION_DISPOSITIONS.get(
-                    classification, frozenset()
-                )
+                or (classification, disposition)
+                not in SUCCESSOR_SAFE_CLASSIFICATION_DECISIONS
                 or not DIGEST.fullmatch(
                     verified_classification.classification_evidence_digest
                 )
@@ -3136,6 +3167,7 @@ def _verify_authenticated_feedback_growth(
     authorized_thread_ids: set[str],
     successor_evidence: Any,
     rejected_candidate: bool = False,
+    reanchored_classified_review: bool = False,
 ) -> str | None:
     expected_keys = {
         "schema_version",
@@ -3159,7 +3191,7 @@ def _verify_authenticated_feedback_growth(
         "1.2"
         if provider_reaction_replacement
         else "1.1"
-        if rejected_candidate
+        if rejected_candidate or reanchored_classified_review
         else "1.0"
     )
     if (
@@ -3184,6 +3216,7 @@ def _verify_authenticated_feedback_growth(
         current_sources=current_sources,
         resulting_head_sha=resulting_head_sha,
         rejected_candidate=rejected_candidate,
+        reanchored_classified_review=reanchored_classified_review,
     )
     replacement_ids = None
     if provider_reaction_replacement:
@@ -3368,22 +3401,14 @@ def verify_reanchored_stable_feedback_successor(
         raise SecurityBlocker(
             "corrected successor feedback does not preserve replacement identity"
         )
-    transport = successor_safety_evidence.get("provider_transport")
-    roles = {
-        item.get("role")
-        for item in transport
-        if isinstance(item, dict)
-    } if isinstance(transport, list) else set()
-    if not REQUIRED_CODEX_SUCCESSOR_ROLES.issubset(roles):
-        raise SecurityBlocker(
-            "corrected successor exact-head providers are incomplete"
-        )
+    classified_review = successor_safety_evidence.get("schema_version") == "1.1"
     _verify_authenticated_feedback_growth(
         reviewed,
         current,
         resulting_head_sha=resulting_head_sha,
         authorized_thread_ids=set(),
         successor_evidence=successor_safety_evidence,
+        reanchored_classified_review=classified_review,
     )
 
 

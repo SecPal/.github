@@ -561,6 +561,236 @@ def authenticated_provider_reaction_replacement() -> tuple[
     return reviewed, current, evidence
 
 
+def authenticated_pr_905_classified_codex_review() -> tuple[
+    fast_path.StableFeedbackState,
+    fast_path.StableFeedbackState,
+    dict[str, object],
+]:
+    """Reproduce the exact-head provider shape observed on PR #905."""
+
+    predecessor_head = "46d09efb237f3e8c2e1f1066ba2b840a018ef889"
+    resulting_head = "18a6d02d8c548a4a010fc93c5f8d09d89427f1b2"
+    reviewed, _unused, _unused_evidence = authenticated_provider_growth(
+        delivery_issue=894,
+        pull_request=905,
+        predecessor_head_sha=predecessor_head,
+        resulting_head_sha=resulting_head,
+        base_sha="da7d5f19a1ff4e65bfdbe7ad0a66e13f6172ada9",
+    )
+    provider = {
+        "login": "chatgpt-codex-connector",
+        "node_id": "BOT_kgDOC98s_g",
+        "database_id": 199175422,
+    }
+    requester = {
+        "login": "aroviqen",
+        "node_id": "U_kgDOD9_SfQ",
+        "database_id": 266326653,
+    }
+    reviewed.feedback["conversation_comments"][0].update(
+        node_id="IC_kwDOQFR1MM8AAAABT7Fdrg",
+        actor=provider,
+    )
+    reviewed.refresh_digests()
+    summary = (
+        "<!-- codex-pull-request-review-summary -->\n"
+        '<!-- codex-security-review:v1 {"blockingSeverityThreshold":"P0",'
+        f'"headSha":"{resulting_head}","mergeGateEnabled":false,'
+        '"pullRequestNumber":905,"repository":"SecPal/.github",'
+        '"status":"completed"} -->\n'
+        "## Codex Review Summary\n\n"
+        "This comment shows the latest Codex review activity on this pull request.\n\n"
+        "| Review | Status | Commit | Review trigger |\n"
+        "| --- | --- | --- | --- |\n"
+        "| 📝 **Code Review** | ✅ **Completed** "
+        '<relative-time datetime="2026-09-11T17:41:54.104406Z">'
+        "2026-09-11T17:41:54.104406Z</relative-time> | `18a6d02` | Manual request |\n"
+        "| 🔒 **Security Review** | ✅ **Completed** "
+        '<relative-time datetime="2026-09-11T17:45:06.295720Z">'
+        "2026-09-11T17:45:06.295720Z</relative-time> | `18a6d02` | Manual request |\n"
+        "\n\n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n"
+        "[Your team has set up Codex to review pull requests in this repo]"
+        "(https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n"
+        "- Open a pull request for review\n"
+        "- Mark a draft as ready\n"
+        '- Comment "@codex review" or "@codex security review".\n\n'
+        "Codex reacts with 👀 while any review is running, comments if it has suggestions, "
+        "and reacts with 👍 once all reviews finish with no findings.\n\n</details>"
+    )
+    code_review = (
+        "\n### 💡 Codex Review\n\n"
+        "Here are some automated review suggestions for this pull request.\n\n"
+        "**Reviewed commit:** `18a6d02d8c`\n    \n\n"
+        "<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n"
+        "[Your team has set up Codex to review pull requests in this repo]"
+        "(https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n"
+        "- Open a pull request for review\n"
+        "- Mark a draft as ready\n"
+        '- Comment "@codex review".\n\n'
+        "If Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\n"
+        'Codex can also answer questions or update the PR. Try commenting "@codex '
+        'address that feedback".\n            \n</details>'
+    )
+    security_result = (
+        "### 🛡️ Codex Security Review\n\n"
+        "Security review completed. No security issues were found in this pull request.\n\n"
+        "**Reviewed commit:** `18a6d02d8c`\n\n"
+        "[View security finding report]"
+        "(https://chatgpt.com/codex/cloud/tasks/task_e_6aa43c276a7c83329053f601e2daaa25)\n\n"
+        "_Only the user who started this review can view the report in Codex._\n\n"
+        "<details> <summary>ℹ️ About Codex security reviews in GitHub</summary>\n<br/>\n\n"
+        "This is an experimental Codex feature. Security reviews are triggered when:\n"
+        '- You comment "@codex security review"\n'
+        '- A regular code review gets triggered (for example, "@codex review" or when a PR '
+        "is opened), and you’re opted in so security review runs alongside code review\n\n"
+        "Once complete, Codex will leave suggestions, or a comment if no findings are found.\n\n\n"
+        "</details>"
+    )
+    bodies = {
+        "IC_kwDOQFR1MM8AAAABUBIbNg": "@codex review",
+        "IC_kwDOQFR1MM8AAAABUBIcQw": "@codex security review",
+        "IC_kwDOQFR1MM8AAAABUBQgbA": security_result,
+    }
+    current_feedback = copy.deepcopy(reviewed.feedback)
+    current_feedback["conversation_comments"][0].update(
+        body_digest=fast_path.digest_text(summary),
+        updated_at="2026-09-11T17:45:08Z",
+    )
+    for node_id, body in bodies.items():
+        current_feedback["conversation_comments"].append(
+            {
+                "node_id": node_id,
+                "body_digest": fast_path.digest_text(body),
+                "actor": requester if body.startswith("@codex") else provider,
+                "updated_at": None,
+                "reactions": [],
+            }
+        )
+    current_feedback["reviews"].append(
+        {
+            "node_id": "PRR_kwDOQFR1MM8AAAABNNvsIA",
+            "body_digest": fast_path.digest_text(code_review),
+            "actor": provider,
+            "state": "COMMENTED",
+            "commit_oid": resulting_head,
+            "reactions": [],
+        }
+    )
+    suggestions = (
+        (
+            "PRRT_kwDOQFR1MM6hk-YJ",
+            "PRRC_kwDOQFR1MM7t72Mn",
+            "6d2f2240da81d5b30595fa239d6989311bb0c1191fafcb861d7194472a45df3a",
+        ),
+        (
+            "PRRT_kwDOQFR1MM6hk-YQ",
+            "PRRC_kwDOQFR1MM7t72Mt",
+            "1b914a1fea2d46bbe8bcf04b52f148fa38e8ff68dc339347b60e094e90ac097c",
+        ),
+    )
+    findings = []
+    for index, (thread_id, comment_id, body_digest) in enumerate(suggestions, 1):
+        current_feedback["threads"].append(
+            {
+                "node_id": thread_id,
+                "is_resolved": False,
+                "is_outdated": False,
+                "comments": [
+                    {
+                        "node_id": comment_id,
+                        "body_digest": body_digest,
+                        "actor": provider,
+                        "reply_to_id": None,
+                        "reactions": [],
+                    }
+                ],
+            }
+        )
+        source = {
+            "kind": "THREAD_COMMENT",
+            "node_id": comment_id,
+            "digest": body_digest,
+        }
+        findings.append(
+            {
+                "sources": [source],
+                "classification_evidence": fast_path._seal_successor_classification(
+                    repository=REPOSITORY,
+                    delivery_issue_number=894,
+                    pull_request_number=905,
+                    head_sha=resulting_head,
+                    finding_id=comment_id,
+                    finding_evidence_digest=f"{index + 1}" * 64,
+                    thread_id=thread_id,
+                    top_level_comment_node_id=comment_id,
+                    finding_body_digest=body_digest,
+                    reply_count=0,
+                    is_resolved=False,
+                    is_outdated=False,
+                    classification="INVALID_FALSE_OR_MISLEADING",
+                    disposition="DISPROVEN_WITH_EVIDENCE",
+                    technically_blocking=False,
+                    technical_blockers=(),
+                    classification_evidence_digest=f"{index + 3}" * 64,
+                    source_bindings=(
+                        ("THREAD_COMMENT", comment_id, body_digest, thread_id),
+                    ),
+                ),
+            }
+        )
+    current = fast_path.StableFeedbackState(
+        repository=REPOSITORY,
+        pull_request_number=905,
+        head_sha=resulting_head,
+        base_ref="main",
+        base_sha=reviewed.base_sha,
+        pr_state="OPEN",
+        feedback=current_feedback,
+    )
+    evidence: dict[str, object] = {
+        "schema_version": "1.1",
+        "repository": REPOSITORY,
+        "pull_request_number": 905,
+        "predecessor_state_digest": reviewed.state_digest,
+        "resulting_head_sha": resulting_head,
+        "resulting_state_digest": current.state_digest,
+        "provider_transport": [
+            {
+                "role": "CODEX_SUMMARY_UPDATE",
+                "kind": "CONVERSATION_COMMENT",
+                "node_id": "IC_kwDOQFR1MM8AAAABT7Fdrg",
+                "body": summary,
+            },
+            {
+                "role": "CODEX_REVIEW_REQUEST",
+                "kind": "CONVERSATION_COMMENT",
+                "node_id": "IC_kwDOQFR1MM8AAAABUBIbNg",
+                "body": bodies["IC_kwDOQFR1MM8AAAABUBIbNg"],
+            },
+            {
+                "role": "CODEX_SECURITY_REVIEW_REQUEST",
+                "kind": "CONVERSATION_COMMENT",
+                "node_id": "IC_kwDOQFR1MM8AAAABUBIcQw",
+                "body": bodies["IC_kwDOQFR1MM8AAAABUBIcQw"],
+            },
+            {
+                "role": "CODEX_REVIEW",
+                "kind": "REVIEW",
+                "node_id": "PRR_kwDOQFR1MM8AAAABNNvsIA",
+                "body": code_review,
+            },
+            {
+                "role": "CODEX_SECURITY_REVIEW_RESULT",
+                "kind": "CONVERSATION_COMMENT",
+                "node_id": "IC_kwDOQFR1MM8AAAABUBQgbA",
+                "body": security_result,
+            },
+        ],
+        "successor_findings": findings,
+    }
+    return reviewed, current, evidence
+
+
 def _provider_terminal_summary(head_sha: str) -> str:
     return (
         "<!-- codex-pull-request-review-summary -->\n"
@@ -2485,6 +2715,50 @@ class LifecycleOrchestrationTests(TestCase):
             fast_path.VerifiedSuccessorClassification,
         )
 
+        reanchored_raw = copy.deepcopy(raw)
+        reanchored_raw["schema_version"] = "1.1"
+        with (
+            mock.patch.object(
+                orchestration,
+                "_successor_classification_signer",
+                return_value=late_disposition.SignerIdentity(
+                    "ssh", "SHA256:fixture"
+                ),
+            ),
+            mock.patch.object(
+                late_disposition,
+                "parse_successor_classification_artifact",
+                return_value=verified,
+            ) as reanchored_parser,
+        ):
+            reanchored_authenticated = (
+                orchestration._authenticate_successor_safety_evidence(
+                    reanchored_raw,
+                    repository=REPOSITORY,
+                    delivery_issue=ISSUE,
+                    pull_request=PR,
+                    predecessor_state_digest=reviewed.state_digest,
+                    resulting_head_sha=NEXT_HEAD,
+                    resulting_state_digest=current.state_digest,
+                    reanchored_classified_review=True,
+                )
+            )
+        reanchored_parser.assert_called_once()
+        self.assertEqual(reanchored_authenticated["schema_version"], "1.1")
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError,
+            "unknown or missing fields",
+        ):
+            orchestration._authenticate_successor_safety_evidence(
+                reanchored_raw,
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                pull_request=PR,
+                predecessor_state_digest=reviewed.state_digest,
+                resulting_head_sha=NEXT_HEAD,
+                resulting_state_digest=current.state_digest,
+            )
+
         rejected_raw = copy.deepcopy(raw)
         rejected_raw["schema_version"] = "1.1"
         material_thread = late_disposition.ThreadAuthorization(
@@ -3298,7 +3572,7 @@ class LifecycleOrchestrationTests(TestCase):
         missing_provider = copy.deepcopy(evidence)
         missing_provider["provider_transport"] = []
         with self.assertRaisesRegex(
-            fast_path.SecurityBlocker, "exact-head providers are incomplete"
+            fast_path.SecurityBlocker, "unauthenticated addition"
         ):
             fast_path.verify_reanchored_stable_feedback_successor(
                 reviewed,
@@ -3333,6 +3607,306 @@ class LifecycleOrchestrationTests(TestCase):
                 resulting_head_sha=NEXT_HEAD,
                 successor_safety_evidence=material,
             )
+
+    def test_reanchored_successor_accepts_pr_905_classified_codex_review(
+        self,
+    ) -> None:
+        reviewed, current, evidence = authenticated_pr_905_classified_codex_review()
+        self.assertEqual(
+            next(
+                item["body_digest"]
+                for item in current.feedback["reviews"]
+                if item["node_id"] == "PRR_kwDOQFR1MM8AAAABNNvsIA"
+            ),
+            "7641566780ebf61fdc73ae1d1f57f7098cd5bdad0d2157ae203fbb52af8f58da",
+        )
+        self.assertEqual(
+            next(
+                item["body_digest"]
+                for item in current.feedback["conversation_comments"]
+                if item["node_id"] == "IC_kwDOQFR1MM8AAAABT7Fdrg"
+            ),
+            "223004c82862671eab1209a31be2673fba7d7ad62ee750ed182c444e56686f07",
+        )
+        self.assertEqual(
+            next(
+                item["body_digest"]
+                for item in current.feedback["conversation_comments"]
+                if item["node_id"] == "IC_kwDOQFR1MM8AAAABUBQgbA"
+            ),
+            "84f16d17de54b5b8cb629e37d3d19a9d154c7784e1e91a46de3171e3405f3ff7",
+        )
+
+        fast_path.verify_reanchored_stable_feedback_successor(
+            reviewed,
+            current,
+            resulting_head_sha=current.head_sha,
+            successor_safety_evidence=evidence,
+        )
+
+        informational = copy.deepcopy(evidence)
+        classification = informational["successor_findings"][1][
+            "classification_evidence"
+        ]
+        informational["successor_findings"][1]["classification_evidence"] = (
+            fast_path._seal_successor_classification(
+                **{
+                    key: value
+                    for key, value in classification.__dict__.items()
+                    if key != "_verification_seal"
+                }
+                | {
+                    "classification": "INFORMATIONAL",
+                    "disposition": "NON_ACTIONABLE",
+                }
+            )
+        )
+        fast_path.verify_reanchored_stable_feedback_successor(
+            reviewed,
+            current,
+            resulting_head_sha=current.head_sha,
+            successor_safety_evidence=informational,
+        )
+
+    def test_reanchored_classified_codex_review_fails_closed(self) -> None:
+        def replace_classification(evidence, index, **updates):
+            original = evidence["successor_findings"][index][
+                "classification_evidence"
+            ]
+            evidence["successor_findings"][index]["classification_evidence"] = (
+                fast_path._seal_successor_classification(
+                    **{
+                        key: value
+                        for key, value in original.__dict__.items()
+                        if key != "_verification_seal"
+                    }
+                    | updates
+                )
+            )
+
+        def code_review(current, evidence):
+            review = next(
+                item
+                for item in current.feedback["reviews"]
+                if item["node_id"] == "PRR_kwDOQFR1MM8AAAABNNvsIA"
+            )
+            transport = next(
+                item
+                for item in evidence["provider_transport"]
+                if item["role"] == "CODEX_REVIEW"
+            )
+            return review, transport
+
+        def missing_finding(_current, evidence):
+            evidence["successor_findings"].pop()
+
+        def extra_invented_finding_source(_current, evidence):
+            evidence["successor_findings"][0]["sources"].append(
+                {
+                    "kind": "THREAD_COMMENT",
+                    "node_id": "PRRC_CALLER_INVENTED",
+                    "digest": "f" * 64,
+                }
+            )
+
+        def repeated_finding(_current, evidence):
+            evidence["successor_findings"].append(
+                copy.deepcopy(evidence["successor_findings"][0])
+            )
+
+        def nonterminal_review(current, evidence):
+            review, _transport = code_review(current, evidence)
+            review["state"] = "PENDING"
+
+        def wrong_provider(current, evidence):
+            review, _transport = code_review(current, evidence)
+            review["actor"] = {
+                "login": "delivery-user",
+                "node_id": "USER_DELIVERY",
+                "database_id": 7,
+            }
+
+        def stale_review(current, evidence):
+            review, _transport = code_review(current, evidence)
+            review["commit_oid"] = "7" * 40
+
+        def tampered_review_body(_current, evidence):
+            _review, transport = code_review(_current, evidence)
+            transport["body"] += "\ntampered"
+
+        def replaced_review_identity(_current, evidence):
+            _review, transport = code_review(_current, evidence)
+            transport["node_id"] = "PRR_REPLACED"
+
+        def nonterminal_summary(current, evidence):
+            summary = next(
+                item
+                for item in evidence["provider_transport"]
+                if item["role"] == "CODEX_SUMMARY_UPDATE"
+            )
+            summary["body"] = summary["body"].replace(
+                '"status":"completed"', '"status":"running"'
+            )
+            next(
+                item
+                for item in current.feedback["conversation_comments"]
+                if item["node_id"] == summary["node_id"]
+            )["body_digest"] = fast_path.digest_text(summary["body"])
+
+        def missing_request(current, evidence):
+            node_id = "IC_kwDOQFR1MM8AAAABUBIbNg"
+            current.feedback["conversation_comments"] = [
+                item
+                for item in current.feedback["conversation_comments"]
+                if item["node_id"] != node_id
+            ]
+            evidence["provider_transport"] = [
+                item
+                for item in evidence["provider_transport"]
+                if item["node_id"] != node_id
+            ]
+
+        def wrong_request_provenance(current, _evidence):
+            next(
+                item
+                for item in current.feedback["conversation_comments"]
+                if item["node_id"] == "IC_kwDOQFR1MM8AAAABUBIbNg"
+            )["actor"] = {
+                "login": "chatgpt-codex-connector",
+                "node_id": "BOT_kgDOC98s_g",
+                "database_id": 199175422,
+            }
+
+        def synthetic_no_finding(current, evidence):
+            body = (
+                "Codex Review: Didn't find any major issues.\n\n"
+                "**Reviewed commit:** `18a6d02d8c`"
+            )
+            current.feedback["conversation_comments"].append(
+                {
+                    "node_id": "IC_SYNTHETIC_CODE_RESULT",
+                    "body_digest": fast_path.digest_text(body),
+                    "actor": {
+                        "login": "chatgpt-codex-connector",
+                        "node_id": "BOT_kgDOC98s_g",
+                        "database_id": 199175422,
+                    },
+                    "updated_at": None,
+                    "reactions": [],
+                }
+            )
+            evidence["provider_transport"].append(
+                {
+                    "role": "CODEX_CODE_REVIEW_RESULT",
+                    "kind": "CONVERSATION_COMMENT",
+                    "node_id": "IC_SYNTHETIC_CODE_RESULT",
+                    "body": body,
+                }
+            )
+
+        def unclassified_late_addition(current, _evidence):
+            current.feedback["threads"].append(
+                {
+                    "node_id": "PRRT_LATE_ADDITION",
+                    "is_resolved": False,
+                    "is_outdated": False,
+                    "comments": [
+                        {
+                            "node_id": "PRRC_LATE_ADDITION",
+                            "body_digest": "f" * 64,
+                            "actor": {
+                                "login": "chatgpt-codex-connector",
+                                "node_id": "BOT_kgDOC98s_g",
+                                "database_id": 199175422,
+                            },
+                            "reply_to_id": None,
+                            "reactions": [],
+                        }
+                    ],
+                }
+            )
+
+        def material_finding(_current, evidence):
+            replace_classification(
+                evidence,
+                0,
+                technically_blocking=True,
+                technical_blockers=("P1",),
+            )
+
+        def actionable_finding(_current, evidence):
+            replace_classification(
+                evidence,
+                0,
+                classification="VALID_ACTIONABLE",
+                disposition="CORRECTED_AND_VERIFIED",
+            )
+
+        def resolved_finding(current, evidence):
+            current.feedback["threads"][-2]["is_resolved"] = True
+            replace_classification(evidence, 0, is_resolved=True)
+
+        def wrong_pr(current, evidence):
+            current.pull_request_number = 906
+            evidence["pull_request_number"] = 906
+
+        def wrong_head(current, evidence):
+            current.head_sha = "7" * 40
+            evidence["resulting_head_sha"] = current.head_sha
+
+        def wrong_predecessor_binding(_current, evidence):
+            evidence["predecessor_state_digest"] = "f" * 64
+
+        def missing_security(current, evidence):
+            node_id = "IC_kwDOQFR1MM8AAAABUBQgbA"
+            current.feedback["conversation_comments"] = [
+                item
+                for item in current.feedback["conversation_comments"]
+                if item["node_id"] != node_id
+            ]
+            evidence["provider_transport"] = [
+                item
+                for item in evidence["provider_transport"]
+                if item["node_id"] != node_id
+            ]
+
+        for label, mutate in (
+            ("missing finding", missing_finding),
+            ("caller-invented finding", extra_invented_finding_source),
+            ("ambiguous repeated finding", repeated_finding),
+            ("nonterminal Code Review", nonterminal_review),
+            ("wrong provider", wrong_provider),
+            ("stale reviewed commit", stale_review),
+            ("review body substitution", tampered_review_body),
+            ("provider review replacement", replaced_review_identity),
+            ("fake terminal summary", nonterminal_summary),
+            ("missing request provenance", missing_request),
+            ("wrong request actor", wrong_request_provenance),
+            ("synthetic no-finding result", synthetic_no_finding),
+            ("omitted late provider addition", unclassified_late_addition),
+            ("material finding", material_finding),
+            ("VALID_ACTIONABLE", actionable_finding),
+            ("resolved finding", resolved_finding),
+            ("cross-PR replay", wrong_pr),
+            ("cross-head replay", wrong_head),
+            ("re-anchor predecessor mismatch", wrong_predecessor_binding),
+            ("nonterminal Security result", missing_security),
+        ):
+            reviewed, current, evidence = (
+                authenticated_pr_905_classified_codex_review()
+            )
+            mutate(current, evidence)
+            current.refresh_digests()
+            evidence["resulting_state_digest"] = current.state_digest
+            with self.subTest(label=label), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                fast_path.verify_reanchored_stable_feedback_successor(
+                    reviewed,
+                    current,
+                    resulting_head_sha=current.head_sha,
+                    successor_safety_evidence=evidence,
+                )
 
     def test_rejected_successor_accepts_exact_codex_completion_reaction_replacement(
         self,

@@ -473,6 +473,7 @@ def _authenticate_successor_safety_evidence(
     predecessor_state_digest: str,
     resulting_head_sha: str,
     resulting_state_digest: str,
+    reanchored_classified_review: bool = False,
 ) -> Any:
     return _authenticate_successor_safety_evidence_with_policy(
         value,
@@ -483,6 +484,7 @@ def _authenticate_successor_safety_evidence(
         resulting_head_sha=resulting_head_sha,
         resulting_state_digest=resulting_state_digest,
         rejected_candidate=False,
+        reanchored_classified_review=reanchored_classified_review,
     )
 
 
@@ -505,6 +507,7 @@ def _authenticate_rejected_successor_safety_evidence(
         resulting_head_sha=resulting_head_sha,
         resulting_state_digest=resulting_state_digest,
         rejected_candidate=True,
+        reanchored_classified_review=False,
     )
 
 
@@ -518,6 +521,7 @@ def _authenticate_successor_safety_evidence_with_policy(
     resulting_head_sha: str,
     resulting_state_digest: str,
     rejected_candidate: bool,
+    reanchored_classified_review: bool,
 ) -> Any:
     if value is None:
         return None
@@ -544,7 +548,7 @@ def _authenticate_successor_safety_evidence_with_policy(
         "1.2"
         if provider_reaction_replacement
         else "1.1"
-        if rejected_candidate
+        if rejected_candidate or reanchored_classified_review
         else "1.0"
     )
     if (
@@ -760,6 +764,7 @@ def _verify_continuation_finding_authority(
             predecessor_state_digest=reviewed.state_digest,
             resulting_head_sha=resulting_head_sha,
             resulting_state_digest=current.state_digest,
+            reanchored_classified_review=(reanchor is not None),
         )
         if reanchor is not None:
             fast_path.verify_reanchored_stable_feedback_successor(
