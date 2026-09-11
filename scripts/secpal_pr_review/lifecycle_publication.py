@@ -152,11 +152,6 @@ class VerifiedReadySourceRecovery:
     historical_evidence_loss_proof_digest: str
 
 
-@dataclass(frozen=True, slots=True)
-class _VerifiedReadySourceRecoveryProviderBindingSeal:
-    binding_digest: str
-
-
 @dataclass(frozen=True)
 class VerifiedReadySourceRecoveryProviderBinding:
     """Ephemeral provider head derived from authenticated CURRENT history."""
@@ -172,7 +167,6 @@ class VerifiedReadySourceRecoveryProviderBinding:
     current_publication_digest: str
     remediation_event_digests: tuple[str, ...]
     lifecycle_evidence_digest: str
-    _verification_seal: object
 
     def provider_head(
         self, *, repository: str, pull_request: int, current_head_sha: str
@@ -2019,10 +2013,17 @@ def derive_ready_source_recovery_provider_binding(
         parsed = authority._load_canonical_json(
             serialized, "Ready-source provider lifecycle evidence"
         )
+        if (
+            isinstance(parsed, dict)
+            and set(parsed) == authority.PUBLICATION_EVIDENCE_FIELDS
+        ):
+            bundle = parsed.get("lifecycle_evidence")
+        else:
+            bundle = parsed
         admitted_initialization = (
-            parsed.get("delivery_initialization")
-            if isinstance(parsed, dict)
-            and set(parsed) == authority.BUNDLE_FIELDS
+            bundle.get("delivery_initialization")
+            if isinstance(bundle, dict)
+            and set(bundle) == authority.BUNDLE_FIELDS
             else None
         )
         verified = authority._verify_lifecycle_authority_for_journal(
@@ -2036,10 +2037,6 @@ def derive_ready_source_recovery_provider_binding(
         raise LifecyclePublicationError(
             "Ready-source provider lifecycle differs from CURRENT"
         )
-    if isinstance(parsed, dict) and set(parsed) == authority.PUBLICATION_EVIDENCE_FIELDS:
-        bundle = parsed.get("lifecycle_evidence")
-    else:
-        bundle = parsed
     if not isinstance(bundle, dict) or frozenset(bundle) not in {
         authority.BUNDLE_FIELDS,
         authority.EXACT_ADOPTION_PUBLICATION_FIELDS,
@@ -2145,12 +2142,8 @@ def derive_ready_source_recovery_provider_binding(
         "remediation_event_digests": event_digests,
         "lifecycle_evidence_digest": digest_json(parsed),
     }
-    binding_digest = digest_json(fields)
     return VerifiedReadySourceRecoveryProviderBinding(
         **{**fields, "remediation_event_digests": tuple(event_digests)},
-        _verification_seal=_VerifiedReadySourceRecoveryProviderBindingSeal(
-            binding_digest
-        ),
     )
 
 
@@ -2165,12 +2158,6 @@ def ready_source_recovery_provider_head(
 
     if (
         not isinstance(value, VerifiedReadySourceRecoveryProviderBinding)
-        or not isinstance(
-            value._verification_seal,
-            _VerifiedReadySourceRecoveryProviderBindingSeal,
-        )
-        or value._verification_seal.binding_digest
-        != digest_json(_ready_source_provider_binding_fields(value))
         or value.repository != repository
         or value.pull_request != pull_request
         or value.current_head_sha != current_head_sha
@@ -2178,7 +2165,18 @@ def ready_source_recovery_provider_head(
         raise LifecyclePublicationError(
             "Ready-source provider binding is stale or substituted"
         )
-    return value.provider_head_sha
+    current = verify_current_lifecycle_authority(
+        value.repository,
+        value.delivery_issue,
+    )
+    authenticated = derive_ready_source_recovery_provider_binding(current)
+    if _ready_source_provider_binding_fields(authenticated) != (
+        _ready_source_provider_binding_fields(value)
+    ):
+        raise LifecyclePublicationError(
+            "Ready-source provider binding is stale or substituted"
+        )
+    return authenticated.provider_head_sha
 
 
 def _verify_historical_lifecycle_transition(

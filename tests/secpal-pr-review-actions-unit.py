@@ -8075,6 +8075,11 @@ class FastPathTests(TestCase):
             mock.patch.object(
                 actions, "_validated_commit_parent", return_value="9" * 40
             ),
+            mock.patch.object(
+                type(binding),
+                "provider_head",
+                return_value=binding.provider_head_sha,
+            ),
         ):
             facts, _ = actions._acquire_ready_source_recovery_facts(
                 repository=reviewed.repository,
@@ -12184,7 +12189,7 @@ class FastPathTests(TestCase):
         security_label: str = "**Security Review**",
         metadata_head: str = p21.HEAD,
         metadata_repository: str = "SecPal/.github",
-        metadata_pull_request: int = 1,
+        metadata_pull_request: Any = 1,
         author: str = "chatgpt-codex-connector",
         extra_rows: str = "",
     ) -> dict[str, Any]:
@@ -12199,7 +12204,7 @@ class FastPathTests(TestCase):
                             "<!-- codex-pull-request-review-summary -->\n"
                             "<!-- codex-security-review:v1 "
                             f'{{"headSha":"{metadata_head}",'
-                            f'"pullRequestNumber":{metadata_pull_request},'
+                            f'"pullRequestNumber":{json.dumps(metadata_pull_request)},'
                             f'"repository":"{metadata_repository}",'
                             '"status":"completed"} -->\n'
                             "| Review | Status | Commit | Review trigger |\n"
@@ -12413,23 +12418,27 @@ class FastPathTests(TestCase):
                     fields["remediation_event_digests"]
                 ),
             },
-            _verification_seal=(
-                lifecycle_publication
-                ._VerifiedReadySourceRecoveryProviderBindingSeal(
-                    fast_path.digest_json(fields)
-                )
-            ),
         )
 
-    def test_ready_source_accepts_only_sealed_remediated_provider_predecessor(
+    def test_ready_source_accepts_only_authenticated_remediated_provider_predecessor(
         self,
     ) -> None:
         binding = self._ready_source_provider_binding()
-        actions._require_review_providers_terminal(
-            self._codex_provider_state(metadata_head="f" * 40),
+        with mock.patch.object(
+            type(binding),
+            "provider_head",
+            return_value="f" * 40,
+        ) as provider_head:
+            actions._require_review_providers_terminal(
+                self._codex_provider_state(metadata_head="f" * 40),
+                repository="SecPal/.github",
+                pull_request_number=1,
+                ready_source_provider_binding=binding,
+            )
+        provider_head.assert_called_once_with(
             repository="SecPal/.github",
-            pull_request_number=1,
-            ready_source_provider_binding=binding,
+            pull_request=1,
+            current_head_sha=p21.HEAD,
         )
         cases = (
             self._codex_provider_state(metadata_head="e" * 40),
@@ -12440,9 +12449,33 @@ class FastPathTests(TestCase):
             self._codex_provider_state(metadata_head="f" * 40,
                                        security_status="**Running**"),
         )
-        for provider_state in cases:
-            with self.subTest(provider_state=provider_state), self.assertRaises(
-                actions.MutationBlocked
+        with mock.patch.object(
+            type(binding), "provider_head", return_value="f" * 40
+        ):
+            for provider_state in cases:
+                with self.subTest(
+                    provider_state=provider_state
+                ), self.assertRaises(actions.MutationBlocked):
+                    actions._require_review_providers_terminal(
+                        provider_state,
+                        repository="SecPal/.github",
+                        pull_request_number=1,
+                        ready_source_provider_binding=binding,
+                    )
+
+    def test_ready_source_exact_current_head_still_requires_provider_identity(
+        self,
+    ) -> None:
+        binding = self._ready_source_provider_binding()
+        for provider_state in (
+            self._codex_provider_state(metadata_repository="SecPal/api"),
+            self._codex_provider_state(metadata_pull_request=2),
+            self._codex_provider_state(metadata_pull_request=True),
+            self._codex_provider_state(metadata_pull_request=1.0),
+        ):
+            with self.subTest(provider_state=provider_state), self.assertRaisesRegex(
+                actions.MutationBlocked,
+                "repository or PR identity changed",
             ):
                 actions._require_review_providers_terminal(
                     provider_state,
@@ -12450,15 +12483,6 @@ class FastPathTests(TestCase):
                     pull_request_number=1,
                     ready_source_provider_binding=binding,
                 )
-
-        substituted = replace(binding, provider_head_sha="e" * 40)
-        with self.assertRaisesRegex(actions.MutationBlocked, "substituted"):
-            actions._require_review_providers_terminal(
-                self._codex_provider_state(metadata_head="e" * 40),
-                repository="SecPal/.github",
-                pull_request_number=1,
-                ready_source_provider_binding=substituted,
-            )
 
     def test_ready_pr_missing_codex_summary_remains_rejected(self) -> None:
         pull_request = self._codex_provider_state()

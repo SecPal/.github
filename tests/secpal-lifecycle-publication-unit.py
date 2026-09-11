@@ -562,6 +562,53 @@ class LifecyclePublicationTests(TestCase):
         self.assertEqual(binding.pull_request, PR)
         self.assertEqual(binding.current_head_sha, HEADS[2])
         self.assertEqual(binding.provider_head_sha, HEADS[1])
+        self.assertEqual(
+            publication.ready_source_recovery_provider_head(
+                binding,
+                repository=REPOSITORY,
+                pull_request=PR,
+                current_head_sha=HEADS[2],
+            ),
+            HEADS[1],
+        )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "stale or substituted"
+        ):
+            publication.ready_source_recovery_provider_head(
+                replace(binding, provider_head_sha=HEADS[0]),
+                repository=REPOSITORY,
+                pull_request=PR,
+                current_head_sha=HEADS[2],
+            )
+
+    def test_ready_source_provider_binding_accepts_native_publication_wrapper(
+        self,
+    ) -> None:
+        chain = Chain(ISSUE + 10)
+        chain.append("INITIALIZED_DRAFT")
+        chain.append("UNRESTRICTED_REVIEW_CONSUMED")
+        chain.append("DRAFT_TO_READY")
+        chain.append("REMEDIATION_COMPLETED", head=HEADS[1])
+        serialized = authority.serialize_publication_lifecycle_evidence(
+            lifecycle_evidence=chain.raw()
+        )
+        verified = authority._verify_lifecycle_authority_for_journal(
+            serialized,
+            admitted_initialization=chain.initialization,
+        )
+        current = publication.VerifiedLifecyclePublication(
+            "1" * 40,
+            "2" * 64,
+            BRANCH,
+            "3" * 40,
+            "4" * 40,
+            verified,
+            serialized,
+        )
+
+        binding = publication.derive_ready_source_recovery_provider_binding(current)
+
+        self.assertEqual(binding.provider_head_sha, HEADS[0])
 
     def test_ready_source_provider_binding_rejects_nonexact_lifecycle_shapes(self) -> None:
         missing_remediation = Chain(ISSUE + 1)

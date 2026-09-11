@@ -2017,8 +2017,25 @@ def _require_review_providers_terminal(
         ):
             raise MutationBlocked("Codex review provider status is indeterminate")
         body = summary_comments[0].get("body")
+        if ready_source_provider_binding is not None and (
+            repository is None or pull_request_number is None
+        ):
+            raise MutationBlocked(
+                "Codex review provider repository or PR identity changed"
+            )
         try:
-            fast_path.verify_codex_provider_summary(body, head_sha=head_sha)
+            fast_path.verify_codex_provider_summary(
+                body,
+                head_sha=head_sha,
+                repository=(
+                    repository if ready_source_provider_binding is not None else None
+                ),
+                pull_request_number=(
+                    pull_request_number
+                    if ready_source_provider_binding is not None
+                    else None
+                ),
+            )
         except fast_path.SecurityBlocker as exc:
             if (
                 str(exc)

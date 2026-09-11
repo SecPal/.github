@@ -455,14 +455,17 @@ def verify_codex_provider_summary(
             "Codex review provider status is stale for the current head"
         )
     if repository is not None or pull_request_number is not None:
+        status_pull_request = status.get("pullRequestNumber")
         if (
             not isinstance(repository, str)
             or not REPOSITORY.fullmatch(repository)
             or not isinstance(pull_request_number, int)
             or isinstance(pull_request_number, bool)
             or pull_request_number < 1
+            or not isinstance(status_pull_request, int)
+            or isinstance(status_pull_request, bool)
             or status.get("repository") != repository
-            or status.get("pullRequestNumber") != pull_request_number
+            or status_pull_request != pull_request_number
         ):
             raise SecurityBlocker(
                 "Codex review provider repository or PR identity changed"
