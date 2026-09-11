@@ -4572,6 +4572,10 @@ class LifecycleOrchestrationTests(TestCase):
             _review, transport = predecessor_review(_current, evidence)
             transport["body"] += "\nsubstituted"
 
+        def non_utf8_predecessor_body(_current, evidence):
+            _review, transport = predecessor_review(_current, evidence)
+            transport["body"] = "\ud800"
+
         def missing_predecessor_review(_current, evidence):
             evidence["predecessor_provider_feedback"]["provider_transport"] = []
 
@@ -4733,6 +4737,7 @@ class LifecycleOrchestrationTests(TestCase):
             ("ambiguous predecessor reviewed head", ambiguous_predecessor_head),
             ("wrong predecessor provider", wrong_predecessor_provider),
             ("predecessor provider body mismatch", changed_predecessor_body),
+            ("non-UTF-8 predecessor provider body", non_utf8_predecessor_body),
             ("missing predecessor provider object", missing_predecessor_review),
             (
                 "predecessor feedback older than anchor",

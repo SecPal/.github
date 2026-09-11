@@ -3016,15 +3016,21 @@ def _verify_predecessor_provider_feedback(
             "predecessor provider review transport is incomplete or ambiguous"
         )
     review = transport[0]
+    if not isinstance(review, dict) or not isinstance(review.get("body"), str):
+        raise SecurityBlocker("predecessor provider review transport is malformed")
+    try:
+        review_body_size = len(review["body"].encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise SecurityBlocker(
+            "predecessor provider review body is not valid UTF-8"
+        ) from exc
     if (
-        not isinstance(review, dict)
-        or set(review) != {"role", "kind", "node_id", "body"}
+        set(review) != {"role", "kind", "node_id", "body"}
         or review.get("role") != "COPILOT_PREDECESSOR_REVIEW"
         or review.get("kind") != "REVIEW"
         or not isinstance(review.get("node_id"), str)
         or not IDENTITY.fullmatch(review["node_id"])
-        or not isinstance(review.get("body"), str)
-        or len(review["body"].encode("utf-8")) > 64 * 1024
+        or review_body_size > 64 * 1024
     ):
         raise SecurityBlocker("predecessor provider review transport is malformed")
     review_key = ("REVIEW", review["node_id"])
