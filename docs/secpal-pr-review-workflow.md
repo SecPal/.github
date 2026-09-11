@@ -151,6 +151,24 @@ status after the gate, preserving the existing stable-feedback schema and
 digest. Provider absence remains `NOT_TRIGGERED` only where the maintained
 observable boundary has no affirmative trigger evidence.
 
+Ready-source recovery has one narrower head-binding derivation. When protected
+CURRENT authenticates an exact Ready-preserving `REMEDIATION_COMPLETED` suffix,
+the recovery issuer may use the predecessor of that suffix as the provider head.
+The provider summary must name that verifier-derived head and its exact
+repository and PR, remain terminal, and pass the ordinary parser. The caller
+cannot supply a predecessor. Review 1/1, the bounded remediation count, one
+Ready transition, unchanged lifecycle identity, and absence of Cycle 3,
+Recovery, or Continuation are reverified from the complete signed lifecycle.
+The maintained current-head final attestation and recovery authorization remain
+independently binding; the provider result is not persisted as evidence.
+
+This exception changes only provider-summary head binding. The same bounded
+read still captures all current-head feedback. Every later material,
+actionable, security, authentication, integrity, unclassified, or otherwise
+blocking source must be dispositioned under the existing current-feedback
+rules. Ordinary capture and Ready integration continue to require exact-head
+provider terminality.
+
 When the current instruction authorizes full delivery and the environment can
 wait, observe only maintained review-provider status at bounded intervals of
 approximately 60 to 90 seconds for approximately 30 minutes total. This passive
