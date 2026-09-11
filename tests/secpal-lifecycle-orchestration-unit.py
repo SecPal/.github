@@ -561,6 +561,137 @@ def authenticated_provider_reaction_replacement() -> tuple[
     return reviewed, current, evidence
 
 
+def _provider_terminal_summary(head_sha: str) -> str:
+    return (
+        "<!-- codex-pull-request-review-summary -->\n"
+        '<!-- codex-security-review:v1 '
+        f'{{"headSha":"{head_sha}","status":"completed"}} -->\n'
+        "| Review | Status | Commit | Review trigger |\n"
+        "| --- | --- | --- | --- |\n"
+        "| **Code Review** | **Completed** | head | manual |\n"
+        "| **Security Review** | **Completed** | head | manual |"
+    )
+
+
+def _provider_feedback_response(
+    state: fast_path.StableFeedbackState,
+    *,
+    transport_bodies: dict[str, str],
+) -> dict[str, object]:
+    """Recreate the provider's external GraphQL representation for one replay."""
+
+    def actor(value):
+        return {
+            "login": value["login"],
+            "id": value["node_id"],
+            "databaseId": value["database_id"],
+        }
+
+    def reaction(value):
+        return {
+            "id": value["mutation_id"],
+            "databaseId": 1,
+            "content": value["content"],
+            "user": actor(value["actor"]),
+        }
+
+    def reactions(values):
+        return {
+            "nodes": [reaction(item) for item in values],
+            "pageInfo": {"hasNextPage": False},
+        }
+
+    reviews = []
+    for item in state.feedback["reviews"]:
+        body = transport_bodies.get(item["node_id"], item["node_id"])
+        reviews.append(
+            {
+                "id": item["node_id"],
+                "body": body,
+                "author": actor(item["actor"]),
+                "state": item["state"],
+                "commit": {"oid": item["commit_oid"]},
+                "reactions": reactions(item["reactions"]),
+            }
+        )
+    comments = []
+    for item in state.feedback["conversation_comments"]:
+        body = transport_bodies.get(item["node_id"], item["node_id"])
+        comments.append(
+            {
+                "id": item["node_id"],
+                "body": body,
+                "author": actor(item["actor"]),
+                "updatedAt": item["updated_at"],
+                "reactions": reactions(item["reactions"]),
+            }
+        )
+    threads = []
+    for thread in state.feedback["threads"]:
+        comments_connection = []
+        for item in thread["comments"]:
+            comments_connection.append(
+                {
+                    "id": item["node_id"],
+                    "body": transport_bodies.get(
+                        item["node_id"], item["node_id"]
+                    ),
+                    "author": actor(item["actor"]),
+                    "replyTo": (
+                        None
+                        if item["reply_to_id"] is None
+                        else {"id": item["reply_to_id"]}
+                    ),
+                    "reactions": reactions(item["reactions"]),
+                }
+            )
+        threads.append(
+            {
+                "id": thread["node_id"],
+                "isResolved": thread["is_resolved"],
+                "isOutdated": thread["is_outdated"],
+                "comments": {
+                    "nodes": comments_connection,
+                    "pageInfo": {"hasNextPage": False},
+                },
+            }
+        )
+    return {
+        "data": {
+            "repository": {
+                "pullRequest": {
+                    "id": "PR_PROVIDER_REPLAY",
+                    "headRefOid": state.head_sha,
+                    "baseRefName": state.base_ref,
+                    "baseRefOid": state.base_sha,
+                    "state": state.pr_state,
+                    "isDraft": False,
+                    "reviewDecision": None,
+                    "reactions": reactions(
+                        state.feedback["pull_request_reactions"]
+                    ),
+                    "reviews": {
+                        "nodes": reviews,
+                        "pageInfo": {"hasNextPage": False},
+                    },
+                    "comments": {
+                        "nodes": comments,
+                        "pageInfo": {"hasNextPage": False},
+                    },
+                    "reviewThreads": {
+                        "nodes": threads,
+                        "pageInfo": {"hasNextPage": False},
+                    },
+                    "reviewRequests": {
+                        "nodes": [],
+                        "pageInfo": {"hasNextPage": False},
+                    },
+                }
+            }
+        }
+    }
+
+
 class LifecycleOrchestrationTests(TestCase):
     def test_feedback_capture_uses_explicit_isolated_bounded_repository_root(
         self,
@@ -1389,7 +1520,7 @@ class LifecycleOrchestrationTests(TestCase):
                 ),
                 mock.patch.object(
                     orchestration,
-                    "_require_accepted_main_ancestor",
+                    "_authenticate_accepted_main_ancestor",
                     new=accepted_main_lineage,
                 ),
                 mock.patch.object(
@@ -1507,6 +1638,27 @@ class LifecycleOrchestrationTests(TestCase):
             later_verified.current_protected_main_base_sha,
             protected_main,
         )
+        self.assertEqual(later_verified.evidence_digest, verified.evidence_digest)
+        def signed_scope(reanchor):
+            return orchestration._continuation_authorization_scope(
+                orchestration.VerifiedContinuationFindingAuthority(
+                    reviewed_state_digest=replacement_reviewed.state_digest,
+                    reviewed_feedback_digest=(
+                        replacement_reviewed.feedback_digest
+                    ),
+                    eligibility_evidence_digest="d" * 64,
+                    finding_ids=reanchor.material_finding_ids,
+                    thread_ids=(),
+                    reanchor=reanchor,
+                    continuation_tree_sha="e" * 40,
+                    corrected_successor_state_digest="f" * 64,
+                ),
+                pull_request=replacement_pr,
+                predecessor_head_sha=current_head,
+                resulting_head_sha="9" * 40,
+            )
+
+        self.assertEqual(signed_scope(later_verified), signed_scope(verified))
         self.assertEqual(
             accepted_main_lineage.call_args_list,
             [
@@ -1739,6 +1891,79 @@ class LifecycleOrchestrationTests(TestCase):
                     REPO_ROOT,
                     REPOSITORY,
                     historical_main,
+                )
+
+    def test_accepted_main_comparison_separates_observation_from_admission(
+        self,
+    ) -> None:
+        ancestor = "aa7d9e4485abbceed01136cd81fdbbd353f877bc"
+        descendant = "da7d5f19a1ff4e65bfdbe7ad0a66e13f6172ada9"
+        result = subprocess.CompletedProcess(
+            [],
+            0,
+            json.dumps(
+                {
+                    "status": "ahead",
+                    "behind_by": 0,
+                    "merge_base_sha": ancestor,
+                }
+            ).encode(),
+            b"",
+        )
+        with mock.patch.object(
+            orchestration.bootstrap_source_admission,
+            "_run_bootstrap_gh",
+            return_value=result,
+        ) as compare_reader:
+            observed = orchestration._observe_accepted_main_comparison(
+                REPOSITORY,
+                ancestor,
+                descendant,
+            )
+
+        self.assertEqual(
+            observed,
+            orchestration.AcceptedMainComparisonFacts(
+                status="ahead",
+                behind_by=0,
+                merge_base_sha=ancestor,
+            ),
+        )
+        orchestration._require_accepted_main_ancestor(
+            ancestor,
+            descendant,
+            observed,
+        )
+        compare_command = compare_reader.call_args.args[0]
+        self.assertIn(
+            f"repos/{REPOSITORY}/compare/{ancestor}...{descendant}",
+            compare_command,
+        )
+
+        for facts in (
+            orchestration.AcceptedMainComparisonFacts(
+                status="diverged",
+                behind_by=0,
+                merge_base_sha=ancestor,
+            ),
+            orchestration.AcceptedMainComparisonFacts(
+                status="ahead",
+                behind_by=1,
+                merge_base_sha=ancestor,
+            ),
+            orchestration.AcceptedMainComparisonFacts(
+                status="ahead",
+                behind_by=0,
+                merge_base_sha="f" * 40,
+            ),
+        ):
+            with self.subTest(facts=facts), self.assertRaises(
+                orchestration.LifecycleOrchestrationError
+            ):
+                orchestration._require_accepted_main_ancestor(
+                    ancestor,
+                    descendant,
+                    facts,
                 )
 
     def test_reanchored_continuation_normalization_keeps_old_threads_diagnostic_only(
@@ -3114,6 +3339,119 @@ class LifecycleOrchestrationTests(TestCase):
     ) -> None:
         rejected_head = "be511e420933eeffb289188f3620677bc7cb9f84"
         reviewed, current, evidence = authenticated_provider_reaction_replacement()
+
+        material = fast_path.verify_rejected_stable_feedback_successor(
+            reviewed,
+            current,
+            resulting_head_sha=rejected_head,
+            rejected_successor_evidence=evidence,
+        )
+        self.assertRegex(
+            material.provider_reaction_replacement_digest or "",
+            r"^[0-9a-f]{64}$",
+        )
+
+    def test_rejected_successor_replays_provider_reaction_replacement_from_graphql(
+        self,
+    ) -> None:
+        rejected_head = "be511e420933eeffb289188f3620677bc7cb9f84"
+        predecessor_model, current_model, evidence = (
+            authenticated_provider_reaction_replacement()
+        )
+        current_bodies = {
+            item["node_id"]: item["body"]
+            for item in evidence["provider_transport"]
+            if item["body"] is not None
+        }
+        current_bodies["PRR_RESULTING_HEAD"] = ""
+        current_bodies["PRRC_RESULTING_HEAD"] = "provider finding"
+        predecessor_bodies = {
+            "IC_CODEX_SUMMARY": _provider_terminal_summary(
+                predecessor_model.head_sha
+            )
+        }
+        actions = orchestration.bootstrap_source_admission._load_actions_helper()
+        registry = {
+            "repository": REPOSITORY,
+            "maximum_api_calls": 20,
+            "maximum_threads": 20,
+            "maximum_comments": 100,
+            "maximum_reactions": 50,
+            "maximum_items": 200,
+        }
+
+        def capture(model, bodies):
+            runner = SimpleNamespace(
+                run=mock.Mock(
+                    return_value=_provider_feedback_response(
+                        model,
+                        transport_bodies=bodies,
+                    )
+                )
+            )
+            gateway = actions.FastPathGateway(
+                REPO_ROOT,
+                registry,
+                github=actions.LiveGitHub(runner=runner),
+            )
+            captured = gateway.capture_stable_feedback(
+                REPOSITORY,
+                model.pull_request_number,
+            )
+            runner.run.assert_called_once()
+            return fast_path.StableFeedbackState.from_payload(
+                captured.to_dict()
+            )
+
+        reviewed = capture(predecessor_model, predecessor_bodies)
+        current = capture(current_model, current_bodies)
+        finding = next(
+            comment
+            for thread in current.feedback["threads"]
+            if thread["node_id"] == "PRRT_RESULTING_HEAD"
+            for comment in thread["comments"]
+            if comment["node_id"] == "PRRC_RESULTING_HEAD"
+        )
+        finding_digest = finding["body_digest"]
+        classification = evidence["successor_findings"][0][
+            "classification_evidence"
+        ]
+        evidence["successor_findings"][0]["sources"][0]["digest"] = (
+            finding_digest
+        )
+        evidence["successor_findings"][0]["classification_evidence"] = (
+            fast_path._seal_successor_classification(
+                **{
+                    key: value
+                    for key, value in classification.__dict__.items()
+                    if key != "_verification_seal"
+                }
+                | {
+                    "finding_body_digest": finding_digest,
+                    "source_bindings": (
+                        (
+                            "THREAD_COMMENT",
+                            "PRRC_RESULTING_HEAD",
+                            finding_digest,
+                            "PRRT_RESULTING_HEAD",
+                        ),
+                    ),
+                }
+            )
+        )
+        evidence["predecessor_state_digest"] = reviewed.state_digest
+        evidence["resulting_state_digest"] = current.state_digest
+
+        self.assertEqual(current.repository, reviewed.repository)
+        self.assertEqual(
+            current.pull_request_number,
+            reviewed.pull_request_number,
+        )
+        self.assertEqual((reviewed.pr_state, current.pr_state), ("OPEN", "OPEN"))
+        self.assertEqual(current.head_sha, rejected_head)
+        self.assertNotEqual(current.head_sha, reviewed.head_sha)
+        self.assertEqual(current.base_ref, reviewed.base_ref)
+        self.assertEqual(current.base_sha, reviewed.base_sha)
 
         material = fast_path.verify_rejected_stable_feedback_successor(
             reviewed,

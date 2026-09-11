@@ -607,7 +607,11 @@ the rejected candidate only when maintained acquisition proves the historical
 base precedes the replacement base and the replacement base remains in the
 independently observed live protected-main ancestry. Both bases are added to
 the re-anchor projection only for that advancement; the historical same-base
-projection stays byte-compatible. No caller base assertion is accepted.
+projection stays byte-compatible. Compare acquisition normalizes a closed
+provider observation before a separate pure lineage predicate admits it. A
+later live protected-main tip is checked at runtime but is not durable evidence,
+so unrelated subsequent accepted merges do not alter an already authenticated
+re-anchor digest or signed scope. No caller base assertion is accepted.
 
 Rejected-successor safety schema 1.2 may bind one exact provider-owned
 completion-reaction replacement while reviewing the rejected candidate. It

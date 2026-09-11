@@ -15,7 +15,9 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 - Preserve an immutable rejected Continuation candidate across authenticated
   accepted protected-main advancement while retaining exact same-delivery
-  `PR_REBOUND`, lifecycle CURRENT, and unconsumed Continuation authority.
+  `PR_REBOUND`, lifecycle CURRENT, and unconsumed Continuation authority; later
+  protected-main movement is runtime verification and does not rewrite the
+  signed re-anchor scope.
 - Admit only one exact Codex-owned completion `THUMBS_UP` removal/replacement
   paired with complete terminal exact-head provider transport; unrelated base,
   reaction, actor, content, provider, head, PR, and replay drift remains

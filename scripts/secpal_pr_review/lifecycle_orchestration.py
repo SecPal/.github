@@ -148,6 +148,15 @@ class LifecycleOrchestrationError(ValueError):
 
 
 @dataclass(frozen=True)
+class AcceptedMainComparisonFacts:
+    """Closed provider observation used by pure accepted-main lineage admission."""
+
+    status: str
+    behind_by: int
+    merge_base_sha: str
+
+
+@dataclass(frozen=True)
 class LifecycleDecision:
     """One fail-closed decision over the independently authenticated CURRENT tip."""
 
@@ -1139,12 +1148,12 @@ def _validation_registry_binding(repository: str) -> dict[str, Any]:
         ) from exc
 
 
-def _require_accepted_main_ancestor(
+def _observe_accepted_main_comparison(
     repository: str,
     ancestor_sha: str,
     descendant_sha: str,
-) -> None:
-    """Require one exact commit to precede another on accepted-main lineage."""
+) -> AcceptedMainComparisonFacts:
+    """Normalize one bounded GitHub Compare response without admitting lineage."""
 
     try:
         comparison_result = bootstrap_source_admission._run_bootstrap_gh(
@@ -1160,19 +1169,33 @@ def _require_accepted_main_ancestor(
                 ),
             ]
         )
+        if comparison_result.returncode != 0:
+            raise LifecycleOrchestrationError(
+                "accepted-main comparison observation failed"
+            )
         comparison = authority.loads_closed_json(comparison_result.stdout)
         if (
-            comparison_result.returncode != 0
-            or not isinstance(comparison, Mapping)
+            not isinstance(comparison, Mapping)
             or set(comparison)
             != {"status", "behind_by", "merge_base_sha"}
-            or comparison.get("status") not in {"ahead", "identical"}
-            or comparison.get("behind_by") != 0
-            or comparison.get("merge_base_sha") != ancestor_sha
+            or comparison.get("status")
+            not in {"ahead", "behind", "diverged", "identical"}
+            or not isinstance(comparison.get("behind_by"), int)
+            or isinstance(comparison.get("behind_by"), bool)
+            or comparison["behind_by"] < 0
         ):
             raise LifecycleOrchestrationError(
-                "re-anchor base advancement is not accepted-main lineage"
+                "accepted-main comparison observation is malformed"
             )
+        merge_base_sha = authority._require_oid(
+            comparison.get("merge_base_sha"),
+            "accepted-main comparison merge base",
+        )
+        return AcceptedMainComparisonFacts(
+            status=comparison["status"],
+            behind_by=comparison["behind_by"],
+            merge_base_sha=merge_base_sha,
+        )
     except (
         OSError,
         TypeError,
@@ -1182,6 +1205,53 @@ def _require_accepted_main_ancestor(
         raise LifecycleOrchestrationError(
             "accepted-main lineage is unavailable"
         ) from exc
+
+
+def _require_accepted_main_ancestor(
+    ancestor_sha: str,
+    descendant_sha: str,
+    comparison: AcceptedMainComparisonFacts,
+) -> None:
+    """Purely admit one observed comparison as accepted-main ancestry."""
+
+    try:
+        ancestor_sha = authority._require_oid(
+            ancestor_sha, "accepted-main ancestor"
+        )
+        descendant_sha = authority._require_oid(
+            descendant_sha, "accepted-main descendant"
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecycleOrchestrationError(str(exc)) from exc
+    if (
+        not isinstance(comparison, AcceptedMainComparisonFacts)
+        or comparison.status not in {"ahead", "identical"}
+        or comparison.behind_by != 0
+        or comparison.merge_base_sha != ancestor_sha
+        or (comparison.status == "identical") != (ancestor_sha == descendant_sha)
+    ):
+        raise LifecycleOrchestrationError(
+            "re-anchor base advancement is not accepted-main lineage"
+        )
+
+
+def _authenticate_accepted_main_ancestor(
+    repository: str,
+    ancestor_sha: str,
+    descendant_sha: str,
+) -> None:
+    """Compose bounded Compare observation with pure lineage admission."""
+
+    comparison = _observe_accepted_main_comparison(
+        repository,
+        ancestor_sha,
+        descendant_sha,
+    )
+    _require_accepted_main_ancestor(
+        ancestor_sha,
+        descendant_sha,
+        comparison,
+    )
 
 
 def _historical_validation_registry_authority(
@@ -1199,7 +1269,11 @@ def _historical_validation_registry_authority(
             raise LifecycleOrchestrationError(
                 "rejected-candidate validation repository changed"
             )
-        _require_accepted_main_ancestor(repository, head_sha, protected.head_sha)
+        _authenticate_accepted_main_ancestor(
+            repository,
+            head_sha,
+            protected.head_sha,
+        )
         actions = bootstrap_source_admission._load_actions_helper()
         binding = actions._prior_delivery_registry_binding(
             repository_root,
@@ -1484,13 +1558,13 @@ def verify_rejected_continuation_reanchor(
             "rejected Continuation base is not the maintained default branch"
         )
     if protected_main_advancement:
-        _require_accepted_main_ancestor(
+        _authenticate_accepted_main_ancestor(
             repository,
             historical_base,
             replacement_base,
         )
         if replacement_base != protected_main.head_sha:
-            _require_accepted_main_ancestor(
+            _authenticate_accepted_main_ancestor(
                 repository,
                 replacement_base,
                 protected_main.head_sha,
@@ -1608,8 +1682,6 @@ def verify_rejected_continuation_reanchor(
             {
                 "historical_accepted_main_base_sha": historical_base,
                 "current_protected_main_base_sha": replacement_base,
-                "verification_protected_main_head_sha": protected_main.head_sha,
-                "accepted_main_default_branch": protected_main.default_branch,
             }
         )
     if material.provider_reaction_replacement_digest is not None:

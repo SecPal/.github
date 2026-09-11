@@ -1102,7 +1102,12 @@ protected-main head form one authenticated accepted-main lineage. The
 replacement base is derived from its canonical Stable Feedback state; caller
 base assertions have no authority. The exact immediate same-head `PR_REBOUND`
 remains mandatory, and the protected lifecycle CURRENT must remain unchanged.
-Legacy same-base re-anchor evidence keeps its original projection and digest.
+Provider Compare acquisition first normalizes one closed bounded observation;
+a separate pure predicate admits only exact ancestor lineage. The durable
+re-anchor projection binds the historical and replacement bases, while the
+later live protected-main tip remains runtime verification and cannot change a
+previously signed scope or digest. Legacy same-base re-anchor evidence keeps its
+original projection and digest.
 
 Rejected-successor safety schema 1.2 permits one narrower provider
 representation: Codex may remove its predecessor direct-PR completion
