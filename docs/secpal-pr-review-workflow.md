@@ -611,6 +611,88 @@ only canonical signed authorization evidence bound to the exact CURRENT
 publication, lifecycle authority, PR, head, operation, reason, and scope;
 caller-constructed request fields are not authority.
 
+The material-feedback form remains unchanged. The second, closed
+`IMMUTABLE_EVIDENCE_VERSION_COLLISION` trigger shares that same one-use
+Continuation budget; it is not a new transition or source-correction budget.
+It requires Review and Remediation exhausted, Recovery consumed, Continuation
+unused, Ready true, Draft false and Cycle 3 absent. Both exact predecessor
+providers must be terminal, and every predecessor feedback source must be
+authenticated as provider transport or covered by an existing signed safe
+classification. Undispositioned material, unsafe or unclassified feedback
+rejects this trigger rather than becoming a fabricated finding or thread.
+The collision-only predecessor input may additionally carry
+`historical_thread_classifications`: at most 32 existing schema-1.3 signed
+`LATE_FEEDBACK_CLASSIFICATION` artifacts for `CORRECTED_AND_VERIFIED` historical
+threads. Each must bind the exact predecessor head and live, reply-free thread,
+body and disposition with no technical blocker. Missing proof or any reply
+rejects this bounded form. These are historical dispositions, not trigger
+threads, and neither become successor findings nor grant thread resolution.
+The existing successor-classification parser and permitted decisions remain
+unchanged.
+
+Only clean accepted protected-main tooling derives the version inventory.
+`scripts/secpal_pr_review/version_collision.py` reads immutable Git blobs with
+a closed, non-executing AST reader for the existing Ready-integration schema
+and attestation mappings. It binds protected-main commit/tree, family, full
+canonical inventory and digest. A candidate must introduce exactly one schema
+identity, already occupied on main by a different immutable mapping. The
+successor must move that identity to the lowest greater free compatible version
+while preserving every attestation mapping. Same-semantic reuse is not a
+collision. This trigger allocates no Ready-integration version itself.
+
+Source authentication fetches exact main and CURRENT predecessor into a private
+repository. It imports the unpublished successor only after recomputing Git
+object hashes; caller grafts, replacement refs, commit graphs, hooks and source
+configuration are not source authority. The existing delivery scope is the
+actual predecessor delta from its unique merge base with that exact main.
+Every renumber path must already belong to that scope. The raw predecessor/tree
+delta permits only modifications of existing regular text blobs, without mode
+changes, additions, deletions or renames. Paired OLD/NEW token offsets must
+normalize to identical bytes: no whitespace, wording, logic or formatting edit
+is permitted beside the renumber. Python replacements must occur inside string
+or comment tokens, never numeric literals or executable syntax. Interpolated
+Python strings are excluded entirely, including their nested string literals
+and formatted expressions. Limits remain 32
+changed paths, 1 MiB per blob,
+4 MiB aggregate old/new bytes and 4096 replacements. Source import separately
+bounds every visited object (including already-present objects), depth and
+aggregate bytes. Main drift rejects admission. The implementation delta must
+rename all and only the independently derived version-table keys and owning
+normalizer version literals, never attestation values or another domain's
+version tokens. Retaining an old-version validation branch rejects the entire
+delta. Other changed paths are limited to existing delivery tests or Markdown
+documentation; another runtime implementation cannot enter through this trigger.
+
+`prepare_collision_tree` provides read-only, accepted-main preparation for a
+local renumber tree. Its projection omits the not-yet-created resulting commit
+identity; it cannot authorize publication. Bind its digest in schema **1.1** of
+the existing `READY_EXCEPTIONAL_CONTINUATION` evidence family, using the exact
+collision trigger and an empty resolution-eligibility set, not finding/thread
+IDs. Freeze the tree, run focused validation and exactly one successful normal
+Complete Validation epoch, then create the existing receipt and signed
+single-parent successor and final attestation. Receipt/attestation families and
+versions remain unchanged. Historical Continuation schema 1.0 is not redefined.
+
+`issue_collision_continuation_authorization` reuses the existing schema-1.0
+lifecycle-orchestration authorization signer/family. Its exact one-use scope
+binds CURRENT publication OID/digest, authority/lifecycle/PR/delivery identities,
+both source heads/trees, main inventory, old/free versions, exact changed paths,
+blob identities, delta digest, reviewed/Stable Feedback state, continuation
+document and signed validation receipt/attestation. Raw request fields and the
+preparation helper alone grant no authority. Push only the exact authorized
+signed successor, without rebase, force push or replacement PR.
+
+Before publication, required exact-resulting-head providers must complete.
+Existing successor-safety evidence must preserve all predecessor sources and
+completely account for provider growth; material, unsafe or unclassified
+successor feedback rejects publication without recursive correction.
+`publish_collision_continuation` admits `CONTINUATION_COMMIT_PUSHED`, rechecks
+CURRENT, live Ready head, protected main and Stable Feedback, and uses the
+existing signed lifecycle append/publication owner. Only
+`EXCEPTIONAL_CONTINUATION` changes (0 to 1); all other counters, Ready history,
+lifecycle and PR identity are preserved. This trigger grants no thread-resolution
+authority, even after successful publication.
+
 GitHub review submissions, review comments/threads, CI observations, reopen
 events, and validated Ready integrations are bounded evidence observations, not
 lifecycle events. They select no review request, counter change, recovery,

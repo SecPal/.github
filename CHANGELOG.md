@@ -82,6 +82,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 - Reuse the existing exact-source Git hashing boundary while preserving the
   external transport limit and all existing Exceptional Recovery semantics.
 
+## 2026-09-09 - Authenticate Immutable Version Collisions
+
+**Fixed:**
+
+- Extend the existing one-use Exceptional Continuation with independently
+  authenticated protected-main version-collision evidence, exact signed user
+  authorization and bounded byte-only renumber verification.
+- Preserve historical material-feedback continuations, validation and provider
+  safety, Ready-source recovery and thread-authority isolation; allocate no
+  Ready-integration evidence or attestation version.
+
 ## 2026-09-09 - Authenticate Diagnostic Exceptional Recovery
 
 **Fixed:**
