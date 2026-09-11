@@ -1127,8 +1127,7 @@ def _historical_validation_registry_binding(
                 "--jq",
                 (
                     '{"status":.status,"behind_by":.behind_by,'
-                    '"merge_base_sha":.merge_base_commit.sha,'
-                    '"head_sha":(.head_commit.sha // .base_commit.sha)}'
+                    '"merge_base_sha":.merge_base_commit.sha}'
                 ),
             ]
         )
@@ -1138,11 +1137,10 @@ def _historical_validation_registry_binding(
             or comparison_result.returncode != 0
             or not isinstance(comparison, Mapping)
             or set(comparison)
-            != {"status", "behind_by", "merge_base_sha", "head_sha"}
+            != {"status", "behind_by", "merge_base_sha"}
             or comparison.get("status") not in {"ahead", "identical"}
             or comparison.get("behind_by") != 0
             or comparison.get("merge_base_sha") != head_sha
-            or comparison.get("head_sha") != protected.head_sha
         ):
             raise LifecycleOrchestrationError(
                 "rejected-candidate validation base is not accepted-main history"
