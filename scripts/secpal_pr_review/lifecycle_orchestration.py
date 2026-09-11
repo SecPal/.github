@@ -248,6 +248,7 @@ class VerifiedExceptionalContinuationAuthority:
     rejected_continuation_evidence_digest: str | None = None
     diagnostic_thread_ids: tuple[str, ...] = ()
     finding_source_digest: str | None = None
+    provider_reaction_replacement_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -281,6 +282,9 @@ class VerifiedRejectedContinuationReanchor:
     material_finding_ids: tuple[str, ...]
     material_thread_ids: tuple[str, ...]
     finding_source_digest: str
+    historical_accepted_main_base_sha: str | None = None
+    current_protected_main_base_sha: str | None = None
+    provider_reaction_replacement_digest: str | None = None
 
 
 def _continuation_authorization_scope(
@@ -325,6 +329,15 @@ def _continuation_authorization_scope(
                 "finding_source_digest": reanchor.finding_source_digest,
                 "corrected_successor_state_digest": (
                     findings.corrected_successor_state_digest
+                ),
+                **(
+                    {
+                        "provider_reaction_replacement_digest": (
+                            reanchor.provider_reaction_replacement_digest
+                        )
+                    }
+                    if reanchor.provider_reaction_replacement_digest is not None
+                    else {}
                 ),
             }
         )
@@ -510,7 +523,26 @@ def _authenticate_successor_safety_evidence_with_policy(
         "successor_findings",
         "classification_signer",
     }
-    if not isinstance(value, Mapping) or set(value) != expected_keys:
+    schema_version = (
+        value.get("schema_version") if isinstance(value, Mapping) else None
+    )
+    provider_reaction_replacement = (
+        rejected_candidate and schema_version == "1.2"
+    )
+    if provider_reaction_replacement:
+        expected_keys.add("provider_completion_reaction_replacement")
+    expected_schema_version = (
+        "1.2"
+        if provider_reaction_replacement
+        else "1.1"
+        if rejected_candidate
+        else "1.0"
+    )
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != expected_keys
+        or schema_version != expected_schema_version
+    ):
         raise LifecycleOrchestrationError(
             "successor safety evidence contains unknown or missing fields"
         )
@@ -1107,23 +1139,20 @@ def _validation_registry_binding(repository: str) -> dict[str, Any]:
         ) from exc
 
 
-def _historical_validation_registry_binding(
-    repository_root: Path,
+def _require_accepted_main_ancestor(
     repository: str,
-    head_sha: str,
-) -> dict[str, Any]:
-    """Reuse immutable prior-delivery registry and schema authentication."""
+    ancestor_sha: str,
+    descendant_sha: str,
+) -> None:
+    """Require one exact commit to precede another on accepted-main lineage."""
 
     try:
-        protected = bootstrap_source_admission._normalize_protected_main(
-            bootstrap_source_admission._observe_protected_main()
-        )
         comparison_result = bootstrap_source_admission._run_bootstrap_gh(
             [
                 "api",
                 "--hostname",
                 "github.com",
-                f"repos/{repository}/compare/{head_sha}...{protected.head_sha}",
+                f"repos/{repository}/compare/{ancestor_sha}...{descendant_sha}",
                 "--jq",
                 (
                     '{"status":.status,"behind_by":.behind_by,'
@@ -1133,18 +1162,44 @@ def _historical_validation_registry_binding(
         )
         comparison = authority.loads_closed_json(comparison_result.stdout)
         if (
-            protected.repository != repository
-            or comparison_result.returncode != 0
+            comparison_result.returncode != 0
             or not isinstance(comparison, Mapping)
             or set(comparison)
             != {"status", "behind_by", "merge_base_sha"}
             or comparison.get("status") not in {"ahead", "identical"}
             or comparison.get("behind_by") != 0
-            or comparison.get("merge_base_sha") != head_sha
+            or comparison.get("merge_base_sha") != ancestor_sha
         ):
             raise LifecycleOrchestrationError(
-                "rejected-candidate validation base is not accepted-main history"
+                "re-anchor base advancement is not accepted-main lineage"
             )
+    except (
+        OSError,
+        TypeError,
+        authority.LifecycleAuthorityError,
+        bootstrap_source_admission.BootstrapSourceAdmissionError,
+    ) as exc:
+        raise LifecycleOrchestrationError(
+            "accepted-main lineage is unavailable"
+        ) from exc
+
+
+def _historical_validation_registry_authority(
+    repository_root: Path,
+    repository: str,
+    head_sha: str,
+) -> tuple[dict[str, Any], bootstrap_source_admission.ProtectedMainFacts]:
+    """Authenticate an immutable registry base and the current protected main."""
+
+    try:
+        protected = bootstrap_source_admission._normalize_protected_main(
+            bootstrap_source_admission._observe_protected_main()
+        )
+        if protected.repository != repository:
+            raise LifecycleOrchestrationError(
+                "rejected-candidate validation repository changed"
+            )
+        _require_accepted_main_ancestor(repository, head_sha, protected.head_sha)
         actions = bootstrap_source_admission._load_actions_helper()
         binding = actions._prior_delivery_registry_binding(
             repository_root,
@@ -1155,7 +1210,7 @@ def _historical_validation_registry_binding(
             raise LifecycleOrchestrationError(
                 "rejected-candidate validation default branch changed"
             )
-        return binding
+        return binding, protected
     except (
         AttributeError,
         OSError,
@@ -1167,6 +1222,21 @@ def _historical_validation_registry_binding(
         raise LifecycleOrchestrationError(
             "immutable rejected-candidate validation registry is unavailable"
         ) from exc
+
+
+def _historical_validation_registry_binding(
+    repository_root: Path,
+    repository: str,
+    head_sha: str,
+) -> dict[str, Any]:
+    """Preserve the existing registry-only accepted-main boundary."""
+
+    binding, _protected = _historical_validation_registry_authority(
+        repository_root,
+        repository,
+        head_sha,
+    )
+    return binding
 
 
 def verify_rejected_continuation_reanchor(
@@ -1338,11 +1408,6 @@ def verify_rejected_continuation_reanchor(
             rejected_reviewed.base_sha,
         )
         != (rejected_state.base_ref, rejected_state.base_sha)
-        or (
-            replacement_reviewed.base_ref,
-            replacement_reviewed.base_sha,
-        )
-        != (rejected_reviewed.base_ref, rejected_reviewed.base_sha)
     ):
         raise LifecycleOrchestrationError(
             "rejected or replacement Stable Feedback identity changed"
@@ -1401,15 +1466,35 @@ def verify_rejected_continuation_reanchor(
             "rejected Continuation differs from authenticated lifecycle or source"
         )
     rejected_continuation_digest = fast_path.digest_json(rejected_continuation)
-    registry = _historical_validation_registry_binding(
+    registry, protected_main = _historical_validation_registry_authority(
         repository_root,
         repository,
         rejected_reviewed.base_sha,
     )
-    if rejected_reviewed.base_ref != registry["default_branch"]:
+    historical_base = rejected_reviewed.base_sha
+    replacement_base = replacement_reviewed.base_sha
+    protected_main_advancement = replacement_base != historical_base
+    if (
+        rejected_reviewed.base_ref != registry["default_branch"]
+        or replacement_reviewed.base_ref != registry["default_branch"]
+        or protected_main.repository != repository
+        or protected_main.default_branch != registry["default_branch"]
+    ):
         raise LifecycleOrchestrationError(
             "rejected Continuation base is not the maintained default branch"
         )
+    if protected_main_advancement:
+        _require_accepted_main_ancestor(
+            repository,
+            historical_base,
+            replacement_base,
+        )
+        if replacement_base != protected_main.head_sha:
+            _require_accepted_main_ancestor(
+                repository,
+                replacement_base,
+                protected_main.head_sha,
+            )
     attestation = item.get("rejected_final_attestation")
     receipt = item.get("rejected_validation_receipt")
     try:
@@ -1518,6 +1603,19 @@ def verify_rejected_continuation_reanchor(
             material.classification_evidence_digests
         ),
     }
+    if protected_main_advancement:
+        projection.update(
+            {
+                "historical_accepted_main_base_sha": historical_base,
+                "current_protected_main_base_sha": replacement_base,
+                "verification_protected_main_head_sha": protected_main.head_sha,
+                "accepted_main_default_branch": protected_main.default_branch,
+            }
+        )
+    if material.provider_reaction_replacement_digest is not None:
+        projection["provider_reaction_replacement_digest"] = (
+            material.provider_reaction_replacement_digest
+        )
     return VerifiedRejectedContinuationReanchor(
         evidence_digest=fast_path.digest_json(projection),
         original_pull_request=original_pr,
@@ -1532,6 +1630,15 @@ def verify_rejected_continuation_reanchor(
         material_finding_ids=material.finding_ids,
         material_thread_ids=material.thread_ids,
         finding_source_digest=fast_path.digest_json(source_projection),
+        historical_accepted_main_base_sha=(
+            historical_base if protected_main_advancement else None
+        ),
+        current_protected_main_base_sha=(
+            replacement_base if protected_main_advancement else None
+        ),
+        provider_reaction_replacement_digest=(
+            material.provider_reaction_replacement_digest
+        ),
     )
 
 
@@ -2223,6 +2330,11 @@ def verify_exceptional_continuation_authority(
         ),
         finding_source_digest=(
             findings.reanchor.finding_source_digest
+            if findings.reanchor is not None
+            else None
+        ),
+        provider_reaction_replacement_digest=(
+            findings.reanchor.provider_reaction_replacement_digest
             if findings.reanchor is not None
             else None
         ),

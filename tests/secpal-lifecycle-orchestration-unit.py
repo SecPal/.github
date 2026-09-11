@@ -44,6 +44,8 @@ def current_lifecycle(
     head_sha: str = HEAD,
     remediation_cycles: int = 2,
     pull_request: int = PR,
+    delivery_issue: int = ISSUE,
+    lifecycle_id: str = LIFECYCLE,
 ) -> authority.VerifiedLifecycleAuthority:
     state = authority.initial_state()
     state.update(
@@ -93,8 +95,8 @@ def current_lifecycle(
     return authority.VerifiedLifecycleAuthority(
         authority_digest="e" * 64,
         repository=REPOSITORY,
-        delivery_issue=ISSUE,
-        lifecycle_id=LIFECYCLE,
+        delivery_issue=delivery_issue,
+        lifecycle_id=lifecycle_id,
         initialization_evidence_digest="f" * 64,
         pull_request=pull_request,
         head_sha=head_sha,
@@ -237,7 +239,14 @@ def feedback_successor(
     )
 
 
-def authenticated_provider_growth() -> tuple[
+def authenticated_provider_growth(
+    *,
+    delivery_issue: int = ISSUE,
+    pull_request: int = PR,
+    predecessor_head_sha: str = HEAD,
+    resulting_head_sha: str = NEXT_HEAD,
+    base_sha: str = "0" * 40,
+) -> tuple[
     fast_path.StableFeedbackState,
     fast_path.StableFeedbackState,
     dict[str, object],
@@ -264,10 +273,10 @@ def authenticated_provider_growth() -> tuple[
     }
     predecessor = fast_path.StableFeedbackState(
         repository=REPOSITORY,
-        pull_request_number=PR,
-        head_sha=HEAD,
+        pull_request_number=pull_request,
+        head_sha=predecessor_head_sha,
         base_ref="main",
-        base_sha="0" * 40,
+        base_sha=base_sha,
         pr_state="OPEN",
         feedback={
             "pull_request_reactions": [],
@@ -277,7 +286,7 @@ def authenticated_provider_growth() -> tuple[
                     "body_digest": "1" * 64,
                     "actor": reviewer,
                     "state": "COMMENTED",
-                    "commit_oid": HEAD,
+                    "commit_oid": predecessor_head_sha,
                     "reactions": [],
                 }
             ],
@@ -324,7 +333,7 @@ def authenticated_provider_growth() -> tuple[
     summary = (
         "<!-- codex-pull-request-review-summary -->\n"
         '<!-- codex-security-review:v1 '
-        f'{{"headSha":"{NEXT_HEAD}","status":"completed"}} -->\n'
+        f'{{"headSha":"{resulting_head_sha}","status":"completed"}} -->\n'
         "| Review | Status | Commit | Review trigger |\n"
         "| --- | --- | --- | --- |\n"
         "| **Code Review** | **Completed** | head | manual |\n"
@@ -347,12 +356,12 @@ def authenticated_provider_growth() -> tuple[
         "IC_SECURITY_REQUEST": "@codex security review",
         "IC_CODE_RESULT": (
             "Codex Review: Didn't find any major issues.\n\n"
-            f"**Reviewed commit:** `{NEXT_HEAD[:10]}`"
+            f"**Reviewed commit:** `{resulting_head_sha[:10]}`"
         ),
         "IC_SECURITY_RESULT": (
             "### 🛡️ Codex Security Review\n\n"
             "No security issues were found in this pull request.\n\n"
-            f"**Reviewed commit:** `{NEXT_HEAD[:10]}`"
+            f"**Reviewed commit:** `{resulting_head_sha[:10]}`"
         ),
     }
     for node_id, body in bodies.items():
@@ -371,7 +380,7 @@ def authenticated_provider_growth() -> tuple[
             "body_digest": fast_path.digest_text(""),
             "actor": code_quality,
             "state": "COMMENTED",
-            "commit_oid": NEXT_HEAD,
+            "commit_oid": resulting_head_sha,
             "reactions": [],
         }
     )
@@ -393,8 +402,8 @@ def authenticated_provider_growth() -> tuple[
     )
     current = fast_path.StableFeedbackState(
         repository=REPOSITORY,
-        pull_request_number=PR,
-        head_sha=NEXT_HEAD,
+        pull_request_number=pull_request,
+        head_sha=resulting_head_sha,
         base_ref=predecessor.base_ref,
         base_sha=predecessor.base_sha,
         pr_state="OPEN",
@@ -421,9 +430,9 @@ def authenticated_provider_growth() -> tuple[
     ]
     classification = fast_path._seal_successor_classification(
         repository=REPOSITORY,
-        delivery_issue_number=ISSUE,
-        pull_request_number=PR,
-        head_sha=NEXT_HEAD,
+        delivery_issue_number=delivery_issue,
+        pull_request_number=pull_request,
+        head_sha=resulting_head_sha,
         finding_id="PRRC_RESULTING_HEAD",
         finding_evidence_digest="b" * 64,
         thread_id="PRRT_RESULTING_HEAD",
@@ -442,9 +451,9 @@ def authenticated_provider_growth() -> tuple[
     evidence: dict[str, object] = {
         "schema_version": "1.0",
         "repository": REPOSITORY,
-        "pull_request_number": PR,
+        "pull_request_number": pull_request,
         "predecessor_state_digest": predecessor.state_digest,
-        "resulting_head_sha": NEXT_HEAD,
+        "resulting_head_sha": resulting_head_sha,
         "resulting_state_digest": current.state_digest,
         "provider_transport": [
             {
@@ -483,6 +492,73 @@ def authenticated_provider_growth() -> tuple[
         ],
     }
     return predecessor, current, evidence
+
+
+def authenticated_provider_reaction_replacement() -> tuple[
+    fast_path.StableFeedbackState,
+    fast_path.StableFeedbackState,
+    dict[str, object],
+]:
+    current_head = "46d09efb237f3e8c2e1f1066ba2b840a018ef889"
+    rejected_head = "be511e420933eeffb289188f3620677bc7cb9f84"
+    reviewed, current, evidence = authenticated_provider_growth(
+        delivery_issue=894,
+        pull_request=901,
+        predecessor_head_sha=current_head,
+        resulting_head_sha=rejected_head,
+        base_sha="aa7d9e4485abbceed01136cd81fdbbd353f877bc",
+    )
+    reviewed.feedback["pull_request_reactions"].append(
+        {
+            "mutation_id": "REACTION_CODEX_PREDECESSOR_COMPLETE",
+            "content": "THUMBS_UP",
+            "actor": {
+                "login": "chatgpt-codex-connector[bot]",
+                "node_id": "BOT_CODEX",
+                "database_id": 199175422,
+            },
+        }
+    )
+    current.feedback["pull_request_reactions"][0]["mutation_id"] = (
+        "REA_lAHOQFR1MM8AAAABQu3eG84d1ZDA"
+    )
+    current.feedback["pull_request_reactions"][0]["actor"]["login"] = (
+        "chatgpt-codex-connector[bot]"
+    )
+    completion_transport = next(
+        item
+        for item in evidence["provider_transport"]
+        if item["role"] == "CODEX_COMPLETION_REACTION"
+    )
+    completion_transport["node_id"] = "REA_lAHOQFR1MM8AAAABQu3eG84d1ZDA"
+    reviewed.refresh_digests()
+    current.refresh_digests()
+    safe = evidence["successor_findings"][0]["classification_evidence"]
+    evidence["successor_findings"][0]["classification_evidence"] = (
+        fast_path._seal_successor_classification(
+            **{
+                key: value
+                for key, value in safe.__dict__.items()
+                if key != "_verification_seal"
+            }
+            | {
+                "classification": "IN_CONTRACT_DEFECT",
+                "disposition": "CANDIDATE_REJECTED_BEFORE_PUBLICATION",
+                "technically_blocking": True,
+                "technical_blockers": ("P2",),
+            }
+        )
+    )
+    evidence["schema_version"] = "1.2"
+    evidence["predecessor_state_digest"] = reviewed.state_digest
+    evidence["resulting_state_digest"] = current.state_digest
+    evidence["provider_completion_reaction_replacement"] = {
+        "provider_login": "chatgpt-codex-connector",
+        "reaction_content": "THUMBS_UP",
+        "removed_reaction_id": "REACTION_CODEX_PREDECESSOR_COMPLETE",
+        "replacement_reaction_id": "REA_lAHOQFR1MM8AAAABQu3eG84d1ZDA",
+    }
+    return reviewed, current, evidence
 
 
 class LifecycleOrchestrationTests(TestCase):
@@ -890,6 +966,7 @@ class LifecycleOrchestrationTests(TestCase):
             material_finding_ids=("F-REJECTED-1",),
             material_thread_ids=("PRRT_REJECTED_1",),
             finding_source_digest="5" * 64,
+            provider_reaction_replacement_digest="9" * 64,
         )
         authorization = {
             "authorization_id": "user-reanchored-continuation-1",
@@ -922,6 +999,7 @@ class LifecycleOrchestrationTests(TestCase):
                 "replacement_state_digest": reanchor.replacement_state_digest,
                 "finding_source_digest": reanchor.finding_source_digest,
                 "corrected_successor_state_digest": current.state_digest,
+                "provider_reaction_replacement_digest": "9" * 64,
             },
             "bounded_uses": 1,
         }
@@ -948,7 +1026,9 @@ class LifecycleOrchestrationTests(TestCase):
 
         def decide(candidate, *, reanchor_authority=reanchor, source_tree="e" * 40):
             with mock.patch.object(
-                fast_path, "verify_reanchored_stable_feedback_successor"
+                fast_path,
+                "verify_reanchored_stable_feedback_successor",
+                return_value=None,
             ):
                 return orchestration._orchestrate_event(
                     REPOSITORY,
@@ -983,6 +1063,7 @@ class LifecycleOrchestrationTests(TestCase):
             ("replacement_state_digest", "f" * 64),
             ("finding_source_digest", "f" * 64),
             ("corrected_successor_state_digest", "f" * 64),
+            ("provider_reaction_replacement_digest", "f" * 64),
         ):
             changed = copy.deepcopy(request)
             changed["authorization"]["scope"][field] = replacement
@@ -1079,34 +1160,24 @@ class LifecycleOrchestrationTests(TestCase):
     def test_reanchor_authenticates_rebound_candidate_validation_and_material_sources(
         self,
     ) -> None:
+        delivery_issue = 894
+        original_pr = 901
+        replacement_pr = 905
+        historical_main = "aa7d9e4485abbceed01136cd81fdbbd353f877bc"
+        protected_main = "da7d5f19a1ff4e65bfdbe7ad0a66e13f6172ada9"
+        current_head = "46d09efb237f3e8c2e1f1066ba2b840a018ef889"
+        current_tree = "1635cf7a27f1340c001c67c91999224c9cb577a7"
+        rejected_head = "be511e420933eeffb289188f3620677bc7cb9f84"
+        rejected_tree = "ea029f69a64f6b08145483018f7b1d0e7dec51b7"
         rejected_reviewed, rejected_state, rejected_safety = (
-            authenticated_provider_growth()
-        )
-        safe = rejected_safety["successor_findings"][0][
-            "classification_evidence"
-        ]
-        rejected_safety["schema_version"] = "1.1"
-        rejected_safety["successor_findings"][0]["classification_evidence"] = (
-            fast_path._seal_successor_classification(
-                **{
-                    key: value
-                    for key, value in safe.__dict__.items()
-                    if key != "_verification_seal"
-                }
-                | {
-                    "classification": "IN_CONTRACT_DEFECT",
-                    "disposition": "CANDIDATE_REJECTED_BEFORE_PUBLICATION",
-                    "technically_blocking": True,
-                    "technical_blockers": ("P2",),
-                }
-            )
+            authenticated_provider_reaction_replacement()
         )
         replacement_reviewed = fast_path.StableFeedbackState(
             repository=REPOSITORY,
-            pull_request_number=REPLACEMENT_PR,
-            head_sha=HEAD,
+            pull_request_number=replacement_pr,
+            head_sha=current_head,
             base_ref=rejected_reviewed.base_ref,
-            base_sha=rejected_reviewed.base_sha,
+            base_sha=protected_main,
             pr_state="OPEN",
             feedback={
                 "pull_request_reactions": [],
@@ -1117,16 +1188,18 @@ class LifecycleOrchestrationTests(TestCase):
         )
         current_lifecycle_state = current_lifecycle(
             exceptional_recoveries=1,
-            pull_request=REPLACEMENT_PR,
+            pull_request=replacement_pr,
+            head_sha=current_head,
+            delivery_issue=delivery_issue,
         )
         predecessor_lifecycle = authority.VerifiedLifecycleAuthority(
             authority_digest="6" * 64,
             repository=REPOSITORY,
-            delivery_issue=ISSUE,
+            delivery_issue=delivery_issue,
             lifecycle_id=LIFECYCLE,
             initialization_evidence_digest=current_lifecycle_state.initialization_evidence_digest,
-            pull_request=PR,
-            head_sha=HEAD,
+            pull_request=original_pr,
+            head_sha=current_head,
             state=copy.deepcopy(current_lifecycle_state.state),
             authority_signer_identity=current_lifecycle_state.authority_signer_identity,
         )
@@ -1153,10 +1226,10 @@ class LifecycleOrchestrationTests(TestCase):
             event_digest="a" * 64,
             transition_kind="PR_REBOUND",
             event_signer_identity="aroviqen@secpal.app",
-            pull_request=PR,
+            pull_request=original_pr,
             predecessor_authority_digest=predecessor_lifecycle.authority_digest,
-            predecessor_head_sha=HEAD,
-            resulting_head_sha=HEAD,
+            predecessor_head_sha=current_head,
+            resulting_head_sha=current_head,
             initialization_evidence_digest=(
                 current_lifecycle_state.initialization_evidence_digest
             ),
@@ -1183,8 +1256,8 @@ class LifecycleOrchestrationTests(TestCase):
         normalized_rejected_continuation = {
             "eligibility_evidence_digest": "1" * 64,
             "authorization_id": "rejected-continuation-authorization",
-            "delivery_issue_number": ISSUE,
-            "prior_ready_tree_sha": "d" * 40,
+            "delivery_issue_number": delivery_issue,
+            "prior_ready_tree_sha": current_tree,
             "expected_signer": {
                 "kind": "SSH_PRINCIPAL",
                 "identity": "aroviqen@secpal.app",
@@ -1195,7 +1268,10 @@ class LifecycleOrchestrationTests(TestCase):
             normalized_rejected_continuation
         )
         receipt = {
-            "receipt_digest": "b" * 64,
+            "receipt_digest": (
+                "cea452a1f4eb4926233259b84bde1aab7"
+                "167e59686dd4667818b5bd499ba6738"
+            ),
             "manual_gate_evidence": [],
             "eligibility_evidence_digest": "1" * 64,
             "exceptional_continuation_evidence_digest": (
@@ -1207,21 +1283,21 @@ class LifecycleOrchestrationTests(TestCase):
             "schema_version": "1.0",
             "kind": "REJECTED_EXCEPTIONAL_CONTINUATION_REANCHOR",
             "repository": REPOSITORY,
-            "delivery_issue_number": ISSUE,
-            "original_pull_request_number": PR,
-            "replacement_pull_request_number": REPLACEMENT_PR,
+            "delivery_issue_number": delivery_issue,
+            "original_pull_request_number": original_pr,
+            "replacement_pull_request_number": replacement_pr,
             "lifecycle_id": LIFECYCLE,
             "current_publication_oid": observed.publication_oid,
             "current_publication_digest": observed.publication_digest,
             "current_authority_digest": current_lifecycle_state.authority_digest,
-            "current_head_sha": HEAD,
-            "current_tree_sha": "d" * 40,
+            "current_head_sha": current_head,
+            "current_tree_sha": current_tree,
             "rebound_predecessor_publication_oid": (
                 predecessor_publication.publication_oid
             ),
             "rebound_event_digest": rebound.event_digest,
-            "rejected_candidate_head_sha": NEXT_HEAD,
-            "rejected_candidate_tree_sha": "e" * 40,
+            "rejected_candidate_head_sha": rejected_head,
+            "rejected_candidate_tree_sha": rejected_tree,
             "rejected_candidate_expected_signer": {
                 "kind": "SSH_PRINCIPAL",
                 "identity": "aroviqen@secpal.app",
@@ -1236,7 +1312,7 @@ class LifecycleOrchestrationTests(TestCase):
             "replacement_reviewed_state_evidence": replacement_reviewed.to_dict(),
         }
         source = SimpleNamespace(
-            tree_sha="e" * 40,
+            tree_sha=rejected_tree,
             signer_kind="SSH_PRINCIPAL",
             signer_identity="aroviqen@secpal.app",
             authentication_digest="f" * 64,
@@ -1246,12 +1322,29 @@ class LifecycleOrchestrationTests(TestCase):
             final_attestation_digest=attestation["attestation_digest"],
         )
         historical_registry_reader = mock.Mock(
-            return_value={
-                "default_branch": "main",
-                "validation": [],
-                "manual_gates": [],
-            }
+            return_value=(
+                {
+                    "default_branch": "main",
+                    "validation": [],
+                    "manual_gates": [],
+                },
+                orchestration.bootstrap_source_admission.ProtectedMainFacts(
+                    repository=REPOSITORY,
+                    default_branch="main",
+                    head_sha=protected_main,
+                ),
+            )
         )
+        def authenticate_lineage(repository, ancestor, descendant):
+            if repository != REPOSITORY or (ancestor, descendant) not in {
+                (historical_main, protected_main),
+                (protected_main, "f" * 40),
+            }:
+                raise orchestration.LifecycleOrchestrationError(
+                    "unrelated accepted-main substitution"
+                )
+
+        accepted_main_lineage = mock.Mock(side_effect=authenticate_lineage)
 
         def verify(candidate, *, current=observed, rebound_value=rebound):
             def verify_attestation(value, **_kwargs):
@@ -1264,7 +1357,7 @@ class LifecycleOrchestrationTests(TestCase):
                     value != rejected_continuation
                     or kwargs.get("eligibility_evidence") != rejected_eligibility
                     or kwargs.get("reviewed_state") != rejected_reviewed
-                    or kwargs.get("validated_tree_sha") != "e" * 40
+                    or kwargs.get("validated_tree_sha") != rejected_tree
                 ):
                     raise fast_path.SecurityBlocker(
                         "substituted rejected Continuation evidence"
@@ -1276,7 +1369,7 @@ class LifecycleOrchestrationTests(TestCase):
                     orchestration,
                     "_immutable_commit_tree",
                     side_effect=lambda _root, _repo, head: (
-                        "d" * 40 if head == HEAD else "e" * 40
+                        current_tree if head == current_head else rejected_tree
                     ),
                 ),
                 mock.patch.object(
@@ -1291,8 +1384,13 @@ class LifecycleOrchestrationTests(TestCase):
                 ),
                 mock.patch.object(
                     orchestration,
-                    "_historical_validation_registry_binding",
+                    "_historical_validation_registry_authority",
                     new=historical_registry_reader,
+                ),
+                mock.patch.object(
+                    orchestration,
+                    "_require_accepted_main_ancestor",
+                    new=accepted_main_lineage,
                 ),
                 mock.patch.object(
                     fast_path,
@@ -1324,13 +1422,32 @@ class LifecycleOrchestrationTests(TestCase):
         historical_registry_reader.assert_called_once_with(
             REPO_ROOT,
             REPOSITORY,
-            "0" * 40,
+            historical_main,
         )
         historical_registry_reader.reset_mock()
+        self.assertEqual(
+            accepted_main_lineage.call_args_list,
+            [
+                mock.call(REPOSITORY, historical_main, protected_main),
+            ],
+        )
+        accepted_main_lineage.reset_mock()
 
-        self.assertEqual(verified.original_pull_request, PR)
-        self.assertEqual(verified.replacement_pull_request, REPLACEMENT_PR)
-        self.assertEqual(verified.rejected_candidate_head_sha, NEXT_HEAD)
+        self.assertEqual(verified.original_pull_request, original_pr)
+        self.assertEqual(verified.replacement_pull_request, replacement_pr)
+        self.assertEqual(verified.rejected_candidate_head_sha, rejected_head)
+        self.assertEqual(
+            verified.historical_accepted_main_base_sha,
+            historical_main,
+        )
+        self.assertEqual(
+            verified.current_protected_main_base_sha,
+            protected_main,
+        )
+        self.assertRegex(
+            verified.provider_reaction_replacement_digest or "",
+            r"^[0-9a-f]{64}$",
+        )
         self.assertEqual(verified.material_finding_ids, ("PRRC_RESULTING_HEAD",))
         self.assertEqual(verified.material_thread_ids, ("PRRT_RESULTING_HEAD",))
         self.assertEqual(
@@ -1339,11 +1456,71 @@ class LifecycleOrchestrationTests(TestCase):
         )
         self.assertRegex(verified.evidence_digest, r"^[0-9a-f]{64}$")
 
+        same_base = copy.deepcopy(evidence)
+        same_base_payload = copy.deepcopy(
+            same_base["replacement_reviewed_state_evidence"]
+        )
+        same_base_payload["base_sha"] = historical_main
+        same_base["replacement_reviewed_state_evidence"] = (
+            fast_path.StableFeedbackState.from_payload(
+                same_base_payload
+            ).to_dict()
+        )
+        same_base_verified = verify(same_base)
+        self.assertIsNone(same_base_verified.historical_accepted_main_base_sha)
+        self.assertIsNone(same_base_verified.current_protected_main_base_sha)
+        self.assertNotEqual(
+            same_base_verified.evidence_digest,
+            verified.evidence_digest,
+        )
+
+        caller_trust = copy.deepcopy(evidence)
+        caller_trust["trusted_replacement_base_sha"] = protected_main
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            verify(caller_trust)
+
+        registry, protected_facts = historical_registry_reader.return_value
+        historical_registry_reader.return_value = (
+            registry,
+            orchestration.bootstrap_source_admission.ProtectedMainFacts(
+                repository="SecPal/api",
+                default_branch=protected_facts.default_branch,
+                head_sha=protected_facts.head_sha,
+            ),
+        )
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            verify(evidence)
+        historical_registry_reader.return_value = (registry, protected_facts)
+
+        later_protected_main = "f" * 40
+        historical_registry_reader.return_value = (
+            registry,
+            orchestration.bootstrap_source_admission.ProtectedMainFacts(
+                repository=REPOSITORY,
+                default_branch=protected_facts.default_branch,
+                head_sha=later_protected_main,
+            ),
+        )
+        accepted_main_lineage.reset_mock()
+        later_verified = verify(evidence)
+        self.assertEqual(
+            later_verified.current_protected_main_base_sha,
+            protected_main,
+        )
+        self.assertEqual(
+            accepted_main_lineage.call_args_list,
+            [
+                mock.call(REPOSITORY, historical_main, protected_main),
+                mock.call(REPOSITORY, protected_main, later_protected_main),
+            ],
+        )
+        historical_registry_reader.return_value = (registry, protected_facts)
+
         for field, replacement in (
             ("repository", "SecPal/api"),
             ("delivery_issue_number", ISSUE + 1),
-            ("original_pull_request_number", PR + 10),
-            ("replacement_pull_request_number", REPLACEMENT_PR + 10),
+            ("original_pull_request_number", original_pr + 10),
+            ("replacement_pull_request_number", replacement_pr + 10),
             ("current_publication_oid", "f" * 40),
             ("current_publication_digest", "f" * 64),
             ("current_authority_digest", "f" * 64),
@@ -1413,7 +1590,9 @@ class LifecycleOrchestrationTests(TestCase):
         consumed_lifecycle = current_lifecycle(
             exceptional_recoveries=1,
             exceptional_continuations=1,
-            pull_request=REPLACEMENT_PR,
+            pull_request=replacement_pr,
+            head_sha=current_head,
+            delivery_issue=delivery_issue,
         )
         consumed_current = publication.VerifiedLifecyclePublication(
             observed.publication_oid,
@@ -1429,13 +1608,13 @@ class LifecycleOrchestrationTests(TestCase):
         published_lifecycle = authority.VerifiedLifecycleAuthority(
             authority_digest=current_lifecycle_state.authority_digest,
             repository=REPOSITORY,
-            delivery_issue=ISSUE,
+            delivery_issue=delivery_issue,
             lifecycle_id=LIFECYCLE,
             initialization_evidence_digest=(
                 current_lifecycle_state.initialization_evidence_digest
             ),
-            pull_request=REPLACEMENT_PR,
-            head_sha=NEXT_HEAD,
+            pull_request=replacement_pr,
+            head_sha=rejected_head,
             state=copy.deepcopy(current_lifecycle_state.state),
             authority_signer_identity=(
                 current_lifecycle_state.authority_signer_identity
@@ -1464,8 +1643,8 @@ class LifecycleOrchestrationTests(TestCase):
     def test_historical_validation_registry_requires_accepted_main_ancestor(
         self,
     ) -> None:
-        protected_main = "f" * 40
-        historical_main = "0" * 40
+        protected_main = "da7d5f19a1ff4e65bfdbe7ad0a66e13f6172ada9"
+        historical_main = "aa7d9e4485abbceed01136cd81fdbbd353f877bc"
         registry = {
             "default_branch": "main",
             "validation": [],
@@ -1672,6 +1851,75 @@ class LifecycleOrchestrationTests(TestCase):
             normalized["reanchor"]["material_thread_ids"],
             ["PRRT_REJECTED_1"],
         )
+        advanced_reanchor = orchestration.VerifiedRejectedContinuationReanchor(
+            **{
+                **reanchor.__dict__,
+                "historical_accepted_main_base_sha": (
+                    "aa7d9e4485abbceed01136cd81fdbbd353f877bc"
+                ),
+                "current_protected_main_base_sha": (
+                    "da7d5f19a1ff4e65bfdbe7ad0a66e13f6172ada9"
+                ),
+                "provider_reaction_replacement_digest": "9" * 64,
+            }
+        )
+        advanced = copy.deepcopy(value)
+        advanced["reanchor"] = {
+            field: (
+                list(getattr(advanced_reanchor, field))
+                if field in {"material_finding_ids", "material_thread_ids"}
+                else getattr(advanced_reanchor, field)
+            )
+            for field in fast_path.EXCEPTIONAL_CONTINUATION_REANCHOR_DRIFT_FIELDS
+        }
+        advanced_normalized = fast_path.normalize_exceptional_continuation_evidence(
+            advanced,
+            repository=REPOSITORY,
+            reviewed_state=reviewed,
+            validated_tree_sha="b" * 40,
+            eligibility_evidence=eligibility,
+            reanchor_authority=advanced_reanchor,
+        )
+        self.assertEqual(
+            advanced_normalized["reanchor"][
+                "historical_accepted_main_base_sha"
+            ],
+            "aa7d9e4485abbceed01136cd81fdbbd353f877bc",
+        )
+        for label, mutate in (
+            (
+                "unbound",
+                lambda item: (
+                    item["reanchor"].pop("historical_accepted_main_base_sha"),
+                    item["reanchor"].pop("current_protected_main_base_sha"),
+                ),
+            ),
+            (
+                "substituted",
+                lambda item: item["reanchor"].update(
+                    current_protected_main_base_sha="f" * 40
+                ),
+            ),
+            (
+                "provider substituted",
+                lambda item: item["reanchor"].update(
+                    provider_reaction_replacement_digest="f" * 64
+                ),
+            ),
+        ):
+            changed_advanced = copy.deepcopy(advanced)
+            mutate(changed_advanced)
+            with self.subTest(advanced_base=label), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                fast_path.normalize_exceptional_continuation_evidence(
+                    changed_advanced,
+                    repository=REPOSITORY,
+                    reviewed_state=reviewed,
+                    validated_tree_sha="b" * 40,
+                    eligibility_evidence=eligibility,
+                    reanchor_authority=advanced_reanchor,
+                )
         changed = copy.deepcopy(value)
         changed["thread_ids"] = ["PRRT_REJECTED_1"]
         with self.assertRaises(fast_path.SecurityBlocker):
@@ -2059,6 +2307,46 @@ class LifecycleOrchestrationTests(TestCase):
             rejected_authenticated["successor_findings"][0][
                 "classification_evidence"
             ].technically_blocking
+        )
+
+        replacement_raw = copy.deepcopy(rejected_raw)
+        replacement_raw["schema_version"] = "1.2"
+        replacement_raw["provider_completion_reaction_replacement"] = {
+            "provider_login": "chatgpt-codex-connector",
+            "reaction_content": "THUMBS_UP",
+            "removed_reaction_id": "REACTION_CODEX_PREDECESSOR_COMPLETE",
+            "replacement_reaction_id": "REA_lAHOQFR1MM8AAAABQu3eG84d1ZDA",
+        }
+        with (
+            mock.patch.object(
+                orchestration,
+                "_successor_classification_signer",
+                return_value=late_disposition.SignerIdentity(
+                    "ssh", "SHA256:fixture"
+                ),
+            ),
+            mock.patch.object(
+                late_disposition,
+                "parse_rejected_successor_classification_artifact",
+                return_value=material_verified,
+            ),
+        ):
+            replacement_authenticated = (
+                orchestration._authenticate_rejected_successor_safety_evidence(
+                    replacement_raw,
+                    repository=REPOSITORY,
+                    delivery_issue=ISSUE,
+                    pull_request=PR,
+                    predecessor_state_digest=reviewed.state_digest,
+                    resulting_head_sha=NEXT_HEAD,
+                    resulting_state_digest=current.state_digest,
+                )
+            )
+        self.assertEqual(
+            replacement_authenticated[
+                "provider_completion_reaction_replacement"
+            ]["removed_reaction_id"],
+            "REACTION_CODEX_PREDECESSOR_COMPLETE",
         )
 
     def test_successor_classification_parser_binds_exact_sources_and_state(self) -> None:
@@ -2820,6 +3108,200 @@ class LifecycleOrchestrationTests(TestCase):
                 resulting_head_sha=NEXT_HEAD,
                 successor_safety_evidence=material,
             )
+
+    def test_rejected_successor_accepts_exact_codex_completion_reaction_replacement(
+        self,
+    ) -> None:
+        rejected_head = "be511e420933eeffb289188f3620677bc7cb9f84"
+        reviewed, current, evidence = authenticated_provider_reaction_replacement()
+
+        material = fast_path.verify_rejected_stable_feedback_successor(
+            reviewed,
+            current,
+            resulting_head_sha=rejected_head,
+            rejected_successor_evidence=evidence,
+        )
+        self.assertRegex(
+            material.provider_reaction_replacement_digest or "",
+            r"^[0-9a-f]{64}$",
+        )
+
+    def test_rejected_successor_rejects_completion_reaction_replacement_drift(
+        self,
+    ) -> None:
+        resulting_head = "be511e420933eeffb289188f3620677bc7cb9f84"
+
+        def reject(label, mutate, *, refresh_evidence=True):
+            reviewed, current, evidence = (
+                authenticated_provider_reaction_replacement()
+            )
+            mutate(reviewed, current, evidence)
+            if refresh_evidence:
+                reviewed.refresh_digests()
+                current.refresh_digests()
+                evidence["predecessor_state_digest"] = reviewed.state_digest
+                evidence["resulting_state_digest"] = current.state_digest
+            with self.subTest(label=label), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                fast_path.verify_rejected_stable_feedback_successor(
+                    reviewed,
+                    current,
+                    resulting_head_sha=resulting_head,
+                    rejected_successor_evidence=evidence,
+                )
+
+        def arbitrary_deletion(reviewed, _current, _evidence):
+            reviewed.feedback["pull_request_reactions"].append(
+                {
+                    "mutation_id": "REACTION_UNRELATED_PREDECESSOR",
+                    "content": "HEART",
+                    "actor": {
+                        "login": "delivery-user",
+                        "node_id": "USER_DELIVERY",
+                        "database_id": 7,
+                    },
+                }
+            )
+
+        def removed_actor_substitution(reviewed, _current, _evidence):
+            reviewed.feedback["pull_request_reactions"][-1]["actor"]["login"] = (
+                "delivery-user"
+            )
+
+        def removed_content_substitution(reviewed, _current, _evidence):
+            reviewed.feedback["pull_request_reactions"][-1]["content"] = "HEART"
+
+        def replacement_actor_substitution(_reviewed, current, _evidence):
+            current.feedback["pull_request_reactions"][0]["actor"]["login"] = (
+                "different-provider"
+            )
+
+        def replacement_actor_identity_substitution(_reviewed, current, _evidence):
+            current.feedback["pull_request_reactions"][0]["actor"]["node_id"] = (
+                "BOT_DIFFERENT_PROVIDER"
+            )
+
+        def replacement_content_substitution(_reviewed, current, _evidence):
+            current.feedback["pull_request_reactions"][0]["content"] = "HEART"
+
+        def incomplete_transport(_reviewed, _current, evidence):
+            evidence["provider_transport"] = [
+                item
+                for item in evidence["provider_transport"]
+                if item["role"] != "CODEX_SECURITY_REVIEW_RESULT"
+            ]
+
+        def nonterminal_transport(_reviewed, current, evidence):
+            summary = next(
+                item
+                for item in evidence["provider_transport"]
+                if item["role"] == "CODEX_SUMMARY_UPDATE"
+            )
+            summary["body"] = summary["body"].replace(
+                '"status":"completed"',
+                '"status":"running"',
+            )
+            observed = next(
+                item
+                for item in current.feedback["conversation_comments"]
+                if item["node_id"] == summary["node_id"]
+            )
+            observed["body_digest"] = fast_path.digest_text(summary["body"])
+
+        def wrong_head_transport(_reviewed, current, evidence):
+            result = next(
+                item
+                for item in evidence["provider_transport"]
+                if item["role"] == "CODEX_CODE_REVIEW_RESULT"
+            )
+            result["body"] = result["body"].replace(
+                resulting_head[:10],
+                "f" * 10,
+            )
+            observed = next(
+                item
+                for item in current.feedback["conversation_comments"]
+                if item["node_id"] == result["node_id"]
+            )
+            observed["body_digest"] = fast_path.digest_text(result["body"])
+
+        def reaction_replay(reviewed, _current, _evidence):
+            reviewed.feedback["pull_request_reactions"].append(
+                {
+                    "mutation_id": "REA_lAHOQFR1MM8AAAABQu3eG84d1ZDA",
+                    "content": "THUMBS_UP",
+                    "actor": {
+                        "login": "chatgpt-codex-connector",
+                        "node_id": "BOT_CODEX",
+                        "database_id": 199175422,
+                    },
+                }
+            )
+
+        def unrelated_reaction_mutation(_reviewed, current, _evidence):
+            current.feedback["threads"][0]["comments"][0]["reactions"][0][
+                "content"
+            ] = "THUMBS_DOWN"
+
+        def unrelated_reaction_addition(_reviewed, current, _evidence):
+            current.feedback["conversation_comments"][0]["reactions"].append(
+                {
+                    "mutation_id": "REACTION_UNRELATED_ADDITION",
+                    "content": "HEART",
+                    "actor": {
+                        "login": "delivery-user",
+                        "node_id": "USER_DELIVERY",
+                        "database_id": 7,
+                    },
+                }
+            )
+
+        for label, mutate in (
+            ("arbitrary reaction deletion", arbitrary_deletion),
+            ("removed reaction actor substitution", removed_actor_substitution),
+            ("removed reaction content substitution", removed_content_substitution),
+            ("replacement provider substitution", replacement_actor_substitution),
+            (
+                "replacement actor identity substitution",
+                replacement_actor_identity_substitution,
+            ),
+            (
+                "replacement reaction type substitution",
+                replacement_content_substitution,
+            ),
+            ("incomplete provider transport", incomplete_transport),
+            ("nonterminal provider transport", nonterminal_transport),
+            ("wrong-head provider result", wrong_head_transport),
+            ("reaction replay", reaction_replay),
+            ("unrelated reaction mutation", unrelated_reaction_mutation),
+            ("unrelated reaction addition", unrelated_reaction_addition),
+            (
+                "caller provider substitution",
+                lambda _r, _c, evidence: evidence[
+                    "provider_completion_reaction_replacement"
+                ].update(provider_login="different-provider"),
+            ),
+            (
+                "caller reaction substitution",
+                lambda _r, _c, evidence: evidence[
+                    "provider_completion_reaction_replacement"
+                ].update(reaction_content="HEART"),
+            ),
+            (
+                "wrong PR evidence",
+                lambda _r, _c, evidence: evidence.update(
+                    pull_request_number=906
+                ),
+            ),
+            (
+                "wrong head evidence",
+                lambda _r, _c, evidence: evidence.update(
+                    resulting_head_sha="f" * 40
+                ),
+            ),
+        ):
+            reject(label, mutate)
 
     def test_reanchored_corrected_successor_accepts_first_terminal_summary(
         self,

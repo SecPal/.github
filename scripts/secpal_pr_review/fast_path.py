@@ -159,6 +159,14 @@ REQUIRED_CODEX_SUCCESSOR_ROLES = frozenset(
         "CODEX_SECURITY_REVIEW_RESULT",
     }
 )
+PROVIDER_COMPLETION_REACTION_REPLACEMENT_FIELDS = frozenset(
+    {
+        "provider_login",
+        "reaction_content",
+        "removed_reaction_id",
+        "replacement_reaction_id",
+    }
+)
 SOURCE_KINDS = frozenset(
     {
         "PULL_REQUEST_REACTION",
@@ -265,6 +273,21 @@ EXCEPTIONAL_CONTINUATION_REANCHOR_FIELDS = frozenset(
         "material_thread_ids",
         "finding_source_digest",
     }
+)
+EXCEPTIONAL_CONTINUATION_REANCHOR_ADVANCEMENT_FIELDS = (
+    EXCEPTIONAL_CONTINUATION_REANCHOR_FIELDS
+    | {
+        "historical_accepted_main_base_sha",
+        "current_protected_main_base_sha",
+    }
+)
+EXCEPTIONAL_CONTINUATION_REANCHOR_REACTION_FIELDS = (
+    EXCEPTIONAL_CONTINUATION_REANCHOR_FIELDS
+    | {"provider_reaction_replacement_digest"}
+)
+EXCEPTIONAL_CONTINUATION_REANCHOR_DRIFT_FIELDS = (
+    EXCEPTIONAL_CONTINUATION_REANCHOR_ADVANCEMENT_FIELDS
+    | {"provider_reaction_replacement_digest"}
 )
 READY_INTEGRATION_KEYS = frozenset(
     {
@@ -1357,9 +1380,24 @@ def normalize_exceptional_continuation_evidence(
         }
     elif reanchored:
         candidate = value.get("reanchor")
+        candidate_fields = (
+            frozenset(candidate) if isinstance(candidate, dict) else frozenset()
+        )
+        base_advanced = EXCEPTIONAL_CONTINUATION_REANCHOR_ADVANCEMENT_FIELDS.issubset(
+            candidate_fields
+        )
+        provider_reaction_replaced = (
+            "provider_reaction_replacement_digest" in candidate_fields
+        )
         if (
             not isinstance(candidate, dict)
-            or set(candidate) != EXCEPTIONAL_CONTINUATION_REANCHOR_FIELDS
+            or candidate_fields
+            not in {
+                EXCEPTIONAL_CONTINUATION_REANCHOR_FIELDS,
+                EXCEPTIONAL_CONTINUATION_REANCHOR_ADVANCEMENT_FIELDS,
+                EXCEPTIONAL_CONTINUATION_REANCHOR_REACTION_FIELDS,
+                EXCEPTIONAL_CONTINUATION_REANCHOR_DRIFT_FIELDS,
+            }
             or any(SECRET_VALUE.search(item) for item in _all_strings(candidate))
         ):
             raise SecurityBlocker(
@@ -1413,6 +1451,30 @@ def normalize_exceptional_continuation_evidence(
                 candidate.get("finding_source_digest"),
                 "rejected finding sources",
             ),
+            **(
+                {
+                    "historical_accepted_main_base_sha": _require_oid(
+                        candidate.get("historical_accepted_main_base_sha"),
+                        "historical accepted-main base",
+                    ),
+                    "current_protected_main_base_sha": _require_oid(
+                        candidate.get("current_protected_main_base_sha"),
+                        "current protected-main base",
+                    ),
+                }
+                if base_advanced
+                else {}
+            ),
+            **(
+                {
+                    "provider_reaction_replacement_digest": _require_digest(
+                        candidate.get("provider_reaction_replacement_digest"),
+                        "provider reaction replacement",
+                    )
+                }
+                if provider_reaction_replaced
+                else {}
+            ),
         }
         finding_ids = reanchor["material_finding_ids"]
         diagnostic_thread_ids = reanchor["material_thread_ids"]
@@ -1437,6 +1499,11 @@ def normalize_exceptional_continuation_evidence(
                 for identity in diagnostic_thread_ids
             )
             or eligibility.get("eligible_threads") != []
+            or (
+                base_advanced
+                and reanchor["historical_accepted_main_base_sha"]
+                == reanchor["current_protected_main_base_sha"]
+            )
         ):
             raise SecurityBlocker(
                 "exceptional continuation re-anchor identity is invalid or stale"
@@ -1488,6 +1555,41 @@ def normalize_exceptional_continuation_evidence(
             authority_binding["material_thread_ids"] = list(
                 authority_binding["material_thread_ids"] or []
             )
+            authority_historical_base = (
+                reanchor_authority.historical_accepted_main_base_sha
+            )
+            authority_current_base = (
+                reanchor_authority.current_protected_main_base_sha
+            )
+            authority_base_advanced = (
+                authority_historical_base is not None
+                and authority_current_base is not None
+                and authority_historical_base != authority_current_base
+            )
+            authority_reaction_digest = (
+                reanchor_authority.provider_reaction_replacement_digest
+            )
+            authority_reaction_replaced = authority_reaction_digest is not None
+            if (
+                base_advanced != authority_base_advanced
+                or provider_reaction_replaced != authority_reaction_replaced
+            ):
+                raise SecurityBlocker(
+                    "exceptional continuation re-anchor drift is unbound"
+                )
+            if base_advanced:
+                authority_binding.update(
+                    {
+                        "historical_accepted_main_base_sha": (
+                            authority_historical_base
+                        ),
+                        "current_protected_main_base_sha": authority_current_base,
+                    }
+                )
+            if provider_reaction_replaced:
+                authority_binding["provider_reaction_replacement_digest"] = (
+                    authority_reaction_digest
+                )
             if reanchor != authority_binding:
                 raise SecurityBlocker(
                     "exceptional continuation re-anchor authority changed"
@@ -1888,6 +1990,7 @@ class VerifiedRejectedSuccessorFindings:
     thread_ids: tuple[str, ...]
     source_bindings: tuple[tuple[str, str, str, str | None], ...]
     classification_evidence_digests: tuple[str, ...]
+    provider_reaction_replacement_digest: str | None = None
 
 
 def _seal_successor_classification(**values: Any) -> VerifiedSuccessorClassification:
@@ -2378,6 +2481,14 @@ def _successor_source_inventory(
     return inventory
 
 
+def _source_actor_login(source: Any) -> str | None:
+    actor = source.get("actor") if isinstance(source, dict) else None
+    login = actor.get("login") if isinstance(actor, dict) else None
+    if not isinstance(login, str):
+        return None
+    return re.sub(r"\[bot\]$", "", login.strip().lower())
+
+
 def _verify_successor_transport(
     value: Any,
     *,
@@ -2435,10 +2546,7 @@ def _verify_successor_transport(
         source_digest, _thread_id, source = observed
         if body is not None and digest_text(body) != source_digest:
             raise SecurityBlocker("successor provider transport body changed")
-        actor = source.get("actor") if isinstance(source, dict) else None
-        login = actor.get("login") if isinstance(actor, dict) else None
-        if isinstance(login, str):
-            login = re.sub(r"\[bot\]$", "", login.strip().lower())
+        login = _source_actor_login(source)
         predecessor = reviewed_sources.get(key)
 
         if role == "CODEX_SUMMARY_UPDATE":
@@ -2584,6 +2692,102 @@ def _verify_successor_transport(
                 "Codex provider acquisition transport is incomplete or ambiguous"
             )
     return admitted_additions, admitted_updates
+
+
+def _verify_provider_completion_reaction_replacement(
+    value: Any,
+    *,
+    reviewed_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    current_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    provider_transport: Any,
+) -> tuple[str, str]:
+    """Authenticate one exact Codex-owned completion-reaction replacement."""
+
+    if (
+        not isinstance(value, dict)
+        or set(value) != PROVIDER_COMPLETION_REACTION_REPLACEMENT_FIELDS
+        or value.get("provider_login") != CODEX_PROVIDER_LOGIN
+        or value.get("reaction_content") != "THUMBS_UP"
+    ):
+        raise SecurityBlocker(
+            "provider completion reaction replacement is malformed"
+        )
+    removed_id = value.get("removed_reaction_id")
+    replacement_id = value.get("replacement_reaction_id")
+    if (
+        not isinstance(removed_id, str)
+        or not IDENTITY.fullmatch(removed_id)
+        or not isinstance(replacement_id, str)
+        or not IDENTITY.fullmatch(replacement_id)
+        or removed_id == replacement_id
+    ):
+        raise SecurityBlocker(
+            "provider completion reaction replacement identity is invalid"
+        )
+    removed_key = ("PULL_REQUEST_REACTION", removed_id)
+    replacement_key = ("PULL_REQUEST_REACTION", replacement_id)
+    removed = reviewed_sources.get(removed_key)
+    replacement = current_sources.get(replacement_key)
+    reaction_kinds = {
+        "PULL_REQUEST_REACTION",
+        "REVIEW_REACTION",
+        "CONVERSATION_REACTION",
+        "THREAD_COMMENT_REACTION",
+    }
+    removed_reactions = {
+        key
+        for key in set(reviewed_sources) - set(current_sources)
+        if key[0] in reaction_kinds
+    }
+    added_reactions = {
+        key
+        for key in set(current_sources) - set(reviewed_sources)
+        if key[0] in reaction_kinds
+    }
+    if (
+        removed is None
+        or removed[1] is not None
+        or removed_key in current_sources
+        or replacement is None
+        or replacement[1] is not None
+        or replacement_key in reviewed_sources
+        or removed[2].get("content") != "THUMBS_UP"
+        or replacement[2].get("content") != "THUMBS_UP"
+        or _source_actor_login(removed[2]) != CODEX_PROVIDER_LOGIN
+        or _source_actor_login(replacement[2]) != CODEX_PROVIDER_LOGIN
+        or removed[2].get("actor") != replacement[2].get("actor")
+        or removed_reactions != {removed_key}
+        or added_reactions != {replacement_key}
+    ):
+        raise SecurityBlocker(
+            "provider completion reaction replacement is not provider-owned"
+        )
+    completion_transport = (
+        [
+            item
+            for item in provider_transport
+            if isinstance(item, dict)
+            and item.get("role") == "CODEX_COMPLETION_REACTION"
+        ]
+        if isinstance(provider_transport, list)
+        else []
+    )
+    if completion_transport != [
+        {
+            "role": "CODEX_COMPLETION_REACTION",
+            "kind": "PULL_REQUEST_REACTION",
+            "node_id": replacement_id,
+            "body": None,
+        }
+    ]:
+        raise SecurityBlocker(
+            "provider completion reaction replacement transport is invalid"
+        )
+    return removed_id, replacement_id
 
 
 def _verify_successor_findings(
@@ -2812,6 +3016,7 @@ def _verify_predecessor_preservation(
     *,
     authorized_thread_ids: set[str],
     admitted_updates: set[tuple[str, str]],
+    removed_provider_reaction_id: str | None = None,
 ) -> None:
     for category, identity_key in (
         ("pull_request_reactions", "mutation_id"),
@@ -2839,6 +3044,12 @@ def _verify_predecessor_preservation(
                     raise SecurityBlocker(
                         "provider summary update altered predecessor authority"
                     )
+            elif (
+                category == "pull_request_reactions"
+                and node_id == removed_provider_reaction_id
+                and observed is None
+            ):
+                continue
             elif observed != expected:
                 if (
                     category not in {"reviews", "conversation_comments"}
@@ -2925,7 +3136,7 @@ def _verify_authenticated_feedback_growth(
     authorized_thread_ids: set[str],
     successor_evidence: Any,
     rejected_candidate: bool = False,
-) -> None:
+) -> str | None:
     expected_keys = {
         "schema_version",
         "repository",
@@ -2936,12 +3147,26 @@ def _verify_authenticated_feedback_growth(
         "provider_transport",
         "successor_findings",
     }
+    schema_version = successor_evidence.get("schema_version") if isinstance(
+        successor_evidence, dict
+    ) else None
+    provider_reaction_replacement = (
+        rejected_candidate and schema_version == "1.2"
+    )
+    if provider_reaction_replacement:
+        expected_keys.add("provider_completion_reaction_replacement")
+    expected_schema_version = (
+        "1.2"
+        if provider_reaction_replacement
+        else "1.1"
+        if rejected_candidate
+        else "1.0"
+    )
     if (
         not isinstance(successor_evidence, dict)
         or set(successor_evidence) != expected_keys
         or any(SECRET_VALUE.search(item) for item in _all_strings(successor_evidence))
-        or successor_evidence.get("schema_version")
-        != ("1.1" if rejected_candidate else "1.0")
+        or schema_version != expected_schema_version
         or successor_evidence.get("repository") != reviewed.repository
         or successor_evidence.get("pull_request_number")
         != reviewed.pull_request_number
@@ -2960,6 +3185,14 @@ def _verify_authenticated_feedback_growth(
         resulting_head_sha=resulting_head_sha,
         rejected_candidate=rejected_candidate,
     )
+    replacement_ids = None
+    if provider_reaction_replacement:
+        replacement_ids = _verify_provider_completion_reaction_replacement(
+            successor_evidence["provider_completion_reaction_replacement"],
+            reviewed_sources=reviewed_sources,
+            current_sources=current_sources,
+            provider_transport=successor_evidence["provider_transport"],
+        )
     finding_verifier = (
         _verify_rejected_successor_findings
         if rejected_candidate
@@ -2997,6 +3230,9 @@ def _verify_authenticated_feedback_growth(
         current,
         authorized_thread_ids=authorized_thread_ids,
         admitted_updates=transport_updates,
+        removed_provider_reaction_id=(
+            replacement_ids[0] if replacement_ids is not None else None
+        ),
     )
 
     predecessor_thread_ids = {
@@ -3016,6 +3252,24 @@ def _verify_authenticated_feedback_growth(
         raise SecurityBlocker(
             "successor thread lacks complete classification authority"
         )
+    if replacement_ids is None:
+        return None
+    return digest_json(
+        {
+            "domain": (
+                "secpal.rejected-successor-provider-reaction-replacement/v1"
+            ),
+            "repository": reviewed.repository,
+            "pull_request_number": reviewed.pull_request_number,
+            "predecessor_state_digest": reviewed.state_digest,
+            "resulting_head_sha": resulting_head_sha,
+            "resulting_state_digest": current.state_digest,
+            "provider_transport": successor_evidence["provider_transport"],
+            "provider_completion_reaction_replacement": successor_evidence[
+                "provider_completion_reaction_replacement"
+            ],
+        }
+    )
 
 
 def verify_stable_feedback_successor(
@@ -3161,7 +3415,7 @@ def verify_rejected_stable_feedback_successor(
         raise SecurityBlocker(
             "rejected stable feedback does not identify the exact successor"
         )
-    _verify_authenticated_feedback_growth(
+    provider_reaction_replacement_digest = _verify_authenticated_feedback_growth(
         reviewed,
         rejected,
         resulting_head_sha=resulting_head_sha,
@@ -3200,6 +3454,9 @@ def verify_rejected_stable_feedback_successor(
         source_bindings=source_bindings,
         classification_evidence_digests=tuple(
             sorted(item.classification_evidence_digest for item in classifications)
+        ),
+        provider_reaction_replacement_digest=(
+            provider_reaction_replacement_digest
         ),
     )
 
