@@ -882,6 +882,7 @@ class LifecycleOrchestrationTests(TestCase):
             replacement_pull_request=REPLACEMENT_PR,
             rejected_candidate_head_sha="c" * 40,
             rejected_candidate_tree_sha="d" * 40,
+            rejected_continuation_evidence_digest="8" * 64,
             rejected_validation_receipt_digest="2" * 64,
             rejected_final_attestation_digest="3" * 64,
             rejected_state_digest="4" * 64,
@@ -908,6 +909,9 @@ class LifecycleOrchestrationTests(TestCase):
                 "reanchor_evidence_digest": reanchor.evidence_digest,
                 "rejected_candidate_head_sha": reanchor.rejected_candidate_head_sha,
                 "rejected_candidate_tree_sha": reanchor.rejected_candidate_tree_sha,
+                "rejected_continuation_evidence_digest": (
+                    reanchor.rejected_continuation_evidence_digest
+                ),
                 "rejected_validation_receipt_digest": (
                     reanchor.rejected_validation_receipt_digest
                 ),
@@ -972,6 +976,7 @@ class LifecycleOrchestrationTests(TestCase):
             ("reanchor_evidence_digest", "f" * 64),
             ("rejected_candidate_head_sha", "f" * 40),
             ("rejected_candidate_tree_sha", "f" * 40),
+            ("rejected_continuation_evidence_digest", "f" * 64),
             ("rejected_validation_receipt_digest", "f" * 64),
             ("rejected_final_attestation_digest", "f" * 64),
             ("rejected_state_digest", "f" * 64),
@@ -1156,7 +1161,23 @@ class LifecycleOrchestrationTests(TestCase):
                 current_lifecycle_state.initialization_evidence_digest
             ),
         )
-        receipt = {"receipt_digest": "b" * 64, "manual_gate_evidence": []}
+        rejected_eligibility = {"closed": "rejected eligibility fixture"}
+        rejected_continuation = {"closed": "rejected Continuation fixture"}
+        normalized_rejected_continuation = {
+            "eligibility_evidence_digest": "1" * 64,
+            "authorization_id": "rejected-continuation-authorization",
+        }
+        rejected_continuation_digest = fast_path.digest_json(
+            normalized_rejected_continuation
+        )
+        receipt = {
+            "receipt_digest": "b" * 64,
+            "manual_gate_evidence": [],
+            "eligibility_evidence_digest": "1" * 64,
+            "exceptional_continuation_evidence_digest": (
+                rejected_continuation_digest
+            ),
+        }
         attestation = {"attestation_digest": "c" * 64}
         evidence = {
             "schema_version": "1.0",
@@ -1181,6 +1202,8 @@ class LifecycleOrchestrationTests(TestCase):
                 "kind": "SSH_PRINCIPAL",
                 "identity": "aroviqen@secpal.app",
             },
+            "rejected_continuation_evidence": rejected_continuation,
+            "rejected_eligibility_evidence": rejected_eligibility,
             "rejected_reviewed_state_evidence": rejected_reviewed.to_dict(),
             "rejected_candidate_state_evidence": rejected_state.to_dict(),
             "rejected_successor_safety_evidence": {"signed": "fixture"},
@@ -1193,12 +1216,31 @@ class LifecycleOrchestrationTests(TestCase):
             validation_receipt_digest=receipt["receipt_digest"],
             final_attestation_digest=attestation["attestation_digest"],
         )
+        historical_registry_reader = mock.Mock(
+            return_value={
+                "default_branch": "main",
+                "validation": [],
+                "manual_gates": [],
+            }
+        )
 
         def verify(candidate, *, current=observed, rebound_value=rebound):
             def verify_attestation(value, **_kwargs):
                 if value != attestation:
                     raise fast_path.SecurityBlocker("substituted attestation")
                 return validation
+
+            def normalize_continuation(value, **kwargs):
+                if (
+                    value != rejected_continuation
+                    or kwargs.get("eligibility_evidence") != rejected_eligibility
+                    or kwargs.get("reviewed_state") != rejected_reviewed
+                    or kwargs.get("validated_tree_sha") != "e" * 40
+                ):
+                    raise fast_path.SecurityBlocker(
+                        "substituted rejected Continuation evidence"
+                    )
+                return normalized_rejected_continuation
 
             with (
                 mock.patch.object(
@@ -1220,12 +1262,13 @@ class LifecycleOrchestrationTests(TestCase):
                 ),
                 mock.patch.object(
                     orchestration,
-                    "_validation_registry_binding",
-                    return_value={
-                        "default_branch": "main",
-                        "validation": [],
-                        "manual_gates": [],
-                    },
+                    "_historical_validation_registry_binding",
+                    new=historical_registry_reader,
+                ),
+                mock.patch.object(
+                    fast_path,
+                    "normalize_exceptional_continuation_evidence",
+                    side_effect=normalize_continuation,
                 ),
                 mock.patch.object(
                     fast_path, "create_validation_receipt", return_value=receipt
@@ -1249,12 +1292,22 @@ class LifecycleOrchestrationTests(TestCase):
                 )
 
         verified = verify(evidence)
+        historical_registry_reader.assert_called_once_with(
+            REPO_ROOT,
+            REPOSITORY,
+            "0" * 40,
+        )
+        historical_registry_reader.reset_mock()
 
         self.assertEqual(verified.original_pull_request, PR)
         self.assertEqual(verified.replacement_pull_request, REPLACEMENT_PR)
         self.assertEqual(verified.rejected_candidate_head_sha, NEXT_HEAD)
         self.assertEqual(verified.material_finding_ids, ("PRRC_RESULTING_HEAD",))
         self.assertEqual(verified.material_thread_ids, ("PRRT_RESULTING_HEAD",))
+        self.assertEqual(
+            verified.rejected_continuation_evidence_digest,
+            rejected_continuation_digest,
+        )
         self.assertRegex(verified.evidence_digest, r"^[0-9a-f]{64}$")
 
         for field, replacement in (
@@ -1285,6 +1338,10 @@ class LifecycleOrchestrationTests(TestCase):
         changed_attestation["rejected_final_attestation"]["attestation_digest"] = (
             "f" * 64
         )
+        changed_continuation = copy.deepcopy(evidence)
+        changed_continuation["rejected_continuation_evidence"] = {
+            "closed": "substituted Continuation"
+        }
         changed_base = copy.deepcopy(evidence)
         replacement_payload = copy.deepcopy(
             changed_base["replacement_reviewed_state_evidence"]
@@ -1296,6 +1353,7 @@ class LifecycleOrchestrationTests(TestCase):
         for label, changed in (
             ("receipt", changed_receipt),
             ("attestation", changed_attestation),
+            ("Continuation", changed_continuation),
             ("base", changed_base),
         ):
             with self.subTest(label=label), self.assertRaises(
@@ -1385,6 +1443,7 @@ class LifecycleOrchestrationTests(TestCase):
             replacement_pull_request=REPLACEMENT_PR,
             rejected_candidate_head_sha="c" * 40,
             rejected_candidate_tree_sha="d" * 40,
+            rejected_continuation_evidence_digest="8" * 64,
             rejected_validation_receipt_digest="2" * 64,
             rejected_final_attestation_digest="3" * 64,
             rejected_state_digest="4" * 64,
@@ -1474,6 +1533,28 @@ class LifecycleOrchestrationTests(TestCase):
                 eligibility_evidence=eligibility,
                 reanchor_authority=reanchor,
             )
+
+        collision = copy.deepcopy(value)
+        collision.pop("reanchor")
+        collision.pop("finding_ids")
+        collision.pop("thread_ids")
+        collision.update(
+            authorization_id="collision-continuation-1",
+            trigger="IMMUTABLE_EVIDENCE_VERSION_COLLISION",
+            collision_digest="9" * 64,
+        )
+        normalized_collision = fast_path.normalize_exceptional_continuation_evidence(
+            collision,
+            repository=REPOSITORY,
+            reviewed_state=reviewed,
+            validated_tree_sha="b" * 40,
+            eligibility_evidence=eligibility,
+        )
+        self.assertEqual(
+            normalized_collision["trigger"],
+            "IMMUTABLE_EVIDENCE_VERSION_COLLISION",
+        )
+        self.assertEqual(normalized_collision["collision_digest"], "9" * 64)
 
     def test_continuation_successor_accepts_authenticated_provider_growth(
         self,
@@ -2319,6 +2400,129 @@ class LifecycleOrchestrationTests(TestCase):
         )
         self.assertEqual(finding_material.finding_ids, material.finding_ids)
 
+        review_body = next(
+            item["body"]
+            for item in finding_evidence["provider_transport"]
+            if item["node_id"] == "PRR_CODE_FINDINGS"
+        )
+        review_source = (
+            "REVIEW",
+            "PRR_CODE_FINDINGS",
+            fast_path.digest_text(review_body),
+            None,
+        )
+        dual_role_evidence = copy.deepcopy(finding_evidence)
+        dual_role_classification = dual_role_evidence["successor_findings"][0][
+            "classification_evidence"
+        ]
+        dual_role_evidence["successor_findings"][0]["classification_evidence"] = (
+            fast_path._seal_successor_classification(
+                **{
+                    key: value
+                    for key, value in dual_role_classification.__dict__.items()
+                    if key not in {"_verification_seal", "source_bindings"}
+                },
+                source_bindings=(
+                    *dual_role_classification.source_bindings,
+                    review_source,
+                ),
+            )
+        )
+        dual_role_evidence["successor_findings"][0]["sources"].append(
+            {
+                "kind": review_source[0],
+                "node_id": review_source[1],
+                "digest": review_source[2],
+            }
+        )
+        fast_path.verify_rejected_stable_feedback_successor(
+            reviewed,
+            finding_state,
+            resulting_head_sha=NEXT_HEAD,
+            rejected_successor_evidence=dual_role_evidence,
+        )
+
+        shared_thread_state = copy.deepcopy(rejected)
+        shared_thread_evidence = copy.deepcopy(evidence)
+        root = shared_thread_evidence["successor_findings"][0][
+            "classification_evidence"
+        ]
+        shared_thread_state.feedback["threads"][-1]["comments"].append(
+            {
+                "node_id": "PRRC_SECOND_FINDING",
+                "body_digest": "d" * 64,
+                "actor": {
+                    "login": "github-code-quality",
+                    "node_id": "BOT_CODE_QUALITY",
+                    "database_id": 223894421,
+                },
+                "reply_to_id": "PRRC_RESULTING_HEAD",
+                "reactions": [],
+            }
+        )
+        shared_thread_evidence["successor_findings"][0][
+            "classification_evidence"
+        ] = fast_path._seal_successor_classification(
+            **{
+                key: value
+                for key, value in root.__dict__.items()
+                if key not in {"_verification_seal", "reply_count"}
+            },
+            reply_count=1,
+        )
+        shared_thread_evidence["successor_findings"].append(
+            {
+                "sources": [
+                    {
+                        "kind": "THREAD_COMMENT",
+                        "node_id": "PRRC_SECOND_FINDING",
+                        "digest": "d" * 64,
+                    }
+                ],
+                "classification_evidence": fast_path._seal_successor_classification(
+                    **{
+                        key: value
+                        for key, value in root.__dict__.items()
+                        if key
+                        not in {
+                            "_verification_seal",
+                            "finding_id",
+                            "finding_evidence_digest",
+                            "reply_count",
+                            "classification_evidence_digest",
+                            "source_bindings",
+                        }
+                    },
+                    finding_id="F-SECOND-IN-SHARED-THREAD",
+                    finding_evidence_digest="e" * 64,
+                    reply_count=1,
+                    classification_evidence_digest="f" * 64,
+                    source_bindings=(
+                        (
+                            "THREAD_COMMENT",
+                            "PRRC_SECOND_FINDING",
+                            "d" * 64,
+                            "PRRT_RESULTING_HEAD",
+                        ),
+                    ),
+                ),
+            }
+        )
+        shared_thread_state.refresh_digests()
+        shared_thread_evidence["resulting_state_digest"] = (
+            shared_thread_state.state_digest
+        )
+        shared_thread_material = fast_path.verify_rejected_stable_feedback_successor(
+            reviewed,
+            shared_thread_state,
+            resulting_head_sha=NEXT_HEAD,
+            rejected_successor_evidence=shared_thread_evidence,
+        )
+        self.assertEqual(
+            shared_thread_material.thread_ids,
+            ("PRRT_RESULTING_HEAD",),
+        )
+
         with self.assertRaisesRegex(
             fast_path.SecurityBlocker, "material successor finding"
         ):
@@ -2441,6 +2645,21 @@ class LifecycleOrchestrationTests(TestCase):
                 resulting_head_sha=NEXT_HEAD,
                 successor_safety_evidence=material,
             )
+
+    def test_reanchored_corrected_successor_accepts_first_terminal_summary(
+        self,
+    ) -> None:
+        reviewed, current, evidence = authenticated_provider_growth()
+        reviewed.feedback["conversation_comments"] = []
+        reviewed.refresh_digests()
+        evidence["predecessor_state_digest"] = reviewed.state_digest
+
+        fast_path.verify_reanchored_stable_feedback_successor(
+            reviewed,
+            current,
+            resulting_head_sha=NEXT_HEAD,
+            successor_safety_evidence=evidence,
+        )
 
     def test_continuation_event_fails_closed_for_state_identity_and_finding_drift(
         self,

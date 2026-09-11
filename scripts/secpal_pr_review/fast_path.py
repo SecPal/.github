@@ -246,6 +246,9 @@ EXCEPTIONAL_CONTINUATION_KEYS = frozenset(
 EXCEPTIONAL_CONTINUATION_REANCHOR_KEYS = EXCEPTIONAL_CONTINUATION_KEYS | {
     "reanchor"
 }
+EXCEPTIONAL_CONTINUATION_COLLISION_KEYS = (
+    EXCEPTIONAL_CONTINUATION_KEYS - {"finding_ids", "thread_ids"}
+) | {"trigger", "collision_digest"}
 EXCEPTIONAL_CONTINUATION_REANCHOR_FIELDS = frozenset(
     {
         "evidence_digest",
@@ -253,6 +256,7 @@ EXCEPTIONAL_CONTINUATION_REANCHOR_FIELDS = frozenset(
         "replacement_pull_request",
         "rejected_candidate_head_sha",
         "rejected_candidate_tree_sha",
+        "rejected_continuation_evidence_digest",
         "rejected_validation_receipt_digest",
         "rejected_final_attestation_digest",
         "rejected_state_digest",
@@ -1296,8 +1300,15 @@ def normalize_exceptional_continuation_evidence(
         and value.get("schema_version") == "1.1"
         and set(value) == EXCEPTIONAL_CONTINUATION_REANCHOR_KEYS
     )
+    collision = (
+        isinstance(value, dict)
+        and value.get("schema_version") == "1.1"
+        and set(value) == EXCEPTIONAL_CONTINUATION_COLLISION_KEYS
+    )
     if not isinstance(value, dict) or (
-        not reanchored and set(value) != EXCEPTIONAL_CONTINUATION_KEYS
+        not reanchored
+        and not collision
+        and set(value) != EXCEPTIONAL_CONTINUATION_KEYS
     ):
         raise SecurityBlocker(
             "exceptional continuation evidence is malformed or ambiguous"
@@ -1313,7 +1324,8 @@ def normalize_exceptional_continuation_evidence(
     )
     eligibility_digest = digest_json(eligibility)
     if (
-        value.get("schema_version") != ("1.1" if reanchored else "1.0")
+        value.get("schema_version")
+        != ("1.1" if reanchored or collision else "1.0")
         or value.get("kind") != EXCEPTIONAL_CONTINUATION_KIND
         or value.get("repository") != repository
         or reviewed_state.repository != repository
@@ -1327,7 +1339,23 @@ def normalize_exceptional_continuation_evidence(
     ):
         raise SecurityBlocker("exceptional continuation identity or evidence is stale")
     reanchor = None
-    if reanchored:
+    trigger_fields: dict[str, Any]
+    if collision:
+        if (
+            value.get("trigger") != "IMMUTABLE_EVIDENCE_VERSION_COLLISION"
+            or eligibility.get("eligible_threads") != []
+            or reanchor_authority is not None
+        ):
+            raise SecurityBlocker(
+                "collision continuation grants no thread-resolution or re-anchor authority"
+            )
+        trigger_fields = {
+            "trigger": value["trigger"],
+            "collision_digest": _require_digest(
+                value.get("collision_digest"), "version collision"
+            ),
+        }
+    elif reanchored:
         candidate = value.get("reanchor")
         if (
             not isinstance(candidate, dict)
@@ -1354,6 +1382,10 @@ def normalize_exceptional_continuation_evidence(
             "rejected_candidate_tree_sha": _require_oid(
                 candidate.get("rejected_candidate_tree_sha"),
                 "rejected candidate tree",
+            ),
+            "rejected_continuation_evidence_digest": _require_digest(
+                candidate.get("rejected_continuation_evidence_digest"),
+                "rejected Continuation evidence",
             ),
             "rejected_validation_receipt_digest": _require_digest(
                 candidate.get("rejected_validation_receipt_digest"),
@@ -1423,6 +1455,9 @@ def normalize_exceptional_continuation_evidence(
                     "rejected_candidate_tree_sha": (
                         reanchor_authority.rejected_candidate_tree_sha
                     ),
+                    "rejected_continuation_evidence_digest": (
+                        reanchor_authority.rejected_continuation_evidence_digest
+                    ),
                     "rejected_validation_receipt_digest": (
                         reanchor_authority.rejected_validation_receipt_digest
                     ),
@@ -1458,11 +1493,22 @@ def normalize_exceptional_continuation_evidence(
                     "exceptional continuation re-anchor authority changed"
                 )
         thread_ids = []
+        trigger_fields = {
+            "finding_ids": finding_ids,
+            "thread_ids": thread_ids,
+        }
     else:
         finding_ids, thread_ids = continuation_material_finding_projection(
             reviewed_state, eligibility
         )
-    if value.get("finding_ids") != finding_ids or value.get("thread_ids") != thread_ids:
+        trigger_fields = {
+            "finding_ids": finding_ids,
+            "thread_ids": thread_ids,
+        }
+    if not collision and (
+        value.get("finding_ids") != finding_ids
+        or value.get("thread_ids") != thread_ids
+    ):
         raise SecurityBlocker(
             "exceptional continuation findings differ from eligibility authority"
         )
@@ -1526,7 +1572,7 @@ def normalize_exceptional_continuation_evidence(
             "exceptional continuation would alter the finite lifecycle"
         )
     return {
-        "schema_version": "1.1" if reanchored else "1.0",
+        "schema_version": "1.1" if reanchored or collision else "1.0",
         "kind": EXCEPTIONAL_CONTINUATION_KIND,
         "authorization_id": _require_string(
             value.get("authorization_id"),
@@ -1548,8 +1594,7 @@ def normalize_exceptional_continuation_evidence(
         "reviewed_state_digest": reviewed_state.state_digest,
         "reviewed_feedback_digest": reviewed_state.feedback_digest,
         "eligibility_evidence_digest": eligibility_digest,
-        "finding_ids": finding_ids,
-        "thread_ids": thread_ids,
+        **trigger_fields,
         "expected_signer": {
             "kind": expected_signer["kind"],
             "identity": signer_identity,
@@ -2399,13 +2444,15 @@ def _verify_successor_transport(
         if role == "CODEX_SUMMARY_UPDATE":
             if (
                 kind != "CONVERSATION_COMMENT"
-                or predecessor is None
                 or body is None
                 or login != CODEX_PROVIDER_LOGIN
             ):
                 raise SecurityBlocker("Codex summary update is not authenticated")
             verify_codex_provider_summary(body, head_sha=resulting_head_sha)
-            admitted_updates.add(key)
+            if predecessor is None:
+                admitted_additions.add(key)
+            else:
+                admitted_updates.add(key)
         elif role in {"CODEX_REVIEW_REQUEST", "CODEX_SECURITY_REVIEW_REQUEST"}:
             expected_body = (
                 "@codex review"
@@ -2929,7 +2976,16 @@ def _verify_authenticated_feedback_growth(
             item["node_id"]: item for item in current.feedback["threads"]
         },
     )
-    if transport_additions & finding_additions:
+    overlapping_additions = transport_additions & finding_additions
+    rejected_review_sources = {
+        (item["kind"], item["node_id"])
+        for item in successor_evidence["provider_transport"]
+        if isinstance(item, dict) and item.get("role") == "CODEX_REVIEW"
+    }
+    if overlapping_additions and (
+        not rejected_candidate
+        or not overlapping_additions.issubset(rejected_review_sources)
+    ):
         raise SecurityBlocker("successor feedback has ambiguous authority")
     expected_additions = set(current_sources) - set(reviewed_sources)
     if expected_additions != transport_additions | finding_additions:
@@ -3120,9 +3176,11 @@ def verify_rejected_stable_feedback_successor(
         raise SecurityBlocker("rejected successor material findings are missing")
     thread_ids = tuple(
         sorted(
-            item.thread_id
-            for item in classifications
-            if item.thread_id is not None
+            {
+                item.thread_id
+                for item in classifications
+                if item.thread_id is not None
+            }
         )
     )
     source_bindings = tuple(

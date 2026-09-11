@@ -593,12 +593,13 @@ candidate was rejected by authenticated material successor findings and an
 authenticated same-head `PR_REBOUND` moved the unchanged lifecycle to a
 replacement PR. The re-anchor verifier binds protected CURRENT, both PRs, the
 rebound publication, the rejected signed sole-parent commit, its validation
-receipt and final attestation, both independently captured Stable Feedback
-states, and signed version-1.3 material finding/source classifications. The
-corrected candidate must again be a signed sole-parent successor of CURRENT and
-must pass fresh exact-head provider safety before publication. The rejected
-candidate is diagnostic evidence only: it supplies no ancestry, CURRENT,
-publication, tree-nomination, or trust authority.
+receipt and final attestation, its normalized original Continuation document,
+immutable accepted-main validation registry and schema, both independently captured
+Stable Feedback states, and signed version-1.3 material finding/source
+classifications. The corrected candidate must again be a signed sole-parent
+successor of CURRENT and must pass fresh exact-head provider safety before
+publication. The rejected candidate is diagnostic evidence only: it supplies
+no ancestry, CURRENT, publication, tree-nomination, or trust authority.
 
 Re-anchored Continuation authorization always has an empty resolution thread
 set. Original-PR thread identities remain diagnostic bindings owned by that PR;

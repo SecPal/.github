@@ -78,6 +78,8 @@ REJECTED_CONTINUATION_REANCHOR_FIELDS = frozenset(
         "rejected_candidate_head_sha",
         "rejected_candidate_tree_sha",
         "rejected_candidate_expected_signer",
+        "rejected_continuation_evidence",
+        "rejected_eligibility_evidence",
         "rejected_reviewed_state_evidence",
         "rejected_candidate_state_evidence",
         "rejected_successor_safety_evidence",
@@ -243,6 +245,7 @@ class VerifiedExceptionalContinuationAuthority:
     original_pull_request: int | None = None
     rejected_candidate_head_sha: str | None = None
     rejected_candidate_tree_sha: str | None = None
+    rejected_continuation_evidence_digest: str | None = None
     diagnostic_thread_ids: tuple[str, ...] = ()
     finding_source_digest: str | None = None
 
@@ -270,6 +273,7 @@ class VerifiedRejectedContinuationReanchor:
     replacement_pull_request: int
     rejected_candidate_head_sha: str
     rejected_candidate_tree_sha: str
+    rejected_continuation_evidence_digest: str
     rejected_validation_receipt_digest: str
     rejected_final_attestation_digest: str
     rejected_state_digest: str
@@ -307,6 +311,9 @@ def _continuation_authorization_scope(
                 "reanchor_evidence_digest": reanchor.evidence_digest,
                 "rejected_candidate_head_sha": reanchor.rejected_candidate_head_sha,
                 "rejected_candidate_tree_sha": reanchor.rejected_candidate_tree_sha,
+                "rejected_continuation_evidence_digest": (
+                    reanchor.rejected_continuation_evidence_digest
+                ),
                 "rejected_validation_receipt_digest": (
                     reanchor.rejected_validation_receipt_digest
                 ),
@@ -1100,6 +1107,32 @@ def _validation_registry_binding(repository: str) -> dict[str, Any]:
         ) from exc
 
 
+def _historical_validation_registry_binding(
+    repository_root: Path,
+    repository: str,
+    head_sha: str,
+) -> dict[str, Any]:
+    """Reuse immutable prior-delivery registry and schema authentication."""
+
+    try:
+        actions = bootstrap_source_admission._load_actions_helper()
+        return actions._prior_delivery_registry_binding(
+            repository_root,
+            head_sha,
+            repository,
+        )
+    except (
+        AttributeError,
+        OSError,
+        TypeError,
+        bootstrap_source_admission.BootstrapSourceAdmissionError,
+        fast_path.SecurityBlocker,
+    ) as exc:
+        raise LifecycleOrchestrationError(
+            "immutable rejected-candidate validation registry is unavailable"
+        ) from exc
+
+
 def verify_rejected_continuation_reanchor(
     value: Any,
     *,
@@ -1290,7 +1323,28 @@ def verify_rejected_continuation_reanchor(
     receipt_digest = _immutable_commit_receipt(
         repository_root, repository, rejected_head
     )
-    registry = _validation_registry_binding(repository)
+    try:
+        rejected_continuation = (
+            fast_path.normalize_exceptional_continuation_evidence(
+                item.get("rejected_continuation_evidence"),
+                repository=repository,
+                reviewed_state=rejected_reviewed,
+                validated_tree_sha=rejected_tree,
+                eligibility_evidence=item.get("rejected_eligibility_evidence"),
+            )
+        )
+        rejected_continuation_digest = fast_path.digest_json(
+            rejected_continuation
+        )
+    except fast_path.SecurityBlocker as exc:
+        raise LifecycleOrchestrationError(
+            "rejected Continuation evidence is invalid or stale"
+        ) from exc
+    registry = _historical_validation_registry_binding(
+        repository_root,
+        repository,
+        rejected_reviewed.base_sha,
+    )
     if rejected_reviewed.base_ref != registry["default_branch"]:
         raise LifecycleOrchestrationError(
             "rejected Continuation base is not the maintained default branch"
@@ -1311,20 +1365,16 @@ def verify_rejected_continuation_reanchor(
                 if isinstance(receipt, Mapping)
                 else None
             ),
-            eligibility_evidence_digest=(
-                receipt.get("eligibility_evidence_digest")
-                if isinstance(receipt, Mapping)
-                else None
-            ),
+            eligibility_evidence_digest=rejected_continuation[
+                "eligibility_evidence_digest"
+            ],
             exceptional_recovery_evidence_digest=(
                 receipt.get("exceptional_recovery_evidence_digest")
                 if isinstance(receipt, Mapping)
                 else None
             ),
             exceptional_continuation_evidence_digest=(
-                receipt.get("exceptional_continuation_evidence_digest")
-                if isinstance(receipt, Mapping)
-                else None
+                rejected_continuation_digest
             ),
         )
         if receipt != expected_receipt or receipt_digest != expected_receipt["receipt_digest"]:
@@ -1394,6 +1444,7 @@ def verify_rejected_continuation_reanchor(
         "rejected_candidate_head_sha": rejected_head,
         "rejected_candidate_tree_sha": rejected_tree,
         "rejected_commit_authentication_digest": source.authentication_digest,
+        "rejected_continuation_evidence_digest": rejected_continuation_digest,
         "rejected_validation_receipt_digest": validation.validation_receipt_digest,
         "rejected_final_attestation_digest": validation.final_attestation_digest,
         "rejected_source_reviewed_state_digest": rejected_reviewed.state_digest,
@@ -1412,6 +1463,7 @@ def verify_rejected_continuation_reanchor(
         replacement_pull_request=replacement_pr,
         rejected_candidate_head_sha=rejected_head,
         rejected_candidate_tree_sha=rejected_tree,
+        rejected_continuation_evidence_digest=rejected_continuation_digest,
         rejected_validation_receipt_digest=validation.validation_receipt_digest,
         rejected_final_attestation_digest=validation.final_attestation_digest,
         rejected_state_digest=rejected_state.state_digest,
@@ -2095,6 +2147,11 @@ def verify_exceptional_continuation_authority(
         ),
         rejected_candidate_tree_sha=(
             findings.reanchor.rejected_candidate_tree_sha
+            if findings.reanchor is not None
+            else None
+        ),
+        rejected_continuation_evidence_digest=(
+            findings.reanchor.rejected_continuation_evidence_digest
             if findings.reanchor is not None
             else None
         ),
