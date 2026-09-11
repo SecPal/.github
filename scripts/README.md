@@ -602,6 +602,28 @@ successor of CURRENT and must pass fresh exact-head provider safety before
 publication. The rejected candidate is diagnostic evidence only: it supplies
 no ancestry, CURRENT, publication, tree-nomination, or trust authority.
 
+The replacement PR may be based on a newer accepted protected-main commit than
+the rejected candidate only when maintained acquisition proves the historical
+base precedes the replacement base and the replacement base remains in the
+independently observed live protected-main ancestry. Both bases are added to
+the re-anchor projection only for that advancement; the historical same-base
+projection stays byte-compatible. Compare acquisition normalizes a closed
+provider observation before a separate pure lineage predicate admits it. A
+later live protected-main tip is checked at runtime but is not durable evidence,
+so unrelated subsequent accepted merges do not alter an already authenticated
+re-anchor digest or signed scope. No caller base assertion is accepted.
+
+Rejected-successor safety schema 1.2 may bind one exact provider-owned
+completion-reaction replacement while reviewing the rejected candidate. It
+authenticates the removed and replacement direct-PR reaction identities as
+Codex `THUMBS_UP` reactions, requires exactly one matching replacement
+transport item plus the complete terminal exact-head Code/Security provider
+transport, and binds the resulting replacement digest into the re-anchor and
+signed Continuation scope. Other reaction deletion, mutation, substitution,
+replay, or provider drift remains fail-closed. Ordinary successor safety,
+legacy rejected-successor schema 1.1, and corrected-successor safety retain
+their existing behavior.
+
 Re-anchored Continuation authorization always has an empty resolution thread
 set. Original-PR thread identities remain diagnostic bindings owned by that PR;
 they are not projected onto the replacement PR, and the guarded resolver

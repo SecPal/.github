@@ -1096,6 +1096,32 @@ head/tree. Fresh exact-head provider safety is still mandatory for the corrected
 candidate, and any material or unclassified successor finding blocks
 publication.
 
+The same re-anchor authority permits the replacement PR to retain a newer base
+only when the original base, replacement base, and independently observed live
+protected-main head form one authenticated accepted-main lineage. The
+replacement base is derived from its canonical Stable Feedback state; caller
+base assertions have no authority. The exact immediate same-head `PR_REBOUND`
+remains mandatory, and the protected lifecycle CURRENT must remain unchanged.
+Provider Compare acquisition first normalizes one closed bounded observation;
+a separate pure predicate admits only exact ancestor lineage. The durable
+re-anchor projection binds the historical and replacement bases, while the
+later live protected-main tip remains runtime verification and cannot change a
+previously signed scope or digest. Legacy same-base re-anchor evidence keeps its
+original projection and digest.
+
+Rejected-successor safety schema 1.2 permits one narrower provider
+representation: Codex may remove its predecessor direct-PR completion
+`THUMBS_UP` reaction and add one replacement completion reaction while reviewing
+the rejected candidate. The closed record names both reaction identities, the
+fixed provider, and the fixed content, and must match complete terminal
+exact-head Code and Security review transport. Its canonical digest binds the
+PR, both Stable Feedback states, the rejected head, the full provider transport,
+and the removal/replacement pair into the re-anchor projection and existing
+signed Continuation authorization scope. Actor or content substitution, missing
+or additional reaction churn, incomplete or nonterminal transport, wrong-head
+or wrong-PR evidence, and replay remain rejected. Corrected-successor safety
+retains its existing schema and predecessor-preservation behavior.
+
 The re-anchored artifact carries no resolution-eligible thread identities. Old
 threads remain owned by the original PR, and the resolver rejects schema 1.1
 Continuation evidence outright. Clean or incomplete replacement-PR
