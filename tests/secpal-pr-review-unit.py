@@ -196,6 +196,42 @@ def check(
     }
 
 
+def classic_protection_response() -> dict[str, Any]:
+    return {
+        "required_status_checks": {
+            "strict": True,
+            "contexts": ["tests"],
+            "checks": [{"context": "tests", "app_id": 1}],
+        },
+        "required_pull_request_reviews": {
+            "required_approving_review_count": 2,
+            "dismiss_stale_reviews": True,
+            "require_code_owner_reviews": True,
+            "require_last_push_approval": True,
+            "dismissal_restrictions": {
+                "users": [{"login": "maintainer"}],
+                "teams": [{"slug": "security"}],
+                "apps": [{"slug": "policy-bot"}],
+            },
+            "bypass_pull_request_allowances": {
+                "users": [],
+                "teams": [],
+                "apps": [],
+            },
+        },
+        "required_signatures": {"enabled": True},
+        "enforce_admins": {"enabled": True},
+        "required_linear_history": {"enabled": True},
+        "allow_force_pushes": {"enabled": False},
+        "allow_deletions": {"enabled": False},
+        "required_conversation_resolution": {"enabled": True},
+    }
+
+
+def classic_protection() -> dict[str, Any]:
+    return review.normalize_classic_branch_protection(classic_protection_response())
+
+
 def finalize_snapshot(
     value: dict[str, Any],
     *,
@@ -303,11 +339,7 @@ def snapshot() -> dict[str, Any]:
                     "required_checks": [{"context": "tests", "integration_id": 1}],
                 }
             ],
-            "branch_protection": {
-                "strict": True,
-                "contexts": ["tests"],
-                "checks": [{"context": "tests", "app_id": 1}],
-            },
+            "branch_protection": classic_protection(),
             "evidence_complete": True,
         },
         "required_check_evidence": {
@@ -721,11 +753,7 @@ class SnapshotAndPaginationTests(unittest.TestCase):
         value = snapshot()
         value["pull_request"]["merge_state_status"] = "BEHIND"
         value["required_check_evidence"]["sources"] = ["rulesets"]
-        value["applicable_rules"]["branch_protection"] = {
-            "strict": None,
-            "contexts": [],
-            "checks": [],
-        }
+        value["applicable_rules"]["branch_protection"] = review.empty_classic_branch_protection()
         configuration = config()
         configuration["check_policy"]["require_branch_protection_evidence"] = False
         result = review.verify_snapshot_gate(finalize_snapshot(value), configuration)
@@ -848,11 +876,7 @@ class SnapshotAndPaginationTests(unittest.TestCase):
     def test_gate_preserves_report_when_current_branch_protection_evidence_is_absent(self) -> None:
         value = snapshot()
         value["required_check_evidence"]["sources"] = ["rulesets"]
-        value["applicable_rules"]["branch_protection"] = {
-            "strict": None,
-            "contexts": [],
-            "checks": [],
-        }
+        value["applicable_rules"]["branch_protection"] = review.empty_classic_branch_protection()
         value = finalize_snapshot(value)
 
         result = review.verify_snapshot_gate(value, config())
@@ -900,7 +924,7 @@ class SnapshotAndPaginationTests(unittest.TestCase):
         value["checks"][0]["evidence_state"] = "non_required_successful"
         value["applicable_rules"] = {
             "rulesets": [],
-            "branch_protection": {"strict": None, "contexts": [], "checks": []},
+            "branch_protection": review.empty_classic_branch_protection(),
             "evidence_complete": True,
         }
         value = finalize_snapshot(value)
@@ -924,11 +948,9 @@ class SnapshotAndPaginationTests(unittest.TestCase):
             if "rulesets" not in captured_sources:
                 value["applicable_rules"]["rulesets"] = []
             if "branch_protection" not in captured_sources:
-                value["applicable_rules"]["branch_protection"] = {
-                    "strict": None,
-                    "contexts": [],
-                    "checks": [],
-                }
+                value["applicable_rules"]["branch_protection"] = (
+                    review.empty_classic_branch_protection()
+                )
             if not captured_sources:
                 value["required_check_evidence"]["required"] = []
                 value["checks"][0]["requiredness"] = "non_required"
@@ -2192,6 +2214,161 @@ class SecurityAndOutputTests(unittest.TestCase):
         ):
             with self.subTest(arguments=arguments), self.assertRaises(review.CommandPolicyError):
                 review.validate_external_command(arguments)
+
+    def test_full_branch_protection_get_is_read_only_allowlisted(self) -> None:
+        exact = [
+            "gh",
+            "api",
+            "--hostname",
+            "github.com",
+            "--method",
+            "GET",
+            "repos/Example/protected/branches/release%2Fstable/protection",
+        ]
+        review.validate_external_command(exact)
+        review.validate_external_command(
+            [*exact[:-1], f"{exact[-1]}/required_status_checks"]
+        )
+        review.validate_external_command(
+            [
+                *exact[:-1],
+                "repos/Example/protected/rules/branches/release%2Fstable?per_page=100&page=2",
+            ]
+        )
+        for method in ("POST", "PATCH", "PUT", "DELETE"):
+            unsafe = copy.deepcopy(exact)
+            unsafe[5] = method
+            with self.subTest(method=method), self.assertRaises(review.CommandPolicyError):
+                review.validate_external_command(unsafe)
+        for unsafe in (
+            [*exact[:2], "--hostname", "example.com", *exact[4:]],
+            [*exact[:-1], f"{exact[-1]}?unexpected=true"],
+            [*exact[:-1], "repos/Example/protected/branches/main/protection/enforce_admins"],
+            [*exact[:-1], "repos/Example//branches/main/protection"],
+            [*exact[:-1], "repos/../protected/branches/main/protection"],
+            [*exact[:-1], "repos/Example/protected/branches/release%2fstable/protection"],
+            [*exact[:-1], "repos/Example/protected/branches/main%2F..%2Funsafe/protection"],
+            [*exact[:-1], "repos/Example/protected/branches/.hidden/protection"],
+            [*exact[:-1], "repos/Example/protected/branches/main%ZZ/protection"],
+        ):
+            with self.subTest(arguments=unsafe), self.assertRaises(review.CommandPolicyError):
+                review.validate_external_command(unsafe)
+
+    def test_complete_classic_branch_protection_normalizes_exactly(self) -> None:
+        self.assertEqual(
+            classic_protection(),
+            {
+                "required_status_checks_enabled": True,
+                "strict": True,
+                "contexts": ["tests"],
+                "checks": [{"context": "tests", "app_id": 1}],
+                "required_pull_request_reviews": {
+                    "enabled": True,
+                    "required_approving_review_count": 2,
+                    "dismiss_stale_reviews": True,
+                    "require_code_owner_reviews": True,
+                    "require_last_push_approval": True,
+                    "dismissal_restrictions": {
+                        "users": ["maintainer"],
+                        "teams": ["security"],
+                        "apps": ["policy-bot"],
+                    },
+                    "bypass_pull_request_allowances": {
+                        "users": [],
+                        "teams": [],
+                        "apps": [],
+                    },
+                },
+                "required_conversation_resolution": True,
+                "required_signatures": True,
+                "required_linear_history": True,
+                "allow_force_pushes": False,
+                "allow_deletions": False,
+                "enforce_admins": True,
+            },
+        )
+
+    def test_omitted_empty_review_actor_collections_normalize_exactly(self) -> None:
+        response = classic_protection_response()
+        reviews = response["required_pull_request_reviews"]
+        reviews.pop("dismissal_restrictions")
+        reviews.pop("bypass_pull_request_allowances")
+        normalized = review.normalize_classic_branch_protection(response)
+        self.assertEqual(
+            normalized["required_pull_request_reviews"]["dismissal_restrictions"],
+            {"users": [], "teams": [], "apps": []},
+        )
+        self.assertEqual(
+            normalized["required_pull_request_reviews"]["bypass_pull_request_allowances"],
+            {"users": [], "teams": [], "apps": []},
+        )
+
+    def test_omitted_required_signatures_normalizes_as_disabled(self) -> None:
+        response = classic_protection_response()
+        response.pop("required_signatures")
+        normalized = review.normalize_classic_branch_protection(response)
+        self.assertIs(normalized["required_signatures"], False)
+
+        response["required_signatures"] = {"enabled": "yes"}
+        with self.assertRaises(review.BlockedError):
+            review.normalize_classic_branch_protection(response)
+
+    def test_incomplete_or_malformed_classic_protection_fails_closed(self) -> None:
+        response = classic_protection_response()
+        for mutation in (
+            lambda value: value.pop("enforce_admins"),
+            lambda value: value["required_pull_request_reviews"].pop(
+                "required_approving_review_count"
+            ),
+            lambda value: value["required_conversation_resolution"].update(
+                {"enabled": "yes"}
+            ),
+            lambda value: value["allow_force_pushes"].update({"enabled": None}),
+        ):
+            malformed = copy.deepcopy(response)
+            mutation(malformed)
+            with self.subTest(malformed=malformed), self.assertRaises(review.BlockedError):
+                review.normalize_classic_branch_protection(malformed)
+
+        normalized = classic_protection()
+        normalized["required_pull_request_reviews"]["enabled"] = 1
+        with self.assertRaises(review.BlockedError):
+            review.validate_normalized_classic_branch_protection(normalized)
+
+    def test_historical_compact_v1_snapshot_remains_valid(self) -> None:
+        value = snapshot()
+        value["applicable_rules"]["branch_protection"] = {
+            "strict": True,
+            "contexts": ["tests"],
+            "checks": [{"context": "tests", "app_id": 1}],
+        }
+        review.validate_snapshot(finalize_snapshot(value))
+
+    def test_historical_compact_v1_snapshot_is_closed_and_unambiguous(self) -> None:
+        value = snapshot()
+        value["applicable_rules"]["branch_protection"] = {
+            "strict": None,
+            "contexts": [],
+            "checks": [],
+        }
+        value["required_check_evidence"]["sources"] = ["rulesets"]
+        review.validate_snapshot(finalize_snapshot(value))
+
+        value["applicable_rules"]["branch_protection"]["unexpected"] = False
+        with self.assertRaises(review.ContractError):
+            review.validate_snapshot(finalize_snapshot(value))
+
+        value["applicable_rules"]["branch_protection"] = {
+            "strict": None,
+            "contexts": [],
+            "checks": [],
+        }
+        value["required_check_evidence"]["sources"] = [
+            "rulesets",
+            "branch_protection",
+        ]
+        with self.assertRaises(review.ContractError):
+            review.validate_snapshot(finalize_snapshot(value))
 
     def test_graphql_string_variables_cannot_trigger_field_file_reads(self) -> None:
         arguments = review.graphql_arguments(
