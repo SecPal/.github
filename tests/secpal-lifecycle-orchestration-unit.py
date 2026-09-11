@@ -774,6 +774,143 @@ class CollisionCompositionFixture:
 
 
 class LifecycleOrchestrationTests(TestCase):
+    def test_collision_python_tests_reject_executable_version_dispatch(self) -> None:
+        from scripts.secpal_pr_review import version_collision
+
+        rejected = (
+            b'if "1.2" == "1.3":\n    dangerous()\n',
+            b'assertEqual("1.2", Trigger())\n',
+            b'assertEqual(Trigger(), "1.2")\n',
+            b'result = callable_value("1.2")\n',
+            b'result = owner.value == "1.2"\n',
+            b'result = "1.2" in attacker_controlled\n',
+        )
+        for source in rejected:
+            with self.subTest(source=source):
+                successor = source.replace(b"1.2", b"1.3")
+                positions = version_collision.verify_blob_renumber(
+                    source, successor, "1.2", "1.3",
+                )
+                with self.assertRaisesRegex(
+                    version_collision.VersionCollisionError,
+                    "test version token",
+                ):
+                    version_collision._verify_python_test_renumber(
+                        source, successor, positions, "1.2", "1.3",
+                    )
+
+    def test_collision_python_tests_admit_only_provably_inert_expectations(self) -> None:
+        from scripts.secpal_pr_review import version_collision
+
+        admitted = (
+            (
+                b'# maintained expected schema: 1.2\nassert current\n',
+                b'# maintained expected schema: 1.3\nassert current\n',
+            ),
+            (
+                b'assert {"expected": "1.2"} == {"expected": "1.2"}\n',
+                b'assert {"expected": "1.3"} == {"expected": "1.3"}\n',
+            ),
+        )
+        for predecessor, successor in admitted:
+            with self.subTest(predecessor=predecessor):
+                positions = version_collision.verify_blob_renumber(
+                    predecessor, successor, "1.2", "1.3",
+                )
+                version_collision._verify_python_test_renumber(
+                    predecessor, successor, positions, "1.2", "1.3",
+                )
+
+        predecessor = b'assert "1.2" == "1.3"\n'
+        successor = b'assert "1.3" == "1.3"\n'
+        with self.assertRaisesRegex(
+            version_collision.VersionCollisionError,
+            "test version token",
+        ):
+            version_collision._verify_python_test_renumber(
+                predecessor,
+                successor,
+                version_collision.verify_blob_renumber(
+                    predecessor, successor, "1.2", "1.3",
+                ),
+                "1.2",
+                "1.3",
+            )
+
+    def test_collision_tree_enforces_the_registered_test_boundary(self) -> None:
+        from scripts.secpal_pr_review import version_collision
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def git(*arguments: str, data: bytes | None = None) -> str:
+                return subprocess.run(
+                    ["git", "-C", str(root), *arguments],
+                    input=data,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                ).stdout.decode().strip()
+
+            def test_tree(source: bytes, path: str = "test_collision.py") -> str:
+                blob = git("hash-object", "-w", "--stdin", data=source)
+                subtree = git(
+                    "mktree", "-z",
+                    data=f"100644 blob {blob}\t{path}\0".encode(),
+                )
+                return git(
+                    "mktree", "-z",
+                    data=f"040000 tree {subtree}\ttests\0".encode(),
+                )
+
+            git("init", "--quiet")
+            for predecessor in (
+                b'if "1.2" == "1.3":\n    dangerous()\n',
+                b'assertEqual("1.2", Trigger())\n',
+                b'assertEqual(Trigger(), "1.2")\n',
+            ):
+                with self.subTest(predecessor=predecessor):
+                    with self.assertRaisesRegex(
+                        version_collision.VersionCollisionError,
+                        "test version token",
+                    ):
+                        version_collision.verify_tree_renumber(
+                            root,
+                            test_tree(predecessor),
+                            test_tree(predecessor.replace(b"1.2", b"1.3")),
+                            occupied_version="1.2",
+                            free_version="1.3",
+                            source_scope=frozenset({"tests/test_collision.py"}),
+                            authorized_paths=("tests/test_collision.py",),
+                        )
+
+            inert = b'assert {"expected": "1.2"} == {"expected": "1.2"}\n'
+            evidence = version_collision.verify_tree_renumber(
+                root,
+                test_tree(inert),
+                test_tree(inert.replace(b"1.2", b"1.3")),
+                occupied_version="1.2",
+                free_version="1.3",
+                source_scope=frozenset({"tests/test_collision.py"}),
+                authorized_paths=("tests/test_collision.py",),
+            )
+            self.assertEqual(evidence["changed_paths"], ["tests/test_collision.py"])
+
+            shell = b'if [ "1.2" = "1.3" ]; then dangerous; fi\n'
+            with self.assertRaisesRegex(
+                version_collision.VersionCollisionError,
+                "provably inert profile",
+            ):
+                version_collision.verify_tree_renumber(
+                    root,
+                    test_tree(shell, "test_collision.sh"),
+                    test_tree(shell.replace(b"1.2", b"1.3"), "test_collision.sh"),
+                    occupied_version="1.2",
+                    free_version="1.3",
+                    source_scope=frozenset({"tests/test_collision.sh"}),
+                    authorized_paths=("tests/test_collision.sh",),
+                )
+
     def test_collision_python_rejects_interpolated_version_expressions(self) -> None:
         from scripts.secpal_pr_review import version_collision
 
@@ -1027,6 +1164,80 @@ class LifecycleOrchestrationTests(TestCase):
                 with self.assertRaises(orchestration.LifecycleOrchestrationError):
                     orchestration.publish_collision_continuation(REPOSITORY, ISSUE, request)
                 publication_write.assert_called_once()
+
+    def test_collision_publication_rechecks_main_after_final_feedback_capture(self) -> None:
+        from scripts.secpal_pr_review import lifecycle_execution, lifecycle_publication, version_collision
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = CollisionCompositionFixture(Path(directory))
+            original = orchestration._orchestrate_event
+            feedback_captured = [False]
+
+            def execute(repository, issue, request, **kwargs):
+                kwargs.update(
+                    current_reader=lambda *_args: fixture.observed,
+                    feedback_reader=lambda *_args: fixture.current,
+                    collision_reader=fixture.collision_reader,
+                )
+                return original(repository, issue, request, **kwargs)
+
+            def capture(*_args):
+                feedback_captured[0] = True
+                return fixture.current
+
+            def observe_main():
+                return "f" * 40 if feedback_captured[0] else fixture.main
+
+            with mock.patch.object(
+                authority, "_load_lifecycle_trust_policy", return_value=fixture.policy,
+            ), mock.patch.object(
+                orchestration.bootstrap_source_admission,
+                "_read_protected_main_registry",
+                side_effect=fixture.registry_reader,
+            ), mock.patch.object(
+                lifecycle_publication,
+                "verify_current_lifecycle_authority",
+                return_value=fixture.observed,
+            ), mock.patch.object(
+                orchestration, "_orchestrate_event", side_effect=execute,
+            ), mock.patch.object(
+                lifecycle_execution,
+                "_production_signing_authorities",
+                return_value=lifecycle_execution.SigningAuthorities(
+                    fixture.identity,
+                    fixture.sign,
+                    fixture.identity,
+                    fixture.sign,
+                    fixture.identity,
+                    fixture.sign,
+                ),
+            ), mock.patch.object(
+                lifecycle_execution,
+                "_read_live_github",
+                return_value=SimpleNamespace(
+                    repository=REPOSITORY,
+                    pull_request=PR,
+                    head_sha=fixture.resulting,
+                    state="OPEN",
+                    draft=False,
+                ),
+            ), mock.patch.object(
+                orchestration, "_capture_current_stable_feedback", side_effect=capture,
+            ), mock.patch.object(
+                version_collision, "_observe_main", side_effect=observe_main,
+            ), mock.patch.object(
+                lifecycle_publication,
+                "advance_current_terminal",
+                side_effect=AssertionError("stale protected main reached publication"),
+            ) as publication_write:
+                with self.assertRaisesRegex(
+                    orchestration.LifecycleOrchestrationError,
+                    "drifted",
+                ):
+                    orchestration.publish_collision_continuation(
+                        REPOSITORY, ISSUE, fixture.request(),
+                    )
+                publication_write.assert_not_called()
 
     def test_collision_successor_provider_failures_cannot_publish(self) -> None:
         from scripts.secpal_pr_review import lifecycle_execution, lifecycle_publication

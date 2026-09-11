@@ -1732,12 +1732,16 @@ def publish_collision_continuation(
     )
     current = publication.verify_current_lifecycle_authority(repository, delivery_issue)
     actual_pr = lifecycle_execution._read_live_github(repository, observed.lifecycle.pull_request)
+    final_feedback = _capture_current_stable_feedback(
+        repository, observed.lifecycle.pull_request
+    )
+    final_protected_main = version_collision._observe_main()
     if (
         current.publication_oid != observed.publication_oid or current.publication_digest != observed.publication_digest
         or actual_pr.repository != repository or actual_pr.pull_request != observed.lifecycle.pull_request
         or actual_pr.head_sha != item["head_sha"] or actual_pr.state != "OPEN" or actual_pr.draft is not False
-        or version_collision._observe_main() != authorization["scope"]["collision"]["protected_main"]
-        or _capture_current_stable_feedback(repository, observed.lifecycle.pull_request).state_digest != validation[0][1]
+        or final_feedback.state_digest != validation[0][1]
+        or final_protected_main != authorization["scope"]["collision"]["protected_main"]
     ):
         raise LifecycleOrchestrationError("collision publication predecessor or live Ready successor drifted")
     published = publication.advance_current_terminal(

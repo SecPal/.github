@@ -149,6 +149,117 @@ def _verify_python_version_tokens(blob: bytes, offsets: tuple[int, ...], version
         raise VersionCollisionError("Python version token replacement changes executable syntax")
 
 
+def _verify_python_test_renumber(
+    predecessor: bytes,
+    successor: bytes,
+    positions: tuple[tuple[int, int], ...],
+    occupied_version: str,
+    free_version: str,
+) -> None:
+    """Admit only comments and literal assertions whose outcome stays true."""
+
+    def safe_spans(blob: bytes) -> tuple[tuple[int, int], ...]:
+        text = blob.decode("utf-8", errors="strict")
+        lines = text.splitlines(keepends=True)
+        starts = [0]
+        for line in lines:
+            starts.append(starts[-1] + len(line.encode("utf-8")))
+
+        def byte_offset(position: tuple[int, int]) -> int:
+            row, column = position
+            return starts[row - 1] + len(
+                lines[row - 1][:column].encode("utf-8")
+            )
+
+        def literal_only(node: ast.AST) -> bool:
+            if isinstance(node, ast.Constant):
+                return type(node.value) in {
+                    str, bytes, int, float, complex, bool, type(None),
+                }
+            if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+                return all(literal_only(item) for item in node.elts)
+            if isinstance(node, ast.Dict):
+                return all(
+                    key is not None
+                    and literal_only(key)
+                    and literal_only(value)
+                    for key, value in zip(node.keys, node.values, strict=True)
+                )
+            return False
+
+        try:
+            module = ast.parse(text)
+            spans = [
+                (byte_offset(token.start), byte_offset(token.end))
+                for token in tokenize.generate_tokens(io.StringIO(text).readline)
+                if token.type == tokenize.COMMENT
+            ]
+            for statement in ast.walk(module):
+                comparison = statement.test if isinstance(statement, ast.Assert) else None
+                if (
+                    not isinstance(comparison, ast.Compare)
+                    or statement.msg is not None
+                    or len(comparison.ops) != 1
+                    or len(comparison.comparators) != 1
+                    or not isinstance(comparison.ops[0], (ast.Eq, ast.NotEq))
+                    or not literal_only(comparison.left)
+                    or not literal_only(comparison.comparators[0])
+                ):
+                    continue
+                left = ast.literal_eval(comparison.left)
+                right = ast.literal_eval(comparison.comparators[0])
+                outcome = (
+                    left == right
+                    if isinstance(comparison.ops[0], ast.Eq)
+                    else left != right
+                )
+                if outcome is not True:
+                    continue
+                for node in ast.walk(comparison):
+                    if (
+                        isinstance(node, ast.Constant)
+                        and isinstance(node.value, str)
+                        and hasattr(node, "end_lineno")
+                    ):
+                        spans.append(
+                            (
+                                starts[node.lineno - 1] + node.col_offset,
+                                starts[node.end_lineno - 1] + node.end_col_offset,
+                            )
+                        )
+        except (
+            tokenize.TokenError,
+            IndentationError,
+            SyntaxError,
+            IndexError,
+            RecursionError,
+            ValueError,
+        ) as exc:
+            raise VersionCollisionError(
+                "Python test version token source is malformed"
+            ) from exc
+        return tuple(spans)
+
+    predecessor_spans = safe_spans(predecessor)
+    successor_spans = safe_spans(successor)
+    if any(
+        not any(
+            start <= old_offset
+            and old_offset + len(occupied_version) <= end
+            for start, end in predecessor_spans
+        )
+        or not any(
+            start <= new_offset
+            and new_offset + len(free_version) <= end
+            for start, end in successor_spans
+        )
+        for old_offset, new_offset in positions
+    ):
+        raise VersionCollisionError(
+            "Python test version token is not a provably inert expectation"
+        )
+
+
 def _oid(value: str) -> str:
     if not isinstance(value, str) or _OID.fullmatch(value) is None:
         raise VersionCollisionError("source object identity is malformed")
@@ -247,9 +358,17 @@ proves a collision or authorizes a lifecycle transition.
                 raise VersionCollisionError("changed blob size differs from observed object")
             blobs.append(data)
         positions = verify_blob_renumber(blobs[0], blobs[1], occupied_version, free_version)
+        if path.startswith("tests/") and not path.endswith(".py"):
+            raise VersionCollisionError(
+                "test version token source has no provably inert profile"
+            )
         if path.endswith(".py"):
             _verify_python_version_tokens(blobs[0], tuple(pair[0] for pair in positions), occupied_version)
             _verify_python_version_tokens(blobs[1], tuple(pair[1] for pair in positions), free_version)
+            if path.startswith("tests/"):
+                _verify_python_test_renumber(
+                    blobs[0], blobs[1], positions, occupied_version, free_version,
+                )
         total_replacements += len(positions)
         if total_replacements > MAX_REPLACEMENTS:
             raise VersionCollisionError("source delta token count exceeds the bound")
