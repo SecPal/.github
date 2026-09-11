@@ -258,6 +258,7 @@ class VerifiedExceptionalContinuationAuthority:
     diagnostic_thread_ids: tuple[str, ...] = ()
     finding_source_digest: str | None = None
     provider_reaction_replacement_digest: str | None = None
+    predecessor_provider_growth_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -272,6 +273,7 @@ class VerifiedContinuationFindingAuthority:
     reanchor: "VerifiedRejectedContinuationReanchor | None" = None
     continuation_tree_sha: str | None = None
     corrected_successor_state_digest: str | None = None
+    predecessor_provider_growth_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -338,6 +340,15 @@ def _continuation_authorization_scope(
                 "finding_source_digest": reanchor.finding_source_digest,
                 "corrected_successor_state_digest": (
                     findings.corrected_successor_state_digest
+                ),
+                **(
+                    {
+                        "predecessor_provider_growth_digest": (
+                            findings.predecessor_provider_growth_digest
+                        )
+                    }
+                    if findings.predecessor_provider_growth_digest is not None
+                    else {}
                 ),
                 **(
                     {
@@ -474,6 +485,9 @@ def _authenticate_successor_safety_evidence(
     resulting_head_sha: str,
     resulting_state_digest: str,
     reanchored_classified_review: bool = False,
+    predecessor_correction_authority: (
+        VerifiedRejectedContinuationReanchor | None
+    ) = None,
 ) -> Any:
     return _authenticate_successor_safety_evidence_with_policy(
         value,
@@ -485,6 +499,7 @@ def _authenticate_successor_safety_evidence(
         resulting_state_digest=resulting_state_digest,
         rejected_candidate=False,
         reanchored_classified_review=reanchored_classified_review,
+        predecessor_correction_authority=predecessor_correction_authority,
     )
 
 
@@ -508,6 +523,7 @@ def _authenticate_rejected_successor_safety_evidence(
         resulting_state_digest=resulting_state_digest,
         rejected_candidate=True,
         reanchored_classified_review=False,
+        predecessor_correction_authority=None,
     )
 
 
@@ -522,6 +538,7 @@ def _authenticate_successor_safety_evidence_with_policy(
     resulting_state_digest: str,
     rejected_candidate: bool,
     reanchored_classified_review: bool,
+    predecessor_correction_authority: VerifiedRejectedContinuationReanchor | None,
 ) -> Any:
     if value is None:
         return None
@@ -542,11 +559,19 @@ def _authenticate_successor_safety_evidence_with_policy(
     provider_reaction_replacement = (
         rejected_candidate and schema_version == "1.2"
     )
+    predecessor_provider_growth = (
+        reanchored_classified_review and schema_version == "1.2"
+    )
     if provider_reaction_replacement:
         expected_keys.add("provider_completion_reaction_replacement")
+    if predecessor_provider_growth:
+        expected_keys.add("predecessor_provider_feedback")
+        expected_keys.add("provider_completion_reaction_removal")
     expected_schema_version = (
         "1.2"
         if provider_reaction_replacement
+        else "1.2"
+        if predecessor_provider_growth
         else "1.1"
         if rejected_candidate or reanchored_classified_review
         else "1.0"
@@ -559,6 +584,34 @@ def _authenticate_successor_safety_evidence_with_policy(
         raise LifecycleOrchestrationError(
             "successor safety evidence contains unknown or missing fields"
         )
+    if predecessor_provider_growth:
+        if not isinstance(
+            predecessor_correction_authority,
+            VerifiedRejectedContinuationReanchor,
+        ):
+            raise LifecycleOrchestrationError(
+                "predecessor provider correction authority is unavailable"
+            )
+        predecessor_feedback = value.get("predecessor_provider_feedback")
+        expected_correction_authority = {
+            "reanchor_evidence_digest": (
+                predecessor_correction_authority.evidence_digest
+            ),
+            "material_finding_ids": list(
+                predecessor_correction_authority.material_finding_ids
+            ),
+            "finding_source_digest": (
+                predecessor_correction_authority.finding_source_digest
+            ),
+        }
+        if (
+            not isinstance(predecessor_feedback, Mapping)
+            or predecessor_feedback.get("correction_authority")
+            != expected_correction_authority
+        ):
+            raise LifecycleOrchestrationError(
+                "predecessor provider feedback differs from re-anchor authority"
+            )
     signer = _successor_classification_signer(
         repository, value.get("classification_signer")
     )
@@ -756,6 +809,7 @@ def _verify_continuation_finding_authority(
                 reviewed, eligibility
             )
         current = feedback_reader(repository, pull_request)
+        predecessor_provider_growth_digest = None
         raw_successor_safety = item.get("successor_safety_evidence")
         successor_safety = _authenticate_successor_safety_evidence(
             raw_successor_safety,
@@ -768,15 +822,28 @@ def _verify_continuation_finding_authority(
             reanchored_classified_review=(
                 reanchor is not None
                 and isinstance(raw_successor_safety, Mapping)
-                and raw_successor_safety.get("schema_version") == "1.1"
+                and raw_successor_safety.get("schema_version") in {"1.1", "1.2"}
             ),
+            predecessor_correction_authority=reanchor,
         )
         if reanchor is not None:
-            fast_path.verify_reanchored_stable_feedback_successor(
-                reviewed,
-                current,
-                resulting_head_sha=resulting_head_sha,
-                successor_safety_evidence=successor_safety,
+            predecessor_provider_growth_digest = (
+                fast_path.verify_reanchored_stable_feedback_successor(
+                    reviewed,
+                    current,
+                    resulting_head_sha=resulting_head_sha,
+                    successor_safety_evidence=successor_safety,
+                    predecessor_correction_authority=(
+                        fast_path._seal_predecessor_correction_authority(
+                            reanchor_evidence_digest=reanchor.evidence_digest,
+                            material_finding_ids=reanchor.material_finding_ids,
+                            finding_source_digest=reanchor.finding_source_digest,
+                        )
+                        if isinstance(raw_successor_safety, Mapping)
+                        and raw_successor_safety.get("schema_version") == "1.2"
+                        else None
+                    ),
+                )
             )
         else:
             fast_path.verify_stable_feedback_successor(
@@ -810,6 +877,7 @@ def _verify_continuation_finding_authority(
         corrected_successor_state_digest=(
             current.state_digest if reanchor is not None else None
         ),
+        predecessor_provider_growth_digest=predecessor_provider_growth_digest,
     )
 
 
@@ -2419,6 +2487,9 @@ def verify_exceptional_continuation_authority(
             findings.reanchor.provider_reaction_replacement_digest
             if findings.reanchor is not None
             else None
+        ),
+        predecessor_provider_growth_digest=(
+            findings.predecessor_provider_growth_digest
         ),
     )
 

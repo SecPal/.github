@@ -612,6 +612,24 @@ successor-safety schema 1.0 and its ordinary classification family are
 unchanged. Neither form grants thread-resolution, review-request,
 lifecycle-transition, or Git authority.
 
+Successor-safety schema 1.2 preserves those exact-resulting-head rules and adds
+one independent predecessor partition. It authenticates one exact GitHub
+Copilot review committed to lifecycle CURRENT plus the complete set of new,
+unresolved, provider-owned thread sources that appeared after the authenticated
+replacement anchor and existed before corrected-successor qualification. Those
+sources remain material correction input and are bound to the existing
+rejected-candidate correction-source digest through a closed one-to-one
+material-finding map and then to the signed Continuation scope; they are never
+classified as safe successor feedback. The closed record also binds
+the exact Codex-owned completion `THUMBS_UP` removed during the resulting-head
+re-review, reusing the maintained provider-reaction drift family. Only the
+remaining exact-resulting-head provider sources are evaluated by schema 1.1
+successor safety. Omission, invention, source/body drift, wrong provider, head,
+PR, repository, correction authority, reaction, or thread boundary, and any
+material or unclassified resulting-head finding fail closed. This partition
+does not authorize thread resolution, cross-PR replay, candidate self-trust,
+provider acquisition, or a new lifecycle operation.
+
 ## Authenticated Ready/Draft execution boundary
 
 The separate `lifecycle_execution.py` boundary executes only an already signed

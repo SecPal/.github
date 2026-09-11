@@ -1160,6 +1160,25 @@ Historical ordinary successor classifications retain their existing decision
 policy. The classification proves candidate safety only and carries no
 thread-resolution or lifecycle-transition authority.
 
+Corrected-successor safety schema 1.2 adds a prior partition step for provider
+feedback created on the replacement PR after its authenticated anchor snapshot.
+One exact GitHub Copilot review must name lifecycle CURRENT as its reviewed
+commit, and every newly observed Copilot thread must be inventoried as unresolved
+material predecessor evidence. Each exact source is bound to the already
+authenticated rejected-candidate correction-source digest through a closed
+one-to-one material-finding map and then to the existing signed Continuation
+authorization; no predecessor finding receives a safe classification or
+becomes candidate-local trust. The same closed evidence
+authenticates the exact Codex-owned completion `THUMBS_UP` removed when the
+corrected head was re-reviewed, using the existing provider-reaction drift
+family. Only after this predecessor inventory is complete does schema 1.1
+successor safety evaluate the exact-resulting-head Codex review, its complete
+safe classifications, and the terminal Security no-finding result. Missing,
+additional, stale, wrong-head, wrong-PR, provider-substituted, cross-boundary,
+material-resulting-head, or unclassified-resulting-head feedback remains
+blocking. The predecessor partition carries no cross-PR thread authority,
+resolution eligibility, provider request, new trust root, or lifecycle event.
+
 The re-anchored artifact carries no resolution-eligible thread identities. Old
 threads remain owned by the original PR, and the resolver rejects schema 1.1
 Continuation evidence outright. Clean or incomplete replacement-PR
