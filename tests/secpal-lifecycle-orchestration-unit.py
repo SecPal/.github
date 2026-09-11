@@ -1486,7 +1486,6 @@ class LifecycleOrchestrationTests(TestCase):
                     "status": status,
                     "behind_by": 0,
                     "merge_base_sha": merge_base,
-                    "head_sha": protected_main,
                 }
             ).encode()
             return subprocess.CompletedProcess([], 0, payload, b"")
@@ -1522,6 +1521,12 @@ class LifecycleOrchestrationTests(TestCase):
                 registry,
             )
         compare_reader.assert_called_once()
+        compare_command = compare_reader.call_args.args[0]
+        self.assertIn(
+            f"repos/{REPOSITORY}/compare/{historical_main}...{protected_main}",
+            compare_command,
+        )
+        self.assertNotIn(".head_commit.sha", compare_command[-1])
 
         for result in (
             comparison(status="diverged"),
