@@ -587,6 +587,27 @@ existing source authorization/receipt/attestation. The extension proves only
 candidate safety: it does not expand the authorized source-change finding set
 or request providers. Explicit
 Ready/Draft changes require their exact separately reasoned authorization.
+
+The schema-1.1 form reuses this transition after one unpublished Continuation
+candidate was rejected by authenticated material successor findings and an
+authenticated same-head `PR_REBOUND` moved the unchanged lifecycle to a
+replacement PR. The re-anchor verifier binds protected CURRENT, both PRs, the
+rebound publication, the rejected signed sole-parent commit, its validation
+receipt and final attestation, its normalized original Continuation document
+cross-bound to delivery, CURRENT tree, lifecycle, and signer, the validation
+registry and schema from a protected-main ancestor, both independently captured
+Stable Feedback states, and signed version-1.3 material finding/source
+classifications. The corrected candidate must again be a signed sole-parent
+successor of CURRENT and must pass fresh exact-head provider safety before
+publication. The rejected candidate is diagnostic evidence only: it supplies
+no ancestry, CURRENT, publication, tree-nomination, or trust authority.
+
+Re-anchored Continuation authorization always has an empty resolution thread
+set. Original-PR thread identities remain diagnostic bindings owned by that PR;
+they are not projected onto the replacement PR, and the guarded resolver
+rejects the schema-1.1 form. This adds no lifecycle event, counter, cycle,
+Recovery, Ready transition, signer, trust root, or cross-PR mutation authority.
+
 Every user-controlled orchestration decision consumes canonical signed evidence
 bound to the exact CURRENT publication, authority, PR, head, operation, reason,
 and scope. Caller-constructed mappings have no authority.

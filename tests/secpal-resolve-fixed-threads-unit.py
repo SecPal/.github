@@ -3320,6 +3320,57 @@ class ResolveFixedThreadsTests(TestCase):
                     continuation_authorization_path=authorization_path,
                 )
 
+    def test_reanchored_continuation_cannot_authorize_any_thread_resolution(self) -> None:
+        validation = MODULE.ValidationEvidence(
+            kind="attestation",
+            evidence_digest="1" * 64,
+            validated_tree_sha="2" * 40,
+            validation_receipt_digest="3" * 64,
+            eligibility_evidence_digest="4" * 64,
+            attestation={"exceptional_continuation_evidence_digest": "5" * 64},
+        )
+        reviewed = MODULE.ReviewedState(
+            head_sha="6" * 40,
+            state_digest="7" * 64,
+            feedback_digest="8" * 64,
+            targets={},
+            thread_ids=frozenset(),
+            payload={},
+        )
+        eligibility = MODULE.EligibilityEvidence(
+            MODULE._digest_json({}), MODULE._canonical_json_bytes({}), ()
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence_path = root / "continuation.json"
+            authorization_path = root / "authorization.json"
+            evidence_path.write_text(
+                '{"schema_version":"1.1","reanchor":{}}', encoding="utf-8"
+            )
+            authorization_path.write_bytes(b"signed")
+            with (
+                mock.patch.object(
+                    MODULE.lifecycle_orchestration,
+                    "verify_exceptional_continuation_authority",
+                ) as verifier,
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError, "no thread-resolution authority"
+                ),
+            ):
+                MODULE.verify_continuation_bound_source_authority(
+                    validation,
+                    reviewed,
+                    eligibility,
+                    repository_root=root,
+                    repository="SecPal/.github",
+                    delivery_issue=902,
+                    pull_request=901,
+                    resulting_head_sha="9" * 40,
+                    continuation_evidence_path=evidence_path,
+                    continuation_authorization_path=authorization_path,
+                )
+            verifier.assert_not_called()
+
     def test_recovery_bound_attestation_uses_canonical_source_verifier(self) -> None:
         thread_id = "PRRT_RECOVERY_BOUND"
         reviewed_payload = reviewed_state_payload(

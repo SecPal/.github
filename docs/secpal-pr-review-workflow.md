@@ -1076,6 +1076,35 @@ performs no provider request. A Continuation-bound resolver receives this
 separate proof through `--exceptional-continuation-successor-safety`; the
 immutable source authorization, receipt, attestation, and commit remain reusable.
 
+Schema 1.1 extends that same one-use Continuation family for one candidate that
+was rejected before publication. It requires unchanged exhausted Ready CURRENT
+with Recovery consumed and Continuation unconsumed, an authenticated same-head
+`PR_REBOUND`, the original and replacement PR identities, and independently
+captured Stable Feedback for both PRs. The original-PR candidate must be a
+signed, validated, sole-parent successor of CURRENT, remain unpublished, and
+have complete exact-head provider acquisition plus signed version-1.3 material
+classifications. Its original typed Continuation document is normalized,
+cross-bound to the delivery, CURRENT tree, lifecycle, and source signer, and
+bound by the candidate receipt and attestation. Validation policy and schema
+come from a base proven in protected-main ancestry rather than the verifier's
+checkout. Those classifications bind the rejected state, exact finding
+sources, and `CANDIDATE_REJECTED_BEFORE_PUBLICATION`; they are diagnostic input
+only. The signed correction authorization also binds both PRs, protected
+CURRENT, the rejected head/tree/receipt/attestation, both Stable Feedback
+states, exact material findings and sources, and the corrected sole-parent
+head/tree. Fresh exact-head provider safety is still mandatory for the corrected
+candidate, and any material or unclassified successor finding blocks
+publication.
+
+The re-anchored artifact carries no resolution-eligible thread identities. Old
+threads remain owned by the original PR, and the resolver rejects schema 1.1
+Continuation evidence outright. Clean or incomplete replacement-PR
+rediscovery cannot erase the authenticated original-PR rejection, nominate a
+tree, or grant cross-PR mutation. The rejected candidate never becomes CURRENT,
+an ancestry root, or a lifecycle transition. Successful publication remains the
+existing `EXCEPTIONAL_CONTINUATION` transition and consumes only its existing
+`0 -> 1` counter.
+
 The simple resolver first verifies the caller-captured reviewed-state digest,
 successful validation attestation, actual local signed commit, and exact
 per-thread eligibility manifest authenticated by the signed validation
