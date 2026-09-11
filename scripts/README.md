@@ -165,6 +165,9 @@ attempt to supply malformed historical evidence and fall back. The recovery's
 expected base SHA remains exact historical source provenance; later integration
 independently authenticates the protected current tip of the same registered
 target repository/ref as parent 2, without requiring those two SHAs to match.
+Receipt creation and final commit binding each authenticate that live authority,
+so a caller-supplied, stale, or substituted parent 2 cannot acquire an
+attestation after the protected ref moves.
 These functions never synthesize historical bytes, create an integration
 candidate, add a lifecycle state, or mutate feedback.
 

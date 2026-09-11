@@ -18,6 +18,9 @@ Log of notable changes to SecPal organization defaults (newest first).
   the same registered target repository/ref as integration parent 2.
 - Allow legitimate target-base advancement without weakening exact current-main,
   ordered-parent, source, lifecycle, signature, or integration-evidence checks.
+- Reauthenticate the protected current-main tip during final integration
+  attestation binding so stale or caller-substituted parent-2 identities fail
+  closed.
 
 ## 2026-09-11 - Authenticate Remediated Ready Provider Terminality
 

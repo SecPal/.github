@@ -7596,12 +7596,15 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 raise fast_path.SecurityBlocker(
                     "validation receipt does not bind the Ready integration evidence"
                 )
+            live_observation = _observe_ready_integration_authority_once(
+                arguments.repo, integration_evidence["pull_request_number"]
+            )
             _verify_ready_integration_prior_authority(
                 arguments=arguments,
                 repository_root=repository_root,
                 binding=binding,
                 integration_evidence=integration_evidence,
-                live_observation=None,
+                live_observation=live_observation,
             )
             parents = _validated_integration_commit_parents(
                 repository_root,

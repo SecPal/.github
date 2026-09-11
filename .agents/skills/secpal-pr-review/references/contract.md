@@ -925,10 +925,12 @@ that immutable object. OpenPGP authority matching distinguishes the verified
 signing-subkey fingerprint from its authenticated primary-key fingerprint.
 Integration evidence and its fresh receipt bind the same authority and tag-
 object identities. During receipt creation, one trusted GitHub read must
-also prove that the open Ready PR still has parent 1 as its head and that its
-registered default branch currently resolves to parent 2. The pull request's
-creation-time base OID is not a current-tip authority. Missing authority,
-live-ref drift, or an unavailable observation fails closed without retry.
+prove that the open Ready PR still has parent 1 as its head and that its
+registered default branch currently resolves to parent 2. The final commit-
+binding invocation must independently repeat that trusted observation before
+issuing the attestation. The pull request's creation-time base OID is not a
+current-tip authority. Missing authority, live-ref drift, or an unavailable
+observation fails closed without retry.
 
 For a legitimate unchanged Ready source whose pre-persistence package is
 explicitly proven unavailable, version 1.2 of the same prior-authority manifest
