@@ -25,6 +25,8 @@ from unittest import TestCase, main, mock
 
 import jsonschema
 
+from scripts.secpal_pr_review import lifecycle_publication
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ACTIONS_HELPER = REPO_ROOT / "scripts/secpal-pr-review-actions.py"
@@ -7997,6 +7999,102 @@ class FastPathTests(TestCase):
             "f" * 40, REPO_ROOT, ready_source_current_safety_profile()
         )
 
+    def test_ready_source_acquisition_accepts_derived_predecessor_provider(self) -> None:
+        reviewed = fast_feedback(thread_count=0)
+        observation = reviewed.to_dict()
+        observation.update(review_decision="APPROVED", is_draft=False)
+        entry = registry_entry(reviewed.repository)
+        entry["manual_gates"] = []
+        binding = self._ready_source_provider_binding(
+            current_head=reviewed.head_sha
+        )
+        provider_state = self._codex_provider_state(
+            metadata_head=binding.provider_head_sha,
+            metadata_pull_request=reviewed.pull_request_number,
+        )
+
+        def read_feedback(
+            _plan: Any,
+            _entry: Any,
+            _budget: Any,
+            *,
+            ready_source_provider_binding: Any,
+        ) -> dict[str, Any]:
+            actions._require_review_providers_terminal(
+                provider_state,
+                repository=reviewed.repository,
+                pull_request_number=reviewed.pull_request_number,
+                ready_source_provider_binding=ready_source_provider_binding,
+            )
+            return copy.deepcopy(observation)
+
+        gateway = actions.FastPathGateway(
+            REPO_ROOT,
+            entry,
+            github=SimpleNamespace(_read_current_feedback_once=read_feedback),
+            ready_source_provider_binding=binding,
+        )
+        gateway.observe_ready_source_recovery_approval_policy = mock.Mock(
+            return_value=False
+        )
+        gateway.observe_ready_source_recovery_delivery = mock.Mock(
+            return_value={"oid": reviewed.head_sha}
+        )
+        finding = {
+            "finding_id": "review-summary",
+            "thread_id": None,
+            "sources": [{
+                "kind": "REVIEW",
+                "node_id": "REVIEW_1",
+                "digest": digest("review summary"),
+            }],
+            "classification": "INFORMATIONAL",
+            "disposition": "NON_ACTIONABLE",
+            "evidence_digest": "1" * 64,
+            "technically_blocking": False,
+        }
+        with (
+            mock.patch.object(
+                actions,
+                "_ready_source_recovery_current_safety_profile",
+                return_value=ready_source_current_safety_profile(),
+            ),
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                side_effect=[
+                    (reviewed.head_sha, ""),
+                    (reviewed.head_sha, ""),
+                ],
+            ),
+            mock.patch.object(
+                actions,
+                "_run_attestation_git",
+                return_value=SimpleNamespace(stdout="a" * 40),
+            ),
+            mock.patch.object(
+                actions, "_validated_commit_parent", return_value="9" * 40
+            ),
+        ):
+            facts, _ = actions._acquire_ready_source_recovery_facts(
+                repository=reviewed.repository,
+                pull_request_number=reviewed.pull_request_number,
+                expected_head_sha=reviewed.head_sha,
+                repository_root=REPO_ROOT,
+                feedback_findings=[finding],
+                manual_gate_evidence=[],
+                expected_commit_signer={
+                    "kind": "SSH_PRINCIPAL", "identity": "reviewer",
+                },
+                _policy_loader=mock.Mock(return_value=("f" * 40, entry)),
+                _gateway_factory=mock.Mock(return_value=gateway),
+                _validation_runner=mock.Mock(
+                    return_value=actions.RegisteredValidationResult()
+                ),
+                ready_source_provider_binding=binding,
+            )
+        self.assertEqual(facts["head_sha"], reviewed.head_sha)
+
     def test_ready_source_recovery_rejects_open_draft_provider_state(self) -> None:
         reviewed = fast_feedback(thread_count=0)
         observation = reviewed.to_dict()
@@ -12085,6 +12183,8 @@ class FastPathTests(TestCase):
         code_label: str = "**Code Review**",
         security_label: str = "**Security Review**",
         metadata_head: str = p21.HEAD,
+        metadata_repository: str = "SecPal/.github",
+        metadata_pull_request: int = 1,
         author: str = "chatgpt-codex-connector",
         extra_rows: str = "",
     ) -> dict[str, Any]:
@@ -12098,7 +12198,10 @@ class FastPathTests(TestCase):
                         "body": (
                             "<!-- codex-pull-request-review-summary -->\n"
                             "<!-- codex-security-review:v1 "
-                            f'{{"headSha":"{metadata_head}","status":"completed"}} -->\n'
+                            f'{{"headSha":"{metadata_head}",'
+                            f'"pullRequestNumber":{metadata_pull_request},'
+                            f'"repository":"{metadata_repository}",'
+                            '"status":"completed"} -->\n'
                             "| Review | Status | Commit | Review trigger |\n"
                             "| --- | --- | --- | --- |\n"
                             f"| {code_label} | {code_status} | head | ready |\n"
@@ -12280,6 +12383,81 @@ class FastPathTests(TestCase):
         ):
             actions._require_review_providers_terminal(
                 self._codex_provider_state(metadata_head="f" * 40)
+            )
+
+    @staticmethod
+    def _ready_source_provider_binding(
+        *,
+        provider_head: str = "f" * 40,
+        current_head: str = p21.HEAD,
+        repository: str = "SecPal/.github",
+        pull_request: int = 1,
+    ) -> Any:
+        fields = {
+            "repository": repository,
+            "delivery_issue": 911,
+            "pull_request": pull_request,
+            "lifecycle_id": "lifecycle:ready-source-provider",
+            "current_head_sha": current_head,
+            "provider_head_sha": provider_head,
+            "current_authority_digest": "1" * 64,
+            "current_publication_oid": "2" * 40,
+            "current_publication_digest": "3" * 64,
+            "remediation_event_digests": ["4" * 64],
+            "lifecycle_evidence_digest": "5" * 64,
+        }
+        return lifecycle_publication.VerifiedReadySourceRecoveryProviderBinding(
+            **{
+                **fields,
+                "remediation_event_digests": tuple(
+                    fields["remediation_event_digests"]
+                ),
+            },
+            _verification_seal=(
+                lifecycle_publication
+                ._VerifiedReadySourceRecoveryProviderBindingSeal(
+                    fast_path.digest_json(fields)
+                )
+            ),
+        )
+
+    def test_ready_source_accepts_only_sealed_remediated_provider_predecessor(
+        self,
+    ) -> None:
+        binding = self._ready_source_provider_binding()
+        actions._require_review_providers_terminal(
+            self._codex_provider_state(metadata_head="f" * 40),
+            repository="SecPal/.github",
+            pull_request_number=1,
+            ready_source_provider_binding=binding,
+        )
+        cases = (
+            self._codex_provider_state(metadata_head="e" * 40),
+            self._codex_provider_state(metadata_repository="SecPal/api",
+                                       metadata_head="f" * 40),
+            self._codex_provider_state(metadata_pull_request=2,
+                                       metadata_head="f" * 40),
+            self._codex_provider_state(metadata_head="f" * 40,
+                                       security_status="**Running**"),
+        )
+        for provider_state in cases:
+            with self.subTest(provider_state=provider_state), self.assertRaises(
+                actions.MutationBlocked
+            ):
+                actions._require_review_providers_terminal(
+                    provider_state,
+                    repository="SecPal/.github",
+                    pull_request_number=1,
+                    ready_source_provider_binding=binding,
+                )
+
+        substituted = replace(binding, provider_head_sha="e" * 40)
+        with self.assertRaisesRegex(actions.MutationBlocked, "substituted"):
+            actions._require_review_providers_terminal(
+                self._codex_provider_state(metadata_head="e" * 40),
+                repository="SecPal/.github",
+                pull_request_number=1,
+                ready_source_provider_binding=substituted,
             )
 
     def test_ready_pr_missing_codex_summary_remains_rejected(self) -> None:

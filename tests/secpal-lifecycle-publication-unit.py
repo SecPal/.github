@@ -544,6 +544,76 @@ class LifecyclePublicationTests(TestCase):
         ).stdout.strip()
         return value
 
+    def test_ready_source_provider_binding_derives_attested_ready_predecessor(self) -> None:
+        chain = Chain()
+        chain.append("INITIALIZED_DRAFT")
+        chain.append("UNRESTRICTED_REVIEW_CONSUMED")
+        chain.append("REMEDIATION_COMPLETED", head=HEADS[1])
+        chain.append("DRAFT_TO_READY")
+        chain.append("REMEDIATION_COMPLETED", head=HEADS[2])
+        _, current = self.enroll(chain)
+
+        binding = publication.derive_ready_source_recovery_provider_binding(
+            current
+        )
+
+        self.assertEqual(binding.repository, REPOSITORY)
+        self.assertEqual(binding.delivery_issue, ISSUE)
+        self.assertEqual(binding.pull_request, PR)
+        self.assertEqual(binding.current_head_sha, HEADS[2])
+        self.assertEqual(binding.provider_head_sha, HEADS[1])
+
+    def test_ready_source_provider_binding_rejects_nonexact_lifecycle_shapes(self) -> None:
+        missing_remediation = Chain(ISSUE + 1)
+        missing_remediation.append("INITIALIZED_DRAFT")
+        missing_remediation.append("UNRESTRICTED_REVIEW_CONSUMED")
+        missing_remediation.append("DRAFT_TO_READY")
+        _, current = self.enroll(missing_remediation)
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "remediation lineage"
+        ):
+            publication.derive_ready_source_recovery_provider_binding(current)
+
+        not_ready = Chain(ISSUE + 2)
+        not_ready.append("INITIALIZED_DRAFT")
+        not_ready.append("UNRESTRICTED_REVIEW_CONSUMED")
+        not_ready.append("REMEDIATION_COMPLETED", head=HEADS[1])
+        _, current = self.enroll(not_ready)
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "remediation lineage"
+        ):
+            publication.derive_ready_source_recovery_provider_binding(current)
+
+        valid = Chain(ISSUE + 3)
+        valid.append("INITIALIZED_DRAFT")
+        valid.append("UNRESTRICTED_REVIEW_CONSUMED")
+        valid.append("DRAFT_TO_READY")
+        valid.append("REMEDIATION_COMPLETED", head=HEADS[1])
+        valid.append("REMEDIATION_COMPLETED", head=HEADS[2])
+        _, current = self.enroll(valid)
+        binding = publication.derive_ready_source_recovery_provider_binding(current)
+        self.assertEqual(binding.provider_head_sha, HEADS[0])
+        self.assertEqual(len(binding.remediation_event_digests), 2)
+
+        raw = json.loads(current.serialized_lifecycle_evidence)
+        lifecycle = raw.get("lifecycle_evidence", raw)
+        lifecycle["transition_authorizations"][-1][
+            "predecessor_head_sha"
+        ] = HEADS[9]
+        substituted = replace(
+            current,
+            serialized_lifecycle_evidence=fast_path.canonical_json_bytes(raw),
+        )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "lifecycle evidence is invalid"
+        ):
+            publication.derive_ready_source_recovery_provider_binding(substituted)
+
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            valid.append("REMEDIATION_COMPLETED", head=HEADS[3])
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            valid.append("UNRESTRICTED_REVIEW_CONSUMED")
+
     def test_pre_enrollment_absence_is_bound_to_the_observed_protected_tip(self) -> None:
         absence = publication.verify_pre_enrollment_absence(REPOSITORY, ISSUE)
         self.assertEqual(absence.repository, REPOSITORY)

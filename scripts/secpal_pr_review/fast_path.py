@@ -416,7 +416,13 @@ def _is_codex_completed_status(value: str) -> bool:
     return True
 
 
-def verify_codex_provider_summary(body: Any, *, head_sha: str) -> None:
+def verify_codex_provider_summary(
+    body: Any,
+    *,
+    head_sha: str,
+    repository: str | None = None,
+    pull_request_number: int | None = None,
+) -> None:
     """Verify the canonical terminal Code/Security provider summary for a head."""
 
     head_sha = _require_oid(head_sha, "Codex provider summary head")
@@ -448,6 +454,19 @@ def verify_codex_provider_summary(body: Any, *, head_sha: str) -> None:
         raise SecurityBlocker(
             "Codex review provider status is stale for the current head"
         )
+    if repository is not None or pull_request_number is not None:
+        if (
+            not isinstance(repository, str)
+            or not REPOSITORY.fullmatch(repository)
+            or not isinstance(pull_request_number, int)
+            or isinstance(pull_request_number, bool)
+            or pull_request_number < 1
+            or status.get("repository") != repository
+            or status.get("pullRequestNumber") != pull_request_number
+        ):
+            raise SecurityBlocker(
+                "Codex review provider repository or PR identity changed"
+            )
     if status.get("status") != "completed":
         raise SecurityBlocker("Codex review provider is not terminal")
     for label in ("Code Review", "Security Review"):

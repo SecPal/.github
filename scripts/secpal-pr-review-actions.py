@@ -1987,7 +1987,13 @@ def _normalized_reviewer_login(value: Any) -> str | None:
     return re.sub(r"\[bot\]$", "", value.strip().lower())
 
 
-def _require_review_providers_terminal(pull_request: dict[str, Any]) -> None:
+def _require_review_providers_terminal(
+    pull_request: dict[str, Any],
+    *,
+    repository: str | None = None,
+    pull_request_number: int | None = None,
+    ready_source_provider_binding: Any = None,
+) -> None:
     """Reject visible non-terminal automated review-provider evidence."""
 
     head_sha = pull_request.get("headRefOid")
@@ -2010,12 +2016,37 @@ def _require_review_providers_terminal(pull_request: dict[str, Any]) -> None:
             or author.get("login") != "chatgpt-codex-connector"
         ):
             raise MutationBlocked("Codex review provider status is indeterminate")
+        body = summary_comments[0].get("body")
         try:
-            fast_path.verify_codex_provider_summary(
-                summary_comments[0].get("body"), head_sha=head_sha
-            )
+            fast_path.verify_codex_provider_summary(body, head_sha=head_sha)
         except fast_path.SecurityBlocker as exc:
-            raise MutationBlocked(str(exc)) from exc
+            if (
+                str(exc)
+                != "Codex review provider status is stale for the current head"
+                or ready_source_provider_binding is None
+                or repository is None
+                or pull_request_number is None
+            ):
+                raise MutationBlocked(str(exc)) from exc
+            try:
+                provider_head = ready_source_provider_binding.provider_head(
+                    repository=repository,
+                    pull_request=pull_request_number,
+                    current_head_sha=head_sha,
+                )
+                fast_path.verify_codex_provider_summary(
+                    body,
+                    head_sha=provider_head,
+                    repository=repository,
+                    pull_request_number=pull_request_number,
+                )
+            except (
+                fast_path.SecurityBlocker,
+                AttributeError,
+                TypeError,
+                ValueError,
+            ) as recovery_exc:
+                raise MutationBlocked(str(recovery_exc)) from recovery_exc
 
     requests = _bounded_nodes(
         pull_request.get("reviewRequests"), "review-provider requests"
@@ -2275,6 +2306,8 @@ class LiveGitHub:
         plan: dict[str, Any],
         limits: dict[str, Any],
         budget: dict[str, int],
+        *,
+        ready_source_provider_binding: Any = None,
     ) -> dict[str, Any]:
         owner, name = plan["repository"].split("/", 1)
         base_variables = {
@@ -2370,7 +2403,15 @@ class LiveGitHub:
             "nodes": comments,
             "pageInfo": {"hasNextPage": False},
         }
-        _require_review_providers_terminal(provider_state)
+        if ready_source_provider_binding is None:
+            _require_review_providers_terminal(provider_state)
+        else:
+            _require_review_providers_terminal(
+                provider_state,
+                repository=plan["repository"],
+                pull_request_number=plan["pull_request_number"],
+                ready_source_provider_binding=ready_source_provider_binding,
+            )
         for label, nodes in (
             ("reviews", reviews),
             ("conversation comments", comments),
@@ -2928,6 +2969,8 @@ class FastPathGateway:
         repository_root: Path,
         registry_entry: dict[str, Any],
         github: LiveGitHub | None = None,
+        *,
+        ready_source_provider_binding: Any = None,
     ) -> None:
         self.repository_root = repository_root.resolve(strict=True)
         if not self.repository_root.is_dir():
@@ -2940,6 +2983,7 @@ class FastPathGateway:
                 "selected feedback registry entry is malformed"
             )
         self.registry_entry = copy.deepcopy(registry_entry)
+        self.ready_source_provider_binding = ready_source_provider_binding
         self.github = github or LiveGitHub()
         try:
             self.git_executable = evidence.resolve_trusted_executable("git")
@@ -3452,10 +3496,16 @@ class FastPathGateway:
                 raise fast_path.SecurityBlocker(
                     "selected feedback registry repository does not match the request"
                 )
-            return self.github._read_current_feedback_once(
+            arguments = (
                 {"repository": repository, "pull_request_number": pull_request_number},
                 self.registry_entry,
                 {"calls": 0},
+            )
+            if self.ready_source_provider_binding is None:
+                return self.github._read_current_feedback_once(*arguments)
+            return self.github._read_current_feedback_once(
+                *arguments,
+                ready_source_provider_binding=self.ready_source_provider_binding,
             )
         except (ActionCommandFailure, MutationFailure) as exc:
             raise fast_path.TransientReadFailure(str(exc)) from exc
@@ -4875,6 +4925,7 @@ def _acquire_ready_source_recovery_facts(
     _policy_loader: Any,
     _gateway_factory: Any,
     _validation_runner: Any,
+    ready_source_provider_binding: Any = None,
 ) -> Any:
     """Test-seamed implementation; production fixes every observation boundary."""
 
@@ -4907,7 +4958,14 @@ def _acquire_ready_source_recovery_facts(
             "Ready-source recovery candidate tree is malformed"
         )
     parent = _validated_commit_parent(root, head)
-    gateway = _gateway_factory(root, entry)
+    if ready_source_provider_binding is None:
+        gateway = _gateway_factory(root, entry)
+    else:
+        gateway = _gateway_factory(
+            root,
+            entry,
+            ready_source_provider_binding=ready_source_provider_binding,
+        )
     observation = gateway.observe_stable_feedback(
         repository, pull_request_number
     )
@@ -5010,12 +5068,18 @@ def _issue_ready_source_recovery_authorization(
     _policy_loader: Any, _gateway_factory: Any, _validation_runner: Any,
     _issuer_source_verifier: Any, _current_lifecycle_loader: Any,
     _authorization_factory: Any, _recovery_user_authorization_verifier: Any,
+    _provider_binding_deriver: Any = None,
 ) -> dict[str, Any]:
     """Acquire, reverify, and sign one recovery in one maintained boundary."""
 
     policy_head_sha, policy_entry = _policy_loader(repository)
     _issuer_source_verifier(policy_head_sha)
     current = _current_lifecycle_loader(repository, delivery_issue)
+    ready_source_provider_binding = (
+        _provider_binding_deriver(current)
+        if _provider_binding_deriver is not None
+        else None
+    )
 
     def accepted_policy(requested_repository: str) -> tuple[str, dict[str, Any]]:
         if requested_repository != repository:
@@ -5035,6 +5099,7 @@ def _issue_ready_source_recovery_authorization(
         _policy_loader=accepted_policy,
         _gateway_factory=_gateway_factory,
         _validation_runner=_validation_runner,
+        ready_source_provider_binding=ready_source_provider_binding,
     )
     final_policy_head_sha, final_policy_entry = _policy_loader(repository)
     if (
@@ -5106,6 +5171,14 @@ def issue_ready_source_recovery_authorization(
 
     lifecycle_authority, lifecycle_publication = _load_lifecycle_publication_helpers()
 
+    def derive_provider_binding(current: Any) -> Any:
+        try:
+            return lifecycle_publication.derive_ready_source_recovery_provider_binding(
+                current
+            )
+        except lifecycle_publication.LifecyclePublicationError:
+            return None
+
     def verify_recovery_user_authorization(
         value: Any, observed: Any, expected_scope: dict[str, Any]
     ) -> dict[str, Any]:
@@ -5153,6 +5226,7 @@ def issue_ready_source_recovery_authorization(
         _recovery_user_authorization_verifier=(
             verify_recovery_user_authorization
         ),
+        _provider_binding_deriver=derive_provider_binding,
     )
 
 

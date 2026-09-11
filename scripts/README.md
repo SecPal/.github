@@ -132,6 +132,12 @@ harness, executes through the isolated Python boundary, and authenticates
 candidate production bytes before and after. It never overlays accepted-main
 production implementation and does not replay unrelated current repository
 regressions. The issuer then re-verifies the complete package before signing.
+If protected CURRENT proves a Ready-preserving remediation suffix, that fixed
+issuer may also derive the suffix predecessor as the sole acceptable Codex
+provider-summary head. The summary must retain terminal status and exact
+repository/PR metadata. This is an ephemeral Ready-source recovery gate, not a
+caller option or persisted evidence kind; current-head feedback completeness
+and its blocking classifications are unchanged.
 Applicable protected-branch
 rules independently determine whether `NONE` is admissible; `REVIEW_REQUIRED`
 always fails closed. Unsigned recovery facts and caller-selected feedback

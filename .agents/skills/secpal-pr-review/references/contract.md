@@ -105,6 +105,12 @@ It rejects a visible non-terminal, malformed, forged, duplicate, or wrong-head
 Codex summary; it rejects a Ready PR with no Codex summary and a pending Copilot
 review request. Provider status remains ephemeral and is excluded from the
 stable-feedback artifact, so this adds no evidence family or persistence.
+The sole exception is Ready-source recovery after authenticated Ready-preserving
+remediation: maintained CURRENT derives the unique predecessor provider head,
+and the terminal summary must also bind the exact repository and PR. Callers
+cannot nominate that head. Current-head feedback is still captured completely
+and remains blocking under the ordinary classification rules; every other path
+retains exact-head provider terminality.
 
 ## Simple resolution-only path
 

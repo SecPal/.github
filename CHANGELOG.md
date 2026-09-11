@@ -9,6 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-11 - Authenticate Remediated Ready Provider Terminality
+
+**Fixed:**
+
+- Derive the unique predecessor Codex provider head from authenticated
+  Ready-preserving remediation history during Ready-source recovery, while
+  retaining exact repository, PR, terminal-status, finite-budget, and lifecycle
+  bindings.
+- Keep current-head feedback completeness authoritative and preserve ordinary
+  exact-head provider checks, Ready integration, and historical source recovery
+  behavior outside this narrow case.
+
 ## 2026-09-11 - Admit Classified Codex Successor Findings
 
 **Fixed:**
