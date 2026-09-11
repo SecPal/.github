@@ -33,6 +33,18 @@ REPLACEMENT_PR = 801
 HEAD = "a" * 40
 NEXT_HEAD = "b" * 40
 LIFECYCLE = "lifecycle:" + "c" * 64
+PR_905_CORRECTION_AUTHORITY = {
+    "reanchor_evidence_digest": "7" * 64,
+    "material_finding_ids": [
+        "PRRC_kwDOQFR1MM7td5Q8",
+        "PRRC_kwDOQFR1MM7td5Rp",
+        "PRRC_kwDOQFR1MM7td5SC",
+        "PRRC_kwDOQFR1MM7td5Sd",
+    ],
+    "finding_source_digest": (
+        "01b49bf34ee28ea224dfd7f73f690ac95867c429dcc2f6b1242652370e476e62"
+    ),
+}
 
 
 def current_lifecycle(
@@ -577,6 +589,11 @@ def authenticated_pr_905_classified_codex_review() -> tuple[
         resulting_head_sha=resulting_head,
         base_sha="da7d5f19a1ff4e65bfdbe7ad0a66e13f6172ada9",
     )
+    copilot = {
+        "login": "copilot-pull-request-reviewer",
+        "node_id": "BOT_kgDOCnlnWA",
+        "database_id": 175728472,
+    }
     provider = {
         "login": "chatgpt-codex-connector",
         "node_id": "BOT_kgDOC98s_g",
@@ -587,11 +604,59 @@ def authenticated_pr_905_classified_codex_review() -> tuple[
         "node_id": "U_kgDOD9_SfQ",
         "database_id": 266326653,
     }
-    reviewed.feedback["conversation_comments"][0].update(
-        node_id="IC_kwDOQFR1MM8AAAABT7Fdrg",
-        actor=provider,
+    predecessor_summary = (
+        "<!-- codex-pull-request-review-summary -->\n"
+        '<!-- codex-security-review:v1 {"blockingSeverityThreshold":"P0",'
+        f'"headSha":"{predecessor_head}","mergeGateEnabled":false,'
+        '"pullRequestNumber":905,"repository":"SecPal/.github",'
+        '"status":"completed"} -->\n'
+        "## Codex Review Summary\n\n"
+        "This comment shows the latest Codex review activity on this pull request.\n\n"
+        "| Review | Status | Commit | Review trigger |\n"
+        "| --- | --- | --- | --- |\n"
+        "| 📝 **Code Review** | ✅ **Completed** "
+        '<relative-time datetime="2026-09-11T09:02:46.182651Z">'
+        "2026-09-11T09:02:46.182651Z</relative-time> | `46d09ef` | PR opened |\n"
+        "| 🔒 **Security Review** | ✅ **Completed** "
+        '<relative-time datetime="2026-09-11T09:05:44.125661Z">'
+        "2026-09-11T09:05:44.125661Z</relative-time> | `46d09ef` | PR opened |\n"
+        "\n\n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n"
+        "[Your team has set up Codex to review pull requests in this repo]"
+        "(https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n"
+        "- Open a pull request for review\n"
+        "- Mark a draft as ready\n"
+        '- Comment "@codex review" or "@codex security review".\n\n'
+        "Codex reacts with 👀 while any review is running, comments if it has suggestions, "
+        "and reacts with 👍 once all reviews finish with no findings.\n\n</details>"
     )
+    reviewed.feedback = {
+        "pull_request_reactions": [
+            {
+                "mutation_id": "REA_lAHOQFR1MM8AAAABQzMEUc4d1oLF",
+                "content": "THUMBS_UP",
+                "actor": {
+                    "login": "chatgpt-codex-connector[bot]",
+                    "node_id": "BOT_kgDOC98s_g",
+                    "database_id": 199175422,
+                },
+            }
+        ],
+        "reviews": [],
+        "conversation_comments": [
+            {
+                "node_id": "IC_kwDOQFR1MM8AAAABT7Fdrg",
+                "body_digest": fast_path.digest_text(predecessor_summary),
+                "actor": provider,
+                "updated_at": "2026-09-11T09:05:45Z",
+                "reactions": [],
+            }
+        ],
+        "threads": [],
+    }
     reviewed.refresh_digests()
+    assert reviewed.state_digest == (
+        "d76acca37ab79269f3ed7d36394696831e16be4160f88081c6a552d6ed6b6d3a"
+    )
     summary = (
         "<!-- codex-pull-request-review-summary -->\n"
         '<!-- codex-security-review:v1 {"blockingSeverityThreshold":"P0",'
@@ -631,6 +696,83 @@ def authenticated_pr_905_classified_codex_review() -> tuple[
         'Codex can also answer questions or update the PR. Try commenting "@codex '
         'address that feedback".\n            \n</details>'
     )
+    copilot_review = (
+        "### 🟡 Changes recommended\n\n"
+        "Unresolved critical and moderate security, validation, source-authentication, "
+        "and resource-boundary findings remain.\n\n"
+        "*Once you've addressed the issues Copilot identified, you can request another "
+        "Copilot review.*\n\n"
+        "<details>\n<summary>Pull request overview</summary>\n\n"
+        "Adds authenticated evidence-version collision handling for Exceptional "
+        "Continuation.\n\n"
+        "**Changes:**\n"
+        "- Adds collision detection and byte-only renumber validation.\n"
+        "- Integrates lifecycle, provider-safety, and publication checks.\n"
+        "- Adds regression tests and documentation updates.\n"
+        "</details>\n\n"
+        "<details>\n<summary>File summaries</summary>\n\n"
+        "| File | Summary |\r\n"
+        "|---|---|\r\n"
+        "| `tests/secpal-lifecycle-orchestration-unit.py` | Collision regression "
+        "coverage |\r\n"
+        "| `scripts/secpal_pr_review/version_collision.py` | Collision authentication "
+        "and source validation |\r\n"
+        "| `scripts/secpal_pr_review/lifecycle_orchestration.py` | Lifecycle "
+        "integration and publication |\r\n"
+        "| `scripts/secpal_pr_review/fast_path.py` | Evidence and feedback validation "
+        "|\r\n"
+        "| `scripts/README.md` | Script documentation |\r\n"
+        "| `docs/secpal-pr-review-workflow.md` | Workflow contract documentation |\r\n"
+        "| `CHANGELOG.md` | Change record |\n"
+        "</details>\n\n"
+        "<details>\n<summary>Review details</summary>\n\n"
+        "### Suppressed comments (3)\n\n"
+        "**scripts/secpal_pr_review/version_collision.py:366**\n"
+        "* These offsets mix character and byte units. `ast` columns and "
+        "`verify_blob_renumber` positions are UTF-8 byte offsets, but `len(line)` "
+        "counts characters; because fast_path.py contains emoji literals before "
+        "these declarations (for example lines 129 and 136), every identity after "
+        "them is shifted and an otherwise exact collision renumber is rejected. "
+        "Build `starts` with the encoded byte length and add a non-ASCII regression.\n"
+        "```\n        starts.append(starts[-1] + len(line))\n```\n"
+        "**scripts/secpal_pr_review/version_collision.py:698**\n"
+        "* The object-transfer limits below do not bound this acquisition: a plain "
+        "`git fetch` of both tips downloads their entire reachable commit, tree, and "
+        "blob history before `_import_successor` applies any limit. Every collision "
+        "authentication can therefore incur unbounded network, disk, and CPU cost as "
+        "the repository grows, and a large history can exhaust the runner before the "
+        "fail-closed checks run. Use a bounded partial/shallow acquisition that still "
+        "proves the unique merge base, or enforce a fetch-level resource limit and "
+        "reject when it cannot be met.\n"
+        "```\n        _git(root, [\"-c\", \"fetch.fsckObjects=true\", \"fetch\", "
+        "\"--no-tags\", \"origin\", _oid(main), _oid(predecessor)], 4096)\n```\n"
+        "**scripts/secpal_pr_review/version_collision.py:380**\n"
+        "* The linked #894 contract says the OLD-to-NEW normalization permits no test "
+        "or logic edits, but this condition explicitly authorizes any changed `tests/` "
+        "or Markdown path that happens to be in delivery scope. Those files are only "
+        "checked for byte-level renumbering, so this trigger can carry unrelated "
+        "test/documentation changes that are outside the promised source-only "
+        "correction. Reject non-owner paths here (or bind a narrower, explicitly "
+        "contract-approved set).\n"
+        "```\n    if any(change[\"path\"] != SOURCE_PATH and not (\n"
+        "        change[\"path\"].startswith(\"tests/\") or "
+        "change[\"path\"].endswith(\".md\")\n"
+        "    ) for change in delta[\"changes\"]):\n"
+        "        raise VersionCollisionError(\"version identity edit extends outside "
+        "its implementation, tests or documentation\")\n```\n"
+        "\n- **Files reviewed:** 7/7 changed files\n"
+        "- **Comments generated:** 4\n"
+        "- **Review effort level:** Lite\n"
+        "</details>\n\n---\n\n"
+        "💡 <a href=\"/SecPal/.github/new/main?filename=.github/skills/code-review/"
+        "SKILL.md\" class=\"Link--inTextBlock\" target=\"_blank\" "
+        "rel=\"noopener noreferrer\">Add a `code-review` agent skill</a> or configure "
+        "MCP servers for context-aware, tailored reviews. <a "
+        "href=\"https://docs.github.com/copilot/how-tos/use-copilot-agents/"
+        "request-a-code-review/use-code-review?tool=webui#mcp-servers-and-agent-skills\" "
+        "class=\"Link--inTextBlock\" target=\"_blank\" "
+        "rel=\"noopener noreferrer\">Learn more in the docs.</a>"
+    )
     security_result = (
         "### 🛡️ Codex Security Review\n\n"
         "Security review completed. No security issues were found in this pull request.\n\n"
@@ -652,6 +794,7 @@ def authenticated_pr_905_classified_codex_review() -> tuple[
         "IC_kwDOQFR1MM8AAAABUBQgbA": security_result,
     }
     current_feedback = copy.deepcopy(reviewed.feedback)
+    current_feedback["pull_request_reactions"] = []
     current_feedback["conversation_comments"][0].update(
         body_digest=fast_path.digest_text(summary),
         updated_at="2026-09-11T17:45:08Z",
@@ -662,10 +805,24 @@ def authenticated_pr_905_classified_codex_review() -> tuple[
                 "node_id": node_id,
                 "body_digest": fast_path.digest_text(body),
                 "actor": requester if body.startswith("@codex") else provider,
-                "updated_at": None,
+                "updated_at": {
+                    "IC_kwDOQFR1MM8AAAABUBIbNg": "2026-09-11T17:36:32Z",
+                    "IC_kwDOQFR1MM8AAAABUBIcQw": "2026-09-11T17:36:33Z",
+                    "IC_kwDOQFR1MM8AAAABUBQgbA": "2026-09-11T17:45:05Z",
+                }[node_id],
                 "reactions": [],
             }
         )
+    current_feedback["reviews"].append(
+        {
+            "node_id": "PRR_kwDOQFR1MM8AAAABNJC0sw",
+            "body_digest": fast_path.digest_text(copilot_review),
+            "actor": copilot,
+            "state": "COMMENTED",
+            "commit_oid": predecessor_head,
+            "reactions": [],
+        }
+    )
     current_feedback["reviews"].append(
         {
             "node_id": "PRR_kwDOQFR1MM8AAAABNNvsIA",
@@ -676,6 +833,65 @@ def authenticated_pr_905_classified_codex_review() -> tuple[
             "reactions": [],
         }
     )
+    predecessor_findings = (
+        (
+            "PRRT_kwDOQFR1MM6hZ8MN",
+            "PRRC_kwDOQFR1MM7tresP",
+            "1419657c315455ffa222846a87eb96c40c62e2323628df7f6b472bdd8bf22de9",
+            False,
+        ),
+        (
+            "PRRT_kwDOQFR1MM6hZ8NI",
+            "PRRC_kwDOQFR1MM7treth",
+            "0e24243b6326d58ee210cd4e64c61ed95d409c1f937abdb096c945321738e42b",
+            True,
+        ),
+        (
+            "PRRT_kwDOQFR1MM6hZ8Ny",
+            "PRRC_kwDOQFR1MM7treub",
+            "c421704ad8149bcecf0f58df9be2114897703bf92c029b65fe69fd75f6285790",
+            True,
+        ),
+        (
+            "PRRT_kwDOQFR1MM6hZ8OV",
+            "PRRC_kwDOQFR1MM7trevL",
+            "c0058e62442ec19a6a9cd4f35805106d0544c0eeb9b9797110933d7ef2ca3944",
+            False,
+        ),
+    )
+    predecessor_material = []
+    for thread_id, comment_id, body_digest, is_outdated in predecessor_findings:
+        current_feedback["threads"].append(
+            {
+                "node_id": thread_id,
+                "is_resolved": False,
+                "is_outdated": is_outdated,
+                "comments": [
+                    {
+                        "node_id": comment_id,
+                        "body_digest": body_digest,
+                        "actor": copilot,
+                        "reply_to_id": None,
+                        "reactions": [],
+                    }
+                ],
+            }
+        )
+        predecessor_material.append(
+            {
+                "correction_scope_digest": PR_905_CORRECTION_AUTHORITY[
+                    "finding_source_digest"
+                ],
+                "thread_id": thread_id,
+                "sources": [
+                    {
+                        "kind": "THREAD_COMMENT",
+                        "node_id": comment_id,
+                        "digest": body_digest,
+                    }
+                ],
+            }
+        )
     suggestions = (
         (
             "PRRT_kwDOQFR1MM6hk-YJ",
@@ -748,7 +964,7 @@ def authenticated_pr_905_classified_codex_review() -> tuple[
         feedback=current_feedback,
     )
     evidence: dict[str, object] = {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
         "repository": REPOSITORY,
         "pull_request_number": 905,
         "predecessor_state_digest": reviewed.state_digest,
@@ -787,8 +1003,54 @@ def authenticated_pr_905_classified_codex_review() -> tuple[
             },
         ],
         "successor_findings": findings,
+        "provider_completion_reaction_removal": {
+            "provider_login": "chatgpt-codex-connector",
+            "reaction_content": "THUMBS_UP",
+            "removed_reaction_id": "REA_lAHOQFR1MM8AAAABQzMEUc4d1oLF",
+        },
+        "predecessor_provider_feedback": {
+            "correction_authority": copy.deepcopy(PR_905_CORRECTION_AUTHORITY),
+            "provider_transport": [
+                {
+                    "role": "COPILOT_PREDECESSOR_REVIEW",
+                    "kind": "REVIEW",
+                    "node_id": "PRR_kwDOQFR1MM8AAAABNJC0sw",
+                    "body": copilot_review,
+                }
+            ],
+            "material_findings": predecessor_material,
+        },
     }
+    assert current.state_digest == (
+        "d54bbdf4afa66b90c3a1db0827d1546833e64cb4cdc1878984929ce507c3339d"
+    )
     return reviewed, current, evidence
+
+
+def verify_pr_905_successor(
+    reviewed: fast_path.StableFeedbackState,
+    current: fast_path.StableFeedbackState,
+    evidence: dict[str, object],
+) -> str | None:
+    return fast_path.verify_reanchored_stable_feedback_successor(
+        reviewed,
+        current,
+        resulting_head_sha=current.head_sha,
+        successor_safety_evidence=evidence,
+        predecessor_correction_authority=(
+            fast_path._seal_predecessor_correction_authority(
+                reanchor_evidence_digest=PR_905_CORRECTION_AUTHORITY[
+                    "reanchor_evidence_digest"
+                ],
+                material_finding_ids=tuple(
+                    PR_905_CORRECTION_AUTHORITY["material_finding_ids"]
+                ),
+                finding_source_digest=PR_905_CORRECTION_AUTHORITY[
+                    "finding_source_digest"
+                ],
+            )
+        ),
+    )
 
 
 def _provider_terminal_summary(head_sha: str) -> str:
@@ -1386,20 +1648,32 @@ class LifecycleOrchestrationTests(TestCase):
         }
 
         classified_review_modes = []
+        predecessor_correction_authorities = []
 
-        def decide(candidate, *, reanchor_authority=reanchor, source_tree="e" * 40):
+        def decide(
+            candidate,
+            *,
+            reanchor_authority=reanchor,
+            source_tree="e" * 40,
+            predecessor_growth_digest=None,
+        ):
             with (
                 mock.patch.object(
                     orchestration,
                     "_authenticate_successor_safety_evidence",
-                    side_effect=lambda _value, **kwargs: classified_review_modes.append(
-                        kwargs["reanchored_classified_review"]
-                    ),
+                    side_effect=lambda _value, **kwargs: (
+                        classified_review_modes.append(
+                            kwargs["reanchored_classified_review"]
+                        ),
+                        predecessor_correction_authorities.append(
+                            kwargs["predecessor_correction_authority"]
+                        ),
+                    )[-1],
                 ),
                 mock.patch.object(
                     fast_path,
                     "verify_reanchored_stable_feedback_successor",
-                    return_value=None,
+                    return_value=predecessor_growth_digest,
                 ),
             ):
                 return orchestration._orchestrate_event(
@@ -1431,6 +1705,22 @@ class LifecycleOrchestrationTests(TestCase):
         decision = decide(classified_request)
         self.assertEqual(decision.lifecycle_transition, "EXCEPTIONAL_CONTINUATION")
         self.assertIs(classified_review_modes[-1], True)
+        self.assertIs(predecessor_correction_authorities[-1], reanchor)
+
+        predecessor_growth_request = copy.deepcopy(request)
+        predecessor_growth_request["continuation_evidence"][
+            "successor_safety_evidence"
+        ] = {"schema_version": "1.2"}
+        predecessor_growth_request["authorization"]["scope"][
+            "predecessor_provider_growth_digest"
+        ] = "a" * 64
+        decision = decide(
+            predecessor_growth_request,
+            predecessor_growth_digest="a" * 64,
+        )
+        self.assertEqual(decision.lifecycle_transition, "EXCEPTIONAL_CONTINUATION")
+        self.assertIs(classified_review_modes[-1], True)
+        self.assertIs(predecessor_correction_authorities[-1], reanchor)
 
         for field, replacement in (
             ("original_pull_request", PR + 10),
@@ -1446,13 +1736,19 @@ class LifecycleOrchestrationTests(TestCase):
             ("finding_source_digest", "f" * 64),
             ("corrected_successor_state_digest", "f" * 64),
             ("provider_reaction_replacement_digest", "f" * 64),
+            ("predecessor_provider_growth_digest", "f" * 64),
         ):
             changed = copy.deepcopy(request)
             changed["authorization"]["scope"][field] = replacement
+            growth_digest = None
+            if field == "predecessor_provider_growth_digest":
+                changed = copy.deepcopy(predecessor_growth_request)
+                changed["authorization"]["scope"][field] = replacement
+                growth_digest = "a" * 64
             with self.subTest(field=field), self.assertRaises(
                 orchestration.LifecycleOrchestrationError
             ):
-                decide(changed)
+                decide(changed, predecessor_growth_digest=growth_digest)
 
         rejected_head_reused = orchestration.VerifiedRejectedContinuationReanchor(
             **{
@@ -2780,6 +3076,92 @@ class LifecycleOrchestrationTests(TestCase):
                 resulting_state_digest=current.state_digest,
             )
 
+        _anchor, _live, complete_pr_905 = (
+            authenticated_pr_905_classified_codex_review()
+        )
+        predecessor_growth_raw = copy.deepcopy(reanchored_raw)
+        predecessor_growth_raw["schema_version"] = "1.2"
+        predecessor_growth_raw["predecessor_provider_feedback"] = copy.deepcopy(
+            complete_pr_905["predecessor_provider_feedback"]
+        )
+        predecessor_growth_raw["provider_completion_reaction_removal"] = (
+            copy.deepcopy(
+                complete_pr_905["provider_completion_reaction_removal"]
+            )
+        )
+        reanchor_authority = orchestration.VerifiedRejectedContinuationReanchor(
+            evidence_digest="7" * 64,
+            original_pull_request=901,
+            replacement_pull_request=905,
+            rejected_candidate_head_sha="c" * 40,
+            rejected_candidate_tree_sha="d" * 40,
+            rejected_continuation_evidence_digest="1" * 64,
+            rejected_validation_receipt_digest="2" * 64,
+            rejected_final_attestation_digest="3" * 64,
+            rejected_state_digest="4" * 64,
+            replacement_state_digest="5" * 64,
+            material_finding_ids=tuple(
+                PR_905_CORRECTION_AUTHORITY["material_finding_ids"]
+            ),
+            material_thread_ids=tuple(
+                f"PRRT_REJECTED_{index}" for index in range(1, 5)
+            ),
+            finding_source_digest=PR_905_CORRECTION_AUTHORITY[
+                "finding_source_digest"
+            ],
+        )
+        with (
+            mock.patch.object(
+                orchestration,
+                "_successor_classification_signer",
+                return_value=late_disposition.SignerIdentity(
+                    "ssh", "SHA256:fixture"
+                ),
+            ),
+            mock.patch.object(
+                late_disposition,
+                "parse_successor_classification_artifact",
+                return_value=verified,
+            ),
+        ):
+            predecessor_growth_authenticated = (
+                orchestration._authenticate_successor_safety_evidence(
+                    predecessor_growth_raw,
+                    repository=REPOSITORY,
+                    delivery_issue=ISSUE,
+                    pull_request=PR,
+                    predecessor_state_digest=reviewed.state_digest,
+                    resulting_head_sha=NEXT_HEAD,
+                    resulting_state_digest=current.state_digest,
+                    reanchored_classified_review=True,
+                    predecessor_correction_authority=reanchor_authority,
+                )
+            )
+        self.assertEqual(
+            predecessor_growth_authenticated["predecessor_provider_feedback"],
+            complete_pr_905["predecessor_provider_feedback"],
+        )
+
+        wrong_correction = copy.deepcopy(predecessor_growth_raw)
+        wrong_correction["predecessor_provider_feedback"]["correction_authority"][
+            "finding_source_digest"
+        ] = "f" * 64
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError,
+            "differs from re-anchor authority",
+        ):
+            orchestration._authenticate_successor_safety_evidence(
+                wrong_correction,
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                pull_request=PR,
+                predecessor_state_digest=reviewed.state_digest,
+                resulting_head_sha=NEXT_HEAD,
+                resulting_state_digest=current.state_digest,
+                reanchored_classified_review=True,
+                predecessor_correction_authority=reanchor_authority,
+            )
+
         rejected_raw = copy.deepcopy(raw)
         rejected_raw["schema_version"] = "1.1"
         material_thread = late_disposition.ThreadAuthorization(
@@ -3684,6 +4066,25 @@ class LifecycleOrchestrationTests(TestCase):
                 successor_safety_evidence=empty_provider,
             )
 
+    def test_accepted_main_rejects_complete_pr_905_predecessor_feedback_delta(
+        self,
+    ) -> None:
+        reviewed, current, evidence = authenticated_pr_905_classified_codex_review()
+        evidence["schema_version"] = "1.1"
+        evidence.pop("predecessor_provider_feedback")
+        evidence.pop("provider_completion_reaction_removal")
+
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker,
+            "successor feedback contains an unauthenticated addition",
+        ):
+            fast_path.verify_reanchored_stable_feedback_successor(
+                reviewed,
+                current,
+                resulting_head_sha=current.head_sha,
+                successor_safety_evidence=evidence,
+            )
+
     def test_reanchored_successor_accepts_pr_905_classified_codex_review(
         self,
     ) -> None:
@@ -3713,12 +4114,21 @@ class LifecycleOrchestrationTests(TestCase):
             "84f16d17de54b5b8cb629e37d3d19a9d154c7784e1e91a46de3171e3405f3ff7",
         )
 
-        fast_path.verify_reanchored_stable_feedback_successor(
-            reviewed,
-            current,
-            resulting_head_sha=current.head_sha,
-            successor_safety_evidence=evidence,
+        predecessor_growth_digest = verify_pr_905_successor(
+            reviewed, current, evidence
         )
+        self.assertRegex(predecessor_growth_digest or "", r"^[0-9a-f]{64}$")
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker,
+            "correction authority is unauthenticated",
+        ):
+            fast_path.verify_reanchored_stable_feedback_successor(
+                reviewed,
+                current,
+                resulting_head_sha=current.head_sha,
+                successor_safety_evidence=evidence,
+                predecessor_correction_authority=PR_905_CORRECTION_AUTHORITY,
+            )
 
         informational = copy.deepcopy(evidence)
         classification = informational["successor_findings"][1][
@@ -3737,12 +4147,7 @@ class LifecycleOrchestrationTests(TestCase):
                 }
             )
         )
-        fast_path.verify_reanchored_stable_feedback_successor(
-            reviewed,
-            current,
-            resulting_head_sha=current.head_sha,
-            successor_safety_evidence=informational,
-        )
+        verify_pr_905_successor(reviewed, current, informational)
 
     def test_reanchored_classified_codex_review_fails_closed(self) -> None:
         def replace_classification(evidence, index, **updates):
@@ -4134,6 +4539,121 @@ class LifecycleOrchestrationTests(TestCase):
                 if item["node_id"] != node_id
             ]
 
+        def predecessor_review(current, evidence):
+            review = next(
+                item
+                for item in current.feedback["reviews"]
+                if item["node_id"] == "PRR_kwDOQFR1MM8AAAABNJC0sw"
+            )
+            transport = evidence["predecessor_provider_feedback"][
+                "provider_transport"
+            ][0]
+            return review, transport
+
+        def wrong_predecessor_head(current, evidence):
+            review, _transport = predecessor_review(current, evidence)
+            review["commit_oid"] = current.head_sha
+
+        def ambiguous_predecessor_head(current, evidence):
+            review, _transport = predecessor_review(current, evidence)
+            review["commit_oid"] = None
+
+        def wrong_predecessor_provider(current, evidence):
+            review, _transport = predecessor_review(current, evidence)
+            review["actor"] = {
+                "login": "chatgpt-codex-connector",
+                "node_id": "BOT_kgDOC98s_g",
+                "database_id": 199175422,
+            }
+
+        def changed_predecessor_body(_current, evidence):
+            _review, transport = predecessor_review(_current, evidence)
+            transport["body"] += "\nsubstituted"
+
+        def missing_predecessor_review(_current, evidence):
+            evidence["predecessor_provider_feedback"]["provider_transport"] = []
+
+        def predecessor_feedback_older_than_anchor(current, _evidence):
+            review = next(
+                item
+                for item in current.feedback["reviews"]
+                if item["node_id"] == "PRR_kwDOQFR1MM8AAAABNJC0sw"
+            )
+            reviewed.feedback["reviews"].append(copy.deepcopy(review))
+
+        def wrong_removed_reaction(_current, evidence):
+            evidence["provider_completion_reaction_removal"][
+                "removed_reaction_id"
+            ] = "REA_OTHER"
+
+        def wrong_reaction_provider(_current, evidence):
+            evidence["provider_completion_reaction_removal"][
+                "provider_login"
+            ] = "different-provider"
+
+        def wrong_reaction_content(_current, evidence):
+            evidence["provider_completion_reaction_removal"][
+                "reaction_content"
+            ] = "HEART"
+
+        def retained_completion_reaction(current, _evidence):
+            current.feedback["pull_request_reactions"] = copy.deepcopy(
+                reviewed.feedback["pull_request_reactions"]
+            )
+
+        def extra_predecessor_review(_current, evidence):
+            evidence["predecessor_provider_feedback"]["provider_transport"].append(
+                copy.deepcopy(
+                    evidence["predecessor_provider_feedback"]["provider_transport"][0]
+                )
+            )
+
+        def omitted_predecessor_finding(_current, evidence):
+            evidence["predecessor_provider_feedback"]["material_findings"].pop()
+
+        def cross_head_thread(_current, evidence):
+            evidence["predecessor_provider_feedback"]["material_findings"][0] = (
+                copy.deepcopy(evidence["successor_findings"][0])
+            )
+
+        def cross_pr_predecessor_thread(_current, evidence):
+            evidence["predecessor_provider_feedback"]["material_findings"][0][
+                "thread_id"
+            ] = "PRRT_OTHER_PULL_REQUEST"
+
+        def false_safe_predecessor_finding(_current, evidence):
+            finding = evidence["predecessor_provider_feedback"][
+                "material_findings"
+            ].pop()
+            evidence["successor_findings"].append(
+                {
+                    "sources": finding["sources"],
+                    "classification_evidence": copy.deepcopy(
+                        evidence["successor_findings"][0]["classification_evidence"]
+                    ),
+                }
+            )
+
+        def candidate_self_trust(_current, evidence):
+            evidence["predecessor_provider_feedback"]["correction_authority"].update(
+                reanchor_evidence_digest=_current.head_sha + "0" * 24
+            )
+
+        def wrong_rejected_authority(_current, evidence):
+            evidence["predecessor_provider_feedback"]["correction_authority"][
+                "material_finding_ids"
+            ][0] = "UNAUTHENTICATED_CORRECTION"
+
+        def wrong_predecessor_correction_scope(_current, evidence):
+            evidence["predecessor_provider_feedback"]["material_findings"][0][
+                "correction_scope_digest"
+            ] = "f" * 64
+
+        def predecessor_thread_authority_expansion(_current, evidence):
+            evidence["predecessor_provider_feedback"]["authorized_thread_ids"] = [
+                "PRRT_kwDOQFR1MM6hZ8MN"
+            ]
+
         for label, mutate in (
             ("review without suggestions", review_without_suggestions),
             (
@@ -4164,6 +4684,34 @@ class LifecycleOrchestrationTests(TestCase):
             ("cross-head replay", wrong_head),
             ("re-anchor predecessor mismatch", wrong_predecessor_binding),
             ("nonterminal Security result", missing_security),
+            ("predecessor feedback on wrong head", wrong_predecessor_head),
+            ("ambiguous predecessor reviewed head", ambiguous_predecessor_head),
+            ("wrong predecessor provider", wrong_predecessor_provider),
+            ("predecessor provider body mismatch", changed_predecessor_body),
+            ("missing predecessor provider object", missing_predecessor_review),
+            (
+                "predecessor feedback older than anchor",
+                predecessor_feedback_older_than_anchor,
+            ),
+            ("extra predecessor provider object", extra_predecessor_review),
+            ("omitted material predecessor thread", omitted_predecessor_finding),
+            ("cross-head thread substitution", cross_head_thread),
+            ("cross-PR predecessor thread replay", cross_pr_predecessor_thread),
+            ("false safe predecessor classification", false_safe_predecessor_finding),
+            ("candidate-local correction trust", candidate_self_trust),
+            ("wrong rejected-candidate authority", wrong_rejected_authority),
+            (
+                "wrong predecessor correction scope",
+                wrong_predecessor_correction_scope,
+            ),
+            (
+                "predecessor thread authority expansion",
+                predecessor_thread_authority_expansion,
+            ),
+            ("wrong removed reaction", wrong_removed_reaction),
+            ("wrong completion-reaction provider", wrong_reaction_provider),
+            ("wrong completion-reaction content", wrong_reaction_content),
+            ("retained predecessor completion reaction", retained_completion_reaction),
         ):
             reviewed, current, evidence = (
                 authenticated_pr_905_classified_codex_review()
@@ -4174,12 +4722,7 @@ class LifecycleOrchestrationTests(TestCase):
             with self.subTest(label=label), self.assertRaises(
                 fast_path.SecurityBlocker
             ):
-                fast_path.verify_reanchored_stable_feedback_successor(
-                    reviewed,
-                    current,
-                    resulting_head_sha=current.head_sha,
-                    successor_safety_evidence=evidence,
-                )
+                verify_pr_905_successor(reviewed, current, evidence)
 
     def test_rejected_successor_accepts_exact_codex_completion_reaction_replacement(
         self,

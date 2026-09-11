@@ -9,6 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-11 - Authenticate Predecessor Feedback Drift
+
+**Fixed:**
+
+- Partition replacement-PR provider growth by reviewed head so exact-CURRENT
+  Copilot review feedback created after the re-anchor snapshot remains material
+  correction input instead of being treated as corrected-successor safety.
+- Bind the complete predecessor review and finding inventory, the provider-owned
+  completion-reaction removal, and the existing rejected-candidate correction
+  scope into the signed Continuation authorization while preserving strict
+  exact-resulting-head Codex and Security Review safety.
+
 ## 2026-09-11 - Admit Classified Codex Successor Findings
 
 **Fixed:**
