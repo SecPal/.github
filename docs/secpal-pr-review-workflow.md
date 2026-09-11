@@ -1134,8 +1134,13 @@ classification bound to the repository, PR, exact head, both Stable Feedback
 states, exact finding content, and live thread state. A Code no-finding result
 or completion reaction is incompatible with this representation. Missing,
 additional, ambiguous, stale, cross-boundary, material, actionable, unsafe, or
-unclassified findings remain blocking. The classification proves candidate
-safety only and carries no thread-resolution or lifecycle-transition authority.
+unclassified findings remain blocking. Each classified finding must be rooted
+in the authenticated Codex provider and contain only Codex-owned sources from
+that exact thread; provider-owned non-thread sources remain transport evidence,
+and non-provider additions cannot be classified as review suggestions.
+Historical ordinary successor classifications retain their existing decision
+policy. The classification proves candidate safety only and carries no
+thread-resolution or lifecycle-transition authority.
 
 The re-anchored artifact carries no resolution-eligible thread identities. Old
 threads remain owned by the original PR, and the resolver rejects schema 1.1

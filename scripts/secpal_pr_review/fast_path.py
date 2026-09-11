@@ -2841,6 +2841,7 @@ def _verify_successor_findings(
     pull_request_number: int,
     resulting_head_sha: str,
     current_threads: dict[str, dict[str, Any]],
+    classified_codex_review: bool = False,
 ) -> set[tuple[str, str]]:
     """Keep ordinary successor safety fail-closed for every material finding."""
 
@@ -2853,6 +2854,7 @@ def _verify_successor_findings(
         resulting_head_sha=resulting_head_sha,
         current_threads=current_threads,
         rejected_candidate=False,
+        classified_codex_review=classified_codex_review,
     )
 
 
@@ -2881,6 +2883,7 @@ def _verify_rejected_successor_findings(
         resulting_head_sha=resulting_head_sha,
         current_threads=current_threads,
         rejected_candidate=True,
+        classified_codex_review=False,
     )
 
 
@@ -2898,6 +2901,7 @@ def _verify_successor_findings_with_policy(
     resulting_head_sha: str,
     current_threads: dict[str, dict[str, Any]],
     rejected_candidate: bool,
+    classified_codex_review: bool,
 ) -> set[tuple[str, str]]:
     if not isinstance(value, list):
         raise SecurityBlocker("successor finding evidence is malformed")
@@ -2955,10 +2959,18 @@ def _verify_successor_findings_with_policy(
                 raise SecurityBlocker(
                     "material successor finding blocks continuation"
                 )
+            if classified_codex_review:
+                safe_decision = (
+                    classification,
+                    disposition,
+                ) in SUCCESSOR_SAFE_CLASSIFICATION_DECISIONS
+            else:
+                safe_decision = disposition in CLASSIFICATION_DISPOSITIONS.get(
+                    classification, frozenset()
+                )
             if (
                 technically_blocking is not False
-                or (classification, disposition)
-                not in SUCCESSOR_SAFE_CLASSIFICATION_DECISIONS
+                or not safe_decision
                 or not DIGEST.fullmatch(
                     verified_classification.classification_evidence_digest
                 )
@@ -3012,6 +3024,10 @@ def _verify_successor_findings_with_policy(
         }:
             raise SecurityBlocker("successor signed finding sources are incomplete")
         if thread_id is None:
+            if classified_codex_review:
+                raise SecurityBlocker(
+                    "classified Codex finding is not thread-bound"
+                )
             if (
                 verified_classification.top_level_comment_node_id is not None
                 or verified_classification.finding_body_digest is not None
@@ -3023,11 +3039,12 @@ def _verify_successor_findings_with_policy(
                     "successor source-only classification is malformed"
                 )
         else:
+            top_level_key = (
+                "THREAD_COMMENT",
+                verified_classification.top_level_comment_node_id,
+            )
             top_level = current_sources.get(
-                (
-                    "THREAD_COMMENT",
-                    verified_classification.top_level_comment_node_id,
-                )
+                top_level_key
             )
             thread = current_threads.get(thread_id)
             if (
@@ -3043,6 +3060,22 @@ def _verify_successor_findings_with_policy(
             ):
                 raise SecurityBlocker(
                     "successor finding classification does not bind the live finding"
+                )
+            if classified_codex_review and (
+                _source_actor_login(top_level[2]) != CODEX_PROVIDER_LOGIN
+                or top_level_key not in signed_sources
+                or any(
+                    source_thread_id != thread_id
+                    or _source_actor_login(current_sources[source_key][2])
+                    != CODEX_PROVIDER_LOGIN
+                    for source_key, (
+                        _digest,
+                        source_thread_id,
+                    ) in signed_sources.items()
+                )
+            ):
+                raise SecurityBlocker(
+                    "classified Codex finding source is not provider-owned"
                 )
     return admitted
 
@@ -3234,39 +3267,29 @@ def _verify_authenticated_feedback_growth(
             current_sources=current_sources,
             provider_transport=successor_evidence["provider_transport"],
         )
-    finding_verifier = (
-        _verify_rejected_successor_findings
-        if rejected_candidate
-        else _verify_successor_findings
-    )
-    finding_additions = finding_verifier(
-        successor_evidence["successor_findings"],
-        reviewed_sources=reviewed_sources,
-        current_sources=current_sources,
-        repository=reviewed.repository,
-        pull_request_number=reviewed.pull_request_number,
-        resulting_head_sha=resulting_head_sha,
-        current_threads={
+    finding_arguments = {
+        "reviewed_sources": reviewed_sources,
+        "current_sources": current_sources,
+        "repository": reviewed.repository,
+        "pull_request_number": reviewed.pull_request_number,
+        "resulting_head_sha": resulting_head_sha,
+        "current_threads": {
             item["node_id"]: item for item in current.feedback["threads"]
         },
-    )
-    if reanchored_classified_review and not any(
-        isinstance(item, dict)
-        and isinstance(
-            item.get("classification_evidence"), VerifiedSuccessorClassification
+    }
+    if rejected_candidate:
+        finding_additions = _verify_rejected_successor_findings(
+            successor_evidence["successor_findings"], **finding_arguments
         )
-        and item["classification_evidence"].thread_id is not None
-        and (
-            observed := current_sources.get(
-                (
-                    "THREAD_COMMENT",
-                    item["classification_evidence"].top_level_comment_node_id,
-                )
-            )
+    else:
+        finding_additions = _verify_successor_findings(
+            successor_evidence["successor_findings"],
+            **finding_arguments,
+            classified_codex_review=reanchored_classified_review,
         )
-        is not None
-        and _source_actor_login(observed[2]) == CODEX_PROVIDER_LOGIN
-        for item in successor_evidence["successor_findings"]
+    if (
+        reanchored_classified_review
+        and not successor_evidence["successor_findings"]
     ):
         raise SecurityBlocker(
             "classified Codex review has no authenticated suggestion"

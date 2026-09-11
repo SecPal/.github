@@ -598,8 +598,13 @@ source. Only invalid/disproven and informational/non-actionable decisions are
 safe. Mixing a Code no-finding result or completion reaction with the findings
 review, omitting or inventing a source, or admitting any stale, ambiguous,
 material, actionable, unsupported, or unclassified finding fails closed.
-Historical clean successor-safety schema 1.0 is unchanged. Neither form grants
-thread-resolution, review-request, lifecycle-transition, or Git authority.
+Every classified finding is thread-bound, rooted in the authenticated Codex
+provider, and limited to Codex-owned sources from that exact thread.
+Provider-owned non-thread sources must use their exact transport role, while
+non-provider additions cannot be recast as review findings. Historical clean
+successor-safety schema 1.0 and its ordinary classification family are
+unchanged. Neither form grants thread-resolution, review-request,
+lifecycle-transition, or Git authority.
 
 ## Authenticated Ready/Draft execution boundary
 

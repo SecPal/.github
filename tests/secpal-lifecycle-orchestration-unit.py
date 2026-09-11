@@ -3293,6 +3293,31 @@ class LifecycleOrchestrationTests(TestCase):
         ):
             reject(label, mutate)
 
+    def test_ordinary_successor_preserves_safe_classification_family(self) -> None:
+        reviewed, current, evidence = authenticated_provider_growth()
+        original = evidence["successor_findings"][0]["classification_evidence"]
+        evidence["successor_findings"][0]["classification_evidence"] = (
+            fast_path._seal_successor_classification(
+                **{
+                    key: value
+                    for key, value in original.__dict__.items()
+                    if key != "_verification_seal"
+                }
+                | {
+                    "classification": "DUPLICATE",
+                    "disposition": "DUPLICATE_OF_CANONICAL",
+                }
+            )
+        )
+
+        fast_path.verify_stable_feedback_successor(
+            reviewed,
+            current,
+            resulting_head_sha=NEXT_HEAD,
+            authorized_thread_ids=["PRRT_CONTINUATION_1"],
+            successor_safety_evidence=evidence,
+        )
+
     def test_rejected_successor_safety_authenticates_only_complete_material_findings(
         self,
     ) -> None:
@@ -3755,6 +3780,129 @@ class LifecycleOrchestrationTests(TestCase):
             current.feedback["threads"] = current.feedback["threads"][:-2]
             evidence["successor_findings"] = []
 
+        def source_only_addition(current, evidence, *, provider):
+            node_id = (
+                "IC_OMITTED_PROVIDER_RESULT"
+                if provider
+                else "IC_NON_PROVIDER_ADDITION"
+            )
+            body = (
+                "Codex Review: Didn't find any major issues.\n\n"
+                "**Reviewed commit:** `18a6d02d8c`"
+                if provider
+                else "additional source"
+            )
+            actor = (
+                {
+                    "login": "chatgpt-codex-connector",
+                    "node_id": "BOT_kgDOC98s_g",
+                    "database_id": 199175422,
+                }
+                if provider
+                else {
+                    "login": "delivery-user",
+                    "node_id": "USER_DELIVERY",
+                    "database_id": 7,
+                }
+            )
+            digest = fast_path.digest_text(body)
+            current.feedback["conversation_comments"].append(
+                {
+                    "node_id": node_id,
+                    "body_digest": digest,
+                    "actor": actor,
+                    "updated_at": None,
+                    "reactions": [],
+                }
+            )
+            evidence["successor_findings"].append(
+                {
+                    "sources": [
+                        {
+                            "kind": "CONVERSATION_COMMENT",
+                            "node_id": node_id,
+                            "digest": digest,
+                        }
+                    ],
+                    "classification_evidence": (
+                        fast_path._seal_successor_classification(
+                            repository=REPOSITORY,
+                            delivery_issue_number=894,
+                            pull_request_number=905,
+                            head_sha=current.head_sha,
+                            finding_id=node_id,
+                            finding_evidence_digest="8" * 64,
+                            thread_id=None,
+                            top_level_comment_node_id=None,
+                            finding_body_digest=None,
+                            reply_count=0,
+                            is_resolved=None,
+                            is_outdated=None,
+                            classification="INFORMATIONAL",
+                            disposition="NON_ACTIONABLE",
+                            technically_blocking=False,
+                            technical_blockers=(),
+                            classification_evidence_digest="9" * 64,
+                            source_bindings=(
+                                (
+                                    "CONVERSATION_COMMENT",
+                                    node_id,
+                                    digest,
+                                    None,
+                                ),
+                            ),
+                        )
+                    ),
+                }
+            )
+
+        def omitted_provider_non_thread_addition(current, evidence):
+            source_only_addition(current, evidence, provider=True)
+
+        def non_provider_classified_addition(current, evidence):
+            source_only_addition(current, evidence, provider=False)
+
+        def non_provider_thread_source(current, evidence):
+            reply_id = "PRRC_NON_PROVIDER_REPLY"
+            digest = fast_path.digest_text("requester reply")
+            current.feedback["threads"][-2]["comments"].append(
+                {
+                    "node_id": reply_id,
+                    "body_digest": digest,
+                    "actor": {
+                        "login": "delivery-user",
+                        "node_id": "USER_DELIVERY",
+                        "database_id": 7,
+                    },
+                    "reply_to_id": "PRRC_kwDOQFR1MM7t72Mn",
+                    "reactions": [],
+                }
+            )
+            evidence["successor_findings"][0]["sources"].append(
+                {
+                    "kind": "THREAD_COMMENT",
+                    "node_id": reply_id,
+                    "digest": digest,
+                }
+            )
+            original = evidence["successor_findings"][0][
+                "classification_evidence"
+            ]
+            replace_classification(
+                evidence,
+                0,
+                reply_count=1,
+                source_bindings=original.source_bindings
+                + (
+                    (
+                        "THREAD_COMMENT",
+                        reply_id,
+                        digest,
+                        "PRRT_kwDOQFR1MM6hk-YJ",
+                    ),
+                ),
+            )
+
         def extra_invented_finding_source(_current, evidence):
             evidence["successor_findings"][0]["sources"].append(
                 {
@@ -3988,6 +4136,12 @@ class LifecycleOrchestrationTests(TestCase):
 
         for label, mutate in (
             ("review without suggestions", review_without_suggestions),
+            (
+                "omitted provider non-thread addition",
+                omitted_provider_non_thread_addition,
+            ),
+            ("non-provider classified addition", non_provider_classified_addition),
+            ("non-provider thread source", non_provider_thread_source),
             ("missing finding", missing_finding),
             ("caller-invented finding", extra_invented_finding_source),
             ("ambiguous repeated finding", repeated_finding),
