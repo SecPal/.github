@@ -643,6 +643,26 @@ inventories cannot establish completeness, ordinary successor classification
 policy remains unchanged, and the representation grants no thread-resolution,
 lifecycle, review-request, or Git authority.
 
+Corrected-successor safety schema 1.2 extends only that re-anchor representation
+when the replacement PR gained provider feedback after its authenticated anchor
+snapshot but before the corrected candidate was qualified. Stable Feedback is
+partitioned by the review object's actual commit: one exact GitHub Copilot
+review on lifecycle CURRENT and every new Copilot thread are authenticated as
+material predecessor correction input, while only exact-resulting-head Codex
+feedback enters successor safety. Each predecessor thread remains unresolved,
+provider-owned, source-complete, and maps one-to-one to the existing rejected-
+candidate material finding set and correction-source digest; it is never
+assigned a safe disposition. The same
+record authenticates the exact provider-owned completion `THUMBS_UP` removed
+during re-review, reusing the bounded reaction-drift family without inventing a
+replacement completion result. The complete predecessor-growth and reaction
+record is bound into the existing signed Continuation authorization. Wrong-PR,
+wrong-head, stale, late, omitted, additional, replayed, ambiguous, or
+provider-substituted feedback fails closed. This partition grants no
+cross-PR resolution, candidate-local trust, provider request, or additional
+lifecycle authority, and schema 1.1 exact-resulting-head classification rules
+remain unchanged.
+
 Re-anchored Continuation authorization always has an empty resolution thread
 set. Original-PR thread identities remain diagnostic bindings owned by that PR;
 they are not projected onto the replacement PR, and the guarded resolver
