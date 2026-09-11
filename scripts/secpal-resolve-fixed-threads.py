@@ -1998,18 +1998,45 @@ def verify_continuation_bound_source_authority(
             parse_constant=_reject_nonfinite_json_constant,
             object_pairs_hook=_reject_duplicate_json_object,
         )
-        verified = lifecycle_orchestration.verify_exceptional_continuation_authority(
-            continuation_evidence,
-            orchestration_authorization=continuation_authorization,
-            reviewed_state_evidence=reviewed.payload,
-            eligibility_evidence=eligibility_evidence,
-            successor_safety_evidence=successor_safety_evidence,
-            repository_root=repository_root,
-            repository=repository,
-            delivery_issue=delivery_issue,
-            pull_request=pull_request,
-            resulting_head_sha=resulting_head_sha,
+        collision = (
+            isinstance(continuation_evidence, dict)
+            and continuation_evidence.get("schema_version") == "1.1"
+            and continuation_evidence.get("trigger")
+            == "IMMUTABLE_EVIDENCE_VERSION_COLLISION"
         )
+        if collision:
+            if successor_safety_evidence is not None:
+                raise ValueError(
+                    "collision Continuation rejects material successor evidence"
+                )
+            verified = lifecycle_orchestration.verify_collision_continuation_authority(
+                continuation_evidence,
+                orchestration_authorization=continuation_authorization,
+                reviewed_state_evidence=reviewed.payload,
+                eligibility_evidence=eligibility_evidence,
+                repository_root=repository_root,
+                repository=repository,
+                delivery_issue=delivery_issue,
+                pull_request=pull_request,
+                resulting_head_sha=resulting_head_sha,
+            )
+            if verified.finding_ids or verified.thread_ids:
+                raise ValueError(
+                    "collision Continuation grants no thread-resolution authority"
+                )
+        else:
+            verified = lifecycle_orchestration.verify_exceptional_continuation_authority(
+                continuation_evidence,
+                orchestration_authorization=continuation_authorization,
+                reviewed_state_evidence=reviewed.payload,
+                eligibility_evidence=eligibility_evidence,
+                successor_safety_evidence=successor_safety_evidence,
+                repository_root=repository_root,
+                repository=repository,
+                delivery_issue=delivery_issue,
+                pull_request=pull_request,
+                resulting_head_sha=resulting_head_sha,
+            )
     except (
         OSError,
         ValueError,

@@ -23,6 +23,7 @@ from typing import Any, Iterator
 
 from . import lifecycle_publication as publication
 from . import bootstrap_source_admission as bootstrap
+from . import exact_source_safety
 from .fast_path import digest_json
 
 
@@ -149,6 +150,117 @@ def _verify_python_version_tokens(blob: bytes, offsets: tuple[int, ...], version
         raise VersionCollisionError("Python version token replacement changes executable syntax")
 
 
+def _verify_python_test_renumber(
+    predecessor: bytes,
+    successor: bytes,
+    positions: tuple[tuple[int, int], ...],
+    occupied_version: str,
+    free_version: str,
+) -> None:
+    """Admit only comments and literal assertions whose outcome stays true."""
+
+    def safe_spans(blob: bytes) -> tuple[tuple[int, int], ...]:
+        text = blob.decode("utf-8", errors="strict")
+        lines = text.splitlines(keepends=True)
+        starts = [0]
+        for line in lines:
+            starts.append(starts[-1] + len(line.encode("utf-8")))
+
+        def byte_offset(position: tuple[int, int]) -> int:
+            row, column = position
+            return starts[row - 1] + len(
+                lines[row - 1][:column].encode("utf-8")
+            )
+
+        def literal_only(node: ast.AST) -> bool:
+            if isinstance(node, ast.Constant):
+                return type(node.value) in {
+                    str, bytes, int, float, complex, bool, type(None),
+                }
+            if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+                return all(literal_only(item) for item in node.elts)
+            if isinstance(node, ast.Dict):
+                return all(
+                    key is not None
+                    and literal_only(key)
+                    and literal_only(value)
+                    for key, value in zip(node.keys, node.values, strict=True)
+                )
+            return False
+
+        try:
+            module = ast.parse(text)
+            spans = [
+                (byte_offset(token.start), byte_offset(token.end))
+                for token in tokenize.generate_tokens(io.StringIO(text).readline)
+                if token.type == tokenize.COMMENT
+            ]
+            for statement in ast.walk(module):
+                comparison = statement.test if isinstance(statement, ast.Assert) else None
+                if (
+                    not isinstance(comparison, ast.Compare)
+                    or statement.msg is not None
+                    or len(comparison.ops) != 1
+                    or len(comparison.comparators) != 1
+                    or not isinstance(comparison.ops[0], (ast.Eq, ast.NotEq))
+                    or not literal_only(comparison.left)
+                    or not literal_only(comparison.comparators[0])
+                ):
+                    continue
+                left = ast.literal_eval(comparison.left)
+                right = ast.literal_eval(comparison.comparators[0])
+                outcome = (
+                    left == right
+                    if isinstance(comparison.ops[0], ast.Eq)
+                    else left != right
+                )
+                if outcome is not True:
+                    continue
+                for node in ast.walk(comparison):
+                    if (
+                        isinstance(node, ast.Constant)
+                        and isinstance(node.value, str)
+                        and hasattr(node, "end_lineno")
+                    ):
+                        spans.append(
+                            (
+                                starts[node.lineno - 1] + node.col_offset,
+                                starts[node.end_lineno - 1] + node.end_col_offset,
+                            )
+                        )
+        except (
+            tokenize.TokenError,
+            IndentationError,
+            SyntaxError,
+            IndexError,
+            RecursionError,
+            ValueError,
+        ) as exc:
+            raise VersionCollisionError(
+                "Python test version token source is malformed"
+            ) from exc
+        return tuple(spans)
+
+    predecessor_spans = safe_spans(predecessor)
+    successor_spans = safe_spans(successor)
+    if any(
+        not any(
+            start <= old_offset
+            and old_offset + len(occupied_version) <= end
+            for start, end in predecessor_spans
+        )
+        or not any(
+            start <= new_offset
+            and new_offset + len(free_version) <= end
+            for start, end in successor_spans
+        )
+        for old_offset, new_offset in positions
+    ):
+        raise VersionCollisionError(
+            "Python test version token is not a provably inert expectation"
+        )
+
+
 def _oid(value: str) -> str:
     if not isinstance(value, str) or _OID.fullmatch(value) is None:
         raise VersionCollisionError("source object identity is malformed")
@@ -247,9 +359,17 @@ proves a collision or authorizes a lifecycle transition.
                 raise VersionCollisionError("changed blob size differs from observed object")
             blobs.append(data)
         positions = verify_blob_renumber(blobs[0], blobs[1], occupied_version, free_version)
+        if path.startswith("tests/") and not path.endswith(".py"):
+            raise VersionCollisionError(
+                "test version token source has no provably inert profile"
+            )
         if path.endswith(".py"):
             _verify_python_version_tokens(blobs[0], tuple(pair[0] for pair in positions), occupied_version)
             _verify_python_version_tokens(blobs[1], tuple(pair[1] for pair in positions), free_version)
+            if path.startswith("tests/"):
+                _verify_python_test_renumber(
+                    blobs[0], blobs[1], positions, occupied_version, free_version,
+                )
         total_replacements += len(positions)
         if total_replacements > MAX_REPLACEMENTS:
             raise VersionCollisionError("source delta token count exceeds the bound")
@@ -282,6 +402,70 @@ class _SourceDeclarations:
                 for target in node.targets:
                     if isinstance(target, ast.Name):
                         self.assignments.setdefault(target.id, []).append(node.value)
+        protected = frozenset({
+            "READY_INTEGRATION_KIND",
+            "READY_INTEGRATION_KEYS",
+            "READY_INTEGRATION_V12_KEYS",
+            "READY_INTEGRATION_KEYS_BY_VERSION",
+            "READY_INTEGRATION_ATTESTATION_BY_VERSION",
+        })
+        declared_targets = {
+            id(target)
+            for node in self.module.body
+            if isinstance(node, ast.Assign)
+            for target in node.targets
+            if isinstance(target, ast.Name) and target.id in protected
+        }
+        for node in ast.walk(self.module):
+            if (
+                isinstance(node, ast.Name)
+                and isinstance(node.ctx, (ast.Store, ast.Del))
+                and node.id in protected
+                and id(node) not in declared_targets
+            ):
+                raise VersionCollisionError("version declaration is mutated or shadowed")
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                and node.name in protected
+            ):
+                raise VersionCollisionError("version declaration is mutated or shadowed")
+            if isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+                (alias.asname or alias.name.split(".")[0]) in protected
+                for alias in node.names
+            ):
+                raise VersionCollisionError("version declaration is mutated or shadowed")
+            if (
+                isinstance(node, ast.ExceptHandler)
+                and node.name in protected
+            ):
+                raise VersionCollisionError("version declaration is mutated or shadowed")
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in {"exec", "eval", "globals", "locals", "vars"}
+            ):
+                raise VersionCollisionError("version declaration is mutated or shadowed")
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in protected
+                and node.func.attr in {
+                    "add", "append", "clear", "discard", "extend", "insert",
+                    "pop", "remove", "setdefault", "sort", "update",
+                }
+            ):
+                raise VersionCollisionError("version declaration is mutated or shadowed")
+            if (
+                isinstance(node, ast.Subscript)
+                and isinstance(node.ctx, ast.Store)
+                and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name)
+                and node.value.func.id in {"globals", "locals", "vars"}
+                and isinstance(node.slice, ast.Constant)
+                and node.slice.value in protected
+            ):
+                raise VersionCollisionError("version declaration is mutated or shadowed")
 
     def declaration(self, name: str, depth: int = 0) -> Any:
         values = self.assignments.get(name, [])
@@ -348,19 +532,80 @@ def _expression_is(node: ast.expr, expected: str) -> bool:
 
 def _verify_owner_renumber(source: bytes, occupied: str, delta: dict[str, Any]) -> None:
     declarations = _SourceDeclarations(source)
+    inventory = inventory_from_source(source)
+    if occupied not in inventory["versions"]:
+        raise VersionCollisionError("candidate version identity is not maintained")
     identities: list[ast.Constant] = []
-    for name in ("READY_INTEGRATION_KEYS_BY_VERSION", "READY_INTEGRATION_ATTESTATION_BY_VERSION"):
-        assigned = declarations.assignments.get(name, [])
-        if len(assigned) != 1 or not isinstance(assigned[0], ast.Dict):
-            raise VersionCollisionError("candidate version identity table is not explicit")
-        for key in assigned[0].keys:
-            identity = key.elts[0] if isinstance(key, ast.Tuple) and key.elts else key
-            if isinstance(identity, ast.Constant) and identity.value == occupied:
-                identities.append(identity)
-    if len(identities) != 3:
-        raise VersionCollisionError("candidate version identity keys are incomplete")
-    identities.extend(node for node in ast.walk(declarations.function("normalize_ready_integration_evidence"))
-                      if isinstance(node, ast.Constant) and node.value == occupied)
+    mapped = all(
+        len(declarations.assignments.get(name, [])) == 1
+        and isinstance(declarations.assignments[name][0], ast.Dict)
+        for name in (
+            "READY_INTEGRATION_KEYS_BY_VERSION",
+            "READY_INTEGRATION_ATTESTATION_BY_VERSION",
+        )
+    )
+    normalizer = declarations.function("normalize_ready_integration_evidence")
+    if mapped:
+        for name in (
+            "READY_INTEGRATION_KEYS_BY_VERSION",
+            "READY_INTEGRATION_ATTESTATION_BY_VERSION",
+        ):
+            table = declarations.assignments[name][0]
+            for key in table.keys:
+                identity = key.elts[0] if isinstance(key, ast.Tuple) and key.elts else key
+                if isinstance(identity, ast.Constant) and identity.value == occupied:
+                    identities.append(identity)
+        if len(identities) != 3:
+            raise VersionCollisionError("candidate version identity keys are incomplete")
+        identities.extend(
+            node
+            for node in ast.walk(normalizer)
+            if isinstance(node, ast.Constant) and node.value == occupied
+        )
+    else:
+        comparisons = [
+            node
+            for node in ast.walk(normalizer)
+            if isinstance(node, ast.Compare)
+            and _expression_is(node, f'schema_version == "{occupied}"')
+        ]
+        if len(comparisons) != 3:
+            raise VersionCollisionError("candidate version identity dispatch is incomplete")
+        identities.extend(comparison.comparators[0] for comparison in comparisons)
+        guards = [
+            node
+            for node in ast.walk(normalizer)
+            if isinstance(node, ast.Compare)
+            and len(node.ops) == 1
+            and isinstance(node.ops[0], ast.NotIn)
+            and _expression_is(node.left, "schema_version")
+            and isinstance(node.comparators[0], ast.Set)
+        ]
+        guard_identities = [
+            item
+            for guard in guards
+            for item in guard.comparators[0].elts
+            if isinstance(item, ast.Constant) and item.value == occupied
+        ]
+        fields = _assigned_expression(
+            declarations.function("create_ready_integration_attestation"), "fields"
+        )
+        schema_values = [
+            value
+            for key, value in zip(fields.keys, fields.values)
+            if isinstance(key, ast.Constant) and key.value == "schema_version"
+        ] if isinstance(fields, ast.Dict) else []
+        attestation_identities = [
+            value.body
+            for value in schema_values
+            if isinstance(value, ast.IfExp)
+            and _expression_is(value.test, "eligibility_bound")
+            and isinstance(value.body, ast.Constant)
+            and value.body.value == occupied
+        ]
+        if len(guard_identities) != 1 or len(attestation_identities) != 1:
+            raise VersionCollisionError("candidate version identity dispatch is incomplete")
+        identities.extend((*guard_identities, *attestation_identities))
     starts = [0]
     for line in source.splitlines(keepends=True):
         starts.append(starts[-1] + len(line))
@@ -615,8 +860,99 @@ def _observe_main() -> str:
     return bootstrap._normalize_protected_main(bootstrap._observe_protected_main()).head_sha
 
 
+class _BoundedObjectImporter:
+    def __init__(self, source: Path, destination: Path):
+        self.source = source
+        self.destination = destination
+        self.imported: set[str] = set()
+        self.objects: dict[str, bytes] = {}
+        self.histories: set[str] = set()
+        self.total_bytes = 0
+
+    def transfer(self, oid: str, kind: str, depth: int = 0) -> bytes:
+        oid = _oid(oid)
+        if oid in self.objects:
+            return self.objects[oid]
+        if depth > 64 or len(self.imported) >= MAX_IMPORTED_OBJECTS:
+            raise VersionCollisionError("source object closure exceeds the bound")
+        self.imported.add(oid)
+        size = _git(self.source, ["cat-file", "-s", oid], 32)
+        limit = 65536 if kind == "commit" else MAX_BLOB_BYTES
+        if re.fullmatch(rb"[0-9]+\n", size) is None or not 0 <= int(size) <= limit:
+            raise VersionCollisionError("source object exceeds the bound")
+        raw = _git(self.source, ["cat-file", kind, oid], limit)
+        header = kind.encode("ascii") + b" " + str(len(raw)).encode("ascii") + b"\x00"
+        if hashlib.sha1(header + raw).hexdigest() != oid:
+            raise VersionCollisionError("source object hash differs from its claimed identity")
+        self.total_bytes += len(raw)
+        if self.total_bytes > MAX_IMPORTED_BYTES:
+            raise VersionCollisionError("source object closure exceeds the byte bound")
+        written = publication._run_git(
+            self.destination, ["hash-object", "-w", "-t", kind, "--stdin"], input_bytes=raw,
+        )
+        if written.returncode != 0 or written.stdout != (oid + "\n").encode("ascii"):
+            raise VersionCollisionError("verified source object import failed")
+        self.objects[oid] = raw
+        if kind == "tree":
+            offset = 0
+            while offset < len(raw):
+                delimiter = raw.find(b"\x00", offset)
+                if delimiter < 0 or delimiter + 21 > len(raw):
+                    raise VersionCollisionError("source tree entry is malformed")
+                metadata = raw[offset:delimiter].split(b" ", 1)
+                if len(metadata) != 2 or metadata[0] not in {
+                    b"40000", b"100644", b"100755", b"120000", b"160000",
+                }:
+                    raise VersionCollisionError("source tree object mode is malformed")
+                child = raw[delimiter + 1:delimiter + 21].hex()
+                if metadata[0] != b"160000":
+                    self.transfer(
+                        child,
+                        "tree" if metadata[0] == b"40000" else "blob",
+                        depth + 1,
+                    )
+                offset = delimiter + 21
+        return raw
+
+    def commit(self, oid: str) -> tuple[str, tuple[str, ...]]:
+        from . import fast_path
+
+        try:
+            return fast_path._commit_topology(
+                self.transfer(oid, "commit").decode("utf-8", errors="strict")
+            )
+        except (UnicodeError, fast_path.SecurityBlocker) as exc:
+            raise VersionCollisionError("source commit headers are malformed") from exc
+
+    def history(self, head: str, base: str, depth: int = 0) -> str:
+        head = _oid(head)
+        base = _oid(base)
+        if depth > 64:
+            raise VersionCollisionError("source commit history exceeds the bound")
+        tree, parents = self.commit(head)
+        if head in self.histories:
+            return tree
+        self.histories.add(head)
+        if head == base:
+            return tree
+        if not parents:
+            raise VersionCollisionError("source commit history does not reach the merge base")
+        for parent in parents:
+            if parent != base:
+                ancestry = publication._run_git(
+                    self.source, ["merge-base", "--is-ancestor", base, parent]
+                )
+                if ancestry.returncode != 0:
+                    raise VersionCollisionError(
+                        "source commit history exceeds the bounded merge-base ancestry"
+                    )
+            self.history(parent, base, depth + 1)
+        return tree
+
+
 def _import_successor(
     source: Path, destination: Path, head: str | None, predecessor: str, *, resulting_tree: str | None = None,
+    importer: _BoundedObjectImporter | None = None,
 ) -> None:
     from . import fast_path
 
@@ -626,61 +962,19 @@ def _import_successor(
     selected = _oid(head if head is not None else resulting_tree)
     if len(selected) != 40 or len(predecessor) != 40:
         raise VersionCollisionError("GitHub collision source requires SHA-1 object identities")
-    imported: set[str] = set()
-    total_bytes = 0
-
-    def transfer(oid: str, kind: str, depth: int) -> bytes | None:
-        nonlocal total_bytes
-        _oid(oid)
-        if oid in imported:
-            return None
-        if depth > 64 or len(imported) >= MAX_IMPORTED_OBJECTS:
-            raise VersionCollisionError("source object closure exceeds the bound")
-        imported.add(oid)
-        if kind != "commit" and publication._run_git(destination, ["cat-file", "-e", oid]).returncode == 0:
-            return None
-        size = _git(source, ["cat-file", "-s", oid], 32)
-        limit = 65536 if kind == "commit" else MAX_BLOB_BYTES
-        if re.fullmatch(rb"[0-9]+\n", size) is None or not 0 <= int(size) <= limit:
-            raise VersionCollisionError("source object exceeds the bound")
-        raw = _git(source, ["cat-file", kind, oid], limit)
-        header = kind.encode("ascii") + b" " + str(len(raw)).encode("ascii") + b"\x00"
-        if hashlib.sha1(header + raw).hexdigest() != oid:
-            raise VersionCollisionError("source object hash differs from its claimed identity")
-        total_bytes += len(raw)
-        if total_bytes > MAX_IMPORTED_BYTES:
-            raise VersionCollisionError("source object closure exceeds the byte bound")
-        written = publication._run_git(destination, ["hash-object", "-w", "-t", kind, "--stdin"], input_bytes=raw)
-        if written.returncode != 0 or written.stdout != (oid + "\n").encode("ascii"):
-            raise VersionCollisionError("verified source object import failed")
-        if kind == "tree":
-            offset = 0
-            while offset < len(raw):
-                delimiter = raw.find(b"\x00", offset)
-                if delimiter < 0 or delimiter + 21 > len(raw):
-                    raise VersionCollisionError("source tree entry is malformed")
-                metadata = raw[offset:delimiter].split(b" ", 1)
-                if len(metadata) != 2 or metadata[0] not in {b"40000", b"100644", b"100755", b"120000", b"160000"}:
-                    raise VersionCollisionError("source tree object mode is malformed")
-                child = raw[delimiter + 1:delimiter + 21].hex()
-                if metadata[0] != b"160000":
-                    transfer(child, "tree" if metadata[0] == b"40000" else "blob", depth + 1)
-                offset = delimiter + 21
-        return raw
+    importer = importer or _BoundedObjectImporter(source, destination)
 
     if resulting_tree is not None:
-        transfer(resulting_tree, "tree", 0)
+        importer.transfer(resulting_tree, "tree")
         return
-    commit = transfer(selected, "commit", 0)
-    if commit is None:
-        raise VersionCollisionError("successor commit is absent")
+    commit = importer.transfer(selected, "commit")
     try:
         tree, parents = fast_path._commit_topology(commit.decode("utf-8", errors="strict"))
     except (UnicodeError, fast_path.SecurityBlocker) as exc:
         raise VersionCollisionError("successor commit headers are malformed") from exc
     if parents != (predecessor,):
         raise VersionCollisionError("successor requires the exact single predecessor parent")
-    transfer(tree, "tree", 0)
+    importer.transfer(tree, "tree")
 
 
 @contextmanager
@@ -691,12 +985,33 @@ def _authenticated_source_checkout(
 
     main = _observe_main()
     _require_accepted_issuer(main)
+    source = source.resolve(strict=True)
+    bases = _git(
+        source, ["merge-base", "--all", _oid(main), _oid(predecessor)], 256,
+    ).decode("ascii").split()
+    if len(bases) != 1:
+        raise VersionCollisionError("delivery source scope has no unique merge base")
+    base = _oid(bases[0])
     with tempfile.TemporaryDirectory(prefix="secpal-collision-source-") as directory:
         root = Path(directory)
         _git(root, ["init", "--quiet"], 4096)
-        _git(root, ["remote", "add", "origin", "https://github.com/SecPal/.github.git"], 4096)
-        _git(root, ["-c", "fetch.fsckObjects=true", "fetch", "--no-tags", "origin", _oid(main), _oid(predecessor)], 4096)
-        _import_successor(source.resolve(strict=True), root, resulting, predecessor, resulting_tree=resulting_tree)
+        _git(
+            root,
+            ["remote", "add", "origin", "https://github.com/SecPal/.github.git"],
+            4096,
+        )
+        importer = _BoundedObjectImporter(source, root)
+        trees = {
+            head: importer.history(head, base)
+            for head in (main, predecessor)
+        }
+        base_tree, _ = importer.commit(base)
+        for tree in {*trees.values(), base_tree}:
+            importer.transfer(tree, "tree")
+        _import_successor(
+            source, root, resulting, predecessor,
+            resulting_tree=resulting_tree, importer=importer,
+        )
         policy = authority._load_lifecycle_trust_policy("SecPal/.github")
         allowed = root / "allowed-signers"
         allowed.write_text("".join(
@@ -722,6 +1037,9 @@ def authenticate_collision_source(
 ) -> VerifiedVersionCollision:
     """Observe protected main and immutable source through fixed maintained boundaries."""
 
+    _require_current_collision_predecessor(
+        repository, delivery_issue, pull_request, predecessor_head,
+    )
     with _authenticated_source_checkout(repository_root, predecessor_head, resulting_head) as (root, main):
         return _seal_collision(_derive_collision_from_git(
             root, repository=repository, delivery_issue=delivery_issue, pull_request=pull_request,
@@ -735,6 +1053,9 @@ def prepare_collision_tree(
 ) -> VerifiedVersionCollision:
     """Read-only validation preparation; absence of a resulting head prevents publication."""
 
+    _require_current_collision_predecessor(
+        repository, delivery_issue, pull_request, predecessor_head,
+    )
     with _authenticated_source_checkout(
         repository_root, predecessor_head, None, resulting_tree=resulting_tree,
     ) as (root, main):
@@ -745,11 +1066,59 @@ def prepare_collision_tree(
 
 
 def _require_accepted_issuer(main: str) -> None:
+    from . import lifecycle_authority as authority
+
     root = Path(__file__).resolve().parents[2]
     head = _git(root, ["rev-parse", "HEAD"], 128).decode("ascii").strip()
     status = _git(root, ["status", "--porcelain=v1", "--untracked-files=normal"], MAX_DELTA_BYTES)
     if head != main or status:
         raise VersionCollisionError("collision issuer is not exact clean accepted-main tooling")
+    try:
+        exact_source_safety.verify_source_bytes(root, main)
+    except authority.LifecycleAuthorityError as exc:
+        raise VersionCollisionError(
+            "collision issuer has substituted accepted-main source bytes"
+        ) from exc
+
+
+def _require_current_collision_predecessor(
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    predecessor_head: str,
+) -> Any:
+    from . import lifecycle_authority as authority
+
+    try:
+        observed = publication.verify_current_lifecycle_authority(
+            repository, delivery_issue
+        )
+        lifecycle = observed.lifecycle
+        state = authority._validate_state(copy.deepcopy(lifecycle.state))
+    except (
+        authority.LifecycleAuthorityError,
+        publication.LifecyclePublicationError,
+    ) as exc:
+        raise VersionCollisionError(
+            "collision CURRENT lifecycle authority is unavailable"
+        ) from exc
+    if (
+        lifecycle.repository != repository
+        or lifecycle.delivery_issue != delivery_issue
+        or lifecycle.pull_request != pull_request
+        or lifecycle.head_sha != _oid(predecessor_head)
+        or state["ready"] is not True
+        or state["draft"] is not False
+        or state["unrestricted_review_count"] != authority.MAX_UNRESTRICTED_REVIEWS
+        or state["remediation_cycle_count"] != authority.MAX_REMEDIATION_CYCLES
+        or state["exceptional_recovery_count"] != authority.MAX_EXCEPTIONAL_RECOVERIES
+        or state["exceptional_continuation_count"] != 0
+        or state["cycle_3_absent"] is not True
+    ):
+        raise VersionCollisionError(
+            "collision predecessor differs from exact exhausted Ready CURRENT"
+        )
+    return observed
 
 
 def validation_collision_projection(value: dict[str, Any]) -> dict[str, Any]:
