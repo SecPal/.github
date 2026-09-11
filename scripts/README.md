@@ -621,8 +621,27 @@ transport item plus the complete terminal exact-head Code/Security provider
 transport, and binds the resulting replacement digest into the re-anchor and
 signed Continuation scope. Other reaction deletion, mutation, substitution,
 replay, or provider drift remains fail-closed. Ordinary successor safety,
-legacy rejected-successor schema 1.1, and corrected-successor safety retain
+legacy rejected-successor schema 1.1, and corrected-successor schema 1.0 retain
 their existing behavior.
+
+Corrected-successor safety schema 1.1 admits one additional closed provider
+representation for re-anchor only: the exact terminal, exact-head Codex Code
+Review object replaces the incompatible Code no-finding conversation result,
+while the existing terminal Security no-finding result remains mandatory. The
+review identity, provider, reviewed commit, body digest, terminal summary,
+request comments, and complete Stable Feedback additions are authenticated.
+Every review suggestion must be covered by the existing signed version-1.2
+safe successor classification bound to both Stable Feedback states and its
+exact live source. A Code no-finding result or completion reaction cannot be
+mixed into this representation. Missing, additional, ambiguous, stale,
+material, actionable, unsupported, or unclassified findings fail closed.
+Every classified finding is thread-bound, rooted in the authenticated Codex
+provider, and limited to exact Codex-owned sources from that thread.
+Provider-owned non-thread sources must retain their transport roles;
+non-provider additions cannot be recast as suggestions. Caller-provided
+inventories cannot establish completeness, ordinary successor classification
+policy remains unchanged, and the representation grants no thread-resolution,
+lifecycle, review-request, or Git authority.
 
 Re-anchored Continuation authorization always has an empty resolution thread
 set. Original-PR thread identities remain diagnostic bindings owned by that PR;

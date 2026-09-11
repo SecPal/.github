@@ -9,6 +9,19 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-11 - Admit Classified Codex Successor Findings
+
+**Fixed:**
+
+- Authenticate a terminal exact-head Codex Code Review with suggestions during
+  rejected-candidate re-anchor when the complete provider-derived finding set
+  has signed, exact-state invalid/disproven or informational/non-actionable
+  classifications and Security Review independently completed without findings.
+- Preserve the historical Code/Security no-finding representation while
+  rejecting incomplete inventories, unsafe classifications, stale bindings,
+  synthetic Code no-finding results, provider substitution, and any thread-
+  resolution or lifecycle authority expansion.
+
 ## 2026-09-11 - Preserve Re-anchor Across PR Feedback Drift
 
 **Fixed:**

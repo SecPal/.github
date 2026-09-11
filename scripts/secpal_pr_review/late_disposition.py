@@ -1001,7 +1001,11 @@ def _parse_successor_classification_artifact(
             raise LateDispositionError(
                 "rejected successor classification decision is unsupported"
             )
-    elif decision not in SUCCESSOR_SAFE_DECISIONS:
+    elif (
+        decision not in SUCCESSOR_SAFE_DECISIONS
+        or item.get("technically_blocking") is not False
+        or blockers
+    ):
         raise LateDispositionError("successor classification decision is unsupported")
     raw_sources = payload.get("sources")
     sources: list[tuple[str, str, str, str | None]] = []
