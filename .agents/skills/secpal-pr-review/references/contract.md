@@ -612,8 +612,9 @@ Copilot review committed to lifecycle CURRENT plus the complete set of new,
 unresolved, provider-owned thread sources that appeared after the authenticated
 replacement anchor and existed before corrected-successor qualification. Those
 sources remain material correction input and are bound to the existing
-rejected-candidate correction-source digest and signed Continuation scope; they
-are never classified as safe successor feedback. The closed record also binds
+rejected-candidate correction-source digest through a closed one-to-one
+material-finding map and then to the signed Continuation scope; they are never
+classified as safe successor feedback. The closed record also binds
 the exact Codex-owned completion `THUMBS_UP` removed during the resulting-head
 re-review, reusing the maintained provider-reaction drift family. Only the
 remaining exact-resulting-head provider sources are evaluated by schema 1.1

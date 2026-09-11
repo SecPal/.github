@@ -860,7 +860,9 @@ def authenticated_pr_905_classified_codex_review() -> tuple[
         ),
     )
     predecessor_material = []
-    for thread_id, comment_id, body_digest, is_outdated in predecessor_findings:
+    for index, (thread_id, comment_id, body_digest, is_outdated) in enumerate(
+        predecessor_findings
+    ):
         current_feedback["threads"].append(
             {
                 "node_id": thread_id,
@@ -879,9 +881,9 @@ def authenticated_pr_905_classified_codex_review() -> tuple[
         )
         predecessor_material.append(
             {
-                "correction_scope_digest": PR_905_CORRECTION_AUTHORITY[
-                    "finding_source_digest"
-                ],
+                "correction_finding_id": PR_905_CORRECTION_AUTHORITY[
+                    "material_finding_ids"
+                ][index],
                 "thread_id": thread_id,
                 "sources": [
                     {
@@ -4611,6 +4613,49 @@ class LifecycleOrchestrationTests(TestCase):
         def omitted_predecessor_finding(_current, evidence):
             evidence["predecessor_provider_feedback"]["material_findings"].pop()
 
+        def malformed_predecessor_source_identity(_current, evidence):
+            evidence["predecessor_provider_feedback"]["material_findings"][0][
+                "sources"
+            ][0]["node_id"] = []
+
+        def extra_material_predecessor_finding(current, evidence):
+            thread_id = "PRRT_EXTRA_PREDECESSOR"
+            comment_id = "PRRC_EXTRA_PREDECESSOR"
+            body_digest = fast_path.digest_text("extra predecessor defect")
+            current.feedback["threads"].append(
+                {
+                    "node_id": thread_id,
+                    "is_resolved": False,
+                    "is_outdated": False,
+                    "comments": [
+                        {
+                            "node_id": comment_id,
+                            "body_digest": body_digest,
+                            "actor": {
+                                "login": "copilot-pull-request-reviewer",
+                                "node_id": "BOT_kgDOCnlnWA",
+                                "database_id": 175728472,
+                            },
+                            "reply_to_id": None,
+                            "reactions": [],
+                        }
+                    ],
+                }
+            )
+            evidence["predecessor_provider_feedback"]["material_findings"].append(
+                {
+                    "correction_finding_id": "UNAUTHENTICATED_CORRECTION",
+                    "thread_id": thread_id,
+                    "sources": [
+                        {
+                            "kind": "THREAD_COMMENT",
+                            "node_id": comment_id,
+                            "digest": body_digest,
+                        }
+                    ],
+                }
+            )
+
         def cross_head_thread(_current, evidence):
             evidence["predecessor_provider_feedback"]["material_findings"][0] = (
                 copy.deepcopy(evidence["successor_findings"][0])
@@ -4646,8 +4691,8 @@ class LifecycleOrchestrationTests(TestCase):
 
         def wrong_predecessor_correction_scope(_current, evidence):
             evidence["predecessor_provider_feedback"]["material_findings"][0][
-                "correction_scope_digest"
-            ] = "f" * 64
+                "correction_finding_id"
+            ] = "UNAUTHENTICATED_CORRECTION"
 
         def predecessor_thread_authority_expansion(_current, evidence):
             evidence["predecessor_provider_feedback"]["authorized_thread_ids"] = [
@@ -4695,6 +4740,14 @@ class LifecycleOrchestrationTests(TestCase):
             ),
             ("extra predecessor provider object", extra_predecessor_review),
             ("omitted material predecessor thread", omitted_predecessor_finding),
+            (
+                "malformed predecessor source identity",
+                malformed_predecessor_source_identity,
+            ),
+            (
+                "extra material predecessor finding",
+                extra_material_predecessor_finding,
+            ),
             ("cross-head thread substitution", cross_head_thread),
             ("cross-PR predecessor thread replay", cross_pr_predecessor_thread),
             ("false safe predecessor classification", false_safe_predecessor_finding),

@@ -3044,7 +3044,11 @@ def _verify_predecessor_provider_feedback(
         )
 
     findings = value.get("material_findings")
-    if not isinstance(findings, list) or not findings:
+    if (
+        not isinstance(findings, list)
+        or not findings
+        or len(findings) != len(correction_authority.material_finding_ids)
+    ):
         raise SecurityBlocker(
             "predecessor material finding inventory is incomplete or ambiguous"
         )
@@ -3054,19 +3058,21 @@ def _verify_predecessor_provider_feedback(
     reviewed_thread_ids = {
         item["node_id"] for item in reviewed.feedback["threads"]
     }
+    correction_ids: set[str] = set()
     thread_ids: set[str] = set()
     admitted = {review_key}
     for finding in findings:
         if (
             not isinstance(finding, dict)
-            or set(finding) != {"correction_scope_digest", "thread_id", "sources"}
+            or set(finding) != {"correction_finding_id", "thread_id", "sources"}
         ):
             raise SecurityBlocker("predecessor material finding is malformed")
+        correction_id = finding.get("correction_finding_id")
         thread_id = finding.get("thread_id")
         sources = finding.get("sources")
         if (
-            finding.get("correction_scope_digest")
-            != correction_authority.finding_source_digest
+            correction_id not in correction_authority.material_finding_ids
+            or correction_id in correction_ids
             or not isinstance(thread_id, str)
             or not re.fullmatch(r"PRRT_[A-Za-z0-9_-]+", thread_id)
             or thread_id in reviewed_thread_ids
@@ -3090,25 +3096,41 @@ def _verify_predecessor_provider_feedback(
             raise SecurityBlocker(
                 "predecessor material finding does not identify one live thread"
             )
-        source_key = ("THREAD_COMMENT", source.get("node_id"))
+        source_node_id = source.get("node_id")
+        source_digest = source.get("digest")
+        if (
+            not isinstance(source_node_id, str)
+            or not IDENTITY.fullmatch(source_node_id)
+            or not isinstance(source_digest, str)
+            or not DIGEST.fullmatch(source_digest)
+        ):
+            raise SecurityBlocker(
+                "predecessor material finding source identity is malformed"
+            )
+        source_key = ("THREAD_COMMENT", source_node_id)
         observed_source = current_sources.get(source_key)
         comment = thread["comments"][0]
         if (
             source_key in admitted
             or source_key in reviewed_sources
             or observed_source is None
-            or observed_source[:2] != (source.get("digest"), thread_id)
+            or observed_source[:2] != (source_digest, thread_id)
             or observed_source[2].get("actor") != COPILOT_REVIEW_PROVIDER
-            or comment.get("node_id") != source.get("node_id")
-            or comment.get("body_digest") != source.get("digest")
+            or comment.get("node_id") != source_node_id
+            or comment.get("body_digest") != source_digest
             or comment.get("reply_to_id") is not None
             or comment.get("reactions") != []
         ):
             raise SecurityBlocker(
                 "predecessor material finding source is stale or substituted"
             )
+        correction_ids.add(correction_id)
         thread_ids.add(thread_id)
         admitted.add(source_key)
+    if correction_ids != set(correction_authority.material_finding_ids):
+        raise SecurityBlocker(
+            "predecessor material findings differ from correction authority"
+        )
     return admitted, thread_ids
 
 

@@ -1147,9 +1147,10 @@ feedback created on the replacement PR after its authenticated anchor snapshot.
 One exact GitHub Copilot review must name lifecycle CURRENT as its reviewed
 commit, and every newly observed Copilot thread must be inventoried as unresolved
 material predecessor evidence. Each exact source is bound to the already
-authenticated rejected-candidate correction-source digest and then to the
-existing signed Continuation authorization; no predecessor finding receives a
-safe classification or becomes candidate-local trust. The same closed evidence
+authenticated rejected-candidate correction-source digest through a closed
+one-to-one material-finding map and then to the existing signed Continuation
+authorization; no predecessor finding receives a safe classification or
+becomes candidate-local trust. The same closed evidence
 authenticates the exact Codex-owned completion `THUMBS_UP` removed when the
 corrected head was re-reviewed, using the existing provider-reaction drift
 family. Only after this predecessor inventory is complete does schema 1.1

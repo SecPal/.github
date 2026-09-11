@@ -650,8 +650,9 @@ partitioned by the review object's actual commit: one exact GitHub Copilot
 review on lifecycle CURRENT and every new Copilot thread are authenticated as
 material predecessor correction input, while only exact-resulting-head Codex
 feedback enters successor safety. Each predecessor thread remains unresolved,
-provider-owned, source-complete, and bound to the existing rejected-candidate
-correction-source digest; it is never assigned a safe disposition. The same
+provider-owned, source-complete, and maps one-to-one to the existing rejected-
+candidate material finding set and correction-source digest; it is never
+assigned a safe disposition. The same
 record authenticates the exact provider-owned completion `THUMBS_UP` removed
 during re-review, reusing the bounded reaction-drift family without inventing a
 replacement completion result. The complete predecessor-growth and reaction
