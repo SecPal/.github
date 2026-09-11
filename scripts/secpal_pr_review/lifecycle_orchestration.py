@@ -1115,16 +1115,54 @@ def _historical_validation_registry_binding(
     """Reuse immutable prior-delivery registry and schema authentication."""
 
     try:
+        protected = bootstrap_source_admission._normalize_protected_main(
+            bootstrap_source_admission._observe_protected_main()
+        )
+        comparison_result = bootstrap_source_admission._run_bootstrap_gh(
+            [
+                "api",
+                "--hostname",
+                "github.com",
+                f"repos/{repository}/compare/{head_sha}...{protected.head_sha}",
+                "--jq",
+                (
+                    '{"status":.status,"behind_by":.behind_by,'
+                    '"merge_base_sha":.merge_base_commit.sha,'
+                    '"head_sha":(.head_commit.sha // .base_commit.sha)}'
+                ),
+            ]
+        )
+        comparison = authority.loads_closed_json(comparison_result.stdout)
+        if (
+            protected.repository != repository
+            or comparison_result.returncode != 0
+            or not isinstance(comparison, Mapping)
+            or set(comparison)
+            != {"status", "behind_by", "merge_base_sha", "head_sha"}
+            or comparison.get("status") not in {"ahead", "identical"}
+            or comparison.get("behind_by") != 0
+            or comparison.get("merge_base_sha") != head_sha
+            or comparison.get("head_sha") != protected.head_sha
+        ):
+            raise LifecycleOrchestrationError(
+                "rejected-candidate validation base is not accepted-main history"
+            )
         actions = bootstrap_source_admission._load_actions_helper()
-        return actions._prior_delivery_registry_binding(
+        binding = actions._prior_delivery_registry_binding(
             repository_root,
             head_sha,
             repository,
         )
+        if binding.get("default_branch") != protected.default_branch:
+            raise LifecycleOrchestrationError(
+                "rejected-candidate validation default branch changed"
+            )
+        return binding
     except (
         AttributeError,
         OSError,
         TypeError,
+        authority.LifecycleAuthorityError,
         bootstrap_source_admission.BootstrapSourceAdmissionError,
         fast_path.SecurityBlocker,
     ) as exc:
@@ -1333,13 +1371,38 @@ def verify_rejected_continuation_reanchor(
                 eligibility_evidence=item.get("rejected_eligibility_evidence"),
             )
         )
-        rejected_continuation_digest = fast_path.digest_json(
-            rejected_continuation
-        )
     except fast_path.SecurityBlocker as exc:
         raise LifecycleOrchestrationError(
             "rejected Continuation evidence is invalid or stale"
         ) from exc
+    rejected_lifecycle_projection = {
+        "unrestricted_reviews": state["unrestricted_review_count"],
+        "remediation_cycles": state["remediation_cycle_count"],
+        "cycle_3": not state["cycle_3_absent"],
+        "draft": state["draft"],
+        "ready": state["ready"],
+        "ready_transition_count": state["ready_transition_count"],
+        "ready_history": state["ready_history"],
+        "exceptional_recovery_count": state["exceptional_recovery_count"],
+        "exceptional_recovery_history": state["exceptional_recovery_history"],
+        "exceptional_continuation_predecessor_count": 0,
+        "exceptional_continuation_successor_count": 1,
+    }
+    if (
+        rejected_continuation.get("delivery_issue_number") != delivery_issue
+        or rejected_continuation.get("prior_ready_tree_sha") != current_tree
+        or rejected_continuation.get("expected_signer")
+        != {
+            "kind": source.signer_kind,
+            "identity": source.signer_identity,
+        }
+        or rejected_continuation.get("lifecycle")
+        != rejected_lifecycle_projection
+    ):
+        raise LifecycleOrchestrationError(
+            "rejected Continuation differs from authenticated lifecycle or source"
+        )
+    rejected_continuation_digest = fast_path.digest_json(rejected_continuation)
     registry = _historical_validation_registry_binding(
         repository_root,
         repository,

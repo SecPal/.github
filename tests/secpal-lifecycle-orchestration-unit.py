@@ -1163,9 +1163,33 @@ class LifecycleOrchestrationTests(TestCase):
         )
         rejected_eligibility = {"closed": "rejected eligibility fixture"}
         rejected_continuation = {"closed": "rejected Continuation fixture"}
+        rejected_lifecycle_projection = {
+            "unrestricted_reviews": 1,
+            "remediation_cycles": 2,
+            "cycle_3": False,
+            "draft": False,
+            "ready": True,
+            "ready_transition_count": 1,
+            "ready_history": copy.deepcopy(
+                current_lifecycle_state.state["ready_history"]
+            ),
+            "exceptional_recovery_count": 1,
+            "exceptional_recovery_history": copy.deepcopy(
+                current_lifecycle_state.state["exceptional_recovery_history"]
+            ),
+            "exceptional_continuation_predecessor_count": 0,
+            "exceptional_continuation_successor_count": 1,
+        }
         normalized_rejected_continuation = {
             "eligibility_evidence_digest": "1" * 64,
             "authorization_id": "rejected-continuation-authorization",
+            "delivery_issue_number": ISSUE,
+            "prior_ready_tree_sha": "d" * 40,
+            "expected_signer": {
+                "kind": "SSH_PRINCIPAL",
+                "identity": "aroviqen@secpal.app",
+            },
+            "lifecycle": rejected_lifecycle_projection,
         }
         rejected_continuation_digest = fast_path.digest_json(
             normalized_rejected_continuation
@@ -1211,7 +1235,12 @@ class LifecycleOrchestrationTests(TestCase):
             "rejected_final_attestation": attestation,
             "replacement_reviewed_state_evidence": replacement_reviewed.to_dict(),
         }
-        source = SimpleNamespace(tree_sha="e" * 40, authentication_digest="f" * 64)
+        source = SimpleNamespace(
+            tree_sha="e" * 40,
+            signer_kind="SSH_PRINCIPAL",
+            signer_identity="aroviqen@secpal.app",
+            authentication_digest="f" * 64,
+        )
         validation = SimpleNamespace(
             validation_receipt_digest=receipt["receipt_digest"],
             final_attestation_digest=attestation["attestation_digest"],
@@ -1361,6 +1390,26 @@ class LifecycleOrchestrationTests(TestCase):
             ):
                 verify(changed)
 
+        for field, replacement in (
+            ("delivery_issue_number", ISSUE + 1),
+            ("prior_ready_tree_sha", "f" * 40),
+            (
+                "expected_signer",
+                {
+                    "kind": "SSH_PRINCIPAL",
+                    "identity": "different@secpal.app",
+                },
+            ),
+            ("lifecycle", {**rejected_lifecycle_projection, "ready": False}),
+        ):
+            original = normalized_rejected_continuation[field]
+            normalized_rejected_continuation[field] = replacement
+            with self.subTest(continuation_field=field), self.assertRaises(
+                orchestration.LifecycleOrchestrationError
+            ):
+                verify(evidence)
+            normalized_rejected_continuation[field] = original
+
         consumed_lifecycle = current_lifecycle(
             exceptional_recoveries=1,
             exceptional_continuations=1,
@@ -1411,6 +1460,102 @@ class LifecycleOrchestrationTests(TestCase):
         )
         with self.assertRaises(orchestration.LifecycleOrchestrationError):
             verify(evidence, rebound_value=wrong_rebound)
+
+    def test_historical_validation_registry_requires_accepted_main_ancestor(
+        self,
+    ) -> None:
+        protected_main = "f" * 40
+        historical_main = "0" * 40
+        registry = {
+            "default_branch": "main",
+            "validation": [],
+            "manual_gates": [],
+        }
+        actions = SimpleNamespace(
+            _prior_delivery_registry_binding=mock.Mock(return_value=registry)
+        )
+        facts = SimpleNamespace(
+            repository=REPOSITORY,
+            default_branch="main",
+            head_sha=protected_main,
+        )
+
+        def comparison(*, status="ahead", merge_base=historical_main):
+            payload = json.dumps(
+                {
+                    "status": status,
+                    "behind_by": 0,
+                    "merge_base_sha": merge_base,
+                    "head_sha": protected_main,
+                }
+            ).encode()
+            return subprocess.CompletedProcess([], 0, payload, b"")
+
+        with (
+            mock.patch.object(
+                orchestration.bootstrap_source_admission,
+                "_observe_protected_main",
+                return_value=object(),
+            ),
+            mock.patch.object(
+                orchestration.bootstrap_source_admission,
+                "_normalize_protected_main",
+                return_value=facts,
+            ),
+            mock.patch.object(
+                orchestration.bootstrap_source_admission,
+                "_run_bootstrap_gh",
+                return_value=comparison(),
+            ) as compare_reader,
+            mock.patch.object(
+                orchestration.bootstrap_source_admission,
+                "_load_actions_helper",
+                return_value=actions,
+            ),
+        ):
+            self.assertEqual(
+                orchestration._historical_validation_registry_binding(
+                    REPO_ROOT,
+                    REPOSITORY,
+                    historical_main,
+                ),
+                registry,
+            )
+        compare_reader.assert_called_once()
+
+        for result in (
+            comparison(status="diverged"),
+            comparison(merge_base="1" * 40),
+            subprocess.CompletedProcess([], 1, b"{}", b"failure"),
+        ):
+            with (
+                mock.patch.object(
+                    orchestration.bootstrap_source_admission,
+                    "_observe_protected_main",
+                    return_value=object(),
+                ),
+                mock.patch.object(
+                    orchestration.bootstrap_source_admission,
+                    "_normalize_protected_main",
+                    return_value=facts,
+                ),
+                mock.patch.object(
+                    orchestration.bootstrap_source_admission,
+                    "_run_bootstrap_gh",
+                    return_value=result,
+                ),
+                mock.patch.object(
+                    orchestration.bootstrap_source_admission,
+                    "_load_actions_helper",
+                    return_value=actions,
+                ),
+                self.assertRaises(orchestration.LifecycleOrchestrationError),
+            ):
+                orchestration._historical_validation_registry_binding(
+                    REPO_ROOT,
+                    REPOSITORY,
+                    historical_main,
+                )
 
     def test_reanchored_continuation_normalization_keeps_old_threads_diagnostic_only(
         self,
@@ -2083,6 +2228,31 @@ class LifecycleOrchestrationTests(TestCase):
                 late_disposition,
                 "verify_detached_signature",
                 return_value=late_disposition.canonical_json_bytes(broadened),
+            ),
+            self.assertRaisesRegex(
+                late_disposition.LateDispositionError,
+                "rejected successor classification decision is unsupported",
+            ),
+        ):
+            late_disposition.parse_rejected_successor_classification_artifact(
+                Path("unused.json"),
+                Path("unused.sig"),
+                expected_signer=signer,
+                repository=REPOSITORY,
+                delivery_issue_number=ISSUE,
+                pull_request_number=PR,
+                head_sha=NEXT_HEAD,
+                predecessor_state_digest="1" * 64,
+                resulting_state_digest="2" * 64,
+            )
+
+        stale = copy.deepcopy(artifact)
+        stale["thread"]["is_outdated"] = True
+        with (
+            mock.patch.object(
+                late_disposition,
+                "verify_detached_signature",
+                return_value=late_disposition.canonical_json_bytes(stale),
             ),
             self.assertRaisesRegex(
                 late_disposition.LateDispositionError,

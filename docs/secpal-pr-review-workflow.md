@@ -1083,10 +1083,11 @@ with Recovery consumed and Continuation unconsumed, an authenticated same-head
 captured Stable Feedback for both PRs. The original-PR candidate must be a
 signed, validated, sole-parent successor of CURRENT, remain unpublished, and
 have complete exact-head provider acquisition plus signed version-1.3 material
-classifications. Its original typed Continuation document is normalized
-and bound by the candidate receipt and attestation, while validation policy and
-schema are authenticated from the immutable accepted-main base rather than the
-verifier's checkout. Those classifications bind the rejected state, exact finding
+classifications. Its original typed Continuation document is normalized,
+cross-bound to the delivery, CURRENT tree, lifecycle, and source signer, and
+bound by the candidate receipt and attestation. Validation policy and schema
+come from a base proven in protected-main ancestry rather than the verifier's
+checkout. Those classifications bind the rejected state, exact finding
 sources, and `CANDIDATE_REJECTED_BEFORE_PUBLICATION`; they are diagnostic input
 only. The signed correction authorization also binds both PRs, protected
 CURRENT, the rejected head/tree/receipt/attestation, both Stable Feedback

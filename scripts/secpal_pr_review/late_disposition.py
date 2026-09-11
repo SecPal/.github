@@ -996,6 +996,7 @@ def _parse_successor_classification_artifact(
             != ("IN_CONTRACT_DEFECT", "CANDIDATE_REJECTED_BEFORE_PUBLICATION")
             or item.get("technically_blocking") is not True
             or not blockers
+            or (thread_bound and item.get("is_outdated") is not False)
         ):
             raise LateDispositionError(
                 "rejected successor classification decision is unsupported"
