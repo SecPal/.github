@@ -1983,6 +1983,14 @@ def verify_continuation_bound_source_authority(
             parse_constant=_reject_nonfinite_json_constant,
             object_pairs_hook=_reject_duplicate_json_object,
         )
+        if (
+            isinstance(continuation_evidence, dict)
+            and continuation_evidence.get("schema_version") == "1.1"
+            and "reanchor" in continuation_evidence
+        ):
+            raise ResolutionError(
+                "re-anchored Continuation evidence grants no thread-resolution authority"
+            )
         continuation_authorization = continuation_authorization_path.read_bytes()
         successor_safety_evidence = (
             json.loads(

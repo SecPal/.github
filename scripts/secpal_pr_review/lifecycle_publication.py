@@ -153,6 +153,35 @@ class VerifiedReadySourceRecovery:
 
 
 @dataclass(frozen=True)
+class VerifiedReadySourceRecoveryProviderBinding:
+    """Ephemeral provider head derived from authenticated CURRENT history."""
+
+    repository: str
+    delivery_issue: int
+    pull_request: int
+    lifecycle_id: str
+    current_head_sha: str
+    provider_head_sha: str
+    current_authority_digest: str
+    current_publication_oid: str
+    current_publication_digest: str
+    remediation_event_digests: tuple[str, ...]
+    lifecycle_evidence_digest: str
+
+    def provider_head(
+        self, *, repository: str, pull_request: int, current_head_sha: str
+    ) -> str:
+        """Expose the verifier-derived head through this binding's module."""
+
+        return ready_source_recovery_provider_head(
+            self,
+            repository=repository,
+            pull_request=pull_request,
+            current_head_sha=current_head_sha,
+        )
+
+
+@dataclass(frozen=True)
 class VerifiedPreEnrollmentAbsence:
     """Authenticated proof that neither genesis nor CURRENT owns a delivery."""
 
@@ -1947,6 +1976,207 @@ def verify_current_lifecycle_authority(
         document["predecessor_publication_oid"], lifecycle,
         canonical_json_bytes(document["lifecycle_evidence"]),
     )
+
+
+def _ready_source_provider_binding_fields(
+    value: VerifiedReadySourceRecoveryProviderBinding,
+) -> dict[str, Any]:
+    return {
+        "repository": value.repository,
+        "delivery_issue": value.delivery_issue,
+        "pull_request": value.pull_request,
+        "lifecycle_id": value.lifecycle_id,
+        "current_head_sha": value.current_head_sha,
+        "provider_head_sha": value.provider_head_sha,
+        "current_authority_digest": value.current_authority_digest,
+        "current_publication_oid": value.current_publication_oid,
+        "current_publication_digest": value.current_publication_digest,
+        "remediation_event_digests": list(value.remediation_event_digests),
+        "lifecycle_evidence_digest": value.lifecycle_evidence_digest,
+    }
+
+
+def derive_ready_source_recovery_provider_binding(
+    current: VerifiedLifecyclePublication,
+) -> VerifiedReadySourceRecoveryProviderBinding:
+    """Derive the sole admissible stale provider head from CURRENT authority."""
+
+    if (
+        not isinstance(current, VerifiedLifecyclePublication)
+        or current.serialized_lifecycle_evidence is None
+    ):
+        raise LifecyclePublicationError(
+            "Ready-source provider binding requires authenticated CURRENT lifecycle"
+        )
+    serialized = current.serialized_lifecycle_evidence
+    try:
+        parsed = authority._load_canonical_json(
+            serialized, "Ready-source provider lifecycle evidence"
+        )
+        if (
+            isinstance(parsed, dict)
+            and set(parsed) == authority.PUBLICATION_EVIDENCE_FIELDS
+        ):
+            bundle = parsed.get("lifecycle_evidence")
+        else:
+            bundle = parsed
+        admitted_initialization = (
+            bundle.get("delivery_initialization")
+            if isinstance(bundle, dict)
+            and set(bundle) == authority.BUNDLE_FIELDS
+            else None
+        )
+        verified = authority._verify_lifecycle_authority_for_journal(
+            serialized, admitted_initialization=admitted_initialization
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecyclePublicationError(
+            "Ready-source provider lifecycle evidence is invalid"
+        ) from exc
+    if verified != current.lifecycle:
+        raise LifecyclePublicationError(
+            "Ready-source provider lifecycle differs from CURRENT"
+        )
+    if not isinstance(bundle, dict) or frozenset(bundle) not in {
+        authority.BUNDLE_FIELDS,
+        authority.EXACT_ADOPTION_PUBLICATION_FIELDS,
+    }:
+        raise LifecyclePublicationError(
+            "Ready-source provider lifecycle shape is unsupported"
+        )
+    events = bundle.get("transition_authorizations")
+    snapshots = bundle.get("authority_chain")
+    if (
+        not isinstance(events, list)
+        or not isinstance(snapshots, list)
+        or len(events) != len(snapshots)
+        or not events
+    ):
+        raise LifecyclePublicationError(
+            "Ready-source provider remediation lineage is incomplete"
+        )
+    start = len(events) - 1
+    while start >= 0 and events[start].get("transition_kind") == "REMEDIATION_COMPLETED":
+        snapshot = snapshots[start]
+        before = snapshot.get("state_before") if isinstance(snapshot, dict) else None
+        if not isinstance(before, dict) or before.get("ready") is not True:
+            break
+        start -= 1
+    start += 1
+    tail = list(zip(events[start:], snapshots[start:]))
+    if not tail:
+        raise LifecyclePublicationError(
+            "Ready-source provider requires authenticated Ready remediation lineage"
+        )
+    first_event, first_snapshot = tail[0]
+    before = first_snapshot.get("state_before")
+    final_state = current.lifecycle.state
+    if (
+        not isinstance(before, dict)
+        or before.get("unrestricted_review_count") != 1
+        or before.get("ready") is not True
+        or before.get("draft") is not False
+        or before.get("cycle_3_absent") is not True
+        or before.get("ready_transition_count") != 1
+        or before.get("exceptional_recovery_count") != 0
+        or before.get("exceptional_continuation_count") != 0
+        or final_state.get("unrestricted_review_count") != 1
+        or final_state.get("remediation_cycle_count") != before.get(
+            "remediation_cycle_count"
+        ) + len(tail)
+        or final_state.get("remediation_cycle_count") > authority.MAX_REMEDIATION_CYCLES
+        or final_state.get("ready") is not True
+        or final_state.get("draft") is not False
+        or final_state.get("cycle_3_absent") is not True
+        or final_state.get("ready_transition_count") != 1
+        or final_state.get("exceptional_recovery_count") != 0
+        or final_state.get("exceptional_continuation_count") != 0
+    ):
+        raise LifecyclePublicationError(
+            "Ready-source provider lifecycle is not the exact finite Ready remediation"
+        )
+    predecessor = first_event.get("predecessor_head_sha")
+    expected_head = predecessor
+    event_digests: list[str] = []
+    for event, snapshot in tail:
+        if (
+            not isinstance(event, dict)
+            or not isinstance(snapshot, dict)
+            or event.get("transition_kind") != "REMEDIATION_COMPLETED"
+            or event.get("repository") != current.lifecycle.repository
+            or event.get("delivery_issue") != current.lifecycle.delivery_issue
+            or event.get("pull_request") != current.lifecycle.pull_request
+            or event.get("lifecycle_id") != current.lifecycle.lifecycle_id
+            or event.get("predecessor_head_sha") != expected_head
+            or snapshot.get("predecessor_head_sha") != expected_head
+            or snapshot.get("head_sha") != event.get("resulting_head_sha")
+            or snapshot.get("state_before", {}).get("ready") is not True
+            or snapshot.get("state_after", {}).get("ready") is not True
+        ):
+            raise LifecyclePublicationError(
+                "Ready-source provider remediation lineage is invalid"
+            )
+        expected_head = event.get("resulting_head_sha")
+        event_digests.append(event.get("event_digest"))
+    if (
+        not isinstance(predecessor, str)
+        or not _OID.fullmatch(predecessor)
+        or predecessor == current.lifecycle.head_sha
+        or expected_head != current.lifecycle.head_sha
+        or any(not isinstance(item, str) or not authority._DIGEST.fullmatch(item)
+               for item in event_digests)
+    ):
+        raise LifecyclePublicationError(
+            "Ready-source provider remediation heads are invalid"
+        )
+    fields = {
+        "repository": current.lifecycle.repository,
+        "delivery_issue": current.lifecycle.delivery_issue,
+        "pull_request": current.lifecycle.pull_request,
+        "lifecycle_id": current.lifecycle.lifecycle_id,
+        "current_head_sha": current.lifecycle.head_sha,
+        "provider_head_sha": predecessor,
+        "current_authority_digest": current.lifecycle.authority_digest,
+        "current_publication_oid": current.publication_oid,
+        "current_publication_digest": current.publication_digest,
+        "remediation_event_digests": event_digests,
+        "lifecycle_evidence_digest": digest_json(parsed),
+    }
+    return VerifiedReadySourceRecoveryProviderBinding(
+        **{**fields, "remediation_event_digests": tuple(event_digests)},
+    )
+
+
+def ready_source_recovery_provider_head(
+    value: Any,
+    *,
+    repository: str,
+    pull_request: int,
+    current_head_sha: str,
+) -> str:
+    """Return a sealed binding's head without accepting a caller-selected head."""
+
+    if (
+        not isinstance(value, VerifiedReadySourceRecoveryProviderBinding)
+        or value.repository != repository
+        or value.pull_request != pull_request
+        or value.current_head_sha != current_head_sha
+    ):
+        raise LifecyclePublicationError(
+            "Ready-source provider binding is stale or substituted"
+        )
+    current = verify_current_lifecycle_authority(
+        value.repository,
+        value.delivery_issue,
+    )
+    authenticated = derive_ready_source_recovery_provider_binding(current)
+    if _ready_source_provider_binding_fields(authenticated) != (
+        _ready_source_provider_binding_fields(value)
+    ):
+        raise LifecyclePublicationError(
+            "Ready-source provider binding is stale or substituted"
+        )
+    return authenticated.provider_head_sha
 
 
 def _verify_historical_lifecycle_transition(

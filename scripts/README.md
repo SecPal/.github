@@ -132,6 +132,12 @@ harness, executes through the isolated Python boundary, and authenticates
 candidate production bytes before and after. It never overlays accepted-main
 production implementation and does not replay unrelated current repository
 regressions. The issuer then re-verifies the complete package before signing.
+If protected CURRENT proves a Ready-preserving remediation suffix, that fixed
+issuer may also derive the suffix predecessor as the sole acceptable Codex
+provider-summary head. The summary must retain terminal status and exact
+repository/PR metadata. This is an ephemeral Ready-source recovery gate, not a
+caller option or persisted evidence kind; current-head feedback completeness
+and its blocking classifications are unchanged.
 Applicable protected-branch
 rules independently determine whether `NONE` is admissible; `REVIEW_REQUIRED`
 always fails closed. Unsigned recovery facts and caller-selected feedback
@@ -595,6 +601,88 @@ thread-resolution authority. See the collision-trigger procedure in
 [`docs/secpal-pr-review-workflow.md`](../docs/secpal-pr-review-workflow.md).
 Explicit
 Ready/Draft changes require their exact separately reasoned authorization.
+
+The schema-1.1 form reuses this transition after one unpublished Continuation
+candidate was rejected by authenticated material successor findings and an
+authenticated same-head `PR_REBOUND` moved the unchanged lifecycle to a
+replacement PR. The re-anchor verifier binds protected CURRENT, both PRs, the
+rebound publication, the rejected signed sole-parent commit, its validation
+receipt and final attestation, its normalized original Continuation document
+cross-bound to delivery, CURRENT tree, lifecycle, and signer, the validation
+registry and schema from a protected-main ancestor, both independently captured
+Stable Feedback states, and signed version-1.3 material finding/source
+classifications. The corrected candidate must again be a signed sole-parent
+successor of CURRENT and must pass fresh exact-head provider safety before
+publication. The rejected candidate is diagnostic evidence only: it supplies
+no ancestry, CURRENT, publication, tree-nomination, or trust authority.
+
+The replacement PR may be based on a newer accepted protected-main commit than
+the rejected candidate only when maintained acquisition proves the historical
+base precedes the replacement base and the replacement base remains in the
+independently observed live protected-main ancestry. Both bases are added to
+the re-anchor projection only for that advancement; the historical same-base
+projection stays byte-compatible. Compare acquisition normalizes a closed
+provider observation before a separate pure lineage predicate admits it. A
+later live protected-main tip is checked at runtime but is not durable evidence,
+so unrelated subsequent accepted merges do not alter an already authenticated
+re-anchor digest or signed scope. No caller base assertion is accepted.
+
+Rejected-successor safety schema 1.2 may bind one exact provider-owned
+completion-reaction replacement while reviewing the rejected candidate. It
+authenticates the removed and replacement direct-PR reaction identities as
+Codex `THUMBS_UP` reactions, requires exactly one matching replacement
+transport item plus the complete terminal exact-head Code/Security provider
+transport, and binds the resulting replacement digest into the re-anchor and
+signed Continuation scope. Other reaction deletion, mutation, substitution,
+replay, or provider drift remains fail-closed. Ordinary successor safety,
+legacy rejected-successor schema 1.1, and corrected-successor schema 1.0 retain
+their existing behavior.
+
+Corrected-successor safety schema 1.1 admits one additional closed provider
+representation for re-anchor only: the exact terminal, exact-head Codex Code
+Review object replaces the incompatible Code no-finding conversation result,
+while the existing terminal Security no-finding result remains mandatory. The
+review identity, provider, reviewed commit, body digest, terminal summary,
+request comments, and complete Stable Feedback additions are authenticated.
+Every review suggestion must be covered by the existing signed version-1.2
+safe successor classification bound to both Stable Feedback states and its
+exact live source. A Code no-finding result or completion reaction cannot be
+mixed into this representation. Missing, additional, ambiguous, stale,
+material, actionable, unsupported, or unclassified findings fail closed.
+Every classified finding is thread-bound, rooted in the authenticated Codex
+provider, and limited to exact Codex-owned sources from that thread.
+Provider-owned non-thread sources must retain their transport roles;
+non-provider additions cannot be recast as suggestions. Caller-provided
+inventories cannot establish completeness, ordinary successor classification
+policy remains unchanged, and the representation grants no thread-resolution,
+lifecycle, review-request, or Git authority.
+
+Corrected-successor safety schema 1.2 extends only that re-anchor representation
+when the replacement PR gained provider feedback after its authenticated anchor
+snapshot but before the corrected candidate was qualified. Stable Feedback is
+partitioned by the review object's actual commit: one exact GitHub Copilot
+review on lifecycle CURRENT and every new Copilot thread are authenticated as
+material predecessor correction input, while only exact-resulting-head Codex
+feedback enters successor safety. Each predecessor thread remains unresolved,
+provider-owned, source-complete, and maps one-to-one to the existing rejected-
+candidate material finding set and correction-source digest; it is never
+assigned a safe disposition. The same
+record authenticates the exact provider-owned completion `THUMBS_UP` removed
+during re-review, reusing the bounded reaction-drift family without inventing a
+replacement completion result. The complete predecessor-growth and reaction
+record is bound into the existing signed Continuation authorization. Wrong-PR,
+wrong-head, stale, late, omitted, additional, replayed, ambiguous, or
+provider-substituted feedback fails closed. This partition grants no
+cross-PR resolution, candidate-local trust, provider request, or additional
+lifecycle authority, and schema 1.1 exact-resulting-head classification rules
+remain unchanged.
+
+Re-anchored Continuation authorization always has an empty resolution thread
+set. Original-PR thread identities remain diagnostic bindings owned by that PR;
+they are not projected onto the replacement PR, and the guarded resolver
+rejects the schema-1.1 form. This adds no lifecycle event, counter, cycle,
+Recovery, Ready transition, signer, trust root, or cross-PR mutation authority.
+
 Every user-controlled orchestration decision consumes canonical signed evidence
 bound to the exact CURRENT publication, authority, PR, head, operation, reason,
 and scope. Caller-constructed mappings have no authority.

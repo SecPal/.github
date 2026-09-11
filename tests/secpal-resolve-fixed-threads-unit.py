@@ -3398,6 +3398,57 @@ class ResolveFixedThreadsTests(TestCase):
                     continuation_authorization_path=authorization_path,
                 )
 
+    def test_reanchored_continuation_cannot_authorize_any_thread_resolution(self) -> None:
+        validation = MODULE.ValidationEvidence(
+            kind="attestation",
+            evidence_digest="1" * 64,
+            validated_tree_sha="2" * 40,
+            validation_receipt_digest="3" * 64,
+            eligibility_evidence_digest="4" * 64,
+            attestation={"exceptional_continuation_evidence_digest": "5" * 64},
+        )
+        reviewed = MODULE.ReviewedState(
+            head_sha="6" * 40,
+            state_digest="7" * 64,
+            feedback_digest="8" * 64,
+            targets={},
+            thread_ids=frozenset(),
+            payload={},
+        )
+        eligibility = MODULE.EligibilityEvidence(
+            MODULE._digest_json({}), MODULE._canonical_json_bytes({}), ()
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence_path = root / "continuation.json"
+            authorization_path = root / "authorization.json"
+            evidence_path.write_text(
+                '{"schema_version":"1.1","reanchor":{}}', encoding="utf-8"
+            )
+            authorization_path.write_bytes(b"signed")
+            with (
+                mock.patch.object(
+                    MODULE.lifecycle_orchestration,
+                    "verify_exceptional_continuation_authority",
+                ) as verifier,
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError, "no thread-resolution authority"
+                ),
+            ):
+                MODULE.verify_continuation_bound_source_authority(
+                    validation,
+                    reviewed,
+                    eligibility,
+                    repository_root=root,
+                    repository="SecPal/.github",
+                    delivery_issue=902,
+                    pull_request=901,
+                    resulting_head_sha="9" * 40,
+                    continuation_evidence_path=evidence_path,
+                    continuation_authorization_path=authorization_path,
+                )
+            verifier.assert_not_called()
+
     def test_recovery_bound_attestation_uses_canonical_source_verifier(self) -> None:
         thread_id = "PRRT_RECOVERY_BOUND"
         reviewed_payload = reviewed_state_payload(
@@ -6294,6 +6345,203 @@ class ResolveFixedThreadsTests(TestCase):
                 MODULE.late_disposition.LateDispositionError,
                 "signer does not match final delivery signer",
             ):
+                parse()
+
+    def test_signed_successor_classification_binds_pr_905_finding_and_states(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".config").mkdir()
+            (root / ".gnupg").mkdir(mode=0o700)
+            environment = MODULE.late_disposition.signing_environment(
+                account_home=root
+            )
+            key = root / "successor-classification-key"
+            alternate_key = root / "alternate-successor-key"
+            for key_path in (key, alternate_key):
+                subprocess.run(
+                    [
+                        "/usr/bin/ssh-keygen",
+                        "-q",
+                        "-t",
+                        "ed25519",
+                        "-N",
+                        "",
+                        "-f",
+                        str(key_path),
+                    ],
+                    check=True,
+                    env=environment,
+                    capture_output=True,
+                )
+
+            def identity(key_path: Path) -> MODULE.late_disposition.SignerIdentity:
+                fingerprint = subprocess.run(
+                    [
+                        "/usr/bin/ssh-keygen",
+                        "-lf",
+                        f"{key_path}.pub",
+                        "-E",
+                        "sha256",
+                    ],
+                    check=True,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                ).stdout.split()[1]
+                return MODULE.late_disposition.SignerIdentity("ssh", fingerprint)
+
+            signer = identity(key)
+            alternate = identity(alternate_key)
+            artifact = root / "successor-classification.json"
+            signature = root / "successor-classification.sig"
+            predecessor_state = "a" * 64
+            resulting_state = "b" * 64
+            head = "18a6d02d8c548a4a010fc93c5f8d09d89427f1b2"
+            thread_id = "PRRT_kwDOQFR1MM6hk-YJ"
+            comment_id = "PRRC_kwDOQFR1MM7t72Mn"
+            body_digest = (
+                "6d2f2240da81d5b30595fa239d6989311bb0c1191fafcb861d7194472a45df3a"
+            )
+            payload = {
+                "schema_version": "1.2",
+                "kind": "LATE_FEEDBACK_CLASSIFICATION",
+                "repository": "SecPal/.github",
+                "delivery_issue_number": 894,
+                "pull_request_number": 905,
+                "head_sha": head,
+                "predecessor_state_digest": predecessor_state,
+                "resulting_state_digest": resulting_state,
+                "delivery_signer": {
+                    "format": "ssh",
+                    "fingerprint": signer.fingerprint,
+                },
+                "authorized_purpose": (
+                    "AUTHENTICATE_CONTINUATION_SUCCESSOR_SAFETY"
+                ),
+                "finding_id": comment_id,
+                "finding_evidence_digest": "c" * 64,
+                "thread": {
+                    "thread_id": thread_id,
+                    "top_level_comment_node_id": comment_id,
+                    "top_level_comment_database_id": 3991888679,
+                    "finding_body_digest": body_digest,
+                    "reply_state_digest": MODULE._digest_json([]),
+                    "reply_count": 0,
+                    "is_resolved": False,
+                    "is_outdated": False,
+                    "classification": "INVALID_FALSE_OR_MISLEADING",
+                    "disposition": "DISPROVEN_WITH_EVIDENCE",
+                    "technically_blocking": False,
+                    "technical_blockers": [],
+                },
+                "sources": [
+                    {
+                        "kind": "THREAD_COMMENT",
+                        "node_id": comment_id,
+                        "digest": body_digest,
+                        "thread_id": thread_id,
+                    }
+                ],
+            }
+
+            def sign(value, key_path=key, signer_identity=signer):
+                MODULE.late_disposition.sign_artifact(
+                    value,
+                    artifact,
+                    signature,
+                    signer=signer_identity,
+                    signing_key=str(key_path),
+                    environment=environment,
+                    signature_namespace=(
+                        MODULE.late_disposition.CLASSIFICATION_SIGNATURE_NAMESPACE
+                    ),
+                )
+
+            def parse():
+                return MODULE.late_disposition.parse_successor_classification_artifact(
+                    artifact,
+                    signature,
+                    expected_signer=signer,
+                    repository="SecPal/.github",
+                    delivery_issue_number=894,
+                    pull_request_number=905,
+                    head_sha=head,
+                    predecessor_state_digest=predecessor_state,
+                    resulting_state_digest=resulting_state,
+                    signature_environment=environment,
+                )
+
+            sign(payload)
+            verified = parse()
+            self.assertEqual(verified.finding_id, comment_id)
+            self.assertEqual(
+                verified.sources,
+                (("THREAD_COMMENT", comment_id, body_digest, thread_id),),
+            )
+
+            for label, mutate in (
+                (
+                    "cross repository",
+                    lambda value: value.update(repository="SecPal/other"),
+                ),
+                (
+                    "cross PR",
+                    lambda value: value.update(pull_request_number=906),
+                ),
+                (
+                    "cross head",
+                    lambda value: value.update(head_sha="d" * 40),
+                ),
+                (
+                    "predecessor Stable Feedback drift",
+                    lambda value: value.update(predecessor_state_digest="d" * 64),
+                ),
+                (
+                    "resulting Stable Feedback drift",
+                    lambda value: value.update(resulting_state_digest="d" * 64),
+                ),
+                (
+                    "ambiguous repeated source",
+                    lambda value: value["sources"].append(
+                        copy.deepcopy(value["sources"][0])
+                    ),
+                ),
+                (
+                    "VALID_ACTIONABLE",
+                    lambda value: value["thread"].update(
+                        classification="VALID_ACTIONABLE",
+                        disposition="CORRECTED_AND_VERIFIED",
+                    ),
+                ),
+                (
+                    "material finding",
+                    lambda value: value["thread"].update(
+                        technically_blocking=True,
+                        technical_blockers=["P1"],
+                    ),
+                ),
+            ):
+                changed = copy.deepcopy(payload)
+                mutate(changed)
+                sign(changed)
+                with self.subTest(label=label), self.assertRaises(
+                    MODULE.late_disposition.LateDispositionError
+                ):
+                    parse()
+
+            changed = copy.deepcopy(payload)
+            changed["delivery_signer"]["fingerprint"] = alternate.fingerprint
+            sign(changed, alternate_key, alternate)
+            with self.assertRaisesRegex(
+                MODULE.late_disposition.LateDispositionError,
+                "signer does not match final delivery signer",
+            ):
+                parse()
+
+            signature.write_bytes(b"")
+            with self.assertRaises(MODULE.late_disposition.LateDispositionError):
                 parse()
 
     def test_cycle1_r2_openpgp_verifies_captured_bytes_not_mutable_paths(

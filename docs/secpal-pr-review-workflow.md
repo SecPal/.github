@@ -151,6 +151,24 @@ status after the gate, preserving the existing stable-feedback schema and
 digest. Provider absence remains `NOT_TRIGGERED` only where the maintained
 observable boundary has no affirmative trigger evidence.
 
+Ready-source recovery has one narrower head-binding derivation. When protected
+CURRENT authenticates an exact Ready-preserving `REMEDIATION_COMPLETED` suffix,
+the recovery issuer may use the predecessor of that suffix as the provider head.
+The provider summary must name that verifier-derived head and its exact
+repository and PR, remain terminal, and pass the ordinary parser. The caller
+cannot supply a predecessor. Review 1/1, the bounded remediation count, one
+Ready transition, unchanged lifecycle identity, and absence of Cycle 3,
+Recovery, or Continuation are reverified from the complete signed lifecycle.
+The maintained current-head final attestation and recovery authorization remain
+independently binding; the provider result is not persisted as evidence.
+
+This exception changes only provider-summary head binding. The same bounded
+read still captures all current-head feedback. Every later material,
+actionable, security, authentication, integrity, unclassified, or otherwise
+blocking source must be dispositioned under the existing current-feedback
+rules. Ordinary capture and Ready integration continue to require exact-head
+provider terminality.
+
 When the current instruction authorizes full delivery and the environment can
 wait, observe only maintained review-provider status at bounded intervals of
 approximately 60 to 90 seconds for approximately 30 minutes total. This passive
@@ -1157,6 +1175,100 @@ earlier source-correction authorization or resolver scope, and its verification
 performs no provider request. A Continuation-bound resolver receives this
 separate proof through `--exceptional-continuation-successor-safety`; the
 immutable source authorization, receipt, attestation, and commit remain reusable.
+
+Schema 1.1 extends that same one-use Continuation family for one candidate that
+was rejected before publication. It requires unchanged exhausted Ready CURRENT
+with Recovery consumed and Continuation unconsumed, an authenticated same-head
+`PR_REBOUND`, the original and replacement PR identities, and independently
+captured Stable Feedback for both PRs. The original-PR candidate must be a
+signed, validated, sole-parent successor of CURRENT, remain unpublished, and
+have complete exact-head provider acquisition plus signed version-1.3 material
+classifications. Its original typed Continuation document is normalized,
+cross-bound to the delivery, CURRENT tree, lifecycle, and source signer, and
+bound by the candidate receipt and attestation. Validation policy and schema
+come from a base proven in protected-main ancestry rather than the verifier's
+checkout. Those classifications bind the rejected state, exact finding
+sources, and `CANDIDATE_REJECTED_BEFORE_PUBLICATION`; they are diagnostic input
+only. The signed correction authorization also binds both PRs, protected
+CURRENT, the rejected head/tree/receipt/attestation, both Stable Feedback
+states, exact material findings and sources, and the corrected sole-parent
+head/tree. Fresh exact-head provider safety is still mandatory for the corrected
+candidate, and any material or unclassified successor finding blocks
+publication.
+
+The same re-anchor authority permits the replacement PR to retain a newer base
+only when the original base, replacement base, and independently observed live
+protected-main head form one authenticated accepted-main lineage. The
+replacement base is derived from its canonical Stable Feedback state; caller
+base assertions have no authority. The exact immediate same-head `PR_REBOUND`
+remains mandatory, and the protected lifecycle CURRENT must remain unchanged.
+Provider Compare acquisition first normalizes one closed bounded observation;
+a separate pure predicate admits only exact ancestor lineage. The durable
+re-anchor projection binds the historical and replacement bases, while the
+later live protected-main tip remains runtime verification and cannot change a
+previously signed scope or digest. Legacy same-base re-anchor evidence keeps its
+original projection and digest.
+
+Rejected-successor safety schema 1.2 permits one narrower provider
+representation: Codex may remove its predecessor direct-PR completion
+`THUMBS_UP` reaction and add one replacement completion reaction while reviewing
+the rejected candidate. The closed record names both reaction identities, the
+fixed provider, and the fixed content, and must match complete terminal
+exact-head Code and Security review transport. Its canonical digest binds the
+PR, both Stable Feedback states, the rejected head, the full provider transport,
+and the removal/replacement pair into the re-anchor projection and existing
+signed Continuation authorization scope. Actor or content substitution, missing
+or additional reaction churn, incomplete or nonterminal transport, wrong-head
+or wrong-PR evidence, and replay remain rejected. Corrected-successor safety
+schema 1.0 retains its historical clean Code/Security no-finding behavior and
+predecessor preservation.
+
+Corrected-successor safety schema 1.1 is the re-anchor-only alternative for one
+terminal exact-head Codex Code Review containing suggestions. It authenticates
+the exact review object, provider identity, reviewed commit, body digest,
+terminal summary, Code/Security request comments, and the existing independently
+terminal Security no-finding result. Completeness is derived from the canonical
+Stable Feedback source inventory: every suggestion source must have an existing
+signed version-1.2 invalid/disproven or informational/non-actionable successor
+classification bound to the repository, PR, exact head, both Stable Feedback
+states, exact finding content, and live thread state. A Code no-finding result
+or completion reaction is incompatible with this representation. Missing,
+additional, ambiguous, stale, cross-boundary, material, actionable, unsafe, or
+unclassified findings remain blocking. Each classified finding must be rooted
+in the authenticated Codex provider and contain only Codex-owned sources from
+that exact thread; provider-owned non-thread sources remain transport evidence,
+and non-provider additions cannot be classified as review suggestions.
+Historical ordinary successor classifications retain their existing decision
+policy. The classification proves candidate safety only and carries no
+thread-resolution or lifecycle-transition authority.
+
+Corrected-successor safety schema 1.2 adds a prior partition step for provider
+feedback created on the replacement PR after its authenticated anchor snapshot.
+One exact GitHub Copilot review must name lifecycle CURRENT as its reviewed
+commit, and every newly observed Copilot thread must be inventoried as unresolved
+material predecessor evidence. Each exact source is bound to the already
+authenticated rejected-candidate correction-source digest through a closed
+one-to-one material-finding map and then to the existing signed Continuation
+authorization; no predecessor finding receives a safe classification or
+becomes candidate-local trust. The same closed evidence
+authenticates the exact Codex-owned completion `THUMBS_UP` removed when the
+corrected head was re-reviewed, using the existing provider-reaction drift
+family. Only after this predecessor inventory is complete does schema 1.1
+successor safety evaluate the exact-resulting-head Codex review, its complete
+safe classifications, and the terminal Security no-finding result. Missing,
+additional, stale, wrong-head, wrong-PR, provider-substituted, cross-boundary,
+material-resulting-head, or unclassified-resulting-head feedback remains
+blocking. The predecessor partition carries no cross-PR thread authority,
+resolution eligibility, provider request, new trust root, or lifecycle event.
+
+The re-anchored artifact carries no resolution-eligible thread identities. Old
+threads remain owned by the original PR, and the resolver rejects schema 1.1
+Continuation evidence outright. Clean or incomplete replacement-PR
+rediscovery cannot erase the authenticated original-PR rejection, nominate a
+tree, or grant cross-PR mutation. The rejected candidate never becomes CURRENT,
+an ancestry root, or a lifecycle transition. Successful publication remains the
+existing `EXCEPTIONAL_CONTINUATION` transition and consumes only its existing
+`0 -> 1` counter.
 
 The simple resolver first verifies the caller-captured reviewed-state digest,
 successful validation attestation, actual local signed commit, and exact

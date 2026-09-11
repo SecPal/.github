@@ -105,6 +105,12 @@ It rejects a visible non-terminal, malformed, forged, duplicate, or wrong-head
 Codex summary; it rejects a Ready PR with no Codex summary and a pending Copilot
 review request. Provider status remains ephemeral and is excluded from the
 stable-feedback artifact, so this adds no evidence family or persistence.
+The sole exception is Ready-source recovery after authenticated Ready-preserving
+remediation: maintained CURRENT derives the unique predecessor provider head,
+and the terminal summary must also bind the exact repository and PR. Callers
+cannot nominate that head. Current-head feedback is still captured completely
+and remains blocking under the ordinary classification rules; every other path
+retains exact-head provider terminality.
 
 ## Simple resolution-only path
 
@@ -586,6 +592,43 @@ cross-head/PR replay, and unsigned additions fail closed. Provider transport is
 authenticated separately and is never a generic feedback-growth allowance.
 This proof remains separate from the immutable source-correction authorization,
 receipt, attestation, and commit, and verification requests no provider.
+
+For a re-anchored corrected successor only, successor-safety schema 1.1 may
+represent a terminal exact-head Codex Code Review containing suggestions in
+place of the mutually incompatible Code no-finding conversation result. The
+existing terminal Security no-finding result remains mandatory. The verifier
+authenticates the exact review identity, provider, reviewed commit, review-body
+digest, terminal summary, request transport, complete Stable Feedback addition
+set, and one signed version-1.2 safe classification for every suggestion
+source. Only invalid/disproven and informational/non-actionable decisions are
+safe. Mixing a Code no-finding result or completion reaction with the findings
+review, omitting or inventing a source, or admitting any stale, ambiguous,
+material, actionable, unsupported, or unclassified finding fails closed.
+Every classified finding is thread-bound, rooted in the authenticated Codex
+provider, and limited to Codex-owned sources from that exact thread.
+Provider-owned non-thread sources must use their exact transport role, while
+non-provider additions cannot be recast as review findings. Historical clean
+successor-safety schema 1.0 and its ordinary classification family are
+unchanged. Neither form grants thread-resolution, review-request,
+lifecycle-transition, or Git authority.
+
+Successor-safety schema 1.2 preserves those exact-resulting-head rules and adds
+one independent predecessor partition. It authenticates one exact GitHub
+Copilot review committed to lifecycle CURRENT plus the complete set of new,
+unresolved, provider-owned thread sources that appeared after the authenticated
+replacement anchor and existed before corrected-successor qualification. Those
+sources remain material correction input and are bound to the existing
+rejected-candidate correction-source digest through a closed one-to-one
+material-finding map and then to the signed Continuation scope; they are never
+classified as safe successor feedback. The closed record also binds
+the exact Codex-owned completion `THUMBS_UP` removed during the resulting-head
+re-review, reusing the maintained provider-reaction drift family. Only the
+remaining exact-resulting-head provider sources are evaluated by schema 1.1
+successor safety. Omission, invention, source/body drift, wrong provider, head,
+PR, repository, correction authority, reaction, or thread boundary, and any
+material or unclassified resulting-head finding fail closed. This partition
+does not authorize thread resolution, cross-PR replay, candidate self-trust,
+provider acquisition, or a new lifecycle operation.
 
 ## Authenticated Ready/Draft execution boundary
 

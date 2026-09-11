@@ -9,6 +9,69 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-11 - Authenticate Remediated Ready Provider Terminality
+
+**Fixed:**
+
+- Derive the unique predecessor Codex provider head from authenticated
+  Ready-preserving remediation history during Ready-source recovery, while
+  retaining exact repository, PR, terminal-status, finite-budget, and lifecycle
+  bindings.
+- Keep current-head feedback completeness authoritative and preserve ordinary
+  exact-head provider checks, Ready integration, and historical source recovery
+  behavior outside this narrow case.
+
+## 2026-09-11 - Authenticate Predecessor Feedback Drift
+
+**Fixed:**
+
+- Partition replacement-PR provider growth by reviewed head so exact-CURRENT
+  Copilot review feedback created after the re-anchor snapshot remains material
+  correction input instead of being treated as corrected-successor safety.
+- Bind the complete predecessor review and finding inventory, the provider-owned
+  completion-reaction removal, and the existing rejected-candidate correction
+  scope into the signed Continuation authorization while preserving strict
+  exact-resulting-head Codex and Security Review safety.
+
+## 2026-09-11 - Admit Classified Codex Successor Findings
+
+**Fixed:**
+
+- Authenticate a terminal exact-head Codex Code Review with suggestions during
+  rejected-candidate re-anchor when the complete provider-derived finding set
+  has signed, exact-state invalid/disproven or informational/non-actionable
+  classifications and Security Review independently completed without findings.
+- Preserve the historical Code/Security no-finding representation while
+  rejecting incomplete inventories, unsafe classifications, stale bindings,
+  synthetic Code no-finding results, provider substitution, and any thread-
+  resolution or lifecycle authority expansion.
+
+## 2026-09-11 - Preserve Re-anchor Across PR Feedback Drift
+
+**Fixed:**
+
+- Preserve an immutable rejected Continuation candidate across authenticated
+  accepted protected-main advancement while retaining exact same-delivery
+  `PR_REBOUND`, lifecycle CURRENT, and unconsumed Continuation authority; later
+  protected-main movement is runtime verification and does not rewrite the
+  signed re-anchor scope.
+- Admit only one exact Codex-owned completion `THUMBS_UP` removal/replacement
+  paired with complete terminal exact-head provider transport; unrelated base,
+  reaction, actor, content, provider, head, PR, and replay drift remains
+  fail-closed.
+
+## 2026-09-10 - Re-anchor Rejected Continuation Candidates
+
+**Fixed:**
+
+- Reuse the one-use Exceptional Continuation after an unpublished candidate is
+  rejected by authenticated material successor findings and the unchanged
+  lifecycle moves to a replacement PR through authenticated `PR_REBOUND`.
+- Bind both PRs, protected CURRENT, rejected source and validation evidence,
+  immutable validation policy, original Continuation evidence, exact material
+  finding sources, the corrected sole-parent candidate, and fresh successor
+  safety while granting no cross-PR thread or trust authority.
+
 ## 2026-09-10 - Authenticate Large Diagnostic Recovery Sources
 
 **Fixed:**
