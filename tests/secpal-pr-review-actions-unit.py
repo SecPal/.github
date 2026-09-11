@@ -6993,6 +6993,7 @@ class FastPathTests(TestCase):
         )
         cases = (
             ("repository", "SecPal/api"),
+            ("base_repository", "SecPal/api"),
             ("pull_request_number", 2),
             ("state", "CLOSED"),
             ("draft", True),
@@ -7408,6 +7409,38 @@ class FastPathTests(TestCase):
                 ),
                 authority_manifest,
             )
+
+            historical_base_sha = "8" * 40
+            recovered.expected_target_base_sha = historical_base_sha
+            self.assertEqual(
+                actions._verify_ready_integration_prior_authority(
+                    arguments=arguments,
+                    repository_root=REPO_ROOT,
+                    binding=fast_registry(),
+                    integration_evidence=integration,
+                    live_observation=None,
+                ),
+                authority_manifest,
+            )
+            self.assertEqual(
+                recovered.expected_target_base_sha, historical_base_sha
+            )
+            self.assertEqual(
+                integration["ordered_parent_shas"][1], reviewed.base_sha
+            )
+
+            recovered.expected_target_base_ref = "release"
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "binding changed"
+            ):
+                actions._verify_ready_integration_prior_authority(
+                    arguments=arguments,
+                    repository_root=REPO_ROOT,
+                    binding=fast_registry(),
+                    integration_evidence=integration,
+                    live_observation=None,
+                )
+            recovered.expected_target_base_ref = reviewed.base_ref
 
             arguments.prior_receipt = "invalid-supplied-history.json"
             with self.assertRaisesRegex(

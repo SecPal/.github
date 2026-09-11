@@ -935,7 +935,11 @@ explicitly proven unavailable, version 1.2 of the same prior-authority manifest
 may select one protected `READY_SOURCE_RECOVERY_PUBLICATION`. It binds the exact
 repository, issue, PR, signed sole-parent head, tree, expected base, CURRENT
 lifecycle publication and complete Ready histories; historical receipt and
-attestation digests remain provenance facts only. Fresh complete feedback and
+attestation digests remain provenance facts only. Its expected base SHA is also
+immutable recovery-time provenance. A later integration authenticates parent 2
+from the protected current tip of the same registered target repository/ref;
+legitimate advancement does not require the historical and current SHAs to be
+equal. Fresh complete feedback and
 validation safety digests plus a separately signed one-use authorization are
 mandatory. The recovery is an ancillary record in the existing protected
 lifecycle journal and never becomes a lifecycle transition or second journal.

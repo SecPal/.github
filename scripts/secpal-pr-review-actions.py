@@ -5881,6 +5881,7 @@ def _verify_ready_integration_live_observation(
 ) -> None:
     if (
         observation["repository"] != integration_evidence["repository"]
+        or observation["base_repository"] != integration_evidence["repository"]
         or observation["pull_request_number"] != integration_evidence["pull_request_number"]
         or observation["state"] != "OPEN"
         or observation["draft"] is not False
@@ -6133,10 +6134,11 @@ def _verify_ready_integration_recovered_authority(
         or recovered.head_sha != authority_manifest["prior_delivery_head_sha"]
         or recovered.tree_sha != authority_manifest["prior_delivery_tree_sha"]
         or recovered.parent_shas != (parent_sha,)
+        # Recovery-time base SHA is immutable source provenance. The same
+        # authenticated base ref, not that historical tip, must match the
+        # independently authenticated current integration target.
         or recovered.expected_target_base_ref
         != integration_evidence["target_base"]["ref"]
-        or recovered.expected_target_base_sha
-        != integration_evidence["target_base"]["authorized_sha"]
         or recovered.expected_commit_signer
         != authority_manifest["expected_signer"]
         or recovered.commit_signature_evidence_digest
