@@ -173,6 +173,9 @@ EOF
   cat >"$repository/tests/evidence-architecture-governance.py" <<'EOF'
 """Fixture stand-in for preflight's required governance-test dependency."""
 EOF
+  cat >"$repository/tests/delivery-lifecycle-governance.py" <<'EOF'
+"""Fixture stand-in for preflight's Draft-first governance dependency."""
+EOF
   cat >"$repository/tests/postgresql-18-baseline-governance.py" <<'EOF'
 """Fixture stand-in for preflight's required PostgreSQL governance dependency."""
 EOF

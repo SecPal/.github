@@ -148,6 +148,16 @@ with open(os.environ["TEST_LOG"], "a", encoding="utf-8") as log:
     log.write("evidence-architecture-governance\n")
 EOF
 
+cat >"$workspace/tests/delivery-lifecycle-governance.py" <<'EOF'
+"""Fixture stand-in proving preflight requires Draft-first governance."""
+
+import os
+
+
+with open(os.environ["TEST_LOG"], "a", encoding="utf-8") as log:
+    log.write("delivery-lifecycle-governance\n")
+EOF
+
 cat >"$workspace/tests/postgresql-18-baseline-governance.py" <<'EOF'
 """Fixture stand-in proving preflight requires the PostgreSQL baseline suite."""
 
