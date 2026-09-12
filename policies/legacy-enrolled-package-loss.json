@@ -51,10 +51,7 @@
           "validation-attestation.json",
           "validation-receipt.json"
         ],
-        "maintained_durable_stores": [
-          "DELIVERY_SOURCE_HISTORY",
-          "PROTECTED_LIFECYCLE_PUBLICATION"
-        ],
+        "maintained_durable_stores": ["DELIVERY_SOURCE_HISTORY", "PROTECTED_LIFECYCLE_PUBLICATION"],
         "unsurveyed_maintained_stores": [],
         "retained_local_store": "NO_MAINTAINED_RETAINED_STORE"
       },
