@@ -114,8 +114,11 @@ output binds the exact conflict paths and requires each to be explicitly
 changed or deleted, with no extra paths or retained text conflict markers. This
 does not relax the ordinary sole-parent path, create or push an integration,
 change Ready state, read post-push checks, or authorize merge automation.
-Historical receipt reconstruction reads the registry blob from the immutable
-prior delivery commit rather than applying a later registry to older evidence.
+Historical receipt reconstruction resolves the receipt-bound repository
+projection from immutable central registry history and validates it with the
+schema committed alongside that registry state. The target delivery repository
+does not become the registry source, and later registry policy does not rewrite
+older evidence.
 For an explicitly authorized unchanged Ready source whose pre-persistence
 package is proven unavailable, `issue_ready_source_recovery_authorization` is
 the only production trust-producing entrypoint. It reads validation policy from

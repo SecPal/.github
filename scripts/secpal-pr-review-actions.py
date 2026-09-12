@@ -126,6 +126,7 @@ def _load_fast_path_helper() -> Any:
 
 fast_path = _load_fast_path_helper()
 follow_up = fast_path.follow_up
+PROHIBITED_OPERATION_KINDS = tuple(fast_path.PROHIBITED_REGISTRY_OPERATIONS)
 
 
 def _load_exact_source_safety_helper() -> Any:
@@ -368,18 +369,6 @@ MUTATION_KINDS_BY_STATE = {
     },
     "RESOLVE_ELIGIBLE_THREADS_FROM_VERIFIED_STATE": {"THREAD_RESOLUTION"},
 }
-PROHIBITED_OPERATION_KINDS = (
-    "REVIEW_REQUEST",
-    "READY_TRANSITION",
-    "LABEL",
-    "ISSUE",
-    "REVIEW_SUBMISSION",
-    "MERGE",
-    "AUTO_MERGE",
-    "COMMENT_DELETE",
-    "REVIEW_DISMISSAL",
-    "BRANCH_WRITE",
-)
 SESSION_LIMITS = {
     "remediation_cycles": 2,
     "state_captures": 3,
@@ -388,19 +377,6 @@ SESSION_LIMITS = {
     "fast_forward_pushes": 2,
     "evidence_replies": 10,
 }
-P21_CONFIGURATION_KEYS = (
-    "repository",
-    "default_branch",
-    "allowed_base_repositories",
-    "reviewer_identities",
-    "signature_policy",
-    "check_policy",
-    "maximum_api_calls",
-    "maximum_items",
-    "maximum_threads",
-    "maximum_comments",
-    "maximum_reactions",
-)
 RESOLVABLE_DISPOSITIONS = {
     "CORRECTED_AND_VERIFIED",
     "PROVEN_EXISTING_FIX",
@@ -460,11 +436,6 @@ STATUS_REPLY = re.compile(
 SECRET_VALUE = fast_path.SECRET_VALUE
 OID_PATTERN = re.compile(r"^[0-9a-fA-F]{40,64}$")
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-SAFE_COMMAND_NAME = re.compile(r"^(?:[A-Za-z0-9_.+-]+|\./[A-Za-z0-9_./+-]+)$")
-SAFE_PACKAGE_SCRIPT_NAME = re.compile(r"^[A-Za-z0-9_.:+-]+$")
-DESTRUCTIVE_COMMANDS = {"rm", "rmdir", "shred", "mkfs", "dd", "sudo", "git-clean"}
-DIRECT_VALIDATION_EXECUTABLES = {"composer", "node", "npm", "python3", "reuse"}
-COMPOSER_VALIDATION_SCRIPTS = {"analyse", "ci:check", "test"}
 DISPOSITION_POLICY = {
     "VALID_ACTIONABLE": {"PENDING", "CORRECTED_AND_VERIFIED", "PROVEN_EXISTING_FIX"},
     "INVALID_FALSE_OR_MISLEADING": {"DISPROVEN_WITH_EVIDENCE"},
@@ -1271,91 +1242,30 @@ def validate_plan(
     return copy.deepcopy(plan)
 
 
-def _validate_command(command: dict[str, Any]) -> None:
-    argv = command.get("argv")
-    if not isinstance(argv, list) or not argv or any(not isinstance(item, str) or not item for item in argv):
-        raise RegistryError("validation command argv must be a non-empty argument array")
-    executable = Path(argv[0]).name
-    executable_path = Path(argv[0])
-    if (
-        not SAFE_COMMAND_NAME.fullmatch(argv[0])
-        or executable_path.is_absolute()
-        or ".." in executable_path.parts
-    ):
-        raise RegistryError("validation command executable must stay repository-relative")
-    if executable in DESTRUCTIVE_COMMANDS or any(
-        item in {"--force", "--delete", "--hard", "deploy", "migrate:fresh"}
-        or item.startswith(("deploy:", "publish:"))
-        for item in argv[1:]
-    ):
-        raise RegistryError("destructive validation command is prohibited")
-    if not argv[0].startswith("./") and executable not in DIRECT_VALIDATION_EXECUTABLES:
-        raise RegistryError("validation command must use a trusted direct executable")
-    if executable == "python3" and not (
-        len(argv) >= 4 and argv[1:3] == ["-m", "unittest"]
-    ):
-        raise RegistryError("registry python commands must invoke unittest")
-    if executable == "node" and argv != ["node", "--test"]:
-        raise RegistryError("registry node commands must invoke the checked-in test suite")
-    if executable == "npm" and not (
-        len(argv) == 3
-        and argv[1] == "run"
-        and SAFE_PACKAGE_SCRIPT_NAME.fullmatch(argv[2])
-    ):
-        raise RegistryError("registry npm commands must name one checked-in package script")
-    if executable == "composer" and not (
-        len(argv) == 2 and argv[1] in COMPOSER_VALIDATION_SCRIPTS
-    ):
-        raise RegistryError("registry composer commands must name one approved project script")
-    if executable == "reuse" and argv != ["reuse", "lint"]:
-        raise RegistryError("registry reuse commands must invoke lint")
-    working_directory = command.get("working_directory")
-    if not isinstance(working_directory, str) or not working_directory or Path(working_directory).is_absolute() or ".." in Path(working_directory).parts:
-        raise RegistryError("validation working directory must stay repository-relative")
-    if not isinstance(command.get("purpose"), str) or not command["purpose"].strip():
-        raise RegistryError("validation command purpose is required")
-
-
 def validate_registry(registry: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(registry, dict):
         raise RegistryError("repository registry must be a JSON object")
     _validate_schema(registry, REGISTRY_SCHEMA_PATH, "workflow_registry", RegistryError)
-    repositories: set[str] = set()
-    for entry in registry["repositories"]:
-        repository = entry["repository"]
-        if not REPOSITORY_PATTERN.fullmatch(repository):
-            raise RegistryError(f"invalid repository identity: {repository}")
-        if repository in repositories:
-            raise RegistryError(f"duplicate repository registry entry: {repository}")
-        repositories.add(repository)
-        p21_configuration = _package_21_configuration(entry)
-        try:
-            evidence.validate_config(p21_configuration)
-        except evidence.ContractError as exc:
-            raise RegistryError(f"invalid Package 2.1 configuration for {repository}: {exc}") from exc
-        for command in (*entry["focused_validation"], *entry["required_local_validation"]):
-            _validate_command(command)
-        if any(
-            command.get("execution_policy") == "focused-only"
-            for command in entry["required_local_validation"]
-        ):
-            raise RegistryError(
-                "required local validation cannot use focused-only execution"
-            )
-        if not entry["required_local_validation"] and not entry["manual_gates"]:
-            raise RegistryError("incomplete validation requires an explicit manual gate")
-        if set(entry["unsupported_operations"]) != set(PROHIBITED_OPERATION_KINDS):
-            raise RegistryError("unsupported operations must retain every prohibited capability")
-    return copy.deepcopy(registry)
+    try:
+        return fast_path.validate_repository_registry_structure(registry)
+    except fast_path.SecurityBlocker as exc:
+        raise RegistryError(str(exc)) from exc
 
 
 def _package_21_configuration(entry: dict[str, Any]) -> dict[str, Any]:
     configuration = {
         key: copy.deepcopy(entry[key])
-        for key in P21_CONFIGURATION_KEYS
+        for key in fast_path.REGISTRY_CONFIGURATION_KEYS
     }
     configuration["schema_version"] = "1.0"
     return configuration
+
+
+def _validate_command(command: dict[str, Any]) -> None:
+    try:
+        fast_path.validate_registry_command(command)
+    except fast_path.SecurityBlocker as exc:
+        raise RegistryError(str(exc)) from exc
 
 
 def load_registry(path: str | None = None) -> dict[str, Any]:
@@ -6164,72 +6074,19 @@ def _verify_ready_integration_recovered_authority(
 
 
 def _prior_delivery_registry_binding(
-    repository_root: Path, head: str, repository: str
+    head: str,
+    repository: str,
+    registry_digest: str,
+    command_set_digest: str,
 ) -> dict[str, Any]:
-    """Read validation policy and schema from the immutable prior delivery."""
+    """Adapt the action layer to the canonical immutable registry loader."""
 
-    registry_result = _run_attestation_git(
-        repository_root,
-        [
-            "show",
-            f"{head}:.agents/skills/secpal-pr-review/references/repositories.json",
-        ],
-        allow_failure=True,
+    return fast_path.load_immutable_delivery_registry_binding(
+        repository=repository,
+        delivery_head_sha=head,
+        expected_registry_digest=registry_digest,
+        expected_command_set_digest=command_set_digest,
     )
-    schema_result = _run_attestation_git(
-        repository_root,
-        [
-            "show",
-            f"{head}:.agents/skills/secpal-pr-review/references/"
-            "repositories.schema.json",
-        ],
-        allow_failure=True,
-    )
-    if registry_result.returncode != 0 or schema_result.returncode != 0:
-        raise fast_path.SecurityBlocker(
-            "prior delivery validation registry or schema is unavailable"
-        )
-    try:
-        registry = json.loads(
-            registry_result.stdout, object_pairs_hook=_reject_duplicate_json_object
-        )
-        json.loads(
-            schema_result.stdout, object_pairs_hook=_reject_duplicate_json_object
-        )
-        with tempfile.TemporaryDirectory(
-            prefix="secpal-prior-registry-schema-"
-        ) as directory:
-            schema_path = Path(directory) / "repositories.schema.json"
-            schema_path.write_text(schema_result.stdout, encoding="utf-8")
-            evidence.validate_against_authoritative_schema(
-                registry, schema_path, "prior delivery validation registry"
-            )
-        entries = registry["repositories"]
-    except (
-        KeyError,
-        TypeError,
-        ValueError,
-        evidence.ContractError,
-        OSError,
-    ) as exc:
-        raise fast_path.SecurityBlocker(
-            "prior delivery validation registry is malformed"
-        ) from exc
-    matches = [
-        item
-        for item in entries
-        if isinstance(item, dict) and item.get("repository") == repository
-    ] if isinstance(entries, list) else []
-    if len(matches) != 1:
-        raise fast_path.SecurityBlocker(
-            "prior delivery validation registry identity is ambiguous"
-        )
-    try:
-        return _fast_registry_binding(matches[0])
-    except (KeyError, TypeError, RegistryError) as exc:
-        raise fast_path.SecurityBlocker(
-            "prior delivery validation registry entry is invalid"
-        ) from exc
 
 
 def _verified_prior_delivery_commit(
@@ -6559,6 +6416,8 @@ def _derive_exact_state_adoption_v3_ready_prior_authority(
     delivery_issue: int,
     pull_request: int,
     binding: dict[str, Any],
+    reviewed_state_digest: str | None = None,
+    reviewed_feedback_digest: str | None = None,
 ) -> dict[str, Any]:
     """Derive the v3-adopted source projection from protected CURRENT."""
 
@@ -6658,6 +6517,7 @@ def _derive_exact_state_adoption_v3_ready_prior_authority(
     loss = proof.get("validation_evidence_loss_admission")
     budget = proof.get("review_budget_consumption_admission")
     authorization = proof.get("authorization")
+    current_safety = loss.get("current_safety") if isinstance(loss, dict) else None
     if (
         not isinstance(loss, dict)
         or not isinstance(budget, dict)
@@ -6675,7 +6535,7 @@ def _derive_exact_state_adoption_v3_ready_prior_authority(
         or loss.get("historical_validation_receipt_digest")
         != proof.get("validation_receipt_digest")
         or proof.get("source_validation_evidence_digest")
-        != fast_path.digest_json(loss.get("current_safety"))
+        != fast_path.digest_json(current_safety)
         or budget.get("admission_digest")
         != next(
             (
@@ -6688,6 +6548,19 @@ def _derive_exact_state_adoption_v3_ready_prior_authority(
     ):
         raise fast_path.SecurityBlocker(
             "Exact-State-Adoption v3 source provenance is invalid"
+        )
+    if (reviewed_state_digest is None) != (reviewed_feedback_digest is None):
+        raise fast_path.SecurityBlocker(
+            "adopted Ready reviewed-state selectors are incomplete"
+        )
+    if reviewed_state_digest is not None and (
+        not isinstance(current_safety, dict)
+        or current_safety.get("reviewed_state_digest") != reviewed_state_digest
+        or current_safety.get("reviewed_feedback_digest")
+        != reviewed_feedback_digest
+    ):
+        raise fast_path.SecurityBlocker(
+            "integration reviewed predecessor differs from authenticated adopted Ready safety"
         )
     source_commit = _verified_prior_delivery_commit(
         repository_root,
@@ -6970,6 +6843,10 @@ def _verify_ready_integration_prior_authority(
             delivery_issue=arguments.delivery_issue,
             pull_request=integration_evidence["pull_request_number"],
             binding=binding,
+            reviewed_state_digest=integration_evidence["reviewed_state_digest"],
+            reviewed_feedback_digest=integration_evidence[
+                "reviewed_feedback_digest"
+            ],
         )
         _require_exact_adopted_ready_manifest(authority, derived)
         if required_paths[4] != _canonical_ready_prior_authority_tag_ref(authority):
@@ -7036,7 +6913,10 @@ def _verify_ready_integration_prior_authority(
         ):
             raise fast_path.SecurityBlocker("prior delivery evidence identity changed")
         prior_binding = _prior_delivery_registry_binding(
-            repository_root, head, arguments.repo
+            head,
+            arguments.repo,
+            attestation.get("registry_digest", ""),
+            attestation.get("command_set_digest", ""),
         )
         expected_prior_receipt = fast_path.create_validation_receipt(
             repository=arguments.repo,
@@ -7368,14 +7248,18 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         raise fast_path.SecurityBlocker(
             "reviewed feedback repository does not match --repo"
         )
-    if not arguments.bind_commit and reviewed.head_sha != arguments.expected_head:
+    integration_evidence_path = getattr(arguments, "integration_evidence", None)
+    if (
+        not arguments.bind_commit
+        and not integration_evidence_path
+        and reviewed.head_sha != arguments.expected_head
+    ):
         raise fast_path.SecurityBlocker(
             "reviewed feedback head does not match --expected-head"
         )
     registry = load_registry(arguments.registry)
     entry = select_repository(registry, arguments.repo)
     binding = _fast_registry_binding(entry)
-    integration_evidence_path = getattr(arguments, "integration_evidence", None)
     pre_enrollment_evidence_path = getattr(
         arguments, "pre_enrollment_integration_evidence", None
     )
@@ -7916,6 +7800,10 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             validated_tree_sha=tree,
         )
         _verify_integration_selection(integration_evidence, arguments)
+        if head != integration_evidence["prior_delivery_head_sha"]:
+            raise fast_path.SecurityBlocker(
+                "local head does not match the authenticated prior Ready parent"
+            )
         _verify_ready_integration_prior_authority(
             arguments=arguments,
             repository_root=repository_root,
