@@ -8,18 +8,33 @@ from __future__ import annotations
 import copy
 from dataclasses import replace
 import hashlib
+import importlib.util
 import inspect
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest import TestCase, main
 from unittest.mock import patch
 
 from scripts.secpal_pr_review import lifecycle_authority as authority
 from scripts.secpal_pr_review import lifecycle_publication as publication
+from scripts.secpal_pr_review import fast_path
+
+
+def load_actions() -> Any:
+    path = Path(__file__).resolve().parents[1] / "scripts/secpal-pr-review-actions.py"
+    spec = importlib.util.spec_from_file_location("secpal_actions_for_publication", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load action helper")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 REPOSITORY = "SecPal/.github"
 ISSUE = 752
@@ -203,6 +218,274 @@ def recovered_ready_chain(issue: int = ISSUE) -> Chain:
     return chain
 
 
+def exact_adoption_evidence(
+    *, admit_review_budget: bool = False
+) -> tuple[bytes, dict[str, Any]]:
+    if admit_review_budget:
+        history = [
+            {"sequence": 1, "kind": "PR_CREATED_DRAFT",
+             "observed_at": "2026-08-01T00:00:00Z", "head_sha": HEADS[0],
+             "reviewed_head_sha": None},
+            {"sequence": 2, "kind": "REMEDIATION_HEAD_OBSERVED",
+             "observed_at": "2026-08-04T00:00:00Z", "head_sha": HEADS[2],
+             "reviewed_head_sha": None},
+        ]
+    else:
+        history = [
+            {"sequence": 1, "kind": "PR_CREATED_DRAFT",
+             "observed_at": "2026-08-01T00:00:00Z", "head_sha": HEADS[0],
+             "reviewed_head_sha": None},
+            {"sequence": 2, "kind": "DRAFT_TO_READY_OBSERVED",
+             "observed_at": "2026-08-02T00:00:00Z", "head_sha": HEADS[0],
+             "reviewed_head_sha": None},
+            {"sequence": 3, "kind": "REVIEW_SUBMITTED",
+             "observed_at": "2026-08-03T00:00:00Z", "head_sha": HEADS[0],
+             "reviewed_head_sha": HEADS[0]},
+            {"sequence": 4, "kind": "REMEDIATION_HEAD_OBSERVED",
+             "observed_at": "2026-08-04T00:00:00Z", "head_sha": HEADS[1],
+             "reviewed_head_sha": None},
+            {"sequence": 5, "kind": "REMEDIATION_HEAD_OBSERVED",
+             "observed_at": "2026-08-05T00:00:00Z", "head_sha": HEADS[2],
+             "reviewed_head_sha": None},
+        ]
+    state = authority.initial_state()
+    state.update(
+        unrestricted_review_count=1,
+        remediation_cycle_count=1 if admit_review_budget else 2,
+        draft=True if admit_review_budget else False,
+        ready=False if admit_review_budget else True,
+        ready_transition_count=0 if admit_review_budget else 1,
+        ready_history=[] if admit_review_budget else [{
+            "sequence": 1, "transition_kind": "DRAFT_TO_READY",
+            "observation_digest": authority.digest_json(history[1]),
+        }],
+    )
+    validation = verified_validation_evidence(
+        head=HEADS[2], tree=HEADS[3], parent=HEADS[1]
+    )
+    commit = {
+        "oid": HEADS[2], "source": "USER", "signer_identity": SIGNER,
+        "local_signature": {"verified": True, "state": "valid", "format": "ssh"},
+        "github_verification": {"verified": True, "reason": "valid"},
+    }
+    review_budget_admission = None
+    if admit_review_budget:
+        verified_commit = fast_path.verify_commit_signatures(
+            [commit],
+            {"accepted_formats": ["ssh"], "require_github_verified": True},
+        )[0]
+        review_budget_admission = (
+            authority.create_pre_enrollment_review_budget_consumption_admission(
+                admission_id="publication-review-budget-admission",
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                pull_request=PR,
+                head_sha=HEADS[2],
+                tree_sha=HEADS[3],
+                pull_request_state="OPEN",
+                commit_signature_evidence_digest=authority.digest_json(
+                    verified_commit
+                ),
+                validation_receipt_digest=validation.validation_receipt_digest,
+                source_validation_evidence_digest=(
+                    validation.source_validation_evidence_digest
+                ),
+                adoption_source_evidence_digest=(
+                    validation.final_attestation_digest
+                ),
+                observed_pre_enrollment_history=history,
+                intended_state=state,
+                adoption_timestamp="2026-08-06T00:00:00Z",
+                signer_identity=LEGACY_SIGNER,
+                signer=signer_for(LEGACY_SIGNER),
+            )
+        )
+    with patch.object(
+        authority, "_load_delivery_signature_policy",
+        return_value={"accepted_formats": ["ssh"], "require_github_verified": True},
+    ):
+        arguments = dict(
+            repository=REPOSITORY, delivery_issue=ISSUE, pull_request=PR,
+            head_sha=HEADS[2], tree_sha=HEADS[3], pull_request_state="OPEN",
+            commit_signature_evidence=commit, validation_evidence=validation,
+            observed_pre_enrollment_history=history, intended_state=state,
+        )
+        if review_budget_admission is not None:
+            arguments["review_budget_consumption_admission"] = (
+                review_budget_admission
+            )
+        external = authority.authenticate_exact_state_adoption_external_evidence(
+            **arguments
+        )
+    evidence = authority.create_exact_state_adoption_evidence(
+        verified_external_evidence=external,
+        adoption_timestamp="2026-08-06T00:00:00Z",
+    )
+    authorization = authority.create_exact_state_adoption_authorization(
+        adoption_evidence=evidence, authorization_id="exact-adoption-auth-1",
+        bounded_uses=1, signer_identity=LEGACY_SIGNER,
+        signer=signer_for(LEGACY_SIGNER),
+    )
+    proof = authority.create_exact_state_adoption_proof(
+        adoption_evidence=evidence, authorization=authorization,
+        signer_identity=LEGACY_SIGNER, signer=signer_for(LEGACY_SIGNER),
+    )
+    return authority.serialize_exact_state_adoption_evidence(
+        exact_state_adoption_proof=proof
+    ), proof
+
+
+def verified_validation_evidence(
+    *,
+    head: str,
+    tree: str,
+    parent: str,
+    pull_request: int = PR,
+    ready_integration: bool = False,
+    delivery_issue: int = ISSUE,
+) -> fast_path.VerifiedValidationEvidence:
+    reviewed = fast_path.StableFeedbackState(
+        repository=REPOSITORY, pull_request_number=pull_request, head_sha=parent,
+        base_ref="main", base_sha=HEADS[0], pr_state="OPEN",
+        feedback={"pull_request_reactions": [], "reviews": [],
+                  "conversation_comments": [], "threads": []},
+    )
+    registry = {
+        "default_branch": "main",
+        "manual_gates": [],
+        "signature_policy": {"accepted_formats": ["ssh", "openpgp"]},
+        "validation": [],
+    }
+    integration = None
+    eligibility_digest = None
+    if ready_integration:
+        eligibility_digest = "e" * 64
+        integration = {
+            "schema_version": "1.1",
+            "kind": "TWO_PARENT_READY_INTEGRATION",
+            "authorization_id": "ready-integration-authorization-001",
+            "repository": REPOSITORY,
+            "delivery_issue_number": delivery_issue,
+            "pull_request_number": pull_request,
+            "prior_delivery_head_sha": parent,
+            "prior_authority_digest": "6" * 64,
+            "prior_authority_tag_object_sha": "7" * 40,
+            "target_base": {
+                "ref": "main",
+                "authorized_sha": HEADS[0],
+                "observed_sha": HEADS[0],
+            },
+            "ordered_parent_shas": [parent, HEADS[0]],
+            "validated_tree_sha": tree,
+            "mechanical_merge_tree_sha": tree,
+            "mechanical_conflict_paths": [],
+            "manual_conflict_resolution_delta": [],
+            "reviewed_state_digest": reviewed.state_digest,
+            "reviewed_feedback_digest": reviewed.feedback_digest,
+            "validation_execution": {
+                "registry_digest": fast_path.digest_json(registry),
+                "command_set_digest": fast_path.digest_json(registry["validation"]),
+            },
+            "expected_signer": {
+                "kind": "SSH_PRINCIPAL",
+                "identity": SIGNER,
+            },
+            "eligibility": {
+                "eligible": True,
+                "lifecycle_identity": "lifecycle-1",
+                "draft_before": False,
+                "draft_after": False,
+                "ready_before": True,
+                "ready_after": True,
+                "ready_transition": False,
+                "review_requested": False,
+                "unrestricted_reviews_before": 1,
+                "unrestricted_reviews_after": 1,
+                "remediation_cycles_before": 2,
+                "remediation_cycles_after": 2,
+                "exceptional_recoveries_before": 0,
+                "exceptional_recoveries_after": 0,
+                "exceptional_continuations_before": 0,
+                "exceptional_continuations_after": 0,
+                "cycle_3": False,
+            },
+        }
+    receipt = fast_path.create_validation_receipt(
+        repository=REPOSITORY, head_sha=parent, validated_tree_sha=tree,
+        registry=registry, command_set=[], successful_result=True,
+        reviewed_state=reviewed, manual_gate_evidence=[],
+        eligibility_evidence_digest=eligibility_digest,
+        integration_evidence_digest=(
+            fast_path.digest_json(integration) if integration is not None else None
+        ),
+    )
+    if integration is not None:
+        attestation = fast_path.create_ready_integration_attestation(
+            repository=REPOSITORY,
+            head_sha=head,
+            registry=registry,
+            command_set=[],
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+            integration_evidence=integration,
+        )
+        git_results = [
+            subprocess.CompletedProcess(
+                [], 0, "https://github.com/SecPal/.github.git\n", ""
+            ),
+            subprocess.CompletedProcess(
+                [],
+                0,
+                (
+                    f"tree {tree}\n"
+                    + "".join(
+                        f"parent {parent_sha}\n"
+                        for parent_sha in integration["ordered_parent_shas"]
+                    )
+                    + "gpgsig -----BEGIN SSH SIGNATURE-----\n\n"
+                ),
+                "",
+            ),
+            subprocess.CompletedProcess(
+                [],
+                0,
+                f'Good "git" signature for {SIGNER} with ED25519 key '
+                "SHA256:test\n",
+                "",
+            ),
+        ]
+        with patch.object(
+            fast_path, "_run_integration_commit_git", side_effect=git_results
+        ):
+            return fast_path.verify_eligibility_bound_ready_integration_attestation(
+                attestation,
+                repository=REPOSITORY,
+                head_sha=head,
+                registry=registry,
+                command_set=[],
+                reviewed_state=reviewed,
+                validation_receipt=receipt,
+                integration_evidence=integration,
+                commit_parent_shas=integration["ordered_parent_shas"],
+                commit_tree_sha=tree,
+                commit_validation_receipt_digest=receipt["receipt_digest"],
+                commit_integration_evidence_digest=fast_path.digest_json(integration),
+                repository_root=Path(__file__).resolve().parents[1],
+                signature_policy=registry["signature_policy"],
+            )
+    attestation = fast_path.create_validation_attestation(
+        repository=REPOSITORY, head_sha=head, registry=registry,
+        command_set=[], successful_result=True, reviewed_state=reviewed,
+        validation_receipt=receipt,
+    )
+    return fast_path.verify_validation_attestation(
+        attestation, repository=REPOSITORY, head_sha=head, registry=registry,
+        command_set=[], reviewed_state=reviewed, commit_parent_sha=parent,
+        commit_tree_sha=tree,
+        commit_validation_receipt_digest=receipt["receipt_digest"],
+    )
+
+
 class LifecyclePublicationTests(TestCase):
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory(prefix="lifecycle-publication-")
@@ -260,6 +543,300 @@ class LifecyclePublicationTests(TestCase):
             check=True, capture_output=True, text=True,
         ).stdout.strip()
         return value
+
+    def test_ready_source_provider_binding_derives_attested_ready_predecessor(self) -> None:
+        chain = Chain()
+        chain.append("INITIALIZED_DRAFT")
+        chain.append("UNRESTRICTED_REVIEW_CONSUMED")
+        chain.append("REMEDIATION_COMPLETED", head=HEADS[1])
+        chain.append("DRAFT_TO_READY")
+        chain.append("REMEDIATION_COMPLETED", head=HEADS[2])
+        _, current = self.enroll(chain)
+
+        binding = publication.derive_ready_source_recovery_provider_binding(
+            current
+        )
+
+        self.assertEqual(binding.repository, REPOSITORY)
+        self.assertEqual(binding.delivery_issue, ISSUE)
+        self.assertEqual(binding.pull_request, PR)
+        self.assertEqual(binding.current_head_sha, HEADS[2])
+        self.assertEqual(binding.provider_head_sha, HEADS[1])
+        self.assertEqual(
+            publication.ready_source_recovery_provider_head(
+                binding,
+                repository=REPOSITORY,
+                pull_request=PR,
+                current_head_sha=HEADS[2],
+            ),
+            HEADS[1],
+        )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "stale or substituted"
+        ):
+            publication.ready_source_recovery_provider_head(
+                replace(binding, provider_head_sha=HEADS[0]),
+                repository=REPOSITORY,
+                pull_request=PR,
+                current_head_sha=HEADS[2],
+            )
+
+    def test_ready_source_provider_binding_accepts_native_publication_wrapper(
+        self,
+    ) -> None:
+        chain = Chain(ISSUE + 10)
+        chain.append("INITIALIZED_DRAFT")
+        chain.append("UNRESTRICTED_REVIEW_CONSUMED")
+        chain.append("DRAFT_TO_READY")
+        chain.append("REMEDIATION_COMPLETED", head=HEADS[1])
+        serialized = authority.serialize_publication_lifecycle_evidence(
+            lifecycle_evidence=chain.raw()
+        )
+        verified = authority._verify_lifecycle_authority_for_journal(
+            serialized,
+            admitted_initialization=chain.initialization,
+        )
+        current = publication.VerifiedLifecyclePublication(
+            "1" * 40,
+            "2" * 64,
+            BRANCH,
+            "3" * 40,
+            "4" * 40,
+            verified,
+            serialized,
+        )
+
+        binding = publication.derive_ready_source_recovery_provider_binding(current)
+
+        self.assertEqual(binding.provider_head_sha, HEADS[0])
+
+    def test_ready_source_provider_binding_rejects_nonexact_lifecycle_shapes(self) -> None:
+        missing_remediation = Chain(ISSUE + 1)
+        missing_remediation.append("INITIALIZED_DRAFT")
+        missing_remediation.append("UNRESTRICTED_REVIEW_CONSUMED")
+        missing_remediation.append("DRAFT_TO_READY")
+        _, current = self.enroll(missing_remediation)
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "remediation lineage"
+        ):
+            publication.derive_ready_source_recovery_provider_binding(current)
+
+        not_ready = Chain(ISSUE + 2)
+        not_ready.append("INITIALIZED_DRAFT")
+        not_ready.append("UNRESTRICTED_REVIEW_CONSUMED")
+        not_ready.append("REMEDIATION_COMPLETED", head=HEADS[1])
+        _, current = self.enroll(not_ready)
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "remediation lineage"
+        ):
+            publication.derive_ready_source_recovery_provider_binding(current)
+
+        valid = Chain(ISSUE + 3)
+        valid.append("INITIALIZED_DRAFT")
+        valid.append("UNRESTRICTED_REVIEW_CONSUMED")
+        valid.append("DRAFT_TO_READY")
+        valid.append("REMEDIATION_COMPLETED", head=HEADS[1])
+        valid.append("REMEDIATION_COMPLETED", head=HEADS[2])
+        _, current = self.enroll(valid)
+        binding = publication.derive_ready_source_recovery_provider_binding(current)
+        self.assertEqual(binding.provider_head_sha, HEADS[0])
+        self.assertEqual(len(binding.remediation_event_digests), 2)
+
+        raw = json.loads(current.serialized_lifecycle_evidence)
+        lifecycle = raw.get("lifecycle_evidence", raw)
+        lifecycle["transition_authorizations"][-1][
+            "predecessor_head_sha"
+        ] = HEADS[9]
+        substituted = replace(
+            current,
+            serialized_lifecycle_evidence=fast_path.canonical_json_bytes(raw),
+        )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "lifecycle evidence is invalid"
+        ):
+            publication.derive_ready_source_recovery_provider_binding(substituted)
+
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            valid.append("REMEDIATION_COMPLETED", head=HEADS[3])
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            valid.append("UNRESTRICTED_REVIEW_CONSUMED")
+
+    def test_pre_enrollment_absence_is_bound_to_the_observed_protected_tip(self) -> None:
+        absence = publication.verify_pre_enrollment_absence(REPOSITORY, ISSUE)
+        self.assertEqual(absence.repository, REPOSITORY)
+        self.assertEqual(absence.delivery_issue, ISSUE)
+        self.assertEqual(absence.publication_branch, BRANCH)
+        self.assertIsNone(absence.observed_tip_oid)
+        self.assertRegex(absence.evidence_digest, r"^[0-9a-f]{64}$")
+
+    def test_pre_enrollment_delivery_genesis_requires_typed_live_pr_head(self) -> None:
+        admission = SimpleNamespace(
+            subtype="PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE",
+            purpose="PRE_ENROLLMENT_IMPLEMENTATION_BOOTSTRAP",
+            delivery_issue=ISSUE,
+            pull_request=PR,
+        )
+        policy = replace(
+            self.policy, bootstrap_source_admissions=(admission,)
+        )
+        ordinary = Chain().initialization
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "typed integrated head"
+        ):
+            publication._verify_pre_enrollment_genesis_boundary(policy, ordinary)
+
+        typed = copy.deepcopy(ordinary)
+        typed["schema_version"] = "1.1"
+        typed["initial_head_proof"] = {
+            "kind": "AUTHENTICATED_PRE_ENROLLMENT_DRAFT_INTEGRATION_HEAD"
+        }
+        with patch.object(
+            publication,
+            "_observe_pre_enrollment_pull_request",
+            return_value={
+                "repository": REPOSITORY, "pull_request": PR,
+                "state": "OPEN", "draft": True,
+                "head_sha": typed["initial_head_sha"],
+            },
+        ):
+            publication._verify_pre_enrollment_genesis_boundary(policy, typed)
+
+        with patch.object(
+            publication,
+            "_observe_pre_enrollment_pull_request",
+            return_value={
+                "repository": REPOSITORY, "pull_request": PR,
+                "state": "OPEN", "draft": True, "head_sha": "f" * 40,
+            },
+        ), self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "live PR head"
+        ):
+            publication._verify_pre_enrollment_genesis_boundary(policy, typed)
+
+    def test_pre_enrollment_absence_rejects_existing_native_genesis(self) -> None:
+        chain = Chain()
+        chain.append("INITIALIZED_DRAFT")
+        publication.admit_native_genesis(
+            chain.raw(), signer_identity=SIGNER, signer=signer_for()
+        )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError,
+            "already has native genesis or CURRENT",
+        ):
+            publication.verify_pre_enrollment_absence(REPOSITORY, ISSUE)
+
+    def test_pre_enrollment_absence_accepts_signed_unrelated_modern_history(self) -> None:
+        other_issue = ISSUE + 1
+        fields = {
+            "schema_version": publication.SCHEMA_VERSION,
+            "kind": publication.PUBLICATION_KIND,
+            "domain": publication.PUBLICATION_DOMAIN,
+            "operation": "ENROLL_EXISTING_LIFECYCLE",
+            "repository": REPOSITORY,
+            "delivery_issue": other_issue,
+            "lifecycle_id": "lifecycle:unrelated-exact-adoption",
+            "initialization_evidence_digest": "1" * 64,
+            "pull_request": PR + 1,
+            "head_sha": HEADS[1],
+            "terminal_authority_digest": "2" * 64,
+            "historical_proof_mode": "exact_state_adoption",
+            "legacy_adoption_checkpoint_digest": None,
+            "lifecycle_evidence": {
+                "kind": "SECPAL_EXACT_STATE_ADOPTION_EVIDENCE",
+                "proof_version": "3.0",
+            },
+            "lifecycle_evidence_digest": "",
+            "publication_branch": BRANCH,
+            "journal_predecessor_oid": None,
+            "predecessor_publication_oid": None,
+            "predecessor_publication_digest": None,
+            "predecessor_terminal_authority_digest": None,
+            "signer_identity": SIGNER,
+        }
+        evidence_raw = authority.canonical_json_bytes(fields["lifecycle_evidence"])
+        fields["lifecycle_evidence_digest"] = hashlib.sha256(evidence_raw).hexdigest()
+        raw = publication._sign_publication(fields, signer_for())
+        oid = publication._write_publication_object(self.probe, raw, None)
+        publication._cas_remote_ref(self.probe, str(self.remote), BRANCH, oid, None)
+
+        absence = publication.verify_pre_enrollment_absence(REPOSITORY, ISSUE)
+        self.assertEqual(absence.observed_tip_oid, oid)
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError,
+            "already has native genesis or CURRENT",
+        ):
+            publication.verify_pre_enrollment_absence(REPOSITORY, other_issue)
+
+    def test_pre_enrollment_absence_rejects_corrupt_unrelated_publication(self) -> None:
+        fields = {
+            "schema_version": publication.SCHEMA_VERSION,
+            "kind": publication.PUBLICATION_KIND,
+            "domain": publication.PUBLICATION_DOMAIN,
+            "operation": "ENROLL_EXISTING_LIFECYCLE",
+            "repository": REPOSITORY,
+            "delivery_issue": ISSUE + 1,
+            "lifecycle_id": "lifecycle:corrupt",
+            "initialization_evidence_digest": "1" * 64,
+            "pull_request": PR + 1,
+            "head_sha": HEADS[1],
+            "terminal_authority_digest": "2" * 64,
+            "historical_proof_mode": "exact_state_adoption",
+            "legacy_adoption_checkpoint_digest": None,
+            "lifecycle_evidence": {"kind": "corrupt"},
+            "lifecycle_evidence_digest": "3" * 64,
+            "publication_branch": BRANCH,
+            "journal_predecessor_oid": None,
+            "predecessor_publication_oid": None,
+            "predecessor_publication_digest": None,
+            "predecessor_terminal_authority_digest": None,
+            "signer_identity": SIGNER,
+        }
+        raw = publication._sign_publication(fields, signer_for())
+        oid = publication._write_publication_object(self.probe, raw, None)
+        publication._cas_remote_ref(self.probe, str(self.remote), BRANCH, oid, None)
+
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError,
+            "lifecycle-evidence digest mismatch",
+        ):
+            publication.verify_pre_enrollment_absence(REPOSITORY, ISSUE)
+
+    def test_pre_enrollment_absence_rejects_unknown_proof_mode(self) -> None:
+        fields = {
+            "schema_version": publication.SCHEMA_VERSION,
+            "kind": publication.PUBLICATION_KIND,
+            "domain": publication.PUBLICATION_DOMAIN,
+            "operation": "ENROLL_EXISTING_LIFECYCLE",
+            "repository": REPOSITORY,
+            "delivery_issue": ISSUE + 1,
+            "lifecycle_id": "lifecycle:unknown",
+            "initialization_evidence_digest": "1" * 64,
+            "pull_request": PR + 1,
+            "head_sha": HEADS[1],
+            "terminal_authority_digest": "2" * 64,
+            "historical_proof_mode": "future_unreviewed_mode",
+            "legacy_adoption_checkpoint_digest": None,
+            "lifecycle_evidence": {"kind": "unknown"},
+            "lifecycle_evidence_digest": "",
+            "publication_branch": BRANCH,
+            "journal_predecessor_oid": None,
+            "predecessor_publication_oid": None,
+            "predecessor_publication_digest": None,
+            "predecessor_terminal_authority_digest": None,
+            "signer_identity": SIGNER,
+        }
+        fields["lifecycle_evidence_digest"] = hashlib.sha256(
+            authority.canonical_json_bytes(fields["lifecycle_evidence"])
+        ).hexdigest()
+        raw = publication._sign_publication(fields, signer_for())
+        oid = publication._write_publication_object(self.probe, raw, None)
+        publication._cas_remote_ref(self.probe, str(self.remote), BRANCH, oid, None)
+
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError,
+            "historical-proof mode is invalid",
+        ):
+            publication.verify_pre_enrollment_absence(REPOSITORY, ISSUE)
 
     def test_real_ssh_verifier_proves_the_requested_signer(self) -> None:
         initialization = issue_736_chain().initialization
@@ -334,6 +911,793 @@ class LifecyclePublicationTests(TestCase):
             publication.enroll_existing_lifecycle(
                 chain.published(), signer_identity=SIGNER, signer=signer_for()
             )
+
+    def test_pre_persistence_ready_recovery_is_explicit_published_and_one_use(self) -> None:
+        chain, enrolled = self.enroll()
+        reviewed = fast_path.StableFeedbackState(
+            repository=REPOSITORY,
+            pull_request_number=PR,
+            head_sha=chain.head,
+            base_ref="main",
+            base_sha=HEADS[9],
+            pr_state="OPEN",
+            feedback={
+                "pull_request_reactions": [],
+                "reviews": [],
+                "conversation_comments": [],
+                "threads": [{
+                    "node_id": "THREAD_RECOVERY",
+                    "is_resolved": True,
+                    "is_outdated": False,
+                    "comments": [{
+                        "node_id": "COMMENT_RECOVERY",
+                        "body_digest": hashlib.sha256(
+                            b"technically blocking authentication bypass"
+                        ).hexdigest(),
+                        "actor": {
+                            "login": "reviewer", "node_id": "ACTOR_RECOVERY",
+                            "database_id": 17,
+                        },
+                        "reply_to_id": None,
+                        "reactions": [],
+                    }],
+                }],
+            },
+        )
+        registry = {
+            "manual_gates": [],
+            "validation": [],
+            "limits": {"maximum_items": 10000},
+        }
+        fresh_receipt = fast_path.create_validation_receipt(
+            repository=REPOSITORY,
+            head_sha=chain.head,
+            validated_tree_sha=HEADS[8],
+            registry=registry,
+            command_set=[],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+        )
+        commit = {
+            "oid": chain.head,
+            "source": "USER",
+            "signer_identity": SIGNER,
+            "local_signature": {
+                "verified": True,
+                "state": "valid",
+                "format": "ssh",
+            },
+            "github_verification": {"verified": True, "reason": "valid"},
+        }
+        with patch.object(
+            authority,
+            "_load_delivery_signature_policy",
+            return_value={
+                "accepted_formats": ["ssh"],
+                "require_github_verified": True,
+            },
+        ):
+            safety = fast_path.derive_ready_source_recovery_safety_facts(
+                tooling_authority_main="f" * 40,
+                repository=REPOSITORY,
+                pull_request_number=PR,
+                head_sha=chain.head,
+                tree_sha=HEADS[8],
+                parent_shas=[HEADS[7]],
+                expected_base_ref="main",
+                expected_base_sha=HEADS[9],
+                reviewed_state=reviewed,
+                review_decision="APPROVED",
+                feedback_findings=[{
+                    "finding_id": "signed-resolved-safe-decision",
+                    "thread_id": "THREAD_RECOVERY",
+                    "sources": [{
+                        "kind": "THREAD_COMMENT",
+                        "node_id": "COMMENT_RECOVERY",
+                        "digest": reviewed.feedback["threads"][0]["comments"][0][
+                            "body_digest"
+                        ],
+                    }],
+                    "classification": "INFORMATIONAL",
+                    "disposition": "NON_ACTIONABLE",
+                    "evidence_digest": "8" * 64,
+                    "technically_blocking": False,
+                }],
+                fresh_validation_receipt=fresh_receipt,
+                registry=registry,
+                command_set=[],
+            )
+        self.assertNotIn("signature", safety)
+        self.assertFalse(hasattr(fast_path, "is_verified_ready_source_recovery_safety"))
+        actions = load_actions()
+        entry = copy.deepcopy(actions.select_repository(
+            actions.load_registry(), REPOSITORY
+        ))
+        entry["manual_gates"] = []
+        observation = reviewed.to_dict()
+        observation["review_decision"] = "APPROVED"
+        observation["is_draft"] = False
+        gateway = SimpleNamespace(
+            observe_stable_feedback=lambda *_: observation,
+            observe_ready_source_recovery_approval_policy=lambda *_: True,
+            observe_ready_source_recovery_delivery=lambda *_: commit,
+        )
+        harness_path = actions.READY_SOURCE_RECOVERY_CURRENT_SAFETY_PATH
+        safety_command = {
+            "argv": ["python3", harness_path], "working_directory": ".",
+            "purpose": "Validate Ready-source recovery current safety",
+        }
+        current_safety_profile = {
+            "schema_version": "1.0",
+            "policy": "READY_SOURCE_RECOVERY_CURRENT_SAFETY",
+            "harness": [{
+                "path": harness_path, "mode": "100644",
+                "blob_oid": "e" * 40, "size": 1,
+            }],
+            "validation_command_set": [safety_command],
+            "validation_command_set_digest": authority.digest_json([safety_command]),
+            "timeout_seconds": 120,
+            "required_invariants": list(
+                actions.READY_SOURCE_RECOVERY_CURRENT_SAFETY_INVARIANTS
+            ),
+            "validation_results": [{
+                "command_digest": authority.digest_json(safety_command),
+                "exit_status": 0, "successful": True,
+            }],
+        }
+        with (
+            patch.object(
+                actions, "_ready_source_recovery_current_safety_profile",
+                return_value=current_safety_profile,
+            ),
+            patch.object(
+                actions, "_attestation_local_state",
+                side_effect=[(chain.head, ""), (chain.head, "")],
+            ),
+            patch.object(
+                actions, "_run_attestation_git",
+                return_value=SimpleNamespace(stdout=HEADS[8]),
+            ),
+            patch.object(
+                actions, "_validated_commit_parent", return_value=HEADS[7]
+            ),
+            patch.object(
+                authority, "_load_delivery_signature_policy",
+                return_value={
+                    "accepted_formats": ["ssh"],
+                    "require_github_verified": True,
+                },
+            ),
+        ):
+            recovery = actions._issue_ready_source_recovery_authorization(
+                repository=REPOSITORY, delivery_issue=ISSUE,
+                pull_request_number=PR, expected_head_sha=chain.head,
+                repository_root=Path(self.directory.name),
+                feedback_findings=safety["feedback_findings"],
+                manual_gate_evidence=[],
+                historical_validation_receipt_digest=(
+                    chain.initialization["validation_receipt_digest"]
+                ),
+                historical_final_attestation_digest=(
+                    chain.initialization["final_attestation_digest"]
+                ),
+                recovery_user_authorization=b"authorization",
+                expected_commit_signer={
+                    "kind": "SSH_PRINCIPAL", "identity": SIGNER,
+                },
+                signer_identity=SIGNER, signer=signer_for(),
+                _policy_loader=lambda _: ("f" * 40, entry),
+                _gateway_factory=lambda *_: gateway,
+                _validation_runner=lambda *_: actions.RegisteredValidationResult(),
+                _issuer_source_verifier=lambda _: None,
+                _current_lifecycle_loader=lambda *_: enrolled,
+                _authorization_factory=(
+                    authority._sign_ready_source_recovery_authorization
+                ),
+                _recovery_user_authorization_verifier=lambda *_: {
+                    "authorization_id": "ready-source-recovery-1",
+                    "authorization_digest": "7" * 64,
+                },
+            )
+
+        with self.assertRaises((
+            authority.LifecycleAuthorityError,
+            publication.LifecyclePublicationError,
+        )):
+            publication.publish_ready_source_recovery(
+                safety, signer_identity=SIGNER, signer=signer_for()
+            )
+
+        tampered = copy.deepcopy(recovery)
+        tampered_facts = tampered["recovery_safety_facts"]
+        tampered_facts["feedback_findings"][0]["evidence_digest"] = "9" * 64
+        tampered_facts["feedback_assessment_digest"] = fast_path.digest_json({
+            "review_decision": tampered_facts["review_decision"],
+            "approval_required": tampered_facts["approval_required"],
+            "findings": tampered_facts["feedback_findings"],
+        })
+        unsigned_facts = {
+            key: copy.deepcopy(value)
+            for key, value in tampered_facts.items()
+            if key != "safety_facts_digest"
+        }
+        tampered_facts["safety_facts_digest"] = fast_path.digest_json(
+            unsigned_facts
+        )
+        tampered["feedback_assessment_digest"] = fast_path.digest_json({
+            "review_decision": tampered_facts["review_decision"],
+            "findings": tampered_facts["feedback_findings"],
+        })
+        tampered["authorization_digest"] = authority.digest_json({
+            key: copy.deepcopy(value)
+            for key, value in tampered.items()
+            if key != "authorization_digest"
+        })
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            authority.verify_ready_source_recovery_authorization(
+                tampered, current_lifecycle=enrolled.lifecycle,
+                current_publication_oid=enrolled.publication_oid,
+                current_publication_digest=enrolled.publication_digest,
+            )
+
+        wrong_signer = copy.deepcopy(recovery)
+        wrong_signer["signer_identity"] = OTHER_SIGNER
+        wrong_signer["signature"] = signer_for(OTHER_SIGNER)(
+            authority.canonical_json_bytes(authority._unsigned(
+                wrong_signer, "authorization_digest", "signature"
+            )),
+            authority.READY_SOURCE_RECOVERY_AUTHORIZATION_DOMAIN,
+        )
+        wrong_signer["authorization_digest"] = authority.digest_json({
+            key: copy.deepcopy(value)
+            for key, value in wrong_signer.items()
+            if key != "authorization_digest"
+        })
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            authority.verify_ready_source_recovery_authorization(
+                wrong_signer, current_lifecycle=enrolled.lifecycle,
+                current_publication_oid=enrolled.publication_oid,
+                current_publication_digest=enrolled.publication_digest,
+            )
+
+        recovered = publication.publish_ready_source_recovery(
+            recovery,
+            signer_identity=SIGNER,
+            signer=signer_for(),
+        )
+        tip = self.remote_tip()
+        verified = publication.verify_current_ready_source_recovery(
+            REPOSITORY, ISSUE
+        )
+
+        self.assertEqual(verified.publication_oid, recovered.publication_oid)
+        self.assertEqual(verified.authorization_id, "ready-source-recovery-1")
+        self.assertEqual(verified.head_sha, chain.head)
+        self.assertEqual(verified.tree_sha, HEADS[8])
+        self.assertEqual(
+            publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE)
+            .publication_oid,
+            enrolled.publication_oid,
+        )
+        self.assertNotIn("reviewed_state", recovery)
+        self.assertNotIn("validation_receipt", recovery)
+
+        repeated = publication.publish_ready_source_recovery(
+            recovery,
+            signer_identity=SIGNER,
+            signer=signer_for(),
+        )
+        self.assertEqual(repeated.publication_oid, recovered.publication_oid)
+        self.assertEqual(self.remote_tip(), tip)
+
+        publication._observe_remote_current_once(self.probe, str(self.remote), BRANCH)
+        replay_fields = publication._ready_source_recovery_fields(
+            recovery,
+            publication_branch=BRANCH,
+            journal_predecessor_oid=recovered.publication_oid,
+            signer_identity=SIGNER,
+        )
+        replay_raw = publication._sign_ready_source_recovery(
+            replay_fields, signer_for()
+        )
+        replay_oid = publication._write_publication_object(
+            self.probe, replay_raw, recovered.publication_oid
+        )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "replayed"
+        ):
+            publication._walk_journal(
+                self.probe, replay_oid, BRANCH, include_recoveries=True
+            )
+
+        predecessor_fields = copy.deepcopy(replay_fields)
+        predecessor_fields["journal_predecessor_oid"] = enrolled.publication_oid
+        predecessor_raw = publication._sign_ready_source_recovery(
+            predecessor_fields, signer_for()
+        )
+        predecessor_oid = publication._write_publication_object(
+            self.probe, predecessor_raw, recovered.publication_oid
+        )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "parent binding"
+        ):
+            publication._walk_journal(
+                self.probe, predecessor_oid, BRANCH, include_recoveries=True
+            )
+
+        replay = copy.deepcopy(recovery)
+        replay["authorization_id"] = "ready-source-recovery-replay"
+        with self.assertRaises((
+            authority.LifecycleAuthorityError,
+            publication.LifecyclePublicationError,
+        )):
+            publication.publish_ready_source_recovery(
+                replay,
+                signer_identity=SIGNER,
+                signer=signer_for(),
+            )
+
+        checkpoint = copy.deepcopy(chain.checkpoint)
+        chain.append("EXCEPTIONAL_CONTINUATION", head=HEADS[6])
+        chain.checkpoint = checkpoint
+        publication.advance_current_terminal(
+            chain.published(), signer_identity=SIGNER, signer=signer_for()
+        )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "no longer binds CURRENT"
+        ):
+            publication.verify_current_ready_source_recovery(REPOSITORY, ISSUE)
+
+    def test_ready_recovery_accepts_only_verified_exact_adoption_history(self) -> None:
+        state = authority.initial_state()
+        state.update(
+            unrestricted_review_count=1,
+            remediation_cycle_count=2,
+            draft=False,
+            ready=True,
+            ready_transition_count=1,
+            ready_history=[{
+                "sequence": 1,
+                "transition_kind": "DRAFT_TO_READY",
+                "observation_digest": "7" * 64,
+            }],
+        )
+        self.assertEqual(
+            authority._ready_source_recovery_state(
+                state,
+                historical_proof_mode=authority.EXACT_ADOPTION_PROOF_MODE,
+            )["ready_history"],
+            state["ready_history"],
+        )
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            authority._ready_source_recovery_state(
+                state,
+                historical_proof_mode=authority.NATIVE_PROOF_MODE,
+            )
+    def test_exact_adoption_ready_recovery_publishes_and_verifies(self) -> None:
+        serialized, _ = exact_adoption_evidence()
+        enrolled = publication.enroll_existing_lifecycle(
+            serialized, signer_identity=SIGNER, signer=signer_for()
+        )
+        reviewed = fast_path.StableFeedbackState(
+            repository=REPOSITORY,
+            pull_request_number=PR,
+            head_sha=HEADS[2],
+            base_ref="main",
+            base_sha=HEADS[9],
+            pr_state="OPEN",
+            feedback={
+                "pull_request_reactions": [],
+                "reviews": [],
+                "conversation_comments": [],
+                "threads": [],
+            },
+        )
+        registry = {
+            "manual_gates": [],
+            "validation": [],
+            "limits": {"maximum_items": 10000},
+        }
+        receipt = fast_path.create_validation_receipt(
+            repository=REPOSITORY,
+            head_sha=HEADS[2],
+            validated_tree_sha=HEADS[3],
+            registry=registry,
+            command_set=[],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+        )
+        safety = fast_path.derive_ready_source_recovery_safety_facts(
+            tooling_authority_main="f" * 40,
+            repository=REPOSITORY,
+            pull_request_number=PR,
+            head_sha=HEADS[2],
+            tree_sha=HEADS[3],
+            parent_shas=[HEADS[1]],
+            expected_base_ref="main",
+            expected_base_sha=HEADS[9],
+            reviewed_state=reviewed,
+            review_decision="APPROVED",
+            feedback_findings=[],
+            fresh_validation_receipt=receipt,
+            registry=registry,
+            command_set=[],
+        )
+        commit = {
+            "oid": HEADS[2],
+            "source": "USER",
+            "signer_identity": SIGNER,
+            "local_signature": {
+                "verified": True,
+                "state": "valid",
+                "format": "ssh",
+            },
+            "github_verification": {"verified": True, "reason": "valid"},
+        }
+        with patch.object(
+            authority,
+            "_load_delivery_signature_policy",
+            return_value={
+                "accepted_formats": ["ssh"],
+                "require_github_verified": True,
+            },
+        ):
+            recovery = authority._sign_ready_source_recovery_authorization(
+                current_lifecycle=enrolled.lifecycle,
+                current_publication_oid=enrolled.publication_oid,
+                current_publication_digest=enrolled.publication_digest,
+                recovery_safety_facts=safety,
+                commit_signature_evidence=commit,
+                historical_validation_receipt_digest=(
+                    enrolled.lifecycle.validation_receipt_digest
+                ),
+                historical_final_attestation_digest=(
+                    enrolled.lifecycle.adoption_source_evidence_digest
+                ),
+                historical_evidence_loss_proof_digest="7" * 64,
+                authorization_id="exact-adoption-ready-recovery",
+                bounded_uses=1,
+                expected_commit_signer={
+                    "kind": "SSH_PRINCIPAL",
+                    "identity": SIGNER,
+                },
+                signer_identity=SIGNER,
+                signer=signer_for(),
+            )
+        published = publication.publish_ready_source_recovery(
+            recovery, signer_identity=SIGNER, signer=signer_for()
+        )
+        verified = publication.verify_current_ready_source_recovery(
+            REPOSITORY, ISSUE
+        )
+        self.assertEqual(verified.publication_oid, published.publication_oid)
+        self.assertEqual(verified.head_sha, HEADS[2])
+        self.assertEqual(
+            publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE)
+            .publication_oid,
+            enrolled.publication_oid,
+        )
+
+
+    def test_exact_adoption_enrolls_once_and_uses_normal_successor_path(self) -> None:
+        self.assertIn(
+            "current_head_evidence",
+            inspect.signature(
+                authority.issue_exact_state_adoption_successor_authority
+            ).parameters,
+        )
+        serialized, proof = exact_adoption_evidence()
+        self.assertEqual(proof["schema_version"], authority.SCHEMA_VERSION)
+        self.assertEqual(proof["domain"], authority.EXACT_ADOPTION_PROOF_DOMAIN)
+        self.assertNotIn("review_budget_consumption_admission", proof)
+        enrolled = publication.enroll_existing_lifecycle(
+            serialized, signer_identity=SIGNER, signer=signer_for()
+        )
+        self.assertEqual(
+            enrolled.lifecycle.historical_proof_mode,
+            authority.EXACT_ADOPTION_PROOF_MODE,
+        )
+        self.assertEqual(enrolled.lifecycle.authority_digest, proof["proof_digest"])
+        self.assertEqual(enrolled.lifecycle.state["remediation_cycle_count"], 2)
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "already enrolled"
+        ):
+            publication.enroll_existing_lifecycle(
+                serialized, signer_identity=SIGNER, signer=signer_for()
+            )
+
+        event = authority.create_transition_authorization(
+            event_id="adopted-head-advanced-1", repository=REPOSITORY,
+            delivery_issue=ISSUE, lifecycle_id=enrolled.lifecycle.lifecycle_id,
+            pull_request=PR,
+            predecessor_authority_digest=enrolled.lifecycle.authority_digest,
+            predecessor_head_sha=HEADS[2], resulting_head_sha=HEADS[4],
+            transition_kind="HEAD_ADVANCED", replacement_pull_request=None,
+            initialization_evidence_digest=(
+                enrolled.lifecycle.initialization_evidence_digest
+            ),
+            signer_identity=SIGNER, signer=signer_for(),
+        )
+        current_validation = verified_validation_evidence(
+            head=HEADS[4], tree=HEADS[5], parent=HEADS[2],
+            ready_integration=True,
+        )
+
+        def issue_successor(**kwargs: Any) -> dict[str, Any]:
+            provenance = json.loads(
+                current_validation._verification_seal.provenance_json
+            )
+            integration = provenance["integration_evidence"]
+            git_results = [
+                subprocess.CompletedProcess(
+                    [], 0, "https://github.com/SecPal/.github.git\n", ""
+                ),
+                subprocess.CompletedProcess(
+                    [],
+                    0,
+                    (
+                        f"tree {integration['validated_tree_sha']}\n"
+                        + "".join(
+                            f"parent {parent_sha}\n"
+                            for parent_sha in integration["ordered_parent_shas"]
+                        )
+                        + "gpgsig -----BEGIN SSH SIGNATURE-----\n\n"
+                    ),
+                    "",
+                ),
+                subprocess.CompletedProcess(
+                    [],
+                    0,
+                    f'Good "git" signature for {SIGNER} with ED25519 key '
+                    "SHA256:test\n",
+                    "",
+                ),
+            ]
+            with patch.object(
+                fast_path,
+                "_run_integration_commit_git",
+                side_effect=git_results,
+            ):
+                return authority.issue_exact_state_adoption_successor_authority(
+                    **kwargs
+                )
+
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "verified current evidence"
+        ):
+            issue_successor(
+                serialized_adoption_evidence=serialized, authorization=event,
+                signer_identity=SIGNER, authority_signer=signer_for(),
+                current_head_evidence=replace(
+                    current_validation, _verification_seal=object()
+                ),
+            )
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "verified current evidence"
+        ):
+            issue_successor(
+                serialized_adoption_evidence=serialized, authorization=event,
+                signer_identity=SIGNER, authority_signer=signer_for(),
+                current_head_evidence=verified_validation_evidence(
+                    head=HEADS[4], tree=HEADS[5], parent=HEADS[2],
+                    ready_integration=True, delivery_issue=ISSUE + 1,
+                ),
+            )
+        snapshot = issue_successor(
+            serialized_adoption_evidence=serialized, authorization=event,
+            signer_identity=SIGNER, authority_signer=signer_for(),
+            current_head_evidence=current_validation,
+        )
+        successor = authority.serialize_exact_state_adoption_evidence(
+            exact_state_adoption_proof=proof,
+            transition_authorizations=[event], authority_chain=[snapshot],
+        )
+        advanced = publication.advance_current_terminal(
+            successor, signer_identity=SIGNER, signer=signer_for()
+        )
+        self.assertEqual(advanced.lifecycle.head_sha, HEADS[4])
+        self.assertEqual(advanced.lifecycle.tree_sha, HEADS[5])
+        self.assertNotEqual(
+            advanced.lifecycle.validation_receipt_digest,
+            enrolled.lifecycle.validation_receipt_digest,
+        )
+        self.assertNotEqual(
+            advanced.lifecycle.source_validation_evidence_digest,
+            enrolled.lifecycle.source_validation_evidence_digest,
+        )
+        self.assertNotEqual(
+            advanced.lifecycle.adoption_source_evidence_digest,
+            enrolled.lifecycle.adoption_source_evidence_digest,
+        )
+        self.assertEqual(advanced.lifecycle.state, enrolled.lifecycle.state)
+        self.assertEqual(
+            publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE)
+            .lifecycle.authority_digest,
+            snapshot["authority_digest"],
+        )
+        manifest = {
+            "repository": REPOSITORY,
+            "delivery_issue_number": ISSUE,
+            "pull_request_number": PR,
+            "prior_delivery_head_sha": advanced.lifecycle.head_sha,
+            "prior_delivery_tree_sha": advanced.lifecycle.tree_sha,
+            "prior_validation_receipt_digest": (
+                advanced.lifecycle.validation_receipt_digest
+            ),
+            "prior_final_attestation_digest": (
+                advanced.lifecycle.adoption_source_evidence_digest
+            ),
+            "lifecycle": {
+                "identity": advanced.lifecycle.lifecycle_id,
+                "current_authority_digest": advanced.lifecycle.authority_digest,
+                "historical_proof_mode": authority.EXACT_ADOPTION_PROOF_MODE,
+                "unrestricted_reviews": 1,
+                "remediation_cycles": 2,
+                "exceptional_recoveries": 0,
+                "exceptional_continuations": 0,
+            },
+            "publication": {
+                "object_oid": advanced.publication_oid,
+                "publication_digest": advanced.publication_digest,
+            },
+        }
+        integration = {"eligibility": {"lifecycle_identity": advanced.lifecycle.lifecycle_id}}
+        self.assertEqual(
+            advanced.lifecycle.tree_sha, manifest["prior_delivery_tree_sha"]
+        )
+        self.assertEqual(
+            advanced.lifecycle.validation_receipt_digest,
+            manifest["prior_validation_receipt_digest"],
+        )
+        self.assertEqual(
+            advanced.lifecycle.adoption_source_evidence_digest,
+            manifest["prior_final_attestation_digest"],
+        )
+        self.assertFalse(
+            advanced.lifecycle.tree_sha != manifest["prior_delivery_tree_sha"]
+            or advanced.lifecycle.validation_receipt_digest
+            != manifest["prior_validation_receipt_digest"]
+            or advanced.lifecycle.adoption_source_evidence_digest
+            != manifest["prior_final_attestation_digest"]
+            or advanced.lifecycle.source_validation_evidence_digest
+            != advanced.lifecycle.source_validation_evidence_digest
+        )
+        actions = load_actions()
+        with patch.object(
+            actions,
+            "_load_lifecycle_publication_helpers",
+            return_value=(authority, SimpleNamespace(
+                verify_current_lifecycle_authority=lambda *_: advanced,
+                LifecyclePublicationError=publication.LifecyclePublicationError,
+            )),
+        ):
+            actions._verify_ready_integration_published_authority(
+                manifest,
+                integration,
+                verified_source_validation_evidence_digest=(
+                    advanced.lifecycle.source_validation_evidence_digest
+                ),
+            )
+            stale = copy.deepcopy(manifest)
+            stale["prior_delivery_tree_sha"] = enrolled.lifecycle.tree_sha
+            with self.assertRaises(actions.fast_path.SecurityBlocker):
+                actions._verify_ready_integration_published_authority(
+                    stale,
+                    integration,
+                    verified_source_validation_evidence_digest=(
+                        advanced.lifecycle.source_validation_evidence_digest
+                    ),
+                )
+            for field, stale_value in (
+                ("prior_validation_receipt_digest", enrolled.lifecycle.validation_receipt_digest),
+                ("prior_final_attestation_digest", enrolled.lifecycle.adoption_source_evidence_digest),
+            ):
+                changed = copy.deepcopy(manifest)
+                changed[field] = stale_value
+                with self.subTest(stale_field=field), self.assertRaises(
+                    actions.fast_path.SecurityBlocker
+                ):
+                    actions._verify_ready_integration_published_authority(
+                        changed,
+                        integration,
+                        verified_source_validation_evidence_digest=(
+                            advanced.lifecycle.source_validation_evidence_digest
+                        ),
+                    )
+            with self.assertRaises(actions.fast_path.SecurityBlocker):
+                actions._verify_ready_integration_published_authority(
+                    manifest,
+                    integration,
+                    verified_source_validation_evidence_digest=(
+                        enrolled.lifecycle.source_validation_evidence_digest
+                    ),
+                )
+
+    def test_review_budget_admission_enrolls_exact_finite_state_once(self) -> None:
+        serialized, proof = exact_adoption_evidence(admit_review_budget=True)
+        enrolled = publication.enroll_existing_lifecycle(
+            serialized, signer_identity=SIGNER, signer=signer_for()
+        )
+
+        self.assertEqual(proof["schema_version"], "2.0")
+        self.assertEqual(
+            enrolled.lifecycle.historical_proof_mode,
+            authority.EXACT_ADOPTION_PROOF_MODE,
+        )
+        self.assertEqual(enrolled.lifecycle.state["unrestricted_review_count"], 1)
+        self.assertEqual(enrolled.lifecycle.state["remediation_cycle_count"], 1)
+        self.assertIs(enrolled.lifecycle.state["draft"], True)
+        self.assertIs(enrolled.lifecycle.state["ready"], False)
+        self.assertEqual(enrolled.lifecycle.state["ready_transition_count"], 0)
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "already enrolled"
+        ):
+            publication.enroll_existing_lifecycle(
+                serialized, signer_identity=SIGNER, signer=signer_for()
+            )
+
+    def test_exact_adoption_pr_rebound_requires_replacement_pr_evidence(self) -> None:
+        serialized, proof = exact_adoption_evidence()
+        event = authority.create_transition_authorization(
+            event_id="adopted-pr-rebound-1",
+            repository=REPOSITORY,
+            delivery_issue=ISSUE,
+            lifecycle_id=proof["lifecycle_id"],
+            pull_request=PR,
+            predecessor_authority_digest=proof["proof_digest"],
+            predecessor_head_sha=HEADS[2],
+            resulting_head_sha=HEADS[2],
+            transition_kind="PR_REBOUND",
+            replacement_pull_request=PR + 1,
+            initialization_evidence_digest=proof["adoption_evidence_digest"],
+            signer_identity=SIGNER,
+            signer=signer_for(),
+        )
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError,
+            "delivery-identity-changing adopted successor requires verified current evidence",
+        ):
+            authority.issue_exact_state_adoption_successor_authority(
+                serialized_adoption_evidence=serialized,
+                authorization=event,
+                signer_identity=SIGNER,
+                authority_signer=signer_for(),
+            )
+        old_pr_evidence = verified_validation_evidence(
+            head=HEADS[2], tree=HEADS[3], parent=HEADS[1]
+        )
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError,
+            "verified current evidence",
+        ):
+            authority.issue_exact_state_adoption_successor_authority(
+                serialized_adoption_evidence=serialized,
+                authorization=event,
+                signer_identity=SIGNER,
+                authority_signer=signer_for(),
+                current_head_evidence=old_pr_evidence,
+            )
+
+        current = verified_validation_evidence(
+            head=HEADS[2],
+            tree=HEADS[3],
+            parent=HEADS[1],
+            pull_request=PR + 1,
+        )
+        snapshot = authority.issue_exact_state_adoption_successor_authority(
+            serialized_adoption_evidence=serialized,
+            authorization=event,
+            signer_identity=SIGNER,
+            authority_signer=signer_for(),
+            current_head_evidence=current,
+        )
+        self.assertEqual(snapshot["pull_request"], PR + 1)
+        self.assertEqual(
+            snapshot["current_head_evidence"]["source_validation_evidence_digest"],
+            current.source_validation_evidence_digest,
+        )
 
     def test_legacy_checkpoint_requires_dedicated_role_and_valid_authorization(self) -> None:
         chain = recovered_ready_chain()

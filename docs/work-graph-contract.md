@@ -54,6 +54,10 @@ GitHub-native issue data is authoritative. Everything else is a mirror: Markdown
 task lists, `Parent:` / `Order:` / `Blocked by:` lines in issue bodies,
 project-board fields, roadmap documents, plan files, and agent-local notes.
 
+A canonical work-graph read is invalidated by a relevant native graph mutation.
+A prompt, internal delivery phase, or unrelated tree change is not a graph
+mutation and does not by itself require another canonical read.
+
 Rules:
 
 - A mirror MUST NOT be treated as graph state. It never makes a node ready,

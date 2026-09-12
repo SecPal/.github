@@ -9,6 +9,485 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-12 - Authenticate Legacy Enrolled Evidence Loss
+
+**Fixed:**
+
+- Authenticate the bounded historical validation-package loss for the exact
+  enrolled Ready delivery in issue 792 without backdating authority or
+  reconstructing historical companion documents.
+- Feed the verifier-derived loss fact through the existing Exact-State-Adoption
+  Ready prior-authority bridge while preserving current-policy safety, finite
+  lifecycle limits, replay resistance, and zero thread-resolution authority.
+
+## 2026-09-11 - Separate Recovered Base Provenance From Current Main
+
+**Fixed:**
+
+- Preserve a recovered Ready source's exact historical base SHA as immutable
+  provenance while independently authenticating the protected current tip of
+  the same registered target repository/ref as integration parent 2.
+- Allow legitimate target-base advancement without weakening exact current-main,
+  ordered-parent, source, lifecycle, signature, or integration-evidence checks.
+- Reauthenticate the protected current-main tip during final integration
+  attestation binding so stale or caller-substituted parent-2 identities fail
+  closed.
+
+## 2026-09-11 - Authenticate Remediated Ready Provider Terminality
+
+**Fixed:**
+
+- Derive the unique predecessor Codex provider head from authenticated
+  Ready-preserving remediation history during Ready-source recovery, while
+  retaining exact repository, PR, terminal-status, finite-budget, and lifecycle
+  bindings.
+- Keep current-head feedback completeness authoritative and preserve ordinary
+  exact-head provider checks, Ready integration, and historical source recovery
+  behavior outside this narrow case.
+
+## 2026-09-11 - Authenticate Predecessor Feedback Drift
+
+**Fixed:**
+
+- Partition replacement-PR provider growth by reviewed head so exact-CURRENT
+  Copilot review feedback created after the re-anchor snapshot remains material
+  correction input instead of being treated as corrected-successor safety.
+- Bind the complete predecessor review and finding inventory, the provider-owned
+  completion-reaction removal, and the existing rejected-candidate correction
+  scope into the signed Continuation authorization while preserving strict
+  exact-resulting-head Codex and Security Review safety.
+
+## 2026-09-11 - Admit Classified Codex Successor Findings
+
+**Fixed:**
+
+- Authenticate a terminal exact-head Codex Code Review with suggestions during
+  rejected-candidate re-anchor when the complete provider-derived finding set
+  has signed, exact-state invalid/disproven or informational/non-actionable
+  classifications and Security Review independently completed without findings.
+- Preserve the historical Code/Security no-finding representation while
+  rejecting incomplete inventories, unsafe classifications, stale bindings,
+  synthetic Code no-finding results, provider substitution, and any thread-
+  resolution or lifecycle authority expansion.
+
+## 2026-09-11 - Preserve Re-anchor Across PR Feedback Drift
+
+**Fixed:**
+
+- Preserve an immutable rejected Continuation candidate across authenticated
+  accepted protected-main advancement while retaining exact same-delivery
+  `PR_REBOUND`, lifecycle CURRENT, and unconsumed Continuation authority; later
+  protected-main movement is runtime verification and does not rewrite the
+  signed re-anchor scope.
+- Admit only one exact Codex-owned completion `THUMBS_UP` removal/replacement
+  paired with complete terminal exact-head provider transport; unrelated base,
+  reaction, actor, content, provider, head, PR, and replay drift remains
+  fail-closed.
+
+## 2026-09-10 - Re-anchor Rejected Continuation Candidates
+
+**Fixed:**
+
+- Reuse the one-use Exceptional Continuation after an unpublished candidate is
+  rejected by authenticated material successor findings and the unchanged
+  lifecycle moves to a replacement PR through authenticated `PR_REBOUND`.
+- Bind both PRs, protected CURRENT, rejected source and validation evidence,
+  immutable validation policy, original Continuation evidence, exact material
+  finding sources, the corrected sole-parent candidate, and fresh successor
+  safety while granting no cross-PR thread or trust authority.
+
+## 2026-09-10 - Authenticate Large Diagnostic Recovery Sources
+
+**Fixed:**
+
+- Authenticate installed diagnostic Recovery Python sources by exact
+  protected-main path, mode, and Git blob identity, including sources larger
+  than the generic 64 KiB external-evidence transport bound.
+- Reuse the existing exact-source Git hashing boundary while preserving the
+  external transport limit and all existing Exceptional Recovery semantics.
+
+## 2026-09-12 - Authenticate Immutable Version Collisions
+
+**Fixed:**
+
+- Extend the existing one-use Exceptional Continuation with independently
+  authenticated protected-main version-collision evidence, exact signed user
+  authorization and bounded byte-only renumber verification.
+- Recompute the unique merge base from bounded raw commit ancestry, including
+  legitimate merge sides that do not descend from that base, without network
+  acquisition or caller-supplied ancestry.
+- Preserve historical material-feedback continuations, validation and provider
+  safety, Ready-source recovery and thread-authority isolation; allocate no
+  Ready-integration evidence or attestation version.
+
+## 2026-09-09 - Authenticate Diagnostic Exceptional Recovery
+
+**Fixed:**
+
+- Admit one independently reproduced material security defect into the existing
+  one-use Exceptional Recovery slot without manufacturing a review thread.
+- Bind exact protected lifecycle authority, prior and correction trees, a
+  maintained deterministic reproduction profile, fail-first and correction
+  results, signed one-use scope, and sole-parent topology while granting no
+  thread-resolution authority.
+
+## 2026-09-09 - Compose Historical Ready Source With Detached Thread Authority
+
+**Fixed:**
+
+- Authenticate schema-1.1 Ready integration and its exact receipt as source
+  authority while proving both omit commit-bound eligibility.
+- Derive late target origin from exact Stable Feedback and require the existing
+  signed classification/disposition chain before guarded resolution; schema 1.1
+  remains unable to authorize resolution by itself.
+- Admit the existing corrected/actionable and invalid/disproven decisions for
+  reviewed-but-ineligible targets while preserving technical-blocker rejection,
+  schema-1.2 commit-bound authority, and the special zero-thread absence policy.
+
+## 2026-09-08 - Authenticate Continuation Feedback Growth
+
+**Fixed:**
+
+- Replace Exceptional Continuation's impossible full-feedback digest equality
+  after mandatory provider acquisition with a closed authenticated successor
+  relation that preserves every predecessor source and accounts for every new
+  source.
+- Admit only exact resulting-head provider transport and completely classified
+  non-blocking findings authenticated by the existing detached-classification
+  signer trust; reject raw caller labels, material, unclassified, spoofed,
+  replayed, or predecessor-mutating feedback without requesting another review
+  or changing lifecycle semantics.
+
+## 2026-09-08 - Execute Bounded Exceptional Continuation
+
+**Fixed:**
+
+- Extend finite Ready orchestration with one authenticated source-changing
+  `EXCEPTIONAL_CONTINUATION` after Exceptional Recovery is consumed.
+- Bind exact current-head material findings, signed one-use authorization,
+  single-parent signed source, protected lifecycle publication, validation,
+  attestation, and guarded thread resolution without adding a counter, cycle,
+  journal, signer, trust root, or Ready transition.
+
+## 2026-09-08 - Separate Ready Tooling From Candidate Source
+
+**Fixed:**
+
+- Authenticate the executing adopted-Ready bridge and its authority modules
+  against one signed protected-main commit while reading integration Git objects
+  from a distinct candidate repository.
+- Reject dirty, stale, symlinked, preloaded, or mixed verifier provenance
+  without requiring legitimate candidate implementation bytes to match main.
+
+## 2026-09-08 - Bridge Adopted Ready Authority
+
+**Fixed:**
+
+- Normalize one verified Exact-State-Adoption v3 source with one real
+  Draft-to-Ready successor into the existing Ready-integration prior-authority
+  boundary without reconstructing unavailable historical companion bytes.
+- Bind the exact source, admissions, protected lifecycle publications, finite
+  history, signed annotated tag, and accepted-main implementation while
+  preserving ordinary prior authority and the single integration verifier.
+
+## 2026-09-07 - Bind Remediated Ready Integration Review
+
+**Fixed:**
+
+- Allow Ready integration to retain the one authenticated reviewed snapshot
+  when parent 1 is its separately attested remediation successor.
+- Bind the reviewed head and exact reviewed-state and feedback digests through
+  the prior head's verified receipt and final attestation, while preserving
+  live parent, current-main, lifecycle, signer, and provider checks.
+
+## 2026-09-07 - Converge Pending Ready Publication After Remediation
+
+**Fixed:**
+
+- Converge one authenticated pending Draft-to-Ready publication followed by one
+  exact Ready-preserving remediation head, using the two existing lifecycle
+  successors and protected publication CAS operations.
+- Require live Ready chronology, exact sole-parent lineage, signed source
+  authority, finding identities, verifier-sealed validation and attestation,
+  tree, receipt, and maintained signer evidence instead of trusting ancestry.
+- Resume safely from the exact predecessor, midpoint, or complete state with no
+  duplicate GitHub Ready write, counter replay, event kind, journal, or recovery
+  family; ambiguous chronology fails closed.
+
+## 2026-09-07 - Unify Validation Registry Projection
+
+**Fixed:**
+
+- Derive validation receipt/final-attestation registry identity and fixed-thread
+  resolution identity from one closed `fast_path` projection owner.
+- Bind an admitted pre-enrollment integration policy consistently in both paths
+  while rejecting unknown projection fields instead of silently dropping them.
+- Preserve immutable evidence-time registry reconstruction for historical Ready
+  integration evidence; current policy cannot reinterpret a historical receipt.
+
+## 2026-09-07 - Close Pre-Enrollment Completion Gaps
+
+**Fixed:**
+
+- persist the typed receipt and final attestation before the one irreversible
+  integration push, so an output failure cannot strand an advanced Draft head
+  without its recovery evidence
+- authenticate typed commit evidence before minting an initial-head proof and
+  require an admitted pre-enrollment delivery's native genesis to select its
+  exact live integrated Draft head
+- preserve historical validation bindings for repositories that do not enable
+  pre-enrollment integration, bound typed-CLI failures, and restore changelog
+  ordering
+
+## 2026-09-07 - Authenticate Isolated Work-Graph Dependencies
+
+**Fixed:**
+
+- Derive a minimal `markdown-it` runtime closure from the exact authenticated
+  pre-enrollment source manifest and lockfile, then materialize it outside the
+  immutable source tree with locked integrity verification and install scripts
+  disabled.
+- Run the canonical Work-Graph parser behind an internally derived Node preload
+  guard that verifies dependency bytes and confines module resolution to the
+  authenticated source and dependency roots, without trusting ambient
+  `node_modules` or caller `NODE_PATH` state.
+- Use a private empty npm cache and closed credential-free configuration; live
+  archive retrieval is permitted only under authenticated lockfile URL and
+  integrity authority and fails closed when unavailable.
+
+## 2026-09-06 - Accept Canonical Completed Codex Status
+
+**Fixed:**
+
+- Accept the canonical successful Codex Code Review and Security Review status
+  rows, including their closed `relative-time` representation, while preserving
+  historical completed-row compatibility.
+- Continue to reject non-terminal, ambiguous, malformed, duplicate, forged,
+  stale, and missing provider evidence before stable-feedback capture or merge.
+
+## 2026-09-06 - Reduce PR Lifecycle Prompt And Validation Loops
+
+**Changed:**
+
+- Reuse authenticated delivery evidence until its explicit head, tree, CURRENT,
+  feedback, graph, or volatile-readiness invalidator occurs, and use delta
+  preflight during same-delivery continuation.
+- Treat in-contract commit, push, evidence binding, lifecycle publication,
+  review observation, remediation, resolution, and conditionally authorized
+  merge as mechanical checkpoints rather than new prompt boundaries.
+- Require affirmative successful terminal evidence from every triggered review
+  provider before stable-feedback capture or merge, with finite observation and
+  one batched finding set per reviewed head; enforce the visible provider gate
+  inside the existing bounded stable-feedback capture.
+- Permit focused in-contract correction after failed Complete Validation in the
+  same invocation only for a changed, freshly audited candidate; preserve no
+  receipt for failure and no repeated success on an unchanged tree.
+- Keep lifecycle counters, Ready monotonicity, Cycle-3 absence, finite external
+  review authority, hosted-CI isolation, and merge fail-closed semantics intact.
+
+## 2026-09-06 - Authenticate Validation-Evidence Provenance
+
+**Fixed:**
+
+- Require consumers to re-verify canonical validation-evidence provenance so
+  caller construction, replacement, malformed objects, and seal substitution
+  fail closed without relying on hidden in-process registration authority.
+- Require the actual Ready-integration commit signature and signer identity to
+  pass the existing canonical verifier before lifecycle-consumable validation
+  evidence is sealed.
+- Bind the authenticated integration commit to its repository, exact tree,
+  ordered parents, and maintained signature-policy digest before sealing.
+- Preserve ordinary validation and historical Ready-integration semantics while
+  removing obsolete internal sentinel-based test fixtures.
+
+## 2026-09-06 - Seal Ready-Integration Validation Evidence
+
+**Changed:**
+
+- Return canonical verifier-sealed validation evidence after successful
+  Ready-integration evidence, receipt, topology, and final-attestation verification.
+- Bind the seal to the authenticated delivery issue, PR, integrated head and tree,
+  ordered parents, current-main identity, reviewed state, signer expectation, kinds,
+  versions, and canonical evidence digests so mutation and replay fail closed.
+- Allow the existing exact-state-adopted `HEAD_ADVANCED` authority to consume that
+  result without changing its independent lifecycle preconditions or historical
+  Ready-integration semantics.
+
+## 2026-09-06 - Authenticate Pre-Enrollment Validation-Evidence Loss
+
+**Changed:**
+
+- Add a bounded migration-signed loss admission as an explicit version-3
+  exact-state-adoption source mode; retain adoption versions 1/2 unchanged.
+- Bind accepted-main loss policy, immutable signed Draft source, current
+  registered safety validation, source-complete feedback and unenrolled history
+  without reconstructing historical validation companions.
+- Normalize bounded provider representations into canonical facts before pure
+  admission, and run accepted-current validation harness bytes against a
+  disposable copy of the immutable historical source.
+- Keep review-budget admission separate and reuse protected enrollment uniqueness;
+  add no lifecycle state, counter, signer role, publication journal or Ready authority.
+
+## 2026-09-06 - Prefer SSH for New Git Signing Credentials
+
+**Changed:**
+
+- prefer SSH with Ed25519 where supported when creating new SecPal Git and
+  lifecycle signing credentials, while retaining SSH and OpenPGP verification
+  for existing, historical, external, and GitHub-generated valid signatures
+- preserve existing valid signing configurations, distinct SSH signing and
+  transport identities, and maintained lifecycle signer-role separation
+
+## 2026-09-05 - Authenticate Pre-Enrollment Bootstrap Source
+
+**Added:**
+
+- admit the exact immutable #776 / PR #779 implementation source through the
+  existing accepted-main bootstrap-source authority
+- verify both maintained source signatures and run one fixed bounded validation
+  command with isolated Python startup before permitting the exact
+  pre-enrollment action entrypoint
+- keep trusted standard-library paths ahead of admitted imports, disable bytecode
+  writes, terminate the complete apply process group on timeout, retain only
+  closed bounded failure identities, validate without host GitHub credentials,
+  and require both the routine lifecycle signer role and Draft source state
+- preserve the historical evidence-loss limitation without granting lifecycle,
+  publication, Ready, push, merge, or arbitrary-source authority
+
+## 2026-09-05 - Prevalidate Lifecycle-Aware PR Evidence
+
+**Changed:**
+
+- Make the canonical PR-body validator consume explicit Draft/Ready state:
+  executable Drafts require fail-first proof; Ready PRs additionally require passing
+  proof. Reject self-authorized validate-first references because this repository
+  grants no exception.
+- Pass actual GitHub Draft state through the trusted-base PR-evidence workflow,
+  retaining mandatory structured evidence and the explicit content-only path.
+- Require exact candidate-body local validation before programmatic PR publication
+  or body editing in repository guidance, Polyscope runtime prompts, and maintained
+  normal and replacement Draft examples. Failed validation blocks publication.
+- Parse real evidence sections with the existing locked Markdown parser, excluding
+  raw HTML and code examples and ending at the next heading of any level. Rollout
+  examples use a prepared trusted governance checkout rather than absent target scripts.
+
+## 2026-09-05 - Select Policy-Specific Lifecycle Credentials
+
+**Changed:**
+
+- select distinct lifecycle signing credentials from bounded OS-account Git
+  configuration only after installed policy selects the required signer role
+- preserve the routine global Git signing key as a compatible default while
+  forbidding it from overriding or replacing a distinct legacy-adoption mapping
+- verify every produced signature against accepted policy credential material
+  before returning a production signer to existing lifecycle constructors
+
+## 2026-09-05 - Replace the Exact Review-Helper Source Admission
+
+**Changed:**
+
+- replace the single active #818 review-helper source admission with the exact
+  validated Cycle-2 successor commit and helper blob
+- bind the byte-only source policy to PR #819's live Ready state while keeping
+  the executable bootstrap source Draft-only and candidate self-admission
+  impossible
+
+## 2026-09-05 - Preserve Pre-Enrollment Review Consumption
+
+**Changed:**
+
+- add one exact-state-adoption mode that conservatively preserves a consumed
+  unrestricted-review budget when no historical provider review exists
+- bind the admission to exact current delivery and validation evidence under
+  the existing migration authority without reconstructing review results,
+  verdicts, findings, or provider observations
+- keep provider-backed adoption, native lifecycle, legacy checkpoints, and
+  remediation/Ready derivation unchanged and fail closed on mixed modes
+
+## 2026-09-05 - Authenticate Immutable Helper Source After PR Advancement
+
+**Changed:**
+
+- preserve the exact historical `PR_REVIEW_EVIDENCE_HELPER_SOURCE` admission
+  after its owning pull request lawfully advances
+- authenticate live PR identity and exact current-candidate helper bytes in one
+  head-consistent observation, without weakening executable bootstrap source
+  contracts
+
+## 2026-09-05 - Authenticate Post-Freeze Non-Actionable Disposition
+
+**Changed:**
+
+- derive whether a late review target was reviewed but ineligible or absent
+  from both authenticated final evidence sets instead of accepting a
+  caller-selected origin
+- authorize only the closed `INFORMATIONAL` / `NON_ACTIONABLE` pair with no
+  technical blocker for the new post-freeze path while preserving the existing
+  invalid/disproven authority
+- keep final-eligibility manifest and authenticated-absence modes disjoint, and
+  isolate classification and disposition schema meanings against replay
+
+## 2026-09-02 - Execute Authenticated Ready/Draft Transitions
+
+**Added:**
+
+- compose authenticated lifecycle decisions with exact GitHub Ready/Draft
+  mutation, protected-journal successor publication, and final convergence
+  verification
+- recover progress exclusively from live GitHub and authenticated CURRENT state,
+  allowing publication-only continuation without replaying an applied GitHub
+  mutation
+- fail closed on drift, replay, reverse partial state, and ambiguous writes
+  while preserving one-use authorization, lifecycle counters, histories, and
+  Ready monotonicity
+- derive successors for exact-state-adopted lifecycles with the maintained
+  adoption-aware validator so authenticated observation history remains valid
+
+## 2026-09-02 - Re-evaluate Exact Released OCI Artifacts
+
+**Added:**
+
+- add one reusable, immutable-SHA-pinned workflow contract for recurring and
+  manual exact-digest Grype and Trivy re-evaluation
+- verify publisher-attested OCI index/platform identity and authoritative Syft
+  SPDX association before fresh-database scanning
+- retain bounded raw, adapted, normalized, and operation-health evidence with
+  deterministic caller-scoped finding and stale-health triage
+- keep scanner/evaluation jobs read-only and isolate issue mutation without any
+  artifact rebuild, retag, deployment, or production mutation
+- close GitHub-token registry access to the authenticated caller's GHCR
+  namespace, share only ephemeral native client credentials, and independently
+  re-derive policy before issue mutation
+- reconcile exact-subject current-state findings after healthy evidence and
+  prove historical scanner replay with pinned binaries and controlled databases
+- bind reviewed-VEX declared provenance and file enumeration to the authenticated
+  checkout, preserve historical alias correlation, and normalize the complete
+  pinned Grype severity taxonomy without weakening fail-closed evidence
+
+## 2026-09-01 - Authenticate Exact Pre-Enrollment State Adoption
+
+**Added:**
+
+- add one versioned exact-state-adoption proof inside the existing lifecycle
+  enrollment family for independently authenticated pre-enrollment state
+- require a separately signed exact-scope, one-use authorization and preserve
+  observed platform chronology without synthesizing ordinary lifecycle events
+- derive adopted source and current-head evidence through maintained verifiers,
+  and distinguish observation provenance from ordinary event authorization
+- reuse the protected publication journal, adoption signer, enrollment
+  uniqueness, ordinary successor path, and prior-Ready trust boundary
+
+## 2026-09-01 - Authenticate Post-Fix Outdated Thread State
+
+**Changed:**
+
+- accept only the exact GitHub-derived `isOutdated=false` to
+  `isOutdated=true` target transition after independent source-fix and
+  eligibility authentication
+- retain complete ordered target-set enforcement, exact thread content and
+  identity checks, stable pre-write reads, and zero-write handling for already
+  resolved targets
+
 ## 2026-08-31 - Authenticate Idempotent Fixed-Thread Satisfaction
 
 **Changed:**
@@ -29,6 +508,16 @@ Log of notable changes to SecPal organization defaults (newest first).
   preceding native-genesis admission
 - align the mandatory publication contract with admission-first authority and
   make real-SSH regression verification prove the requested signer identity
+
+## 2026-08-30 - Authenticate Pre-Enrollment Draft Integration
+
+**Added:**
+
+- one explicitly authorized, signed two-parent path for reconciling the exact
+  current registered default branch into an open, unenrolled Draft delivery
+- exact mechanical clean-merge and bounded conflict-resolution evidence,
+  candidate-specific validation receipt, final attestation, and typed initial
+  lifecycle-head handoff without fabricating lifecycle state
 
 ## 2026-08-30 - Authenticate Native Genesis Before Lifecycle Publication
 

@@ -5,20 +5,27 @@
 from __future__ import annotations
 
 import copy
+from contextlib import nullcontext
 import hashlib
 import importlib
+import inspect
 import importlib.util
+import inspect
 import io
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest import TestCase, main, mock
 
 import jsonschema
+
+from scripts.secpal_pr_review import lifecycle_publication
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -397,6 +404,70 @@ class FakeGitHub:
 
 
 class ContractTests(TestCase):
+    def test_attester_registry_projection_is_owned_by_fast_path(self) -> None:
+        entry = registry_entry("SecPal/.github")
+        entry["pre_enrollment_integration_policy"] = {
+            "schema_version": "1.0",
+            "command": "integrate-pre-enrollment-draft",
+            "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+            "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+            "maximum_candidates": 1,
+            "maximum_pushes": 1,
+            "force_push": False,
+            "automatic_retry": False,
+            "merge_pull_request": False,
+        }
+
+        expected = {"canonical_projection": True}
+        with mock.patch.object(
+            fast_path,
+            "validation_registry_projection",
+            return_value=expected,
+        ) as projection:
+            self.assertIs(actions._fast_registry_binding(entry), expected)
+        projection.assert_called_once_with(entry)
+
+    def test_registry_projection_is_closed_and_binds_additive_policy(self) -> None:
+        entry = registry_entry("SecPal/.github")
+        policy = {
+            "schema_version": "1.0",
+            "command": "integrate-pre-enrollment-draft",
+            "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+            "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+            "maximum_candidates": 1,
+            "maximum_pushes": 1,
+            "force_push": False,
+            "automatic_retry": False,
+            "merge_pull_request": False,
+        }
+        entry["pre_enrollment_integration_policy"] = copy.deepcopy(policy)
+        projected = fast_path.validation_registry_projection(entry)
+        self.assertEqual(projected["pre_enrollment_integration_policy"], policy)
+
+        removed = copy.deepcopy(entry)
+        removed.pop("pre_enrollment_integration_policy")
+        altered = copy.deepcopy(entry)
+        altered["pre_enrollment_integration_policy"]["maximum_pushes"] = 2
+        self.assertNotEqual(
+            fast_path.digest_json(projected),
+            fast_path.digest_json(fast_path.validation_registry_projection(removed)),
+        )
+        self.assertNotEqual(
+            fast_path.digest_json(projected),
+            fast_path.digest_json(fast_path.validation_registry_projection(altered)),
+        )
+
+        unknown = copy.deepcopy(entry)
+        unknown["future_authority"] = {"enabled": True}
+        malformed = copy.deepcopy(entry)
+        malformed["pre_enrollment_integration_policy"] = []
+        missing = copy.deepcopy(entry)
+        missing.pop("signature_policy")
+        for candidate in (unknown, malformed, missing):
+            with self.subTest(candidate=set(candidate)):
+                with self.assertRaises(fast_path.SecurityBlocker):
+                    fast_path.validation_registry_projection(candidate)
+
     def test_classification_fixture_covers_exact_taxonomy_and_cases_1_to_16(self) -> None:
         fixture = json.loads((FIXTURES / "classification-cases.json").read_text(encoding="utf-8"))
         self.assertEqual([case["number"] for case in fixture["cases"]], list(range(1, 17)))
@@ -2266,9 +2337,11 @@ class MutationTests(TestCase):
                         "id": "PR_1",
                         "headRefOid": p21.HEAD,
                         "state": "OPEN",
+                        "reviewDecision": "CHANGES_REQUESTED",
                         "reactions": copy.deepcopy(empty),
                         "reviews": copy.deepcopy(empty),
                         "comments": copy.deepcopy(empty),
+                        "reviewRequests": copy.deepcopy(empty),
                         "reviewThreads": {
                             "nodes": [
                                 {
@@ -2308,6 +2381,7 @@ class MutationTests(TestCase):
         runner = SimpleNamespace(run=lambda _arguments: copy.deepcopy(payload))
         github = actions.LiveGitHub(runner)
         current = github.read_current_feedback(plan())
+        self.assertEqual(current["review_decision"], "CHANGES_REQUESTED")
         self.assertEqual(
             current["feedback"]["threads"][0]["comments"][0]["reactions"][0][
                 "mutation_id"
@@ -2363,6 +2437,17 @@ class MutationTests(TestCase):
             "pageInfo": {"hasNextPage": False},
         }
         pages = iter((payload, changed_second_page))
+        github = actions.LiveGitHub(
+            SimpleNamespace(run=lambda _arguments: copy.deepcopy(next(pages)))
+        )
+        with self.assertRaisesRegex(actions.MutationBlocked, "changed during bounded pagination"):
+            github.read_current_feedback(plan())
+
+        changed_review_decision = copy.deepcopy(second_page)
+        changed_review_decision["data"]["repository"]["pullRequest"][
+            "reviewDecision"
+        ] = "APPROVED"
+        pages = iter((payload, changed_review_decision))
         github = actions.LiveGitHub(
             SimpleNamespace(run=lambda _arguments: copy.deepcopy(next(pages)))
         )
@@ -3975,6 +4060,36 @@ class RegistryTests(TestCase):
                 self.assertLessEqual(entry["maximum_comments"], 200)
                 self.assertLessEqual(entry["maximum_reactions"], 50)
 
+    def test_registry_schema_admits_closed_pre_enrollment_integration_policy(
+        self,
+    ) -> None:
+        registry = actions.load_registry()
+        entry = next(
+            item
+            for item in registry["repositories"]
+            if item["repository"] == "SecPal/.github"
+        )
+        entry["pre_enrollment_integration_policy"] = {
+            "schema_version": "1.0",
+            "command": "integrate-pre-enrollment-draft",
+            "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+            "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+            "maximum_candidates": 1,
+            "maximum_pushes": 1,
+            "force_push": False,
+            "automatic_retry": False,
+            "merge_pull_request": False,
+        }
+
+        validated = actions.validate_registry(registry)
+        selected = actions.select_repository(validated, "SecPal/.github")
+        self.assertEqual(
+            actions._fast_registry_binding(selected)[
+                "pre_enrollment_integration_policy"
+            ],
+            entry["pre_enrollment_integration_policy"],
+        )
+
     def test_registry_cases_61_to_69(self) -> None:
         registry = {
             "schema_version": "1.0",
@@ -4425,6 +4540,12 @@ class RegistryTests(TestCase):
                 ["npm", "run", "build:android"],
             ],
         )
+
+    def test_fast_binding_omits_pre_enrollment_policy_for_unrelated_repository(self) -> None:
+        binding = actions._fast_registry_binding(
+            actions.select_repository(actions.load_registry(), "SecPal/frontend")
+        )
+        self.assertNotIn("pre_enrollment_integration_policy", binding)
         self.assertEqual(
             [command["argv"] for command in binding["focused_only_validation"]],
             [
@@ -4624,6 +4745,27 @@ def fast_registry() -> dict[str, Any]:
     }
 
 
+def ready_source_current_safety_profile() -> dict[str, Any]:
+    path = actions.READY_SOURCE_RECOVERY_CURRENT_SAFETY_PATH
+    command = {
+        "argv": ["python3", path], "working_directory": ".",
+        "purpose": "Validate Ready-source recovery current safety",
+    }
+    return {
+        "schema_version": "1.0",
+        "policy": "READY_SOURCE_RECOVERY_CURRENT_SAFETY",
+        "harness": [{"path": path, "mode": "100644", "blob_oid": "e" * 40, "size": 1}],
+        "validation_command_set": [command],
+        "validation_command_set_digest": fast_path.digest_json([command]),
+        "timeout_seconds": 120,
+        "required_invariants": list(actions.READY_SOURCE_RECOVERY_CURRENT_SAFETY_INVARIANTS),
+        "validation_results": [{
+            "command_digest": fast_path.digest_json(command),
+            "exit_status": 0, "successful": True,
+        }],
+    }
+
+
 def fast_attestation(reviewed: Any, *, head_sha: str = p21.HEAD) -> dict[str, Any]:
     registry = fast_registry()
     receipt = fast_path.create_validation_receipt(
@@ -4713,6 +4855,96 @@ def ready_integration_evidence(
             "cycle_3": False,
         },
     }
+
+
+def integration_commit_git_results(
+    integration: dict[str, Any], *, signer: str = "aroviqen"
+) -> list[subprocess.CompletedProcess[str]]:
+    return [
+        subprocess.CompletedProcess(
+            [], 0, "https://github.com/SecPal/.github.git\n", ""
+        ),
+        subprocess.CompletedProcess(
+            [],
+            0,
+            (
+                f"tree {integration['validated_tree_sha']}\n"
+                + "".join(
+                    f"parent {parent}\n"
+                    for parent in integration["ordered_parent_shas"]
+                )
+                + "gpgsig -----BEGIN SSH SIGNATURE-----\n\n"
+            ),
+            "",
+        ),
+        subprocess.CompletedProcess(
+            [],
+            0,
+            f'Good "git" signature for {signer} with ED25519 key SHA256:test\n',
+            "",
+        ),
+    ]
+
+
+def authenticated_integration_commit(
+    head_sha: str,
+    integration: dict[str, Any],
+    *,
+    signer: str = "aroviqen",
+) -> fast_path.AuthenticatedIntegrationCommit:
+    with mock.patch.object(
+        fast_path,
+        "_run_integration_commit_git",
+        side_effect=integration_commit_git_results(integration, signer=signer),
+    ):
+        return fast_path.authenticate_integration_commit(
+            repository_root=REPO_ROOT,
+            repository="SecPal/.github",
+            head_sha=head_sha,
+            expected_signer=integration["expected_signer"],
+            signature_policy=fast_registry()["signature_policy"],
+        )
+
+
+def verified_ready_integration_attestation(
+    attestation: Any, **kwargs: Any
+) -> fast_path.VerifiedValidationEvidence:
+    integration = kwargs["integration_evidence"]
+    kwargs.setdefault("repository_root", REPO_ROOT)
+    kwargs.setdefault("signature_policy", kwargs["registry"]["signature_policy"])
+    with mock.patch.object(
+        fast_path,
+        "_run_integration_commit_git",
+        side_effect=integration_commit_git_results(integration),
+    ):
+        return fast_path.verify_ready_integration_attestation(attestation, **kwargs)
+
+
+def verified_eligibility_bound_ready_integration_attestation(
+    attestation: Any, **kwargs: Any
+) -> fast_path.VerifiedValidationEvidence:
+    integration = kwargs["integration_evidence"]
+    kwargs.setdefault("repository_root", REPO_ROOT)
+    kwargs.setdefault("signature_policy", kwargs["registry"]["signature_policy"])
+    with mock.patch.object(
+        fast_path,
+        "_run_integration_commit_git",
+        side_effect=integration_commit_git_results(integration),
+    ):
+        return fast_path.verify_eligibility_bound_ready_integration_attestation(
+            attestation, **kwargs
+        )
+
+
+def is_verified_ready_evidence(
+    value: Any, integration: dict[str, Any]
+) -> bool:
+    with mock.patch.object(
+        fast_path,
+        "_run_integration_commit_git",
+        side_effect=integration_commit_git_results(integration),
+    ):
+        return fast_path.is_verified_validation_evidence(value)
 
 
 def ready_integration_prior_authority(
@@ -6439,38 +6671,178 @@ class FastPathTests(TestCase):
                     live_observation=None,
                 )
 
-    def test_ready_integration_reconstructs_prior_policy_from_prior_commit(self) -> None:
-        registry = json.loads(actions.REGISTRY_PATH.read_text(encoding="utf-8"))
-        historical_binding = next(
-            item
-            for item in registry["repositories"]
-            if item["repository"] == "SecPal/.github"
+    def test_ready_integration_prior_authority_rejects_reviewed_pr_mismatch(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        authority = fast_path.normalize_ready_integration_prior_authority(
+            ready_integration_prior_authority(reviewed)
         )
-        historical_binding["focused_validation"] = historical_binding[
-            "focused_validation"
-        ][:4]
-        historical_validation_count = len(
-            historical_binding["focused_validation"]
-        ) + len(historical_binding["required_local_validation"])
-        registry_raw = json.dumps(registry)
+        integration = fast_path.normalize_ready_integration_evidence(
+            ready_integration_evidence(reviewed, validated_tree="a" * 40),
+            repository="SecPal/.github",
+            reviewed_state=reviewed,
+            registry=fast_registry(),
+            validated_tree_sha="a" * 40,
+        )
+        mismatched = fast_path.StableFeedbackState(
+            repository=reviewed.repository,
+            pull_request_number=reviewed.pull_request_number + 1,
+            head_sha=reviewed.head_sha,
+            base_ref=reviewed.base_ref,
+            base_sha=reviewed.base_sha,
+            pr_state=reviewed.pr_state,
+            feedback=reviewed.feedback,
+        )
+        arguments = SimpleNamespace(
+            repo="SecPal/.github",
+            delivery_issue=9,
+            prior_authority="authority.json",
+            prior_reviewed_state="prior-reviewed.json",
+            prior_receipt="prior-receipt.json",
+            prior_attestation="prior-attestation.json",
+            prior_authority_tag_ref="refs/tags/prior-authority",
+            expected_prior_authority_signer="aroviqen",
+        )
+        with (
+            mock.patch.object(actions, "_read_json", return_value=authority),
+            mock.patch.object(actions, "_load_fast_state", return_value=mismatched),
+            mock.patch.object(
+                actions,
+                "_validated_commit_parent",
+                return_value="e" * 40,
+            ),
+            mock.patch.object(
+                actions,
+                "_run_attestation_git",
+                return_value=SimpleNamespace(
+                    returncode=0,
+                    stdout=authority["prior_delivery_tree_sha"],
+                    stderr="",
+                ),
+            ),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "prior delivery pull-request identity changed",
+            ),
+        ):
+            actions._verify_ready_integration_prior_authority(
+                arguments=arguments,
+                repository_root=REPO_ROOT,
+                binding=fast_registry(),
+                integration_evidence=integration,
+                live_observation=None,
+            )
+
+    def test_ready_integration_prior_authority_rejects_reviewed_digest_mismatch(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        raw_authority = ready_integration_prior_authority(reviewed)
+        raw_authority["prior_delivery_head_sha"] = "9" * 40
+        authority = fast_path.normalize_ready_integration_prior_authority(raw_authority)
+        raw_integration = ready_integration_evidence(
+            reviewed, validated_tree="a" * 40
+        )
+        raw_integration.update(
+            schema_version="1.2",
+            reviewed_head_sha=reviewed.head_sha,
+            prior_delivery_head_sha="9" * 40,
+            ordered_parent_shas=["9" * 40, reviewed.base_sha],
+            prior_authority_digest=fast_path.digest_json(authority),
+        )
+        integration = fast_path.normalize_ready_integration_evidence(
+            raw_integration,
+            repository="SecPal/.github",
+            reviewed_state=reviewed,
+            registry=fast_registry(),
+            validated_tree_sha="a" * 40,
+        )
+        changed_reviewed = fast_path.StableFeedbackState(
+            repository=reviewed.repository,
+            pull_request_number=reviewed.pull_request_number,
+            head_sha="b" * 40,
+            base_ref=reviewed.base_ref,
+            base_sha=reviewed.base_sha,
+            pr_state=reviewed.pr_state,
+            feedback=reviewed.feedback,
+        )
+        arguments = SimpleNamespace(
+            repo="SecPal/.github",
+            delivery_issue=9,
+            prior_authority="authority.json",
+            prior_reviewed_state="prior-reviewed.json",
+            prior_receipt="prior-receipt.json",
+            prior_attestation="prior-attestation.json",
+            prior_authority_tag_ref="refs/tags/prior-authority",
+            expected_prior_authority_signer="aroviqen",
+        )
+
+        with (
+            mock.patch.object(actions, "_read_json", return_value=authority),
+            mock.patch.object(actions, "_load_fast_state", return_value=changed_reviewed),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "prior reviewed-state identity changed",
+            ),
+        ):
+            actions._verify_ready_integration_prior_authority(
+                arguments=arguments,
+                repository_root=REPO_ROOT,
+                binding=fast_registry(),
+                integration_evidence=integration,
+                live_observation=None,
+            )
+
+    def test_ready_integration_reconstructs_prior_policy_from_central_history(self) -> None:
+        historical_head = "e78db9eeb0973d1f5853c4abfafa26e6cc8ab289"
         with mock.patch.object(
-            actions,
-            "_run_attestation_git",
-            return_value=SimpleNamespace(returncode=0, stdout=registry_raw, stderr=""),
+            fast_path,
+            "_central_git_result",
+            wraps=fast_path._central_git_result,
         ) as git_read:
             binding = actions._prior_delivery_registry_binding(
-                REPO_ROOT, "a" * 40, "SecPal/.github"
+                historical_head,
+                "SecPal/.github",
+                "38629c17e2397bfc1df44e5fa65fc176326f47fdf9dbfee98d1de52ecd093340",
+                "15d370f613fb13d39bcf5136ffb4ebae298eb78e0acfaf18635253571f9ff12a",
             )
         self.assertEqual(binding["repository"], "SecPal/.github")
-        self.assertEqual(historical_validation_count, 10)
-        self.assertEqual(len(binding["validation"]), historical_validation_count)
         self.assertEqual(
-            git_read.call_args.args[1],
-            [
-                "show",
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:.agents/skills/"
-                "secpal-pr-review/references/repositories.json",
-            ],
+            fast_path.digest_json(binding),
+            "38629c17e2397bfc1df44e5fa65fc176326f47fdf9dbfee98d1de52ecd093340",
+        )
+        self.assertIn(
+            mock.call(
+                ["show", f"{historical_head}:{fast_path.DELIVERY_REGISTRY_PATH}"],
+                allow_failure=True,
+            ),
+            git_read.call_args_list,
+        )
+        self.assertIn(
+            mock.call(
+                [
+                    "show",
+                    f"{historical_head}:"
+                    f"{fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH}",
+                ],
+                allow_failure=True,
+            ),
+            git_read.call_args_list,
+        )
+
+    def test_ready_integration_cross_repository_uses_central_history(self) -> None:
+        binding = actions._prior_delivery_registry_binding(
+            "a" * 40,
+            "SecPal/api",
+            "0284e90a0d918f7baeb2d496d75cf1326858d7e0626c1bd8b72e05f2de2dc0ff",
+            "d3f0d9498954210c1676533210e6bc34ed95468c3fe1db3454098ed7454e4227",
+        )
+
+        self.assertEqual(binding["repository"], "SecPal/api")
+        self.assertEqual(
+            fast_path.digest_json(binding),
+            "0284e90a0d918f7baeb2d496d75cf1326858d7e0626c1bd8b72e05f2de2dc0ff",
         )
 
     def test_ready_integration_prior_authority_rejects_delivery_evidence_drift(
@@ -6557,6 +6929,7 @@ class FastPathTests(TestCase):
         )
         cases = (
             ("repository", "SecPal/api"),
+            ("base_repository", "SecPal/api"),
             ("pull_request_number", 2),
             ("state", "CLOSED"),
             ("draft", True),
@@ -6835,6 +7208,1440 @@ class FastPathTests(TestCase):
                 authority, integration
             )
 
+    def test_ready_integration_consumes_published_pre_persistence_recovery(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        raw_authority = ready_integration_prior_authority(reviewed)
+        raw_authority["schema_version"] = "1.2"
+        raw_authority["recovery_publication"] = {
+            "object_oid": "1" * 40,
+            "publication_digest": "2" * 64,
+            "authorization_id": "ready-source-recovery-1",
+            "authorization_digest": "3" * 64,
+            "fresh_validation_receipt_digest": "4" * 64,
+            "feedback_assessment_digest": "5" * 64,
+            "historical_evidence_loss_proof_digest": "6" * 64,
+            "historical_bytes_reconstructed": False,
+        }
+        authority_manifest = fast_path.normalize_ready_integration_prior_authority(
+            raw_authority
+        )
+        integration_value = ready_integration_evidence(
+            reviewed, validated_tree="a" * 40
+        )
+        integration_value["prior_authority_digest"] = fast_path.digest_json(
+            authority_manifest
+        )
+        integration = fast_path.normalize_ready_integration_evidence(
+            integration_value,
+            repository="SecPal/.github",
+            reviewed_state=reviewed,
+            registry=fast_registry(),
+            validated_tree_sha="a" * 40,
+        )
+        recovered = SimpleNamespace(
+            publication_oid="1" * 40,
+            publication_digest="2" * 64,
+            authorization_id="ready-source-recovery-1",
+            authorization_digest="3" * 64,
+            fresh_validation_receipt_digest="4" * 64,
+            feedback_assessment_digest="5" * 64,
+            historical_evidence_loss_proof_digest="6" * 64,
+            repository="SecPal/.github",
+            delivery_issue=9,
+            pull_request=reviewed.pull_request_number,
+            head_sha=reviewed.head_sha,
+            tree_sha="a" * 40,
+            parent_shas=("9" * 40,),
+            expected_target_base_ref=reviewed.base_ref,
+            expected_target_base_sha=reviewed.base_sha,
+            expected_commit_signer=authority_manifest["expected_signer"],
+            commit_signature_evidence_digest="7" * 64,
+            lifecycle_id=authority_manifest["lifecycle"]["identity"],
+            current_authority_digest=authority_manifest["lifecycle"][
+                "current_authority_digest"
+            ],
+            current_publication_oid=authority_manifest["publication"]["object_oid"],
+            current_publication_digest=authority_manifest["publication"][
+                "publication_digest"
+            ],
+            historical_validation_receipt_digest=authority_manifest[
+                "prior_validation_receipt_digest"
+            ],
+            historical_final_attestation_digest=authority_manifest[
+                "prior_final_attestation_digest"
+            ],
+            reviewed_state_digest=reviewed.state_digest,
+            reviewed_feedback_digest=reviewed.feedback_digest,
+        )
+        lifecycle_publication = SimpleNamespace(
+            verify_current_ready_source_recovery=mock.Mock(return_value=recovered)
+        )
+        lifecycle_authority = SimpleNamespace(
+            ready_source_recovery_commit_signature_binding_digest=mock.Mock(
+                return_value="7" * 64
+            )
+        )
+        tag_object = (
+            f"object {reviewed.head_sha}\ntype commit\ntag recovered\n\n"
+            f"SecPal-Prior-Authority: {fast_path.digest_json(authority_manifest)}\n"
+        )
+
+        def git_result(
+            _root: Path, command: list[str], *, allow_failure: bool = False
+        ) -> Any:
+            del allow_failure
+            if command[:2] == ["rev-parse", f"{reviewed.head_sha}^{{tree}}"]:
+                value = "a" * 40
+            elif command[:2] == ["cat-file", "commit"]:
+                value = "tree " + "a" * 40 + "\ngpgsig signature\n"
+            elif command[:2] == ["rev-parse", "refs/tags/recovered^{tag}"]:
+                value = integration["prior_authority_tag_object_sha"]
+            elif command[:2] == ["cat-file", "-t"]:
+                value = "tag"
+            elif command[:2] == ["cat-file", "tag"]:
+                value = tag_object
+            elif command[:2] in (["verify-commit", "--raw"], ["verify-tag", "--raw"]):
+                value = 'Good "git" signature for aroviqen with ED25519 key SHA256:test'
+            else:
+                raise AssertionError(command)
+            return SimpleNamespace(returncode=0, stdout=value, stderr="")
+
+        arguments = SimpleNamespace(
+            repo="SecPal/.github",
+            delivery_issue=9,
+            prior_authority="authority.json",
+            prior_reviewed_state=None,
+            prior_receipt=None,
+            prior_attestation=None,
+            prior_authority_tag_ref="refs/tags/recovered",
+            expected_prior_authority_signer=None,
+        )
+        with (
+            mock.patch.object(actions, "_read_json", return_value=authority_manifest),
+            mock.patch.object(actions, "_validated_commit_parent", return_value="9" * 40),
+            mock.patch.object(
+                actions,
+                "_commit_validation_receipt_digest",
+                return_value=authority_manifest["prior_validation_receipt_digest"],
+            ),
+            mock.patch.object(actions, "_run_attestation_git", side_effect=git_result),
+            mock.patch.object(actions, "_verify_signature_policy_identity"),
+            mock.patch.object(actions, "_verify_integration_signer"),
+            mock.patch.object(
+                actions,
+                "_load_lifecycle_publication_helpers",
+                return_value=(lifecycle_authority, lifecycle_publication),
+            ),
+        ):
+            self.assertEqual(
+                actions._verify_ready_integration_prior_authority(
+                    arguments=arguments,
+                    repository_root=REPO_ROOT,
+                    binding=fast_registry(),
+                    integration_evidence=integration,
+                    live_observation=None,
+                ),
+                authority_manifest,
+            )
+
+            historical_base_sha = "8" * 40
+            recovered.expected_target_base_sha = historical_base_sha
+            self.assertEqual(
+                actions._verify_ready_integration_prior_authority(
+                    arguments=arguments,
+                    repository_root=REPO_ROOT,
+                    binding=fast_registry(),
+                    integration_evidence=integration,
+                    live_observation=None,
+                ),
+                authority_manifest,
+            )
+            self.assertEqual(
+                recovered.expected_target_base_sha, historical_base_sha
+            )
+            self.assertEqual(
+                integration["ordered_parent_shas"][1], reviewed.base_sha
+            )
+
+            recovered.expected_target_base_ref = "release"
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "binding changed"
+            ):
+                actions._verify_ready_integration_prior_authority(
+                    arguments=arguments,
+                    repository_root=REPO_ROOT,
+                    binding=fast_registry(),
+                    integration_evidence=integration,
+                    live_observation=None,
+                )
+            recovered.expected_target_base_ref = reviewed.base_ref
+
+            arguments.prior_receipt = "invalid-supplied-history.json"
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "cannot downgrade"
+            ):
+                actions._verify_ready_integration_prior_authority(
+                    arguments=arguments,
+                    repository_root=REPO_ROOT,
+                    binding=fast_registry(),
+                    integration_evidence=integration,
+                    live_observation=None,
+                )
+
+    def test_ready_source_recovery_safety_fails_closed_on_feedback_and_scope(self) -> None:
+        reviewed = fast_feedback(thread_count=1)
+        registry = fast_registry()
+        receipt = fast_path.create_validation_receipt(
+            repository=reviewed.repository,
+            head_sha=reviewed.head_sha,
+            validated_tree_sha="a" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+        )
+        findings = []
+        for index, ((kind, node_id), (source_digest, thread_id)) in enumerate(
+            fast_path._classified_feedback_sources(reviewed).items(), 1
+        ):
+            findings.append(
+                {
+                    "finding_id": f"recovery-finding-{index}",
+                    "thread_id": thread_id,
+                    "sources": [
+                        {"kind": kind, "node_id": node_id, "digest": source_digest}
+                    ],
+                    "classification": "INFORMATIONAL",
+                    "disposition": "NON_ACTIONABLE",
+                    "evidence_digest": f"{index:x}".rjust(64, "0"),
+                    "technically_blocking": False,
+                }
+            )
+        arguments = {
+            "tooling_authority_main": "f" * 40,
+            "repository": reviewed.repository,
+            "pull_request_number": reviewed.pull_request_number,
+            "head_sha": reviewed.head_sha,
+            "tree_sha": "a" * 40,
+            "parent_shas": ["9" * 40],
+            "expected_base_ref": reviewed.base_ref,
+            "expected_base_sha": reviewed.base_sha,
+            "reviewed_state": reviewed,
+            "review_decision": "APPROVED",
+            "feedback_findings": findings,
+            "fresh_validation_receipt": receipt,
+            "registry": registry,
+            "command_set": registry["validation"],
+        }
+        verified = fast_path.derive_ready_source_recovery_safety_facts(**arguments)
+        self.assertEqual(verified["head_sha"], reviewed.head_sha)
+        self.assertEqual(verified["schema_version"], "1.0")
+        self.assertEqual(
+            verified["validation_execution_origin"],
+            "MAINTAINED_REGISTERED_EXECUTION",
+        )
+
+        mutations = {
+            "wrong head": lambda value: value.update(head_sha="8" * 40),
+            "wrong base": lambda value: value.update(expected_base_sha="8" * 40),
+            "wrong topology": lambda value: value.update(
+                parent_shas=["8" * 40, "9" * 40]
+            ),
+            "blocking review": lambda value: value.update(
+                review_decision="CHANGES_REQUESTED"
+            ),
+            "incomplete feedback": lambda value: value.update(feedback_findings=[]),
+            "blocking finding": lambda value: value["feedback_findings"][0].update(
+                technically_blocking=True
+            ),
+            "source substitution": lambda value: value["feedback_findings"][0][
+                "sources"
+            ][0].update(digest="f" * 64),
+            "receipt downgrade": lambda value: value[
+                "fresh_validation_receipt"
+            ].update(eligibility_evidence_digest="f" * 64),
+        }
+        for case, mutate in mutations.items():
+            changed = copy.deepcopy(arguments)
+            mutate(changed)
+            with self.subTest(case=case), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                fast_path.derive_ready_source_recovery_safety_facts(**changed)
+    def test_ready_source_recovery_safety_cannot_use_caller_policy_or_receipt(self) -> None:
+        parameters = inspect.signature(
+            actions.issue_ready_source_recovery_authorization
+        ).parameters
+        self.assertNotIn("reviewed_state", parameters)
+        self.assertNotIn("registry", parameters)
+        self.assertNotIn("command_set", parameters)
+        self.assertNotIn("fresh_validation_receipt", parameters)
+        self.assertNotIn("current_publication_digest", parameters)
+        self.assertNotIn("current_publication_oid", parameters)
+        self.assertNotIn("current_lifecycle", parameters)
+        self.assertNotIn("recovery_safety_facts", parameters)
+        self.assertNotIn("commit_signature_evidence", parameters)
+        self.assertIn("recovery_user_authorization", parameters)
+        self.assertNotIn("historical_evidence_loss_proof_digest", parameters)
+        self.assertFalse(
+            hasattr(fast_path, "is_verified_ready_source_recovery_safety")
+        )
+
+    def test_ready_source_recovery_public_boundary_selects_current_safety(self) -> None:
+        issued = {"kind": "SECPAL_READY_SOURCE_RECOVERY_AUTHORIZATION"}
+        lifecycle = SimpleNamespace(
+            _sign_ready_source_recovery_authorization=object()
+        )
+        publication = SimpleNamespace(
+            verify_current_lifecycle_authority=object()
+        )
+        with (
+            mock.patch.object(
+                actions, "_load_lifecycle_publication_helpers",
+                return_value=(lifecycle, publication),
+            ),
+            mock.patch.object(
+                actions, "_issue_ready_source_recovery_authorization",
+                return_value=issued,
+            ) as boundary,
+        ):
+            result = actions.issue_ready_source_recovery_authorization(
+                repository="SecPal/.github", delivery_issue=827,
+                pull_request_number=830, expected_head_sha="a" * 40,
+                repository_root=REPO_ROOT, feedback_findings=[],
+                manual_gate_evidence=[], historical_validation_receipt_digest="1" * 64,
+                historical_final_attestation_digest="2" * 64,
+                recovery_user_authorization=b"authorization",
+                expected_commit_signer={"kind": "SSH_PRINCIPAL", "identity": "reviewer"},
+                signer_identity="reviewer", signer=object(),
+            )
+        self.assertIs(result, issued)
+        self.assertIs(
+            boundary.call_args.kwargs["_validation_runner"],
+            actions._run_ready_source_recovery_current_safety,
+        )
+        self.assertIsNot(
+            boundary.call_args.kwargs["_validation_runner"],
+            actions._run_registered_validations,
+        )
+
+    def test_ready_source_runner_normalizes_transport_failure(self) -> None:
+        profile = ready_source_current_safety_profile()
+        with (
+            mock.patch.object(
+                actions, "_ready_source_recovery_current_safety_profile",
+                return_value=profile,
+            ),
+            mock.patch.object(
+                actions.exact_source_safety, "execution_root",
+                return_value=nullcontext(REPO_ROOT),
+            ),
+            mock.patch.object(
+                actions.exact_source_safety, "run_profile",
+                side_effect=actions.exact_source_safety.transport.BootstrapSourceAdmissionError(
+                    "isolated execution failed"
+                ),
+            ),
+            self.assertRaisesRegex(fast_path.SecurityBlocker, "current safety failed"),
+        ):
+            actions._run_ready_source_recovery_current_safety(
+                "f" * 40, REPO_ROOT, profile,
+            )
+
+    def test_exact_source_profile_combines_multi_command_invariants(self) -> None:
+        commands = [
+            {"argv": ["python3", f"tests/harness-{index}.py"],
+             "working_directory": ".", "purpose": "fixture"}
+            for index in (1, 2)
+        ]
+        profile = {
+            "validation_command_set": commands,
+            "validation_results": [
+                {"command_digest": fast_path.digest_json(command),
+                 "exit_status": 0, "successful": True}
+                for command in commands
+            ],
+            "required_invariants": ["first", "second"],
+            "timeout_seconds": 120,
+        }
+        results = [
+            SimpleNamespace(returncode=0, stdout=b'["first", "second"]'),
+            SimpleNamespace(returncode=0, stdout=b'["first", "second"]'),
+        ]
+        helper = actions.exact_source_safety
+        with (
+            mock.patch.object(helper.authority, "_load_trusted_command_helper"),
+            mock.patch.object(helper.transport, "_closed_validation_environment", return_value={}),
+            mock.patch.object(helper.transport, "_isolated_python_command", return_value=["python3"]),
+            mock.patch.object(helper.transport, "_run_isolated_python", side_effect=results),
+        ):
+            helper.run_profile(REPO_ROOT, profile, expected_profile=copy.deepcopy(profile))
+
+    def test_exact_source_loader_cleans_synthetic_package_on_failure(self) -> None:
+        package_name = "secpal_exact_source_safety"
+        previous_package = sys.modules.pop(package_name, None)
+        previous_module = sys.modules.pop(f"{package_name}.exact_source_safety", None)
+        try:
+            with mock.patch.object(
+                actions.importlib.util, "spec_from_file_location", return_value=None,
+            ), self.assertRaisesRegex(RuntimeError, "Cannot load exact-source"):
+                actions._load_exact_source_safety_helper()
+            self.assertNotIn(package_name, sys.modules)
+            self.assertNotIn(f"{package_name}.exact_source_safety", sys.modules)
+        finally:
+            if previous_package is not None:
+                sys.modules[package_name] = previous_package
+            if previous_module is not None:
+                sys.modules[f"{package_name}.exact_source_safety"] = previous_module
+
+    def test_ready_source_recovery_review_decision_requires_authenticated_policy(self) -> None:
+        reviewed = fast_feedback(thread_count=0)
+        registry = fast_registry()
+        receipt = fast_path.create_validation_receipt(
+            repository=reviewed.repository,
+            head_sha=reviewed.head_sha,
+            validated_tree_sha="a" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+        )
+        findings = [{
+            "finding_id": "review-summary",
+            "thread_id": None,
+            "sources": [{
+                "kind": "REVIEW",
+                "node_id": "REVIEW_1",
+                "digest": digest("review summary"),
+            }],
+            "classification": "INFORMATIONAL",
+            "disposition": "NON_ACTIONABLE",
+            "evidence_digest": "1" * 64,
+            "technically_blocking": False,
+        }]
+        arguments = {
+            "tooling_authority_main": "f" * 40,
+            "repository": reviewed.repository,
+            "pull_request_number": reviewed.pull_request_number,
+            "head_sha": reviewed.head_sha,
+            "tree_sha": "a" * 40,
+            "parent_shas": ["9" * 40],
+            "expected_base_ref": reviewed.base_ref,
+            "expected_base_sha": reviewed.base_sha,
+            "reviewed_state": reviewed,
+            "feedback_findings": findings,
+            "fresh_validation_receipt": receipt,
+            "registry": registry,
+            "command_set": registry["validation"],
+        }
+        for review_decision, approval_required in (
+            ("REVIEW_REQUIRED", False),
+            ("NONE", True),
+        ):
+            with self.subTest(
+                review_decision=review_decision,
+                approval_required=approval_required,
+            ), self.assertRaises(fast_path.SecurityBlocker):
+                fast_path.derive_ready_source_recovery_safety_facts(
+                    **arguments,
+                    review_decision=review_decision,
+                    approval_required=approval_required,
+                )
+        for review_decision, approval_required in (
+            ("APPROVED", True),
+            ("NONE", False),
+        ):
+            with self.subTest(
+                review_decision=review_decision,
+                approval_required=approval_required,
+            ):
+                result = fast_path.derive_ready_source_recovery_safety_facts(
+                    **arguments,
+                    review_decision=review_decision,
+                    approval_required=approval_required,
+                )
+                self.assertEqual(result["review_decision"], review_decision)
+                self.assertIs(result["approval_required"], approval_required)
+
+    def test_ready_source_recovery_validation_failure_is_structured(self) -> None:
+        reviewed = fast_feedback(thread_count=0)
+        observation = reviewed.to_dict()
+        observation.update(review_decision="APPROVED", is_draft=False)
+        gateway = mock.Mock()
+        gateway.observe_stable_feedback.return_value = observation
+        gateway.observe_ready_source_recovery_approval_policy.return_value = True
+        failure = actions.RegisteredValidationResult(
+            failure_index=2,
+            failure_purpose="Run recovery security tests",
+            failure_category="NONZERO_EXIT",
+        )
+        with (
+            mock.patch.object(
+                actions, "_ready_source_recovery_current_safety_profile",
+                return_value=ready_source_current_safety_profile(),
+            ),
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                return_value=(reviewed.head_sha, ""),
+            ),
+            mock.patch.object(
+                actions,
+                "_run_attestation_git",
+                return_value=SimpleNamespace(stdout="a" * 40),
+            ),
+            mock.patch.object(
+                actions, "_validated_commit_parent", return_value="9" * 40
+            ),
+            self.assertRaises(actions.RegisteredValidationFailure) as caught,
+        ):
+            actions._acquire_ready_source_recovery_facts(
+                repository=reviewed.repository,
+                pull_request_number=reviewed.pull_request_number,
+                expected_head_sha=reviewed.head_sha,
+                repository_root=REPO_ROOT,
+                feedback_findings=[],
+                manual_gate_evidence=[],
+                expected_commit_signer={
+                    "kind": "SSH_PRINCIPAL", "identity": "reviewer",
+                },
+                _policy_loader=mock.Mock(
+                    return_value=("f" * 40, registry_entry(reviewed.repository))
+                ),
+                _gateway_factory=mock.Mock(return_value=gateway),
+                _validation_runner=mock.Mock(return_value=failure),
+            )
+        self.assertEqual(
+            caught.exception.report,
+            {
+                "index": 2,
+                "purpose": "Run recovery security tests",
+                "category": "NONZERO_EXIT",
+            },
+        )
+
+    def test_ready_source_recovery_historical_source_uses_current_safety_harness(self) -> None:
+        """The real acquisition seam must not replay every later current test."""
+
+        entry = actions.select_repository(actions.load_registry(), "SecPal/.github")
+        entry["manual_gates"] = []
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            accepted = temporary / "accepted"
+            candidate = temporary / "candidate"
+            accepted.mkdir()
+            shutil.copytree(
+                REPO_ROOT / "scripts", accepted / "scripts",
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            )
+            (accepted / "tests").mkdir()
+            shutil.copy2(
+                REPO_ROOT / actions.READY_SOURCE_RECOVERY_CURRENT_SAFETY_PATH,
+                accepted / actions.READY_SOURCE_RECOVERY_CURRENT_SAFETY_PATH,
+            )
+            subprocess.run(["git", "-C", str(accepted), "init", "--quiet"], check=True)
+            subprocess.run(["git", "-C", str(accepted), "add", "-f", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(accepted), "-c", "user.name=Test", "-c",
+                 "user.email=test@example.invalid", "commit", "--quiet", "-m", "accepted"],
+                check=True,
+            )
+            accepted_head = subprocess.check_output(
+                ["git", "-C", str(accepted), "rev-parse", "HEAD"], text=True,
+            ).strip()
+            shutil.copytree(
+                accepted,
+                candidate,
+                ignore=shutil.ignore_patterns(".git", "tests", "__pycache__", "*.pyc"),
+            )
+            subprocess.run(["git", "-C", str(candidate), "init", "--quiet"], check=True)
+            subprocess.run(
+                ["git", "-C", str(candidate), "remote", "add", "origin",
+                 "https://github.com/SecPal/.github.git"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(candidate), "-c", "user.name=Test", "-c",
+                 "user.email=test@example.invalid", "commit", "--quiet", "--allow-empty",
+                 "-m", "base"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(candidate), "add", "-f", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(candidate), "-c", "user.name=Test", "-c",
+                 "user.email=test@example.invalid", "commit", "--quiet", "-m", "historical"],
+                check=True,
+            )
+            head = subprocess.check_output(
+                ["git", "-C", str(candidate), "rev-parse", "HEAD"], text=True,
+            ).strip()
+            tree = subprocess.check_output(
+                ["git", "-C", str(candidate), "rev-parse", "HEAD^{tree}"], text=True,
+            ).strip()
+            reviewed = fast_feedback(thread_count=0, head_sha=head)
+            observation = reviewed.to_dict()
+            observation.update(review_decision="APPROVED", is_draft=False)
+            findings = [{
+                "finding_id": "review-summary", "thread_id": None,
+                "sources": [{"kind": "REVIEW", "node_id": "REVIEW_1",
+                             "digest": digest("review summary")}],
+                "classification": "INFORMATIONAL", "disposition": "NON_ACTIONABLE",
+                "evidence_digest": "1" * 64, "technically_blocking": False,
+            }]
+            gateway = mock.Mock()
+            gateway.observe_stable_feedback.return_value = observation
+            gateway.observe_ready_source_recovery_approval_policy.return_value = True
+            gateway.observe_ready_source_recovery_delivery.return_value = {
+                "oid": head, "source": "USER", "signer_identity": "reviewer",
+                "local_signature": {"state": "valid", "verified": True, "format": "ssh"},
+                "github_verification": {"verified": True, "reason": "valid"},
+            }
+            before = subprocess.check_output(
+                ["git", "-C", str(candidate), "status", "--porcelain=v2"], text=True,
+            )
+            self.assertFalse(actions._run_registered_validations(entry, candidate))
+            with mock.patch.object(actions, "REPOSITORY_ROOT", accepted):
+                profile = actions._ready_source_recovery_current_safety_profile(
+                    accepted_head
+                )
+                substitutions = {
+                    "blob": lambda value: value["harness"][0].update(blob_oid="0" * 40),
+                    "mode": lambda value: value["harness"][0].update(mode="100755"),
+                    "size": lambda value: value["harness"][0].update(size=0),
+                    "missing": lambda value: value.update(harness=[]),
+                    "undeclared": lambda value: value["harness"][0].update(
+                        path="tests/undeclared.py"
+                    ),
+                    "production overlap": lambda value: value["harness"][0].update(
+                        path="scripts/secpal-pr-review-actions.py"
+                    ),
+                    "command": lambda value: value["validation_command_set"][0]["argv"].append(
+                        "caller-selected"
+                    ),
+                    "profile": lambda value: value.update(policy="OTHER"),
+                    "result": lambda value: value["validation_results"][0].update(
+                        successful=False
+                    ),
+                }
+                for case, substitute in substitutions.items():
+                    changed = copy.deepcopy(profile)
+                    substitute(changed)
+                    with self.subTest(case=case), self.assertRaises(
+                        fast_path.SecurityBlocker
+                    ):
+                        actions._run_ready_source_recovery_current_safety(
+                            accepted_head, candidate, changed
+                        )
+                current = SimpleNamespace(
+                    lifecycle=object(), publication_oid="2" * 40,
+                    publication_digest="3" * 64,
+                )
+                safety = actions._issue_ready_source_recovery_authorization(
+                    repository="SecPal/.github", delivery_issue=891,
+                    pull_request_number=reviewed.pull_request_number,
+                    expected_head_sha=head, repository_root=candidate,
+                    feedback_findings=findings, manual_gate_evidence=[],
+                    historical_validation_receipt_digest="4" * 64,
+                    historical_final_attestation_digest="5" * 64,
+                    recovery_user_authorization=b"authorization",
+                    expected_commit_signer={"kind": "SSH_PRINCIPAL", "identity": "reviewer"},
+                    signer_identity="reviewer", signer=object(),
+                    _policy_loader=mock.Mock(return_value=(accepted_head, entry)),
+                    _gateway_factory=mock.Mock(return_value=gateway),
+                    _validation_runner=actions._run_ready_source_recovery_current_safety,
+                    _issuer_source_verifier=mock.Mock(),
+                    _current_lifecycle_loader=mock.Mock(return_value=current),
+                    _authorization_factory=lambda **values: values["recovery_safety_facts"],
+                    _recovery_user_authorization_verifier=lambda *_: {
+                        "authorization_id": "source-coherent-recovery",
+                        "authorization_digest": "6" * 64,
+                    },
+                )
+            self.assertEqual(safety["tree_sha"], tree)
+            self.assertEqual(safety["schema_version"], "1.1")
+            self.assertEqual(
+                safety["validation_execution_origin"],
+                "ACCEPTED_MAIN_EXACT_SOURCE_CURRENT_SAFETY",
+            )
+            self.assertEqual(
+                safety["policy_binding"]["ready_source_recovery_current_safety"],
+                profile,
+            )
+            self.assertEqual(
+                subprocess.check_output(
+                    ["git", "-C", str(candidate), "status", "--porcelain=v2"], text=True,
+                ),
+                before,
+            )
+
+    def test_ready_source_recovery_safety_acquisition_owns_observation_and_execution(self) -> None:
+        reviewed = fast_feedback(thread_count=0)
+        observation = reviewed.to_dict()
+        observation["review_decision"] = "APPROVED"
+        observation["is_draft"] = False
+        entry = registry_entry(reviewed.repository)
+        entry["manual_gates"] = []
+        findings = [{
+            "finding_id": "review-summary",
+            "thread_id": None,
+            "sources": [{
+                "kind": "REVIEW",
+                "node_id": "REVIEW_1",
+                "digest": digest("review summary"),
+            }],
+            "classification": "INFORMATIONAL",
+            "disposition": "NON_ACTIONABLE",
+            "evidence_digest": "1" * 64,
+            "technically_blocking": False,
+        }]
+        policy_loader = mock.Mock(return_value=("f" * 40, entry))
+        gateway = mock.Mock()
+        gateway.observe_stable_feedback.return_value = observation
+        gateway.observe_ready_source_recovery_approval_policy.return_value = True
+        commit_evidence = {
+            "oid": reviewed.head_sha,
+            "source": "USER",
+            "signer_identity": "reviewer",
+            "local_signature": {
+                "state": "valid", "verified": True, "format": "ssh",
+            },
+            "github_verification": {"verified": True, "reason": "valid"},
+        }
+        gateway.observe_ready_source_recovery_delivery.return_value = commit_evidence
+        gateway_factory = mock.Mock(return_value=gateway)
+        validation_runner = mock.Mock(
+            return_value=actions.RegisteredValidationResult()
+        )
+        with (
+            mock.patch.object(
+                actions, "_ready_source_recovery_current_safety_profile",
+                return_value=ready_source_current_safety_profile(),
+            ),
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                side_effect=[
+                    (reviewed.head_sha, ""),
+                    (reviewed.head_sha, ""),
+                ],
+            ),
+            mock.patch.object(
+                actions,
+                "_run_attestation_git",
+                return_value=SimpleNamespace(stdout="a" * 40),
+            ),
+            mock.patch.object(
+                actions, "_validated_commit_parent", return_value="9" * 40
+            ),
+        ):
+            safety, acquired_commit = actions._acquire_ready_source_recovery_facts(
+                repository=reviewed.repository,
+                pull_request_number=reviewed.pull_request_number,
+                expected_head_sha=reviewed.head_sha,
+                repository_root=REPO_ROOT,
+                feedback_findings=findings,
+                manual_gate_evidence=[],
+                expected_commit_signer={
+                    "kind": "SSH_PRINCIPAL", "identity": "reviewer",
+                },
+                _policy_loader=policy_loader,
+                _gateway_factory=gateway_factory,
+                _validation_runner=validation_runner,
+            )
+        self.assertEqual(safety["head_sha"], reviewed.head_sha)
+        self.assertEqual(acquired_commit, commit_evidence)
+        policy_loader.assert_called_once_with(reviewed.repository)
+        gateway.observe_stable_feedback.assert_called_once_with(
+            reviewed.repository, reviewed.pull_request_number
+        )
+        gateway.observe_ready_source_recovery_delivery.assert_called_once_with(
+            reviewed.repository,
+            reviewed.pull_request_number,
+            reviewed.head_sha,
+            {"kind": "SSH_PRINCIPAL", "identity": "reviewer"},
+        )
+        validation_runner.assert_called_once_with(
+            "f" * 40, REPO_ROOT, ready_source_current_safety_profile()
+        )
+
+    def test_ready_source_acquisition_accepts_derived_predecessor_provider(self) -> None:
+        reviewed = fast_feedback(thread_count=0)
+        observation = reviewed.to_dict()
+        observation.update(review_decision="APPROVED", is_draft=False)
+        entry = registry_entry(reviewed.repository)
+        entry["manual_gates"] = []
+        binding = self._ready_source_provider_binding(
+            current_head=reviewed.head_sha
+        )
+        provider_state = self._codex_provider_state(
+            metadata_head=binding.provider_head_sha,
+            metadata_pull_request=reviewed.pull_request_number,
+        )
+
+        def read_feedback(
+            _plan: Any,
+            _entry: Any,
+            _budget: Any,
+            *,
+            ready_source_provider_binding: Any,
+        ) -> dict[str, Any]:
+            actions._require_review_providers_terminal(
+                provider_state,
+                repository=reviewed.repository,
+                pull_request_number=reviewed.pull_request_number,
+                ready_source_provider_binding=ready_source_provider_binding,
+            )
+            return copy.deepcopy(observation)
+
+        gateway = actions.FastPathGateway(
+            REPO_ROOT,
+            entry,
+            github=SimpleNamespace(_read_current_feedback_once=read_feedback),
+            ready_source_provider_binding=binding,
+        )
+        gateway.observe_ready_source_recovery_approval_policy = mock.Mock(
+            return_value=False
+        )
+        gateway.observe_ready_source_recovery_delivery = mock.Mock(
+            return_value={"oid": reviewed.head_sha}
+        )
+        finding = {
+            "finding_id": "review-summary",
+            "thread_id": None,
+            "sources": [{
+                "kind": "REVIEW",
+                "node_id": "REVIEW_1",
+                "digest": digest("review summary"),
+            }],
+            "classification": "INFORMATIONAL",
+            "disposition": "NON_ACTIONABLE",
+            "evidence_digest": "1" * 64,
+            "technically_blocking": False,
+        }
+        with (
+            mock.patch.object(
+                actions,
+                "_ready_source_recovery_current_safety_profile",
+                return_value=ready_source_current_safety_profile(),
+            ),
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                side_effect=[
+                    (reviewed.head_sha, ""),
+                    (reviewed.head_sha, ""),
+                ],
+            ),
+            mock.patch.object(
+                actions,
+                "_run_attestation_git",
+                return_value=SimpleNamespace(stdout="a" * 40),
+            ),
+            mock.patch.object(
+                actions, "_validated_commit_parent", return_value="9" * 40
+            ),
+            mock.patch.object(
+                type(binding),
+                "provider_head",
+                return_value=binding.provider_head_sha,
+            ),
+        ):
+            facts, _ = actions._acquire_ready_source_recovery_facts(
+                repository=reviewed.repository,
+                pull_request_number=reviewed.pull_request_number,
+                expected_head_sha=reviewed.head_sha,
+                repository_root=REPO_ROOT,
+                feedback_findings=[finding],
+                manual_gate_evidence=[],
+                expected_commit_signer={
+                    "kind": "SSH_PRINCIPAL", "identity": "reviewer",
+                },
+                _policy_loader=mock.Mock(return_value=("f" * 40, entry)),
+                _gateway_factory=mock.Mock(return_value=gateway),
+                _validation_runner=mock.Mock(
+                    return_value=actions.RegisteredValidationResult()
+                ),
+                ready_source_provider_binding=binding,
+            )
+        self.assertEqual(facts["head_sha"], reviewed.head_sha)
+
+    def test_ready_source_recovery_rejects_open_draft_provider_state(self) -> None:
+        reviewed = fast_feedback(thread_count=0)
+        observation = reviewed.to_dict()
+        observation.update(review_decision="APPROVED", is_draft=True)
+        entry = registry_entry(reviewed.repository)
+        entry["manual_gates"] = []
+        gateway = mock.Mock()
+        gateway.observe_stable_feedback.return_value = observation
+        validation_runner = mock.Mock(return_value=actions.RegisteredValidationResult())
+
+        with (
+            mock.patch.object(
+                actions, "_ready_source_recovery_current_safety_profile",
+                return_value=ready_source_current_safety_profile(),
+            ),
+            mock.patch.object(actions, "_attestation_local_state",
+                              return_value=(reviewed.head_sha, "")),
+            mock.patch.object(actions, "_run_attestation_git",
+                              return_value=SimpleNamespace(stdout="a" * 40)),
+            mock.patch.object(actions, "_validated_commit_parent",
+                              return_value="9" * 40),
+            self.assertRaisesRegex(fast_path.SecurityBlocker, "Ready provider state"),
+        ):
+            actions._acquire_ready_source_recovery_facts(
+                repository=reviewed.repository,
+                pull_request_number=reviewed.pull_request_number,
+                expected_head_sha=reviewed.head_sha,
+                repository_root=REPO_ROOT,
+                feedback_findings=[],
+                manual_gate_evidence=[],
+                expected_commit_signer={
+                    "kind": "SSH_PRINCIPAL", "identity": "reviewer",
+                },
+                _policy_loader=mock.Mock(return_value=("f" * 40, entry)),
+                _gateway_factory=mock.Mock(return_value=gateway),
+                _validation_runner=validation_runner,
+            )
+        validation_runner.assert_not_called()
+        gateway.observe_ready_source_recovery_delivery.assert_not_called()
+
+    def test_ready_source_recovery_provider_commit_verification_is_maintained(self) -> None:
+        reviewed = fast_feedback(thread_count=0)
+        entry = registry_entry(reviewed.repository)
+        github = mock.Mock()
+        github.runner.run.return_value = {
+            "data": {"repository": {
+                "nameWithOwner": reviewed.repository,
+                "pullRequest": {
+                    "number": reviewed.pull_request_number,
+                    "state": "OPEN",
+                    "isDraft": False,
+                    "headRefOid": reviewed.head_sha,
+                },
+                "object": {
+                    "__typename": "Commit",
+                    "oid": reviewed.head_sha,
+                    "committedViaWeb": False,
+                    "committer": {"user": {"login": "reviewer"}},
+                    "signature": {
+                        "__typename": "SshSignature",
+                        "isValid": True,
+                        "state": "VALID",
+                        "signer": {"login": "reviewer"},
+                    },
+                },
+            }}
+        }
+        gateway = actions.FastPathGateway(REPO_ROOT, entry, github=github)
+        with mock.patch.object(
+            gateway,
+            "_local_signature_evidence",
+            return_value=(
+                {"state": "valid", "verified": True, "format": "ssh"},
+                'Good "git" signature for reviewer with ED25519 key SHA256:test\n',
+            ),
+        ):
+            observed = gateway.observe_ready_source_recovery_delivery(
+                reviewed.repository,
+                reviewed.pull_request_number,
+                reviewed.head_sha,
+                {"kind": "SSH_PRINCIPAL", "identity": "reviewer"},
+            )
+            self.assertTrue(observed["github_verification"]["verified"])
+            github.runner.run.return_value["data"]["repository"]["object"][
+                "signature"
+            ].update(isValid=False, state="INVALID")
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "GitHub verification"
+            ):
+                gateway.observe_ready_source_recovery_delivery(
+                    reviewed.repository,
+                    reviewed.pull_request_number,
+                    reviewed.head_sha,
+                    {"kind": "SSH_PRINCIPAL", "identity": "reviewer"},
+                )
+
+    def test_ready_source_recovery_approval_policy_is_maintained(self) -> None:
+        reviewed = fast_feedback(thread_count=0)
+        entry = registry_entry(reviewed.repository)
+        github = mock.Mock()
+        gateway = actions.FastPathGateway(REPO_ROOT, entry, github=github)
+        github.runner.run.side_effect = [[], []]
+        self.assertFalse(
+            gateway.observe_ready_source_recovery_approval_policy(
+                reviewed.repository, reviewed.base_ref
+            )
+        )
+        approval_rule = [{
+            "type": "pull_request",
+            "parameters": {"required_approving_review_count": 1},
+        }]
+        github.runner.run.side_effect = [approval_rule, copy.deepcopy(approval_rule)]
+        self.assertTrue(
+            gateway.observe_ready_source_recovery_approval_policy(
+                reviewed.repository, reviewed.base_ref
+            )
+        )
+        malformed = [{"type": "pull_request", "parameters": {}}]
+        github.runner.run.side_effect = [malformed, copy.deepcopy(malformed)]
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "malformed"):
+            gateway.observe_ready_source_recovery_approval_policy(
+                reviewed.repository, reviewed.base_ref
+            )
+
+    def test_ready_source_recovery_rejects_policy_change_after_validation(self) -> None:
+        reviewed = fast_feedback(thread_count=0)
+        first_entry = registry_entry(reviewed.repository)
+        second_entry = copy.deepcopy(first_entry)
+        second_entry["default_branch"] = "changed-main"
+        authorization_factory = mock.Mock()
+        with (
+            mock.patch.object(
+                actions,
+                "_acquire_ready_source_recovery_facts",
+                return_value=(
+                    {"head_sha": reviewed.head_sha},
+                    {"oid": reviewed.head_sha},
+                ),
+            ),
+            self.assertRaisesRegex(fast_path.SecurityBlocker, "changed during validation"),
+        ):
+            actions._issue_ready_source_recovery_authorization(
+                repository=reviewed.repository,
+                delivery_issue=827,
+                pull_request_number=reviewed.pull_request_number,
+                expected_head_sha=reviewed.head_sha,
+                repository_root=REPO_ROOT,
+                feedback_findings=[],
+                manual_gate_evidence=[],
+                historical_validation_receipt_digest="4" * 64,
+                historical_final_attestation_digest="5" * 64,
+                recovery_user_authorization=b"authorization",
+                expected_commit_signer={
+                    "kind": "SSH_PRINCIPAL", "identity": "reviewer",
+                },
+                signer_identity="reviewer",
+                signer=object(),
+                _policy_loader=mock.Mock(side_effect=[
+                    ("f" * 40, first_entry), ("e" * 40, second_entry),
+                ]),
+                _gateway_factory=mock.Mock(),
+                _validation_runner=mock.Mock(),
+                _issuer_source_verifier=mock.Mock(),
+                _current_lifecycle_loader=mock.Mock(),
+                _authorization_factory=authorization_factory,
+                _recovery_user_authorization_verifier=mock.Mock(),
+            )
+        authorization_factory.assert_not_called()
+
+    def test_ready_source_recovery_rejects_unauthenticated_classification_and_loss(self) -> None:
+        reviewed = fast_feedback(thread_count=0)
+        entry = registry_entry(reviewed.repository)
+        facts = {
+            "head_sha": reviewed.head_sha,
+            "tree_sha": "a" * 40,
+            "reviewed_state_digest": reviewed.state_digest,
+            "reviewed_feedback_digest": reviewed.feedback_digest,
+            "feedback_assessment_digest": "4" * 64,
+        }
+        current = SimpleNamespace(
+            lifecycle=object(),
+            publication_oid="2" * 40,
+            publication_digest="3" * 64,
+        )
+        authorization_factory = mock.Mock()
+        with (
+            mock.patch.object(
+                actions,
+                "_acquire_ready_source_recovery_facts",
+                return_value=(facts, {"oid": reviewed.head_sha}),
+            ),
+            self.assertRaisesRegex(fast_path.SecurityBlocker, "signed user authority"),
+        ):
+            actions._issue_ready_source_recovery_authorization(
+                repository=reviewed.repository,
+                delivery_issue=827,
+                pull_request_number=reviewed.pull_request_number,
+                expected_head_sha=reviewed.head_sha,
+                repository_root=REPO_ROOT,
+                feedback_findings=[],
+                manual_gate_evidence=[],
+                historical_validation_receipt_digest="5" * 64,
+                historical_final_attestation_digest="6" * 64,
+                recovery_user_authorization=b"forged",
+                expected_commit_signer={
+                    "kind": "SSH_PRINCIPAL", "identity": "reviewer",
+                },
+                signer_identity="signer",
+                signer=object(),
+                _policy_loader=mock.Mock(return_value=("f" * 40, entry)),
+                _gateway_factory=mock.Mock(),
+                _validation_runner=mock.Mock(),
+                _issuer_source_verifier=mock.Mock(),
+                _current_lifecycle_loader=mock.Mock(return_value=current),
+                _authorization_factory=authorization_factory,
+                _recovery_user_authorization_verifier=mock.Mock(
+                    side_effect=fast_path.SecurityBlocker(
+                        "Ready-source recovery requires exact signed user authority"
+                    )
+                ),
+            )
+        authorization_factory.assert_not_called()
+
+    def test_ready_source_recovery_issuer_signs_only_maintained_acquisition(self) -> None:
+        reviewed = fast_feedback(thread_count=0)
+        observation = reviewed.to_dict()
+        observation["review_decision"] = "APPROVED"
+        observation["is_draft"] = False
+        entry = registry_entry(reviewed.repository)
+        entry["manual_gates"] = []
+        findings = [{
+            "finding_id": "review-summary", "thread_id": None,
+            "sources": [{
+                "kind": "REVIEW", "node_id": "REVIEW_1",
+                "digest": digest("review summary"),
+            }],
+            "classification": "INFORMATIONAL",
+            "disposition": "NON_ACTIONABLE",
+            "evidence_digest": "1" * 64,
+            "technically_blocking": False,
+        }]
+        gateway = mock.Mock()
+        gateway.observe_stable_feedback.return_value = observation
+        gateway.observe_ready_source_recovery_approval_policy.return_value = True
+        gateway.observe_ready_source_recovery_delivery.return_value = {
+            "oid": reviewed.head_sha,
+            "source": "USER",
+            "signer_identity": "reviewer",
+            "local_signature": {
+                "state": "valid", "verified": True, "format": "ssh",
+            },
+            "github_verification": {"verified": True, "reason": "valid"},
+        }
+        gateway_factory = mock.Mock(return_value=gateway)
+        validation_runner = mock.Mock(
+            return_value=actions.RegisteredValidationResult()
+        )
+        authorization_factory = mock.Mock(
+            return_value={"kind": "SECPAL_READY_SOURCE_RECOVERY_AUTHORIZATION"}
+        )
+        issuer_source_verifier = mock.Mock()
+        with (
+            mock.patch.object(
+                actions, "_ready_source_recovery_current_safety_profile",
+                return_value=ready_source_current_safety_profile(),
+            ),
+            mock.patch.object(
+                actions, "_attestation_local_state",
+                side_effect=[(reviewed.head_sha, ""), (reviewed.head_sha, "")],
+            ),
+            mock.patch.object(
+                actions, "_run_attestation_git",
+                return_value=SimpleNamespace(stdout="a" * 40),
+            ),
+            mock.patch.object(
+                actions, "_validated_commit_parent", return_value="9" * 40
+            ),
+        ):
+            result = actions._issue_ready_source_recovery_authorization(
+                repository=reviewed.repository, delivery_issue=827, pull_request_number=1,
+                expected_head_sha=reviewed.head_sha, repository_root=REPO_ROOT,
+                feedback_findings=findings, manual_gate_evidence=[],
+                historical_validation_receipt_digest="4" * 64,
+                historical_final_attestation_digest="5" * 64,
+                recovery_user_authorization=b"authorization",
+                expected_commit_signer={
+                    "kind": "SSH_PRINCIPAL", "identity": "reviewer",
+                },
+                signer_identity="signer", signer=object(),
+                _policy_loader=mock.Mock(return_value=("f" * 40, entry)),
+                _gateway_factory=gateway_factory,
+                _validation_runner=validation_runner,
+                _issuer_source_verifier=issuer_source_verifier,
+                _current_lifecycle_loader=mock.Mock(return_value=SimpleNamespace(
+                    lifecycle=object(), publication_oid="2" * 40,
+                    publication_digest="3" * 64,
+                )),
+                _authorization_factory=authorization_factory,
+                _recovery_user_authorization_verifier=mock.Mock(return_value={
+                    "authorization_id": "recovery-1",
+                    "authorization_digest": "6" * 64,
+                }),
+            )
+        self.assertEqual(
+            result["kind"], "SECPAL_READY_SOURCE_RECOVERY_AUTHORIZATION"
+        )
+        validation_runner.assert_called_once_with(
+            "f" * 40, REPO_ROOT, ready_source_current_safety_profile()
+        )
+        self.assertEqual(
+            issuer_source_verifier.call_args_list,
+            [mock.call("f" * 40), mock.call("f" * 40)],
+        )
+        signed_facts = authorization_factory.call_args.kwargs[
+            "recovery_safety_facts"
+        ]
+        self.assertEqual(signed_facts["tooling_authority_main"], "f" * 40)
+        self.assertEqual(
+            signed_facts["validation_execution_origin"],
+            "ACCEPTED_MAIN_EXACT_SOURCE_CURRENT_SAFETY",
+        )
+        self.assertEqual(
+            signed_facts["feedback_findings"], findings
+        )
+        self.assertEqual(
+            authorization_factory.call_args.kwargs[
+                "historical_evidence_loss_proof_digest"
+            ],
+            "6" * 64,
+        )
+        self.assertEqual(
+            authorization_factory.call_args.kwargs["authorization_id"],
+            "recovery-1",
+        )
+        self.assertNotIn("recovery_safety_facts", inspect.signature(
+            actions.issue_ready_source_recovery_authorization
+        ).parameters)
+
+    def test_ready_source_recovery_issuer_requires_exact_accepted_main(self) -> None:
+        with mock.patch.object(
+            actions, "_attestation_local_state",
+            return_value=("e" * 40, ""),
+        ), self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "exact accepted-main tooling"
+        ):
+            actions._verify_recovery_issuer_source("f" * 40)
+        with mock.patch.object(
+            actions, "_attestation_local_state",
+            return_value=("f" * 40, " M scripts/secpal-pr-review-actions.py"),
+        ), self.assertRaises(fast_path.SecurityBlocker):
+            actions._verify_recovery_issuer_source("f" * 40)
+        with mock.patch.object(
+            actions, "_attestation_local_state", return_value=("f" * 40, "")
+        ):
+            actions._verify_recovery_issuer_source("f" * 40)
+
+    def test_unaccepted_issuer_cannot_capture_or_execute_candidate(self) -> None:
+        entry = registry_entry("SecPal/.github")
+        gateway_factory = mock.Mock()
+        validation_runner = mock.Mock()
+        authorization_factory = mock.Mock()
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "issuer is not accepted"
+        ):
+            actions._issue_ready_source_recovery_authorization(
+                repository="SecPal/.github", delivery_issue=827,
+                pull_request_number=830, expected_head_sha="a" * 40,
+                repository_root=REPO_ROOT, feedback_findings=[],
+                manual_gate_evidence=[],
+                historical_validation_receipt_digest="1" * 64,
+                historical_final_attestation_digest="2" * 64,
+                recovery_user_authorization=b"authorization",
+                expected_commit_signer={},
+                signer_identity="signer", signer=object(),
+                _policy_loader=mock.Mock(return_value=("f" * 40, entry)),
+                _gateway_factory=gateway_factory,
+                _validation_runner=validation_runner,
+                _issuer_source_verifier=mock.Mock(side_effect=(
+                    fast_path.SecurityBlocker("issuer is not accepted")
+                )),
+                _current_lifecycle_loader=mock.Mock(),
+                _authorization_factory=authorization_factory,
+                _recovery_user_authorization_verifier=mock.Mock(),
+            )
+        gateway_factory.assert_not_called()
+        validation_runner.assert_not_called()
+        authorization_factory.assert_not_called()
+
+
+    def test_ready_source_recovery_safety_requires_resolved_thread_disposition(self) -> None:
+        reviewed = fast_feedback(thread_count=1)
+        reviewed.feedback["threads"][0]["is_resolved"] = True
+        reviewed.refresh_digests()
+        registry = fast_registry()
+        receipt = fast_path.create_validation_receipt(
+            repository=reviewed.repository,
+            head_sha=reviewed.head_sha,
+            validated_tree_sha="a" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+        )
+        findings = [
+            {
+                "finding_id": "review-summary",
+                "thread_id": None,
+                "sources": [{
+                    "kind": "REVIEW",
+                    "node_id": "REVIEW_1",
+                    "digest": digest("review summary"),
+                }],
+                "classification": "INFORMATIONAL",
+                "disposition": "NON_ACTIONABLE",
+                "evidence_digest": "1" * 64,
+                "technically_blocking": False,
+            }
+        ]
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "feedback coverage is incomplete"
+        ):
+            fast_path.derive_ready_source_recovery_safety_facts(
+                tooling_authority_main="f" * 40,
+                repository=reviewed.repository,
+                pull_request_number=reviewed.pull_request_number,
+                head_sha=reviewed.head_sha,
+                tree_sha="a" * 40,
+                parent_shas=["9" * 40],
+                expected_base_ref=reviewed.base_ref,
+                expected_base_sha=reviewed.base_sha,
+                reviewed_state=reviewed,
+                review_decision="APPROVED",
+                feedback_findings=findings,
+                fresh_validation_receipt=receipt,
+                registry=registry,
+                command_set=registry["validation"],
+            )
+        safe_findings = []
+        for index, ((kind, node_id), (source_digest, thread_id)) in enumerate(
+            fast_path._classified_feedback_sources(
+                reviewed, include_resolved_threads=True
+            ).items(),
+            1,
+        ):
+            safe_findings.append({
+                "finding_id": f"resolved-safe-{index}",
+                "thread_id": thread_id,
+                "sources": [{
+                    "kind": kind,
+                    "node_id": node_id,
+                    "digest": source_digest,
+                }],
+                "classification": "INFORMATIONAL",
+                "disposition": "NON_ACTIONABLE",
+                "evidence_digest": f"{index:x}".rjust(64, "0"),
+                "technically_blocking": False,
+            })
+        safe = fast_path.derive_ready_source_recovery_safety_facts(
+            tooling_authority_main="f" * 40,
+            repository=reviewed.repository,
+            pull_request_number=reviewed.pull_request_number,
+            head_sha=reviewed.head_sha,
+            tree_sha="a" * 40,
+            parent_shas=["9" * 40],
+            expected_base_ref=reviewed.base_ref,
+            expected_base_sha=reviewed.base_sha,
+            reviewed_state=reviewed,
+            review_decision="APPROVED",
+            feedback_findings=safe_findings,
+            fresh_validation_receipt=receipt,
+            registry=registry,
+            command_set=registry["validation"],
+        )
+        self.assertEqual(safe["reviewed_feedback_digest"], reviewed.feedback_digest)
+        self.assertNotIn("signature", safe)
+        self.assertFalse(hasattr(fast_path, "is_verified_ready_source_recovery_safety"))
+
+
+    def test_ready_integration_binds_exact_adoption_source_evidence(self) -> None:
+        reviewed = fast_feedback()
+        raw_authority = ready_integration_prior_authority(reviewed)
+        raw_authority["lifecycle"]["historical_proof_mode"] = (
+            "exact_state_adoption"
+        )
+        authority = fast_path.normalize_ready_integration_prior_authority(
+            raw_authority
+        )
+        integration = fast_path.normalize_ready_integration_evidence(
+            ready_integration_evidence(reviewed, validated_tree="a" * 40),
+            repository="SecPal/.github", reviewed_state=reviewed,
+            registry=fast_registry(), validated_tree_sha="a" * 40,
+        )
+        verified_lifecycle = SimpleNamespace(
+            authority_digest=authority["lifecycle"]["current_authority_digest"],
+            lifecycle_id=authority["lifecycle"]["identity"],
+            historical_proof_mode="exact_state_adoption",
+            state={"cycle_3_absent": True},
+            tree_sha=authority["prior_delivery_tree_sha"],
+            validation_receipt_digest=authority[
+                "prior_validation_receipt_digest"
+            ],
+            adoption_source_evidence_digest=authority[
+                "prior_final_attestation_digest"
+            ],
+            source_validation_evidence_digest="e" * 64,
+        )
+        published = SimpleNamespace(
+            publication_oid=authority["publication"]["object_oid"],
+            publication_digest=authority["publication"]["publication_digest"],
+            lifecycle=verified_lifecycle,
+        )
+        lifecycle_authority = SimpleNamespace(
+            ExpectedLifecycle=SimpleNamespace, LifecycleAuthorityError=ValueError,
+        )
+        lifecycle_publication = SimpleNamespace(
+            verify_current_lifecycle_authority=mock.Mock(return_value=published),
+            LifecyclePublicationError=ValueError,
+        )
+        with mock.patch.object(
+            actions, "_load_lifecycle_publication_helpers",
+            return_value=(lifecycle_authority, lifecycle_publication),
+        ):
+            actions._verify_ready_integration_published_authority(
+                authority,
+                integration,
+                verified_source_validation_evidence_digest="e" * 64,
+            )
+            published.lifecycle.source_validation_evidence_digest = "f" * 64
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "source evidence"
+            ):
+                actions._verify_ready_integration_published_authority(
+                    authority,
+                    integration,
+                    verified_source_validation_evidence_digest="e" * 64,
+                )
+            published.lifecycle.adoption_source_evidence_digest = "0" * 64
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "adoption source evidence"
+            ):
+                actions._verify_ready_integration_published_authority(
+                    authority,
+                    integration,
+                    verified_source_validation_evidence_digest="e" * 64,
+                )
+
+    def test_ready_source_validation_binding_preserves_historical_exact_adoption(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        authority = ready_integration_prior_authority(reviewed)
+        authority["lifecycle"]["historical_proof_mode"] = (
+            "exact_state_adoption"
+        )
+        historical_attestation = fast_attestation(reviewed)
+        continuation_attestation = {
+            **historical_attestation,
+            "exceptional_continuation_evidence_digest": "9" * 64,
+        }
+
+        self.assertIsNone(
+            actions._authenticated_source_validation_delivery_issue(
+                authority, historical_attestation
+            )
+        )
+        self.assertEqual(
+            actions._authenticated_source_validation_delivery_issue(
+                authority, continuation_attestation
+            ),
+            authority["delivery_issue_number"],
+        )
+
     def test_ready_integration_rejects_actual_default_branch_sha_drift(self) -> None:
         reviewed = fast_feedback()
         final_head = reviewed.head_sha
@@ -6868,7 +8675,7 @@ class FastPathTests(TestCase):
             receipt=None,
             output="attestation.json",
             manual_gate_evidence=None,
-            eligibility_evidence=None,
+            eligibility_evidence="eligibility.json",
             integration_evidence="integration.json",
             delivery_issue=9,
             integration_authorization_id=integration["authorization_id"],
@@ -6882,6 +8689,11 @@ class FastPathTests(TestCase):
             mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
             mock.patch.object(actions, "load_registry", return_value={}),
             mock.patch.object(actions, "select_repository", return_value=entry),
+            mock.patch.object(
+                actions,
+                "_resolution_eligibility_digest",
+                return_value="e" * 64,
+            ),
             mock.patch.object(
                 actions,
                 "_read_json",
@@ -6912,6 +8724,177 @@ class FastPathTests(TestCase):
             ),
             mock.patch.object(actions, "_write_fast_report"),
             self.assertRaises(fast_path.SecurityBlocker),
+        ):
+            actions._command_attest_validation(arguments)
+
+    def test_new_ready_integration_validation_requires_eligibility(self) -> None:
+        reviewed = fast_feedback()
+        entry = registry_entry("SecPal/.github")
+        entry["manual_gates"] = []
+        arguments = SimpleNamespace(
+            expected_head=reviewed.head_sha,
+            repo_root=str(REPO_ROOT),
+            repo="SecPal/.github",
+            reviewed_state="reviewed.json",
+            registry="registry.json",
+            bind_commit=False,
+            receipt=None,
+            output="attestation.json",
+            manual_gate_evidence=None,
+            eligibility_evidence=None,
+            integration_evidence="integration.json",
+            pre_enrollment_integration_evidence=None,
+            exceptional_recovery_evidence=None,
+            exceptional_continuation_evidence=None,
+            delivery_issue=9,
+            integration_authorization_id="ready-integration-authorization-001",
+            expected_integration_signer="aroviqen",
+            prior_authority="prior.json",
+            prior_authority_tag_ref="refs/tags/prior",
+            prior_reviewed_state="prior-reviewed.json",
+            prior_receipt="prior-receipt.json",
+            prior_attestation="prior-attestation.json",
+            expected_prior_authority_signer="aroviqen",
+            validation_receipt_id=None,
+            final_attestation_id=None,
+            exceptional_recovery_delivery_issue=None,
+            exceptional_recovery_authorization_id=None,
+            exceptional_continuation_delivery_issue=None,
+            exceptional_continuation_authorization_id=None,
+        )
+        with (
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                return_value=(reviewed.head_sha, ""),
+            ),
+            mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+            mock.patch.object(actions, "load_registry", return_value={}),
+            mock.patch.object(actions, "select_repository", return_value=entry),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "new Ready integration validation requires authenticated eligibility",
+            ),
+        ):
+            actions._command_attest_validation(arguments)
+
+    def test_new_v12_ready_integration_validates_from_attested_successor(self) -> None:
+        reviewed = fast_feedback()
+        prior_ready_head = "9" * 40
+        tree = "a" * 40
+        entry = registry_entry("SecPal/.github")
+        entry["manual_gates"] = []
+        binding = actions._fast_registry_binding(entry)
+        integration = ready_integration_evidence(
+            reviewed, validated_tree=tree, registry=binding
+        )
+        integration.update(
+            schema_version="1.2",
+            reviewed_head_sha=reviewed.head_sha,
+            prior_delivery_head_sha=prior_ready_head,
+            ordered_parent_shas=[prior_ready_head, reviewed.base_sha],
+        )
+        arguments = SimpleNamespace(
+            expected_head=prior_ready_head,
+            repo_root=str(REPO_ROOT),
+            repo="SecPal/.github",
+            reviewed_state="reviewed.json",
+            registry="registry.json",
+            bind_commit=False,
+            receipt=None,
+            output=None,
+            manual_gate_evidence=None,
+            eligibility_evidence="eligibility.json",
+            integration_evidence="integration.json",
+            pre_enrollment_integration_evidence=None,
+            exceptional_recovery_evidence=None,
+            exceptional_continuation_evidence=None,
+            delivery_issue=9,
+            integration_authorization_id=integration["authorization_id"],
+            expected_integration_signer=integration["expected_signer"]["identity"],
+            prior_authority="prior.json",
+            prior_authority_tag_ref="refs/tags/prior",
+            prior_reviewed_state="prior-reviewed.json",
+            prior_receipt="prior-receipt.json",
+            prior_attestation="prior-attestation.json",
+            expected_prior_authority_signer="aroviqen",
+            validation_receipt_id=None,
+            final_attestation_id=None,
+            exceptional_recovery_delivery_issue=None,
+            exceptional_recovery_authorization_id=None,
+            exceptional_continuation_delivery_issue=None,
+            exceptional_continuation_authorization_id=None,
+        )
+
+        with (
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                return_value=(prior_ready_head, ""),
+            ),
+            mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+            mock.patch.object(actions, "load_registry", return_value={}),
+            mock.patch.object(actions, "select_repository", return_value=entry),
+            mock.patch.object(
+                actions,
+                "_resolution_eligibility_digest",
+                return_value="e" * 64,
+            ),
+            mock.patch.object(actions, "_read_json", return_value=integration),
+            mock.patch.object(actions, "_staged_tree", return_value=tree),
+            mock.patch.object(actions, "_verify_ready_integration_prior_authority"),
+            mock.patch.object(actions, "_verify_integration_tree_delta"),
+            mock.patch.object(actions, "_run_registered_validations", return_value=False),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "complete registered validation failed"
+            ),
+        ):
+            actions._command_attest_validation(arguments)
+
+        substituted_head = "8" * 40
+        arguments.expected_head = substituted_head
+        with (
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                return_value=(substituted_head, ""),
+            ),
+            mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+            mock.patch.object(actions, "load_registry", return_value={}),
+            mock.patch.object(actions, "select_repository", return_value=entry),
+            mock.patch.object(
+                actions,
+                "_resolution_eligibility_digest",
+                return_value="e" * 64,
+            ),
+            mock.patch.object(actions, "_read_json", return_value=integration),
+            mock.patch.object(actions, "_staged_tree", return_value=tree),
+            mock.patch.object(
+                actions, "_verify_ready_integration_prior_authority"
+            ) as verify_prior,
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "local head does not match the authenticated prior Ready parent",
+            ),
+        ):
+            actions._command_attest_validation(arguments)
+        verify_prior.assert_not_called()
+
+        arguments.expected_head = prior_ready_head
+        arguments.integration_evidence = ""
+        with (
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                return_value=(prior_ready_head, ""),
+            ),
+            mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+            mock.patch.object(actions, "load_registry", return_value={}),
+            mock.patch.object(actions, "select_repository", return_value=entry),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "reviewed feedback head does not match --expected-head",
+            ),
         ):
             actions._command_attest_validation(arguments)
 
@@ -7119,14 +9102,11 @@ class FastPathTests(TestCase):
                 command_set=binding["validation"], successful_result=True,
                 reviewed_state=prior_reviewed, validation_receipt=prior_receipt,
             )
-            reviewed = fast_path.StableFeedbackState(
-                repository="SecPal/.github", pull_request_number=746,
-                head_sha=prior_head, base_ref="main", base_sha=target, pr_state="OPEN",
-                feedback={"pull_request_reactions": [], "reviews": [], "conversation_comments": [], "threads": []},
-            )
+            reviewed = prior_reviewed
             tree = git("merge-tree", "--write-tree", prior_head, target).splitlines()[0]
             authority = ready_integration_prior_authority(reviewed)
             authority.update(
+                prior_delivery_head_sha=prior_head,
                 prior_delivery_tree_sha=delivery_tree,
                 prior_validation_receipt_digest=prior_receipt["receipt_digest"],
                 prior_final_attestation_digest=prior_attestation["attestation_digest"],
@@ -7139,6 +9119,10 @@ class FastPathTests(TestCase):
                 "rev-parse", "prior-authority^{tag}"
             )
             integration = ready_integration_evidence(reviewed, validated_tree=tree, registry=binding)
+            integration["schema_version"] = "1.2"
+            integration["reviewed_head_sha"] = reviewed.head_sha
+            integration["prior_delivery_head_sha"] = prior_head
+            integration["ordered_parent_shas"][0] = prior_head
             integration["prior_authority_digest"] = authority_digest
             integration["prior_authority_tag_object_sha"] = prior_authority_tag_object
             integration["expected_signer"] = {"kind": "SSH_PRINCIPAL", "identity": principal}
@@ -7148,6 +9132,12 @@ class FastPathTests(TestCase):
                 repository="SecPal/.github", head_sha=prior_head, tree_sha=tree,
                 binding=binding, reviewed=reviewed, manual_gate_evidence=gates,
                 integration_evidence_digest=integration_digest,
+            )
+            self.assertEqual(
+                fast_path.digest_json(
+                    {key: value for key, value in receipt.items() if key != "receipt_digest"}
+                ),
+                receipt["receipt_digest"],
             )
             candidate = git(
                 "commit-tree", "-S", tree, "-p", prior_head, "-p", target,
@@ -7198,7 +9188,28 @@ class FastPathTests(TestCase):
                 ),
             ):
                 self.assertEqual(actions.main(argv), 0)
-            observe.assert_not_called()
+            observe.assert_called_once_with("SecPal/.github", 746)
+
+            substituted_parent_observation = {
+                **observation,
+                "base_sha": "f" * 40,
+            }
+            with (
+                mock.patch.object(
+                    actions,
+                    "_observe_ready_integration_authority_once",
+                    return_value=substituted_parent_observation,
+                ),
+                mock.patch.object(
+                    actions, "_verify_ready_integration_published_authority"
+                ),
+                mock.patch.object(
+                    actions,
+                    "_prior_delivery_registry_binding",
+                    return_value=binding,
+                ),
+            ):
+                self.assertNotEqual(actions.main(argv), 0)
             ordinary = [
                 "attest-validation",
                 "--repo",
@@ -7270,7 +9281,10 @@ class FastPathTests(TestCase):
             allow_failure: bool = False,
         ) -> Any:
             del allow_failure
-            if command[:4] == ["rev-list", "--parents", "-n", "1"]:
+            if command == ["remote", "get-url", "origin"]:
+                stdout = "https://github.com/SecPal/.github.git\n"
+                stderr = ""
+            elif command[:4] == ["rev-list", "--parents", "-n", "1"]:
                 stdout = f"{final_head} {reviewed.head_sha} {reviewed.base_sha}\n"
                 stderr = ""
             elif command == ["rev-parse", "HEAD^{tree}"]:
@@ -7286,7 +9300,9 @@ class FastPathTests(TestCase):
                 stderr = ""
             elif command[:2] == ["cat-file", "commit"]:
                 stdout = (
-                    "tree deadbeef\ngpgsig -----BEGIN SSH SIGNATURE-----\n"
+                    f"tree {tree}\nparent {reviewed.head_sha}\n"
+                    f"parent {reviewed.base_sha}\n"
+                    "gpgsig -----BEGIN SSH SIGNATURE-----\n"
                     " signature\n -----END SSH SIGNATURE-----\n\nmessage\n"
                 )
                 stderr = ""
@@ -7317,6 +9333,25 @@ class FastPathTests(TestCase):
             mock.patch.object(actions, "select_repository", return_value=entry),
             mock.patch.object(actions, "_read_json", side_effect=read_json),
             mock.patch.object(actions, "_run_attestation_git", side_effect=git_result),
+            mock.patch.object(
+                fast_path,
+                "_run_integration_commit_git",
+                side_effect=lambda root, command: git_result(root, command),
+            ),
+            mock.patch.object(
+                actions,
+                "_observe_ready_integration_authority_once",
+                return_value={
+                    "repository": "SecPal/.github",
+                    "pull_request_number": reviewed.pull_request_number,
+                    "state": "OPEN",
+                    "draft": False,
+                    "head_sha": reviewed.head_sha,
+                    "base_repository": "SecPal/.github",
+                    "base_ref": reviewed.base_ref,
+                    "base_sha": reviewed.base_sha,
+                },
+            ) as observe,
             mock.patch.object(actions, "_verify_ready_integration_prior_authority"),
             mock.patch.object(
                 actions,
@@ -7326,6 +9361,9 @@ class FastPathTests(TestCase):
             mock.patch.object(actions, "_write_fast_report") as write_report,
         ):
             self.assertEqual(actions._command_attest_validation(arguments), 0)
+        observe.assert_called_once_with(
+            "SecPal/.github", reviewed.pull_request_number
+        )
         write_report.assert_called_once()
         self.assertEqual(
             write_report.call_args.args[1]["kind"],
@@ -7436,6 +9474,64 @@ class FastPathTests(TestCase):
                     reviewed_state=reviewed,
                     registry=registry,
                     validated_tree_sha=observed_tree,
+                )
+
+    def test_ready_integration_accepts_attested_remediation_successor(self) -> None:
+        reviewed = fast_feedback()
+        integration = ready_integration_evidence(
+            reviewed, validated_tree="a" * 40
+        )
+        remediation_head = "9" * 40
+        integration["schema_version"] = "1.2"
+        integration["reviewed_head_sha"] = reviewed.head_sha
+        integration["prior_delivery_head_sha"] = remediation_head
+        integration["ordered_parent_shas"][0] = remediation_head
+
+        normalized = fast_path.normalize_ready_integration_evidence(
+            integration,
+            repository="SecPal/.github",
+            reviewed_state=reviewed,
+            registry=fast_registry(),
+            validated_tree_sha="a" * 40,
+        )
+
+        self.assertEqual(normalized["prior_delivery_head_sha"], remediation_head)
+        self.assertEqual(normalized["reviewed_state_digest"], reviewed.state_digest)
+
+    def test_ready_integration_remediation_review_binding_fails_closed(self) -> None:
+        reviewed = fast_feedback()
+        original = ready_integration_evidence(reviewed, validated_tree="a" * 40)
+        original.update(
+            schema_version="1.2",
+            reviewed_head_sha=reviewed.head_sha,
+            prior_delivery_head_sha="9" * 40,
+            ordered_parent_shas=["9" * 40, reviewed.base_sha],
+        )
+        cases = {
+            "missing_reviewed_head": lambda item: item.pop("reviewed_head_sha"),
+            "substituted_reviewed_head": lambda item: item.__setitem__(
+                "reviewed_head_sha", "8" * 40
+            ),
+            "same_reviewed_and_parent_head": lambda item: item.__setitem__(
+                "reviewed_head_sha", "9" * 40
+            ),
+            "downgraded_schema": lambda item: item.__setitem__(
+                "schema_version", "1.1"
+            ),
+        }
+
+        for case, mutate in cases.items():
+            candidate = copy.deepcopy(original)
+            mutate(candidate)
+            with self.subTest(case=case), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                fast_path.normalize_ready_integration_evidence(
+                    candidate,
+                    repository="SecPal/.github",
+                    reviewed_state=reviewed,
+                    registry=fast_registry(),
+                    validated_tree_sha="a" * 40,
                 )
 
     def test_ready_integration_explicit_selection_rejects_issue_or_signer_substitution(
@@ -8333,6 +10429,191 @@ class FastPathTests(TestCase):
                 live_observation=None,
             )
 
+    def test_ready_integration_accepts_continuation_bound_prior_receipt(self) -> None:
+        prior_reviewed = fast_feedback(head_sha="e" * 40)
+        reviewed = fast_feedback(head_sha="d" * 40)
+        registry = fast_registry()
+        tree = "a" * 40
+        continuation_digest = "9" * 64
+        receipt = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=prior_reviewed.head_sha,
+            validated_tree_sha=tree,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=prior_reviewed,
+            manual_gate_evidence=[],
+            exceptional_continuation_evidence_digest=continuation_digest,
+        )
+        attestation = fast_path.create_validation_attestation(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=prior_reviewed,
+            validation_receipt=receipt,
+        )
+        prior_authority = ready_integration_prior_authority(
+            reviewed,
+            remediation_cycles=2,
+            exceptional_recoveries=1,
+            exceptional_continuations=1,
+        )
+        prior_authority.update(
+            prior_delivery_tree_sha=tree,
+            prior_validation_receipt_digest=receipt["receipt_digest"],
+            prior_final_attestation_digest=attestation["attestation_digest"],
+        )
+        prior_authority["lifecycle"]["historical_proof_mode"] = (
+            "exact_state_adoption"
+        )
+        prior_authority = fast_path.normalize_ready_integration_prior_authority(
+            prior_authority
+        )
+        integration = ready_integration_evidence(
+            reviewed,
+            validated_tree=tree,
+            remediation_cycles=2,
+            exceptional_recoveries=1,
+            exceptional_continuations=1,
+        )
+        integration["prior_authority_digest"] = fast_path.digest_json(
+            prior_authority
+        )
+        integration = fast_path.normalize_ready_integration_evidence(
+            integration,
+            repository="SecPal/.github",
+            reviewed_state=reviewed,
+            registry=registry,
+            validated_tree_sha=tree,
+        )
+        arguments = SimpleNamespace(
+            repo="SecPal/.github",
+            delivery_issue=9,
+            prior_authority="authority.json",
+            prior_reviewed_state="prior-reviewed.json",
+            prior_receipt="prior-receipt.json",
+            prior_attestation="prior-attestation.json",
+            prior_authority_tag_ref="refs/tags/prior-authority",
+            expected_prior_authority_signer="aroviqen",
+        )
+
+        def read_json(path: str, _label: str) -> Any:
+            return {
+                "authority.json": prior_authority,
+                "prior-receipt.json": receipt,
+                "prior-attestation.json": attestation,
+            }[path]
+
+        def git_result(
+            _repository_root: Path,
+            command: list[str],
+            *,
+            allow_failure: bool = False,
+        ) -> Any:
+            del allow_failure
+            if command[:2] == ["rev-parse", f"{reviewed.head_sha}^{{tree}}"]:
+                stdout = tree
+            elif command[:2] == ["cat-file", "commit"]:
+                stdout = "tree deadbeef\ngpgsig -----BEGIN SSH SIGNATURE-----\n"
+            elif command[:2] == ["verify-commit", "--raw"]:
+                stdout = 'Good "git" signature for aroviqen with ED25519 key SHA256:test\n'
+            else:
+                raise AssertionError(command)
+            return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+        verified_validation = fast_path.verify_validation_attestation(
+            attestation,
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            registry=registry,
+            command_set=registry["validation"],
+            reviewed_state=prior_reviewed,
+            commit_parent_sha=prior_reviewed.head_sha,
+            commit_tree_sha=tree,
+            commit_validation_receipt_digest=receipt["receipt_digest"],
+            delivery_issue_number=prior_authority["delivery_issue_number"],
+        )
+        verified_lifecycle = SimpleNamespace(
+            authority_digest=prior_authority["lifecycle"][
+                "current_authority_digest"
+            ],
+            lifecycle_id=prior_authority["lifecycle"]["identity"],
+            historical_proof_mode="exact_state_adoption",
+            state={"cycle_3_absent": True},
+            tree_sha=tree,
+            validation_receipt_digest=receipt["receipt_digest"],
+            adoption_source_evidence_digest=attestation["attestation_digest"],
+            source_validation_evidence_digest=(
+                verified_validation.source_validation_evidence_digest
+            ),
+        )
+        published_authority = SimpleNamespace(
+            publication_oid=prior_authority["publication"]["object_oid"],
+            publication_digest=prior_authority["publication"][
+                "publication_digest"
+            ],
+            lifecycle=verified_lifecycle,
+        )
+        lifecycle_authority = SimpleNamespace(
+            ExpectedLifecycle=SimpleNamespace,
+            LifecycleAuthorityError=ValueError,
+        )
+        lifecycle_publication = SimpleNamespace(
+            verify_current_lifecycle_authority=mock.Mock(
+                return_value=published_authority
+            ),
+            LifecyclePublicationError=ValueError,
+        )
+        with (
+            mock.patch.object(actions, "_read_json", side_effect=read_json),
+            mock.patch.object(
+                actions, "_load_fast_state", return_value=prior_reviewed
+            ),
+            mock.patch.object(
+                actions,
+                "_validated_commit_parent",
+                return_value=prior_reviewed.head_sha,
+            ),
+            mock.patch.object(actions, "_run_attestation_git", side_effect=git_result),
+            mock.patch.object(
+                actions, "_prior_delivery_registry_binding", return_value=registry
+            ),
+            mock.patch.object(
+                actions,
+                "_commit_validation_receipt_digest",
+                return_value=receipt["receipt_digest"],
+            ),
+            mock.patch.object(
+                actions.evidence,
+                "interpret_local_signature",
+                return_value=mock.Mock(),
+            ),
+            mock.patch.object(actions, "_verify_signature_policy_identity"),
+            mock.patch.object(actions, "_verify_integration_signer"),
+            mock.patch.object(actions, "_verify_prior_authority_tag"),
+            mock.patch.object(
+                actions,
+                "_load_lifecycle_publication_helpers",
+                return_value=(lifecycle_authority, lifecycle_publication),
+            ),
+        ):
+            result = actions._verify_ready_integration_prior_authority(
+                arguments=arguments,
+                repository_root=REPO_ROOT,
+                binding=registry,
+                integration_evidence=integration,
+                live_observation=None,
+            )
+
+        self.assertEqual(result, prior_authority)
+        self.assertEqual(
+            published_authority.lifecycle.source_validation_evidence_digest,
+            verified_validation.source_validation_evidence_digest,
+        )
+
     def test_ready_integration_openpgp_accepts_authorized_primary_fingerprint(
         self,
     ) -> None:
@@ -8691,6 +10972,370 @@ class FastPathTests(TestCase):
                     eligibility_evidence_digest=eligibility_digest,
                 )
 
+    def test_diagnostic_recovery_loader_uses_current_maintained_authority(
+        self,
+    ) -> None:
+        value = {
+            "schema_version": "1.1",
+            "admission_kind": "REPRODUCED_MATERIAL_SECURITY_DIAGNOSTIC",
+        }
+        observed = SimpleNamespace(lifecycle=SimpleNamespace())
+        publication = SimpleNamespace(
+            verify_current_lifecycle_authority=mock.Mock(return_value=observed)
+        )
+        diagnostic_authenticator = mock.Mock()
+        reviewed = fast_feedback()
+        verified = {
+            **value,
+            "pull_request_number": reviewed.pull_request_number,
+            "prior_ready_head_sha": reviewed.head_sha,
+            "recovery_tree_sha": "2" * 40,
+        }
+        diagnostic_verifier = mock.Mock(return_value=verified)
+        with (
+            mock.patch.object(actions, "_read_json", return_value=value),
+            mock.patch.object(
+                actions,
+                "_load_lifecycle_publication_helpers",
+                return_value=(
+                    SimpleNamespace(), publication, mock.Mock(),
+                    diagnostic_authenticator, diagnostic_verifier,
+                ),
+            ),
+        ):
+            result = actions._load_exceptional_recovery_evidence(
+                path="diagnostic.json",
+                eligibility_path=None,
+                repository="SecPal/.github",
+                delivery_issue=894,
+                repository_root=REPO_ROOT,
+                reviewed=reviewed,
+                validated_tree="2" * 40,
+                eligibility_digest=None,
+            )
+        self.assertEqual(result, verified)
+        publication.verify_current_lifecycle_authority.assert_called_once_with(
+            "SecPal/.github", 894
+        )
+        diagnostic_authenticator.assert_called_once_with()
+        diagnostic_verifier.assert_called_once_with(value, observed, REPO_ROOT)
+
+    def test_diagnostic_recovery_loader_rejects_thread_eligibility(self) -> None:
+        value = {
+            "schema_version": "1.1",
+            "admission_kind": "REPRODUCED_MATERIAL_SECURITY_DIAGNOSTIC",
+        }
+        with (
+            mock.patch.object(actions, "_read_json", return_value=value),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "no thread-resolution authority"
+            ),
+        ):
+            actions._load_exceptional_recovery_evidence(
+                path="diagnostic.json",
+                eligibility_path="eligibility.json",
+                repository="SecPal/.github",
+                delivery_issue=894,
+                repository_root=REPO_ROOT,
+                reviewed=fast_feedback(),
+                validated_tree="2" * 40,
+                eligibility_digest="3" * 64,
+            )
+
+    def test_diagnostic_recovery_loader_binds_reviewed_head_pr_and_tree(self) -> None:
+        reviewed = fast_feedback()
+        value = {
+            "schema_version": "1.1",
+            "admission_kind": "REPRODUCED_MATERIAL_SECURITY_DIAGNOSTIC",
+        }
+        verified = {
+            **value,
+            "pull_request_number": reviewed.pull_request_number,
+            "prior_ready_head_sha": reviewed.head_sha,
+            "recovery_tree_sha": "2" * 40,
+        }
+        publication = SimpleNamespace(
+            verify_current_lifecycle_authority=mock.Mock(
+                return_value=SimpleNamespace(lifecycle=SimpleNamespace())
+            )
+        )
+        for field, replacement in (
+            ("pull_request_number", reviewed.pull_request_number + 1),
+            ("prior_ready_head_sha", "1" * 40),
+            ("recovery_tree_sha", "3" * 40),
+        ):
+            changed = {**verified, field: replacement}
+            with (
+                self.subTest(field=field),
+                mock.patch.object(actions, "_read_json", return_value=value),
+                mock.patch.object(
+                    actions,
+                    "_load_lifecycle_publication_helpers",
+                    return_value=(
+                        SimpleNamespace(), publication, mock.Mock(), mock.Mock(),
+                        mock.Mock(return_value=changed),
+                    ),
+                ),
+                self.assertRaisesRegex(
+                    fast_path.SecurityBlocker,
+                    "diagnostic Recovery reviewed identity or tree changed",
+                ),
+            ):
+                actions._load_exceptional_recovery_evidence(
+                    path="diagnostic.json",
+                    eligibility_path=None,
+                    repository="SecPal/.github",
+                    delivery_issue=894,
+                    repository_root=REPO_ROOT,
+                    reviewed=reviewed,
+                    validated_tree="2" * 40,
+                    eligibility_digest=None,
+                )
+
+    def test_exceptional_continuation_evidence_binds_material_findings_and_attestation(
+        self,
+    ) -> None:
+        original = fast_feedback(thread_count=1)
+        feedback = copy.deepcopy(original.feedback)
+        feedback["threads"][0]["node_id"] = "PRRT_CONTINUATION_GENERIC"
+        feedback["threads"][0]["comments"][0][
+            "node_id"
+        ] = "CONTINUATION_FINDING_GENERIC"
+        reviewed = fast_path.StableFeedbackState(
+            repository=original.repository,
+            pull_request_number=884,
+            head_sha=original.head_sha,
+            base_ref=original.base_ref,
+            base_sha=original.base_sha,
+            pr_state="OPEN",
+            feedback=feedback,
+        )
+        eligibility = {
+            "schema_version": "1.1",
+            "repository": "SecPal/.github",
+            "pull_request_number": 884,
+            "reviewed_head_sha": reviewed.head_sha,
+            "reviewed_state_digest": reviewed.state_digest,
+            "eligible_threads": [
+                {
+                    "thread_id": "PRRT_CONTINUATION_GENERIC",
+                    "classification": "VALID_ACTIONABLE",
+                    "disposition": "CORRECTED_AND_VERIFIED",
+                    "finding_ids": ["CONTINUATION_FINDING_GENERIC"],
+                    "evidence_digest": "3" * 64,
+                    "follow_up": None,
+                }
+            ],
+        }
+        value = {
+            "schema_version": "1.0",
+            "kind": "READY_EXCEPTIONAL_CONTINUATION",
+            "authorization_id": "user-authorized-continuation-884-1",
+            "repository": "SecPal/.github",
+            "delivery_issue_number": 883,
+            "pull_request_number": 884,
+            "prior_ready_head_sha": reviewed.head_sha,
+            "prior_ready_tree_sha": "1" * 40,
+            "continuation_tree_sha": "2" * 40,
+            "reviewed_state_digest": reviewed.state_digest,
+            "reviewed_feedback_digest": reviewed.feedback_digest,
+            "eligibility_evidence_digest": fast_path.digest_json(eligibility),
+            "finding_ids": ["CONTINUATION_FINDING_GENERIC"],
+            "thread_ids": ["PRRT_CONTINUATION_GENERIC"],
+            "expected_signer": {
+                "kind": "SSH_PRINCIPAL",
+                "identity": "aroviqen@secpal.app",
+            },
+            "lifecycle": {
+                "unrestricted_reviews": 1,
+                "remediation_cycles": 2,
+                "cycle_3": False,
+                "draft": False,
+                "ready": True,
+                "ready_transition_count": 1,
+                "ready_history": [
+                    {
+                        "sequence": 1,
+                        "transition_kind": "DRAFT_TO_READY",
+                        "event_authorization_digest": "4" * 64,
+                    }
+                ],
+                "exceptional_recovery_count": 1,
+                "exceptional_recovery_history": [
+                    {
+                        "sequence": 1,
+                        "transition_kind": "EXCEPTIONAL_RECOVERY",
+                        "event_authorization_digest": "5" * 64,
+                    }
+                ],
+                "exceptional_continuation_predecessor_count": 0,
+                "exceptional_continuation_successor_count": 1,
+            },
+        }
+        normalized = fast_path.normalize_exceptional_continuation_evidence(
+            value,
+            repository="SecPal/.github",
+            reviewed_state=reviewed,
+            validated_tree_sha="2" * 40,
+            eligibility_evidence=eligibility,
+        )
+        receipt = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            validated_tree_sha="2" * 40,
+            registry=fast_registry(),
+            command_set=fast_registry()["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+            eligibility_evidence_digest=fast_path.digest_json(eligibility),
+            exceptional_continuation_evidence_digest=fast_path.digest_json(
+                normalized
+            ),
+        )
+        attestation = fast_path.create_validation_attestation(
+            repository="SecPal/.github",
+            head_sha="6" * 40,
+            registry=fast_registry(),
+            command_set=fast_registry()["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+        )
+        self.assertEqual(
+            attestation["exceptional_continuation_evidence_digest"],
+            fast_path.digest_json(normalized),
+        )
+        fast_path.verify_validation_attestation(
+            attestation,
+            repository="SecPal/.github",
+            head_sha="6" * 40,
+            registry=fast_registry(),
+            command_set=fast_registry()["validation"],
+            reviewed_state=reviewed,
+            commit_parent_sha=reviewed.head_sha,
+            commit_tree_sha="2" * 40,
+            commit_validation_receipt_digest=receipt["receipt_digest"],
+        )
+        stale_attestation = copy.deepcopy(attestation)
+        stale_attestation["exceptional_continuation_evidence_digest"] = "9" * 64
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "signed commit"):
+            fast_path.verify_validation_attestation(
+                stale_attestation,
+                repository="SecPal/.github",
+                head_sha="6" * 40,
+                registry=fast_registry(),
+                command_set=fast_registry()["validation"],
+                reviewed_state=reviewed,
+                commit_parent_sha=reviewed.head_sha,
+                commit_tree_sha="2" * 40,
+                commit_validation_receipt_digest=receipt["receipt_digest"],
+            )
+
+        for label, mutate in (
+            ("recovery-zero", lambda item: item["lifecycle"].update(exceptional_recovery_count=0)),
+            ("continuation-replay", lambda item: item["lifecycle"].update(exceptional_continuation_predecessor_count=1)),
+            ("cycle-3", lambda item: item["lifecycle"].update(cycle_3=True)),
+            ("finding", lambda item: item.update(finding_ids=["INVENTED"])),
+            ("thread", lambda item: item.update(thread_ids=["PRRT_UNRELATED"])),
+            ("tree", lambda item: item.update(continuation_tree_sha="7" * 40)),
+            ("recovery-kind", lambda item: item.update(kind="READY_EXCEPTIONAL_RECOVERY")),
+            ("unknown", lambda item: item.update(generic_post_limit=True)),
+        ):
+            changed = copy.deepcopy(value)
+            mutate(changed)
+            with self.subTest(label=label), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                fast_path.normalize_exceptional_continuation_evidence(
+                    changed,
+                    repository="SecPal/.github",
+                    reviewed_state=reviewed,
+                    validated_tree_sha="2" * 40,
+                    eligibility_evidence=eligibility,
+                )
+
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "mutually exclusive"
+        ):
+            fast_path.create_validation_receipt(
+                repository="SecPal/.github",
+                head_sha=reviewed.head_sha,
+                validated_tree_sha="2" * 40,
+                registry=fast_registry(),
+                command_set=fast_registry()["validation"],
+                successful_result=True,
+                reviewed_state=reviewed,
+                manual_gate_evidence=[],
+                exceptional_recovery_evidence_digest="8" * 64,
+                exceptional_continuation_evidence_digest="9" * 64,
+            )
+
+        invented_eligibility = copy.deepcopy(eligibility)
+        invented_eligibility["eligible_threads"][0]["finding_ids"] = [
+            "CALLER_INVENTED_FINDING"
+        ]
+        invented = copy.deepcopy(value)
+        invented["finding_ids"] = ["CALLER_INVENTED_FINDING"]
+        invented["eligibility_evidence_digest"] = fast_path.digest_json(
+            invented_eligibility
+        )
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "stable feedback authority"
+        ):
+            fast_path.normalize_exceptional_continuation_evidence(
+                invented,
+                repository="SecPal/.github",
+                reviewed_state=reviewed,
+                validated_tree_sha="2" * 40,
+                eligibility_evidence=invented_eligibility,
+            )
+
+    def test_continuation_feedback_successor_allows_only_authorized_resolutions(
+        self,
+    ) -> None:
+        original = fast_feedback(thread_count=2)
+        reviewed_feedback = copy.deepcopy(original.feedback)
+        reviewed_feedback["threads"][0]["node_id"] = "PRRT_CONTINUATION_1"
+        reviewed_feedback["threads"][1]["node_id"] = "PRRT_CONTINUATION_2"
+        reviewed = fast_path.StableFeedbackState(
+            repository=original.repository,
+            pull_request_number=original.pull_request_number,
+            head_sha=original.head_sha,
+            base_ref=original.base_ref,
+            base_sha=original.base_sha,
+            pr_state=original.pr_state,
+            feedback=reviewed_feedback,
+        )
+        current_feedback = copy.deepcopy(reviewed.feedback)
+        current_feedback["threads"][0]["is_resolved"] = True
+        current_feedback["threads"][0]["is_outdated"] = True
+        current = fast_path.StableFeedbackState(
+            repository=reviewed.repository,
+            pull_request_number=reviewed.pull_request_number,
+            head_sha="9" * 40,
+            base_ref=reviewed.base_ref,
+            base_sha=reviewed.base_sha,
+            pr_state="OPEN",
+            feedback=current_feedback,
+        )
+
+        fast_path.verify_stable_feedback_successor(
+            reviewed,
+            current,
+            resulting_head_sha=current.head_sha,
+            authorized_thread_ids=[reviewed.feedback["threads"][0]["node_id"]],
+        )
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "reviewed predecessor"
+        ):
+            fast_path.verify_stable_feedback_successor(
+                reviewed,
+                current,
+                resulting_head_sha=current.head_sha,
+                authorized_thread_ids=[reviewed.feedback["threads"][1]["node_id"]],
+            )
+
     def test_ready_integration_signature_requires_the_explicit_signer(self) -> None:
         actions._verify_integration_signer(
             'Good "git" signature for aroviqen with ED25519 key SHA256:test\n',
@@ -8707,6 +11352,13 @@ class FastPathTests(TestCase):
                     output,
                     {"kind": "SSH_PRINCIPAL", "identity": "aroviqen"},
                 )
+        integration = ready_integration_evidence(
+            fast_feedback(), validated_tree="a" * 40
+        )
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "accepted identity"):
+            authenticated_integration_commit(
+                "d" * 40, integration, signer="another"
+            )
         with self.assertRaisesRegex(fast_path.SecurityBlocker, "unsigned"):
             fast_path.verify_commit_signatures(
                 [
@@ -8725,6 +11377,26 @@ class FastPathTests(TestCase):
                     }
                 ],
                 {"accepted_formats": ["ssh", "openpgp"]},
+            )
+
+    def test_caller_signature_claims_cannot_mint_integration_authority(self) -> None:
+        with self.assertRaises(TypeError):
+            fast_path.authenticate_integration_commit(
+                head_sha="d" * 40,
+                local_signature={
+                    "state": "valid",
+                    "verified": True,
+                    "format": "ssh",
+                },
+                verification_output=(
+                    'Good "git" signature for aroviqen with ED25519 key '
+                    "SHA256:caller-claim\n"
+                ),
+                expected_signer={
+                    "kind": "SSH_PRINCIPAL",
+                    "identity": "aroviqen",
+                },
+                signature_policy=fast_registry()["signature_policy"],
             )
 
     def test_ready_integration_rejects_historical_first_parent_receipt_reuse(self) -> None:
@@ -8785,7 +11457,6 @@ class FastPathTests(TestCase):
             validation_receipt=receipt,
             integration_evidence=integration,
         )
-
         self.assertEqual(attestation["schema_version"], "1.2")
         self.assertEqual(
             attestation["kind"],
@@ -8810,7 +11481,7 @@ class FastPathTests(TestCase):
                 integration
             ),
         }
-        fast_path.verify_eligibility_bound_ready_integration_attestation(
+        verified_eligibility_bound_ready_integration_attestation(
             attestation, **verification
         )
 
@@ -8819,7 +11490,7 @@ class FastPathTests(TestCase):
         with self.assertRaisesRegex(
             fast_path.SecurityBlocker, "eligibility-bound"
         ):
-            fast_path.verify_eligibility_bound_ready_integration_attestation(
+            verified_eligibility_bound_ready_integration_attestation(
                 missing, **verification
             )
 
@@ -8834,7 +11505,7 @@ class FastPathTests(TestCase):
             mismatched_fields
         )
         with self.assertRaisesRegex(fast_path.SecurityBlocker, "eligibility differ"):
-            fast_path.verify_eligibility_bound_ready_integration_attestation(
+            verified_eligibility_bound_ready_integration_attestation(
                 mismatched, **verification
             )
 
@@ -8860,7 +11531,7 @@ class FastPathTests(TestCase):
         with self.assertRaisesRegex(
             fast_path.SecurityBlocker, "eligibility-bound"
         ):
-            fast_path.verify_eligibility_bound_ready_integration_attestation(
+            verified_eligibility_bound_ready_integration_attestation(
                 historical, **verification
             )
 
@@ -8917,7 +11588,7 @@ class FastPathTests(TestCase):
         )
 
         def verify(candidate: dict[str, Any], evidence_value: dict[str, Any]) -> None:
-            fast_path.verify_ready_integration_attestation(
+            verified_ready_integration_attestation(
                 candidate,
                 repository="SecPal/.github",
                 head_sha=head,
@@ -8944,6 +11615,497 @@ class FastPathTests(TestCase):
         another["authorization_id"] = "ready-integration-authorization-002"
         with self.assertRaises(fast_path.SecurityBlocker):
             verify(attestation, another)
+
+    def test_ready_integration_verification_yields_sealed_validation_evidence(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        registry = fast_registry()
+        tree = "a" * 40
+        head = "d" * 40
+        integration = ready_integration_evidence(
+            reviewed, validated_tree=tree, registry=registry
+        )
+        receipt = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            validated_tree_sha=tree,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+            integration_evidence_digest=fast_path.digest_json(integration),
+        )
+        attestation = fast_path.create_ready_integration_attestation(
+            repository="SecPal/.github",
+            head_sha=head,
+            registry=registry,
+            command_set=registry["validation"],
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+            integration_evidence=integration,
+        )
+
+        verified = verified_ready_integration_attestation(
+            attestation,
+            repository="SecPal/.github",
+            head_sha=head,
+            registry=registry,
+            command_set=registry["validation"],
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+            integration_evidence=integration,
+            commit_parent_shas=integration["ordered_parent_shas"],
+            commit_tree_sha=tree,
+            commit_validation_receipt_digest=receipt["receipt_digest"],
+            commit_integration_evidence_digest=fast_path.digest_json(integration),
+        )
+
+        self.assertTrue(is_verified_ready_evidence(verified, integration))
+        self.assertEqual(verified.repository, "SecPal/.github")
+        self.assertEqual(verified.delivery_issue_number, 9)
+        self.assertEqual(verified.pull_request_number, reviewed.pull_request_number)
+        self.assertEqual(verified.head_sha, head)
+        self.assertEqual(verified.tree_sha, tree)
+        self.assertEqual(
+            verified.validation_receipt_digest, receipt["receipt_digest"]
+        )
+        self.assertEqual(
+            verified.final_attestation_digest, attestation["attestation_digest"]
+        )
+        self.assertEqual(
+            verified.source_validation_evidence_digest,
+            fast_path.digest_json(
+                {
+                    "repository": integration["repository"],
+                    "delivery_issue_number": integration[
+                        "delivery_issue_number"
+                    ],
+                    "pull_request_number": integration["pull_request_number"],
+                    "head_sha": head,
+                    "tree_sha": tree,
+                    "ordered_parent_shas": integration["ordered_parent_shas"],
+                    "current_main": integration["target_base"],
+                    "validation_receipt_digest": receipt["receipt_digest"],
+                    "final_attestation_digest": attestation[
+                        "attestation_digest"
+                    ],
+                    "integration_evidence": integration,
+                    "reviewed_state_digest": reviewed.state_digest,
+                    "reviewed_feedback_digest": reviewed.feedback_digest,
+                    "expected_signer": integration["expected_signer"],
+                    "evidence_schema_version": integration["schema_version"],
+                    "evidence_kind": integration["kind"],
+                    "attestation_schema_version": attestation[
+                        "schema_version"
+                    ],
+                    "attestation_kind": attestation["kind"],
+                }
+            ),
+        )
+        for field, value in (
+            ("repository", "Other/repository"),
+            ("delivery_issue_number", 10),
+            ("pull_request_number", verified.pull_request_number + 1),
+            ("head_sha", "0" * 40),
+            ("tree_sha", "1" * 40),
+            ("validation_receipt_digest", "2" * 64),
+            ("final_attestation_digest", "3" * 64),
+            ("source_validation_evidence_digest", "4" * 64),
+            ("_verification_seal", object()),
+        ):
+            changed = replace(verified, **{field: value})
+            with self.subTest(field=field):
+                self.assertFalse(is_verified_ready_evidence(changed, integration))
+        with self.assertRaises(AttributeError):
+            verified._verification_seal.provenance_json = "{}\n"
+
+    def test_validation_evidence_authority_rejects_mutated_and_bypassed_seals(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        registry = fast_registry()
+        tree = "a" * 40
+        head = "d" * 40
+        integration = ready_integration_evidence(
+            reviewed, validated_tree=tree, registry=registry
+        )
+        receipt = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            validated_tree_sha=tree,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+            integration_evidence_digest=fast_path.digest_json(integration),
+        )
+        attestation = fast_path.create_ready_integration_attestation(
+            repository="SecPal/.github",
+            head_sha=head,
+            registry=registry,
+            command_set=registry["validation"],
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+            integration_evidence=integration,
+        )
+        verified = verified_ready_integration_attestation(
+            attestation,
+            repository="SecPal/.github",
+            head_sha=head,
+            registry=registry,
+            command_set=registry["validation"],
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+            integration_evidence=integration,
+            commit_parent_shas=integration["ordered_parent_shas"],
+            commit_tree_sha=tree,
+            commit_validation_receipt_digest=receipt["receipt_digest"],
+            commit_integration_evidence_digest=fast_path.digest_json(integration),
+        )
+
+        changed_provenance = json.loads(verified._verification_seal.provenance_json)
+        changed_provenance["repository"] = "Other/repository"
+        changed = replace(
+            verified,
+            repository="Other/repository",
+            _verification_seal=fast_path._VerifiedValidationEvidenceSeal(
+                fast_path.canonical_json_bytes(changed_provenance).decode("utf-8")
+            ),
+        )
+        self.assertFalse(is_verified_ready_evidence(changed, integration))
+
+        bypassed_seal = object.__new__(fast_path._VerifiedValidationEvidenceSeal)
+        bypassed = replace(
+            verified,
+            head_sha="e" * 40,
+            _verification_seal=bypassed_seal,
+        )
+        object.__setattr__(
+            bypassed_seal,
+            "provenance_json",
+            "{}\n",
+        )
+        self.assertFalse(is_verified_ready_evidence(bypassed, integration))
+
+        forged = fast_path.VerifiedValidationEvidence(
+            repository=verified.repository,
+            delivery_issue_number=verified.delivery_issue_number,
+            pull_request_number=verified.pull_request_number,
+            head_sha=verified.head_sha,
+            tree_sha=verified.tree_sha,
+            validation_receipt_digest=verified.validation_receipt_digest,
+            final_attestation_digest=verified.final_attestation_digest,
+            source_validation_evidence_digest=(
+                verified.source_validation_evidence_digest
+            ),
+            _verification_seal=object(),
+        )
+        self.assertFalse(fast_path.is_verified_validation_evidence(forged))
+        self.assertFalse(
+            hasattr(fast_path, "_register_verified_validation_evidence")
+        )
+        self.assertNotIn(
+            "_register",
+            fast_path.verify_validation_attestation.__kwdefaults__ or {},
+        )
+        self.assertNotIn(
+            "_register",
+            fast_path.verify_ready_integration_attestation.__kwdefaults__ or {},
+        )
+        candidate_self_sealed = fast_path._unregistered_validation_evidence(
+            repository=verified.repository,
+            delivery_issue_number=verified.delivery_issue_number,
+            pull_request_number=verified.pull_request_number,
+            head_sha=verified.head_sha,
+            tree_sha=verified.tree_sha,
+            validation_receipt_digest=verified.validation_receipt_digest,
+            final_attestation_digest=verified.final_attestation_digest,
+            source_validation_evidence_digest=(
+                verified.source_validation_evidence_digest
+            ),
+        )
+        self.assertFalse(
+            fast_path.is_verified_validation_evidence(candidate_self_sealed)
+        )
+
+    def test_authority_predicates_fail_closed_for_partially_initialized_objects(
+        self,
+    ) -> None:
+        malformed_evidence = object.__new__(fast_path.VerifiedValidationEvidence)
+        malformed_commit = object.__new__(fast_path.AuthenticatedIntegrationCommit)
+        malformed_seal = object.__new__(fast_path._VerifiedValidationEvidenceSeal)
+        malformed_nested_evidence = fast_path.VerifiedValidationEvidence(
+            repository="SecPal/.github",
+            delivery_issue_number=857,
+            pull_request_number=858,
+            head_sha="d" * 40,
+            tree_sha="a" * 40,
+            validation_receipt_digest="b" * 64,
+            final_attestation_digest="c" * 64,
+            source_validation_evidence_digest="e" * 64,
+            _verification_seal=malformed_seal,
+        )
+
+        self.assertFalse(
+            fast_path.is_verified_validation_evidence(malformed_evidence)
+        )
+        self.assertFalse(
+            fast_path.is_verified_validation_evidence(malformed_nested_evidence)
+        )
+        self.assertFalse(
+            fast_path._authenticated_integration_commit_agrees(
+                malformed_commit,
+                head_sha="d" * 40,
+                expected_signer={
+                    "kind": "SSH_PRINCIPAL",
+                    "identity": "aroviqen",
+                },
+            )
+        )
+
+    def test_exported_verifier_does_not_expose_registration_authority(self) -> None:
+        forged = fast_path._unregistered_validation_evidence(
+            repository="SecPal/.github",
+            delivery_issue_number=857,
+            pull_request_number=858,
+            head_sha="d" * 40,
+            tree_sha="a" * 40,
+            validation_receipt_digest="b" * 64,
+            final_attestation_digest="c" * 64,
+            source_validation_evidence_digest="e" * 64,
+        )
+        for verifier in (
+            fast_path.verify_validation_attestation,
+            fast_path.verify_ready_integration_attestation,
+            fast_path.authenticate_integration_commit,
+        ):
+            captured_callables = [
+                cell.cell_contents
+                for cell in (verifier.__closure__ or ())
+                if callable(cell.cell_contents)
+            ]
+            with self.subTest(verifier=verifier.__name__):
+                self.assertEqual(captured_callables, [])
+        self.assertFalse(fast_path.is_verified_validation_evidence(forged))
+
+    def test_authenticated_commit_binds_observed_topology_and_trust_context(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        registry = fast_registry()
+        claimed_tree = "a" * 40
+        head = "d" * 40
+        integration = ready_integration_evidence(
+            reviewed, validated_tree=claimed_tree, registry=registry
+        )
+        receipt = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            validated_tree_sha=claimed_tree,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+            integration_evidence_digest=fast_path.digest_json(integration),
+        )
+        attestation = fast_path.create_ready_integration_attestation(
+            repository="SecPal/.github",
+            head_sha=head,
+            registry=registry,
+            command_set=registry["validation"],
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+            integration_evidence=integration,
+        )
+        authenticated = authenticated_integration_commit(head, integration)
+        self.assertEqual(authenticated.repository, "SecPal/.github")
+        self.assertEqual(authenticated.tree_sha, claimed_tree)
+        self.assertEqual(
+            authenticated.parent_shas,
+            tuple(integration["ordered_parent_shas"]),
+        )
+        self.assertEqual(
+            authenticated.signature_policy_digest,
+            fast_path.digest_json(registry["signature_policy"]),
+        )
+        self.assertNotIn(
+            "authenticated_integration_commit",
+            inspect.signature(
+                fast_path.verify_ready_integration_attestation
+            ).parameters,
+        )
+        for case, observed_tree, observed_parents in (
+            (
+                "tree",
+                "b" * 40,
+                integration["ordered_parent_shas"],
+            ),
+            (
+                "parents",
+                claimed_tree,
+                ["c" * 40, *integration["ordered_parent_shas"][1:]],
+            ),
+        ):
+            git_results = integration_commit_git_results(integration)
+            git_results[1] = subprocess.CompletedProcess(
+                [],
+                0,
+                (
+                    f"tree {observed_tree}\n"
+                    + "".join(
+                        f"parent {parent}\n" for parent in observed_parents
+                    )
+                    + "gpgsig -----BEGIN SSH SIGNATURE-----\n\n"
+                ),
+                "",
+            )
+            with (
+                self.subTest(case=case),
+                tempfile.TemporaryDirectory() as repository_root,
+                mock.patch.object(
+                    fast_path,
+                    "_run_integration_commit_git",
+                    side_effect=git_results,
+                ),
+                self.assertRaisesRegex(
+                    fast_path.SecurityBlocker,
+                    "authenticated integration commit",
+                ),
+            ):
+                fast_path.verify_ready_integration_attestation(
+                    attestation,
+                    repository="SecPal/.github",
+                    head_sha=head,
+                    registry=registry,
+                    command_set=registry["validation"],
+                    reviewed_state=reviewed,
+                    validation_receipt=receipt,
+                    integration_evidence=integration,
+                    commit_parent_shas=integration["ordered_parent_shas"],
+                    commit_tree_sha=claimed_tree,
+                    commit_validation_receipt_digest=receipt["receipt_digest"],
+                    commit_integration_evidence_digest=fast_path.digest_json(
+                        integration
+                    ),
+                    repository_root=repository_root,
+                    signature_policy=registry["signature_policy"],
+                )
+
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker,
+            "signature policy context changed",
+        ):
+            fast_path.verify_ready_integration_attestation(
+                attestation,
+                repository="SecPal/.github",
+                head_sha=head,
+                registry=registry,
+                command_set=registry["validation"],
+                reviewed_state=reviewed,
+                validation_receipt=receipt,
+                integration_evidence=integration,
+                commit_parent_shas=integration["ordered_parent_shas"],
+                commit_tree_sha=claimed_tree,
+                commit_validation_receipt_digest=receipt["receipt_digest"],
+                commit_integration_evidence_digest=fast_path.digest_json(integration),
+                repository_root=REPO_ROOT,
+                signature_policy={"accepted_formats": ["ssh"]},
+            )
+
+        wrong_context = integration_commit_git_results(integration)
+        wrong_context[0] = subprocess.CompletedProcess(
+            [], 0, "https://github.com/Other/repository.git\n", ""
+        )
+        with (
+            tempfile.TemporaryDirectory() as repository_root,
+            mock.patch.object(
+                fast_path,
+                "_run_integration_commit_git",
+                side_effect=wrong_context,
+            ),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "repository identity changed",
+            ),
+        ):
+            fast_path.verify_ready_integration_attestation(
+                attestation,
+                repository="SecPal/.github",
+                head_sha=head,
+                registry=registry,
+                command_set=registry["validation"],
+                reviewed_state=reviewed,
+                validation_receipt=receipt,
+                integration_evidence=integration,
+                commit_parent_shas=integration["ordered_parent_shas"],
+                commit_tree_sha=claimed_tree,
+                commit_validation_receipt_digest=receipt["receipt_digest"],
+                commit_integration_evidence_digest=fast_path.digest_json(integration),
+                repository_root=repository_root,
+                signature_policy=registry["signature_policy"],
+            )
+
+    def test_ready_integration_cannot_seal_without_commit_authentication(self) -> None:
+        reviewed = fast_feedback()
+        registry = fast_registry()
+        tree = "a" * 40
+        head = "d" * 40
+        integration = ready_integration_evidence(
+            reviewed, validated_tree=tree, registry=registry
+        )
+        receipt = fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            validated_tree_sha=tree,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+            integration_evidence_digest=fast_path.digest_json(integration),
+        )
+        attestation = fast_path.create_ready_integration_attestation(
+            repository="SecPal/.github",
+            head_sha=head,
+            registry=registry,
+            command_set=registry["validation"],
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+            integration_evidence=integration,
+        )
+        with (
+            mock.patch.object(
+                fast_path,
+                "_run_integration_commit_git",
+                side_effect=fast_path.RecoverableLocalError(
+                    "integration commit verification is unavailable"
+                ),
+            ),
+            self.assertRaisesRegex(
+                fast_path.RecoverableLocalError,
+                "integration commit verification is unavailable",
+            ),
+        ):
+            fast_path.verify_ready_integration_attestation(
+                attestation,
+                repository="SecPal/.github",
+                head_sha=head,
+                registry=registry,
+                command_set=registry["validation"],
+                reviewed_state=reviewed,
+                validation_receipt=receipt,
+                integration_evidence=integration,
+                commit_parent_shas=integration["ordered_parent_shas"],
+                commit_tree_sha=tree,
+                commit_validation_receipt_digest=receipt["receipt_digest"],
+                commit_integration_evidence_digest=fast_path.digest_json(integration),
+                repository_root=REPO_ROOT,
+                signature_policy=registry["signature_policy"],
+            )
 
     def test_signed_validation_receipt_trailer_must_be_unique_and_well_formed(self) -> None:
         digest_value = "a" * 64
@@ -9145,6 +12307,408 @@ class FastPathTests(TestCase):
         self.assertEqual(state.feedback_digest, fast_feedback(1).feedback_digest)
         self.assertEqual(read_feedback.call_args.args[1], selected)
 
+    @staticmethod
+    def _codex_provider_state(
+        *,
+        code_status: str = "**Completed**",
+        security_status: str = "**Completed**",
+        code_label: str = "**Code Review**",
+        security_label: str = "**Security Review**",
+        metadata_head: str = p21.HEAD,
+        metadata_repository: str = "SecPal/.github",
+        metadata_pull_request: Any = 1,
+        author: str = "chatgpt-codex-connector",
+        extra_rows: str = "",
+    ) -> dict[str, Any]:
+        return {
+            "headRefOid": p21.HEAD,
+            "isDraft": False,
+            "comments": {
+                "nodes": [
+                    {
+                        "author": {"login": author},
+                        "body": (
+                            "<!-- codex-pull-request-review-summary -->\n"
+                            "<!-- codex-security-review:v1 "
+                            f'{{"headSha":"{metadata_head}",'
+                            f'"pullRequestNumber":{json.dumps(metadata_pull_request)},'
+                            f'"repository":"{metadata_repository}",'
+                            '"status":"completed"} -->\n'
+                            "| Review | Status | Commit | Review trigger |\n"
+                            "| --- | --- | --- | --- |\n"
+                            f"| {code_label} | {code_status} | head | ready |\n"
+                            f"| {security_label} | {security_status} | head | ready |"
+                            f"{extra_rows}"
+                        ),
+                    }
+                ],
+                "pageInfo": {"hasNextPage": False},
+            },
+            "reviewRequests": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+        }
+
+    def test_visible_codex_nonterminal_states_block_stable_feedback(self) -> None:
+        for status in ("queued", "pending", "running", "failed", "indeterminate"):
+            with self.subTest(status=status):
+                pull_request = {
+                    "headRefOid": p21.HEAD,
+                    "isDraft": False,
+                    "comments": {
+                        "nodes": [
+                            {
+                                "author": {"login": "chatgpt-codex-connector"},
+                                "body": (
+                                    '<!-- codex-pull-request-review-summary -->\n'
+                                    '<!-- codex-security-review:v1 '
+                                    f'{{"headSha":"{p21.HEAD}","status":"{status}"}} -->'
+                                )
+                            }
+                        ],
+                        "pageInfo": {"hasNextPage": False},
+                    },
+                    "reviewRequests": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+                }
+                with self.assertRaisesRegex(
+                    actions.MutationBlocked,
+                    "review provider is not terminal",
+                ):
+                    actions._require_review_providers_terminal(pull_request)
+
+    def test_pending_copilot_request_blocks_empty_feedback(self) -> None:
+        pull_request = {
+            "headRefOid": p21.HEAD,
+            "isDraft": True,
+            "comments": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+            "reviewRequests": {
+                "nodes": [
+                    {
+                        "requestedReviewer": {
+                            "__typename": "User",
+                            "login": "copilot-pull-request-reviewer",
+                        }
+                    }
+                ],
+                "pageInfo": {"hasNextPage": False},
+            },
+        }
+        with self.assertRaisesRegex(
+            actions.MutationBlocked,
+            "Copilot Pull Request Review is pending",
+        ):
+            actions._require_review_providers_terminal(pull_request)
+
+    def test_completed_or_untriggered_providers_permit_stable_feedback(self) -> None:
+        completed = self._codex_provider_state()
+        untriggered = {
+            "headRefOid": p21.HEAD,
+            "isDraft": True,
+            "comments": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+            "reviewRequests": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+        }
+        actions._require_review_providers_terminal(completed)
+        actions._require_review_providers_terminal(untriggered)
+
+    def test_canonical_live_completed_status_is_terminal_for_each_codex_review(self) -> None:
+        live_status = (
+            '✅ **Completed** <relative-time datetime="2026-09-06T22:21:12.382893Z">'
+            "2026-09-06T22:21:12.382893Z</relative-time>"
+        )
+        leap_day_status = (
+            '✅ **Completed** <relative-time datetime="2024-02-29T22:21:12Z">'
+            "2024-02-29T22:21:12Z</relative-time>"
+        )
+        for fields in (
+            {"code_label": "📝 **Code Review**", "code_status": live_status},
+            {
+                "security_label": "🔒 **Security Review**",
+                "security_status": live_status,
+            },
+            {"code_label": "📝 **Code Review**", "code_status": leap_day_status},
+        ):
+            with self.subTest(fields=fields):
+                actions._require_review_providers_terminal(
+                    self._codex_provider_state(**fields)
+                )
+
+    def test_nonterminal_or_ambiguous_codex_rows_remain_rejected(self) -> None:
+        rejected = (
+            "**Running**",
+            "**Pending**",
+            "**Queued**",
+            "**Failed**",
+            "**Indeterminate**",
+            "arbitrary Completed text",
+            "**Completed** (running)",
+            (
+                '✅ **Completed** <relative-time datetime="2026-09-06T21:30:00Z">'
+                "2026-09-06T21:30:00Z</relative-time> trailing"
+            ),
+            (
+                '✅ **Completed** <relative-time datetime="2026-09-06T21:30:00Z">'
+                "2026-09-06T21:30:00Z</relative-time><em>terminal</em>"
+            ),
+        )
+        for status in rejected:
+            with self.subTest(status=status):
+                with self.assertRaisesRegex(
+                    actions.MutationBlocked,
+                    "Codex review provider is not terminal",
+                ):
+                    actions._require_review_providers_terminal(
+                        self._codex_provider_state(security_status=status)
+                    )
+
+    def test_malformed_canonical_codex_rows_fail_closed(self) -> None:
+        malformed = (
+            '✅ **Completed** <relative-time>now</relative-time>',
+            (
+                '✅ **Completed** <relative-time datetime="not-a-time">'
+                "now</relative-time>"
+            ),
+            (
+                '✅ **Completed** <relative-time datetime="2026-02-31T21:30:00Z">'
+                "2026-02-31T21:30:00Z</relative-time>"
+            ),
+            (
+                '✅ **Completed** <relative-time datetime="2026-02-29T21:30:00Z">'
+                "2026-02-29T21:30:00Z</relative-time>"
+            ),
+            (
+                '✅ **Completed** <relative-time datetime="0000-01-01T21:30:00Z">'
+                "0000-01-01T21:30:00Z</relative-time>"
+            ),
+            (
+                '✅ **Completed** <relative-time datetime="2026-09-06T21:30:00Z">'
+                "now"
+            ),
+            (
+                '✅ **Completed** <relative-time datetime="2026-09-06T21:30:00Z" '
+                'class="relative">now</relative-time>'
+            ),
+            (
+                '✅ **Completed** <relative-time datetime="2026-09-06T21:30:00Z">'
+                "2026-09-06T21:31:00Z</relative-time>"
+            ),
+            "**Completed** | injected | cell",
+        )
+        for status in malformed:
+            with self.subTest(status=status):
+                with self.assertRaises(actions.MutationBlocked):
+                    actions._require_review_providers_terminal(
+                        self._codex_provider_state(code_status=status)
+                    )
+
+    def test_duplicate_codex_rows_remain_indeterminate(self) -> None:
+        pull_request = self._codex_provider_state(
+            extra_rows="\n| **Code Review** | **Completed** | head | ready |"
+        )
+        with self.assertRaisesRegex(
+            actions.MutationBlocked,
+            "Codex review provider status is indeterminate",
+        ):
+            actions._require_review_providers_terminal(pull_request)
+
+    def test_wrong_head_codex_summary_remains_rejected(self) -> None:
+        with self.assertRaisesRegex(
+            actions.MutationBlocked,
+            "Codex review provider status is stale for the current head",
+        ):
+            actions._require_review_providers_terminal(
+                self._codex_provider_state(metadata_head="f" * 40)
+            )
+
+    @staticmethod
+    def _ready_source_provider_binding(
+        *,
+        provider_head: str = "f" * 40,
+        current_head: str = p21.HEAD,
+        repository: str = "SecPal/.github",
+        pull_request: int = 1,
+    ) -> Any:
+        fields = {
+            "repository": repository,
+            "delivery_issue": 911,
+            "pull_request": pull_request,
+            "lifecycle_id": "lifecycle:ready-source-provider",
+            "current_head_sha": current_head,
+            "provider_head_sha": provider_head,
+            "current_authority_digest": "1" * 64,
+            "current_publication_oid": "2" * 40,
+            "current_publication_digest": "3" * 64,
+            "remediation_event_digests": ["4" * 64],
+            "lifecycle_evidence_digest": "5" * 64,
+        }
+        return lifecycle_publication.VerifiedReadySourceRecoveryProviderBinding(
+            **{
+                **fields,
+                "remediation_event_digests": tuple(
+                    fields["remediation_event_digests"]
+                ),
+            },
+        )
+
+    def test_ready_source_accepts_only_authenticated_remediated_provider_predecessor(
+        self,
+    ) -> None:
+        binding = self._ready_source_provider_binding()
+        with mock.patch.object(
+            type(binding),
+            "provider_head",
+            return_value="f" * 40,
+        ) as provider_head:
+            actions._require_review_providers_terminal(
+                self._codex_provider_state(metadata_head="f" * 40),
+                repository="SecPal/.github",
+                pull_request_number=1,
+                ready_source_provider_binding=binding,
+            )
+        provider_head.assert_called_once_with(
+            repository="SecPal/.github",
+            pull_request=1,
+            current_head_sha=p21.HEAD,
+        )
+        cases = (
+            self._codex_provider_state(metadata_head="e" * 40),
+            self._codex_provider_state(metadata_repository="SecPal/api",
+                                       metadata_head="f" * 40),
+            self._codex_provider_state(metadata_pull_request=2,
+                                       metadata_head="f" * 40),
+            self._codex_provider_state(metadata_head="f" * 40,
+                                       security_status="**Running**"),
+        )
+        with mock.patch.object(
+            type(binding), "provider_head", return_value="f" * 40
+        ):
+            for provider_state in cases:
+                with self.subTest(
+                    provider_state=provider_state
+                ), self.assertRaises(actions.MutationBlocked):
+                    actions._require_review_providers_terminal(
+                        provider_state,
+                        repository="SecPal/.github",
+                        pull_request_number=1,
+                        ready_source_provider_binding=binding,
+                    )
+
+    def test_ready_source_exact_current_head_still_requires_provider_identity(
+        self,
+    ) -> None:
+        binding = self._ready_source_provider_binding()
+        for provider_state in (
+            self._codex_provider_state(metadata_repository="SecPal/api"),
+            self._codex_provider_state(metadata_pull_request=2),
+            self._codex_provider_state(metadata_pull_request=True),
+            self._codex_provider_state(metadata_pull_request=1.0),
+        ):
+            with self.subTest(provider_state=provider_state), self.assertRaisesRegex(
+                actions.MutationBlocked,
+                "repository or PR identity changed",
+            ):
+                actions._require_review_providers_terminal(
+                    provider_state,
+                    repository="SecPal/.github",
+                    pull_request_number=1,
+                    ready_source_provider_binding=binding,
+                )
+
+    def test_ready_pr_missing_codex_summary_remains_rejected(self) -> None:
+        pull_request = self._codex_provider_state()
+        pull_request["comments"] = {
+            "nodes": [],
+            "pageInfo": {"hasNextPage": False},
+        }
+        with self.assertRaisesRegex(
+            actions.MutationBlocked,
+            "Codex review provider status is indeterminate",
+        ):
+            actions._require_review_providers_terminal(pull_request)
+
+    def test_running_codex_row_cannot_reach_stable_capture_merge_gate(self) -> None:
+        with self.assertRaisesRegex(
+            actions.MutationBlocked,
+            "Codex review provider is not terminal",
+        ):
+            actions._require_review_providers_terminal(
+                self._codex_provider_state(security_status="**Running**")
+            )
+
+    def test_forged_or_duplicate_codex_status_is_indeterminate(self) -> None:
+        for author, metadata in (
+            (
+                "attacker",
+                f'{{"headSha":"{p21.HEAD}","status":"completed"}}',
+            ),
+            (
+                "chatgpt-codex-connector",
+                f'{{"headSha":"{p21.HEAD}","status":"running",'
+                '"status":"completed"}',
+            ),
+            (
+                "chatgpt-codex-connector",
+                f'{{"headSha":"{p21.HEAD}","status":}}',
+            ),
+        ):
+            with self.subTest(author=author, metadata=metadata):
+                pull_request = {
+                    "headRefOid": p21.HEAD,
+                    "isDraft": False,
+                    "comments": {
+                        "nodes": [
+                            {
+                                "author": {"login": author},
+                                "body": (
+                                    '<!-- codex-pull-request-review-summary -->\n'
+                                    f'<!-- codex-security-review:v1 {metadata} -->'
+                                ),
+                            }
+                        ],
+                        "pageInfo": {"hasNextPage": False},
+                    },
+                    "reviewRequests": {
+                        "nodes": [],
+                        "pageInfo": {"hasNextPage": False},
+                    },
+                }
+                with self.assertRaisesRegex(
+                    actions.MutationBlocked,
+                    "Codex review provider status is indeterminate",
+                ):
+                    actions._require_review_providers_terminal(pull_request)
+
+    def test_completed_codex_metadata_cannot_override_nonterminal_table_row(self) -> None:
+        for visible_status in ("**Running**", "**Completed** (running)"):
+            with self.subTest(visible_status=visible_status):
+                pull_request = {
+                    "headRefOid": p21.HEAD,
+                    "isDraft": False,
+                    "comments": {
+                        "nodes": [
+                            {
+                                "author": {"login": "chatgpt-codex-connector"},
+                                "body": (
+                                    '<!-- codex-pull-request-review-summary -->\n'
+                                    '<!-- codex-security-review:v1 '
+                                    f'{{"headSha":"{p21.HEAD}","status":"completed"}} -->\n'
+                                    '| Review | Status | Commit | Review trigger |\n'
+                                    '| --- | --- | --- | --- |\n'
+                                    '| **Code Review** | **Completed** | head | ready |\n'
+                                    f'| **Security Review** | {visible_status} | head | ready |'
+                                ),
+                            }
+                        ],
+                        "pageInfo": {"hasNextPage": False},
+                    },
+                    "reviewRequests": {
+                        "nodes": [],
+                        "pageInfo": {"hasNextPage": False},
+                    },
+                }
+                with self.assertRaisesRegex(
+                    actions.MutationBlocked,
+                    "Codex review provider is not terminal",
+                ):
+                    actions._require_review_providers_terminal(pull_request)
+
     def test_required_checks_use_the_allowlisted_graphql_read(self) -> None:
         check_payload = {
             "data": {
@@ -9153,6 +12717,7 @@ class FastPathTests(TestCase):
                         "id": "PR_1",
                         "headRefOid": p21.HEAD,
                         "state": "OPEN",
+                        "isDraft": True,
                         "baseRefName": "main",
                         "baseRefOid": p21.BASE,
                         "baseRepository": {"id": "REPO_1", "nameWithOwner": "SecPal/.github"},
@@ -9729,6 +13294,70 @@ class FastPathTests(TestCase):
                     commit_validation_receipt_digest=attestation[
                         "validation_receipt_digest"
                     ],
+                )
+
+    def test_validation_evidence_rejects_repository_substitution(self) -> None:
+        reviewed = fast_feedback()
+        registry = fast_registry()
+        receipt = fast_path.create_validation_receipt(
+            repository=reviewed.repository,
+            head_sha=reviewed.head_sha,
+            validated_tree_sha="a" * 40,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=[],
+        )
+        attestation = fast_path.create_validation_attestation(
+            repository=reviewed.repository,
+            head_sha=p21.HEAD,
+            registry=registry,
+            command_set=registry["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+        )
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker,
+            "reviewed repository identity changed",
+        ):
+            fast_path.verify_validation_attestation(
+                attestation,
+                repository="Other/governance",
+                head_sha=p21.HEAD,
+                registry=registry,
+                command_set=registry["validation"],
+                reviewed_state=reviewed,
+                commit_parent_sha=reviewed.head_sha,
+                commit_tree_sha="a" * 40,
+                commit_validation_receipt_digest=receipt["receipt_digest"],
+            )
+
+    def test_validation_evidence_rejects_noncanonical_reviewed_state(self) -> None:
+        for reviewed_state in (
+            None,
+            {},
+            object(),
+            SimpleNamespace(payload={"pull_request_number": 1}),
+        ):
+            with (
+                self.subTest(reviewed_state=type(reviewed_state).__name__),
+                self.assertRaisesRegex(
+                    fast_path.SecurityBlocker,
+                    "reviewed state is not canonical",
+                ),
+            ):
+                fast_path.verify_validation_attestation(
+                    {},
+                    repository="SecPal/.github",
+                    head_sha=p21.HEAD,
+                    registry=fast_registry(),
+                    command_set=fast_registry()["validation"],
+                    reviewed_state=reviewed_state,
+                    commit_parent_sha="a" * 40,
+                    commit_tree_sha="b" * 40,
+                    commit_validation_receipt_digest="c" * 64,
                 )
 
     def test_atomic_json_output_supports_spaces(self) -> None:

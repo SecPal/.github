@@ -134,6 +134,30 @@ that root epic, attaches the original leaf and the new leaf natively, and then
 adds the required dependency where applicable. An already-existing
 prerequisite keeps its ownership and needs no invented parent.
 
+## Removing an obsolete dependency
+
+An `IN_CONTRACT_DEFECT` may retain its existing
+`KEEP_IN_CURRENT_CONTRACT` classification while issuing one explicit,
+bounded `REMOVE_OBSOLETE_DEPENDENCY` intent. This is available only when the
+operator's judgment is that the current contract no longer requires the exact
+existing blocker; the planner does not infer that judgment or scan for edges to
+remove.
+
+```json
+{
+  "kind": "REMOVE_OBSOLETE_DEPENDENCY",
+  "blocker": "SecPal/api#44",
+  "contract_no_longer_requires_blocker": true
+}
+```
+
+The current issue is the dependent. The planner requires the named blocker,
+complete forward and reverse dependency observations, and the exact native edge
+before it emits one `REMOVE_BLOCKED_BY` step. It simulates the resulting graph,
+uses the existing native dependency mutation boundary, and applies the normal
+signed recovery and post-mutation verification rules. A bare
+`KEEP_IN_CURRENT_CONTRACT` operation remains a no-write operation.
+
 ## Promoting and splitting a leaf
 
 `PROMOTE_TO_SUB_EPIC` requires at least two child issue specifications. It also

@@ -163,6 +163,31 @@ python3 scripts/secpal-resolve-fixed-threads.py \
 ```
 
 Repeat `--thread-id` to resolve several fixed threads in one invocation.
+
+For a Recovery-bound ordinary final attestation, retain the already accepted
+Recovery document and exact signed orchestration authorization and add the
+complete tuple:
+
+```bash
+  --delivery-issue DELIVERY_ISSUE_NUMBER \
+  --exceptional-recovery-evidence READY_EXCEPTIONAL_RECOVERY.json \
+  --exceptional-recovery-authorization SIGNED_RECOVERY_AUTHORIZATION.json
+```
+
+For a Continuation-bound ordinary final attestation, use the distinct pair:
+
+```bash
+  --delivery-issue DELIVERY_ISSUE_NUMBER \
+  --exceptional-continuation-evidence READY_EXCEPTIONAL_CONTINUATION.json \
+  --exceptional-continuation-authorization SIGNED_CONTINUATION_AUTHORIZATION.json
+```
+
+Supply exactly one tuple; omit both for ordinary source evidence and
+Ready-integration evidence. The shared verifier authenticates the exact typed
+lifecycle transition and
+may read only the installed protection for the lifecycle-publication journal;
+this does not authorize delivery-PR branch-protection or merge-readiness reads.
+
 The ordered `eligible_threads` array in the eligibility manifest must list
 those IDs in the same order and cover no additional thread. Its top-level
 bindings are `repository`, `pull_request_number`, `reviewed_head_sha`, and
@@ -182,6 +207,12 @@ verifier to authenticate the exact two parents, tree, receipt and integration
 trailers, reviewed state, signer, and eligibility digest before applying the
 ordinary exact-thread checks. Version-1.1 integration attestations do not carry
 this authority and are rejected for resolution.
+
+A protected pre-persistence prior-Ready recovery changes only how the existing
+integration verifier authenticates parent 1. Thread resolution still requires
+fresh integration-head evidence and the same eligibility-bound version-1.2
+integration attestation; recovery authority itself is never classification,
+disposition, eligibility, or resolution authority.
 
 New manifests use schema version 1.1. The resolver also reads already-authenticated
 version 1.0 manifests for the legacy resolution-eligible dispositions. It
@@ -214,19 +245,65 @@ field or `TRACKED_AS_FOLLOW_UP`; tracked follow-up resolution requires version
 
 Commit-bound eligibility remains the normal remediation path. A distinct
 resolution-only path exists only for exact technically non-blocking feedback
-outside the authenticated final feedback boundary and observed on the unchanged
+absent from authenticated final eligibility and observed on the unchanged
 final delivery head. It does not extend the
 delivery lifecycle, rerun validation, consume an unrestricted review or
 remediation cycle, change the delivery tree, create a commit or push, inspect
 CI, request review, mark Ready, or imply merge readiness.
 
-The path first verifies the complete final reviewed state, canonical final
-eligibility artifact, validation receipt, final attestation, local final tree
-and head, receipt trailer, accepted commit signature, and exact origin. The
-eligibility digest must match the receipt and attestation, every eligible thread
-must exist in the reviewed snapshot, and the proposed late thread must be absent
-from both final sets. Classification creation, disposition creation, and
-resolution independently re-establish this origin predicate. It derives the
+The path first verifies a typed final-feedback boundary, validation receipt,
+final attestation, local final tree and head, receipt trailer, accepted commit
+signature, and exact origin. Normally that boundary contains the canonical final
+eligibility artifact: its digest must match the receipt and attestation, every
+eligible thread must exist in the reviewed snapshot, and the proposed target
+must be absent from final eligibility. Membership in authenticated final
+reviewed state derives `REVIEWED_BUT_INELIGIBLE`; absence from it derives
+`ABSENT_FROM_BOTH`.
+
+Source authentication accepts exactly ordinary final-delivery evidence or
+canonical eligibility-bound Ready-integration evidence. For the latter, pass
+the same `--integration-evidence` artifact to classification creation,
+disposition creation, and resolution. All three boundaries use the maintained
+integration-specific verifier; the authenticated attestation shape selects the
+family, without a compatibility-mode switch. The verifier preserves the exact
+integration repository, delivery issue, PR, head/tree, ordered parents and
+current-main identity, integration and receipt trailers, receipt, final
+attestation, reviewed-state and eligibility digests, version mapping, and
+signer/signature bindings.
+
+The same path accepts a historical schema-1.1 Ready integration only when the
+caller supplies its exact original validation receipt with
+`--final-validation-receipt` to each producer and
+`--integration-validation-receipt` to the resolver, while omitting final
+eligibility evidence. The integration-specific verifier authenticates the
+source and requires both receipt and attestation to omit
+`eligibility_evidence_digest`. This derives
+`NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY`; it never makes schema 1.1
+thread-resolution authority. Exact authenticated Stable Feedback derives
+`REVIEWED_BUT_INELIGIBLE` or `ABSENT_FROM_BOTH`, after which signed detached
+classification and disposition remain mandatory. A supplied eligibility
+artifact, a present or null digest, or a schema-1.2 downgrade fails closed.
+New Ready-integration validation requires authenticated eligibility and emits
+schema 1.2, so this source-only compatibility path can consume existing schema
+1.1 evidence but cannot mint more of it.
+
+One accepted-main exact recovery record for `SecPal/.github` issue #810 and
+PR #821 permits the alternative
+`AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE` mode. The complete detached late
+classification/disposition tuple selects late mode. Within that mode, absence
+is selected only when `--final-eligibility-evidence` is omitted and binds the
+exact final head, tree, zero-thread reviewed-state digest, receipt, attestation,
+and delivery signer. Final eligibility evidence outside late mode is rejected.
+The verified receipt and attestation must both omit
+`eligibility_evidence_digest`; null, malformed, present-but-invalid, or a
+missing artifact for a present digest is not absence. No eligibility manifest
+is created or recovered. A supplied eligibility path always takes the ordinary
+manifest path and never falls back to absence recovery.
+
+In either mode, a caller cannot select the origin, and original eligibility is
+never replaced or amended. Classification creation, disposition creation, and
+resolution independently re-establish the origin and its closed decision
+policy. The verifier derives the
 delivery signer fingerprint from
 that cryptographic verification. It then captures only the one explicitly
 named live thread and signs the canonical
@@ -241,21 +318,27 @@ artifact is never its trust root. Artifact and signature outputs must be in the
 private session area outside the delivery repository, so creating the evidence
 cannot alter that worktree or tree.
 
-The initial supported authorization is exactly
-`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE` with
-`technically_blocking=false`. Classification is independently established and
-recorded in separately signed exact evidence; no comment-text heuristic exists.
+The closed authorization admits the existing exact safe decisions. A
+`REVIEWED_BUT_INELIGIBLE` target may use
+`VALID_ACTIONABLE + CORRECTED_AND_VERIFIED`,
+`INVALID_FALSE_OR_MISLEADING + DISPROVEN_WITH_EVIDENCE`, or
+`INFORMATIONAL + NON_ACTIONABLE`; an `ABSENT_FROM_BOTH` target retains only the
+last two. Every pair requires `technically_blocking=false`. No other
+classification, disposition, technical blocker,
+or caller-selected origin is accepted. Classification is independently
+established and recorded in signed exact evidence; no text heuristic exists.
 The signed artifact
 binds the repository, delivery issue, PR, unchanged final head and tree, final
-receipt/attestation/eligibility digests, signer, exact thread, top-level comment
+receipt/attestation and either the authenticated eligibility digest or exact
+absence-recovery digest, signer, exact thread, top-level comment
 node and database identities, finding-body digest, reply-state digest and
 count, resolved/outdated states, classification evidence digest, disposition,
 and exact resolution action. It never selects threads by query or pattern.
 
 “Post-push” is lifecycle shorthand for this authenticated boundary. No GitHub
 wall-clock push-order proof is used or claimed: authority comes from exact
-absence in the authenticated final reviewed-state and commit-bound eligibility
-artifacts while the delivery head remains unchanged.
+authenticated reviewed-state membership or absence, commit-bound eligibility
+absence, and the unchanged delivery head.
 
 Create authenticated classification evidence, then detached disposition
 evidence:
@@ -271,6 +354,7 @@ python3 scripts/secpal-create-late-classification.py \
   --expected-final-reviewed-state-digest FINAL_REVIEWED_STATE_SHA256 \
   --final-validation-evidence FINAL_ATTESTATION.json \
   --final-eligibility-evidence FINAL_ELIGIBILITY.json \
+  --integration-evidence READY_INTEGRATION.json \
   --thread-id PRRT_example \
   --finding-id LF-LATE-1 \
   --finding-evidence-digest FINDING_EVIDENCE_SHA256 \
@@ -290,6 +374,7 @@ python3 scripts/secpal-create-late-disposition.py \
   --expected-final-reviewed-state-digest FINAL_REVIEWED_STATE_SHA256 \
   --final-validation-evidence FINAL_ATTESTATION.json \
   --final-eligibility-evidence FINAL_ELIGIBILITY.json \
+  --integration-evidence READY_INTEGRATION.json \
   --classification-evidence LATE_CLASSIFICATION.json \
   --classification-signature LATE_CLASSIFICATION.json.sig \
   --output SESSION/LATE_DISPOSITION.json \
@@ -309,6 +394,7 @@ python3 scripts/secpal-resolve-fixed-threads.py \
   --expected-reviewed-state-digest FINAL_REVIEWED_STATE_SHA256 \
   --validation-evidence FINAL_ATTESTATION.json \
   --final-eligibility-evidence FINAL_ELIGIBILITY.json \
+  --integration-evidence READY_INTEGRATION.json \
   --late-classification-evidence SESSION/LATE_CLASSIFICATION.json \
   --late-classification-signature SESSION/LATE_CLASSIFICATION.json.sig \
   --late-disposition-evidence SESSION/LATE_DISPOSITION.json \
@@ -317,11 +403,23 @@ python3 scripts/secpal-resolve-fixed-threads.py \
   --apply
 ```
 
+For the exact accepted absence-recovery delivery only, omit
+`--final-eligibility-evidence` from all three commands. There is no replacement
+caller input: accepted-main policy selects and verifies the recovery.
+
+The `--integration-evidence` lines apply only to an eligibility-bound Ready-
+integration source; omit them for ordinary final-delivery evidence and for the
+authenticated-absence recovery.
+
 Commit-bound `--eligibility-evidence` and detached
 `--late-disposition-evidence` are mutually exclusive. Missing, non-canonical,
 duplicate-keyed, unknown-version, unsigned, corrupt, differently signed, or
-rebound evidence fails before GitHub access. Any live head, PR, thread, comment,
-body, reply, resolution, or outdated-state drift blocks before mutation.
+rebound evidence fails before GitHub access. For ordinary commit-bound
+eligibility, only authenticated reviewed `isOutdated=false` to live
+`isOutdated=true` is compatible when every other target binding remains exact;
+every other outdated-state difference blocks. Detached late-disposition
+authority remains exact: any live head, PR, thread, comment, body, reply,
+resolution, or outdated-state drift from that authority blocks before mutation.
 
 ## Operational rule
 
