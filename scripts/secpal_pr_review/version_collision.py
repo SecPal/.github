@@ -45,6 +45,24 @@ SOURCE_PATH = "scripts/secpal_pr_review/fast_path.py"
 TRUST_REGISTRY_PATH = (
     ".agents/skills/secpal-pr-review/references/repositories.json"
 )
+TRUST_REGISTRY_SCHEMA_PATH = (
+    ".agents/skills/secpal-pr-review/references/repositories.schema.json"
+)
+COLLISION_AUTHORITY_PATH = "scripts/secpal_pr_review/version_collision.py"
+EXACT_SOURCE_SAFETY_PATH = "scripts/secpal_pr_review/exact_source_safety.py"
+VALIDATION_ACTIONS_PATH = "scripts/secpal-pr-review-actions.py"
+COLLISION_VALIDATION_PROJECTION_PATHS = (
+    VALIDATION_ACTIONS_PATH,
+    "tests/secpal-pr-review-actions-unit.py",
+    "tests/secpal-resolve-fixed-threads-unit.py",
+)
+COLLISION_VALIDATION_DEPENDENCY_PATHS = ("package.json", "package-lock.json")
+COLLISION_VALIDATION_BUNDLE_PATHS = (
+    "tests/fixtures/secpal-pr-review-actions/issue771-exact-candidate.bundle",
+)
+COLLISION_VALIDATION_SNAPSHOT_PATHS = (
+    "tests/secpal-pr-review-skill-policy.sh",
+)
 FAMILY_KIND = "TWO_PARENT_READY_INTEGRATION"
 TRIGGER = "IMMUTABLE_EVIDENCE_VERSION_COLLISION"
 
@@ -656,7 +674,9 @@ def _mapped_limit_identity(
     return identities[0]
 
 
-def _verify_owner_renumber(source: bytes, occupied: str, delta: dict[str, Any]) -> None:
+def _owner_replacement_offsets(source: bytes, occupied: str) -> tuple[int, ...]:
+    """Derive the complete maintained implementation-owner token set."""
+
     declarations = _SourceDeclarations(source)
     inventory = inventory_from_source(source)
     if occupied not in inventory["versions"]:
@@ -740,8 +760,50 @@ def _verify_owner_renumber(source: bytes, occupied: str, delta: dict[str, Any]) 
         if source[start:end] not in {f'"{occupied}"'.encode(), f"'{occupied}'".encode()}:
             raise VersionCollisionError("candidate version identity literal is not canonical")
         positions.append(start + 1)
+    positions = sorted(positions)
+    if len(positions) != len(set(positions)):
+        raise VersionCollisionError("candidate version identity positions are ambiguous")
+    return tuple(positions)
+
+
+def _derive_owner_renumber(
+    source: bytes,
+    occupied: str,
+    free: str,
+) -> tuple[bytes, tuple[tuple[int, int], ...]]:
+    """Replace only the independently derived implementation-owner tokens."""
+
+    old_token = occupied.encode("ascii")
+    new_token = free.encode("ascii")
+    offsets = _owner_replacement_offsets(source, occupied)
+    pieces: list[bytes] = []
+    pairs: list[tuple[int, int]] = []
+    old_end = 0
+    new_end = 0
+    for old_offset in offsets:
+        if old_offset < old_end or not _token_at(source, old_token, old_offset):
+            raise VersionCollisionError(
+                "candidate version identity literal is not canonical"
+            )
+        prefix = source[old_end:old_offset]
+        pieces.extend((prefix, new_token))
+        new_offset = new_end + len(prefix)
+        pairs.append((old_offset, new_offset))
+        old_end = old_offset + len(old_token)
+        new_end = new_offset + len(new_token)
+    pieces.append(source[old_end:])
+    successor = b"".join(pieces)
+    if verify_blob_renumber(source, successor, occupied, free) != tuple(pairs):
+        raise VersionCollisionError(
+            "derived owner renumber differs from its exact byte replacement set"
+        )
+    return successor, tuple(pairs)
+
+
+def _verify_owner_renumber(source: bytes, occupied: str, delta: dict[str, Any]) -> None:
+    positions = _owner_replacement_offsets(source, occupied)
     owner = [change for change in delta["changes"] if change["path"] == SOURCE_PATH]
-    if len(owner) != 1 or [pair[0] for pair in owner[0]["replacement_offsets"]] != sorted(set(positions)):
+    if len(owner) != 1 or [pair[0] for pair in owner[0]["replacement_offsets"]] != list(positions):
         raise VersionCollisionError("source version identity positions differ from the complete owning dispatch")
     if any(change["path"] != SOURCE_PATH and not (
         change["path"].startswith("tests/") or change["path"].endswith(".md")
@@ -835,13 +897,14 @@ This parser is observation/normalization, not protected-main authentication.
         raise VersionCollisionError("immutable version inventory is malformed") from exc
 
 
-def derive_collision(
-    baseline: dict[str, Any], accepted: dict[str, Any],
-    candidate: dict[str, Any], successor: dict[str, Any],
-) -> dict[str, Any]:
-    """Admit an observed immutable schema collision; these arguments are not authority."""
+def _derive_collision_identity(
+    baseline: dict[str, Any],
+    accepted: dict[str, Any],
+    candidate: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Derive the sole compatible collision result before observing a successor."""
 
-    if any(item.get("kind") != FAMILY_KIND for item in (baseline, accepted, candidate, successor)):
+    if any(item.get("kind") != FAMILY_KIND for item in (baseline, accepted, candidate)):
         raise VersionCollisionError("collision evidence family changed")
     introduced = set(candidate["versions"]) - set(baseline["versions"])
     if len(introduced) != 1:
@@ -861,9 +924,7 @@ def derive_collision(
     _version(free)
     expected = {key: copy.deepcopy(value) for key, value in candidate["versions"].items() if key != occupied}
     expected[free] = copy.deepcopy(prior_semantic)
-    if successor["versions"] != expected:
-        raise VersionCollisionError("successor skips lowest-free identity or changes immutable mappings")
-    return {
+    return ({
         "version_family": FAMILY_KIND,
         "occupied_version": occupied,
         "free_version": free,
@@ -871,7 +932,21 @@ def derive_collision(
         "accepted_semantic": copy.deepcopy(accepted_semantic),
         "inventory": copy.deepcopy(accepted),
         "inventory_digest": digest_json(accepted),
-    }
+    }, expected)
+
+
+def derive_collision(
+    baseline: dict[str, Any], accepted: dict[str, Any],
+    candidate: dict[str, Any], successor: dict[str, Any],
+) -> dict[str, Any]:
+    """Admit an observed immutable schema collision; these arguments are not authority."""
+
+    collision, expected = _derive_collision_identity(
+        baseline, accepted, candidate,
+    )
+    if successor.get("kind") != FAMILY_KIND or successor["versions"] != expected:
+        raise VersionCollisionError("successor skips lowest-free identity or changes immutable mappings")
+    return collision
 
 
 @dataclass(frozen=True)
@@ -895,6 +970,15 @@ class VerifiedVersionCollision:
         return result
 
 
+@dataclass(frozen=True)
+class CollisionValidationExecution:
+    collision: VerifiedVersionCollision
+    repository_entry: dict[str, Any]
+    registry_binding: dict[str, Any]
+    execution_root: Path
+    verify_execution_root: Any
+
+
 def _read_bounded_blob(root: Path, treeish: str, path: str) -> bytes:
     path = _path(path)
     entry = _git(root, ["ls-tree", "-z", _oid(treeish), "--", path], 2048)
@@ -909,6 +993,422 @@ def _read_bounded_blob(root: Path, treeish: str, path: str) -> bytes:
     if re.fullmatch(rb"[0-9]+\n", size) is None or not 0 < int(size) <= MAX_BLOB_BYTES:
         raise VersionCollisionError("authenticated source exceeds the bound")
     return _git(root, ["cat-file", "blob", blob], MAX_BLOB_BYTES)
+
+
+def _authenticated_blob(
+    root: Path,
+    treeish: str,
+    path: str,
+) -> tuple[str, str, int, bytes]:
+    """Read one exact regular blob together with its immutable Git binding."""
+
+    path = _path(path)
+    entry = _git(root, ["ls-tree", "-z", _oid(treeish), "--", path], 2048)
+    metadata, separator, observed = entry.rstrip(b"\x00").partition(b"\t")
+    try:
+        fields = metadata.decode("ascii", errors="strict").split()
+    except UnicodeDecodeError as exc:
+        raise VersionCollisionError(
+            "authenticated validation source listing is malformed"
+        ) from exc
+    if (
+        separator != b"\t"
+        or observed != path.encode("utf-8")
+        or len(fields) != 3
+        or fields[0] not in {"100644", "100755"}
+        or fields[1] != "blob"
+    ):
+        raise VersionCollisionError(
+            "authenticated validation source is unavailable"
+        )
+    oid = _oid(fields[2])
+    size_raw = _git(root, ["cat-file", "-s", oid], 32)
+    if re.fullmatch(rb"[0-9]+\n", size_raw) is None:
+        raise VersionCollisionError(
+            "authenticated validation source size is malformed"
+        )
+    size = int(size_raw)
+    if not 0 < size <= MAX_BLOB_BYTES:
+        raise VersionCollisionError(
+            "authenticated validation source exceeds the bound"
+        )
+    source = _git(root, ["cat-file", "blob", oid], MAX_BLOB_BYTES)
+    if len(source) != size:
+        raise VersionCollisionError(
+            "authenticated validation source size changed"
+        )
+    return fields[0], oid, size, source
+
+
+def _tree_regular_blob_paths(
+    root: Path,
+    treeish: str,
+    prefix: str | None = None,
+) -> tuple[str, ...]:
+    if prefix is not None:
+        prefix = _path(prefix)
+    arguments = ["ls-tree", "-rz", "--full-tree", _oid(treeish)]
+    if prefix is not None:
+        arguments.extend(("--", prefix))
+    listing = _git(
+        root,
+        arguments,
+        MAX_DELTA_BYTES,
+    )
+    paths = []
+    for entry in listing.rstrip(b"\x00").split(b"\x00"):
+        metadata, separator, raw_path = entry.partition(b"\t")
+        try:
+            fields = metadata.decode("ascii", errors="strict").split()
+            path = _path(raw_path.decode("utf-8", errors="strict"))
+        except (UnicodeDecodeError, VersionCollisionError) as exc:
+            raise VersionCollisionError(
+                "accepted validation harness inventory is malformed"
+            ) from exc
+        if (
+            separator != b"\t"
+            or len(fields) != 3
+            or fields[0] not in {"100644", "100755"}
+            or fields[1] != "blob"
+            or (prefix is not None and not path.startswith(prefix + "/"))
+        ):
+            raise VersionCollisionError(
+                "accepted validation harness inventory is malformed"
+            )
+        paths.append(path)
+    if not paths or len(paths) != len(set(paths)):
+        raise VersionCollisionError(
+            "accepted validation harness inventory is ambiguous"
+        )
+    return tuple(sorted(paths))
+
+
+def _collision_validation_command_paths(commands: Any) -> frozenset[str]:
+    """Derive every direct repository path in the registered command set."""
+
+    paths: set[str] = set()
+    if not isinstance(commands, list) or not commands:
+        raise VersionCollisionError(
+            "collision validation command set is unavailable"
+        )
+    for command in commands:
+        argv = command.get("argv") if isinstance(command, dict) else None
+        if not isinstance(argv, list) or not argv:
+            raise VersionCollisionError(
+                "collision validation command set is malformed"
+            )
+        if len(argv) == 4 and argv[:3] == ["python3", "-m", "unittest"]:
+            paths.add(_path(argv[3]))
+        elif isinstance(argv[0], str) and argv[0].startswith("./"):
+            paths.add(_path(argv[0][2:]))
+    return frozenset(paths)
+
+
+def _bundle_prerequisites(source: bytes) -> tuple[str, ...]:
+    """Return commit prerequisites from one bounded, authenticated v2 bundle."""
+
+    if not isinstance(source, bytes) or not 0 < len(source) <= MAX_BLOB_BYTES:
+        raise VersionCollisionError(
+            "accepted validation bundle exceeds the bound"
+        )
+    header, separator, pack = source.partition(b"\n\nPACK")
+    if separator != b"\n\nPACK" or not pack:
+        raise VersionCollisionError("accepted validation bundle is malformed")
+    try:
+        lines = header.decode("utf-8", errors="strict").splitlines()
+    except UnicodeDecodeError as exc:
+        raise VersionCollisionError(
+            "accepted validation bundle header is malformed"
+        ) from exc
+    if not lines or lines[0] != "# v2 git bundle":
+        raise VersionCollisionError("accepted validation bundle is malformed")
+    prerequisites = []
+    references = []
+    reference_phase = False
+    for line in lines[1:]:
+        identity, space, description = line.partition(" ")
+        if not space or not description or any(ord(character) < 32 for character in line):
+            raise VersionCollisionError(
+                "accepted validation bundle header is malformed"
+            )
+        if identity.startswith("-") and not reference_phase:
+            prerequisites.append(_oid(identity[1:]))
+        elif (
+            not identity.startswith("-")
+            and description.startswith("refs/heads/")
+            and ".." not in description
+        ):
+            reference_phase = True
+            references.append((_oid(identity), description))
+        else:
+            raise VersionCollisionError(
+                "accepted validation bundle header is malformed"
+            )
+    if (
+        not prerequisites
+        or not references
+        or len(prerequisites) != len(set(prerequisites))
+        or len(references) != len(set(references))
+        or len(prerequisites) > MAX_PARENT_FANOUT
+        or len(references) > MAX_PARENT_FANOUT
+    ):
+        raise VersionCollisionError(
+            "accepted validation bundle inventory is ambiguous"
+        )
+    return tuple(prerequisites)
+
+
+def _validation_object_prerequisites(
+    path: str,
+    source: bytes,
+) -> tuple[str, ...]:
+    """Derive only maintained historical object prerequisites."""
+
+    if path in COLLISION_VALIDATION_BUNDLE_PATHS:
+        return _bundle_prerequisites(source)
+    if path == "tests/secpal-pr-review-skill-policy.sh":
+        matches = re.findall(
+            rb'^P21_BASELINE="([0-9a-f]{40})"$', source, re.MULTILINE
+        )
+        if len(matches) == 1:
+            return (_oid(matches[0].decode("ascii")),)
+    raise VersionCollisionError(
+        "accepted validation object prerequisite owner drifted"
+    )
+
+
+def _collision_validation_authority(
+    root: Path,
+    collision: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Derive the registry, commands, and narrow projection from trusted roots."""
+
+    from . import fast_path
+    from . import lifecycle_authority as authority
+
+    required = {
+        "repository",
+        "predecessor_head",
+        "predecessor_tree",
+        "resulting_tree",
+        "protected_main",
+        "delivery_scope_base",
+        "occupied_version",
+        "free_version",
+        "delta",
+    }
+    if not isinstance(collision, dict) or not required <= set(collision):
+        raise VersionCollisionError(
+            "collision validation authority is incomplete"
+        )
+    repository = collision["repository"]
+    predecessor = _oid(collision["predecessor_head"])
+    predecessor_tree = _oid(collision["predecessor_tree"])
+    resulting_tree = _oid(collision["resulting_tree"])
+    protected_main = _oid(collision["protected_main"])
+    validation_epoch = _oid(collision["delivery_scope_base"])
+    occupied = collision["occupied_version"]
+    implementation = collision["free_version"]
+    if repository != "SecPal/.github":
+        raise VersionCollisionError(
+            "collision validation repository is unsupported"
+        )
+    if collision["delta"].get("changed_paths") != [SOURCE_PATH]:
+        raise VersionCollisionError(
+            "collision candidate changes validation or non-owner bytes"
+        )
+
+    registry_source = _authenticated_blob(root, validation_epoch, TRUST_REGISTRY_PATH)
+    schema_source = _authenticated_blob(
+        root, validation_epoch, TRUST_REGISTRY_SCHEMA_PATH
+    )
+    for candidate_identity in (predecessor_tree, resulting_tree):
+        if (
+            _authenticated_blob(root, candidate_identity, TRUST_REGISTRY_PATH)
+            != registry_source
+            or _authenticated_blob(
+                root, candidate_identity, TRUST_REGISTRY_SCHEMA_PATH
+            )
+            != schema_source
+        ):
+            raise VersionCollisionError(
+                "candidate registry authority differs from the accepted epoch"
+            )
+    try:
+        registry = authority.loads_closed_json(registry_source[3])
+        schema = schema_source[3].decode("utf-8", errors="strict")
+        validated_registry = fast_path.validate_repository_registry_structure(
+            registry,
+            authoritative_schema_raw=schema,
+        )
+    except (
+        UnicodeDecodeError,
+        authority.LifecycleAuthorityError,
+        fast_path.SecurityBlocker,
+    ) as exc:
+        raise VersionCollisionError(
+            "accepted collision validation registry is invalid"
+        ) from exc
+    entries = [
+        entry
+        for entry in validated_registry.get("repositories", [])
+        if isinstance(entry, dict) and entry.get("repository") == repository
+    ]
+    if len(entries) != 1:
+        raise VersionCollisionError(
+            "accepted collision validation registry has no unique repository"
+        )
+    entry = entries[0]
+    binding = fast_path.validation_registry_projection(entry)
+    commands = binding["validation"]
+
+    candidate_paths = frozenset(_tree_regular_blob_paths(root, resulting_tree))
+    selected_paths = _collision_validation_command_paths(commands)
+    if (
+        not selected_paths <= candidate_paths
+        or not set(COLLISION_VALIDATION_PROJECTION_PATHS) <= candidate_paths
+        or not set(COLLISION_VALIDATION_PROJECTION_PATHS[1:]) <= selected_paths
+    ):
+        raise VersionCollisionError(
+            "registered collision validation escapes the authenticated candidate"
+        )
+    projection_sources = []
+    for path in COLLISION_VALIDATION_PROJECTION_PATHS:
+        predecessor_source = _authenticated_blob(root, predecessor_tree, path)
+        candidate_source = _authenticated_blob(root, resulting_tree, path)
+        if predecessor_source != candidate_source:
+            raise VersionCollisionError(
+                "collision candidate changes validation projection bytes: " + path
+            )
+        mode, oid, size, source = candidate_source
+        try:
+            projected, offsets = (
+                exact_source_safety._collision_projection_bytes(
+                    path,
+                    source,
+                    occupied_version=occupied,
+                    implementation_identity=implementation,
+                )
+            )
+        except authority.LifecycleAuthorityError as exc:
+            raise VersionCollisionError(
+                "accepted collision validation projection cannot be derived: "
+                + path
+            ) from exc
+        projection_sources.append({
+            "path": path,
+            "mode": mode,
+            "candidate_blob_oid": oid,
+            "candidate_size": size,
+            "projected_blob_oid": _git_object_oid("blob", projected, len(oid)),
+            "projected_size": len(projected),
+            "current_identity_offsets": [list(item) for item in offsets],
+        })
+
+    dependencies = []
+    for path in COLLISION_VALIDATION_DEPENDENCY_PATHS:
+        accepted = _authenticated_blob(root, validation_epoch, path)
+        predecessor_dependency = _authenticated_blob(root, predecessor_tree, path)
+        candidate = _authenticated_blob(root, resulting_tree, path)
+        if predecessor_dependency != accepted or candidate != accepted:
+            raise VersionCollisionError(
+                "candidate validation dependency differs from accepted main"
+            )
+        dependencies.append({
+            "path": path,
+            "mode": accepted[0],
+            "blob_oid": accepted[1],
+            "size": accepted[2],
+        })
+
+    object_dependencies = []
+    for path in (
+        *COLLISION_VALIDATION_BUNDLE_PATHS,
+        *COLLISION_VALIDATION_SNAPSHOT_PATHS,
+    ):
+        accepted = _authenticated_blob(root, validation_epoch, path)
+        predecessor_fixture = _authenticated_blob(root, predecessor_tree, path)
+        candidate_fixture = _authenticated_blob(root, resulting_tree, path)
+        if predecessor_fixture != accepted or candidate_fixture != accepted:
+            raise VersionCollisionError(
+                "candidate object fixture differs from accepted main"
+            )
+        prerequisites = _validation_object_prerequisites(path, accepted[3])
+        prerequisite_trees = []
+        for commit in prerequisites:
+            try:
+                tree, _parents = fast_path._commit_topology(
+                    _git(root, ["cat-file", "commit", commit], MAX_COMMIT_BYTES)
+                    .decode("utf-8", errors="strict")
+                )
+            except (UnicodeDecodeError, fast_path.SecurityBlocker) as exc:
+                raise VersionCollisionError(
+                    "accepted validation prerequisite tree is malformed"
+                ) from exc
+            prerequisite_trees.append({"commit": commit, "tree": tree})
+        object_dependencies.append({
+            "path": path,
+            "mode": accepted[0],
+            "blob_oid": accepted[1],
+            "size": accepted[2],
+            "prerequisites": prerequisite_trees,
+        })
+
+    issuer_sources = []
+    for path in (
+        COLLISION_AUTHORITY_PATH,
+        EXACT_SOURCE_SAFETY_PATH,
+        VALIDATION_ACTIONS_PATH,
+    ):
+        mode, oid, size, _source = _authenticated_blob(
+            root, protected_main, path,
+        )
+        issuer_sources.append({
+            "path": path,
+            "mode": mode,
+            "blob_oid": oid,
+            "size": size,
+        })
+    profile = {
+        "schema_version": "1.0",
+        "policy": "IMMUTABLE_EVIDENCE_VERSION_COLLISION_COMPLETE_VALIDATION",
+        "accepted_main": protected_main,
+        "validation_epoch": validation_epoch,
+        "accepted_main_sources": issuer_sources,
+        "candidate_predecessor_head": predecessor,
+        "candidate_predecessor_tree": predecessor_tree,
+        "candidate_tree": resulting_tree,
+        "candidate_test_delta": [],
+        "collision_digest": digest_json(
+            validation_collision_projection(collision)
+        ),
+        "occupied_version": occupied,
+        "implementation_identity": implementation,
+        "registry": {
+            "source_commit": validation_epoch,
+            "path": TRUST_REGISTRY_PATH,
+            "mode": registry_source[0],
+            "blob_oid": registry_source[1],
+            "size": registry_source[2],
+            "schema_path": TRUST_REGISTRY_SCHEMA_PATH,
+            "schema_mode": schema_source[0],
+            "schema_blob_oid": schema_source[1],
+            "schema_size": schema_source[2],
+        },
+        "validation_dependencies": dependencies,
+        "validation_object_dependencies": object_dependencies,
+        "validation_object_dependencies_digest": digest_json(
+            object_dependencies
+        ),
+        "validation_command_set": copy.deepcopy(commands),
+        "validation_command_set_digest": digest_json(commands),
+        "validation_projection_sources": projection_sources,
+        "validation_projection_digest": digest_json(projection_sources),
+    }
+    return entry, {
+        **binding,
+        "collision_validation_authority": profile,
+    }
 
 
 def _read_source(root: Path, commit: str) -> bytes:
@@ -995,12 +1495,45 @@ def _observe_main() -> str:
     return bootstrap._normalize_protected_main(bootstrap._observe_protected_main()).head_sha
 
 
+def _source_repository_state(
+    root: Path,
+) -> tuple[bytes, tuple[int, bytes], tuple[int, bytes], bytes]:
+    """Snapshot bounded semantic refs around authenticated source reads."""
+
+    refs = _git(
+        root,
+        [
+            "for-each-ref",
+            "--sort=refname",
+            "--format=%(refname)%00%(objectname)%00%(symref)",
+        ],
+        MAX_BLOB_BYTES,
+    )
+    symbolic = publication._run_git(root, ["symbolic-ref", "-q", "HEAD"])
+    head = publication._run_git(root, ["rev-parse", "--verify", "HEAD"])
+    if (
+        symbolic.returncode not in {0, 1}
+        or len(symbolic.stdout) > 4096
+        or head.returncode not in {0, 128}
+        or len(head.stdout) > 4096
+    ):
+        raise VersionCollisionError("source repository state is malformed")
+    return (
+        refs,
+        (symbolic.returncode, symbolic.stdout),
+        (head.returncode, head.stdout),
+        _git(root, ["count-objects", "-v"], 4096),
+    )
+
+
 class _BoundedObjectImporter:
     def __init__(self, source: Path, destination: Path):
         self.source = source
         self.destination = destination
         self.imported: set[str] = set()
         self.objects: dict[str, bytes] = {}
+        self.object_kinds: dict[str, str] = {}
+        self.source_objects: dict[str, tuple[str, bytes]] = {}
         self.histories: set[str] = set()
         self.commit_trees: dict[str, str] = {}
         self.complete_trees: set[str] = set()
@@ -1064,6 +1597,10 @@ class _BoundedObjectImporter:
             raise VersionCollisionError("source object closure exceeds the bound")
         if oid in self.objects:
             raw = self.objects[oid]
+            if self.object_kinds[oid] != kind:
+                raise VersionCollisionError(
+                    "source object identity changed type"
+                )
             if kind == "tree" and import_blobs and oid not in self.complete_trees:
                 self._transfer_tree_children(
                     oid,
@@ -1075,6 +1612,28 @@ class _BoundedObjectImporter:
         if len(self.imported) >= MAX_IMPORTED_OBJECTS:
             raise VersionCollisionError("source object closure exceeds the bound")
         self.imported.add(oid)
+        raw = self._read_source_object(oid, kind)
+        self.total_bytes += len(raw)
+        if self.total_bytes > MAX_IMPORTED_BYTES:
+            raise VersionCollisionError("source object closure exceeds the byte bound")
+        written = publication._run_git(
+            self.destination, ["hash-object", "-w", "-t", kind, "--stdin"], input_bytes=raw,
+        )
+        if written.returncode != 0 or written.stdout != (oid + "\n").encode("ascii"):
+            raise VersionCollisionError("verified source object import failed")
+        self.objects[oid] = raw
+        self.object_kinds[oid] = kind
+        self.source_objects[oid] = (kind, raw)
+        if kind == "tree":
+            self._transfer_tree_children(
+                oid,
+                raw,
+                depth,
+                import_blobs=import_blobs,
+            )
+        return raw
+
+    def _read_source_object(self, oid: str, kind: str) -> bytes:
         size = _git(self.source, ["cat-file", "-s", oid], 32)
         limit = MAX_COMMIT_BYTES if kind == "commit" else MAX_BLOB_BYTES
         if re.fullmatch(rb"[0-9]+\n", size) is None or not 0 <= int(size) <= limit:
@@ -1087,24 +1646,25 @@ class _BoundedObjectImporter:
             else hashlib.sha256(header + raw).hexdigest()
         )
         if digest != oid:
-            raise VersionCollisionError("source object hash differs from its claimed identity")
-        self.total_bytes += len(raw)
-        if self.total_bytes > MAX_IMPORTED_BYTES:
-            raise VersionCollisionError("source object closure exceeds the byte bound")
-        written = publication._run_git(
-            self.destination, ["hash-object", "-w", "-t", kind, "--stdin"], input_bytes=raw,
-        )
-        if written.returncode != 0 or written.stdout != (oid + "\n").encode("ascii"):
-            raise VersionCollisionError("verified source object import failed")
-        self.objects[oid] = raw
-        if kind == "tree":
-            self._transfer_tree_children(
-                oid,
-                raw,
-                depth,
-                import_blobs=import_blobs,
+            raise VersionCollisionError(
+                "source object hash differs from its claimed identity"
             )
         return raw
+
+    def verify_source_objects_unchanged(self) -> None:
+        """Re-read every bounded source object that granted authority."""
+
+        for oid, (kind, expected) in sorted(self.source_objects.items()):
+            try:
+                observed = self._read_source_object(oid, kind)
+            except VersionCollisionError as exc:
+                raise VersionCollisionError(
+                    "source object bytes changed during collision authentication"
+                ) from exc
+            if observed != expected:
+                raise VersionCollisionError(
+                    "source object bytes changed during collision authentication"
+                )
 
     def transfer_path(self, tree: str, path: str) -> str:
         """Transfer the exact blob named by one already bounded tree path."""
@@ -1209,6 +1769,113 @@ class _BoundedObjectImporter:
                 )
         return base
 
+    def materialize_derived(
+        self,
+        kind: str,
+        oid: str,
+        raw: bytes,
+    ) -> None:
+        """Write one independently reconstructed object into the isolated DB."""
+
+        oid = _oid(oid)
+        if kind not in {"blob", "tree"}:
+            raise VersionCollisionError("derived object type is unsupported")
+        limit = MAX_BLOB_BYTES
+        if len(raw) > limit:
+            raise VersionCollisionError("derived object exceeds the bound")
+        if _git_object_oid(kind, raw, len(oid)) != oid:
+            raise VersionCollisionError(
+                "derived object hash differs from its recomputed identity"
+            )
+        if kind == "tree":
+            self._tree_entries(raw)
+        if oid in self.objects:
+            if self.object_kinds[oid] != kind or self.objects[oid] != raw:
+                raise VersionCollisionError(
+                    "derived object collides with authenticated source bytes"
+                )
+            return
+        if len(self.imported) >= MAX_IMPORTED_OBJECTS:
+            raise VersionCollisionError("source object closure exceeds the bound")
+        if self.total_bytes + len(raw) > MAX_IMPORTED_BYTES:
+            raise VersionCollisionError(
+                "source object closure exceeds the byte bound"
+            )
+        written = publication._run_git(
+            self.destination,
+            ["hash-object", "-w", "-t", kind, "--stdin"],
+            input_bytes=raw,
+        )
+        if written.returncode != 0 or written.stdout != (oid + "\n").encode(
+            "ascii"
+        ):
+            raise VersionCollisionError("verified derived object import failed")
+        self.imported.add(oid)
+        self.objects[oid] = raw
+        self.object_kinds[oid] = kind
+        self.total_bytes += len(raw)
+
+
+def _git_object_oid(kind: str, raw: bytes, oid_length: int) -> str:
+    if kind not in {"blob", "tree"} or oid_length not in {40, 64}:
+        raise VersionCollisionError("derived object identity profile is unsupported")
+    header = kind.encode("ascii") + b" " + str(len(raw)).encode("ascii") + b"\x00"
+    digest = hashlib.sha1 if oid_length == 40 else hashlib.sha256
+    return digest(header + raw).hexdigest()
+
+
+def _plan_collision_tree_reconstruction(
+    importer: _BoundedObjectImporter,
+    predecessor_tree: str,
+    successor_source: bytes,
+) -> tuple[str, tuple[tuple[str, str, bytes], ...]]:
+    """Rebuild only the fixed implementation-owner path without writing it."""
+
+    predecessor_tree = _oid(predecessor_tree)
+    parts = SOURCE_PATH.encode("utf-8").split(b"/")
+    if not parts or len(parts) > MAX_TREE_DEPTH:
+        raise VersionCollisionError("implementation owner path exceeds the bound")
+    current = predecessor_tree
+    frames: list[tuple[bytes, tuple[tuple[bytes, bytes, str], ...], int]] = []
+    for index, part in enumerate(parts):
+        raw = importer.transfer(current, "tree", index, import_blobs=False)
+        entries = importer._tree_entries(raw)
+        matches = [
+            position
+            for position, (_mode, name, _child) in enumerate(entries)
+            if name == part
+        ]
+        if len(matches) != 1:
+            raise VersionCollisionError("implementation owner path is unavailable")
+        position = matches[0]
+        mode, _name, child = entries[position]
+        final = index == len(parts) - 1
+        if final:
+            if mode != b"100644":
+                raise VersionCollisionError(
+                    "implementation owner is not a regular source blob"
+                )
+        elif mode != b"40000":
+            raise VersionCollisionError("implementation owner path is malformed")
+        frames.append((raw, entries, position))
+        current = child
+
+    objects: list[tuple[str, str, bytes]] = []
+    child_oid = _git_object_oid("blob", successor_source, len(predecessor_tree))
+    objects.append(("blob", child_oid, successor_source))
+    for _raw, entries, position in reversed(frames):
+        rebuilt = b"".join(
+            mode
+            + b" "
+            + name
+            + b"\x00"
+            + bytes.fromhex(child_oid if entry_index == position else oid)
+            for entry_index, (mode, name, oid) in enumerate(entries)
+        )
+        child_oid = _git_object_oid("tree", rebuilt, len(predecessor_tree))
+        objects.append(("tree", child_oid, rebuilt))
+    return child_oid, tuple(objects)
+
 
 def _import_successor(
     source: Path, destination: Path, head: str | None, predecessor: str, *, resulting_tree: str | None = None,
@@ -1244,16 +1911,21 @@ def _import_successor(
 @contextmanager
 def _authenticated_source_checkout(
     source: Path, predecessor: str, resulting: str | None, *, resulting_tree: str | None = None,
-    accepted_main: str | None = None,
+    accepted_main: str | None = None, include_validation_authority: bool = False,
 ) -> Iterator[tuple[Path, str]]:
     from . import lifecycle_authority as authority
 
+    if (resulting is None) == (resulting_tree is None):
+        raise VersionCollisionError(
+            "source authentication requires exactly one commit or expected tree"
+        )
     main = (
         _authenticate_installed_collision_issuer()
         if accepted_main is None
         else _oid(accepted_main)
     )
     source = source.resolve(strict=True)
+    source_repository_state = _source_repository_state(source)
     with tempfile.TemporaryDirectory(prefix="secpal-collision-source-") as directory:
         root = Path(directory)
         _git(root, ["init", "--quiet"], 4096)
@@ -1263,32 +1935,79 @@ def _authenticated_source_checkout(
             4096,
         )
         importer = _BoundedObjectImporter(source, root)
-        successor_tree = _import_successor(
-            source,
-            root,
-            resulting,
-            predecessor,
-            resulting_tree=resulting_tree,
-            importer=importer,
-            import_tree=False,
-        )
+        importer.history(main)
+        protected_main_history = frozenset(importer.histories)
         base = importer.import_histories_and_merge_base(main, predecessor)
         trees = {
             head: importer.commit_trees[head]
             for head in (main, predecessor)
         }
         base_tree = importer.commit_trees[base]
-        for tree in {*trees.values(), base_tree, successor_tree}:
+        for tree in {*trees.values(), base_tree}:
             importer.transfer(tree, "tree", import_blobs=False)
         scope_paths = _changed_paths(root, base, predecessor, 4096)
+        if SOURCE_PATH not in scope_paths:
+            raise VersionCollisionError(
+                "collision owner is outside the authenticated delivery scope"
+            )
+        for tree in (base_tree, trees[main], trees[predecessor]):
+            importer.transfer_path(tree, SOURCE_PATH)
+        sources = {
+            head: _read_source(root, head)
+            for head in (base, main, predecessor)
+        }
+        inventories = {
+            head: inventory_from_source(blob)
+            for head, blob in sources.items()
+        }
+        collision, _expected_inventory = _derive_collision_identity(
+            inventories[base], inventories[main], inventories[predecessor]
+        )
+        successor_source, _replacement_offsets = _derive_owner_renumber(
+            sources[predecessor],
+            collision["occupied_version"],
+            collision["free_version"],
+        )
+        successor_inventory = inventory_from_source(successor_source)
+        derive_collision(
+            inventories[base],
+            inventories[main],
+            inventories[predecessor],
+            successor_inventory,
+        )
+        recomputed_tree, derived_objects = _plan_collision_tree_reconstruction(
+            importer,
+            trees[predecessor],
+            successor_source,
+        )
+        expected_tree = (
+            _import_successor(
+                source,
+                root,
+                resulting,
+                predecessor,
+                importer=importer,
+                import_tree=False,
+            )
+            if resulting is not None
+            else _oid(resulting_tree)
+        )
+        if recomputed_tree != expected_tree:
+            raise VersionCollisionError(
+                "recomputed collision tree differs from the expected result"
+            )
+        for kind, oid, raw in derived_objects:
+            importer.materialize_derived(kind, oid, raw)
         changed_paths = _changed_paths(
             root,
             trees[predecessor],
-            successor_tree,
+            recomputed_tree,
             MAX_CHANGED_PATHS,
         )
-        for tree in (base_tree, trees[main], trees[predecessor], successor_tree):
-            importer.transfer_path(tree, SOURCE_PATH)
+        if changed_paths != (SOURCE_PATH,):
+            raise VersionCollisionError(
+                "derived collision tree differs outside its implementation owner"
+            )
         installed = Path(__file__).resolve().parents[2]
         registry_path = authority._TRUST_REGISTRY.relative_to(installed).as_posix()
         if registry_path != TRUST_REGISTRY_PATH:
@@ -1296,23 +2015,76 @@ def _authenticated_source_checkout(
                 "accepted trust registry path differs from the collision profile"
             )
         importer.transfer_path(trees[main], TRUST_REGISTRY_PATH)
+        if include_validation_authority:
+            importer.transfer(recomputed_tree, "tree")
+            accepted_paths = {
+                TRUST_REGISTRY_PATH,
+                TRUST_REGISTRY_SCHEMA_PATH,
+                *COLLISION_VALIDATION_DEPENDENCY_PATHS,
+                *COLLISION_VALIDATION_BUNDLE_PATHS,
+                *COLLISION_VALIDATION_SNAPSHOT_PATHS,
+            }
+            for path in accepted_paths:
+                importer.transfer_path(base_tree, path)
+                importer.transfer_path(trees[predecessor], path)
+            for path in COLLISION_VALIDATION_PROJECTION_PATHS:
+                importer.transfer_path(trees[predecessor], path)
+            for path in (
+                COLLISION_AUTHORITY_PATH,
+                EXACT_SOURCE_SAFETY_PATH,
+                VALIDATION_ACTIONS_PATH,
+            ):
+                importer.transfer_path(trees[main], path)
+            for path in (
+                *COLLISION_VALIDATION_BUNDLE_PATHS,
+                *COLLISION_VALIDATION_SNAPSHOT_PATHS,
+            ):
+                accepted_fixture = _authenticated_blob(root, base_tree, path)
+                if (
+                    _authenticated_blob(root, trees[predecessor], path)
+                    != accepted_fixture
+                    or _authenticated_blob(root, recomputed_tree, path)
+                    != accepted_fixture
+                ):
+                    raise VersionCollisionError(
+                        "candidate object fixture differs from accepted main"
+                    )
+                for prerequisite in _validation_object_prerequisites(
+                    path, accepted_fixture[3]
+                ):
+                    if prerequisite not in protected_main_history:
+                        raise VersionCollisionError(
+                            "validation bundle prerequisite is outside protected-main history"
+                        )
+                    importer.transfer(
+                        importer.commit_trees[prerequisite], "tree"
+                    )
         for path in changed_paths:
             importer.transfer_path(trees[predecessor], path)
-            importer.transfer_path(successor_tree, path)
+            importer.transfer_path(recomputed_tree, path)
         if not set(changed_paths) <= set(scope_paths):
             raise VersionCollisionError(
                 "collision renumber extends outside the authenticated delivery scope"
             )
         policy = authority._load_lifecycle_trust_policy("SecPal/.github")
-        allowed = root / "allowed-signers"
+        allowed = root / ".git" / "allowed-signers"
         allowed.write_text("".join(
             f"{identity} {key}\n" for identity in sorted(policy.transition_signer_identities)
             for key in policy.signers[identity].ssh_public_keys
         ), encoding="utf-8")
         _git(root, ["config", "gpg.ssh.allowedSignersFile", str(allowed)], 4096)
-        yield root, main
-        if _observe_main() != main:
-            raise VersionCollisionError("protected main drifted during collision authentication")
+        try:
+            yield root, main
+        finally:
+            importer.verify_source_objects_unchanged()
+            if _source_repository_state(source) != source_repository_state:
+                raise VersionCollisionError(
+                    "source repository changed during collision authentication"
+                )
+            if _observe_main() != main:
+                raise VersionCollisionError(
+                    "protected main drifted during collision authentication"
+                )
 
 
 def _seal_collision(result: dict[str, Any]) -> VerifiedVersionCollision:
@@ -1381,6 +2153,110 @@ def prepare_collision_tree(
             root, repository=repository, delivery_issue=delivery_issue, pull_request=pull_request,
             predecessor_head=predecessor_head, resulting_tree=resulting_tree, protected_main=main,
         ))
+
+
+@contextmanager
+def collision_complete_validation(
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    predecessor_head: str,
+    resulting_tree: str,
+    repository_root: Path,
+) -> Iterator[CollisionValidationExecution]:
+    """Construct the sole accepted-main ordinary validation environment."""
+
+    _validate_public_collision_request(
+        repository,
+        delivery_issue,
+        pull_request,
+        predecessor_head,
+        resulting_tree,
+        repository_root,
+    )
+    main = _authenticate_installed_collision_issuer()
+    _require_current_collision_predecessor(
+        repository, delivery_issue, pull_request, predecessor_head,
+    )
+    with _authenticated_source_checkout(
+        repository_root,
+        predecessor_head,
+        None,
+        resulting_tree=resulting_tree,
+        accepted_main=main,
+        include_validation_authority=True,
+    ) as (root, main):
+        collision = _derive_collision_tree(
+            root,
+            repository=repository,
+            delivery_issue=delivery_issue,
+            pull_request=pull_request,
+            predecessor_head=predecessor_head,
+            resulting_tree=resulting_tree,
+            protected_main=main,
+        )
+        entry, binding = _collision_validation_authority(root, collision)
+        profile = binding["collision_validation_authority"]
+        try:
+            with exact_source_safety.collision_validation_root(
+                root,
+                profile=profile,
+                expected_profile=profile,
+            ) as (execution_root, verify_execution_root):
+                yield CollisionValidationExecution(
+                    collision=_seal_collision(collision),
+                    repository_entry=copy.deepcopy(entry),
+                    registry_binding=copy.deepcopy(binding),
+                    execution_root=execution_root,
+                    verify_execution_root=verify_execution_root,
+                )
+        finally:
+            _require_accepted_issuer(main)
+
+
+def collision_validation_binding_for_commit(
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    predecessor_head: str,
+    resulting_head: str,
+    repository_root: Path,
+) -> tuple[VerifiedVersionCollision, dict[str, Any]]:
+    """Recompute the receipt authority for one signed collision candidate."""
+
+    _validate_public_collision_request(
+        repository,
+        delivery_issue,
+        pull_request,
+        predecessor_head,
+        resulting_head,
+        repository_root,
+    )
+    main = _authenticate_installed_collision_issuer()
+    _require_current_collision_predecessor(
+        repository, delivery_issue, pull_request, predecessor_head,
+    )
+    with _authenticated_source_checkout(
+        repository_root,
+        predecessor_head,
+        resulting_head,
+        accepted_main=main,
+        include_validation_authority=True,
+    ) as (root, main):
+        collision = _derive_collision_from_git(
+            root,
+            repository=repository,
+            delivery_issue=delivery_issue,
+            pull_request=pull_request,
+            predecessor_head=predecessor_head,
+            resulting_head=resulting_head,
+            protected_main=main,
+        )
+        _entry, binding = _collision_validation_authority(root, collision)
+        _require_accepted_issuer(main)
+        return _seal_collision(collision), binding
 
 
 def _validate_public_collision_request(

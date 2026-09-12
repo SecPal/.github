@@ -8,11 +8,13 @@ from __future__ import annotations
 import ast
 import copy
 import base64
+import hashlib
 import inspect
 import json
 import subprocess
 import sys
 import tempfile
+import zlib
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -518,6 +520,8 @@ class CollisionCompositionFixture:
         *,
         historical_thread: bool = False,
         historical_thread_resolved: bool = False,
+        validation_harness: bool = False,
+        validation_prerequisite_on_predecessor_only: bool = False,
     ):
         from scripts.secpal_pr_review import version_collision
 
@@ -540,21 +544,170 @@ class CollisionCompositionFixture:
         })
         registry = json.loads(authority._TRUST_REGISTRY.read_bytes())
         entry = next(item for item in registry["repositories"] if item["repository"] == REPOSITORY)
-        self.command = {"argv": ["python3", "-c", "import ast,pathlib; ast.parse(pathlib.Path('scripts/secpal_pr_review/fast_path.py').read_text())"],
-                        "working_directory": ".", "purpose": "Hermetic complete validation"}
-        entry.update(focused_validation=[], required_local_validation=[self.command], manual_gates=[])
-        self.registry_document = {"repositories": [entry]}
+        self.command = {
+            "argv": (
+                ["python3", "-m", "unittest", "tests/secpal-pr-review-actions-unit.py"]
+                if validation_harness
+                else ["python3", "-c", "import ast,pathlib; ast.parse(pathlib.Path('scripts/secpal_pr_review/fast_path.py').read_text())"]
+            ),
+            "working_directory": ".",
+            "purpose": "Hermetic complete validation",
+        }
+        commands = [self.command]
+        if validation_harness:
+            commands.append({
+                "argv": [
+                    "python3", "-m", "unittest",
+                    "tests/secpal-resolve-fixed-threads-unit.py",
+                ],
+                "working_directory": ".",
+                "purpose": "Hermetic resolver validation",
+            })
+        entry.update(
+            focused_validation=[],
+            required_local_validation=commands,
+            manual_gates=[],
+        )
+        registry["repositories"] = [entry]
+        self.registry_document = registry
         registry_path = root / ".agents/skills/secpal-pr-review/references/repositories.json"
         registry_path.parent.mkdir(parents=True)
         registry_path.write_bytes(authority.canonical_json_bytes(self.registry_document))
         self.git("add", str(registry_path.relative_to(root)))
+        if validation_harness:
+            schema_path = root / version_collision.TRUST_REGISTRY_SCHEMA_PATH
+            schema_path.write_bytes(
+                authority._TRUST_REGISTRY.with_name(
+                    "repositories.schema.json"
+                ).read_bytes()
+            )
+            action_fixtures = b'''import unittest
+
+def validate(**_values):
+    return None
+
+class CurrentIdentityFixtures(unittest.TestCase):
+    def test_parent2_preservation_cannot_delete_parent1_only_work(self):
+        validate(schema_version="1.2")
+
+    def test_parent2_preservation_uses_exact_new_attestation_versions(self):
+        validate(schema_version="1.2")
+
+    def test_ready_integration_accepts_authenticated_current_ready_histories(self):
+        validate(schema_version="1.2")
+
+    def test_ready_integration_authenticates_exact_parent2_preservation(self):
+        validate(schema_version="1.2")
+        validate(schema_version="1.2")
+
+    def test_ready_integration_mixes_conflict_and_parent2_preservation(self):
+        validate(schema_version="1.2")
+        validate(schema_version="1.2")
+
+    def test_ready_integration_v12_delta_uses_registered_item_limit_before_git_work(self):
+        validate(schema_version="1.2")
+        validate(schema_version="1.2")
+
+def historical_v12_fixture():
+    return "1.2"
+'''
+            resolver_fixtures = b'''import unittest
+
+def validate(**_values):
+    return None
+
+class CurrentIdentityFixtures(unittest.TestCase):
+    def test_eligibility_bound_ready_integration_authorizes_exact_thread(self):
+        validate(schema_version="1.2")
+'''
+            for relative, content in {
+                version_collision.COLLISION_AUTHORITY_PATH: b"# collision authority\n",
+                version_collision.EXACT_SOURCE_SAFETY_PATH: b"# source safety\n",
+                version_collision.VALIDATION_ACTIONS_PATH: (
+                    b"def _verify_integration_tree_delta(_root, evidence, _tree):\n"
+                    b"    schema_version = evidence['schema_version']\n"
+                    b"    if schema_version not in {'1.1', '1.2'}:\n"
+                    b"        raise ValueError('unsupported')\n"
+                ),
+                "package.json": (
+                    Path(__file__).resolve().parents[1] / "package.json"
+                ).read_bytes(),
+                "package-lock.json": (
+                    Path(__file__).resolve().parents[1] / "package-lock.json"
+                ).read_bytes(),
+                "tests/secpal-pr-review-actions-unit.py": action_fixtures,
+                "tests/secpal-resolve-fixed-threads-unit.py": resolver_fixtures,
+            }.items():
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+                if relative == version_collision.VALIDATION_ACTIONS_PATH:
+                    path.chmod(0o755)
+            self.git(
+                "add",
+                version_collision.TRUST_REGISTRY_SCHEMA_PATH,
+                version_collision.COLLISION_AUTHORITY_PATH,
+                version_collision.EXACT_SOURCE_SAFETY_PATH,
+                version_collision.VALIDATION_ACTIONS_PATH,
+                "package.json",
+                "package-lock.json",
+                "tests/secpal-pr-review-actions-unit.py",
+                "tests/secpal-resolve-fixed-threads-unit.py",
+            )
+            validation_prerequisite = self.commit(
+                self.git("write-tree"), "validation prerequisite"
+            )
+            bundle_path = root / version_collision.COLLISION_VALIDATION_BUNDLE_PATHS[0]
+            bundle_path.parent.mkdir(parents=True, exist_ok=True)
+            bundle_path.write_bytes(
+                b"# v2 git bundle\n-"
+                + validation_prerequisite.encode("ascii")
+                + b" validation prerequisite\n"
+                + validation_prerequisite.encode("ascii")
+                + b" refs/heads/validation-fixture\n\nPACKx"
+            )
+            snapshot_path = (
+                root / version_collision.COLLISION_VALIDATION_SNAPSHOT_PATHS[0]
+            )
+            snapshot_path.write_bytes(
+                b'P21_BASELINE="'
+                + validation_prerequisite.encode("ascii")
+                + b'"\n'
+            )
+            snapshot_path.chmod(0o755)
+            self.git(
+                "add",
+                version_collision.COLLISION_VALIDATION_BUNDLE_PATHS[0],
+                version_collision.COLLISION_VALIDATION_SNAPSHOT_PATHS[0],
+            )
+        else:
+            validation_prerequisite = None
         (root / "unrelated.txt").write_text('"1.2"\n')
         self.git("add", "unrelated.txt")
         self.registry = fast_path.validation_registry_projection(entry)
-        self.base = self.commit(self.tree(self.source(None, None)), "base")
+        self.base = self.commit(
+            self.tree(self.source(None, None)),
+            "base",
+            *(
+                [validation_prerequisite]
+                if validation_prerequisite
+                and not validation_prerequisite_on_predecessor_only
+                else []
+            ),
+        )
         self.predecessor_source = self.source("1.2", "authenticated_resolution_delta")
         self.predecessor_tree = self.tree(self.predecessor_source)
-        self.predecessor = self.commit(self.predecessor_tree, "predecessor", self.base)
+        self.predecessor = self.commit(
+            self.predecessor_tree,
+            "predecessor",
+            self.base,
+            *(
+                [validation_prerequisite]
+                if validation_prerequisite_on_predecessor_only
+                and validation_prerequisite
+                else []
+            ),
+        )
         self.main = self.commit(self.tree(self.source("1.2", "reviewed_head_sha")), "accepted main", self.base)
         self.resulting_tree = self.tree(self.source("1.3", "authenticated_resolution_delta"))
         self.git("update-ref", "HEAD", self.predecessor)
@@ -680,6 +833,19 @@ class CollisionCompositionFixture:
             fields[version] = {"kind", "schema_version", field}
             for bound, number in ((False, "1.3"), (True, "1.4")):
                 mappings[(version, bound)] = (number, "AUTHENTICATED_RESOLUTION_ATTESTATION")
+        limit_guard = "" if version is None else (
+            f"    if schema_version == {version!r}:\n"
+            "        limits = registry.get('limits') if isinstance(registry, dict) else None\n"
+            "        maximum_items = limits.get('maximum_items') if isinstance(limits, dict) else None\n"
+            "        if (\n"
+            "            isinstance(maximum_items, bool)\n"
+            "            or not isinstance(maximum_items, int)\n"
+            "            or maximum_items < 1\n"
+            "        ):\n"
+            "            raise SecurityBlocker('registered integration item limit is invalid')\n"
+            "        if isinstance(raw_delta, list) and len(raw_delta) > maximum_items:\n"
+            "            raise SecurityBlocker('Ready integration delta exceeds the registered item limit')\n"
+        )
         declaration = "{\n" + "".join(f"    {key!r}: frozenset({{{', '.join(repr(item) for item in sorted(value))}}}),\n" for key, value in fields.items()) + "}"
         return (f'READY_INTEGRATION_KIND = "TWO_PARENT_READY_INTEGRATION"\n'
                 f"READY_INTEGRATION_KEYS_BY_VERSION = {declaration}\n"
@@ -689,6 +855,7 @@ class CollisionCompositionFixture:
                 "    expected_keys = READY_INTEGRATION_KEYS_BY_VERSION.get(schema_version)\n"
                 "    if expected_keys is None or set(value) != expected_keys:\n"
                 "        raise ValueError('invalid schema')\n"
+                f"{limit_guard}"
                 "    return value\n"
                 "def create_ready_integration_attestation(normalized, eligibility_bound):\n"
                 "    attestation_version, attestation_kind = READY_INTEGRATION_ATTESTATION_BY_VERSION[(normalized['schema_version'], eligibility_bound)]\n"
@@ -1482,6 +1649,587 @@ def _provider_feedback_response(
         }
     }
 class LifecycleOrchestrationTests(TestCase):
+    def test_collision_preparation_recomputes_tree_absent_from_closed_source(
+        self,
+    ) -> None:
+        from scripts.secpal_pr_review import version_collision
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture_root = root / "fixture"
+            fixture_root.mkdir()
+            fixture = CollisionCompositionFixture(fixture_root)
+            source = root / "closed-source"
+            source.mkdir()
+            subprocess.run(
+                ["git", "-C", str(source), "init", "--quiet"], check=True,
+            )
+            importer = version_collision._BoundedObjectImporter(
+                fixture.root, source,
+            )
+            importer.import_histories_and_merge_base(
+                fixture.main, fixture.predecessor,
+            )
+            for tree in set(importer.commit_trees.values()):
+                importer.transfer(tree, "tree")
+
+            def object_snapshot() -> tuple[tuple[str, str], ...]:
+                objects = source / ".git/objects"
+                return tuple(
+                    (path.relative_to(objects).as_posix(), hashlib.sha256(path.read_bytes()).hexdigest())
+                    for path in sorted(objects.rglob("*"))
+                    if path.is_file()
+                )
+
+            absent = subprocess.run(
+                [
+                    "git", "-C", str(source), "cat-file", "-e",
+                    fixture.resulting_tree + "^{tree}",
+                ],
+                env={"GIT_NO_LAZY_FETCH": "1"},
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            self.assertNotEqual(absent.returncode, 0)
+            before = object_snapshot()
+            with (
+                mock.patch.object(
+                    version_collision,
+                    "_authenticate_installed_collision_issuer",
+                    return_value=fixture.main,
+                ),
+                mock.patch.object(
+                    version_collision,
+                    "_require_current_collision_predecessor",
+                    return_value=fixture.observed,
+                ),
+                mock.patch.object(
+                    version_collision, "_observe_main", return_value=fixture.main,
+                ),
+            ):
+                present = version_collision.prepare_collision_tree(
+                    repository=REPOSITORY,
+                    delivery_issue=ISSUE,
+                    pull_request=PR,
+                    predecessor_head=fixture.predecessor,
+                    resulting_tree=fixture.resulting_tree,
+                    repository_root=fixture.root,
+                ).to_dict()
+                with mock.patch.object(
+                    version_collision._BoundedObjectImporter,
+                    "materialize_derived",
+                    side_effect=AssertionError(
+                        "wrong expectation reached derived materialization"
+                    ),
+                ) as materialize:
+                    with self.assertRaisesRegex(
+                        version_collision.VersionCollisionError,
+                        "recomputed collision tree",
+                    ):
+                        version_collision.prepare_collision_tree(
+                            repository=REPOSITORY,
+                            delivery_issue=ISSUE,
+                            pull_request=PR,
+                            predecessor_head=fixture.predecessor,
+                            resulting_tree="f" * 40,
+                            repository_root=source,
+                        )
+                    materialize.assert_not_called()
+                collision = version_collision.prepare_collision_tree(
+                    repository=REPOSITORY,
+                    delivery_issue=ISSUE,
+                    pull_request=PR,
+                    predecessor_head=fixture.predecessor,
+                    resulting_tree=fixture.resulting_tree,
+                    repository_root=source,
+                ).to_dict()
+
+            self.assertEqual(collision, present)
+            self.assertEqual(collision["resulting_tree"], fixture.resulting_tree)
+            self.assertEqual(collision["free_version"], "1.3")
+            self.assertEqual(
+                len(collision["delta"]["changes"][0]["replacement_offsets"]),
+                4,
+            )
+            self.assertEqual(object_snapshot(), before)
+            self.assertNotEqual(
+                subprocess.run(
+                    [
+                        "git", "-C", str(source), "cat-file", "-e",
+                        fixture.resulting_tree + "^{tree}",
+                    ],
+                    env={"GIT_NO_LAZY_FETCH": "1"},
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                ).returncode,
+                0,
+            )
+
+    def test_collision_complete_validation_uses_closed_accepted_harness(
+        self,
+    ) -> None:
+        from contextlib import contextmanager
+        from scripts.secpal_pr_review import exact_source_safety, version_collision
+
+        @contextmanager
+        def no_dependencies(_root: Path):
+            yield {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture_root = root / "fixture"
+            fixture_root.mkdir()
+            fixture = CollisionCompositionFixture(
+                fixture_root, validation_harness=True,
+            )
+            source = root / "closed-source"
+            source.mkdir()
+            subprocess.run(
+                ["git", "-C", str(source), "init", "--quiet"], check=True,
+            )
+            importer = version_collision._BoundedObjectImporter(
+                fixture.root, source,
+            )
+            importer.import_histories_and_merge_base(
+                fixture.main, fixture.predecessor,
+            )
+            for tree in set(importer.commit_trees.values()):
+                importer.transfer(tree, "tree")
+            objects = source / ".git/objects"
+            before = tuple(
+                (
+                    path.relative_to(objects).as_posix(),
+                    hashlib.sha256(path.read_bytes()).hexdigest(),
+                )
+                for path in sorted(objects.rglob("*"))
+                if path.is_file()
+            )
+            self.assertNotEqual(
+                subprocess.run(
+                    [
+                        "git", "-C", str(source), "cat-file", "-e",
+                        fixture.resulting_tree + "^{tree}",
+                    ],
+                    env={"GIT_NO_LAZY_FETCH": "1"},
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                ).returncode,
+                0,
+            )
+            with (
+                mock.patch.object(
+                    version_collision,
+                    "_authenticate_installed_collision_issuer",
+                    return_value=fixture.main,
+                ),
+                mock.patch.object(
+                    version_collision,
+                    "_require_current_collision_predecessor",
+                    return_value=fixture.observed,
+                ),
+                mock.patch.object(
+                    version_collision, "_observe_main", return_value=fixture.main,
+                ),
+                mock.patch.object(version_collision, "_require_accepted_issuer"),
+                mock.patch.object(
+                    authority, "_load_lifecycle_trust_policy",
+                    return_value=fixture.policy,
+                ),
+                mock.patch.object(
+                    exact_source_safety,
+                    "_collision_validation_dependencies",
+                    no_dependencies,
+                ),
+                mock.patch.object(
+                    version_collision,
+                    "_BoundedObjectImporter",
+                    side_effect=version_collision._BoundedObjectImporter,
+                ) as importer_factory,
+            ):
+                with version_collision.collision_complete_validation(
+                    repository=REPOSITORY,
+                    delivery_issue=ISSUE,
+                    pull_request=PR,
+                    predecessor_head=fixture.predecessor,
+                    resulting_tree=fixture.resulting_tree,
+                    repository_root=source,
+                ) as execution:
+                    profile = execution.registry_binding[
+                        "collision_validation_authority"
+                    ]
+                    projected = execution.execution_root / (
+                        "tests/secpal-pr-review-actions-unit.py"
+                    )
+                    self.assertEqual(
+                        sum(
+                            len(item["current_identity_offsets"])
+                            for item in profile["validation_projection_sources"]
+                        ),
+                        10,
+                    )
+                    self.assertEqual(
+                        profile["registry"]["source_commit"], fixture.base,
+                    )
+                    self.assertEqual(
+                        profile["validation_command_set"],
+                        execution.registry_binding["validation"],
+                    )
+                    self.assertEqual(projected.read_bytes().count(b'"1.3"'), 9)
+                    self.assertIn(
+                        b'def historical_v12_fixture():\n    return "1.2"',
+                        projected.read_bytes(),
+                    )
+                    self.assertIn(
+                        b"{'1.1', '1.2', \"1.3\"}",
+                        (
+                            execution.execution_root
+                            / version_collision.VALIDATION_ACTIONS_PATH
+                        ).read_bytes(),
+                    )
+                    self.assertEqual(
+                        subprocess.run(
+                            [
+                                "git", "-C", str(execution.execution_root),
+                                "rev-parse", "HEAD",
+                            ],
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                        ).stdout.strip(),
+                        fixture.predecessor,
+                    )
+                    self.assertEqual(
+                        (execution.execution_root / version_collision.SOURCE_PATH).read_bytes(),
+                        fixture.source("1.3", "authenticated_resolution_delta"),
+                    )
+                    absent_result = (
+                        execution.collision.to_dict(), copy.deepcopy(profile)
+                    )
+                    absent_commands = tuple(
+                        subprocess.run(
+                            command["argv"],
+                            cwd=execution.execution_root,
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            check=False,
+                        ).returncode
+                        for command in profile["validation_command_set"]
+                    )
+                with version_collision.collision_complete_validation(
+                    repository=REPOSITORY,
+                    delivery_issue=ISSUE,
+                    pull_request=PR,
+                    predecessor_head=fixture.predecessor,
+                    resulting_tree=fixture.resulting_tree,
+                    repository_root=fixture.root,
+                ) as execution:
+                    present_profile = execution.registry_binding[
+                        "collision_validation_authority"
+                    ]
+                    present_result = (
+                        execution.collision.to_dict(), copy.deepcopy(present_profile)
+                    )
+                    present_commands = tuple(
+                        subprocess.run(
+                            command["argv"],
+                            cwd=execution.execution_root,
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            check=False,
+                        ).returncode
+                        for command in present_profile["validation_command_set"]
+                    )
+                self.assertEqual(absent_result, present_result)
+                self.assertEqual(absent_commands, present_commands)
+                self.assertEqual(absent_commands, (0, 0))
+                self.assertEqual(importer_factory.call_count, 2)
+            self.assertEqual(
+                tuple(
+                    (
+                        path.relative_to(objects).as_posix(),
+                        hashlib.sha256(path.read_bytes()).hexdigest(),
+                    )
+                    for path in sorted(objects.rglob("*"))
+                    if path.is_file()
+                ),
+                before,
+            )
+            self.assertNotEqual(
+                subprocess.run(
+                    [
+                        "git", "-C", str(source), "cat-file", "-e",
+                        fixture.resulting_tree + "^{tree}",
+                    ],
+                    env={"GIT_NO_LAZY_FETCH": "1"},
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                ).returncode,
+                0,
+            )
+
+    def test_collision_validation_prerequisite_requires_protected_main_history(
+        self,
+    ) -> None:
+        from contextlib import contextmanager
+        from scripts.secpal_pr_review import exact_source_safety, version_collision
+
+        @contextmanager
+        def no_dependencies(_root: Path):
+            yield {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture_root = Path(directory) / "fixture"
+            fixture_root.mkdir()
+            fixture = CollisionCompositionFixture(
+                fixture_root,
+                validation_harness=True,
+                validation_prerequisite_on_predecessor_only=True,
+            )
+            with (
+                mock.patch.object(
+                    version_collision,
+                    "_authenticate_installed_collision_issuer",
+                    return_value=fixture.main,
+                ),
+                mock.patch.object(
+                    version_collision,
+                    "_require_current_collision_predecessor",
+                    return_value=fixture.observed,
+                ),
+                mock.patch.object(
+                    version_collision, "_observe_main", return_value=fixture.main,
+                ),
+                mock.patch.object(version_collision, "_require_accepted_issuer"),
+                mock.patch.object(
+                    authority,
+                    "_load_lifecycle_trust_policy",
+                    return_value=fixture.policy,
+                ),
+                mock.patch.object(
+                    exact_source_safety,
+                    "_collision_validation_dependencies",
+                    no_dependencies,
+                ),
+                self.assertRaisesRegex(
+                    version_collision.VersionCollisionError,
+                    "outside protected-main history",
+                ),
+            ):
+                with version_collision.collision_complete_validation(
+                    repository=REPOSITORY,
+                    delivery_issue=ISSUE,
+                    pull_request=PR,
+                    predecessor_head=fixture.predecessor,
+                    resulting_tree=fixture.resulting_tree,
+                    repository_root=fixture.root,
+                ):
+                    pass
+
+    def test_collision_importer_rechecks_consumed_source_object_bytes(self) -> None:
+        from scripts.secpal_pr_review import version_collision
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            destination = Path(directory) / "destination"
+            source.mkdir()
+            destination.mkdir()
+            subprocess.run(
+                ["git", "-C", str(source), "init", "--quiet"], check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(destination), "init", "--quiet"], check=True,
+            )
+            oid = subprocess.run(
+                ["git", "-C", str(source), "hash-object", "-w", "--stdin"],
+                input=b"trusted",
+                check=True,
+                capture_output=True,
+            ).stdout.decode().strip()
+            importer = version_collision._BoundedObjectImporter(
+                source, destination,
+            )
+            importer.transfer(oid, "blob")
+            count_before = subprocess.run(
+                ["git", "-C", str(source), "count-objects", "-v"],
+                check=True,
+                capture_output=True,
+            ).stdout
+            object_path = source / ".git" / "objects" / oid[:2] / oid[2:]
+            object_path.chmod(0o644)
+            object_path.write_bytes(zlib.compress(b"blob 7\0changed"))
+            count_after = subprocess.run(
+                ["git", "-C", str(source), "count-objects", "-v"],
+                check=True,
+                capture_output=True,
+            ).stdout
+            self.assertEqual(count_before, count_after)
+            with self.assertRaisesRegex(
+                version_collision.VersionCollisionError,
+                "source object.*changed",
+            ):
+                importer.verify_source_objects_unchanged()
+
+    def test_collision_source_snapshot_binds_refs(self) -> None:
+        from scripts.secpal_pr_review import version_collision
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(
+                ["git", "-C", str(root), "init", "--quiet"], check=True,
+            )
+            oid = subprocess.run(
+                ["git", "-C", str(root), "hash-object", "-w", "--stdin"],
+                input=b"unrelated",
+                check=True,
+                capture_output=True,
+            ).stdout.decode().strip()
+            before = version_collision._source_repository_state(root)
+            subprocess.run(
+                ["git", "-C", str(root), "update-ref", "refs/tags/untrusted", oid],
+                check=True,
+            )
+            self.assertNotEqual(
+                version_collision._source_repository_state(root), before,
+            )
+
+    def test_collision_validation_rehashes_candidate_tree_after_execution(
+        self,
+    ) -> None:
+        from scripts.secpal_pr_review import exact_source_safety
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(
+                ["git", "-C", str(root), "init", "--quiet"], check=True,
+            )
+            candidate = root / "candidate.txt"
+            candidate.write_bytes(b"a" * (70 * 1024))
+            candidate.chmod(0o644)
+            subprocess.run(
+                ["git", "-C", str(root), "add", "--", "candidate.txt"],
+                check=True,
+            )
+            tree = subprocess.run(
+                ["git", "-C", str(root), "write-tree"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            blob = subprocess.run(
+                ["git", "-C", str(root), "hash-object", "candidate.txt"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            arguments = (
+                root,
+                tree,
+                {"candidate.txt": ("100644", blob)},
+                {},
+                {},
+                [],
+                tree,
+                exact_source_safety._collision_git_state(root),
+            )
+            exact_source_safety._verify_collision_validation_root(*arguments)
+            object_path = root / ".git" / "objects" / tree[:2] / tree[2:]
+            object_path.chmod(0o644)
+            object_path.write_bytes(zlib.compress(b"tree 0\0"))
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "-C", str(root), "cat-file", "-t", tree],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip(),
+                "tree",
+            )
+            with self.assertRaisesRegex(
+                authority.LifecycleAuthorityError, "object.*identity",
+            ):
+                exact_source_safety._verify_collision_validation_root(*arguments)
+
+    def test_collision_validation_rejects_private_git_state_mutation(self) -> None:
+        from scripts.secpal_pr_review import exact_source_safety
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(
+                ["git", "-C", str(root), "init", "--quiet"], check=True,
+            )
+            state = exact_source_safety._collision_git_state(root)
+            (root / ".git" / "HEAD").write_text(
+                "ref: refs/heads/untrusted\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                authority.LifecycleAuthorityError,
+                "private Git state",
+            ):
+                exact_source_safety._require_collision_git_state(root, state)
+
+    def test_collision_fixture_projection_keeps_historical_versions_pinned(
+        self,
+    ) -> None:
+        from scripts.secpal_pr_review import exact_source_safety
+
+        source = b'''class CurrentIdentityFixtures:
+    def test_parent2_preservation_cannot_delete_parent1_only_work(self):
+        validate(schema_version="1.2")
+    def test_parent2_preservation_uses_exact_new_attestation_versions(self):
+        validate(schema_version="1.2")
+    def test_ready_integration_accepts_authenticated_current_ready_histories(self):
+        validate(schema_version="1.2")
+    def test_ready_integration_authenticates_exact_parent2_preservation(self):
+        validate(schema_version="1.2")
+        validate(schema_version="1.2")
+    def test_ready_integration_mixes_conflict_and_parent2_preservation(self):
+        validate(schema_version="1.2")
+        validate(schema_version="1.2")
+    def test_ready_integration_v12_delta_uses_registered_item_limit_before_git_work(self):
+        validate(schema_version="1.2")
+        validate(schema_version="1.2")
+
+def historical_v12_fixture():
+    return "1.2"
+'''
+        projected, offsets = (
+            exact_source_safety._project_collision_current_identity_fixtures(
+                "tests/secpal-pr-review-actions-unit.py",
+                source,
+                occupied_version="1.2",
+                implementation_identity="1.3",
+            )
+        )
+        self.assertEqual(len(offsets), 9)
+        self.assertIn(
+            b'def historical_v12_fixture():\n    return "1.2"', projected,
+        )
+        self.assertEqual(projected.count(b'"1.3"'), 9)
+        for changed in (
+            source.replace(
+                b"test_parent2_preservation_uses_exact_new_attestation_versions",
+                b"renamed_fixture",
+            ),
+            source.replace(b'"1.2"', b'"1.3"', 1),
+        ):
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                exact_source_safety._project_collision_current_identity_fixtures(
+                    "tests/secpal-pr-review-actions-unit.py",
+                    changed,
+                    occupied_version="1.2",
+                    implementation_identity="1.3",
+                )
+
     def test_collision_importer_recomputes_real_non_descendant_merge_side_base(
         self,
     ) -> None:
@@ -1805,29 +2553,14 @@ class LifecycleOrchestrationTests(TestCase):
         source = CollisionCompositionFixture.source(
             "1.2", "authenticated_resolution_delta"
         )
-        gate = (
-            b'    if schema_version == "1.2":\n'
-            b'        limits = registry.get("limits") if isinstance(registry, dict) else None\n'
-            b'        maximum_items = limits.get("maximum_items") if isinstance(limits, dict) else None\n'
-            b'        if (\n'
-            b'            isinstance(maximum_items, bool)\n'
-            b'            or not isinstance(maximum_items, int)\n'
-            b'            or maximum_items < 1\n'
-            b'        ):\n'
-            b'            raise SecurityBlocker("registered integration item limit is invalid")\n'
-            b'        if isinstance(raw_delta, list) and len(raw_delta) > maximum_items:\n'
-            b'            raise SecurityBlocker("Ready integration delta exceeds the registered item limit")\n'
-        )
-        source = source.replace(b"    return value\n", gate + b"    return value\n")
-        successor = (
-            source.replace(b"'1.2': frozenset", b"'1.3': frozenset", 1)
-            .replace(b"('1.2', False)", b"('1.3', False)", 1)
-            .replace(b"('1.2', True)", b"('1.3', True)", 1)
-            .replace(b'if schema_version == "1.2"', b'if schema_version == "1.3"', 1)
+        successor, derived_positions = version_collision._derive_owner_renumber(
+            source, "1.2", "1.3"
         )
         positions = version_collision.verify_blob_renumber(
             source, successor, "1.2", "1.3"
         )
+        self.assertEqual(positions, derived_positions)
+        self.assertEqual(len(positions), 4)
         delta = {
             "changes": [{
                 "path": version_collision.SOURCE_PATH,

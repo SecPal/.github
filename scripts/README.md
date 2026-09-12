@@ -629,6 +629,20 @@ derived protected-main inventory and an exact byte-only renumber. Its maintained
 signed user authority and protected publication without finding/thread IDs or
 thread-resolution authority. See the collision-trigger procedure in
 [`docs/secpal-pr-review-workflow.md`](../docs/secpal-pr-review-workflow.md).
+Collision preparation reconstructs the fixed owner blob and containing tree
+chain from authenticated predecessor bytes, compares the independently hashed
+tree to the caller's expectation, and writes the match only to the isolated
+bounded database. `collision_complete_validation` then uses current accepted-main
+tooling to select the unique accepted merge-base registry and all registered
+commands. The private root contains the exact candidate test inventory as the
+system under test and overlays only the fixed three-path validation projection
+whose predecessor/candidate equality and current-identity fixture owners are
+authenticated by accepted-main tooling. Accepted-path historical object
+fixtures contribute only bounded snapshot prerequisites already proven in
+accepted-main history. The helper then returns the ordinary receipt binding.
+Candidate-local tests and registry data never select validation authority;
+historical versions remain pinned while the exact current-identity fixture
+inventory derives the authenticated free version.
 Explicit
 Ready/Draft changes require their exact separately reasoned authorization.
 

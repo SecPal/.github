@@ -209,10 +209,12 @@ def _read_pre_enrollment_json(path: str, label: str) -> Any:
 
 
 def _load_lifecycle_publication_helpers(
-    *, include_orchestration: bool = False
+    *, include_orchestration: bool = False, return_collision: bool = False
 ) -> tuple[Any, ...]:
     """Load the maintained lifecycle modules from this exact source tree."""
 
+    if return_collision and not include_orchestration:
+        raise RuntimeError("collision helper requires lifecycle orchestration")
     package_name = "secpal_ready_integration_lifecycle"
     package = types.ModuleType(package_name)
     package.__path__ = [str(LIFECYCLE_AUTHORITY_HELPER.parent)]
@@ -265,12 +267,22 @@ def _load_lifecycle_publication_helpers(
         raise
     if user_authorization_verifier is None:
         return lifecycle_authority, lifecycle_publication
+    if return_collision:
+        return lifecycle_orchestration.version_collision
     return (
         lifecycle_authority,
         lifecycle_publication,
         user_authorization_verifier,
         diagnostic_authenticator,
         diagnostic_verifier,
+    )
+
+
+def _load_collision_validation_helper() -> Any:
+    """Load the collision owner through the maintained lifecycle package."""
+
+    return _load_lifecycle_publication_helpers(
+        include_orchestration=True, return_collision=True,
     )
 
 
@@ -1317,7 +1329,10 @@ def _complete_validation_commands(
 
 
 def _run_registered_validations(
-    repository: dict[str, Any], repository_root: Path
+    repository: dict[str, Any],
+    repository_root: Path,
+    *,
+    integrity_verifier: Any = None,
 ) -> RegisteredValidationResult:
     """Run unconditional validation once without a shell or command output."""
 
@@ -1401,6 +1416,8 @@ def _run_registered_validations(
                     command["purpose"],
                     "unavailable executable",
                 )
+            if integrity_verifier is not None:
+                integrity_verifier()
             try:
                 completed = subprocess.run(
                     [executable, *command["argv"][1:]],
@@ -1424,6 +1441,9 @@ def _run_registered_validations(
                     command["purpose"],
                     "execution error",
                 )
+            finally:
+                if integrity_verifier is not None:
+                    integrity_verifier()
             if completed.returncode != 0:
                 return RegisteredValidationResult(
                     index,
@@ -7572,9 +7592,33 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         raise fast_path.SecurityBlocker(
             "reviewed feedback head does not match --expected-head"
         )
-    registry = load_registry(arguments.registry)
-    entry = select_repository(registry, arguments.repo)
-    binding = _fast_registry_binding(entry)
+    exceptional_continuation_path = getattr(
+        arguments, "exceptional_continuation_evidence", None
+    )
+    raw_continuation = (
+        _read_json(
+            exceptional_continuation_path,
+            "exceptional continuation evidence",
+        )
+        if exceptional_continuation_path
+        else None
+    )
+    collision_request = (
+        isinstance(raw_continuation, dict)
+        and raw_continuation.get("trigger")
+        == "IMMUTABLE_EVIDENCE_VERSION_COLLISION"
+    )
+    if collision_request and arguments.registry:
+        raise fast_path.SecurityBlocker(
+            "collision validation forbids caller-selected registry authority"
+        )
+    if collision_request:
+        entry = None
+        binding = None
+    else:
+        registry = load_registry(arguments.registry)
+        entry = select_repository(registry, arguments.repo)
+        binding = _fast_registry_binding(entry)
     pre_enrollment_evidence_path = getattr(
         arguments, "pre_enrollment_integration_evidence", None
     )
@@ -7582,19 +7626,22 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         raise fast_path.SecurityBlocker(
             "Ready and pre-enrollment integration kinds are mutually exclusive"
         )
-    if pre_enrollment_evidence_path and binding.get(
-        "pre_enrollment_integration_policy"
-    ) != {
-        "schema_version": "1.0",
-        "command": "integrate-pre-enrollment-draft",
-        "topology_kind": pre_enrollment.KIND,
-        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
-        "maximum_candidates": 1,
-        "maximum_pushes": 1,
-        "force_push": False,
-        "automatic_retry": False,
-        "merge_pull_request": False,
-    }:
+    if pre_enrollment_evidence_path and (
+        binding is None
+        or binding.get(
+            "pre_enrollment_integration_policy"
+        ) != {
+            "schema_version": "1.0",
+            "command": "integrate-pre-enrollment-draft",
+            "topology_kind": pre_enrollment.KIND,
+            "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+            "maximum_candidates": 1,
+            "maximum_pushes": 1,
+            "force_push": False,
+            "automatic_retry": False,
+            "merge_pull_request": False,
+        }
+    ):
         raise fast_path.SecurityBlocker(
             "repository has no closed pre-enrollment integration policy"
         )
@@ -7620,9 +7667,6 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             and raw_recovery.get("admission_kind")
             == "REPRODUCED_MATERIAL_SECURITY_DIAGNOSTIC"
         )
-    exceptional_continuation_path = getattr(
-        arguments, "exceptional_continuation_evidence", None
-    )
     integration_selectors = (
         getattr(arguments, "delivery_issue", None),
         getattr(arguments, "integration_authorization_id", None),
@@ -7711,6 +7755,55 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         )
         if not isinstance(receipt, dict):
             raise fast_path.SecurityBlocker("validation receipt is malformed")
+        if collision_request:
+            binding_tree = _run_attestation_git(
+                repository_root, ["rev-parse", "HEAD^{tree}"]
+            ).stdout.strip()
+            binding_continuation = _load_exceptional_continuation_evidence(
+                path=exceptional_continuation_path,
+                eligibility_path=arguments.eligibility_evidence,
+                repository=arguments.repo,
+                reviewed=reviewed,
+                validated_tree=binding_tree,
+            )
+            _verify_exceptional_continuation_selection(
+                binding_continuation, arguments,
+            )
+            try:
+                collision_helper = _load_collision_validation_helper()
+                sealed_collision, binding = (
+                    collision_helper.collision_validation_binding_for_commit(
+                        repository=arguments.repo,
+                        delivery_issue=(
+                            arguments.exceptional_continuation_delivery_issue
+                        ),
+                        pull_request=binding_continuation[
+                            "pull_request_number"
+                        ],
+                        predecessor_head=binding_continuation[
+                            "prior_ready_head_sha"
+                        ],
+                        resulting_head=head,
+                        repository_root=repository_root,
+                    )
+                )
+                collision = sealed_collision.to_dict()
+            except (ImportError, OSError, RuntimeError, ValueError) as exc:
+                raise fast_path.SecurityBlocker(
+                    "collision validation authority is invalid or stale"
+                ) from exc
+            if binding_continuation[
+                "collision_digest"
+            ] != fast_path.digest_json(
+                collision_helper.validation_collision_projection(collision)
+            ):
+                raise fast_path.SecurityBlocker(
+                    "collision validation authority differs from continuation evidence"
+                )
+        if binding is None:
+            raise fast_path.SecurityBlocker(
+                "validation registry authority is unavailable"
+            )
         pre_enrollment_evidence = (
             pre_enrollment.normalize_evidence(
                 _read_pre_enrollment_json(
@@ -8088,8 +8181,12 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         raise fast_path.RecoverableLocalError(
             "--receipt is valid only with --bind-commit"
         )
-    manual_gate_evidence = _load_fast_manual_gate_evidence(
-        getattr(arguments, "manual_gate_evidence", None), binding
+    manual_gate_evidence = (
+        None
+        if collision_request
+        else _load_fast_manual_gate_evidence(
+            getattr(arguments, "manual_gate_evidence", None), binding
+        )
     )
     eligibility_evidence = getattr(arguments, "eligibility_evidence", None)
     eligibility_evidence_digest = (
@@ -8195,6 +8292,15 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             raise fast_path.SecurityBlocker(
                 "exceptional continuation prior Ready tree changed"
             )
+    collision_validation = (
+        exceptional_continuation is not None
+        and exceptional_continuation.get("trigger")
+        == "IMMUTABLE_EVIDENCE_VERSION_COLLISION"
+    )
+    if collision_validation != collision_request:
+        raise fast_path.SecurityBlocker(
+            "collision validation selection changed during normalization"
+        )
     if arguments.output:
         _write_fast_report(
             arguments.output,
@@ -8205,7 +8311,50 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 "validated_tree_sha": tree,
             },
         )
-    validation_result = _run_registered_validations(entry, repository_root)
+    if collision_validation:
+        try:
+            collision_helper = _load_collision_validation_helper()
+            with collision_helper.collision_complete_validation(
+                repository=arguments.repo,
+                delivery_issue=(
+                    arguments.exceptional_continuation_delivery_issue
+                ),
+                pull_request=exceptional_continuation["pull_request_number"],
+                predecessor_head=exceptional_continuation[
+                    "prior_ready_head_sha"
+                ],
+                resulting_tree=tree,
+                repository_root=repository_root,
+            ) as execution:
+                collision = execution.collision.to_dict()
+                if exceptional_continuation[
+                    "collision_digest"
+                ] != fast_path.digest_json(
+                    collision_helper.validation_collision_projection(collision)
+                ):
+                    raise fast_path.SecurityBlocker(
+                        "collision validation authority differs from continuation evidence"
+                    )
+                binding = execution.registry_binding
+                entry = execution.repository_entry
+                manual_gate_evidence = _load_fast_manual_gate_evidence(
+                    getattr(arguments, "manual_gate_evidence", None), binding
+                )
+                validation_result = _run_registered_validations(
+                    entry,
+                    execution.execution_root,
+                    integrity_verifier=execution.verify_execution_root,
+                )
+        except (ImportError, OSError, RuntimeError, ValueError) as exc:
+            raise fast_path.SecurityBlocker(
+                "collision Complete Validation authority failed"
+            ) from exc
+    else:
+        validation_result = _run_registered_validations(entry, repository_root)
+    if binding is None or manual_gate_evidence is None:
+        raise fast_path.SecurityBlocker(
+            "complete validation authority is unavailable"
+        )
     if not validation_result:
         if (
             isinstance(validation_result, RegisteredValidationResult)

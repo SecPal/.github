@@ -857,6 +857,24 @@ attestation. It contains no environment dump, command output, credential, or
 secret. Manual-gate evidence and every user-controlled batch string are rejected
 when they contain the same secret-like patterns prohibited in forensic plans.
 
+An authenticated immutable-evidence-version collision uses this same receipt
+and attestation family. Current protected-main tooling selects the unique
+accepted merge-base registry, complete command set and closed validation
+harness. The exact candidate production tree is independently reconstructed
+from authenticated predecessor bytes and
+collision-owner tokens, while the supplied tree identity remains an expectation
+only. Validation executes against that candidate in a private bounded object
+database with the accepted harness projected separately. Candidate tests remain
+the system under test; only the accepted registry selects commands, and current
+accepted tooling owns the exact collision-sensitive projection. The registry
+digest
+additionally binds accepted-main issuer sources, registry/schema identities,
+command and harness inventories, derived implementation identity, collision
+digest, exact candidate tree, pinned historical fixtures and authenticated
+dependencies. A projected tree, partial or failing command run, candidate-local
+registry or command selection, or ambient object-cache hit cannot become a
+successful receipt.
+
 The sole-parent rule above remains authoritative for remediation and recovery.
 `attest-validation --integration-evidence` is the distinct, explicitly selected
 exception for one already-authorized Ready-PR integration candidate. Its closed
