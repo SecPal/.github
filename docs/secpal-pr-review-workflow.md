@@ -733,6 +733,21 @@ Complete Validation epoch, then create the existing receipt and signed
 single-parent successor and final attestation. Receipt/attestation families and
 versions remain unchanged. Historical Continuation schema 1.0 is not redefined.
 
+For that collision trigger only, Complete Validation is selected by clean
+accepted-main tooling. It authenticates the registry and complete command set
+from the collision's unique accepted merge base, requires the candidate copies
+of that registry, its schema, and its locked validation dependencies to be
+byte-identical, and rejects any caller registry or command selection. The
+disposable root contains the exact staged candidate tree. A fixed AST-owned
+projection changes only maintained current-implementation-identity fixtures to
+the independently derived free version and extends only the corresponding
+validation guard; historical 1.1 and 1.2 fixtures remain literal and unchanged.
+All registered commands execute normally. The root, index, projected harness,
+dependency snapshot, and original candidate bytes are re-authenticated after
+execution. The existing receipt and attestation bind this authority through the
+registry digest while continuing to name the real candidate tree, never the
+disposable projection tree.
+
 `issue_collision_continuation_authorization` reuses the existing schema-1.0
 lifecycle-orchestration authorization signer/family. Its exact one-use scope
 binds CURRENT publication OID/digest, authority/lifecycle/PR/delivery identities,

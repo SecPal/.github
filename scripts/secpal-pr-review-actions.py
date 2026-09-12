@@ -209,10 +209,12 @@ def _read_pre_enrollment_json(path: str, label: str) -> Any:
 
 
 def _load_lifecycle_publication_helpers(
-    *, include_orchestration: bool = False
+    *, include_orchestration: bool = False, return_collision: bool = False
 ) -> tuple[Any, ...]:
     """Load the maintained lifecycle modules from this exact source tree."""
 
+    if return_collision and not include_orchestration:
+        raise RuntimeError("collision helper requires lifecycle orchestration")
     package_name = "secpal_ready_integration_lifecycle"
     package = types.ModuleType(package_name)
     package.__path__ = [str(LIFECYCLE_AUTHORITY_HELPER.parent)]
@@ -265,12 +267,22 @@ def _load_lifecycle_publication_helpers(
         raise
     if user_authorization_verifier is None:
         return lifecycle_authority, lifecycle_publication
+    if return_collision:
+        return lifecycle_orchestration.version_collision
     return (
         lifecycle_authority,
         lifecycle_publication,
         user_authorization_verifier,
         diagnostic_authenticator,
         diagnostic_verifier,
+    )
+
+
+def _load_collision_validation_helper() -> Any:
+    """Load the collision owner through the maintained lifecycle package."""
+
+    return _load_lifecycle_publication_helpers(
+        include_orchestration=True, return_collision=True,
     )
 
 
@@ -7711,6 +7723,53 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         )
         if not isinstance(receipt, dict):
             raise fast_path.SecurityBlocker("validation receipt is malformed")
+        if exceptional_continuation_path:
+            binding_tree = _run_attestation_git(
+                repository_root, ["rev-parse", "HEAD^{tree}"]
+            ).stdout.strip()
+            binding_continuation = _load_exceptional_continuation_evidence(
+                path=exceptional_continuation_path,
+                eligibility_path=arguments.eligibility_evidence,
+                repository=arguments.repo,
+                reviewed=reviewed,
+                validated_tree=binding_tree,
+            )
+            if binding_continuation.get("trigger") == (
+                "IMMUTABLE_EVIDENCE_VERSION_COLLISION"
+            ):
+                if arguments.registry:
+                    raise fast_path.SecurityBlocker(
+                        "collision validation forbids caller-selected registry authority"
+                    )
+                try:
+                    collision_helper = _load_collision_validation_helper()
+                    sealed_collision, binding = (
+                        collision_helper.collision_validation_binding_for_commit(
+                            repository=arguments.repo,
+                            delivery_issue=(
+                                arguments.exceptional_continuation_delivery_issue
+                            ),
+                            pull_request=binding_continuation[
+                                "pull_request_number"
+                            ],
+                            predecessor_head=binding_continuation[
+                                "prior_ready_head_sha"
+                            ],
+                            resulting_head=head,
+                            repository_root=repository_root,
+                        )
+                    )
+                    collision = sealed_collision.to_dict()
+                except (ImportError, OSError, RuntimeError, ValueError) as exc:
+                    raise fast_path.SecurityBlocker(
+                        "collision validation authority is invalid or stale"
+                    ) from exc
+                if binding_continuation["collision_digest"] != fast_path.digest_json(
+                    collision_helper.validation_collision_projection(collision)
+                ):
+                    raise fast_path.SecurityBlocker(
+                        "collision validation authority differs from continuation evidence"
+                    )
         pre_enrollment_evidence = (
             pre_enrollment.normalize_evidence(
                 _read_pre_enrollment_json(
@@ -8088,9 +8147,6 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         raise fast_path.RecoverableLocalError(
             "--receipt is valid only with --bind-commit"
         )
-    manual_gate_evidence = _load_fast_manual_gate_evidence(
-        getattr(arguments, "manual_gate_evidence", None), binding
-    )
     eligibility_evidence = getattr(arguments, "eligibility_evidence", None)
     eligibility_evidence_digest = (
         _resolution_eligibility_digest(
@@ -8188,6 +8244,14 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         _verify_exceptional_continuation_selection(
             exceptional_continuation, arguments
         )
+        if (
+            exceptional_continuation.get("trigger")
+            == "IMMUTABLE_EVIDENCE_VERSION_COLLISION"
+            and arguments.registry
+        ):
+            raise fast_path.SecurityBlocker(
+                "collision validation forbids caller-selected registry authority"
+            )
         prior_tree = _run_attestation_git(
             repository_root, ["rev-parse", "HEAD^{tree}"]
         ).stdout.strip()
@@ -8195,6 +8259,15 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             raise fast_path.SecurityBlocker(
                 "exceptional continuation prior Ready tree changed"
             )
+    collision_validation = (
+        exceptional_continuation is not None
+        and exceptional_continuation.get("trigger")
+        == "IMMUTABLE_EVIDENCE_VERSION_COLLISION"
+    )
+    if collision_validation and arguments.registry:
+        raise fast_path.SecurityBlocker(
+            "collision validation forbids caller-selected registry authority"
+        )
     if arguments.output:
         _write_fast_report(
             arguments.output,
@@ -8205,7 +8278,42 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 "validated_tree_sha": tree,
             },
         )
-    validation_result = _run_registered_validations(entry, repository_root)
+    if collision_validation:
+        try:
+            collision_helper = _load_collision_validation_helper()
+            with collision_helper.collision_complete_validation(
+                repository=arguments.repo,
+                delivery_issue=arguments.exceptional_continuation_delivery_issue,
+                pull_request=exceptional_continuation["pull_request_number"],
+                predecessor_head=exceptional_continuation["prior_ready_head_sha"],
+                resulting_tree=tree,
+                repository_root=repository_root,
+            ) as execution:
+                collision = execution.collision.to_dict()
+                if exceptional_continuation[
+                    "collision_digest"
+                ] != fast_path.digest_json(
+                    collision_helper.validation_collision_projection(collision)
+                ):
+                    raise fast_path.SecurityBlocker(
+                        "collision validation authority differs from continuation evidence"
+                    )
+                binding = execution.registry_binding
+                manual_gate_evidence = _load_fast_manual_gate_evidence(
+                    getattr(arguments, "manual_gate_evidence", None), binding
+                )
+                validation_result = _run_registered_validations(
+                    execution.repository_entry, execution.execution_root,
+                )
+        except (ImportError, OSError, RuntimeError, ValueError) as exc:
+            raise fast_path.SecurityBlocker(
+                "collision Complete Validation authority failed"
+            ) from exc
+    else:
+        manual_gate_evidence = _load_fast_manual_gate_evidence(
+            getattr(arguments, "manual_gate_evidence", None), binding
+        )
+        validation_result = _run_registered_validations(entry, repository_root)
     if not validation_result:
         if (
             isinstance(validation_result, RegisteredValidationResult)

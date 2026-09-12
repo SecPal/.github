@@ -629,6 +629,16 @@ derived protected-main inventory and an exact byte-only renumber. Its maintained
 signed user authority and protected publication without finding/thread IDs or
 thread-resolution authority. See the collision-trigger procedure in
 [`docs/secpal-pr-review-workflow.md`](../docs/secpal-pr-review-workflow.md).
+Collision receipt creation additionally uses
+`collision_complete_validation`: accepted main derives the historical registry
+epoch and all commands, projects only the closed current-identity fixtures and
+their validation guard into a private root, then runs the ordinary registered
+Complete Validation executor. Candidate registry, tests, implementation owner,
+and dependency manifests must match their independently authenticated source
+identities; the exact staged candidate tree and every projected byte are checked
+again after execution. The returned registry projection binds that authority in
+the existing receipt and attestation digests, without creating a collision-only
+evidence family or changing non-collision validation.
 Explicit
 Ready/Draft changes require their exact separately reasoned authorization.
 

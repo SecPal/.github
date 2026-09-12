@@ -2893,7 +2893,10 @@ def _collision_scope(
             predecessor_gate=predecessor_gate,
         )
     with version_collision._authenticated_source_checkout(
-        Path(item["repository_root"]), observed.lifecycle.head_sha, resulting_head,
+        Path(item["repository_root"]),
+        observed.lifecycle.head_sha,
+        resulting_head,
+        include_validation_authority=True,
     ) as (root, main):
         def read_collision(**arguments: Any) -> version_collision.VerifiedVersionCollision:
             arguments.pop("repository_root")
@@ -2956,16 +2959,14 @@ def _collision_scope_from_source(
     )
     if source.tree_sha != collision["resulting_tree"]:
         raise LifecycleOrchestrationError("collision successor tree differs from signed source")
-    raw_registry = authority.loads_closed_json(
-        version_collision._read_authenticated_registry(
-            root, collision["protected_main"]
+    try:
+        _entry, registry = version_collision._collision_validation_authority(
+            root, collision,
         )
-    )
-    entries = [entry for entry in raw_registry.get("repositories", [])
-               if isinstance(entry, dict) and entry.get("repository") == lifecycle.repository]
-    if len(entries) != 1:
-        raise LifecycleOrchestrationError("collision validation has no unique accepted registry")
-    registry = fast_path.validation_registry_projection(entries[0])
+    except version_collision.VersionCollisionError as exc:
+        raise LifecycleOrchestrationError(
+            "collision validation has no unique accepted authority"
+        ) from exc
     trailer = publication._run_git(root, ["show", "-s",
         "--format=%(trailers:key=SecPal-Validation-Receipt,valueonly,separator=%x00)", resulting_head])
     if trailer.returncode != 0 or len(trailer.stdout) > 256:

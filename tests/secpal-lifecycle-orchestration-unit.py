@@ -8,6 +8,7 @@ from __future__ import annotations
 import ast
 import copy
 import base64
+from contextlib import contextmanager
 import inspect
 import json
 import subprocess
@@ -16,7 +17,7 @@ import tempfile
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest import TestCase, main
+from unittest import TestCase, TestLoader, TestResult, main
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -519,7 +520,7 @@ class CollisionCompositionFixture:
         historical_thread: bool = False,
         historical_thread_resolved: bool = False,
     ):
-        from scripts.secpal_pr_review import version_collision
+        from scripts.secpal_pr_review import exact_source_safety, version_collision
 
         self.root = root
         self.identity = "aroviqen@secpal.app"
@@ -540,14 +541,61 @@ class CollisionCompositionFixture:
         })
         registry = json.loads(authority._TRUST_REGISTRY.read_bytes())
         entry = next(item for item in registry["repositories"] if item["repository"] == REPOSITORY)
-        self.command = {"argv": ["python3", "-c", "import ast,pathlib; ast.parse(pathlib.Path('scripts/secpal_pr_review/fast_path.py').read_text())"],
-                        "working_directory": ".", "purpose": "Hermetic complete validation"}
-        entry.update(focused_validation=[], required_local_validation=[self.command], manual_gates=[])
-        self.registry_document = {"repositories": [entry]}
+        self.commands = [
+            {
+                "argv": [
+                    "python3", "-m", "unittest",
+                    "tests/secpal-pr-review-actions-unit.py",
+                ],
+                "working_directory": ".",
+                "purpose": "Hermetic action validation",
+            },
+            {
+                "argv": [
+                    "python3", "-m", "unittest",
+                    "tests/secpal-resolve-fixed-threads-unit.py",
+                ],
+                "working_directory": ".",
+                "purpose": "Hermetic resolver validation",
+            },
+        ]
+        entry.update(
+            focused_validation=self.commands,
+            required_local_validation=[],
+            manual_gates=["Authenticate the hermetic collision fixture."],
+        )
+        self.manual_gate_evidence = [{
+            "gate": "Authenticate the hermetic collision fixture.",
+            "satisfied": True,
+            "evidence": "Synthetic collision validation authority authenticated.",
+        }]
+        self.registry_document = registry
         registry_path = root / ".agents/skills/secpal-pr-review/references/repositories.json"
         registry_path.parent.mkdir(parents=True)
         registry_path.write_bytes(authority.canonical_json_bytes(self.registry_document))
-        self.git("add", str(registry_path.relative_to(root)))
+        schema_path = root / version_collision.TRUST_REGISTRY_SCHEMA_PATH
+        schema_path.write_bytes(authority._TRUST_REGISTRY.with_name(
+            "repositories.schema.json"
+        ).read_bytes())
+        for relative, source in {
+            version_collision.COLLISION_AUTHORITY_PATH: Path(
+                version_collision.__file__
+            ).read_bytes(),
+            version_collision.EXACT_SOURCE_SAFETY_PATH: Path(
+                exact_source_safety.__file__
+            ).read_bytes(),
+            version_collision.VALIDATION_ACTIONS_PATH: self.actions_source(),
+            "package.json": (Path(__file__).resolve().parents[1] / "package.json").read_bytes(),
+            "package-lock.json": (
+                Path(__file__).resolve().parents[1] / "package-lock.json"
+            ).read_bytes(),
+            "tests/secpal-pr-review-actions-unit.py": self.actions_test_source(),
+            "tests/secpal-resolve-fixed-threads-unit.py": self.resolver_test_source(),
+        }.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(source)
+        self.git("add", ".agents", "scripts", "tests", "package.json", "package-lock.json")
         (root / "unrelated.txt").write_text('"1.2"\n')
         self.git("add", "unrelated.txt")
         self.registry = fast_path.validation_registry_projection(entry)
@@ -571,6 +619,9 @@ class CollisionCompositionFixture:
             root, repository=REPOSITORY, delivery_issue=ISSUE, pull_request=PR,
             predecessor_head=self.predecessor, resulting_tree=self.resulting_tree, protected_main=self.main,
         )
+        _entry, self.registry = version_collision._collision_validation_authority(
+            root, proof,
+        )
         state = self.lifecycle.state
         self.document = {
             "schema_version": "1.1", "kind": "READY_EXCEPTIONAL_CONTINUATION",
@@ -588,13 +639,23 @@ class CollisionCompositionFixture:
                           "exceptional_recovery_history": state["exceptional_recovery_history"],
                           "exceptional_continuation_predecessor_count": 0, "exceptional_continuation_successor_count": 1},
         }
-        completed = subprocess.run(self.command["argv"], cwd=root, check=False)
-        if completed.returncode != 0 or self.git("write-tree") != self.resulting_tree:
+        completed = [
+            subprocess.run(
+                command["argv"],
+                cwd=root,
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            for command in self.commands
+        ]
+        if any(item.returncode != 0 for item in completed) or self.git("write-tree") != self.resulting_tree:
             raise AssertionError("hermetic Complete Validation did not preserve the frozen tree")
         self.receipt = fast_path.create_validation_receipt(
             repository=REPOSITORY, head_sha=self.predecessor, validated_tree_sha=self.resulting_tree,
             registry=self.registry, command_set=self.registry["validation"], successful_result=True,
-            reviewed_state=self.reviewed, manual_gate_evidence=[],
+            reviewed_state=self.reviewed,
+            manual_gate_evidence=self.manual_gate_evidence,
             eligibility_evidence_digest=fast_path.digest_json(self.eligibility),
             exceptional_continuation_evidence_digest=fast_path.digest_json(self.document),
         )
@@ -618,7 +679,7 @@ class CollisionCompositionFixture:
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout.decode().strip()
 
     def tree(self, source: bytes) -> str:
-        from scripts.secpal_pr_review import version_collision
+        from scripts.secpal_pr_review import exact_source_safety, version_collision
 
         path = self.root / version_collision.SOURCE_PATH
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -693,6 +754,67 @@ class CollisionCompositionFixture:
                 "def create_ready_integration_attestation(normalized, eligibility_bound):\n"
                 "    attestation_version, attestation_kind = READY_INTEGRATION_ATTESTATION_BY_VERSION[(normalized['schema_version'], eligibility_bound)]\n"
                 "    return {'schema_version': attestation_version, 'kind': attestation_kind}\n").encode()
+
+    @staticmethod
+    def actions_source() -> bytes:
+        return b'''def _verify_integration_tree_delta(integration_evidence):
+    schema_version = integration_evidence["schema_version"]
+    if schema_version not in {"1.1", "1.2"}:
+        raise ValueError("unsupported")
+    if schema_version == "1.1":
+        return "historical"
+    return "current"
+'''
+
+    @staticmethod
+    def resolver_test_source() -> bytes:
+        return b'''def test_eligibility_bound_ready_integration_authorizes_exact_thread():
+    for schema_version in ("1.1", "1.2"):
+        pass
+
+def historical_v12_fixture():
+    return "1.2"
+
+import unittest
+class CollisionFixtureSmoke(unittest.TestCase):
+    def test_fixture_is_executable(self):
+        pass
+'''
+
+    @staticmethod
+    def actions_test_source() -> bytes:
+        return b'''def test_ready_integration_accepts_authenticated_current_ready_histories():
+    for schema_version in ("1.1", "1.2"):
+        pass
+
+def test_ready_integration_v12_delta_uses_registered_item_limit_before_git_work():
+    validate(schema_version="1.2")
+    validate_again(schema_version="1.2")
+
+def test_ready_integration_authenticates_exact_parent2_preservation():
+    extended = {}
+    extended["schema_version"] = "1.2"
+    validate(schema_version="1.2")
+
+def test_parent2_preservation_cannot_delete_parent1_only_work():
+    validate(schema_version="1.2")
+
+def test_ready_integration_mixes_conflict_and_parent2_preservation():
+    validate(schema_version="1.2")
+    validate_again(schema_version="1.2")
+
+def test_parent2_preservation_uses_exact_new_attestation_versions():
+    validate(schema_version="1.2")
+    assert ("1.3", "1.4") == output_versions
+
+def historical_v12_fixture():
+    return "1.2"
+
+import unittest
+class CollisionFixtureSmoke(unittest.TestCase):
+    def test_fixture_is_executable(self):
+        pass
+'''
 
     def feedback(self, head: str, prefix: str, prior=None):
         provider = {"login": "chatgpt-codex-connector", "node_id": "CODEX", "database_id": 199175422}
@@ -1482,6 +1604,482 @@ def _provider_feedback_response(
         }
     }
 class LifecycleOrchestrationTests(TestCase):
+    def test_collision_validation_fixture_reproduces_exact_failure_boundary(
+        self,
+    ) -> None:
+        from scripts.secpal_pr_review import exact_source_safety
+
+        actions_source = b'''import unittest
+
+def validate(*, schema_version):
+    if schema_version != "1.3":
+        raise AssertionError(schema_version)
+
+class CurrentIdentityFixtures(unittest.TestCase):
+    def test_ready_integration_accepts_authenticated_current_ready_histories(self):
+        for case in range(5):
+            with self.subTest(case=case):
+                for schema_version in ("1.2",):
+                    validate(schema_version=schema_version)
+
+    def test_ready_integration_v12_delta_uses_registered_item_limit_before_git_work(self):
+        validate(schema_version="1.2")
+        validate(schema_version="1.2")
+
+    def test_ready_integration_authenticates_exact_parent2_preservation(self):
+        extended = {}
+        extended["schema_version"] = "1.2"
+        validate(schema_version="1.2")
+
+    def test_parent2_preservation_cannot_delete_parent1_only_work(self):
+        validate(schema_version="1.2")
+
+    def test_ready_integration_mixes_conflict_and_parent2_preservation(self):
+        validate(schema_version="1.2")
+        validate(schema_version="1.2")
+
+    def test_parent2_preservation_uses_exact_new_attestation_versions(self):
+        validate(schema_version="1.2")
+        output_versions = ("1.3", "1.4")
+        self.assertEqual(output_versions, ("1.3", "1.4"))
+
+def historical_v12_fixture():
+    return "1.2"
+'''
+        resolver_source = b'''import unittest
+
+def validate(*, schema_version):
+    if schema_version != "1.3":
+        raise AssertionError(schema_version)
+
+class CurrentIdentityFixtures(unittest.TestCase):
+    def test_eligibility_bound_ready_integration_authorizes_exact_thread(self):
+        for schema_version in ("1.2",):
+            validate(schema_version=schema_version)
+
+def historical_v12_fixture():
+    return "1.2"
+'''
+
+        def failures(source: bytes) -> int:
+            namespace = {"__name__": "collision_validation_fixture"}
+            compiled = compile(
+                source, "<collision-validation-fixture>", "exec"
+            )
+            exec(compiled, namespace)
+            result = TestResult()
+            TestLoader().loadTestsFromTestCase(
+                namespace["CurrentIdentityFixtures"]
+            ).run(result)
+            return len(result.failures) + len(result.errors)
+
+        self.assertEqual(failures(actions_source) + failures(resolver_source), 11)
+        projected_actions, action_offsets = (
+            exact_source_safety._project_collision_current_identity_fixtures(
+                "tests/secpal-pr-review-actions-unit.py",
+                actions_source,
+                occupied_version="1.2",
+                implementation_identity="1.3",
+            )
+        )
+        projected_resolver, resolver_offsets = (
+            exact_source_safety._project_collision_current_identity_fixtures(
+                "tests/secpal-resolve-fixed-threads-unit.py",
+                resolver_source,
+                occupied_version="1.2",
+                implementation_identity="1.3",
+            )
+        )
+        self.assertEqual((len(action_offsets), len(resolver_offsets)), (9, 1))
+        self.assertEqual(
+            failures(projected_actions) + failures(projected_resolver), 0,
+        )
+        self.assertIn(
+            b'def historical_v12_fixture():\n    return "1.2"',
+            projected_actions,
+        )
+        self.assertIn(
+            b'output_versions = ("1.3", "1.4")', projected_actions,
+        )
+
+    def test_collision_validation_projects_only_current_identity_fixtures(
+        self,
+    ) -> None:
+        from scripts.secpal_pr_review import exact_source_safety
+
+        resolver_source = b'''def test_eligibility_bound_ready_integration_authorizes_exact_thread():
+    for schema_version in ("1.1", "1.2"):
+        validate(schema_version)
+
+def test_historical_ready_integration_stays_pinned():
+    validate(schema_version="1.2")
+'''
+        actions_source = b'''def test_ready_integration_accepts_authenticated_current_ready_histories():
+    for schema_version in ("1.1", "1.2"):
+        validate(schema_version)
+
+def test_ready_integration_v12_delta_uses_registered_item_limit_before_git_work():
+    validate(schema_version="1.2")
+    validate_again(schema_version="1.2")
+
+def test_ready_integration_authenticates_exact_parent2_preservation():
+    extended = {}
+    extended["schema_version"] = "1.2"
+    validate(schema_version="1.2")
+
+def test_parent2_preservation_cannot_delete_parent1_only_work():
+    validate(schema_version="1.2")
+
+def test_ready_integration_mixes_conflict_and_parent2_preservation():
+    validate(schema_version="1.2")
+    validate_again(schema_version="1.2")
+
+def test_parent2_preservation_uses_exact_new_attestation_versions():
+    validate(schema_version="1.2")
+    assert ("1.3", "1.4") == output_versions
+
+def test_historical_v12_evidence_stays_pinned():
+    validate(schema_version="1.2")
+'''
+        authority_source = b'''def _verify_integration_tree_delta(integration_evidence):
+    schema_version = integration_evidence["schema_version"]
+    if schema_version not in {"1.1", "1.2"}:
+        raise ValueError("unsupported")
+    if schema_version == "1.1":
+        return "historical"
+    return "current"
+'''
+
+        projected_resolver, resolver_offsets = (
+            exact_source_safety._project_collision_current_identity_fixtures(
+                "tests/secpal-resolve-fixed-threads-unit.py",
+                resolver_source,
+                occupied_version="1.2",
+                implementation_identity="1.3",
+            )
+        )
+        projected_actions, action_offsets = (
+            exact_source_safety._project_collision_current_identity_fixtures(
+                "tests/secpal-pr-review-actions-unit.py",
+                actions_source,
+                occupied_version="1.2",
+                implementation_identity="1.3",
+            )
+        )
+        projected_authority = (
+            exact_source_safety._project_collision_validation_authority(
+                authority_source,
+                occupied_version="1.2",
+                implementation_identity="1.3",
+            )
+        )
+
+        self.assertEqual(len(resolver_offsets), 1)
+        self.assertEqual(len(action_offsets), 9)
+        self.assertIn(b'for schema_version in ("1.1", "1.3")', projected_resolver)
+        self.assertIn(
+            b'def test_historical_ready_integration_stays_pinned():\n'
+            b'    validate(schema_version="1.2")',
+            projected_resolver,
+        )
+        self.assertEqual(projected_actions.count(b'schema_version="1.3"'), 7)
+        self.assertIn(b'extended["schema_version"] = "1.3"', projected_actions)
+        self.assertIn(b'assert ("1.3", "1.4") == output_versions', projected_actions)
+        self.assertIn(
+            b'def test_historical_v12_evidence_stays_pinned():\n'
+            b'    validate(schema_version="1.2")',
+            projected_actions,
+        )
+        self.assertIn(
+            b'schema_version not in {"1.1", "1.2", "1.3"}',
+            projected_authority,
+        )
+        self.assertIn(b'if schema_version == "1.1"', projected_authority)
+
+    def test_collision_validation_projection_fails_closed_on_fixture_drift(
+        self,
+    ) -> None:
+        from scripts.secpal_pr_review import exact_source_safety
+
+        source = b'''def test_eligibility_bound_ready_integration_authorizes_exact_thread():
+    validate(schema_version="1.2")
+'''
+        cases = (
+            ("caller-selected path", "tests/caller-selected.py", source),
+            (
+                "hard-coded future identity",
+                "tests/secpal-resolve-fixed-threads-unit.py",
+                source.replace(b'"1.2"', b'"1.3"'),
+            ),
+            (
+                "partial fixture projection",
+                "tests/secpal-resolve-fixed-threads-unit.py",
+                source.replace(b"schema_version=", b"version="),
+            ),
+        )
+        for label, path, candidate in cases:
+            with self.subTest(label=label), self.assertRaises(
+                exact_source_safety.authority.LifecycleAuthorityError
+            ):
+                exact_source_safety._project_collision_current_identity_fixtures(
+                    path,
+                    candidate,
+                    occupied_version="1.2",
+                    implementation_identity="1.3",
+                )
+
+        authority_source = b'''def _verify_integration_tree_delta(integration_evidence):
+    schema_version = integration_evidence["schema_version"]
+    if schema_version not in {"1.1", "1.2", "1.4"}:
+        raise ValueError("unsupported")
+'''
+        with self.assertRaises(
+            exact_source_safety.authority.LifecycleAuthorityError
+        ):
+            exact_source_safety._project_collision_validation_authority(
+                authority_source,
+                occupied_version="1.2",
+                implementation_identity="1.3",
+            )
+
+    def test_collision_validation_authority_binds_the_complete_epoch(self) -> None:
+        from scripts.secpal_pr_review import version_collision
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = CollisionCompositionFixture(Path(directory))
+            collision = version_collision._derive_collision_tree(
+                fixture.root,
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                pull_request=PR,
+                predecessor_head=fixture.predecessor,
+                resulting_tree=fixture.resulting_tree,
+                protected_main=fixture.main,
+            )
+            entry, binding = version_collision._collision_validation_authority(
+                fixture.root, collision,
+            )
+            profile = binding["collision_validation_authority"]
+
+            self.assertEqual(profile["candidate_tree"], fixture.resulting_tree)
+            self.assertEqual(profile["occupied_version"], "1.2")
+            self.assertEqual(profile["implementation_identity"], "1.3")
+            self.assertEqual(profile["validation_command_set"], binding["validation"])
+            self.assertEqual(
+                profile["validation_command_set_digest"],
+                fast_path.digest_json(binding["validation"]),
+            )
+            self.assertEqual(entry["repository"], REPOSITORY)
+            self.assertEqual(
+                fixture.receipt["registry_digest"], fast_path.digest_json(binding),
+            )
+            self.assertEqual(
+                [
+                    (item["path"], len(item["current_identity_offsets"]))
+                    for item in profile["projected_sources"]
+                ],
+                [
+                    ("scripts/secpal-pr-review-actions.py", 0),
+                    ("tests/secpal-pr-review-actions-unit.py", 9),
+                    ("tests/secpal-resolve-fixed-threads-unit.py", 1),
+                ],
+            )
+
+            test_path = fixture.root / "tests/secpal-pr-review-actions-unit.py"
+            test_path.write_bytes(test_path.read_bytes() + b"\n# candidate drift\n")
+            fixture.git("add", "tests/secpal-pr-review-actions-unit.py")
+            substituted = {
+                **collision,
+                "resulting_tree": fixture.git("write-tree"),
+            }
+            with self.assertRaisesRegex(
+                version_collision.VersionCollisionError,
+                "changed validation harness or test bytes",
+            ):
+                version_collision._collision_validation_authority(
+                    fixture.root, substituted,
+                )
+
+    def test_collision_validation_root_is_closed_and_detects_byte_substitution(
+        self,
+    ) -> None:
+        from scripts.secpal_pr_review import exact_source_safety, version_collision
+
+        @contextmanager
+        def no_dependencies(_root: Path):
+            yield {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            candidate_root = Path(directory) / "candidate"
+            candidate_root.mkdir()
+            fixture = CollisionCompositionFixture(candidate_root)
+            authority_root = Path(directory) / "authority"
+            fixture.git("update-ref", "refs/heads/accepted-main", fixture.main)
+            subprocess.run(
+                ["git", "clone", "--quiet", str(fixture.root), str(authority_root)],
+                check=True,
+            )
+            profile = fixture.registry["collision_validation_authority"]
+            source_tree = fixture.git("write-tree")
+            source_status = fixture.git(
+                "status", "--porcelain=v2", "--untracked-files=all",
+            )
+
+            with mock.patch.object(
+                exact_source_safety,
+                "_collision_validation_dependencies",
+                no_dependencies,
+            ):
+                with exact_source_safety.collision_validation_root(
+                    authority_root,
+                    source_root=fixture.root,
+                    profile=profile,
+                    expected_profile=profile,
+                ) as root:
+                    self.assertIn(
+                        b'schema_version not in {"1.1", "1.2", "1.3"}',
+                        (root / version_collision.VALIDATION_ACTIONS_PATH).read_bytes(),
+                    )
+                    self.assertIn(
+                        b'for schema_version in ("1.1", "1.3")',
+                        (root / "tests/secpal-resolve-fixed-threads-unit.py").read_bytes(),
+                    )
+                    self.assertIn(
+                        b'READY_INTEGRATION_KEYS_BY_VERSION',
+                        (root / version_collision.SOURCE_PATH).read_bytes(),
+                    )
+
+                mutations = (
+                    (
+                        "production bytes",
+                        version_collision.SOURCE_PATH,
+                        lambda path: path.write_bytes(path.read_bytes() + b"\n"),
+                    ),
+                    (
+                        "harness bytes",
+                        version_collision.VALIDATION_ACTIONS_PATH,
+                        lambda path: path.write_bytes(path.read_bytes() + b"\n"),
+                    ),
+                    (
+                        "test symlink",
+                        "tests/secpal-resolve-fixed-threads-unit.py",
+                        lambda path: (
+                            path.unlink(),
+                            path.symlink_to("secpal-pr-review-actions-unit.py"),
+                        ),
+                    ),
+                )
+                for label, relative, mutate in mutations:
+                    with self.subTest(label=label), self.assertRaises(
+                        authority.LifecycleAuthorityError
+                    ):
+                        with exact_source_safety.collision_validation_root(
+                            authority_root,
+                            source_root=fixture.root,
+                            profile=profile,
+                            expected_profile=profile,
+                        ) as root:
+                            mutate(root / relative)
+
+            self.assertEqual(fixture.git("write-tree"), source_tree)
+            self.assertEqual(
+                fixture.git("status", "--porcelain=v2", "--untracked-files=all"),
+                source_status,
+            )
+
+    def test_target_786_collision_validation_profile_is_read_only_when_available(
+        self,
+    ) -> None:
+        from scripts.secpal_pr_review import exact_source_safety, version_collision
+
+        predecessor = "62b023f8e2807d0077b291e7af9a280888f1076c"
+        resulting_tree = "fa4b8626c75a109cefa24beec1095bb7abf1580f"
+        available = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "cat-file", "-e", predecessor + "^{commit}"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if available.returncode != 0:
+            self.skipTest("the read-only #786 PR object is not present in this clone")
+        accepted_main = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        with version_collision._authenticated_source_checkout(
+            REPO_ROOT,
+            predecessor,
+            None,
+            resulting_tree=resulting_tree,
+            accepted_main=accepted_main,
+            include_validation_authority=True,
+        ) as (root, main):
+            collision = version_collision._derive_collision_tree(
+                root,
+                repository=REPOSITORY,
+                delivery_issue=786,
+                pull_request=789,
+                predecessor_head=predecessor,
+                resulting_tree=resulting_tree,
+                protected_main=main,
+            )
+            _entry, binding = version_collision._collision_validation_authority(
+                root, collision,
+            )
+            action_tests = version_collision._authenticated_blob(
+                root,
+                resulting_tree,
+                "tests/secpal-pr-review-actions-unit.py",
+            )[3]
+            projected_tests, _offsets = (
+                exact_source_safety._project_collision_current_identity_fixtures(
+                    "tests/secpal-pr-review-actions-unit.py",
+                    action_tests,
+                    occupied_version=collision["occupied_version"],
+                    implementation_identity=collision["free_version"],
+                )
+            )
+
+            def function_source(source: bytes, name: str) -> str:
+                text = source.decode("utf-8")
+                module = ast.parse(text)
+                function = next(
+                    node
+                    for node in ast.walk(module)
+                    if isinstance(node, ast.FunctionDef) and node.name == name
+                )
+                return ast.get_source_segment(text, function) or ""
+
+            for historical in (
+                "test_parent2_preservation_batches_parent_state_authentication",
+                "test_ready_integration_attestation_binds_resolution_eligibility",
+            ):
+                self.assertEqual(
+                    function_source(projected_tests, historical),
+                    function_source(action_tests, historical),
+                )
+            current_output_fixture = function_source(
+                projected_tests,
+                "test_parent2_preservation_uses_exact_new_attestation_versions",
+            )
+            self.assertIn('schema_version="1.3"', current_output_fixture)
+            self.assertIn('"1.3",', current_output_fixture)
+            self.assertIn('"1.4",', current_output_fixture)
+        profile = binding["collision_validation_authority"]
+        self.assertEqual(collision["occupied_version"], "1.2")
+        self.assertEqual(collision["free_version"], "1.3")
+        self.assertEqual(collision["resulting_tree"], resulting_tree)
+        self.assertEqual(collision["delta"]["changed_paths"], [
+            "scripts/secpal_pr_review/fast_path.py"
+        ])
+        self.assertEqual(
+            len(collision["delta"]["changes"][0]["replacement_offsets"]), 4,
+        )
+        self.assertEqual(profile["candidate_tree"], resulting_tree)
+        self.assertEqual(len(profile["validation_command_set"]), 13)
+
     def test_collision_importer_recomputes_real_non_descendant_merge_side_base(
         self,
     ) -> None:

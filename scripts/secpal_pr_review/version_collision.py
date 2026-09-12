@@ -45,6 +45,18 @@ SOURCE_PATH = "scripts/secpal_pr_review/fast_path.py"
 TRUST_REGISTRY_PATH = (
     ".agents/skills/secpal-pr-review/references/repositories.json"
 )
+TRUST_REGISTRY_SCHEMA_PATH = (
+    ".agents/skills/secpal-pr-review/references/repositories.schema.json"
+)
+COLLISION_AUTHORITY_PATH = "scripts/secpal_pr_review/version_collision.py"
+EXACT_SOURCE_SAFETY_PATH = "scripts/secpal_pr_review/exact_source_safety.py"
+VALIDATION_ACTIONS_PATH = "scripts/secpal-pr-review-actions.py"
+COLLISION_VALIDATION_PROJECTION_PATHS = (
+    VALIDATION_ACTIONS_PATH,
+    "tests/secpal-pr-review-actions-unit.py",
+    "tests/secpal-resolve-fixed-threads-unit.py",
+)
+COLLISION_VALIDATION_DEPENDENCY_PATHS = ("package.json", "package-lock.json")
 FAMILY_KIND = "TWO_PARENT_READY_INTEGRATION"
 TRIGGER = "IMMUTABLE_EVIDENCE_VERSION_COLLISION"
 
@@ -895,6 +907,14 @@ class VerifiedVersionCollision:
         return result
 
 
+@dataclass(frozen=True)
+class CollisionValidationExecution:
+    collision: VerifiedVersionCollision
+    repository_entry: dict[str, Any]
+    registry_binding: dict[str, Any]
+    execution_root: Path
+
+
 def _read_bounded_blob(root: Path, treeish: str, path: str) -> bytes:
     path = _path(path)
     entry = _git(root, ["ls-tree", "-z", _oid(treeish), "--", path], 2048)
@@ -909,6 +929,249 @@ def _read_bounded_blob(root: Path, treeish: str, path: str) -> bytes:
     if re.fullmatch(rb"[0-9]+\n", size) is None or not 0 < int(size) <= MAX_BLOB_BYTES:
         raise VersionCollisionError("authenticated source exceeds the bound")
     return _git(root, ["cat-file", "blob", blob], MAX_BLOB_BYTES)
+
+
+def _authenticated_blob(
+    root: Path, treeish: str, path: str,
+) -> tuple[str, str, int, bytes]:
+    """Read one exact regular blob with its immutable Git binding."""
+
+    path = _path(path)
+    entry = _git(root, ["ls-tree", "-z", _oid(treeish), "--", path], 2048)
+    metadata, separator, observed = entry.rstrip(b"\x00").partition(b"\t")
+    fields = metadata.decode("ascii", errors="strict").split()
+    if (
+        separator != b"\t"
+        or observed != path.encode("utf-8")
+        or len(fields) != 3
+        or fields[0] not in {"100644", "100755"}
+        or fields[1] != "blob"
+    ):
+        raise VersionCollisionError("authenticated validation source is unavailable")
+    oid = _oid(fields[2])
+    size_raw = _git(root, ["cat-file", "-s", oid], 32)
+    if re.fullmatch(rb"[0-9]+\n", size_raw) is None:
+        raise VersionCollisionError("authenticated validation source size is malformed")
+    size = int(size_raw)
+    if not 0 < size <= MAX_BLOB_BYTES:
+        raise VersionCollisionError("authenticated validation source exceeds the bound")
+    source = _git(root, ["cat-file", "blob", oid], MAX_BLOB_BYTES)
+    if len(source) != size:
+        raise VersionCollisionError("authenticated validation source size changed")
+    return fields[0], oid, size, source
+
+
+def _blob_oid(source: bytes) -> str:
+    header = b"blob " + str(len(source)).encode("ascii") + b"\x00"
+    return hashlib.sha1(header + source).hexdigest()
+
+
+def _collision_validation_command_paths(commands: Any) -> frozenset[str]:
+    """Derive repository paths selected by the registered direct commands."""
+
+    paths: set[str] = set()
+    if not isinstance(commands, list) or not commands:
+        raise VersionCollisionError("collision validation command set is unavailable")
+    for command in commands:
+        argv = command.get("argv") if isinstance(command, dict) else None
+        if not isinstance(argv, list) or not argv:
+            raise VersionCollisionError("collision validation command set is malformed")
+        if len(argv) == 4 and argv[:3] == ["python3", "-m", "unittest"]:
+            paths.add(_path(argv[3]))
+        elif len(argv) >= 1 and isinstance(argv[0], str) and argv[0].startswith("./"):
+            paths.add(_path(argv[0][2:]))
+    return frozenset(paths)
+
+
+def _collision_validation_authority(
+    root: Path,
+    collision: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Derive the closed Complete Validation authority for one collision.
+
+    The accepted merge-base owns the registry and command epoch. Candidate
+    tests must be byte-identical to their authenticated predecessor; current
+    accepted-main code owns the narrowly enumerated ephemeral projection.
+    """
+
+    from . import fast_path
+    from . import lifecycle_authority as authority
+
+    required = {
+        "repository",
+        "predecessor_head",
+        "predecessor_tree",
+        "resulting_tree",
+        "protected_main",
+        "delivery_scope_base",
+        "occupied_version",
+        "free_version",
+        "delta",
+    }
+    if not isinstance(collision, dict) or not required <= set(collision):
+        raise VersionCollisionError("collision validation authority is incomplete")
+    base = _oid(collision["delivery_scope_base"])
+    predecessor = _oid(collision["predecessor_head"])
+    predecessor_tree = _oid(collision["predecessor_tree"])
+    resulting_tree = _oid(collision["resulting_tree"])
+    protected_main = _oid(collision["protected_main"])
+    occupied = collision["occupied_version"]
+    implementation = collision["free_version"]
+    if collision.get("repository") != "SecPal/.github":
+        raise VersionCollisionError("collision validation repository is unsupported")
+
+    registry_sources = [
+        _authenticated_blob(root, treeish, TRUST_REGISTRY_PATH)
+        for treeish in (base, predecessor_tree, resulting_tree)
+    ]
+    schema_sources = [
+        _authenticated_blob(root, treeish, TRUST_REGISTRY_SCHEMA_PATH)
+        for treeish in (base, predecessor_tree, resulting_tree)
+    ]
+    if any(source != registry_sources[0] for source in registry_sources[1:]):
+        raise VersionCollisionError(
+            "candidate-local registry differs from accepted validation authority"
+        )
+    if any(source != schema_sources[0] for source in schema_sources[1:]):
+        raise VersionCollisionError(
+            "candidate-local registry schema differs from accepted validation authority"
+        )
+    dependency_sources = {
+        path: [
+            _authenticated_blob(root, treeish, path)
+            for treeish in (base, predecessor_tree, resulting_tree)
+        ]
+        for path in COLLISION_VALIDATION_DEPENDENCY_PATHS
+    }
+    if any(
+        any(source != sources[0] for source in sources[1:])
+        for sources in dependency_sources.values()
+    ):
+        raise VersionCollisionError(
+            "candidate-local validation dependencies differ from accepted authority"
+        )
+    try:
+        registry = authority.loads_closed_json(registry_sources[0][3])
+        schema = schema_sources[0][3].decode("utf-8", errors="strict")
+        validated_registry = fast_path.validate_repository_registry_structure(
+            registry, authoritative_schema_raw=schema,
+        )
+    except (
+        UnicodeDecodeError,
+        authority.LifecycleAuthorityError,
+        fast_path.SecurityBlocker,
+    ) as exc:
+        raise VersionCollisionError(
+            "accepted collision validation registry is invalid"
+        ) from exc
+    entries = [
+        entry
+        for entry in validated_registry.get("repositories", [])
+        if isinstance(entry, dict)
+        and entry.get("repository") == collision["repository"]
+    ]
+    if len(entries) != 1:
+        raise VersionCollisionError(
+            "accepted collision validation registry has no unique repository"
+        )
+    entry = entries[0]
+    binding = fast_path.validation_registry_projection(entry)
+    commands = binding["validation"]
+    selected_paths = _collision_validation_command_paths(commands)
+    required_tests = frozenset(COLLISION_VALIDATION_PROJECTION_PATHS[1:])
+    if not required_tests <= selected_paths:
+        raise VersionCollisionError(
+            "registered collision validation excludes a required test"
+        )
+
+    projected_sources = []
+    for path in COLLISION_VALIDATION_PROJECTION_PATHS:
+        predecessor_blob = _authenticated_blob(root, predecessor_tree, path)
+        resulting_blob = _authenticated_blob(root, resulting_tree, path)
+        if predecessor_blob != resulting_blob:
+            raise VersionCollisionError(
+                "collision candidate changed validation harness or test bytes"
+            )
+        mode, oid, size, source = resulting_blob
+        if path == VALIDATION_ACTIONS_PATH:
+            projected = exact_source_safety._project_collision_validation_authority(
+                source,
+                occupied_version=occupied,
+                implementation_identity=implementation,
+            )
+            offsets: list[list[int]] = []
+        else:
+            projected, observed_offsets = (
+                exact_source_safety._project_collision_current_identity_fixtures(
+                    path,
+                    source,
+                    occupied_version=occupied,
+                    implementation_identity=implementation,
+                )
+            )
+            offsets = [list(item) for item in observed_offsets]
+        projected_sources.append({
+            "path": path,
+            "mode": mode,
+            "candidate_blob_oid": oid,
+            "candidate_size": size,
+            "projected_blob_oid": _blob_oid(projected),
+            "projected_size": len(projected),
+            "current_identity_offsets": offsets,
+        })
+
+    issuer_sources = []
+    for path in (
+        COLLISION_AUTHORITY_PATH,
+        EXACT_SOURCE_SAFETY_PATH,
+        VALIDATION_ACTIONS_PATH,
+    ):
+        mode, oid, size, _source = _authenticated_blob(
+            root, protected_main, path,
+        )
+        issuer_sources.append({
+            "path": path, "mode": mode, "blob_oid": oid, "size": size,
+        })
+    registry_binding = {
+        "source_commit": base,
+        "path": TRUST_REGISTRY_PATH,
+        "mode": registry_sources[0][0],
+        "blob_oid": registry_sources[0][1],
+        "size": registry_sources[0][2],
+        "schema_path": TRUST_REGISTRY_SCHEMA_PATH,
+        "schema_mode": schema_sources[0][0],
+        "schema_blob_oid": schema_sources[0][1],
+        "schema_size": schema_sources[0][2],
+    }
+    profile = {
+        "schema_version": "1.0",
+        "policy": "IMMUTABLE_EVIDENCE_VERSION_COLLISION_COMPLETE_VALIDATION",
+        "accepted_main": protected_main,
+        "accepted_main_sources": issuer_sources,
+        "candidate_predecessor_head": predecessor,
+        "candidate_predecessor_tree": predecessor_tree,
+        "candidate_tree": resulting_tree,
+        "collision_digest": digest_json(validation_collision_projection(collision)),
+        "occupied_version": occupied,
+        "implementation_identity": implementation,
+        "registry": registry_binding,
+        "validation_dependencies": [
+            {
+                "path": path,
+                "mode": dependency_sources[path][0][0],
+                "blob_oid": dependency_sources[path][0][1],
+                "size": dependency_sources[path][0][2],
+            }
+            for path in COLLISION_VALIDATION_DEPENDENCY_PATHS
+        ],
+        "validation_command_set": copy.deepcopy(commands),
+        "validation_command_set_digest": digest_json(commands),
+        "projected_sources": projected_sources,
+    }
+    return entry, {
+        **binding,
+        "collision_validation_authority": profile,
+    }
 
 
 def _read_source(root: Path, commit: str) -> bytes:
@@ -1244,7 +1507,7 @@ def _import_successor(
 @contextmanager
 def _authenticated_source_checkout(
     source: Path, predecessor: str, resulting: str | None, *, resulting_tree: str | None = None,
-    accepted_main: str | None = None,
+    accepted_main: str | None = None, include_validation_authority: bool = False,
 ) -> Iterator[tuple[Path, str]]:
     from . import lifecycle_authority as authority
 
@@ -1296,6 +1559,24 @@ def _authenticated_source_checkout(
                 "accepted trust registry path differs from the collision profile"
             )
         importer.transfer_path(trees[main], TRUST_REGISTRY_PATH)
+        if include_validation_authority:
+            for tree in (
+                base_tree, trees[main], trees[predecessor], successor_tree,
+            ):
+                for path in (TRUST_REGISTRY_PATH, TRUST_REGISTRY_SCHEMA_PATH):
+                    importer.transfer_path(tree, path)
+            for tree in (base_tree, trees[predecessor], successor_tree):
+                for path in COLLISION_VALIDATION_DEPENDENCY_PATHS:
+                    importer.transfer_path(tree, path)
+            for path in (
+                COLLISION_AUTHORITY_PATH,
+                EXACT_SOURCE_SAFETY_PATH,
+                VALIDATION_ACTIONS_PATH,
+            ):
+                importer.transfer_path(trees[main], path)
+            for tree in (trees[predecessor], successor_tree):
+                for path in COLLISION_VALIDATION_PROJECTION_PATHS:
+                    importer.transfer_path(tree, path)
         for path in changed_paths:
             importer.transfer_path(trees[predecessor], path)
             importer.transfer_path(successor_tree, path)
@@ -1381,6 +1662,106 @@ def prepare_collision_tree(
             root, repository=repository, delivery_issue=delivery_issue, pull_request=pull_request,
             predecessor_head=predecessor_head, resulting_tree=resulting_tree, protected_main=main,
         ))
+
+
+@contextmanager
+def collision_complete_validation(
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    predecessor_head: str,
+    resulting_tree: str,
+    repository_root: Path,
+) -> Iterator[CollisionValidationExecution]:
+    """Select the sole accepted-main collision Complete Validation profile."""
+
+    _validate_public_collision_request(
+        repository,
+        delivery_issue,
+        pull_request,
+        predecessor_head,
+        resulting_tree,
+        repository_root,
+    )
+    main = _authenticate_installed_collision_issuer()
+    _require_current_collision_predecessor(
+        repository, delivery_issue, pull_request, predecessor_head,
+    )
+    with _authenticated_source_checkout(
+        repository_root,
+        predecessor_head,
+        None,
+        resulting_tree=resulting_tree,
+        accepted_main=main,
+        include_validation_authority=True,
+    ) as (root, main):
+        collision = _derive_collision_tree(
+            root,
+            repository=repository,
+            delivery_issue=delivery_issue,
+            pull_request=pull_request,
+            predecessor_head=predecessor_head,
+            resulting_tree=resulting_tree,
+            protected_main=main,
+        )
+        entry, binding = _collision_validation_authority(root, collision)
+        profile = binding["collision_validation_authority"]
+        with exact_source_safety.collision_validation_root(
+            Path(__file__).resolve().parents[2],
+            source_root=repository_root,
+            profile=profile,
+            expected_profile=profile,
+        ) as execution_root:
+            yield CollisionValidationExecution(
+                collision=_seal_collision(collision),
+                repository_entry=copy.deepcopy(entry),
+                registry_binding=copy.deepcopy(binding),
+                execution_root=execution_root,
+            )
+
+
+def collision_validation_binding_for_commit(
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    predecessor_head: str,
+    resulting_head: str,
+    repository_root: Path,
+) -> tuple[VerifiedVersionCollision, dict[str, Any]]:
+    """Re-derive the ordinary receipt binding for the signed candidate."""
+
+    _validate_public_collision_request(
+        repository,
+        delivery_issue,
+        pull_request,
+        predecessor_head,
+        resulting_head,
+        repository_root,
+    )
+    main = _authenticate_installed_collision_issuer()
+    _require_current_collision_predecessor(
+        repository, delivery_issue, pull_request, predecessor_head,
+    )
+    with _authenticated_source_checkout(
+        repository_root,
+        predecessor_head,
+        resulting_head,
+        accepted_main=main,
+        include_validation_authority=True,
+    ) as (root, main):
+        collision = _derive_collision_from_git(
+            root,
+            repository=repository,
+            delivery_issue=delivery_issue,
+            pull_request=pull_request,
+            predecessor_head=predecessor_head,
+            resulting_head=resulting_head,
+            protected_main=main,
+        )
+        _entry, binding = _collision_validation_authority(root, collision)
+        return _seal_collision(collision), binding
 
 
 def _validate_public_collision_request(

@@ -110,6 +110,11 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 **Fixed:**
 
+- Authenticate the accepted-main Complete Validation harness for source-only
+  immutable evidence-version renumbers. The closed disposable projection keeps
+  historical fixtures pinned, derives current-identity fixtures from collision
+  authority, runs every registered command, and binds the unchanged candidate
+  tree through the ordinary receipt and attestation families.
 - Extend the existing one-use Exceptional Continuation with independently
   authenticated protected-main version-collision evidence, exact signed user
   authorization and bounded byte-only renumber verification.

@@ -4,10 +4,13 @@
 
 from __future__ import annotations
 
+import ast
 from contextlib import contextmanager
 from dataclasses import dataclass
+import hashlib
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
@@ -16,6 +19,237 @@ from typing import Any, Iterator, Mapping, Sequence
 
 from . import bootstrap_source_admission as transport
 from . import lifecycle_authority as authority
+
+
+_EVIDENCE_VERSION = re.compile(
+    r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})", re.ASCII,
+)
+_COLLISION_CURRENT_IDENTITY_FIXTURES = {
+    "tests/secpal-pr-review-actions-unit.py": {
+        "test_parent2_preservation_cannot_delete_parent1_only_work": 1,
+        "test_parent2_preservation_uses_exact_new_attestation_versions": 1,
+        "test_ready_integration_accepts_authenticated_current_ready_histories": 1,
+        "test_ready_integration_authenticates_exact_parent2_preservation": 2,
+        "test_ready_integration_mixes_conflict_and_parent2_preservation": 2,
+        "test_ready_integration_v12_delta_uses_registered_item_limit_before_git_work": 2,
+    },
+    "tests/secpal-resolve-fixed-threads-unit.py": {
+        "test_eligibility_bound_ready_integration_authorizes_exact_thread": 1,
+    },
+}
+_COLLISION_VALIDATION_AUTHORITY_PATH = "scripts/secpal-pr-review-actions.py"
+
+
+def _compatible_evidence_versions(
+    occupied_version: str,
+    implementation_identity: str,
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Admit a derived compatible successor without accepting caller policy."""
+
+    if (
+        not isinstance(occupied_version, str)
+        or not isinstance(implementation_identity, str)
+        or _EVIDENCE_VERSION.fullmatch(occupied_version) is None
+        or _EVIDENCE_VERSION.fullmatch(implementation_identity) is None
+    ):
+        raise authority.LifecycleAuthorityError(
+            "collision validation identity is not canonical"
+        )
+    occupied = tuple(int(part) for part in occupied_version.split("."))
+    implementation = tuple(
+        int(part) for part in implementation_identity.split(".")
+    )
+    if occupied[0] != implementation[0] or implementation[1] <= occupied[1]:
+        raise authority.LifecycleAuthorityError(
+            "collision validation identity is not a later compatible version"
+        )
+    return occupied, implementation
+
+
+def _python_byte_offsets(source: bytes, node: ast.AST) -> tuple[int, int]:
+    lines = source.splitlines(keepends=True)
+    starts = [0]
+    for line in lines:
+        starts.append(starts[-1] + len(line))
+    try:
+        return (
+            starts[node.lineno - 1] + node.col_offset,
+            starts[node.end_lineno - 1] + node.end_col_offset,
+        )
+    except (AttributeError, IndexError) as exc:
+        raise authority.LifecycleAuthorityError(
+            "collision validation fixture location is malformed"
+        ) from exc
+
+
+def _literal_is_current_identity(
+    node: ast.Constant,
+    parents: Mapping[int, ast.AST],
+) -> bool:
+    parent = parents.get(id(node))
+    if isinstance(parent, ast.keyword) and parent.arg == "schema_version":
+        return True
+    if isinstance(parent, ast.Assign) and parent.value is node:
+        return any(
+            isinstance(target, ast.Subscript)
+            and isinstance(target.slice, ast.Constant)
+            and target.slice.value == "schema_version"
+            for target in parent.targets
+        )
+    descendant: ast.AST = node
+    while (ancestor := parents.get(id(descendant))) is not None:
+        if isinstance(ancestor, ast.For):
+            return (
+                isinstance(ancestor.target, ast.Name)
+                and ancestor.target.id == "schema_version"
+                and any(item is node for item in ast.walk(ancestor.iter))
+            )
+        if isinstance(ancestor, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            break
+        descendant = ancestor
+    return False
+
+
+def _project_collision_current_identity_fixtures(
+    relative: str,
+    source: bytes,
+    *,
+    occupied_version: str,
+    implementation_identity: str,
+) -> tuple[bytes, tuple[tuple[int, int], ...]]:
+    """Project only the closed current-identity fixture inventory.
+
+    Historical literals, including historical instances of the occupied
+    version in the same file, are deliberately outside this AST-owned set.
+    """
+
+    _compatible_evidence_versions(occupied_version, implementation_identity)
+    expected = _COLLISION_CURRENT_IDENTITY_FIXTURES.get(relative)
+    if expected is None or not isinstance(source, bytes):
+        raise authority.LifecycleAuthorityError(
+            "collision validation fixture path is not maintained"
+        )
+    try:
+        text = source.decode("utf-8", errors="strict")
+        module = ast.parse(text)
+    except (UnicodeDecodeError, SyntaxError, ValueError, RecursionError) as exc:
+        raise authority.LifecycleAuthorityError(
+            "collision validation fixture source is malformed"
+        ) from exc
+    functions = {
+        node.name: node
+        for node in ast.walk(module)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name in expected
+    }
+    if set(functions) != set(expected):
+        raise authority.LifecycleAuthorityError(
+            "collision validation current-identity fixture inventory drifted"
+        )
+    parents = {
+        id(child): node
+        for node in ast.walk(module)
+        for child in ast.iter_child_nodes(node)
+    }
+    replacements: list[tuple[int, int]] = []
+    old_literal = occupied_version.encode("ascii")
+    new_literal = implementation_identity.encode("ascii")
+    for name, count in expected.items():
+        identities = [
+            node
+            for node in ast.walk(functions[name])
+            if isinstance(node, ast.Constant)
+            and node.value == occupied_version
+            and _literal_is_current_identity(node, parents)
+        ]
+        if len(identities) != count:
+            raise authority.LifecycleAuthorityError(
+                "collision validation current-identity fixture inventory drifted"
+            )
+        for identity in identities:
+            start, end = _python_byte_offsets(source, identity)
+            literal = source[start:end]
+            if literal not in {b'"' + old_literal + b'"', b"'" + old_literal + b"'"}:
+                raise authority.LifecycleAuthorityError(
+                    "collision validation identity literal is not canonical"
+                )
+            replacements.append((start + 1, end - 1))
+    if len(replacements) != len(set(replacements)):
+        raise authority.LifecycleAuthorityError(
+            "collision validation fixture ownership is ambiguous"
+        )
+    replacements.sort()
+    projected = source
+    for start, end in reversed(replacements):
+        projected = projected[:start] + new_literal + projected[end:]
+    return projected, tuple(replacements)
+
+
+def _project_collision_validation_authority(
+    source: bytes,
+    *,
+    occupied_version: str,
+    implementation_identity: str,
+) -> bytes:
+    """Extend the exact accepted validation guard with the derived identity."""
+
+    occupied, _ = _compatible_evidence_versions(
+        occupied_version, implementation_identity,
+    )
+    if not isinstance(source, bytes):
+        raise authority.LifecycleAuthorityError(
+            "collision validation authority source is malformed"
+        )
+    try:
+        text = source.decode("utf-8", errors="strict")
+        module = ast.parse(text)
+    except (UnicodeDecodeError, SyntaxError, ValueError, RecursionError) as exc:
+        raise authority.LifecycleAuthorityError(
+            "collision validation authority source is malformed"
+        ) from exc
+    functions = [
+        node
+        for node in module.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_verify_integration_tree_delta"
+    ]
+    if len(functions) != 1:
+        raise authority.LifecycleAuthorityError(
+            "collision validation authority owner drifted"
+        )
+    comparisons = [
+        node
+        for node in ast.walk(functions[0])
+        if isinstance(node, ast.Compare)
+        and len(node.ops) == 1
+        and isinstance(node.ops[0], ast.NotIn)
+        and isinstance(node.left, ast.Name)
+        and node.left.id == "schema_version"
+        and len(node.comparators) == 1
+        and isinstance(node.comparators[0], ast.Set)
+    ]
+    if len(comparisons) != 1:
+        raise authority.LifecycleAuthorityError(
+            "collision validation authority guard drifted"
+        )
+    version_set = comparisons[0].comparators[0]
+    observed = [
+        item.value
+        for item in version_set.elts
+        if isinstance(item, ast.Constant) and isinstance(item.value, str)
+    ]
+    expected = [f"{occupied[0]}.{minor}" for minor in range(1, occupied[1] + 1)]
+    if observed != expected or len(observed) != len(version_set.elts):
+        raise authority.LifecycleAuthorityError(
+            "collision validation authority version inventory drifted"
+        )
+    start, end = _python_byte_offsets(source, version_set)
+    if source[end - 1:end] != b"}":
+        raise authority.LifecycleAuthorityError(
+            "collision validation authority guard is not canonical"
+        )
+    insertion = b', "' + implementation_identity.encode("ascii") + b'"'
+    return source[:end - 1] + insertion + source[end - 1:]
 
 
 @dataclass(frozen=True)
@@ -317,6 +551,461 @@ def _copy_harness_file(
         temporary.unlink(missing_ok=True)
     _verify_harness_file(repository_root, execution_root, relative, mode, blob_oid, size)
     return mode, blob_oid, size
+
+
+def _collision_projected_bytes(
+    relative: str,
+    source: bytes,
+    *,
+    occupied_version: str,
+    implementation_identity: str,
+) -> tuple[bytes, tuple[tuple[int, int], ...]]:
+    if relative == _COLLISION_VALIDATION_AUTHORITY_PATH:
+        return (
+            _project_collision_validation_authority(
+                source,
+                occupied_version=occupied_version,
+                implementation_identity=implementation_identity,
+            ),
+            (),
+        )
+    return _project_collision_current_identity_fixtures(
+        relative,
+        source,
+        occupied_version=occupied_version,
+        implementation_identity=implementation_identity,
+    )
+
+
+def _git_blob_oid(source: bytes) -> str:
+    header = b"blob " + str(len(source)).encode("ascii") + b"\x00"
+    return hashlib.sha1(header + source).hexdigest()
+
+
+def _collision_listing(
+    listing: str,
+) -> tuple[tuple[str, str, str], ...]:
+    entries = []
+    for raw in listing.rstrip("\0").split("\0"):
+        metadata, separator, relative = raw.partition("\t")
+        fields = metadata.split()
+        if (
+            not separator
+            or len(fields) != 3
+            or fields[0] not in {"100644", "100755"}
+            or fields[1] != "blob"
+            or not relative
+        ):
+            raise authority.LifecycleAuthorityError(
+                "collision validation source listing is malformed"
+            )
+        admitted = Path(relative)
+        if admitted.is_absolute() or ".." in admitted.parts:
+            raise authority.LifecycleAuthorityError(
+                "collision validation source path is unsafe"
+            )
+        entries.append((fields[0], fields[2], relative))
+    if not entries or len({item[2] for item in entries}) != len(entries):
+        raise authority.LifecycleAuthorityError(
+            "collision validation source listing is ambiguous"
+        )
+    return tuple(entries)
+
+
+def _copy_collision_source(
+    source_root: Path,
+    execution_root: Path,
+    listing: tuple[tuple[str, str, str], ...],
+) -> None:
+    for mode, _oid, relative in listing:
+        source = source_root / relative
+        destination = execution_root / relative
+        parent = execution_root
+        for part in Path(relative).parent.parts:
+            parent /= part
+            try:
+                metadata = parent.lstat()
+            except FileNotFoundError:
+                parent.mkdir(mode=0o755)
+                metadata = parent.lstat()
+            if not stat.S_ISDIR(metadata.st_mode) or parent.is_symlink():
+                raise authority.LifecycleAuthorityError(
+                    "collision validation source path is unsafe"
+                )
+        try:
+            metadata = source.lstat()
+            if not stat.S_ISREG(metadata.st_mode) or source.is_symlink():
+                raise authority.LifecycleAuthorityError(
+                    "collision validation source is not a regular file"
+                )
+            shutil.copyfile(source, destination)
+            destination.chmod(0o755 if mode == "100755" else 0o644)
+        except OSError as exc:
+            raise authority.LifecycleAuthorityError(
+                "collision validation source copy failed"
+            ) from exc
+
+
+def _verify_collision_validation_root(
+    root: Path,
+    listing: tuple[tuple[str, str, str], ...],
+    projected: Mapping[str, tuple[str, int]],
+    runtime: Mapping[str, tuple[str, str]],
+    projected_tree: str,
+) -> None:
+    expected_paths = {item[2] for item in listing}
+    tracked = transport._git_text(root, ["ls-files", "-z"]).rstrip("\0").split("\0")
+    if set(tracked) != expected_paths or len(tracked) != len(expected_paths):
+        raise authority.LifecycleAuthorityError(
+            "collision validation projection is incomplete"
+        )
+    expected_by_path = {
+        relative: (mode, oid) for mode, oid, relative in listing
+    }
+    for relative, binding in projected.items():
+        if relative not in expected_by_path:
+            raise authority.LifecycleAuthorityError(
+                "collision validation projection path is untracked"
+            )
+        expected_by_path[relative] = (expected_by_path[relative][0], binding[0])
+    for relative, binding in runtime.items():
+        if relative in expected_by_path:
+            raise authority.LifecycleAuthorityError(
+                "collision validation runtime overlaps source"
+            )
+        expected_by_path[relative] = binding
+    for relative, (mode, oid) in expected_by_path.items():
+        path = root / relative
+        for parent in (path, *path.parents):
+            if parent == root:
+                break
+            if parent.is_symlink():
+                raise authority.LifecycleAuthorityError(
+                    "collision validation source contains a symlink"
+                )
+        try:
+            metadata = path.lstat()
+            actual = _git_blob_oid(path.read_bytes())
+        except OSError as exc:
+            raise authority.LifecycleAuthorityError(
+                "collision validation source is unavailable"
+            ) from exc
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode)
+            != (0o755 if mode == "100755" else 0o644)
+            or actual != oid
+        ):
+            raise authority.LifecycleAuthorityError(
+                "validation mutated collision source or harness bytes"
+            )
+    if transport._git_text(root, ["write-tree"]).strip() != projected_tree:
+        raise authority.LifecycleAuthorityError(
+            "validation mutated the collision projection index"
+        )
+    for path in root.rglob("*"):
+        if path == root / ".git" or root / ".git" in path.parents:
+            continue
+        if path.is_symlink():
+            raise authority.LifecycleAuthorityError(
+                "collision validation source contains a symlink"
+            )
+        if path.is_file() and path.relative_to(root).as_posix() not in expected_by_path:
+            if path.suffix not in {".pyc", ".pyo"} or "__pycache__" not in path.parts:
+                raise authority.LifecycleAuthorityError(
+                    "collision validation source contains an undeclared file"
+                )
+
+
+@contextmanager
+def _collision_validation_dependencies(
+    root: Path,
+) -> Iterator[dict[str, tuple[str, str]]]:
+    """Materialize the lockfile-pinned Markdown validator outside source."""
+
+    helper = authority._load_trusted_command_helper()
+    try:
+        npm = transport._trusted_dependency_executable(helper, "npm")
+        node = transport._trusted_dependency_executable(helper, "node")
+    except transport.BootstrapSourceAdmissionError as exc:
+        raise authority.LifecycleAuthorityError(
+            "collision validation dependency executable is unavailable"
+        ) from exc
+    with tempfile.TemporaryDirectory(
+        prefix="secpal-collision-validation-dependencies-"
+    ) as directory:
+        private = Path(directory)
+        private.chmod(0o700)
+        acquisition = private / "acquisition"
+        home = private / "home"
+        cache = private / "cache"
+        for path in (acquisition, home, cache):
+            path.mkdir(mode=0o700)
+        user_config = home / "user.npmrc"
+        global_config = home / "global.npmrc"
+        for path in (user_config, global_config):
+            path.write_text("", encoding="utf-8")
+            path.chmod(0o600)
+        for name in ("package.json", "package-lock.json"):
+            shutil.copyfile(root / name, acquisition / name)
+        environment = transport._closed_validation_environment(helper, home)
+        environment.update({
+            "NPM_CONFIG_AUDIT": "false",
+            "NPM_CONFIG_CACHE": str(cache),
+            "NPM_CONFIG_FUND": "false",
+            "NPM_CONFIG_IGNORE_SCRIPTS": "true",
+            "NPM_CONFIG_GLOBALCONFIG": str(global_config),
+            "NPM_CONFIG_REGISTRY": "https://registry.npmjs.org/",
+            "NPM_CONFIG_REPLACE_REGISTRY_HOST": "never",
+            "NPM_CONFIG_STRICT_SSL": "true",
+            "NPM_CONFIG_UPDATE_NOTIFIER": "false",
+            "NPM_CONFIG_USERCONFIG": str(user_config),
+        })
+        arguments = ["ci", "--ignore-scripts", "--no-audit", "--no-fund"]
+        try:
+            completed = subprocess.run(
+                [npm, *arguments],
+                cwd=acquisition,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=600,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise authority.LifecycleAuthorityError(
+                "collision validation dependency acquisition failed"
+            ) from exc
+        modules = acquisition / "node_modules"
+        cli = modules / "markdownlint-cli/markdownlint.js"
+        if completed.returncode != 0 or not cli.is_file() or cli.is_symlink():
+            raise authority.LifecycleAuthorityError(
+                "collision validation dependency acquisition failed"
+            )
+        shutil.rmtree(modules / ".bin", ignore_errors=True)
+        try:
+            snapshot = transport._dependency_file_snapshot(modules)
+        except transport.BootstrapSourceAdmissionError as exc:
+            raise authority.LifecycleAuthorityError(
+                "collision validation dependency materialization is unsafe"
+            ) from exc
+        runtime_modules = root / "node_modules"
+        shutil.copytree(modules, runtime_modules)
+        runtime: dict[str, tuple[str, str]] = {}
+        for path in sorted(runtime_modules.rglob("*")):
+            if path.is_dir():
+                path.chmod(0o755)
+                continue
+            mode = "100755" if path.stat().st_mode & 0o111 else "100644"
+            path.chmod(0o755 if mode == "100755" else 0o644)
+            runtime[path.relative_to(root).as_posix()] = (
+                mode, _git_blob_oid(path.read_bytes()),
+            )
+        executable = runtime_modules / ".bin/markdownlint"
+        executable.parent.mkdir(parents=True, mode=0o755)
+        wrapper = (
+            "#!/bin/sh\nexec "
+            + repr(node)
+            + " "
+            + repr(str(runtime_modules / "markdownlint-cli/markdownlint.js"))
+            + ' "$@"\n'
+        ).encode("utf-8")
+        executable.write_bytes(wrapper)
+        executable.chmod(0o755)
+        runtime["node_modules/.bin/markdownlint"] = (
+            "100755", _git_blob_oid(wrapper),
+        )
+        try:
+            yield runtime
+        finally:
+            try:
+                if transport._dependency_file_snapshot(modules) != snapshot:
+                    raise authority.LifecycleAuthorityError(
+                        "collision validation dependency bytes changed"
+                    )
+            except transport.BootstrapSourceAdmissionError as exc:
+                raise authority.LifecycleAuthorityError(
+                    "collision validation dependency bytes changed"
+                ) from exc
+
+
+@contextmanager
+def collision_validation_root(
+    repository_root: Path,
+    *,
+    source_root: Path,
+    profile: Mapping[str, Any],
+    expected_profile: Mapping[str, Any],
+) -> Iterator[Path]:
+    """Build the dedicated immutable-collision Complete Validation root."""
+
+    if dict(profile) != dict(expected_profile):
+        raise authority.LifecycleAuthorityError(
+            "collision validation profile or command set drifted"
+        )
+    candidate_tree = profile.get("candidate_tree")
+    predecessor = profile.get("candidate_predecessor_head")
+    accepted_main = profile.get("accepted_main")
+    occupied = profile.get("occupied_version")
+    implementation = profile.get("implementation_identity")
+    sources = profile.get("projected_sources")
+    dependencies = profile.get("validation_dependencies")
+    if (
+        not isinstance(candidate_tree, str)
+        or not isinstance(predecessor, str)
+        or not isinstance(accepted_main, str)
+        or not isinstance(sources, list)
+        or not isinstance(dependencies, list)
+        or tuple(
+            item.get("path")
+            for item in dependencies
+            if isinstance(item, Mapping)
+        )
+        != ("package.json", "package-lock.json")
+        or tuple(
+            item.get("path") for item in sources if isinstance(item, Mapping)
+        )
+        != (
+            _COLLISION_VALIDATION_AUTHORITY_PATH,
+            *tuple(_COLLISION_CURRENT_IDENTITY_FIXTURES),
+        )
+    ):
+        raise authority.LifecycleAuthorityError(
+            "collision validation profile is malformed"
+        )
+    source_root = source_root.resolve(strict=True)
+    repository_root = repository_root.resolve(strict=True)
+    if source_root == repository_root:
+        raise authority.LifecycleAuthorityError(
+            "collision candidate must be distinct from accepted-main authority"
+        )
+    head = transport._git_text(source_root, ["rev-parse", "HEAD"]).strip()
+    tree = transport._git_text(source_root, ["write-tree"]).strip()
+    if head != predecessor or tree != candidate_tree:
+        raise authority.LifecycleAuthorityError(
+            "collision validation candidate head or tree changed"
+        )
+    source_status = transport._git_text(
+        source_root, ["status", "--porcelain=v2", "--untracked-files=all"],
+    )
+    listing_raw = verify_source_bytes(source_root, candidate_tree)
+    listing = _collision_listing(listing_raw)
+    source_by_path = {relative: (mode, oid) for mode, oid, relative in listing}
+    for item in dependencies:
+        binding = source_by_path.get(item["path"])
+        try:
+            size = (source_root / item["path"]).stat().st_size
+        except OSError as exc:
+            raise authority.LifecycleAuthorityError(
+                "collision validation dependency source is unavailable"
+            ) from exc
+        if (
+            binding != (item.get("mode"), item.get("blob_oid"))
+            or size != item.get("size")
+        ):
+            raise authority.LifecycleAuthorityError(
+                "collision validation dependency authority changed"
+            )
+    projection_bindings: dict[str, tuple[str, int]] = {}
+    projection_bytes: dict[str, bytes] = {}
+    for item in sources:
+        relative = item["path"]
+        binding = source_by_path.get(relative)
+        if (
+            binding is None
+            or binding[0] != item.get("mode")
+            or binding[1] != item.get("candidate_blob_oid")
+        ):
+            raise authority.LifecycleAuthorityError(
+                "collision validation candidate harness binding changed"
+            )
+        raw = (source_root / relative).read_bytes()
+        if len(raw) != item.get("candidate_size"):
+            raise authority.LifecycleAuthorityError(
+                "collision validation candidate harness size changed"
+            )
+        projected_bytes, offsets = _collision_projected_bytes(
+            relative,
+            raw,
+            occupied_version=occupied,
+            implementation_identity=implementation,
+        )
+        if (
+            _git_blob_oid(projected_bytes) != item.get("projected_blob_oid")
+            or len(projected_bytes) != item.get("projected_size")
+            or [list(offset) for offset in offsets]
+            != item.get("current_identity_offsets")
+        ):
+            raise authority.LifecycleAuthorityError(
+                "collision validation accepted projection changed"
+            )
+        projection_bytes[relative] = projected_bytes
+        projection_bindings[relative] = (
+            item["projected_blob_oid"], item["projected_size"],
+        )
+    with tempfile.TemporaryDirectory(
+        prefix="secpal-collision-complete-validation-"
+    ) as directory:
+        root = Path(directory) / "source"
+        root.mkdir(mode=0o700)
+        transport._git(root, ["init", "--quiet"])
+        transport._git(root, ["remote", "add", "candidate", str(source_root)])
+        transport._git(root, ["remote", "add", "authority", str(repository_root)])
+        transport._git(root, [
+            "fetch", "--quiet", "--no-tags", "--depth=2048",
+            "authority", accepted_main,
+        ])
+        transport._git(root, [
+            "fetch", "--quiet", "--no-tags", "--depth=2048",
+            "candidate", predecessor,
+        ])
+        transport._git(root, ["checkout", "--quiet", "--detach", "FETCH_HEAD"])
+        _copy_collision_source(source_root, root, listing)
+        for relative, projected_bytes in projection_bytes.items():
+            destination = root / relative
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{destination.name}.", dir=destination.parent,
+            )
+            temporary = Path(temporary_name)
+            try:
+                with os.fdopen(descriptor, "wb") as output:
+                    output.write(projected_bytes)
+                    output.flush()
+                    os.fsync(output.fileno())
+                temporary.chmod(destination.stat().st_mode & 0o777)
+                os.replace(temporary, destination)
+            finally:
+                temporary.unlink(missing_ok=True)
+        transport._git(root, ["add", "--all", "--"])
+        projected_tree = transport._git_text(root, ["write-tree"]).strip()
+        with _collision_validation_dependencies(root) as runtime:
+            _verify_collision_validation_root(
+                root, listing, projection_bindings, runtime, projected_tree,
+            )
+            try:
+                yield root
+            finally:
+                _verify_collision_validation_root(
+                    root, listing, projection_bindings, runtime, projected_tree,
+                )
+                if (
+                    transport._git_text(source_root, ["rev-parse", "HEAD"]).strip()
+                    != head
+                    or transport._git_text(source_root, ["write-tree"]).strip()
+                    != candidate_tree
+                    or transport._git_text(
+                        source_root,
+                        ["status", "--porcelain=v2", "--untracked-files=all"],
+                    )
+                    != source_status
+                ):
+                    raise authority.LifecycleAuthorityError(
+                        "validation mutated the exact collision candidate"
+                    )
+                verify_source_bytes(
+                    source_root, candidate_tree, expected_listing=listing_raw,
+                )
 
 
 def _candidate_listing_without_harness(listing: str) -> str:

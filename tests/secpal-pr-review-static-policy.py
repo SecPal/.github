@@ -229,6 +229,21 @@ EXACT_SOURCE_SAFETY_CALLS = (
             ("timeout", "transport._BOOTSTRAP_COMMAND_TIMEOUT_SECONDS"),
         ),
     ),
+    ProcessCall(
+        None,
+        "_collision_validation_dependencies",
+        "npm",
+        "arguments",
+        (
+            ("check", "False"),
+            ("cwd", "acquisition"),
+            ("env", "environment"),
+            ("stderr", "subprocess.DEVNULL"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("stdout", "subprocess.DEVNULL"),
+            ("timeout", "600"),
+        ),
+    ),
 )
 
 FAST_PATH_CALLS = (*FAST_PATH_CALLS,
@@ -395,6 +410,7 @@ ALLOWED_IMPORT_ROOTS = {
     "",
     "__future__",
     "argparse",
+    "ast",
     "copy",
     "contextlib",
     "dataclasses",
@@ -480,10 +496,13 @@ ALLOWED_IMPORTS = {
     },
     "exact_source_safety.py": {
         "from __future__ import annotations",
+        "import ast",
         "from contextlib import contextmanager",
         "from dataclasses import dataclass",
+        "import hashlib",
         "import os",
         "from pathlib import Path",
+        "import re",
         "import shutil",
         "import stat",
         "import subprocess",
@@ -640,8 +659,9 @@ DIRECT_MODULE_ATTRIBUTES = {
     },
     "exact_source_safety.py": {
         "os": {"fdopen", "fsync", "replace"},
-        "shutil": {"copytree", "ignore_patterns", "rmtree"},
+        "shutil": {"copyfile", "copytree", "ignore_patterns", "rmtree"},
         "stat": {"S_ISDIR", "S_ISREG", "S_IMODE", "S_IXUSR"},
+        "subprocess": {"DEVNULL", "TimeoutExpired", "run"},
         "tempfile": {"TemporaryDirectory", "mkstemp"},
     },
     "follow_up.py": {
@@ -760,6 +780,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "_authenticate_diagnostic_recovery_source",
             "_verify_diagnostic_recovery_admission",
             "_verify_user_authorization",
+            "version_collision",
         },
         "exact_source_safety": {
             "authority", "build_profile", "execution_root", "run_profile", "transport",
@@ -787,8 +808,11 @@ LOADED_MODULE_ATTRIBUTES = {
             "_ISOLATED_SOURCE_LAUNCHER",
             "_bootstrap_command_environment",
             "_closed_validation_environment",
+            "_dependency_file_snapshot",
             "_git", "_git_text", "_isolated_python_command",
             "_resolve_bootstrap_executable", "_run_isolated_python",
+            "_trusted_dependency_executable",
+            "BootstrapSourceAdmissionError",
         },
         "authority": {
             "LifecycleAuthorityError", "_load_trusted_command_helper",
