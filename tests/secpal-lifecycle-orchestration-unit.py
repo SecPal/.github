@@ -1507,6 +1507,8 @@ class LifecycleOrchestrationTests(TestCase):
 
             git(source, "init", "--quiet")
             git(destination, "init", "--quiet")
+            git(source, "config", "user.name", "Collision Fixture")
+            git(source, "config", "user.email", "collision-fixture@secpal.test")
             tree = git(source, "mktree", data=b"")
 
             def commit(message: str, *parents: str) -> str:
@@ -1556,6 +1558,9 @@ class LifecycleOrchestrationTests(TestCase):
                     check=True,
                 ).stdout.decode().strip()
 
+            git("config", "user.name", "Collision Fixture")
+            git("config", "user.email", "collision-fixture@secpal.test")
+
             tree = git("mktree", data=b"")
 
             def commit(message: str, *parents: str) -> str:
@@ -1593,6 +1598,97 @@ class LifecycleOrchestrationTests(TestCase):
                     finally:
                         for active in reversed(patches):
                             active.stop()
+
+    def test_collision_importer_acquires_only_required_tree_blobs(self) -> None:
+        from scripts.secpal_pr_review import version_collision
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            destination = Path(directory) / "destination"
+            source.mkdir()
+            destination.mkdir()
+
+            def git(root: Path, *arguments: str, data: bytes | None = None) -> str:
+                return subprocess.run(
+                    ["git", "-C", str(root), *arguments],
+                    input=data,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                ).stdout.decode().strip()
+
+            git(source, "init", "--quiet")
+            git(destination, "init", "--quiet")
+            wanted = git(source, "hash-object", "-w", "--stdin", data=b'owner = "1.2"\n')
+            unrelated = git(
+                source,
+                "hash-object",
+                "-w",
+                "--stdin",
+                data=b"x" * (version_collision.MAX_BLOB_BYTES + 1),
+            )
+            subtree = git(
+                source,
+                "mktree",
+                "-z",
+                data=(
+                    f"100644 blob {wanted}\tfast_path.py\0"
+                    f"100644 blob {unrelated}\tunrelated.bin\0"
+                ).encode(),
+            )
+            tree = git(
+                source,
+                "mktree",
+                "-z",
+                data=f"040000 tree {subtree}\tsecpal_pr_review\0".encode(),
+            )
+            importer = version_collision._BoundedObjectImporter(source, destination)
+            importer.transfer(tree, "tree", import_blobs=False)
+            importer.transfer_path(
+                tree,
+                "secpal_pr_review/fast_path.py",
+            )
+            self.assertIn(wanted, importer.imported)
+            self.assertNotIn(unrelated, importer.imported)
+            self.assertEqual(
+                git(destination, "cat-file", "blob", wanted),
+                'owner = "1.2"',
+            )
+
+    def test_collision_importer_enforces_depth_for_cached_tree_objects(self) -> None:
+        from scripts.secpal_pr_review import version_collision
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            destination = Path(directory) / "destination"
+            source.mkdir()
+            destination.mkdir()
+            for root in (source, destination):
+                subprocess.run(
+                    ["git", "-C", str(root), "init", "--quiet"], check=True
+                )
+
+            leaf = subprocess.run(
+                ["git", "-C", str(source), "mktree"],
+                input=b"",
+                stdout=subprocess.PIPE,
+                check=True,
+            ).stdout.decode().strip()
+            parent = subprocess.run(
+                ["git", "-C", str(source), "mktree", "-z"],
+                input=f"040000 tree {leaf}\tcached\0".encode(),
+                stdout=subprocess.PIPE,
+                check=True,
+            ).stdout.decode().strip()
+            importer = version_collision._BoundedObjectImporter(
+                source, destination
+            )
+            importer.transfer(leaf, "tree", import_blobs=False)
+            with mock.patch.object(version_collision, "MAX_TREE_DEPTH", 0):
+                with self.assertRaisesRegex(
+                    version_collision.VersionCollisionError, "object closure"
+                ):
+                    importer.transfer(parent, "tree", import_blobs=False)
 
     def test_collision_owner_model_matches_maintained_ready_declarations(self) -> None:
         from scripts.secpal_pr_review import version_collision
@@ -1656,9 +1752,17 @@ class LifecycleOrchestrationTests(TestCase):
         mutations = (
             b'\nREADY_INTEGRATION_V12_KEYS |= {"attacker"}\n',
             b'\nREADY_INTEGRATION_V12_KEYS.add("attacker")\n',
+            b'\nREADY_INTEGRATION_V12_KEYS["attacker"] = "value"\n',
             b'\nglobals()["READY_INTEGRATION_V12_KEYS"] = frozenset()\n',
             b'\nimport os as READY_INTEGRATION_V12_KEYS\n',
             b'\ndef READY_INTEGRATION_V12_KEYS():\n    return frozenset()\n',
+            b'\ndef shadow(READY_INTEGRATION_V12_KEYS):\n    return None\n',
+            b'\nshadow = lambda READY_INTEGRATION_V12_KEYS: None\n',
+            b'\nalias = READY_INTEGRATION_V12_KEYS\n',
+            b'\nfrozenset = attacker_controlled\n',
+            b'\nsetattr(module, "READY_INTEGRATION_V12_KEYS", attacker_controlled)\n',
+            b'\nbuiltins.frozenset = attacker_controlled\n',
+            b'\n__builtins__["frozenset"] = attacker_controlled\n',
             b'\nname = "READY_INTEGRATION_V12_KEYS"\nglobals()[name] = frozenset()\n',
             b'\nglobals().update({"READY_INTEGRATION_V12_KEYS": frozenset()})\n',
         )
@@ -1669,6 +1773,44 @@ class LifecycleOrchestrationTests(TestCase):
                     "declaration",
                 ):
                     version_collision.inventory_from_source(source + mutation)
+
+    def test_collision_owner_accepts_the_maintained_v12_limit_gate(self) -> None:
+        from scripts.secpal_pr_review import version_collision
+
+        source = CollisionCompositionFixture.source(
+            "1.2", "authenticated_resolution_delta"
+        )
+        gate = (
+            b'    if schema_version == "1.2":\n'
+            b'        limits = registry.get("limits") if isinstance(registry, dict) else None\n'
+            b'        maximum_items = limits.get("maximum_items") if isinstance(limits, dict) else None\n'
+            b'        if (\n'
+            b'            isinstance(maximum_items, bool)\n'
+            b'            or not isinstance(maximum_items, int)\n'
+            b'            or maximum_items < 1\n'
+            b'        ):\n'
+            b'            raise SecurityBlocker("registered integration item limit is invalid")\n'
+            b'        if isinstance(raw_delta, list) and len(raw_delta) > maximum_items:\n'
+            b'            raise SecurityBlocker("Ready integration delta exceeds the registered item limit")\n'
+        )
+        source = source.replace(b"    return value\n", gate + b"    return value\n")
+        successor = (
+            source.replace(b"'1.2': frozenset", b"'1.3': frozenset", 1)
+            .replace(b"('1.2', False)", b"('1.3', False)", 1)
+            .replace(b"('1.2', True)", b"('1.3', True)", 1)
+            .replace(b'if schema_version == "1.2"', b'if schema_version == "1.3"', 1)
+        )
+        positions = version_collision.verify_blob_renumber(
+            source, successor, "1.2", "1.3"
+        )
+        delta = {
+            "changes": [{
+                "path": version_collision.SOURCE_PATH,
+                "replacement_offsets": [list(pair) for pair in positions],
+            }]
+        }
+
+        version_collision._verify_owner_renumber(source, "1.2", delta)
 
     def test_collision_issuer_verifies_exact_accepted_source_bytes(self) -> None:
         from scripts.secpal_pr_review import exact_source_safety, version_collision
@@ -1696,15 +1838,84 @@ class LifecycleOrchestrationTests(TestCase):
                 version_collision._require_accepted_issuer(main)
         verify.assert_called_once_with(Path(version_collision.__file__).resolve().parents[2], main)
 
+    def test_collision_source_safety_detects_hidden_index_substitution(self) -> None:
+        from scripts.secpal_pr_review import exact_source_safety
+
+        for index_flag in (None, "--assume-unchanged", "--skip-worktree"):
+            with self.subTest(index_flag=index_flag), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                subprocess.run(
+                    ["git", "-C", str(root), "init", "--quiet"], check=True
+                )
+                source = root / "source.py"
+                source.write_text('authority = "accepted"\n', encoding="utf-8")
+                subprocess.run(
+                    ["git", "-C", str(root), "add", "source.py"], check=True
+                )
+                tree = subprocess.run(
+                    ["git", "-C", str(root), "write-tree"],
+                    stdout=subprocess.PIPE,
+                    check=True,
+                ).stdout.decode().strip()
+                if index_flag is not None:
+                    subprocess.run(
+                        [
+                            "git", "-C", str(root), "update-index",
+                            index_flag, "source.py",
+                        ],
+                        check=True,
+                    )
+                source.write_text('authority = "substituted"\n', encoding="utf-8")
+
+                with self.assertRaisesRegex(
+                    authority.LifecycleAuthorityError,
+                    "immutable source bytes",
+                ):
+                    exact_source_safety.verify_source_bytes(root, tree)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(
+                ["git", "-C", str(root), "init", "--quiet"], check=True
+            )
+            source = root / "source.py"
+            source.write_text('authority = "accepted"\n', encoding="utf-8")
+            subprocess.run(
+                ["git", "-C", str(root), "add", "source.py"], check=True
+            )
+            tree = subprocess.run(
+                ["git", "-C", str(root), "write-tree"],
+                stdout=subprocess.PIPE,
+                check=True,
+            ).stdout.decode().strip()
+            source.unlink()
+            source.symlink_to("missing-source.py")
+            with self.assertRaisesRegex(
+                authority.LifecycleAuthorityError,
+                "symlink",
+            ):
+                exact_source_safety.verify_source_bytes(root, tree)
+
     def test_collision_public_entry_gates_current_before_source_acquisition(self) -> None:
         from scripts.secpal_pr_review import lifecycle_publication, version_collision
 
+        order = []
         with mock.patch.object(
+            version_collision,
+            "_authenticate_installed_collision_issuer",
+            side_effect=lambda: order.append("source") or "a" * 40,
+            create=True,
+        ) as source_authentication, mock.patch.object(
             lifecycle_publication,
             "verify_current_lifecycle_authority",
-            side_effect=lifecycle_publication.LifecyclePublicationError(
-                "CURRENT unavailable"
-            ),
+            side_effect=lambda *_args: (
+                order.append("CURRENT"),
+                (_ for _ in ()).throw(
+                    lifecycle_publication.LifecyclePublicationError(
+                        "CURRENT unavailable"
+                    )
+                ),
+            )[1],
         ), mock.patch.object(
             version_collision,
             "_authenticated_source_checkout",
@@ -1722,13 +1933,16 @@ class LifecycleOrchestrationTests(TestCase):
                     resulting_tree="a" * 40,
                     repository_root=REPO_ROOT,
                 )
+        source_authentication.assert_called_once_with()
         checkout.assert_not_called()
+        self.assertEqual(order, ["source", "CURRENT"])
 
     def test_collision_python_tests_reject_executable_version_dispatch(self) -> None:
         from scripts.secpal_pr_review import version_collision
 
         rejected = (
             b'if "1.2" == "1.3":\n    dangerous()\n',
+            b'assert {"expected": "1.2"} == {"expected": "1.2"}\n',
             b'assertEqual("1.2", Trigger())\n',
             b'assertEqual(Trigger(), "1.2")\n',
             b'result = callable_value("1.2")\n',
@@ -1756,10 +1970,6 @@ class LifecycleOrchestrationTests(TestCase):
             (
                 b'# maintained expected schema: 1.2\nassert current\n',
                 b'# maintained expected schema: 1.3\nassert current\n',
-            ),
-            (
-                b'assert {"expected": "1.2"} == {"expected": "1.2"}\n',
-                b'assert {"expected": "1.3"} == {"expected": "1.3"}\n',
             ),
         )
         for predecessor, successor in admitted:
@@ -1834,11 +2044,26 @@ class LifecycleOrchestrationTests(TestCase):
                             authorized_paths=("tests/test_collision.py",),
                         )
 
-            inert = b'assert {"expected": "1.2"} == {"expected": "1.2"}\n'
+            assertion = b'assert {"expected": "1.2"} == {"expected": "1.2"}\n'
+            with self.assertRaisesRegex(
+                version_collision.VersionCollisionError,
+                "test version token",
+            ):
+                version_collision.verify_tree_renumber(
+                    root,
+                    test_tree(assertion),
+                    test_tree(assertion.replace(b"1.2", b"1.3")),
+                    occupied_version="1.2",
+                    free_version="1.3",
+                    source_scope=frozenset({"tests/test_collision.py"}),
+                    authorized_paths=("tests/test_collision.py",),
+                )
+
+            comment = b'# maintained expected schema: 1.2\nassert current\n'
             evidence = version_collision.verify_tree_renumber(
                 root,
-                test_tree(inert),
-                test_tree(inert.replace(b"1.2", b"1.3")),
+                test_tree(comment),
+                test_tree(comment.replace(b"1.2", b"1.3")),
                 occupied_version="1.2",
                 free_version="1.3",
                 source_scope=frozenset({"tests/test_collision.py"}),
@@ -1898,7 +2123,11 @@ class LifecycleOrchestrationTests(TestCase):
             with self.assertRaisesRegex(version_collision.VersionCollisionError, "version identity"):
                 derive(partial)
             complete = partial.replace(b'schema_version == "1.2"', b'schema_version == "1.3"')
-            self.assertEqual(derive(complete)["free_version"], "1.3")
+            with self.assertRaisesRegex(
+                version_collision.VersionCollisionError,
+                "custom dispatch",
+            ):
+                derive(complete)
             before += b'other_domain = "1.2"\n'
             predecessor = fixture.commit(fixture.tree(before), "candidate with unrelated version", fixture.base)
             with self.assertRaisesRegex(version_collision.VersionCollisionError, "version identity"):
@@ -2657,6 +2886,10 @@ def create_ready_integration_attestation(normalized, eligibility_bound):
         ):
             with self.assertRaises(fast_path.SecurityBlocker):
                 fast_path.verify_clean_feedback_gate(clean, changed)
+        secret = copy.deepcopy(proof)
+        secret["provider_transport"][0]["body"] += "\nAuthorization: Bearer fixture-secret"
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "secret-like"):
+            fast_path.verify_clean_feedback_gate(clean, secret)
 
     def test_collision_continuation_version_binds_receipt_without_thread_authority(self) -> None:
         request, _ = continuation_inputs()
