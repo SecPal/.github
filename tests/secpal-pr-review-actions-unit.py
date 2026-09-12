@@ -8778,6 +8778,126 @@ class FastPathTests(TestCase):
         ):
             actions._command_attest_validation(arguments)
 
+    def test_new_v12_ready_integration_validates_from_attested_successor(self) -> None:
+        reviewed = fast_feedback()
+        prior_ready_head = "9" * 40
+        tree = "a" * 40
+        entry = registry_entry("SecPal/.github")
+        entry["manual_gates"] = []
+        binding = actions._fast_registry_binding(entry)
+        integration = ready_integration_evidence(
+            reviewed, validated_tree=tree, registry=binding
+        )
+        integration.update(
+            schema_version="1.2",
+            reviewed_head_sha=reviewed.head_sha,
+            prior_delivery_head_sha=prior_ready_head,
+            ordered_parent_shas=[prior_ready_head, reviewed.base_sha],
+        )
+        arguments = SimpleNamespace(
+            expected_head=prior_ready_head,
+            repo_root=str(REPO_ROOT),
+            repo="SecPal/.github",
+            reviewed_state="reviewed.json",
+            registry="registry.json",
+            bind_commit=False,
+            receipt=None,
+            output=None,
+            manual_gate_evidence=None,
+            eligibility_evidence="eligibility.json",
+            integration_evidence="integration.json",
+            pre_enrollment_integration_evidence=None,
+            exceptional_recovery_evidence=None,
+            exceptional_continuation_evidence=None,
+            delivery_issue=9,
+            integration_authorization_id=integration["authorization_id"],
+            expected_integration_signer=integration["expected_signer"]["identity"],
+            prior_authority="prior.json",
+            prior_authority_tag_ref="refs/tags/prior",
+            prior_reviewed_state="prior-reviewed.json",
+            prior_receipt="prior-receipt.json",
+            prior_attestation="prior-attestation.json",
+            expected_prior_authority_signer="aroviqen",
+            validation_receipt_id=None,
+            final_attestation_id=None,
+            exceptional_recovery_delivery_issue=None,
+            exceptional_recovery_authorization_id=None,
+            exceptional_continuation_delivery_issue=None,
+            exceptional_continuation_authorization_id=None,
+        )
+
+        with (
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                return_value=(prior_ready_head, ""),
+            ),
+            mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+            mock.patch.object(actions, "load_registry", return_value={}),
+            mock.patch.object(actions, "select_repository", return_value=entry),
+            mock.patch.object(
+                actions,
+                "_resolution_eligibility_digest",
+                return_value="e" * 64,
+            ),
+            mock.patch.object(actions, "_read_json", return_value=integration),
+            mock.patch.object(actions, "_staged_tree", return_value=tree),
+            mock.patch.object(actions, "_verify_ready_integration_prior_authority"),
+            mock.patch.object(actions, "_verify_integration_tree_delta"),
+            mock.patch.object(actions, "_run_registered_validations", return_value=False),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "complete registered validation failed"
+            ),
+        ):
+            actions._command_attest_validation(arguments)
+
+        substituted_head = "8" * 40
+        arguments.expected_head = substituted_head
+        with (
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                return_value=(substituted_head, ""),
+            ),
+            mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+            mock.patch.object(actions, "load_registry", return_value={}),
+            mock.patch.object(actions, "select_repository", return_value=entry),
+            mock.patch.object(
+                actions,
+                "_resolution_eligibility_digest",
+                return_value="e" * 64,
+            ),
+            mock.patch.object(actions, "_read_json", return_value=integration),
+            mock.patch.object(actions, "_staged_tree", return_value=tree),
+            mock.patch.object(
+                actions, "_verify_ready_integration_prior_authority"
+            ) as verify_prior,
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "local head does not match the authenticated prior Ready parent",
+            ),
+        ):
+            actions._command_attest_validation(arguments)
+        verify_prior.assert_not_called()
+
+        arguments.expected_head = prior_ready_head
+        arguments.integration_evidence = ""
+        with (
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                return_value=(prior_ready_head, ""),
+            ),
+            mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+            mock.patch.object(actions, "load_registry", return_value={}),
+            mock.patch.object(actions, "select_repository", return_value=entry),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "reviewed feedback head does not match --expected-head",
+            ),
+        ):
+            actions._command_attest_validation(arguments)
+
     def test_real_signed_two_parent_candidate_reproduces_sole_parent_failure(
         self,
     ) -> None:
