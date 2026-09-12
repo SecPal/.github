@@ -55,6 +55,41 @@ CURRENT_OID = "7f2390b9a98650a833f21c765b02f7af89814aa0"
 CURRENT_DIGEST = "1cbd45b2c6498cb4cb7a28fc3afe8066fc981cc9b727b56de08e2f53f16422a7"
 READY_AUTHORIZATION = "authorization:1a6ec11a0232ef467c41236e4349a942872bc7346748b637c35c43f45e3a2c2c"
 READY_EVENT = "a92ef35d8471ff3ed5913e07c8498d3565afb0232633901eb3ae3dba67588ca5"
+LEGACY_ISSUE = 792
+LEGACY_PR = 793
+LEGACY_HEAD = "5b8a661cec134256cf31273ab30c38b048999978"
+LEGACY_TREE = "c98663dbcde480c1dcac7858595dabff3cb2fd2c"
+LEGACY_PARENT = "401f0886fdfee9525ced24f703e31087dfa35096"
+LEGACY_LIFECYCLE = (
+    "lifecycle-adoption:"
+    "67799903a7b2c1ffc6e0fafaf18d3127c39b0d02c94928ec4ec33396e21e85f6"
+)
+LEGACY_PROOF = "2cc834e6a37ae41038838f1d663b0ac787a50b2ee57df5fb115d27dc8060f1d1"
+LEGACY_AUTHORIZATION = (
+    "9ae01fca3801cfaf3d74d41c0b06b4ebed400d79e21e18e0fe23b537be2b99d1"
+)
+LEGACY_SIGNATURE = (
+    "03ec1b0b217ea7ebecf32e80bbdde28ba07d9c0029bd3a491c9e757c19cea124"
+)
+LEGACY_REGISTRY = (
+    "38629c17e2397bfc1df44e5fa65fc176326f47fdf9dbfee98d1de52ecd093340"
+)
+LEGACY_COMMAND_SET = (
+    "15d370f613fb13d39bcf5136ffb4ebae298eb78e0acfaf18635253571f9ff12a"
+)
+LEGACY_SOURCE_VALIDATION = (
+    "951af9087c60ac6da16f8f94f6bde89a42035938a0377ea94a2e583f28d39259"
+)
+LEGACY_RECEIPT = (
+    "008128e9edf6b3ad9b166f4641698a6849593006a70a8df09afb65b66dd81065"
+)
+LEGACY_ATTESTATION = (
+    "c824f0f207b8aae00a8b2019ea6e4870279524eb884fcba0af4bff6c322f6b42"
+)
+LEGACY_CURRENT_OID = "afa542a289bb43cecac326b24e041c3fb68bad7a"
+LEGACY_CURRENT_DIGEST = (
+    "275e56d899450fef017fadc9913cdb3062b6650ceea1f3fffd11e5a067aa9cec"
+)
 
 
 def state() -> dict[str, object]:
@@ -175,6 +210,85 @@ def transition(current: SimpleNamespace | None = None) -> SimpleNamespace:
     )
 
 
+def legacy_proof() -> dict[str, object]:
+    intended_state = state()
+    intended_state["ready_history"] = [{
+        "sequence": 1,
+        "transition_kind": "DRAFT_TO_READY",
+        "observation_digest": (
+            "b337d3925348e38a5df9fffad029964bd3f1bac71b1cdb8205581f7a50bd16c3"
+        ),
+    }]
+    return {
+        "schema_version": "1.0",
+        "proof_version": "1.0",
+        "repository": REPOSITORY,
+        "delivery_issue": LEGACY_ISSUE,
+        "pull_request": LEGACY_PR,
+        "head_sha": LEGACY_HEAD,
+        "tree_sha": LEGACY_TREE,
+        "historical_proof_mode": "exact_state_adoption",
+        "commit_signature_evidence_digest": LEGACY_SIGNATURE,
+        "validation_receipt_digest": LEGACY_RECEIPT,
+        "source_validation_evidence_digest": LEGACY_SOURCE_VALIDATION,
+        "adoption_source_evidence_digest": LEGACY_ATTESTATION,
+        "observed_history_digest": (
+            "5728c21f8af3f8eb73d852659f258d9bc19cfa2ee537353dea03497faf93c10d"
+        ),
+        "intended_state_digest": (
+            "f23d8736597f7c9af4e8311beeadc4660c14a5a5419880e9ca50c8198008d6b9"
+        ),
+        "ordinary_lifecycle_events": [],
+        "head_advanced_count": 0,
+        "head_advanced_history_digest": (
+            "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+        ),
+        "supporting_evidence_digests": sorted([
+            LEGACY_RECEIPT,
+            LEGACY_SIGNATURE,
+            "5728c21f8af3f8eb73d852659f258d9bc19cfa2ee537353dea03497faf93c10d",
+            LEGACY_SOURCE_VALIDATION,
+            LEGACY_ATTESTATION,
+        ]),
+        "proof_digest": LEGACY_PROOF,
+        "authorization_digest": LEGACY_AUTHORIZATION,
+        "authorization": {
+            "authorization_id": "sec792-exact-adoption-67799903a7b2c1ff-20260901T224824Z",
+        },
+        "intended_state": intended_state,
+    }
+
+
+def legacy_published() -> SimpleNamespace:
+    proof_value = legacy_proof()
+    lifecycle = SimpleNamespace(
+        repository=REPOSITORY,
+        delivery_issue=LEGACY_ISSUE,
+        pull_request=LEGACY_PR,
+        head_sha=LEGACY_HEAD,
+        tree_sha=LEGACY_TREE,
+        lifecycle_id=LEGACY_LIFECYCLE,
+        authority_digest=LEGACY_PROOF,
+        historical_proof_mode="exact_state_adoption",
+        state=copy.deepcopy(proof_value["intended_state"]),
+        validation_receipt_digest=LEGACY_RECEIPT,
+        source_validation_evidence_digest=LEGACY_SOURCE_VALIDATION,
+        adoption_source_evidence_digest=LEGACY_ATTESTATION,
+    )
+    bundle = {
+        "exact_state_adoption_proof": proof_value,
+        "transition_authorizations": [],
+        "authority_chain": [],
+    }
+    return SimpleNamespace(
+        publication_oid=LEGACY_CURRENT_OID,
+        publication_digest=LEGACY_CURRENT_DIGEST,
+        predecessor_publication_oid=None,
+        lifecycle=lifecycle,
+        serialized_lifecycle_evidence=(json.dumps(bundle).encode() + b"\n"),
+    )
+
+
 class AdoptedReadyPriorAuthorityTests(TestCase):
     def test_authority_imports_ignore_repository_bytecode_caches(self) -> None:
         cache_root = Path(actions.sys.pycache_prefix).resolve(strict=True)
@@ -234,6 +348,70 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
         self.assertEqual(manifest["source_authority"]["review_budget_admission_digest"], BUDGET)
         self.assertEqual(manifest["source_authority"]["enrollment_publication"]["object_oid"], ENROLLMENT_OID)
         self.assertEqual(manifest["lifecycle"]["ready_transition_count"], 1)
+        self.assertEqual(manifest["historical_companions"], {
+            "reviewed_state_bytes": "UNAVAILABLE",
+            "validation_receipt_bytes": "UNAVAILABLE",
+            "final_attestation_bytes": "UNAVAILABLE",
+            "historical_bytes_reconstructed": False,
+        })
+        self.assertEqual(
+            fast_path.normalize_ready_integration_prior_authority(manifest), manifest
+        )
+
+    def test_target_792_shape_derives_authenticated_legacy_loss_authority(self) -> None:
+        current = legacy_published()
+        with (
+            mock.patch.object(
+                actions,
+                "_load_lifecycle_publication_helpers",
+                return_value=(lifecycle_authority, lifecycle_publication),
+            ),
+            mock.patch.object(
+                actions,
+                "_require_accepted_main_bridge_source",
+                return_value="9" * 40,
+            ),
+            mock.patch.object(
+                lifecycle_publication,
+                "verify_current_lifecycle_authority",
+                return_value=current,
+            ),
+            mock.patch.object(
+                lifecycle_authority,
+                "verify_exact_state_adoption_proof",
+                return_value=current.lifecycle,
+            ),
+            mock.patch.object(
+                actions,
+                "_verified_prior_delivery_commit",
+                return_value={
+                    "parent_sha": LEGACY_PARENT,
+                    "tree_sha": LEGACY_TREE,
+                    "signer": {"kind": "SSH_PRINCIPAL", "identity": SIGNER},
+                },
+            ),
+        ):
+            manifest = actions._derive_exact_state_adoption_v3_ready_prior_authority(
+                repository_root=ROOT.parent,
+                repository=REPOSITORY,
+                delivery_issue=LEGACY_ISSUE,
+                pull_request=LEGACY_PR,
+                binding={"signature_policy": {"accepted_formats": ["ssh"]}},
+            )
+        self.assertEqual(manifest["schema_version"], "1.2")
+        self.assertEqual(
+            manifest["source_authority_mode"],
+            "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS",
+        )
+        self.assertEqual(manifest["prior_delivery_head_sha"], LEGACY_HEAD)
+        self.assertEqual(manifest["prior_delivery_tree_sha"], LEGACY_TREE)
+        self.assertEqual(manifest["prior_validation_receipt_digest"], LEGACY_RECEIPT)
+        self.assertEqual(manifest["prior_final_attestation_digest"], LEGACY_ATTESTATION)
+        self.assertEqual(manifest["lifecycle"]["identity"], LEGACY_LIFECYCLE)
+        self.assertEqual(manifest["publication"], {
+            "object_oid": LEGACY_CURRENT_OID,
+            "publication_digest": LEGACY_CURRENT_DIGEST,
+        })
         self.assertEqual(manifest["historical_companions"], {
             "reviewed_state_bytes": "UNAVAILABLE",
             "validation_receipt_bytes": "UNAVAILABLE",
