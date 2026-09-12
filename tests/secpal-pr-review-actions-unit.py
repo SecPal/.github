@@ -6362,6 +6362,160 @@ class FastPathTests(TestCase):
                 },
             )
 
+    def test_collision_validation_uses_only_accepted_disposable_authority(
+        self,
+    ) -> None:
+        reviewed = fast_feedback()
+        tree = "a" * 40
+        collision = {"authenticated": True}
+        continuation = {
+            "schema_version": "1.1",
+            "trigger": "IMMUTABLE_EVIDENCE_VERSION_COLLISION",
+            "delivery_issue_number": 786,
+            "authorization_id": "collision-continuation-001",
+            "pull_request_number": reviewed.pull_request_number,
+            "prior_ready_head_sha": reviewed.head_sha,
+            "prior_ready_tree_sha": "b" * 40,
+            "collision_digest": fast_path.digest_json(collision),
+        }
+        accepted_entry = registry_entry("SecPal/.github")
+        accepted_entry["manual_gates"] = []
+        accepted_binding = {
+            **actions._fast_registry_binding(accepted_entry),
+            "collision_validation_authority": {"candidate_tree": tree},
+        }
+        execution_root = REPO_ROOT / ".context/collision-validation-unit"
+        execution = SimpleNamespace(
+            collision=SimpleNamespace(to_dict=lambda: collision),
+            repository_entry=accepted_entry,
+            registry_binding=accepted_binding,
+            execution_root=execution_root,
+        )
+        helper = SimpleNamespace(
+            collision_complete_validation=mock.Mock(
+                return_value=nullcontext(execution)
+            ),
+            validation_collision_projection=lambda value: value,
+        )
+        arguments = SimpleNamespace(
+            expected_head=reviewed.head_sha,
+            repo_root=str(REPO_ROOT),
+            repo="SecPal/.github",
+            reviewed_state="reviewed.json",
+            registry=None,
+            bind_commit=False,
+            receipt=None,
+            output="receipt.json",
+            manual_gate_evidence=None,
+            eligibility_evidence="eligibility.json",
+            integration_evidence=None,
+            pre_enrollment_integration_evidence=None,
+            exceptional_recovery_evidence=None,
+            exceptional_continuation_evidence="continuation.json",
+            exceptional_recovery_delivery_issue=None,
+            exceptional_recovery_authorization_id=None,
+            exceptional_continuation_delivery_issue=786,
+            exceptional_continuation_authorization_id=(
+                continuation["authorization_id"]
+            ),
+            delivery_issue=None,
+            integration_authorization_id=None,
+            expected_integration_signer=None,
+            prior_authority=None,
+            prior_authority_tag_ref=None,
+            prior_reviewed_state=None,
+            prior_receipt=None,
+            prior_attestation=None,
+            expected_prior_authority_signer=None,
+            validation_receipt_id=None,
+            final_attestation_id=None,
+        )
+
+        def attestation_git(
+            _root: Path,
+            command: list[str],
+            *,
+            allow_failure: bool = False,
+        ) -> Any:
+            del allow_failure
+            self.assertEqual(command, ["rev-parse", "HEAD^{tree}"])
+            return SimpleNamespace(returncode=0, stdout="b" * 40, stderr="")
+
+        reports = []
+        with (
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                return_value=(reviewed.head_sha, ""),
+            ),
+            mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+            mock.patch.object(
+                actions, "_read_json", return_value=continuation,
+            ),
+            mock.patch.object(actions, "load_registry") as candidate_registry,
+            mock.patch.object(actions, "_staged_tree", return_value=tree),
+            mock.patch.object(
+                actions,
+                "_resolution_eligibility_digest",
+                return_value="e" * 64,
+            ),
+            mock.patch.object(
+                actions,
+                "_load_exceptional_continuation_evidence",
+                return_value=continuation,
+            ),
+            mock.patch.object(
+                actions, "_run_attestation_git", side_effect=attestation_git,
+            ),
+            mock.patch.object(
+                actions, "_load_collision_validation_helper", return_value=helper,
+            ),
+            mock.patch.object(
+                actions, "_run_registered_validations", return_value=True,
+            ) as run_validation,
+            mock.patch.object(
+                actions,
+                "_observe_ready_integration_authority_once",
+                return_value={
+                    "repository": "SecPal/.github",
+                    "pull_request_number": reviewed.pull_request_number,
+                    "state": "OPEN",
+                    "draft": False,
+                    "head_sha": reviewed.head_sha,
+                },
+            ),
+            mock.patch.object(
+                actions,
+                "_write_fast_report",
+                side_effect=lambda _path, value: reports.append(value),
+            ),
+        ):
+            self.assertEqual(actions._command_attest_validation(arguments), 0)
+
+        candidate_registry.assert_not_called()
+        run_validation.assert_called_once_with(accepted_entry, execution_root)
+        self.assertEqual(
+            reports[-1]["registry_digest"],
+            fast_path.digest_json(accepted_binding),
+        )
+
+        arguments.registry = "candidate-registry.json"
+        with (
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                return_value=(reviewed.head_sha, ""),
+            ),
+            mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+            mock.patch.object(
+                actions, "_read_json", return_value=continuation,
+            ),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "caller-selected registry",
+            ),
+        ):
+            actions._command_attest_validation(arguments)
+
     def test_attestation_cli_reports_failed_entry_without_output_or_retry(self) -> None:
         entry = registry_entry("SecPal/.github")
         entry["manual_gates"] = []

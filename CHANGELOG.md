@@ -110,6 +110,13 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 **Fixed:**
 
+- Make immutable-version collision validation clone-independent by
+  reconstructing and hashing the derived candidate tree from authenticated
+  predecessor bytes before isolated bounded materialization.
+- Authenticate the accepted-main registry, complete command set and closed
+  validation harness while keeping candidate production bytes as the system
+  under test and candidate-local tests, registry data and ambient Git objects
+  outside validation authority.
 - Extend the existing one-use Exceptional Continuation with independently
   authenticated protected-main version-collision evidence, exact signed user
   authorization and bounded byte-only renumber verification.
