@@ -4313,6 +4313,35 @@ class RegistryTests(TestCase):
         self.assertNotIn("command-output", str(result.failure_report()))
         self.assertEqual(run.call_count, 2)
 
+    def test_registered_validation_rechecks_integrity_at_each_command_boundary(
+        self,
+    ) -> None:
+        repository = registry_entry("SecPal/.github")
+        integrity = mock.Mock(
+            side_effect=[None, RuntimeError("validation root changed")]
+        )
+        with (
+            mock.patch.object(
+                actions,
+                "_validation_executable",
+                return_value="/usr/bin/true",
+            ),
+            mock.patch.object(
+                actions.subprocess,
+                "run",
+                return_value=SimpleNamespace(returncode=0),
+            ) as run,
+            self.assertRaisesRegex(RuntimeError, "validation root changed"),
+        ):
+            actions._run_registered_validations(
+                repository,
+                REPO_ROOT,
+                integrity_verifier=integrity,
+            )
+
+        self.assertEqual(integrity.call_count, 2)
+        self.assertEqual(run.call_count, 1)
+
     def test_registered_validation_timeout_reports_no_command_output(self) -> None:
         repository = registry_entry("SecPal/.github")
         timeout = actions.subprocess.TimeoutExpired(
@@ -6390,6 +6419,7 @@ class FastPathTests(TestCase):
             repository_entry=accepted_entry,
             registry_binding=accepted_binding,
             execution_root=execution_root,
+            verify_execution_root=mock.Mock(),
         )
         helper = SimpleNamespace(
             collision_complete_validation=mock.Mock(
@@ -6493,7 +6523,11 @@ class FastPathTests(TestCase):
             self.assertEqual(actions._command_attest_validation(arguments), 0)
 
         candidate_registry.assert_not_called()
-        run_validation.assert_called_once_with(accepted_entry, execution_root)
+        run_validation.assert_called_once_with(
+            accepted_entry,
+            execution_root,
+            integrity_verifier=execution.verify_execution_root,
+        )
         self.assertEqual(
             reports[-1]["registry_digest"],
             fast_path.digest_json(accepted_binding),

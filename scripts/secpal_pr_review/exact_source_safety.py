@@ -30,6 +30,8 @@ _COLLISION_MAX_OBJECT_BYTES = 1024 * 1024
 _COLLISION_MAX_COMMIT_BYTES = 64 * 1024
 _COLLISION_MAX_AGGREGATE_BYTES = 8 * 1024 * 1024
 _COLLISION_MAX_TREE_DEPTH = 64
+_COLLISION_MAX_GIT_STATE_FILES = _COLLISION_MAX_OBJECTS + 128
+_COLLISION_MAX_GIT_STATE_BYTES = _COLLISION_MAX_AGGREGATE_BYTES * 2
 _COLLISION_CURRENT_IDENTITY_FIXTURES = {
     "tests/secpal-pr-review-actions-unit.py": (
         {
@@ -934,6 +936,7 @@ def _verify_collision_validation_root(
     runtime: Mapping[str, tuple[str, str]],
     object_dependencies: Sequence[Mapping[str, Any]],
     projected_tree: str,
+    git_state: tuple[tuple[str, int, int, str], ...],
 ) -> None:
     expected = {**production, **projection, **runtime}
     if len(expected) != len(production) + len(projection) + len(runtime):
@@ -1055,6 +1058,79 @@ def _verify_collision_validation_root(
             if tree not in verified_trees:
                 _verify_collision_tree_closure(root, tree, verified_objects)
                 verified_trees.add(tree)
+    _require_collision_git_state(root, git_state)
+
+
+def _collision_git_state(root: Path) -> tuple[tuple[str, int, int, str], ...]:
+    """Hash the complete bounded private Git state used by validation."""
+
+    git_root = root / ".git"
+    try:
+        if git_root.resolve(strict=True) != git_root or not git_root.is_dir():
+            raise authority.LifecycleAuthorityError(
+                "collision private Git state is unavailable"
+            )
+    except (OSError, RuntimeError) as exc:
+        raise authority.LifecycleAuthorityError(
+            "collision private Git state is unavailable"
+        ) from exc
+    state: list[tuple[str, int, int, str]] = []
+    aggregate = 0
+    for path in sorted(git_root.rglob("*")):
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise authority.LifecycleAuthorityError(
+                "collision private Git state is unavailable"
+            ) from exc
+        if stat.S_ISDIR(metadata.st_mode):
+            continue
+        if not stat.S_ISREG(metadata.st_mode) or path.is_symlink():
+            raise authority.LifecycleAuthorityError(
+                "collision private Git state contains a special file"
+            )
+        if len(state) >= _COLLISION_MAX_GIT_STATE_FILES:
+            raise authority.LifecycleAuthorityError(
+                "collision private Git state exceeds the file bound"
+            )
+        aggregate += metadata.st_size
+        if aggregate > _COLLISION_MAX_GIT_STATE_BYTES:
+            raise authority.LifecycleAuthorityError(
+                "collision private Git state exceeds the byte bound"
+            )
+        try:
+            raw = path.read_bytes()
+            after = path.lstat()
+        except OSError as exc:
+            raise authority.LifecycleAuthorityError(
+                "collision private Git state is unavailable"
+            ) from exc
+        if (
+            len(raw) != metadata.st_size
+            or after.st_size != metadata.st_size
+            or after.st_mtime_ns != metadata.st_mtime_ns
+            or after.st_mode != metadata.st_mode
+        ):
+            raise authority.LifecycleAuthorityError(
+                "collision private Git state changed while observed"
+            )
+        state.append((
+            path.relative_to(git_root).as_posix(),
+            stat.S_IMODE(metadata.st_mode),
+            len(raw),
+            hashlib.sha256(raw).hexdigest(),
+        ))
+    return tuple(state)
+
+
+def _require_collision_git_state(
+    root: Path,
+    expected: tuple[tuple[str, int, int, str], ...],
+) -> None:
+    if _collision_git_state(root) != expected:
+        raise authority.LifecycleAuthorityError(
+            "validation mutated collision private Git state"
+        )
 
 
 @contextmanager
@@ -1063,7 +1139,7 @@ def collision_validation_root(
     *,
     profile: Mapping[str, Any],
     expected_profile: Mapping[str, Any],
-) -> Iterator[Path]:
+) -> Iterator[tuple[Path, Any]]:
     """Construct one closed candidate root from an isolated authenticated DB."""
 
     if dict(profile) != dict(expected_profile):
@@ -1150,18 +1226,9 @@ def collision_validation_root(
     transport._git(root, ["add", "--all", "--"])
     projected_tree = transport._git_text(root, ["write-tree"]).strip()
     with _collision_validation_dependencies(root) as runtime:
-        _verify_collision_validation_root(
-            root,
-            candidate_tree,
-            production,
-            projection,
-            runtime,
-            object_dependencies,
-            projected_tree,
-        )
-        try:
-            yield root
-        finally:
+        git_state = _collision_git_state(root)
+
+        def verify() -> None:
             _verify_collision_validation_root(
                 root,
                 candidate_tree,
@@ -1170,7 +1237,14 @@ def collision_validation_root(
                 runtime,
                 object_dependencies,
                 projected_tree,
+                git_state,
             )
+
+        verify()
+        try:
+            yield root, verify
+        finally:
+            verify()
 
 
 def _candidate_listing_without_harness(listing: str) -> str:

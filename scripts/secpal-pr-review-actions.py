@@ -1329,7 +1329,10 @@ def _complete_validation_commands(
 
 
 def _run_registered_validations(
-    repository: dict[str, Any], repository_root: Path
+    repository: dict[str, Any],
+    repository_root: Path,
+    *,
+    integrity_verifier: Any = None,
 ) -> RegisteredValidationResult:
     """Run unconditional validation once without a shell or command output."""
 
@@ -1413,6 +1416,8 @@ def _run_registered_validations(
                     command["purpose"],
                     "unavailable executable",
                 )
+            if integrity_verifier is not None:
+                integrity_verifier()
             try:
                 completed = subprocess.run(
                     [executable, *command["argv"][1:]],
@@ -1436,6 +1441,9 @@ def _run_registered_validations(
                     command["purpose"],
                     "execution error",
                 )
+            finally:
+                if integrity_verifier is not None:
+                    integrity_verifier()
             if completed.returncode != 0:
                 return RegisteredValidationResult(
                     index,
@@ -8333,7 +8341,9 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                     getattr(arguments, "manual_gate_evidence", None), binding
                 )
                 validation_result = _run_registered_validations(
-                    entry, execution.execution_root,
+                    entry,
+                    execution.execution_root,
+                    integrity_verifier=execution.verify_execution_root,
                 )
         except (ImportError, OSError, RuntimeError, ValueError) as exc:
             raise fast_path.SecurityBlocker(

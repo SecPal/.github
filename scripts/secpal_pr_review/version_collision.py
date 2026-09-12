@@ -976,6 +976,7 @@ class CollisionValidationExecution:
     repository_entry: dict[str, Any]
     registry_binding: dict[str, Any]
     execution_root: Path
+    verify_execution_root: Any
 
 
 def _read_bounded_blob(root: Path, treeish: str, path: str) -> bytes:
@@ -1494,12 +1495,45 @@ def _observe_main() -> str:
     return bootstrap._normalize_protected_main(bootstrap._observe_protected_main()).head_sha
 
 
+def _source_repository_state(
+    root: Path,
+) -> tuple[bytes, tuple[int, bytes], tuple[int, bytes], bytes]:
+    """Snapshot bounded semantic refs around authenticated source reads."""
+
+    refs = _git(
+        root,
+        [
+            "for-each-ref",
+            "--sort=refname",
+            "--format=%(refname)%00%(objectname)%00%(symref)",
+        ],
+        MAX_BLOB_BYTES,
+    )
+    symbolic = publication._run_git(root, ["symbolic-ref", "-q", "HEAD"])
+    head = publication._run_git(root, ["rev-parse", "--verify", "HEAD"])
+    if (
+        symbolic.returncode not in {0, 1}
+        or len(symbolic.stdout) > 4096
+        or head.returncode not in {0, 128}
+        or len(head.stdout) > 4096
+    ):
+        raise VersionCollisionError("source repository state is malformed")
+    return (
+        refs,
+        (symbolic.returncode, symbolic.stdout),
+        (head.returncode, head.stdout),
+        _git(root, ["count-objects", "-v"], 4096),
+    )
+
+
 class _BoundedObjectImporter:
     def __init__(self, source: Path, destination: Path):
         self.source = source
         self.destination = destination
         self.imported: set[str] = set()
         self.objects: dict[str, bytes] = {}
+        self.object_kinds: dict[str, str] = {}
+        self.source_objects: dict[str, tuple[str, bytes]] = {}
         self.histories: set[str] = set()
         self.commit_trees: dict[str, str] = {}
         self.complete_trees: set[str] = set()
@@ -1563,6 +1597,10 @@ class _BoundedObjectImporter:
             raise VersionCollisionError("source object closure exceeds the bound")
         if oid in self.objects:
             raw = self.objects[oid]
+            if self.object_kinds[oid] != kind:
+                raise VersionCollisionError(
+                    "source object identity changed type"
+                )
             if kind == "tree" and import_blobs and oid not in self.complete_trees:
                 self._transfer_tree_children(
                     oid,
@@ -1574,6 +1612,28 @@ class _BoundedObjectImporter:
         if len(self.imported) >= MAX_IMPORTED_OBJECTS:
             raise VersionCollisionError("source object closure exceeds the bound")
         self.imported.add(oid)
+        raw = self._read_source_object(oid, kind)
+        self.total_bytes += len(raw)
+        if self.total_bytes > MAX_IMPORTED_BYTES:
+            raise VersionCollisionError("source object closure exceeds the byte bound")
+        written = publication._run_git(
+            self.destination, ["hash-object", "-w", "-t", kind, "--stdin"], input_bytes=raw,
+        )
+        if written.returncode != 0 or written.stdout != (oid + "\n").encode("ascii"):
+            raise VersionCollisionError("verified source object import failed")
+        self.objects[oid] = raw
+        self.object_kinds[oid] = kind
+        self.source_objects[oid] = (kind, raw)
+        if kind == "tree":
+            self._transfer_tree_children(
+                oid,
+                raw,
+                depth,
+                import_blobs=import_blobs,
+            )
+        return raw
+
+    def _read_source_object(self, oid: str, kind: str) -> bytes:
         size = _git(self.source, ["cat-file", "-s", oid], 32)
         limit = MAX_COMMIT_BYTES if kind == "commit" else MAX_BLOB_BYTES
         if re.fullmatch(rb"[0-9]+\n", size) is None or not 0 <= int(size) <= limit:
@@ -1586,24 +1646,25 @@ class _BoundedObjectImporter:
             else hashlib.sha256(header + raw).hexdigest()
         )
         if digest != oid:
-            raise VersionCollisionError("source object hash differs from its claimed identity")
-        self.total_bytes += len(raw)
-        if self.total_bytes > MAX_IMPORTED_BYTES:
-            raise VersionCollisionError("source object closure exceeds the byte bound")
-        written = publication._run_git(
-            self.destination, ["hash-object", "-w", "-t", kind, "--stdin"], input_bytes=raw,
-        )
-        if written.returncode != 0 or written.stdout != (oid + "\n").encode("ascii"):
-            raise VersionCollisionError("verified source object import failed")
-        self.objects[oid] = raw
-        if kind == "tree":
-            self._transfer_tree_children(
-                oid,
-                raw,
-                depth,
-                import_blobs=import_blobs,
+            raise VersionCollisionError(
+                "source object hash differs from its claimed identity"
             )
         return raw
+
+    def verify_source_objects_unchanged(self) -> None:
+        """Re-read every bounded source object that granted authority."""
+
+        for oid, (kind, expected) in sorted(self.source_objects.items()):
+            try:
+                observed = self._read_source_object(oid, kind)
+            except VersionCollisionError as exc:
+                raise VersionCollisionError(
+                    "source object bytes changed during collision authentication"
+                ) from exc
+            if observed != expected:
+                raise VersionCollisionError(
+                    "source object bytes changed during collision authentication"
+                )
 
     def transfer_path(self, tree: str, path: str) -> str:
         """Transfer the exact blob named by one already bounded tree path."""
@@ -1729,7 +1790,7 @@ class _BoundedObjectImporter:
         if kind == "tree":
             self._tree_entries(raw)
         if oid in self.objects:
-            if self.objects[oid] != raw:
+            if self.object_kinds[oid] != kind or self.objects[oid] != raw:
                 raise VersionCollisionError(
                     "derived object collides with authenticated source bytes"
                 )
@@ -1751,6 +1812,7 @@ class _BoundedObjectImporter:
             raise VersionCollisionError("verified derived object import failed")
         self.imported.add(oid)
         self.objects[oid] = raw
+        self.object_kinds[oid] = kind
         self.total_bytes += len(raw)
 
 
@@ -1863,7 +1925,7 @@ def _authenticated_source_checkout(
         else _oid(accepted_main)
     )
     source = source.resolve(strict=True)
-    source_object_state = _git(source, ["count-objects", "-v"], 4096)
+    source_repository_state = _source_repository_state(source)
     with tempfile.TemporaryDirectory(prefix="secpal-collision-source-") as directory:
         root = Path(directory)
         _git(root, ["init", "--quiet"], 4096)
@@ -1873,6 +1935,8 @@ def _authenticated_source_checkout(
             4096,
         )
         importer = _BoundedObjectImporter(source, root)
+        importer.history(main)
+        protected_main_history = frozenset(importer.histories)
         base = importer.import_histories_and_merge_base(main, predecessor)
         trees = {
             head: importer.commit_trees[head]
@@ -1988,9 +2052,9 @@ def _authenticated_source_checkout(
                 for prerequisite in _validation_object_prerequisites(
                     path, accepted_fixture[3]
                 ):
-                    if prerequisite not in importer.histories:
+                    if prerequisite not in protected_main_history:
                         raise VersionCollisionError(
-                            "validation bundle prerequisite is outside accepted history"
+                            "validation bundle prerequisite is outside protected-main history"
                         )
                     importer.transfer(
                         importer.commit_trees[prerequisite], "tree"
@@ -2012,9 +2076,10 @@ def _authenticated_source_checkout(
         try:
             yield root, main
         finally:
-            if _git(source, ["count-objects", "-v"], 4096) != source_object_state:
+            importer.verify_source_objects_unchanged()
+            if _source_repository_state(source) != source_repository_state:
                 raise VersionCollisionError(
-                    "source object database changed during collision authentication"
+                    "source repository changed during collision authentication"
                 )
             if _observe_main() != main:
                 raise VersionCollisionError(
@@ -2138,12 +2203,13 @@ def collision_complete_validation(
                 root,
                 profile=profile,
                 expected_profile=profile,
-            ) as execution_root:
+            ) as (execution_root, verify_execution_root):
                 yield CollisionValidationExecution(
                     collision=_seal_collision(collision),
                     repository_entry=copy.deepcopy(entry),
                     registry_binding=copy.deepcopy(binding),
                     execution_root=execution_root,
+                    verify_execution_root=verify_execution_root,
                 )
         finally:
             _require_accepted_issuer(main)
