@@ -709,21 +709,27 @@ match is materialized only in the private object database, so a full clone, a
 partial clone, and a closed database in which the resulting tree is absent
 produce the same collision identity. No source-object cache, promisor fallback,
 arbitrary-OID fetch, replacement object, or second transport grants authority.
-Every renumber path must already belong to that scope. The raw predecessor/tree
-delta permits only modifications of existing regular text blobs, without mode
-changes, additions, deletions or renames. Paired OLD/NEW token offsets must
-normalize to identical bytes: no whitespace, wording, logic or formatting edit
-is permitted beside the renumber. Python replacements must occur inside string
-or comment tokens, never numeric literals or executable syntax. Test changes
-are comment-only: assertions, comparisons, calls, control flow and other test
-execution remain immutable. Interpolated Python strings are excluded entirely,
-including their nested string literals and formatted expressions. Limits are 32
-changed paths, 1 MiB per blob, 4 MiB aggregate old/new bytes and 4096
-replacements. Source import separately limits commits to 2048, commit depth to
-1024, parent fanout to 64, tree recursion to 64, all imported objects to 4096,
-commit objects to 64 KiB, other objects to 1 MiB, and aggregate imported bytes
-to 8 MiB. Only required changed/source/policy blobs are acquired. Main drift
-rejects admission. The implementation delta must
+Clone-independent derived-tree preparation admits only the independently
+derived implementation-owner replacements. It rejects an expectation that also
+renumbers test comments or documentation because those paths have no
+independent candidate-free selector. The existing signed-commit authenticator
+retains its older bounded multi-path contract: every such path must already
+belong to the delivery scope, and auxiliary paths remain limited to inert test
+comments or Markdown documentation. Its raw predecessor/tree delta permits only
+modifications of existing regular text blobs, without mode changes, additions,
+deletions or renames. Paired OLD/NEW token offsets must normalize to identical
+bytes: no whitespace, wording, logic or formatting edit is permitted beside the
+renumber. Python replacements must occur inside string or comment tokens, never
+numeric literals or executable syntax. Test changes are comment-only:
+assertions, comparisons, calls, control flow and other test execution remain
+immutable. Interpolated Python strings are excluded entirely, including their
+nested string literals and formatted expressions. Limits are 32 changed paths,
+1 MiB per blob, 4 MiB aggregate old/new bytes and 4096 replacements. Source
+import separately limits commits to 2048, commit depth to 1024, parent fanout to
+64, tree recursion to 64, all imported objects to 4096, commit objects to 64
+KiB, other objects to 1 MiB, and aggregate imported bytes to 8 MiB. Only
+required changed/source/policy blobs are acquired. Main drift rejects admission.
+The implementation delta must
 rename all and only the independently derived version-table keys and owning
 normalizer version literals, never attestation values or another domain's
 version tokens. Declaration reassignment, mutation, shadowing, aliasing,

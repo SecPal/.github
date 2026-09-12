@@ -1971,10 +1971,6 @@ def _authenticated_source_checkout(
                 VALIDATION_ACTIONS_PATH,
             ):
                 importer.transfer_path(trees[main], path)
-            dependency_importer = _BoundedObjectImporter(source, root)
-            dependency_importer.imported.update(importer.imported)
-            dependency_importer.objects.update(importer.objects)
-            dependency_importer.complete_trees.update(importer.complete_trees)
             for path in (
                 *COLLISION_VALIDATION_BUNDLE_PATHS,
                 *COLLISION_VALIDATION_SNAPSHOT_PATHS,
@@ -1996,7 +1992,7 @@ def _authenticated_source_checkout(
                         raise VersionCollisionError(
                             "validation bundle prerequisite is outside accepted history"
                         )
-                    dependency_importer.transfer(
+                    importer.transfer(
                         importer.commit_trees[prerequisite], "tree"
                     )
         for path in changed_paths:

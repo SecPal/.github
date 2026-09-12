@@ -25,6 +25,11 @@ _EVIDENCE_VERSION = re.compile(
     r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})", re.ASCII,
 )
 _GIT_OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", re.ASCII)
+_COLLISION_MAX_OBJECTS = 4096
+_COLLISION_MAX_OBJECT_BYTES = 1024 * 1024
+_COLLISION_MAX_COMMIT_BYTES = 64 * 1024
+_COLLISION_MAX_AGGREGATE_BYTES = 8 * 1024 * 1024
+_COLLISION_MAX_TREE_DEPTH = 64
 _COLLISION_CURRENT_IDENTITY_FIXTURES = {
     "tests/secpal-pr-review-actions-unit.py": (
         {
@@ -652,21 +657,33 @@ def _materialize_collision_blob(
         ) from exc
 
 
-def _read_collision_blob(root: Path, oid: str, size: int) -> bytes:
-    """Stream one bounded authenticated harness blob without output truncation."""
+def _read_collision_blob(
+    root: Path,
+    oid: str,
+    size: int,
+    *,
+    kind: str = "blob",
+) -> bytes:
+    """Stream and rehash one bounded object without output truncation."""
 
+    limit = (
+        _COLLISION_MAX_COMMIT_BYTES
+        if kind == "commit"
+        else _COLLISION_MAX_OBJECT_BYTES
+    )
     if (
         not isinstance(oid, str)
-        or re.fullmatch(r"[0-9a-f]{40}", oid) is None
+        or _GIT_OID.fullmatch(oid) is None
+        or kind not in {"blob", "tree", "commit"}
         or isinstance(size, bool)
         or not isinstance(size, int)
-        or not 0 < size <= 1024 * 1024
+        or not 0 <= size <= limit
     ):
         raise authority.LifecycleAuthorityError(
             "collision validation accepted harness binding is malformed"
         )
     executable = transport._resolve_bootstrap_executable("git")
-    arguments = ["-C", str(root), "cat-file", "blob", oid]
+    arguments = ["-C", str(root), "cat-file", kind, oid]
     try:
         with tempfile.TemporaryFile() as output:
             completed = subprocess.run(
@@ -682,15 +699,17 @@ def _read_collision_blob(root: Path, oid: str, size: int) -> bytes:
             source = output.read(size + 1)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise authority.LifecycleAuthorityError(
-            "collision validation accepted harness blob is unavailable"
+            "collision validation object bytes are unavailable"
         ) from exc
+    header = kind.encode("ascii") + b" " + str(len(source)).encode("ascii") + b"\0"
+    digest = hashlib.sha1 if len(oid) == 40 else hashlib.sha256
     if (
         completed.returncode != 0
         or len(source) != size
-        or _git_blob_oid(source) != oid
+        or digest(header + source).hexdigest() != oid
     ):
         raise authority.LifecycleAuthorityError(
-            "collision validation accepted harness blob changed"
+            "collision validation object content-addressed identity changed"
         )
     return source
 
@@ -810,66 +829,101 @@ def _collision_validation_dependencies(
                 ) from exc
 
 
-def _verify_collision_dependency_tree(root: Path, tree: str) -> None:
-    """Require every object in one authenticated snapshot tree to be present."""
+def _collision_object_bytes(
+    root: Path,
+    oid: str,
+    kind: str,
+    verified: dict[str, tuple[str, bytes]],
+) -> bytes:
+    """Read and rehash one bounded object from the private object database."""
 
-    listing = transport._git(
-        root, ["ls-tree", "-rz", "-r", "-t", "--full-tree", tree]
-    ).stdout
-    objects: list[tuple[str, str]] = []
-    object_kinds: dict[str, str] = {}
-    paths: set[str] = set()
-    for record in listing.rstrip(b"\0").split(b"\0"):
-        metadata, separator, raw_path = record.partition(b"\t")
-        try:
-            fields = metadata.decode("ascii", errors="strict").split()
-            relative = raw_path.decode("utf-8", errors="strict")
-        except UnicodeDecodeError as exc:
-            raise authority.LifecycleAuthorityError(
-                "collision object dependency listing is malformed"
-            ) from exc
-        path = Path(relative)
-        if (
-            separator != b"\t"
-            or len(fields) != 3
-            or fields[0] not in {"040000", "100644", "100755"}
-            or fields[1] != ("tree" if fields[0] == "040000" else "blob")
-            or _GIT_OID.fullmatch(fields[2]) is None
-            or not relative
-            or path.is_absolute()
-            or ".." in path.parts
-            or path.as_posix() != relative
-            or relative in paths
-            or (
-                fields[2] in object_kinds
-                and object_kinds[fields[2]] != fields[1]
-            )
-        ):
-            raise authority.LifecycleAuthorityError(
-                "collision object dependency listing is malformed"
-            )
-        paths.add(relative)
-        if fields[2] not in object_kinds:
-            object_kinds[fields[2]] = fields[1]
-            objects.append((fields[2], fields[1]))
-    if not objects:
+    if _GIT_OID.fullmatch(oid) is None or kind not in {"blob", "tree", "commit"}:
         raise authority.LifecycleAuthorityError(
-            "collision object dependency listing is ambiguous"
+            "collision object identity is malformed"
         )
-    observed = transport._git(
-        root,
-        ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
-        input_bytes=("\n".join(oid for oid, _kind in objects) + "\n").encode(
-            "ascii"
-        ),
-    ).stdout
-    expected = b"".join(
-        f"{oid} {kind}\n".encode("ascii") for oid, kind in objects
+    existing = verified.get(oid)
+    if existing is not None:
+        if existing[0] != kind:
+            raise authority.LifecycleAuthorityError(
+                "collision object identity changed type"
+            )
+        return existing[1]
+    if len(verified) >= _COLLISION_MAX_OBJECTS:
+        raise authority.LifecycleAuthorityError(
+            "collision object closure exceeds the object bound"
+        )
+    size_source = transport._git(root, ["cat-file", "-s", oid]).stdout
+    limit = (
+        _COLLISION_MAX_COMMIT_BYTES
+        if kind == "commit"
+        else _COLLISION_MAX_OBJECT_BYTES
     )
-    if observed != expected:
+    if (
+        re.fullmatch(rb"[0-9]+\n", size_source) is None
+        or not 0 <= int(size_source) <= limit
+    ):
         raise authority.LifecycleAuthorityError(
-            "collision object dependency closure is incomplete"
+            "collision object exceeds the size bound"
         )
+    raw = _read_collision_blob(root, oid, int(size_source), kind=kind)
+    if sum(len(item[1]) for item in verified.values()) + len(raw) > (
+        _COLLISION_MAX_AGGREGATE_BYTES
+    ):
+        raise authority.LifecycleAuthorityError(
+            "collision object closure exceeds the aggregate byte bound"
+        )
+    verified[oid] = (kind, raw)
+    return raw
+
+
+def _verify_collision_tree_closure(
+    root: Path,
+    tree: str,
+    verified: dict[str, tuple[str, bytes]],
+) -> None:
+    """Rehash one complete bounded tree closure, including its root."""
+
+    pending = [(tree, 0)]
+    while pending:
+        oid, depth = pending.pop()
+        if depth > _COLLISION_MAX_TREE_DEPTH:
+            raise authority.LifecycleAuthorityError(
+                "collision object closure exceeds the tree-depth bound"
+            )
+        already_verified = oid in verified
+        raw = _collision_object_bytes(root, oid, "tree", verified)
+        if already_verified:
+            continue
+        oid_bytes = 20 if len(oid) == 40 else 32
+        offset = 0
+        children: list[tuple[str, str]] = []
+        while offset < len(raw):
+            delimiter = raw.find(b"\0", offset)
+            if delimiter < 0 or delimiter + 1 + oid_bytes > len(raw):
+                raise authority.LifecycleAuthorityError(
+                    "collision tree object is malformed"
+                )
+            metadata = raw[offset:delimiter].split(b" ", 1)
+            if (
+                len(metadata) != 2
+                or metadata[0] not in {b"40000", b"100644", b"100755"}
+                or not metadata[1]
+                or b"/" in metadata[1]
+                or metadata[1] in {b".", b".."}
+            ):
+                raise authority.LifecycleAuthorityError(
+                    "collision tree object is malformed"
+                )
+            child = raw[delimiter + 1:delimiter + 1 + oid_bytes].hex()
+            children.append(
+                ("tree" if metadata[0] == b"40000" else "blob", child)
+            )
+            offset = delimiter + 1 + oid_bytes
+        for kind, child in reversed(children):
+            if kind == "tree":
+                pending.append((child, depth + 1))
+            else:
+                _collision_object_bytes(root, child, kind, verified)
 
 
 def _verify_collision_validation_root(
@@ -928,10 +982,8 @@ def _verify_collision_validation_root(
         raise authority.LifecycleAuthorityError(
             "validation mutated the collision projection index"
         )
-    if transport._git_text(root, ["cat-file", "-t", candidate_tree]).strip() != "tree":
-        raise authority.LifecycleAuthorityError(
-            "authenticated candidate tree disappeared during validation"
-        )
+    verified_objects: dict[str, tuple[str, bytes]] = {}
+    _verify_collision_tree_closure(root, candidate_tree, verified_objects)
     observed_prerequisites: dict[str, str] = {}
     verified_trees: set[str] = set()
     for dependency in object_dependencies:
@@ -983,9 +1035,9 @@ def _verify_collision_validation_root(
                 raise authority.LifecycleAuthorityError(
                     "collision object dependency profile is malformed"
                 )
-            commit_source = transport._git(
-                root, ["cat-file", "commit", commit]
-            ).stdout
+            commit_source = _collision_object_bytes(
+                root, commit, "commit", verified_objects,
+            )
             commit_tree = commit_source.partition(b"\n")[0]
             if (
                 commit in dependency_prerequisites
@@ -993,11 +1045,7 @@ def _verify_collision_validation_root(
                     commit in observed_prerequisites
                     and observed_prerequisites[commit] != tree
                 )
-                or transport._git_text(root, ["cat-file", "-t", commit]).strip()
-                != "commit"
                 or commit_tree != b"tree " + tree.encode("ascii")
-                or transport._git_text(root, ["cat-file", "-t", tree]).strip()
-                != "tree"
             ):
                 raise authority.LifecycleAuthorityError(
                     "collision object dependency changed"
@@ -1005,7 +1053,7 @@ def _verify_collision_validation_root(
             dependency_prerequisites.add(commit)
             observed_prerequisites[commit] = tree
             if tree not in verified_trees:
-                _verify_collision_dependency_tree(root, tree)
+                _verify_collision_tree_closure(root, tree, verified_objects)
                 verified_trees.add(tree)
 
 

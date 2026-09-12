@@ -14,6 +14,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import zlib
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -1650,7 +1651,7 @@ class LifecycleOrchestrationTests(TestCase):
             importer = version_collision._BoundedObjectImporter(
                 fixture.root, source,
             )
-            merge_base = importer.import_histories_and_merge_base(
+            importer.import_histories_and_merge_base(
                 fixture.main, fixture.predecessor,
             )
             for tree in set(importer.commit_trees.values()):
@@ -1777,7 +1778,7 @@ class LifecycleOrchestrationTests(TestCase):
             importer = version_collision._BoundedObjectImporter(
                 fixture.root, source,
             )
-            merge_base = importer.import_histories_and_merge_base(
+            importer.import_histories_and_merge_base(
                 fixture.main, fixture.predecessor,
             )
             for tree in set(importer.commit_trees.values()):
@@ -1829,6 +1830,11 @@ class LifecycleOrchestrationTests(TestCase):
                     "_collision_validation_dependencies",
                     no_dependencies,
                 ),
+                mock.patch.object(
+                    version_collision,
+                    "_BoundedObjectImporter",
+                    side_effect=version_collision._BoundedObjectImporter,
+                ) as importer_factory,
             ):
                 with version_collision.collision_complete_validation(
                     repository=REPOSITORY,
@@ -1928,6 +1934,7 @@ class LifecycleOrchestrationTests(TestCase):
                 self.assertEqual(absent_result, present_result)
                 self.assertEqual(absent_commands, present_commands)
                 self.assertEqual(absent_commands, (0, 0))
+                self.assertEqual(importer_factory.call_count, 2)
             self.assertEqual(
                 tuple(
                     (
@@ -1953,6 +1960,62 @@ class LifecycleOrchestrationTests(TestCase):
                 ).returncode,
                 0,
             )
+
+    def test_collision_validation_rehashes_candidate_tree_after_execution(
+        self,
+    ) -> None:
+        from scripts.secpal_pr_review import exact_source_safety
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(
+                ["git", "-C", str(root), "init", "--quiet"], check=True,
+            )
+            candidate = root / "candidate.txt"
+            candidate.write_bytes(b"a" * (70 * 1024))
+            candidate.chmod(0o644)
+            subprocess.run(
+                ["git", "-C", str(root), "add", "--", "candidate.txt"],
+                check=True,
+            )
+            tree = subprocess.run(
+                ["git", "-C", str(root), "write-tree"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            blob = subprocess.run(
+                ["git", "-C", str(root), "hash-object", "candidate.txt"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            arguments = (
+                root,
+                tree,
+                {"candidate.txt": ("100644", blob)},
+                {},
+                {},
+                [],
+                tree,
+            )
+            exact_source_safety._verify_collision_validation_root(*arguments)
+            object_path = root / ".git" / "objects" / tree[:2] / tree[2:]
+            object_path.chmod(0o644)
+            object_path.write_bytes(zlib.compress(b"tree 0\0"))
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "-C", str(root), "cat-file", "-t", tree],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip(),
+                "tree",
+            )
+            with self.assertRaisesRegex(
+                authority.LifecycleAuthorityError, "object.*identity",
+            ):
+                exact_source_safety._verify_collision_validation_root(*arguments)
 
     def test_collision_fixture_projection_keeps_historical_versions_pinned(
         self,
