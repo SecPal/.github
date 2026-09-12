@@ -624,11 +624,13 @@ The collision-only predecessor input may additionally carry
 `historical_thread_classifications`: at most 32 existing schema-1.3 signed
 `LATE_FEEDBACK_CLASSIFICATION` artifacts for `CORRECTED_AND_VERIFIED` historical
 threads. Each must bind the exact predecessor head and live, reply-free thread,
-body and disposition with no technical blocker. Missing proof or any reply
-rejects this bounded form. These are historical dispositions, not trigger
-threads, and neither become successor findings nor grant thread resolution.
-The existing successor-classification parser and permitted decisions remain
-unchanged.
+body, resolved/outdated state and disposition with no technical blocker.
+Missing proof or any reply rejects this bounded form. A collision-only parser
+may preserve either signed resolution state, while the ordinary
+resolution-eligible parser remains unresolved-only. These are historical
+dispositions, not trigger threads, and neither become successor findings nor
+grant thread resolution. The existing successor-classification decisions
+remain unchanged.
 
 Only clean accepted protected-main tooling derives the version inventory.
 `scripts/secpal_pr_review/version_collision.py` reads immutable Git blobs with

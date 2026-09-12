@@ -2810,7 +2810,7 @@ def _authenticate_collision_predecessor_safety(
                 artifact_path, signature_path = root / "classification.json", root / "classification.sig"
                 late_disposition._write_private_file(artifact_path, base64.b64decode(raw["classification_artifact"], validate=True))
                 late_disposition._write_private_file(signature_path, base64.b64decode(raw["classification_signature"], validate=True))
-                verified = late_disposition.parse_classification_artifact(
+                verified = late_disposition.parse_preserved_thread_classification_artifact(
                     artifact_path, signature_path, expected_signer=signer, repository=reviewed.repository,
                     delivery_issue_number=delivery_issue, pull_request_number=reviewed.pull_request_number,
                     head_sha=reviewed.head_sha, thread_id=raw["thread_id"],
@@ -2845,6 +2845,37 @@ def _authenticate_collision_predecessor_safety(
     return prepared
 
 
+def _collision_predecessor_gate(
+    item: Mapping[str, Any], lifecycle: authority.VerifiedLifecycleAuthority,
+) -> tuple[fast_path.StableFeedbackState, Any]:
+    """Authenticate cheap predecessor feedback authority before Git acquisition."""
+
+    reviewed = fast_path.verify_reviewed_state_evidence(
+        item["reviewed_state_evidence"]
+    )
+    if (
+        reviewed.repository != lifecycle.repository
+        or reviewed.pull_request_number != lifecycle.pull_request
+        or reviewed.head_sha != lifecycle.head_sha
+        or reviewed.pr_state != "OPEN"
+    ):
+        raise LifecycleOrchestrationError(
+            "collision predecessor feedback differs from CURRENT"
+        )
+    try:
+        safety = _authenticate_collision_predecessor_safety(
+            item["predecessor_safety_evidence"],
+            reviewed=reviewed,
+            delivery_issue=lifecycle.delivery_issue,
+        )
+        fast_path.verify_clean_feedback_gate(reviewed, safety)
+    except fast_path.SecurityBlocker as exc:
+        raise LifecycleOrchestrationError(
+            "collision predecessor feedback is not safely dispositioned"
+        ) from exc
+    return reviewed, safety
+
+
 def _collision_scope(
     item: Mapping[str, Any], *, observed: Any, resulting_head: str,
     collision_reader: Callable[..., version_collision.VerifiedVersionCollision],
@@ -2852,9 +2883,15 @@ def _collision_scope(
     _require_continuation_predecessor(
         observed.lifecycle.state, observed.lifecycle.head_sha, resulting_head,
     )
+    predecessor_gate = _collision_predecessor_gate(item, observed.lifecycle)
     if collision_reader is not version_collision.authenticate_collision_source:
-        return _collision_scope_from_source(item, observed=observed, resulting_head=resulting_head,
-                                            collision_reader=collision_reader)
+        return _collision_scope_from_source(
+            item,
+            observed=observed,
+            resulting_head=resulting_head,
+            collision_reader=collision_reader,
+            predecessor_gate=predecessor_gate,
+        )
     with version_collision._authenticated_source_checkout(
         Path(item["repository_root"]), observed.lifecycle.head_sha, resulting_head,
     ) as (root, main):
@@ -2866,22 +2903,18 @@ def _collision_scope(
 
         return _collision_scope_from_source(
             {**item, "repository_root": str(root)}, observed=observed, resulting_head=resulting_head,
-            collision_reader=read_collision,
+            collision_reader=read_collision, predecessor_gate=predecessor_gate,
         )
 
 
 def _collision_scope_from_source(
     item: Mapping[str, Any], *, observed: Any, resulting_head: str,
     collision_reader: Callable[..., version_collision.VerifiedVersionCollision],
+    predecessor_gate: tuple[fast_path.StableFeedbackState, Any],
 ) -> tuple[dict[str, Any], fast_path.StableFeedbackState, fast_path.VerifiedValidationEvidence]:
     lifecycle = observed.lifecycle
     _require_continuation_predecessor(lifecycle.state, lifecycle.head_sha, resulting_head)
-    reviewed = fast_path.verify_reviewed_state_evidence(item["reviewed_state_evidence"])
-    if (
-        reviewed.repository != lifecycle.repository or reviewed.pull_request_number != lifecycle.pull_request
-        or reviewed.head_sha != lifecycle.head_sha or reviewed.pr_state != "OPEN"
-    ):
-        raise LifecycleOrchestrationError("collision predecessor feedback differs from CURRENT")
+    reviewed, safety = predecessor_gate
     root = Path(item["repository_root"]).resolve(strict=True)
     sealed = collision_reader(
         repository=lifecycle.repository, delivery_issue=lifecycle.delivery_issue,
@@ -2923,12 +2956,10 @@ def _collision_scope_from_source(
     )
     if source.tree_sha != collision["resulting_tree"]:
         raise LifecycleOrchestrationError("collision successor tree differs from signed source")
-    safety = _authenticate_collision_predecessor_safety(
-        item["predecessor_safety_evidence"], reviewed=reviewed, delivery_issue=lifecycle.delivery_issue,
-    )
-    fast_path.verify_clean_feedback_gate(reviewed, safety)
     raw_registry = authority.loads_closed_json(
-        bootstrap_source_admission._read_protected_main_registry(collision["protected_main"])
+        version_collision._read_authenticated_registry(
+            root, collision["protected_main"]
+        )
     )
     entries = [entry for entry in raw_registry.get("repositories", [])
                if isinstance(entry, dict) and entry.get("repository") == lifecycle.repository]

@@ -512,7 +512,13 @@ def authenticated_provider_growth(
 
 
 class CollisionCompositionFixture:
-    def __init__(self, root: Path, *, historical_thread: bool = False):
+    def __init__(
+        self,
+        root: Path,
+        *,
+        historical_thread: bool = False,
+        historical_thread_resolved: bool = False,
+    ):
         from scripts.secpal_pr_review import version_collision
 
         self.root = root
@@ -557,7 +563,7 @@ class CollisionCompositionFixture:
         self.observed.serialized_lifecycle_evidence = self.lifecycle_raw
         self.reviewed, self.predecessor_safety = self.feedback(self.predecessor, "PRE")
         if historical_thread:
-            self.add_historical_thread()
+            self.add_historical_thread(resolved=historical_thread_resolved)
         self.eligibility = {"schema_version": "1.1", "repository": REPOSITORY,
                             "pull_request_number": PR, "reviewed_head_sha": self.predecessor,
                             "reviewed_state_digest": self.reviewed.state_digest, "eligible_threads": []}
@@ -742,10 +748,10 @@ class CollisionCompositionFixture:
                                 input=payload, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
         return {"format": "ssh", "signer_identity": self.identity, "value": signed.stdout.decode()}
 
-    def add_historical_thread(self):
+    def add_historical_thread(self, *, resolved: bool = False):
         feedback = copy.deepcopy(self.reviewed.feedback)
         feedback["threads"].append({
-            "node_id": "PRRT_HISTORICAL", "is_resolved": False, "is_outdated": True,
+            "node_id": "PRRT_HISTORICAL", "is_resolved": resolved, "is_outdated": True,
             "comments": [{"node_id": "PRRC_HISTORICAL", "body_digest": "a" * 64,
                           "actor": {"login": "reviewer", "node_id": "REVIEWER", "database_id": 99},
                           "reply_to_id": None, "reactions": []}],
@@ -766,7 +772,7 @@ class CollisionCompositionFixture:
             "thread": {"thread_id": "PRRT_HISTORICAL", "top_level_comment_node_id": "PRRC_HISTORICAL",
                        "top_level_comment_database_id": 77, "finding_body_digest": "a" * 64,
                        "reply_state_digest": fast_path.digest_json([]), "reply_count": 0,
-                       "is_resolved": False, "is_outdated": True, "classification": "VALID_ACTIONABLE",
+                       "is_resolved": resolved, "is_outdated": True, "classification": "VALID_ACTIONABLE",
                        "disposition": "CORRECTED_AND_VERIFIED", "technically_blocking": False, "technical_blockers": []},
         }
         raw = late_disposition.canonical_json_bytes(artifact)
@@ -1765,6 +1771,11 @@ class LifecycleOrchestrationTests(TestCase):
             b'\n__builtins__["frozenset"] = attacker_controlled\n',
             b'\nname = "READY_INTEGRATION_V12_KEYS"\nglobals()[name] = frozenset()\n',
             b'\nglobals().update({"READY_INTEGRATION_V12_KEYS": frozenset()})\n',
+            b'\nnormalize_ready_integration_evidence = lambda value: value\n',
+            b'\ndict.__setitem__(READY_INTEGRATION_KEYS_BY_VERSION, "9.9", frozenset())\n',
+            b'\nmutate((READY_INTEGRATION_KEYS_BY_VERSION, "9.9"))\n',
+            b'\nmodule.__dict__.update({"normalize_ready_integration_evidence": lambda value: value})\n',
+            b'\nindirect = lambda: READY_INTEGRATION_KEYS_BY_VERSION\n',
         )
         for mutation in mutations:
             with self.subTest(mutation=mutation):
@@ -1773,6 +1784,20 @@ class LifecycleOrchestrationTests(TestCase):
                     "declaration",
                 ):
                     version_collision.inventory_from_source(source + mutation)
+
+    def test_collision_python_token_parser_normalizes_recursion_failure(self) -> None:
+        from scripts.secpal_pr_review import version_collision
+
+        with mock.patch.object(
+            version_collision.ast, "parse", side_effect=RecursionError
+        ):
+            with self.assertRaisesRegex(
+                version_collision.VersionCollisionError,
+                "Python version token source is malformed",
+            ):
+                version_collision._verify_python_version_tokens(
+                    b"# 1.2\n", (2,), "1.2"
+                )
 
     def test_collision_owner_accepts_the_maintained_v12_limit_gate(self) -> None:
         from scripts.secpal_pr_review import version_collision
@@ -2172,6 +2197,72 @@ class LifecycleOrchestrationTests(TestCase):
                         REPOSITORY, ISSUE, changed, current_reader=lambda *_args: fixture.observed,
                         feedback_reader=lambda *_args: fixture.current, collision_reader=fixture.collision_reader,
                     )
+
+    def test_collision_preserves_authenticated_resolved_predecessor_threads(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = CollisionCompositionFixture(
+                Path(directory),
+                historical_thread=True,
+                historical_thread_resolved=True,
+            )
+            with mock.patch.object(
+                authority,
+                "_load_lifecycle_trust_policy",
+                return_value=fixture.policy,
+            ):
+                scope, reviewed, _validation = orchestration._collision_scope(
+                    fixture.evidence,
+                    observed=fixture.observed,
+                    resulting_head=fixture.resulting,
+                    collision_reader=fixture.collision_reader,
+                )
+            self.assertEqual(
+                scope["predecessor_safety_digest"],
+                fast_path.digest_json(fixture.predecessor_safety),
+            )
+            self.assertTrue(reviewed.feedback["threads"][0]["is_resolved"])
+
+    def test_collision_reuses_authenticated_local_registry_object(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = CollisionCompositionFixture(Path(directory))
+            with mock.patch.object(
+                authority,
+                "_load_lifecycle_trust_policy",
+                return_value=fixture.policy,
+            ), mock.patch.object(
+                orchestration.bootstrap_source_admission,
+                "_read_protected_main_registry",
+                side_effect=AssertionError("network registry read is forbidden"),
+            ) as network_registry:
+                scope, _reviewed, _validation = orchestration._collision_scope(
+                    fixture.evidence,
+                    observed=fixture.observed,
+                    resulting_head=fixture.resulting,
+                    collision_reader=fixture.collision_reader,
+                )
+            self.assertEqual(scope["collision"]["protected_main"], fixture.main)
+            network_registry.assert_not_called()
+
+    def test_collision_rejects_predecessor_before_source_acquisition(self) -> None:
+        from scripts.secpal_pr_review import version_collision
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = CollisionCompositionFixture(Path(directory))
+            evidence = copy.deepcopy(fixture.evidence)
+            evidence["predecessor_safety_evidence"] = None
+            with mock.patch.object(
+                version_collision,
+                "_authenticated_source_checkout",
+                side_effect=AssertionError("source acquisition ran"),
+            ) as acquisition:
+                with self.assertRaises(orchestration.LifecycleOrchestrationError):
+                    orchestration._collision_scope(
+                        evidence,
+                        observed=fixture.observed,
+                        resulting_head=fixture.resulting,
+                        collision_reader=version_collision.authenticate_collision_source,
+                    )
+            acquisition.assert_not_called()
 
     def test_collision_import_ignores_caller_graph_and_checks_object_hashes(self) -> None:
         from scripts.secpal_pr_review import version_collision

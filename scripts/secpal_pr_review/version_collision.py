@@ -42,6 +42,9 @@ _VERSION = re.compile(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})", re.ASCII)
 _VERSION_BYTES = frozenset(b"0123456789.")
 _OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", re.ASCII)
 SOURCE_PATH = "scripts/secpal_pr_review/fast_path.py"
+TRUST_REGISTRY_PATH = (
+    ".agents/skills/secpal-pr-review/references/repositories.json"
+)
 FAMILY_KIND = "TWO_PARENT_READY_INTEGRATION"
 TRIGGER = "IMMUTABLE_EVIDENCE_VERSION_COLLISION"
 
@@ -151,7 +154,14 @@ def _verify_python_version_tokens(blob: bytes, offsets: tuple[int, ...], version
         for token in tokenize.generate_tokens(io.StringIO(text).readline):
             if token.type in {tokenize.STRING, tokenize.COMMENT}:
                 spans.append((byte_offset(token.start), byte_offset(token.end)))
-    except (tokenize.TokenError, IndentationError, SyntaxError, IndexError) as exc:
+    except (
+        tokenize.TokenError,
+        IndentationError,
+        SyntaxError,
+        IndexError,
+        RecursionError,
+        ValueError,
+    ) as exc:
         raise VersionCollisionError("Python version token source is malformed") from exc
     if any(not any(start <= offset and offset + len(version) <= end for start, end in spans) for offset in offsets):
         raise VersionCollisionError("Python version token replacement changes executable syntax")
@@ -365,13 +375,41 @@ class _SourceDeclarations:
             "READY_INTEGRATION_KEYS_BY_VERSION",
             "READY_INTEGRATION_ATTESTATION_BY_VERSION",
         })
-        reserved = protected | {"frozenset"}
+        owner_functions = frozenset({
+            "normalize_ready_integration_evidence",
+            "create_ready_integration_attestation",
+        })
+        mutable_tables = frozenset({
+            "READY_INTEGRATION_KEYS_BY_VERSION",
+            "READY_INTEGRATION_ATTESTATION_BY_VERSION",
+        })
+        reserved = protected | owner_functions | {"frozenset"}
         declared_targets = {
             id(target)
             for node in self.module.body
             if isinstance(node, ast.Assign)
             for target in node.targets
             if isinstance(target, ast.Name) and target.id in protected
+        }
+        declared_functions = {
+            id(node)
+            for node in self.module.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name in owner_functions
+        }
+        if any(
+            node.decorator_list
+            for node in self.module.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name in owner_functions
+        ):
+            raise VersionCollisionError(
+                "version declaration is mutated or shadowed"
+            )
+        parents = {
+            id(child): node
+            for node in ast.walk(self.module)
+            for child in ast.iter_child_nodes(node)
         }
 
         def rooted_in_protected(node: ast.AST) -> bool:
@@ -380,6 +418,36 @@ class _SourceDeclarations:
             return isinstance(node, ast.Name) and node.id in protected
 
         for node in ast.walk(self.module):
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and node.value in reserved
+            ):
+                raise VersionCollisionError(
+                    "version declaration is mutated or shadowed"
+                )
+            if (
+                isinstance(node, ast.Name)
+                and isinstance(node.ctx, ast.Load)
+                and node.id in mutable_tables
+            ):
+                parent = parents.get(id(node))
+                direct_get = (
+                    isinstance(parent, ast.Attribute)
+                    and parent.value is node
+                    and parent.attr == "get"
+                    and isinstance(parents.get(id(parent)), ast.Call)
+                    and parents[id(parent)].func is parent
+                )
+                direct_item = (
+                    isinstance(parent, ast.Subscript)
+                    and parent.value is node
+                    and isinstance(parent.ctx, ast.Load)
+                )
+                if not direct_get and not direct_item:
+                    raise VersionCollisionError(
+                        "version declaration is mutated or shadowed"
+                    )
             if (
                 isinstance(node, ast.Name)
                 and isinstance(node.ctx, (ast.Store, ast.Del))
@@ -392,6 +460,7 @@ class _SourceDeclarations:
             if (
                 isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
                 and node.name in reserved
+                and id(node) not in declared_functions
             ):
                 raise VersionCollisionError("version declaration is mutated or shadowed")
             if isinstance(node, (ast.Import, ast.ImportFrom)) and any(
@@ -438,6 +507,18 @@ class _SourceDeclarations:
                 and node.func.id in {
                     "exec", "eval", "globals", "locals", "vars", "setattr", "delattr",
                 }
+            ):
+                raise VersionCollisionError("version declaration is mutated or shadowed")
+            if isinstance(node, ast.Call) and any(
+                any(
+                    isinstance(descendant, ast.Name)
+                    and descendant.id in protected
+                    for descendant in ast.walk(argument)
+                )
+                for argument in (
+                    *node.args,
+                    *(keyword.value for keyword in node.keywords),
+                )
             ):
                 raise VersionCollisionError("version declaration is mutated or shadowed")
             if (
@@ -814,19 +895,30 @@ class VerifiedVersionCollision:
         return result
 
 
-def _read_source(root: Path, commit: str) -> bytes:
-    entry = _git(root, ["ls-tree", "-z", _oid(commit), "--", SOURCE_PATH], 2048)
+def _read_bounded_blob(root: Path, treeish: str, path: str) -> bytes:
+    path = _path(path)
+    entry = _git(root, ["ls-tree", "-z", _oid(treeish), "--", path], 2048)
     parts = entry.split(b"\t")
-    if len(parts) != 2 or parts[1] != SOURCE_PATH.encode() + b"\x00":
-        raise VersionCollisionError("version authority source is missing")
+    if len(parts) != 2 or parts[1] != path.encode() + b"\x00":
+        raise VersionCollisionError("authenticated source blob is missing")
     metadata = parts[0].decode("ascii").split(" ")
     if len(metadata) != 3 or metadata[:2] != ["100644", "blob"]:
-        raise VersionCollisionError("version authority source is not a regular blob")
+        raise VersionCollisionError("authenticated source is not a regular blob")
     blob = _oid(metadata[2])
     size = _git(root, ["cat-file", "-s", blob], 32)
     if re.fullmatch(rb"[0-9]+\n", size) is None or not 0 < int(size) <= MAX_BLOB_BYTES:
-        raise VersionCollisionError("version authority source exceeds the bound")
+        raise VersionCollisionError("authenticated source exceeds the bound")
     return _git(root, ["cat-file", "blob", blob], MAX_BLOB_BYTES)
+
+
+def _read_source(root: Path, commit: str) -> bytes:
+    return _read_bounded_blob(root, commit, SOURCE_PATH)
+
+
+def _read_authenticated_registry(root: Path, protected_main: str) -> bytes:
+    """Read the fixed registry blob already imported from accepted main."""
+
+    return _read_bounded_blob(root, protected_main, TRUST_REGISTRY_PATH)
 
 
 def _changed_paths(root: Path, before: str, after: str, limit: int) -> tuple[str, ...]:
@@ -1199,7 +1291,11 @@ def _authenticated_source_checkout(
             importer.transfer_path(tree, SOURCE_PATH)
         installed = Path(__file__).resolve().parents[2]
         registry_path = authority._TRUST_REGISTRY.relative_to(installed).as_posix()
-        importer.transfer_path(trees[main], registry_path)
+        if registry_path != TRUST_REGISTRY_PATH:
+            raise VersionCollisionError(
+                "accepted trust registry path differs from the collision profile"
+            )
+        importer.transfer_path(trees[main], TRUST_REGISTRY_PATH)
         for path in changed_paths:
             importer.transfer_path(trees[predecessor], path)
             importer.transfer_path(successor_tree, path)

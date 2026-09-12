@@ -3189,6 +3189,7 @@ def _verify_successor_findings(
         current_threads=current_threads,
         rejected_candidate=False,
         classified_codex_review=classified_codex_review,
+        allow_resolved_threads=False,
     )
 
 
@@ -3218,6 +3219,34 @@ def _verify_rejected_successor_findings(
         current_threads=current_threads,
         rejected_candidate=True,
         classified_codex_review=False,
+        allow_resolved_threads=False,
+    )
+
+
+def _verify_predecessor_findings(
+    value: Any,
+    *,
+    current_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    repository: str,
+    pull_request_number: int,
+    resulting_head_sha: str,
+    current_threads: dict[str, dict[str, Any]],
+) -> set[tuple[str, str]]:
+    """Authenticate prior findings without deriving thread-resolution authority."""
+
+    return _verify_successor_findings_with_policy(
+        value,
+        reviewed_sources={},
+        current_sources=current_sources,
+        repository=repository,
+        pull_request_number=pull_request_number,
+        resulting_head_sha=resulting_head_sha,
+        current_threads=current_threads,
+        rejected_candidate=False,
+        classified_codex_review=False,
+        allow_resolved_threads=True,
     )
 
 
@@ -3236,6 +3265,7 @@ def _verify_successor_findings_with_policy(
     current_threads: dict[str, dict[str, Any]],
     rejected_candidate: bool,
     classified_codex_review: bool,
+    allow_resolved_threads: bool,
 ) -> set[tuple[str, str]]:
     if not isinstance(value, list):
         raise SecurityBlocker("successor finding evidence is malformed")
@@ -3382,7 +3412,11 @@ def _verify_successor_findings_with_policy(
             )
             thread = current_threads.get(thread_id)
             if (
-                verified_classification.is_resolved is not False
+                not isinstance(verified_classification.is_resolved, bool)
+                or (
+                    verified_classification.is_resolved
+                    and not allow_resolved_threads
+                )
                 or top_level is None
                 or top_level[:2]
                 != (verified_classification.finding_body_digest, thread_id)
@@ -4104,8 +4138,8 @@ trigger finding. Transport and classification admission retain their owners.
         transport, reviewed_sources={summary_key: summary_source},
         current_sources=sources, resulting_head_sha=reviewed.head_sha,
     )
-    findings = _verify_successor_findings(
-        safety_evidence["successor_findings"], reviewed_sources={}, current_sources=sources,
+    findings = _verify_predecessor_findings(
+        safety_evidence["successor_findings"], current_sources=sources,
         repository=reviewed.repository, pull_request_number=reviewed.pull_request_number,
         resulting_head_sha=reviewed.head_sha,
         current_threads={item["node_id"]: item for item in reviewed.feedback["threads"]},
