@@ -816,6 +816,19 @@ def authenticate(
         expected_registry_digest=record["evidence_time_registry_digest"],
         expected_command_set_digest=record["historical_command_set_digest"],
     )
+    trust = authority._load_lifecycle_trust_policy(repository)
+    try:
+        signature_evidence_digest = validation_evidence_loss._source_signature(
+            repository_root, record, trust
+        )
+    except transport.BootstrapSourceAdmissionError as exc:
+        raise authority.LifecycleAuthorityError(
+            "legacy package-loss source signature evidence is unavailable"
+        ) from exc
+    if signature_evidence_digest != record["commit_signature_evidence_digest"]:
+        raise authority.LifecycleAuthorityError(
+            "legacy package-loss source signature evidence changed"
+        )
     store_survey = _survey_package_stores(repository_root, record, current)
     provider_binding = _provider_head_binding(current, record)
     helper = transport._load_actions_helper()
