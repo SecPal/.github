@@ -72,15 +72,18 @@ DIRECT_VALIDATION_EXECUTABLES = frozenset(
     {"composer", "node", "npm", "python3", "reuse"}
 )
 COMPOSER_VALIDATION_SCRIPTS = frozenset({"analyse", "ci:check", "test"})
+EXTERNAL_COMMAND_TIMEOUT_SECONDS = 30
 
 
 def _load_follow_up_helper() -> Any:
     loaded = sys.modules.get("secpal_pr_review.follow_up")
     if loaded is not None:
         loaded_path = getattr(loaded, "__file__", None)
-        if not isinstance(loaded_path, str) or Path(loaded_path).resolve() != FOLLOW_UP_HELPER:
+        if (
+            not isinstance(loaded_path, str)
+            or Path(loaded_path).absolute() != FOLLOW_UP_HELPER.absolute()
+        ):
             raise RuntimeError("Canonical follow-up module has an unexpected path")
-        return loaded
     spec = importlib.util.spec_from_file_location("secpal_pr_review.follow_up", FOLLOW_UP_HELPER)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load follow-up helper: {FOLLOW_UP_HELPER}")
@@ -94,19 +97,20 @@ def _load_follow_up_helper() -> Any:
     return module
 
 
+follow_up = _load_follow_up_helper()
+
+
 def _load_evidence_helper() -> Any:
-    loaded = sys.modules.get("secpal_pr_review_evidence_shared")
+    module_name = "secpal_pr_review.integration_evidence_helper"
+    loaded = sys.modules.get(module_name)
     if loaded is not None:
         loaded_path = getattr(loaded, "__file__", None)
         if (
             not isinstance(loaded_path, str)
-            or Path(loaded_path).resolve() != EVIDENCE_HELPER
+            or Path(loaded_path).absolute() != EVIDENCE_HELPER.absolute()
         ):
-            raise RuntimeError("Canonical evidence module has an unexpected path")
-        return loaded
-    spec = importlib.util.spec_from_file_location(
-        "secpal_pr_review_evidence_shared", EVIDENCE_HELPER
-    )
+            raise RuntimeError("Canonical evidence helper has an unexpected path")
+    spec = importlib.util.spec_from_file_location(module_name, EVIDENCE_HELPER)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load evidence helper: {EVIDENCE_HELPER}")
     module = importlib.util.module_from_spec(spec)
@@ -119,7 +123,6 @@ def _load_evidence_helper() -> Any:
     return module
 
 
-follow_up = _load_follow_up_helper()
 evidence = _load_evidence_helper()
 
 
@@ -131,6 +134,482 @@ REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SECRET_VALUE = re.compile(
     r"(?i)(?:github_pat_|gh[opsu]_|-----BEGIN [A-Z ]*PRIVATE KEY-----|authorization\s*:\s*bearer)"
 )
+VALIDATION_REGISTRY_ENTRY_FIELDS = frozenset(
+    {
+        "repository",
+        "default_branch",
+        "allowed_base_repositories",
+        "reviewer_identities",
+        "focused_validation",
+        "required_local_validation",
+        "final_eligibility_absence_recoveries",
+        "signature_policy",
+        "lifecycle_authority_policy",
+        "pre_enrollment_integration_policy",
+        "check_policy",
+        "manual_gates",
+        "unsupported_operations",
+        "maximum_api_calls",
+        "maximum_items",
+        "maximum_threads",
+        "maximum_comments",
+        "maximum_reactions",
+    }
+)
+VALIDATION_REGISTRY_PROJECTION_FIELDS = frozenset(
+    {
+        "repository",
+        "default_branch",
+        "allowed_base_repositories",
+        "focused_validation",
+        "required_local_validation",
+        "signature_policy",
+        "check_policy",
+        "manual_gates",
+        "maximum_api_calls",
+        "maximum_items",
+    }
+)
+SUPPORTED_BATCH_CAPABILITIES = frozenset({"THREAD_RESOLUTION"})
+TRANSIENT_PULL_REQUEST_REACTION_CONTENTS = frozenset({"EYES"})
+CODEX_PROVIDER_LOGIN = "chatgpt-codex-connector"
+GITHUB_CODE_QUALITY_LOGIN = "github-code-quality"
+COPILOT_REVIEW_PROVIDER = {
+    "login": "copilot-pull-request-reviewer",
+    "node_id": "BOT_kgDOCnlnWA",
+    "database_id": 175728472,
+}
+CODEX_REACTION_PROVIDER = {
+    "login": "chatgpt-codex-connector[bot]",
+    "node_id": "BOT_kgDOC98s_g",
+    "database_id": 199175422,
+}
+CODEX_REVIEW_SUMMARY_MARKER = "<!-- codex-pull-request-review-summary -->"
+CODEX_REVIEW_STATUS = re.compile(
+    r"<!--\s*codex-security-review:v1\s+(\{.*?\})\s*-->", re.DOTALL
+)
+CODEX_CANONICAL_COMPLETED_STATUS = re.compile(
+    r'✅ \*\*Completed\*\* <relative-time datetime="'
+    r'(?P<datetime>[0-9]{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])'
+    r'|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-9]))'
+    r'T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]'
+    r'(?:\.[0-9]{1,6})?Z)">(?P=datetime)</relative-time>'
+)
+CODEX_REVIEW_LABELS = {
+    "Code Review": frozenset({"**Code Review**", "📝 **Code Review**"}),
+    "Security Review": frozenset(
+        {"**Security Review**", "🔒 **Security Review**"}
+    ),
+}
+SUCCESSOR_TRANSPORT_ROLES = frozenset(
+    {
+        "CODEX_SUMMARY_UPDATE",
+        "CODEX_REVIEW_REQUEST",
+        "CODEX_SECURITY_REVIEW_REQUEST",
+        "CODEX_CODE_REVIEW_RESULT",
+        "CODEX_SECURITY_REVIEW_RESULT",
+        "CODEX_COMPLETION_REACTION",
+        "CODEX_REVIEW",
+        "GITHUB_CODE_QUALITY_REVIEW",
+    }
+)
+REQUIRED_CODEX_SUCCESSOR_ROLES = frozenset(
+    {
+        "CODEX_SUMMARY_UPDATE",
+        "CODEX_REVIEW_REQUEST",
+        "CODEX_SECURITY_REVIEW_REQUEST",
+        "CODEX_CODE_REVIEW_RESULT",
+        "CODEX_SECURITY_REVIEW_RESULT",
+    }
+)
+REQUIRED_CODEX_CLASSIFIED_REVIEW_ROLES = frozenset(
+    {
+        "CODEX_SUMMARY_UPDATE",
+        "CODEX_REVIEW_REQUEST",
+        "CODEX_SECURITY_REVIEW_REQUEST",
+        "CODEX_REVIEW",
+        "CODEX_SECURITY_REVIEW_RESULT",
+    }
+)
+PROVIDER_COMPLETION_REACTION_REPLACEMENT_FIELDS = frozenset(
+    {
+        "provider_login",
+        "reaction_content",
+        "removed_reaction_id",
+        "replacement_reaction_id",
+    }
+)
+SOURCE_KINDS = frozenset(
+    {
+        "PULL_REQUEST_REACTION",
+        "REVIEW",
+        "REVIEW_REACTION",
+        "CONVERSATION_COMMENT",
+        "CONVERSATION_REACTION",
+        "THREAD_COMMENT",
+        "THREAD_COMMENT_REACTION",
+    }
+)
+THREAD_SOURCE_KINDS = frozenset({"THREAD_COMMENT", "THREAD_COMMENT_REACTION"})
+CLASSIFICATION_DISPOSITIONS = {
+    "VALID_ACTIONABLE": frozenset({"CORRECTED_AND_VERIFIED", "PROVEN_EXISTING_FIX"}),
+    "INVALID_FALSE_OR_MISLEADING": frozenset({"DISPROVEN_WITH_EVIDENCE"}),
+    "INFORMATIONAL": frozenset({"NON_ACTIONABLE"}),
+    "DUPLICATE": frozenset({"DUPLICATE_OF_CANONICAL"}),
+    "OUTDATED_BUT_STILL_VALID": frozenset(
+        {"CORRECTED_AND_VERIFIED", "PROVEN_EXISTING_FIX"}
+    ),
+    "OUTDATED_AND_OBSOLETE": frozenset({"OBSOLETE_ON_CURRENT_HEAD"}),
+    "ALREADY_FIXED_ON_SNAPSHOT_HEAD": frozenset({"PROVEN_EXISTING_FIX"}),
+    "SUPERSEDED": frozenset({"SUPERSEDED_BY_CANONICAL"}),
+    "OUTSIDE_PR_SCOPE": frozenset({"TRACKED_AS_FOLLOW_UP"}),
+    "SECURITY_WEAKENING_SUGGESTION": frozenset({"REJECTED_SECURITY_WEAKENING"}),
+}
+SUCCESSOR_SAFE_CLASSIFICATION_DECISIONS = frozenset(
+    {
+        ("INVALID_FALSE_OR_MISLEADING", "DISPROVEN_WITH_EVIDENCE"),
+        ("INFORMATIONAL", "NON_ACTIONABLE"),
+    }
+)
+FIXED_DISPOSITIONS = frozenset({"CORRECTED_AND_VERIFIED", "PROVEN_EXISTING_FIX"})
+MERGE_STATE_POLICY = {
+    "DIRTY": "block",
+    "UNKNOWN": "block",
+    "BLOCKED": "block",
+    "BEHIND": "strict_base",
+    "DRAFT": "block",
+    "UNSTABLE": "required_checks",
+    "HAS_HOOKS": "allow",
+    "CLEAN": "allow",
+}
+RESOLUTION_MERGE_STATE_POLICY = {
+    **MERGE_STATE_POLICY,
+    "BLOCKED": "required_checks",
+}
+READY_INTEGRATION_KIND = "TWO_PARENT_READY_INTEGRATION"
+READY_INTEGRATION_PRIOR_AUTHORITY_KIND = "READY_INTEGRATION_PRIOR_AUTHORITY"
+EXCEPTIONAL_RECOVERY_KIND = "READY_EXCEPTIONAL_RECOVERY"
+EXCEPTIONAL_RECOVERY_KEYS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "authorization_id",
+        "repository",
+        "delivery_issue_number",
+        "pull_request_number",
+        "prior_ready_head_sha",
+        "prior_ready_tree_sha",
+        "recovery_tree_sha",
+        "reviewed_state_digest",
+        "reviewed_feedback_digest",
+        "eligibility_evidence_digest",
+        "finding_ids",
+        "thread_ids",
+        "lifecycle",
+    }
+)
+EXCEPTIONAL_CONTINUATION_KIND = "READY_EXCEPTIONAL_CONTINUATION"
+EXCEPTIONAL_CONTINUATION_KEYS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "authorization_id",
+        "repository",
+        "delivery_issue_number",
+        "pull_request_number",
+        "prior_ready_head_sha",
+        "prior_ready_tree_sha",
+        "continuation_tree_sha",
+        "reviewed_state_digest",
+        "reviewed_feedback_digest",
+        "eligibility_evidence_digest",
+        "finding_ids",
+        "thread_ids",
+        "expected_signer",
+        "lifecycle",
+    }
+)
+EXCEPTIONAL_CONTINUATION_REANCHOR_KEYS = EXCEPTIONAL_CONTINUATION_KEYS | {
+    "reanchor"
+}
+EXCEPTIONAL_CONTINUATION_COLLISION_KEYS = (
+    EXCEPTIONAL_CONTINUATION_KEYS - {"finding_ids", "thread_ids"}
+) | {"trigger", "collision_digest"}
+EXCEPTIONAL_CONTINUATION_REANCHOR_FIELDS = frozenset(
+    {
+        "evidence_digest",
+        "original_pull_request",
+        "replacement_pull_request",
+        "rejected_candidate_head_sha",
+        "rejected_candidate_tree_sha",
+        "rejected_continuation_evidence_digest",
+        "rejected_validation_receipt_digest",
+        "rejected_final_attestation_digest",
+        "rejected_state_digest",
+        "replacement_state_digest",
+        "material_finding_ids",
+        "material_thread_ids",
+        "finding_source_digest",
+    }
+)
+EXCEPTIONAL_CONTINUATION_REANCHOR_ADVANCEMENT_FIELDS = (
+    EXCEPTIONAL_CONTINUATION_REANCHOR_FIELDS
+    | {
+        "historical_accepted_main_base_sha",
+        "current_protected_main_base_sha",
+    }
+)
+EXCEPTIONAL_CONTINUATION_REANCHOR_REACTION_FIELDS = (
+    EXCEPTIONAL_CONTINUATION_REANCHOR_FIELDS
+    | {"provider_reaction_replacement_digest"}
+)
+EXCEPTIONAL_CONTINUATION_REANCHOR_DRIFT_FIELDS = (
+    EXCEPTIONAL_CONTINUATION_REANCHOR_ADVANCEMENT_FIELDS
+    | {"provider_reaction_replacement_digest"}
+)
+READY_INTEGRATION_KEYS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "authorization_id",
+        "repository",
+        "delivery_issue_number",
+        "pull_request_number",
+        "prior_delivery_head_sha",
+        "prior_authority_digest",
+        "prior_authority_tag_object_sha",
+        "target_base",
+        "ordered_parent_shas",
+        "validated_tree_sha",
+        "mechanical_merge_tree_sha",
+        "mechanical_conflict_paths",
+        "manual_conflict_resolution_delta",
+        "reviewed_state_digest",
+        "reviewed_feedback_digest",
+        "validation_execution",
+        "expected_signer",
+        "eligibility",
+    }
+)
+READY_INTEGRATION_V12_KEYS = READY_INTEGRATION_KEYS | {"reviewed_head_sha"}
+
+READY_INTEGRATION_PRIOR_AUTHORITY_KEYS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "repository",
+        "delivery_issue_number",
+        "pull_request_number",
+        "prior_delivery_head_sha",
+        "prior_delivery_tree_sha",
+        "prior_validation_receipt_digest",
+        "prior_final_attestation_digest",
+        "expected_signer",
+        "lifecycle",
+        "publication",
+    }
+)
+READY_INTEGRATION_RECOVERED_PRIOR_AUTHORITY_KEYS = (
+    READY_INTEGRATION_PRIOR_AUTHORITY_KEYS | {"recovery_publication"}
+)
+READY_INTEGRATION_RECOVERY_PUBLICATION_KEYS = frozenset(
+    {
+        "object_oid", "publication_digest", "authorization_id",
+        "authorization_digest", "fresh_validation_receipt_digest",
+        "feedback_assessment_digest", "historical_evidence_loss_proof_digest",
+        "historical_bytes_reconstructed",
+    }
+)
+READY_INTEGRATION_ADOPTED_PRIOR_AUTHORITY_KEYS = frozenset(
+    READY_INTEGRATION_PRIOR_AUTHORITY_KEYS
+    | {"source_authority_mode", "source_authority", "historical_companions"}
+)
+
+
+class SecurityBlocker(RuntimeError):
+    """Fail-closed state or identity evidence stopped the batch."""
+
+
+class RecoverableLocalError(RuntimeError):
+    """A correctable local invocation or workspace preparation error."""
+
+
+class TransientReadFailure(RuntimeError):
+    """A GitHub read failed before any mutation had an ambiguous result."""
+
+
+class MutationFailure(RuntimeError):
+    """GitHub definitively rejected one mutation; never retry it automatically."""
+
+
+class UnknownWriteResult(RuntimeError):
+    """A mutation may have applied but its response is not authoritative."""
+
+
+def canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8") + b"\n"
+
+
+def digest_json(value: Any) -> str:
+    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
+def digest_text(value: str) -> str:
+    """Return the exact UTF-8 body digest used by Stable Feedback capture."""
+
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _is_codex_completed_status(value: str) -> bool:
+    if value == "**Completed**":
+        return True
+    match = CODEX_CANONICAL_COMPLETED_STATUS.fullmatch(value)
+    if match is None:
+        return False
+    timestamp = match.group("datetime")
+    year = int(timestamp[:4])
+    if year == 0:
+        return False
+    if timestamp[5:10] == "02-29" and not (
+        year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    ):
+        return False
+    return True
+
+
+def verify_codex_provider_summary(
+    body: Any,
+    *,
+    head_sha: str,
+    repository: str | None = None,
+    pull_request_number: int | None = None,
+) -> None:
+    """Verify the canonical terminal Code/Security provider summary for a head."""
+
+    head_sha = _require_oid(head_sha, "Codex provider summary head")
+    if (
+        not isinstance(body, str)
+        or CODEX_REVIEW_SUMMARY_MARKER not in body
+        or len(body.encode("utf-8")) > 64 * 1024
+    ):
+        raise SecurityBlocker("Codex review provider status is indeterminate")
+    matches = CODEX_REVIEW_STATUS.findall(body)
+    if len(matches) != 1:
+        raise SecurityBlocker("Codex review provider status is indeterminate")
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate provider status key")
+            value[key] = item
+        return value
+
+    try:
+        status = json.loads(matches[0], object_pairs_hook=reject_duplicate_keys)
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise SecurityBlocker("Codex review provider status is indeterminate") from exc
+    if not isinstance(status, dict) or not {"headSha", "status"} <= set(status):
+        raise SecurityBlocker("Codex review provider status is indeterminate")
+    if status.get("headSha") != head_sha:
+        raise SecurityBlocker(
+            "Codex review provider status is stale for the current head"
+        )
+    if repository is not None or pull_request_number is not None:
+        status_pull_request = status.get("pullRequestNumber")
+        if (
+            not isinstance(repository, str)
+            or not REPOSITORY.fullmatch(repository)
+            or not isinstance(pull_request_number, int)
+            or isinstance(pull_request_number, bool)
+            or pull_request_number < 1
+            or not isinstance(status_pull_request, int)
+            or isinstance(status_pull_request, bool)
+            or status.get("repository") != repository
+            or status_pull_request != pull_request_number
+        ):
+            raise SecurityBlocker(
+                "Codex review provider repository or PR identity changed"
+            )
+    if status.get("status") != "completed":
+        raise SecurityBlocker("Codex review provider is not terminal")
+    for label in ("Code Review", "Security Review"):
+        rows = [line for line in body.splitlines() if f"**{label}**" in line]
+        if len(rows) != 1:
+            raise SecurityBlocker("Codex review provider status is indeterminate")
+        cells = rows[0].split("|")
+        if (
+            len(cells) != 6
+            or cells[0].strip()
+            or cells[-1].strip()
+            or cells[1].strip() not in CODEX_REVIEW_LABELS[label]
+            or not cells[3].strip()
+            or not cells[4].strip()
+        ):
+            raise SecurityBlocker("Codex review provider status is indeterminate")
+        if not _is_codex_completed_status(cells[2].strip()):
+            raise SecurityBlocker("Codex review provider is not terminal")
+
+
+def validation_registry_projection(entry: Any) -> dict[str, Any]:
+    """Return the one closed registry identity used by validation evidence."""
+
+    if not isinstance(entry, dict):
+        raise SecurityBlocker("validation registry entry is malformed")
+    missing = sorted(VALIDATION_REGISTRY_PROJECTION_FIELDS - entry.keys())
+    unknown = sorted(entry.keys() - VALIDATION_REGISTRY_ENTRY_FIELDS)
+    if missing or unknown:
+        raise SecurityBlocker(
+            "validation registry entry is not a supported closed projection"
+        )
+    focused_validation = entry["focused_validation"]
+    required_validation = entry["required_local_validation"]
+    if not isinstance(focused_validation, list) or not isinstance(
+        required_validation, list
+    ):
+        raise SecurityBlocker("validation registry command set is malformed")
+    validation = [
+        command
+        for command in focused_validation
+        if isinstance(command, dict)
+        and command.get("execution_policy", "always") == "always"
+    ]
+    if any(not isinstance(command, dict) for command in focused_validation) or any(
+        not isinstance(command, dict) for command in required_validation
+    ):
+        raise SecurityBlocker("validation registry command set is malformed")
+    binding = {
+        "repository": entry["repository"],
+        "default_branch": entry["default_branch"],
+        "allowed_base_repositories": copy.deepcopy(
+            entry["allowed_base_repositories"]
+        ),
+        "manual_gates": copy.deepcopy(entry["manual_gates"]),
+        "signature_policy": copy.deepcopy(entry["signature_policy"]),
+        "check_policy": copy.deepcopy(entry["check_policy"]),
+        "limits": {
+            key: entry[key] for key in ("maximum_api_calls", "maximum_items")
+        },
+        "validation": copy.deepcopy(validation + required_validation),
+        "focused_only_validation": copy.deepcopy(
+            [
+                command
+                for command in focused_validation
+                if command.get("execution_policy") == "focused-only"
+            ]
+        ),
+    }
+    if "pre_enrollment_integration_policy" in entry:
+        if not isinstance(entry["pre_enrollment_integration_policy"], dict):
+            raise SecurityBlocker(
+                "pre-enrollment integration registry policy is malformed"
+            )
+        binding["pre_enrollment_integration_policy"] = copy.deepcopy(
+            entry["pre_enrollment_integration_policy"]
+        )
+    return binding
 
 
 def _reject_duplicate_json_object(
@@ -303,51 +782,9 @@ def validate_repository_registry_structure(
 
 
 def validation_registry_binding(entry: Any) -> dict[str, Any]:
-    """Derive the canonical validation binding from one registry entry."""
+    """Derive the canonical evidence-time validation binding."""
 
-    if not isinstance(entry, dict):
-        raise SecurityBlocker("delivery validation registry entry is invalid")
-    try:
-        focused_validation = entry["focused_validation"]
-        required_validation = entry["required_local_validation"]
-        if (
-            not isinstance(focused_validation, list)
-            or not isinstance(required_validation, list)
-            or any(not isinstance(command, dict) for command in focused_validation)
-            or any(not isinstance(command, dict) for command in required_validation)
-        ):
-            raise TypeError
-        validation = [
-            command
-            for command in focused_validation
-            if command.get("execution_policy", "always") == "always"
-        ] + required_validation
-        return {
-            "repository": entry["repository"],
-            "default_branch": entry["default_branch"],
-            "allowed_base_repositories": copy.deepcopy(
-                entry["allowed_base_repositories"]
-            ),
-            "manual_gates": copy.deepcopy(entry["manual_gates"]),
-            "signature_policy": copy.deepcopy(entry["signature_policy"]),
-            "check_policy": copy.deepcopy(entry["check_policy"]),
-            "limits": {
-                key: entry[key]
-                for key in ("maximum_api_calls", "maximum_items")
-            },
-            "validation": copy.deepcopy(validation),
-            "focused_only_validation": copy.deepcopy(
-                [
-                    command
-                    for command in focused_validation
-                    if command.get("execution_policy") == "focused-only"
-                ]
-            ),
-        }
-    except (KeyError, TypeError) as exc:
-        raise SecurityBlocker(
-            "delivery validation registry entry is invalid"
-        ) from exc
+    return validation_registry_projection(entry)
 
 
 def _parse_registry_json(raw: Any, label: str) -> Any:
@@ -546,142 +983,6 @@ def load_immutable_delivery_registry_binding(
     raise SecurityBlocker(
         "immutable delivery validation registry binding is unavailable"
     )
-SUPPORTED_BATCH_CAPABILITIES = frozenset({"THREAD_RESOLUTION"})
-TRANSIENT_PULL_REQUEST_REACTION_CONTENTS = frozenset({"EYES"})
-SOURCE_KINDS = frozenset(
-    {
-        "PULL_REQUEST_REACTION",
-        "REVIEW",
-        "REVIEW_REACTION",
-        "CONVERSATION_COMMENT",
-        "CONVERSATION_REACTION",
-        "THREAD_COMMENT",
-        "THREAD_COMMENT_REACTION",
-    }
-)
-THREAD_SOURCE_KINDS = frozenset({"THREAD_COMMENT", "THREAD_COMMENT_REACTION"})
-CLASSIFICATION_DISPOSITIONS = {
-    "VALID_ACTIONABLE": frozenset({"CORRECTED_AND_VERIFIED", "PROVEN_EXISTING_FIX"}),
-    "INVALID_FALSE_OR_MISLEADING": frozenset({"DISPROVEN_WITH_EVIDENCE"}),
-    "INFORMATIONAL": frozenset({"NON_ACTIONABLE"}),
-    "DUPLICATE": frozenset({"DUPLICATE_OF_CANONICAL"}),
-    "OUTDATED_BUT_STILL_VALID": frozenset(
-        {"CORRECTED_AND_VERIFIED", "PROVEN_EXISTING_FIX"}
-    ),
-    "OUTDATED_AND_OBSOLETE": frozenset({"OBSOLETE_ON_CURRENT_HEAD"}),
-    "ALREADY_FIXED_ON_SNAPSHOT_HEAD": frozenset({"PROVEN_EXISTING_FIX"}),
-    "SUPERSEDED": frozenset({"SUPERSEDED_BY_CANONICAL"}),
-    "OUTSIDE_PR_SCOPE": frozenset({"TRACKED_AS_FOLLOW_UP"}),
-    "SECURITY_WEAKENING_SUGGESTION": frozenset({"REJECTED_SECURITY_WEAKENING"}),
-}
-FIXED_DISPOSITIONS = frozenset({"CORRECTED_AND_VERIFIED", "PROVEN_EXISTING_FIX"})
-MERGE_STATE_POLICY = {
-    "DIRTY": "block",
-    "UNKNOWN": "block",
-    "BLOCKED": "block",
-    "BEHIND": "strict_base",
-    "DRAFT": "block",
-    "UNSTABLE": "required_checks",
-    "HAS_HOOKS": "allow",
-    "CLEAN": "allow",
-}
-RESOLUTION_MERGE_STATE_POLICY = {
-    **MERGE_STATE_POLICY,
-    "BLOCKED": "required_checks",
-}
-READY_INTEGRATION_KIND = "TWO_PARENT_READY_INTEGRATION"
-READY_INTEGRATION_PRIOR_AUTHORITY_KIND = "READY_INTEGRATION_PRIOR_AUTHORITY"
-EXCEPTIONAL_RECOVERY_KIND = "READY_EXCEPTIONAL_RECOVERY"
-EXCEPTIONAL_RECOVERY_KEYS = frozenset(
-    {
-        "schema_version",
-        "kind",
-        "authorization_id",
-        "repository",
-        "delivery_issue_number",
-        "pull_request_number",
-        "prior_ready_head_sha",
-        "prior_ready_tree_sha",
-        "recovery_tree_sha",
-        "reviewed_state_digest",
-        "reviewed_feedback_digest",
-        "eligibility_evidence_digest",
-        "finding_ids",
-        "thread_ids",
-        "lifecycle",
-    }
-)
-READY_INTEGRATION_KEYS = frozenset(
-    {
-        "schema_version",
-        "kind",
-        "authorization_id",
-        "repository",
-        "delivery_issue_number",
-        "pull_request_number",
-        "prior_delivery_head_sha",
-        "prior_authority_digest",
-        "prior_authority_tag_object_sha",
-        "target_base",
-        "ordered_parent_shas",
-        "validated_tree_sha",
-        "mechanical_merge_tree_sha",
-        "mechanical_conflict_paths",
-        "manual_conflict_resolution_delta",
-        "reviewed_state_digest",
-        "reviewed_feedback_digest",
-        "validation_execution",
-        "expected_signer",
-        "eligibility",
-    }
-)
-
-READY_INTEGRATION_PRIOR_AUTHORITY_KEYS = frozenset(
-    {
-        "schema_version",
-        "kind",
-        "repository",
-        "delivery_issue_number",
-        "pull_request_number",
-        "prior_delivery_head_sha",
-        "prior_delivery_tree_sha",
-        "prior_validation_receipt_digest",
-        "prior_final_attestation_digest",
-        "expected_signer",
-        "lifecycle",
-        "publication",
-    }
-)
-
-
-class SecurityBlocker(RuntimeError):
-    """Fail-closed state or identity evidence stopped the batch."""
-
-
-class RecoverableLocalError(RuntimeError):
-    """A correctable local invocation or workspace preparation error."""
-
-
-class TransientReadFailure(RuntimeError):
-    """A GitHub read failed before any mutation had an ambiguous result."""
-
-
-class MutationFailure(RuntimeError):
-    """GitHub definitively rejected one mutation; never retry it automatically."""
-
-
-class UnknownWriteResult(RuntimeError):
-    """A mutation may have applied but its response is not authoritative."""
-
-
-def canonical_json_bytes(value: Any) -> bytes:
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
-    ).encode("utf-8") + b"\n"
-
-
-def digest_json(value: Any) -> str:
-    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
 
 
 def _all_strings(value: Any) -> list[str]:
@@ -795,13 +1096,27 @@ def _ready_integration_conflict_paths(value: Any) -> list[str]:
 def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
     """Normalize the separately signed authority for the prior Ready head."""
 
-    if not isinstance(value, dict) or set(value) != READY_INTEGRATION_PRIOR_AUTHORITY_KEYS:
+    if not isinstance(value, dict):
         raise SecurityBlocker("Ready integration prior authority is malformed or ambiguous")
     if any(SECRET_VALUE.search(item) for item in _all_strings(value)):
         raise SecurityBlocker("Ready integration prior authority contains secret-like text")
-    if (
-        value.get("schema_version") != "1.1"
-        or value.get("kind") != READY_INTEGRATION_PRIOR_AUTHORITY_KIND
+    schema_version = value.get("schema_version")
+    keys = set(value)
+    authority_mode = (
+        "ORDINARY"
+        if schema_version == "1.1" and keys == READY_INTEGRATION_PRIOR_AUTHORITY_KEYS
+        else "RECOVERED"
+        if schema_version == "1.2"
+        and keys == READY_INTEGRATION_RECOVERED_PRIOR_AUTHORITY_KEYS
+        else "ADOPTED_V3"
+        if schema_version == "1.2"
+        and keys == READY_INTEGRATION_ADOPTED_PRIOR_AUTHORITY_KEYS
+        else None
+    )
+    if authority_mode is None:
+        raise SecurityBlocker("Ready integration prior authority is malformed or ambiguous")
+    if schema_version not in {"1.1", "1.2"} or (
+        value.get("kind") != READY_INTEGRATION_PRIOR_AUTHORITY_KIND
     ):
         raise SecurityBlocker("Ready integration prior authority kind or version is unsupported")
     signer = value.get("expected_signer")
@@ -830,6 +1145,13 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         "exceptional_continuations",
         "cycle_3",
     }
+    if authority_mode == "ADOPTED_V3":
+        lifecycle_keys |= {
+            "ready_transition_count",
+            "ready_history",
+            "exceptional_recovery_history",
+            "exceptional_continuation_history",
+        }
     if not isinstance(lifecycle, dict) or set(lifecycle) != lifecycle_keys:
         raise SecurityBlocker("Ready integration prior lifecycle authority is malformed")
     reviews = lifecycle.get("unrestricted_reviews")
@@ -865,14 +1187,39 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         or not 0 <= continuations <= 1
     ):
         raise SecurityBlocker("Ready integration prior lifecycle authority is invalid")
+    if authority_mode == "ADOPTED_V3":
+        ready_history = lifecycle.get("ready_history")
+        if (
+            lifecycle.get("historical_proof_mode") != "exact_state_adoption"
+            or isinstance(lifecycle.get("ready_transition_count"), bool)
+            or lifecycle.get("ready_transition_count") != 1
+            or not isinstance(ready_history, list)
+            or len(ready_history) != 1
+            or not isinstance(ready_history[0], dict)
+            or set(ready_history[0])
+            != {"sequence", "transition_kind", "event_authorization_digest"}
+            or ready_history[0].get("sequence") != 1
+            or ready_history[0].get("transition_kind") != "DRAFT_TO_READY"
+            or not _require_digest(
+                ready_history[0].get("event_authorization_digest"),
+                "Ready integration transition authorization",
+            )
+            or lifecycle.get("exceptional_recovery_history") != []
+            or lifecycle.get("exceptional_continuation_history") != []
+            or recoveries != 0
+            or continuations != 0
+        ):
+            raise SecurityBlocker(
+                "adopted Ready integration lifecycle authority is invalid"
+            )
     publication = value.get("publication")
     if not isinstance(publication, dict) or set(publication) != {
         "object_oid",
         "publication_digest",
     }:
         raise SecurityBlocker("Ready integration lifecycle publication is malformed")
-    return {
-        "schema_version": "1.1",
+    normalized = {
+        "schema_version": schema_version,
         "kind": READY_INTEGRATION_PRIOR_AUTHORITY_KIND,
         "repository": _require_string(value.get("repository"), "prior authority repository"),
         "delivery_issue_number": _require_positive_integer(value.get("delivery_issue_number"), "prior authority delivery issue"),
@@ -880,7 +1227,14 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         "prior_delivery_head_sha": _require_oid(value.get("prior_delivery_head_sha"), "prior authority head"),
         "prior_delivery_tree_sha": _require_oid(value.get("prior_delivery_tree_sha"), "prior authority tree"),
         "prior_validation_receipt_digest": _require_digest(value.get("prior_validation_receipt_digest"), "prior validation receipt"),
-        "prior_final_attestation_digest": _require_digest(value.get("prior_final_attestation_digest"), "prior final attestation"),
+        "prior_final_attestation_digest": (
+            _require_digest(
+                value.get("prior_final_attestation_digest"),
+                "prior final attestation",
+            )
+            if authority_mode != "ADOPTED_V3"
+            else value.get("prior_final_attestation_digest")
+        ),
         "expected_signer": {"kind": signer_kind, "identity": signer_identity},
         "lifecycle": copy.deepcopy(lifecycle),
         "publication": {
@@ -894,6 +1248,152 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             ),
         },
     }
+    if authority_mode == "ORDINARY":
+        return normalized
+    if authority_mode == "RECOVERED":
+        recovery = value.get("recovery_publication")
+        if (
+            not isinstance(recovery, dict)
+            or set(recovery) != READY_INTEGRATION_RECOVERY_PUBLICATION_KEYS
+            or recovery.get("historical_bytes_reconstructed") is not False
+        ):
+            raise SecurityBlocker(
+                "Ready integration recovered prior authority is malformed"
+            )
+        normalized["recovery_publication"] = {
+            "object_oid": _require_oid(
+                recovery.get("object_oid"), "Ready recovery publication object"
+            ),
+            "publication_digest": _require_digest(
+                recovery.get("publication_digest"),
+                "Ready recovery publication",
+            ),
+            "authorization_id": _require_string(
+                recovery.get("authorization_id"),
+                "Ready recovery authorization identity",
+            ),
+            "authorization_digest": _require_digest(
+                recovery.get("authorization_digest"),
+                "Ready recovery authorization",
+            ),
+            "fresh_validation_receipt_digest": _require_digest(
+                recovery.get("fresh_validation_receipt_digest"),
+                "Ready recovery fresh validation receipt",
+            ),
+            "feedback_assessment_digest": _require_digest(
+                recovery.get("feedback_assessment_digest"),
+                "Ready recovery feedback assessment",
+            ),
+            "historical_evidence_loss_proof_digest": _require_digest(
+                recovery.get("historical_evidence_loss_proof_digest"),
+                "Ready recovery historical evidence-loss proof",
+            ),
+            "historical_bytes_reconstructed": False,
+        }
+        return normalized
+    if normalized["prior_final_attestation_digest"] is not None:
+        raise SecurityBlocker(
+            "adopted Ready authority cannot claim a historical final attestation"
+        )
+    if value.get("source_authority_mode") != "EXACT_STATE_ADOPTION_V3":
+        raise SecurityBlocker("adopted Ready source authority mode is unsupported")
+    companions = value.get("historical_companions")
+    expected_companions = {
+        "reviewed_state_bytes": "UNAVAILABLE",
+        "validation_receipt_bytes": "UNAVAILABLE",
+        "final_attestation_bytes": "UNAVAILABLE",
+        "historical_bytes_reconstructed": False,
+    }
+    if companions != expected_companions:
+        raise SecurityBlocker("adopted Ready historical companion status is invalid")
+    source = value.get("source_authority")
+    source_keys = {
+        "proof_version",
+        "source_parent_sha",
+        "source_signer_identity",
+        "commit_signature_evidence_digest",
+        "historical_receipt_provenance_digest",
+        "current_safety_digest",
+        "observed_history_digest",
+        "intended_state_digest",
+        "head_advanced_count",
+        "head_advanced_history_digest",
+        "loss_admission_id",
+        "loss_admission_digest",
+        "review_budget_admission_id",
+        "review_budget_admission_digest",
+        "adoption_proof_digest",
+        "adoption_authorization_id",
+        "adoption_authorization_digest",
+        "enrollment_publication",
+        "ready_transition",
+    }
+    if not isinstance(source, dict) or set(source) != source_keys:
+        raise SecurityBlocker("adopted Ready source authority is malformed")
+    enrollment = source.get("enrollment_publication")
+    if not isinstance(enrollment, dict) or set(enrollment) != {
+        "object_oid", "publication_digest"
+    }:
+        raise SecurityBlocker("adopted Ready enrollment publication is malformed")
+    transition = source.get("ready_transition")
+    if not isinstance(transition, dict) or set(transition) != {
+        "event_id", "event_digest", "predecessor_authority_digest",
+        "predecessor_head_sha", "resulting_head_sha",
+    }:
+        raise SecurityBlocker("adopted Ready transition authority is malformed")
+    head_advanced_count = source.get("head_advanced_count")
+    if (
+        source.get("proof_version") != "3.0"
+        or _require_oid(source.get("source_parent_sha"), "adopted source parent")
+        == normalized["prior_delivery_head_sha"]
+        or not _require_string(
+            source.get("source_signer_identity"), "adopted source signer"
+        )
+        or isinstance(head_advanced_count, bool)
+        or not isinstance(head_advanced_count, int)
+        or head_advanced_count < 0
+    ):
+        raise SecurityBlocker("adopted Ready source authority is invalid")
+    for field, label in (
+        ("commit_signature_evidence_digest", "adopted commit signature evidence"),
+        ("historical_receipt_provenance_digest", "historical receipt provenance"),
+        ("current_safety_digest", "adopted current safety"),
+        ("observed_history_digest", "adopted observed history"),
+        ("intended_state_digest", "adopted intended state"),
+        ("head_advanced_history_digest", "adopted head history"),
+        ("loss_admission_digest", "validation evidence loss admission"),
+        ("review_budget_admission_digest", "review budget admission"),
+        ("adoption_proof_digest", "exact adoption proof"),
+        ("adoption_authorization_digest", "exact adoption authorization"),
+    ):
+        _require_digest(source.get(field), label)
+    for field, label in (
+        ("loss_admission_id", "validation evidence loss admission identity"),
+        ("review_budget_admission_id", "review budget admission identity"),
+        ("adoption_authorization_id", "exact adoption authorization identity"),
+    ):
+        _require_string(source.get(field), label)
+    _require_oid(enrollment.get("object_oid"), "adopted enrollment publication")
+    _require_digest(
+        enrollment.get("publication_digest"), "adopted enrollment publication"
+    )
+    _require_string(transition.get("event_id"), "adopted Ready transition")
+    for field, label in (
+        ("event_digest", "adopted Ready event"),
+        ("predecessor_authority_digest", "adopted Ready predecessor"),
+    ):
+        _require_digest(transition.get(field), label)
+    for field in ("predecessor_head_sha", "resulting_head_sha"):
+        if _require_oid(transition.get(field), "adopted Ready transition head") != normalized[
+            "prior_delivery_head_sha"
+        ]:
+            raise SecurityBlocker("adopted Ready transition changed the source head")
+    normalized.update(
+        source_authority_mode="EXACT_STATE_ADOPTION_V3",
+        source_authority=copy.deepcopy(source),
+        historical_companions=copy.deepcopy(companions),
+    )
+    return normalized
 
 
 def normalize_ready_integration_evidence(
@@ -906,11 +1406,19 @@ def normalize_ready_integration_evidence(
 ) -> dict[str, Any]:
     """Normalize and admit one explicitly authorized Ready-head integration."""
 
-    if not isinstance(value, dict) or set(value) != READY_INTEGRATION_KEYS:
+    if not isinstance(value, dict):
         raise SecurityBlocker("Ready integration evidence is malformed or ambiguous")
     if any(SECRET_VALUE.search(item) for item in _all_strings(value)):
         raise SecurityBlocker("Ready integration evidence contains secret-like text")
-    if value.get("schema_version") != "1.1" or value.get("kind") != READY_INTEGRATION_KIND:
+    schema_version = value.get("schema_version")
+    expected_keys = (
+        READY_INTEGRATION_V12_KEYS
+        if schema_version == "1.2"
+        else READY_INTEGRATION_KEYS
+    )
+    if set(value) != expected_keys:
+        raise SecurityBlocker("Ready integration evidence is malformed or ambiguous")
+    if schema_version not in {"1.1", "1.2"} or value.get("kind") != READY_INTEGRATION_KIND:
         raise SecurityBlocker("Ready integration topology kind or version is unsupported")
     normalized_repository = _require_string(value.get("repository"), "integration repository")
     if normalized_repository != repository or reviewed_state.repository != repository:
@@ -929,11 +1437,21 @@ def normalize_ready_integration_evidence(
     prior_head = _require_oid(
         value.get("prior_delivery_head_sha"), "prior delivery head"
     )
+    reviewed_head = (
+        prior_head
+        if schema_version == "1.1"
+        else _require_oid(value.get("reviewed_head_sha"), "integration reviewed head")
+    )
+    if reviewed_head != reviewed_state.head_sha:
+        raise SecurityBlocker("integration reviewed head is stale or substituted")
+    if (
+        (schema_version == "1.1" and prior_head != reviewed_head)
+        or (schema_version == "1.2" and prior_head == reviewed_head)
+    ):
+        raise SecurityBlocker("integration first parent is stale or substituted")
     prior_authority_digest = _require_digest(
         value.get("prior_authority_digest"), "prior Ready authority digest"
     )
-    if prior_head != reviewed_state.head_sha:
-        raise SecurityBlocker("integration first parent is stale or substituted")
     target_base = value.get("target_base")
     if not isinstance(target_base, dict) or set(target_base) != {
         "ref",
@@ -1082,7 +1600,7 @@ def normalize_ready_integration_evidence(
     ):
         raise SecurityBlocker("integration eligibility or lifecycle continuity is invalid")
     normalized = {
-        "schema_version": "1.1",
+        "schema_version": schema_version,
         "kind": READY_INTEGRATION_KIND,
         "authorization_id": authorization_id,
         "repository": normalized_repository,
@@ -1117,6 +1635,8 @@ def normalize_ready_integration_evidence(
         },
         "eligibility": copy.deepcopy(eligibility),
     }
+    if schema_version == "1.2":
+        normalized["reviewed_head_sha"] = reviewed_head
     return normalized
 
 
@@ -1228,6 +1748,442 @@ def normalize_exceptional_recovery_evidence(
         "finding_ids": copy.deepcopy(finding_ids),
         "thread_ids": copy.deepcopy(thread_ids),
         "lifecycle": copy.deepcopy(lifecycle),
+    }
+
+
+def _exceptional_history(
+    value: Any, kinds: frozenset[str], label: str
+) -> list[dict[str, Any]]:
+    """Normalize history shape while lifecycle_authority remains semantic owner."""
+
+    if not isinstance(value, list) or not value:
+        raise SecurityBlocker(f"{label} history is missing")
+    normalized: list[dict[str, Any]] = []
+    for sequence, item in enumerate(value, start=1):
+        if (
+            not isinstance(item, dict)
+            or set(item)
+            != {"sequence", "transition_kind", "event_authorization_digest"}
+            or item.get("sequence") != sequence
+            or item.get("transition_kind") not in kinds
+        ):
+            raise SecurityBlocker(f"{label} history is malformed")
+        normalized.append(
+            {
+                "sequence": sequence,
+                "transition_kind": item["transition_kind"],
+                "event_authorization_digest": _require_digest(
+                    item.get("event_authorization_digest"), f"{label} event"
+                ),
+            }
+        )
+    return normalized
+
+
+def normalize_exceptional_continuation_evidence(
+    value: Any,
+    *,
+    repository: str,
+    reviewed_state: "StableFeedbackState",
+    validated_tree_sha: str,
+    eligibility_evidence: Any,
+    reanchor_authority: Any = None,
+) -> dict[str, Any]:
+    """Normalize one typed source-changing continuation after Recovery."""
+
+    reanchored = (
+        isinstance(value, dict)
+        and value.get("schema_version") == "1.1"
+        and set(value) == EXCEPTIONAL_CONTINUATION_REANCHOR_KEYS
+    )
+    collision = (
+        isinstance(value, dict)
+        and value.get("schema_version") == "1.1"
+        and set(value) == EXCEPTIONAL_CONTINUATION_COLLISION_KEYS
+    )
+    if not isinstance(value, dict) or (
+        not reanchored
+        and not collision
+        and set(value) != EXCEPTIONAL_CONTINUATION_KEYS
+    ):
+        raise SecurityBlocker(
+            "exceptional continuation evidence is malformed or ambiguous"
+        )
+    if any(SECRET_VALUE.search(item) for item in _all_strings(value)):
+        raise SecurityBlocker(
+            "exceptional continuation evidence contains secret-like text"
+        )
+    eligibility = normalize_resolution_eligibility_evidence(
+        eligibility_evidence,
+        repository=repository,
+        reviewed_state=reviewed_state,
+    )
+    eligibility_digest = digest_json(eligibility)
+    if (
+        value.get("schema_version")
+        != ("1.1" if reanchored or collision else "1.0")
+        or value.get("kind") != EXCEPTIONAL_CONTINUATION_KIND
+        or value.get("repository") != repository
+        or reviewed_state.repository != repository
+        or value.get("pull_request_number") != reviewed_state.pull_request_number
+        or reviewed_state.pr_state != "OPEN"
+        or value.get("prior_ready_head_sha") != reviewed_state.head_sha
+        or value.get("reviewed_state_digest") != reviewed_state.state_digest
+        or value.get("reviewed_feedback_digest") != reviewed_state.feedback_digest
+        or value.get("continuation_tree_sha") != validated_tree_sha
+        or value.get("eligibility_evidence_digest") != eligibility_digest
+    ):
+        raise SecurityBlocker("exceptional continuation identity or evidence is stale")
+    reanchor = None
+    trigger_fields: dict[str, Any]
+    if collision:
+        if (
+            value.get("trigger") != "IMMUTABLE_EVIDENCE_VERSION_COLLISION"
+            or eligibility.get("eligible_threads") != []
+            or reanchor_authority is not None
+        ):
+            raise SecurityBlocker(
+                "collision continuation grants no thread-resolution or re-anchor authority"
+            )
+        trigger_fields = {
+            "trigger": value["trigger"],
+            "collision_digest": _require_digest(
+                value.get("collision_digest"), "version collision"
+            ),
+        }
+    elif reanchored:
+        candidate = value.get("reanchor")
+        candidate_fields = (
+            frozenset(candidate) if isinstance(candidate, dict) else frozenset()
+        )
+        base_advanced = EXCEPTIONAL_CONTINUATION_REANCHOR_ADVANCEMENT_FIELDS.issubset(
+            candidate_fields
+        )
+        provider_reaction_replaced = (
+            "provider_reaction_replacement_digest" in candidate_fields
+        )
+        if (
+            not isinstance(candidate, dict)
+            or candidate_fields
+            not in {
+                EXCEPTIONAL_CONTINUATION_REANCHOR_FIELDS,
+                EXCEPTIONAL_CONTINUATION_REANCHOR_ADVANCEMENT_FIELDS,
+                EXCEPTIONAL_CONTINUATION_REANCHOR_REACTION_FIELDS,
+                EXCEPTIONAL_CONTINUATION_REANCHOR_DRIFT_FIELDS,
+            }
+            or any(SECRET_VALUE.search(item) for item in _all_strings(candidate))
+        ):
+            raise SecurityBlocker(
+                "exceptional continuation re-anchor binding is malformed"
+            )
+        reanchor = {
+            "evidence_digest": _require_digest(
+                candidate.get("evidence_digest"), "Continuation re-anchor evidence"
+            ),
+            "original_pull_request": _require_positive_integer(
+                candidate.get("original_pull_request"), "original pull request"
+            ),
+            "replacement_pull_request": _require_positive_integer(
+                candidate.get("replacement_pull_request"), "replacement pull request"
+            ),
+            "rejected_candidate_head_sha": _require_oid(
+                candidate.get("rejected_candidate_head_sha"),
+                "rejected candidate head",
+            ),
+            "rejected_candidate_tree_sha": _require_oid(
+                candidate.get("rejected_candidate_tree_sha"),
+                "rejected candidate tree",
+            ),
+            "rejected_continuation_evidence_digest": _require_digest(
+                candidate.get("rejected_continuation_evidence_digest"),
+                "rejected Continuation evidence",
+            ),
+            "rejected_validation_receipt_digest": _require_digest(
+                candidate.get("rejected_validation_receipt_digest"),
+                "rejected validation receipt",
+            ),
+            "rejected_final_attestation_digest": _require_digest(
+                candidate.get("rejected_final_attestation_digest"),
+                "rejected final attestation",
+            ),
+            "rejected_state_digest": _require_digest(
+                candidate.get("rejected_state_digest"),
+                "rejected Stable Feedback state",
+            ),
+            "replacement_state_digest": _require_digest(
+                candidate.get("replacement_state_digest"),
+                "replacement Stable Feedback state",
+            ),
+            "material_finding_ids": copy.deepcopy(
+                candidate.get("material_finding_ids")
+            ),
+            "material_thread_ids": copy.deepcopy(
+                candidate.get("material_thread_ids")
+            ),
+            "finding_source_digest": _require_digest(
+                candidate.get("finding_source_digest"),
+                "rejected finding sources",
+            ),
+            **(
+                {
+                    "historical_accepted_main_base_sha": _require_oid(
+                        candidate.get("historical_accepted_main_base_sha"),
+                        "historical accepted-main base",
+                    ),
+                    "current_protected_main_base_sha": _require_oid(
+                        candidate.get("current_protected_main_base_sha"),
+                        "current protected-main base",
+                    ),
+                }
+                if base_advanced
+                else {}
+            ),
+            **(
+                {
+                    "provider_reaction_replacement_digest": _require_digest(
+                        candidate.get("provider_reaction_replacement_digest"),
+                        "provider reaction replacement",
+                    )
+                }
+                if provider_reaction_replaced
+                else {}
+            ),
+        }
+        finding_ids = reanchor["material_finding_ids"]
+        diagnostic_thread_ids = reanchor["material_thread_ids"]
+        if (
+            reanchor["original_pull_request"]
+            == reanchor["replacement_pull_request"]
+            or reanchor["replacement_pull_request"]
+            != reviewed_state.pull_request_number
+            or reanchor["replacement_state_digest"] != reviewed_state.state_digest
+            or not isinstance(finding_ids, list)
+            or not finding_ids
+            or len(finding_ids) != len(set(finding_ids))
+            or any(
+                not isinstance(identity, str) or not IDENTITY.fullmatch(identity)
+                for identity in finding_ids
+            )
+            or not isinstance(diagnostic_thread_ids, list)
+            or len(diagnostic_thread_ids) != len(set(diagnostic_thread_ids))
+            or any(
+                not isinstance(identity, str)
+                or not re.fullmatch(r"PRRT_[A-Za-z0-9_-]+", identity)
+                for identity in diagnostic_thread_ids
+            )
+            or eligibility.get("eligible_threads") != []
+            or (
+                base_advanced
+                and reanchor["historical_accepted_main_base_sha"]
+                == reanchor["current_protected_main_base_sha"]
+            )
+        ):
+            raise SecurityBlocker(
+                "exceptional continuation re-anchor identity is invalid or stale"
+            )
+        if reanchor_authority is not None:
+            try:
+                authority_binding = {
+                    "evidence_digest": reanchor_authority.evidence_digest,
+                    "original_pull_request": reanchor_authority.original_pull_request,
+                    "replacement_pull_request": (
+                        reanchor_authority.replacement_pull_request
+                    ),
+                    "rejected_candidate_head_sha": (
+                        reanchor_authority.rejected_candidate_head_sha
+                    ),
+                    "rejected_candidate_tree_sha": (
+                        reanchor_authority.rejected_candidate_tree_sha
+                    ),
+                    "rejected_continuation_evidence_digest": (
+                        reanchor_authority.rejected_continuation_evidence_digest
+                    ),
+                    "rejected_validation_receipt_digest": (
+                        reanchor_authority.rejected_validation_receipt_digest
+                    ),
+                    "rejected_final_attestation_digest": (
+                        reanchor_authority.rejected_final_attestation_digest
+                    ),
+                    "rejected_state_digest": reanchor_authority.rejected_state_digest,
+                    "replacement_state_digest": (
+                        reanchor_authority.replacement_state_digest
+                    ),
+                    "material_finding_ids": copy.deepcopy(
+                        reanchor_authority.material_finding_ids
+                    ),
+                    "material_thread_ids": copy.deepcopy(
+                        reanchor_authority.material_thread_ids
+                    ),
+                    "finding_source_digest": (
+                        reanchor_authority.finding_source_digest
+                    ),
+                }
+            except AttributeError as exc:
+                raise SecurityBlocker(
+                    "exceptional continuation re-anchor authority is malformed"
+                ) from exc
+            authority_binding["material_finding_ids"] = list(
+                authority_binding["material_finding_ids"] or []
+            )
+            authority_binding["material_thread_ids"] = list(
+                authority_binding["material_thread_ids"] or []
+            )
+            authority_historical_base = (
+                reanchor_authority.historical_accepted_main_base_sha
+            )
+            authority_current_base = (
+                reanchor_authority.current_protected_main_base_sha
+            )
+            authority_base_advanced = (
+                authority_historical_base is not None
+                and authority_current_base is not None
+                and authority_historical_base != authority_current_base
+            )
+            authority_reaction_digest = (
+                reanchor_authority.provider_reaction_replacement_digest
+            )
+            authority_reaction_replaced = authority_reaction_digest is not None
+            if (
+                base_advanced != authority_base_advanced
+                or provider_reaction_replaced != authority_reaction_replaced
+            ):
+                raise SecurityBlocker(
+                    "exceptional continuation re-anchor drift is unbound"
+                )
+            if base_advanced:
+                authority_binding.update(
+                    {
+                        "historical_accepted_main_base_sha": (
+                            authority_historical_base
+                        ),
+                        "current_protected_main_base_sha": authority_current_base,
+                    }
+                )
+            if provider_reaction_replaced:
+                authority_binding["provider_reaction_replacement_digest"] = (
+                    authority_reaction_digest
+                )
+            if reanchor != authority_binding:
+                raise SecurityBlocker(
+                    "exceptional continuation re-anchor authority changed"
+                )
+        thread_ids = []
+        trigger_fields = {
+            "finding_ids": finding_ids,
+            "thread_ids": thread_ids,
+        }
+    else:
+        finding_ids, thread_ids = continuation_material_finding_projection(
+            reviewed_state, eligibility
+        )
+        trigger_fields = {
+            "finding_ids": finding_ids,
+            "thread_ids": thread_ids,
+        }
+    if not collision and (
+        value.get("finding_ids") != finding_ids
+        or value.get("thread_ids") != thread_ids
+    ):
+        raise SecurityBlocker(
+            "exceptional continuation findings differ from eligibility authority"
+        )
+    lifecycle = value.get("lifecycle")
+    lifecycle_fields = {
+        "unrestricted_reviews",
+        "remediation_cycles",
+        "cycle_3",
+        "draft",
+        "ready",
+        "ready_transition_count",
+        "ready_history",
+        "exceptional_recovery_count",
+        "exceptional_recovery_history",
+        "exceptional_continuation_predecessor_count",
+        "exceptional_continuation_successor_count",
+    }
+    if not isinstance(lifecycle, dict) or set(lifecycle) != lifecycle_fields:
+        raise SecurityBlocker("exceptional continuation lifecycle is malformed")
+    expected_signer = value.get("expected_signer")
+    if (
+        not isinstance(expected_signer, dict)
+        or set(expected_signer) != {"kind", "identity"}
+        or expected_signer.get("kind")
+        not in {"SSH_PRINCIPAL", "OPENPGP_FINGERPRINT"}
+    ):
+        raise SecurityBlocker("exceptional continuation signer is malformed")
+    signer_identity = _require_string(
+        expected_signer.get("identity"), "exceptional continuation signer"
+    )
+    if expected_signer["kind"] == "OPENPGP_FINGERPRINT" and not re.fullmatch(
+        r"[0-9A-F]{40,64}", signer_identity
+    ):
+        raise SecurityBlocker("exceptional continuation OpenPGP signer is malformed")
+    ready_history = _exceptional_history(
+        lifecycle.get("ready_history"),
+        frozenset({"DRAFT_TO_READY", "READY_TO_DRAFT"}),
+        "Ready transition",
+    )
+    recovery_history = _exceptional_history(
+        lifecycle.get("exceptional_recovery_history"),
+        frozenset({"EXCEPTIONAL_RECOVERY"}),
+        "Exceptional Recovery",
+    )
+    if (
+        lifecycle.get("unrestricted_reviews") != 1
+        or lifecycle.get("remediation_cycles") != 2
+        or lifecycle.get("cycle_3") is not False
+        or lifecycle.get("draft") is not False
+        or lifecycle.get("ready") is not True
+        or lifecycle.get("ready_transition_count")
+        != sum(
+            item["transition_kind"] == "DRAFT_TO_READY" for item in ready_history
+        )
+        or lifecycle.get("exceptional_recovery_count") != 1
+        or len(recovery_history) != 1
+        or lifecycle.get("exceptional_continuation_predecessor_count") != 0
+        or lifecycle.get("exceptional_continuation_successor_count") != 1
+    ):
+        raise SecurityBlocker(
+            "exceptional continuation would alter the finite lifecycle"
+        )
+    return {
+        "schema_version": "1.1" if reanchored or collision else "1.0",
+        "kind": EXCEPTIONAL_CONTINUATION_KIND,
+        "authorization_id": _require_string(
+            value.get("authorization_id"),
+            "exceptional continuation authorization",
+        ),
+        "repository": repository,
+        "delivery_issue_number": _require_positive_integer(
+            value.get("delivery_issue_number"),
+            "exceptional continuation delivery issue",
+        ),
+        "pull_request_number": reviewed_state.pull_request_number,
+        "prior_ready_head_sha": reviewed_state.head_sha,
+        "prior_ready_tree_sha": _require_oid(
+            value.get("prior_ready_tree_sha"), "prior Ready tree"
+        ),
+        "continuation_tree_sha": _require_oid(
+            validated_tree_sha, "continuation tree"
+        ),
+        "reviewed_state_digest": reviewed_state.state_digest,
+        "reviewed_feedback_digest": reviewed_state.feedback_digest,
+        "eligibility_evidence_digest": eligibility_digest,
+        **trigger_fields,
+        "expected_signer": {
+            "kind": expected_signer["kind"],
+            "identity": signer_identity,
+        },
+        "lifecycle": {
+            **{
+                key: copy.deepcopy(lifecycle[key])
+                for key in lifecycle_fields
+                if key not in {"ready_history", "exceptional_recovery_history"}
+            },
+            "ready_history": ready_history,
+            "exceptional_recovery_history": recovery_history,
+        },
+        **({"reanchor": reanchor} if reanchor is not None else {}),
     }
 
 
@@ -1354,6 +2310,11 @@ def _feedback_projection(payload: dict[str, Any]) -> dict[str, Any]:
                     "reactions": _reactions(item.get("reactions", []), "thread comment"),
                 }
             )
+        comment_identities = [item["node_id"] for item in thread_comments]
+        if len(comment_identities) != len(set(comment_identities)):
+            raise SecurityBlocker(
+                f"review thread {thread_id} contains duplicate comment identities"
+            )
         threads.append(
             {
                 "node_id": thread_id,
@@ -1377,6 +2338,15 @@ def _feedback_projection(payload: dict[str, Any]) -> dict[str, Any]:
         identities = [item["node_id"] for item in items]
         if len(identities) != len(set(identities)):
             raise SecurityBlocker(f"stable feedback contains duplicate {label}")
+    comment_identities = [
+        item["node_id"] for item in projection["conversation_comments"]
+    ] + [
+        item["node_id"]
+        for thread in projection["threads"]
+        for item in thread["comments"]
+    ]
+    if len(comment_identities) != len(set(comment_identities)):
+        raise SecurityBlocker("stable feedback contains duplicate comment identities")
     return projection
 
 
@@ -1453,7 +2423,125 @@ class StableFeedbackState:
         }
 
 
-_VERIFIED_VALIDATION_EVIDENCE = object()
+@dataclass(frozen=True, slots=True)
+class _VerifiedSuccessorClassificationSeal:
+    provenance_digest: str
+
+
+@dataclass(frozen=True)
+class VerifiedSuccessorClassification:
+    """Exact safe successor finding returned by maintained signature verification."""
+
+    repository: str
+    delivery_issue_number: int
+    pull_request_number: int
+    head_sha: str
+    finding_id: str
+    finding_evidence_digest: str
+    thread_id: str | None
+    top_level_comment_node_id: str | None
+    finding_body_digest: str | None
+    reply_count: int
+    is_resolved: bool | None
+    is_outdated: bool | None
+    classification: str
+    disposition: str
+    technically_blocking: bool
+    technical_blockers: tuple[str, ...]
+    classification_evidence_digest: str
+    source_bindings: tuple[tuple[str, str, str, str | None], ...]
+    _verification_seal: object
+
+
+@dataclass(frozen=True)
+class VerifiedRejectedSuccessorFindings:
+    """Material findings that made one exact successor unsafe to publish."""
+
+    predecessor_state_digest: str
+    rejected_state_digest: str
+    finding_ids: tuple[str, ...]
+    thread_ids: tuple[str, ...]
+    source_bindings: tuple[tuple[str, str, str, str | None], ...]
+    classification_evidence_digests: tuple[str, ...]
+    provider_reaction_replacement_digest: str | None = None
+
+
+@dataclass(frozen=True)
+class _VerifiedFeedbackGrowth:
+    """Digests produced by the two existing bounded provider-growth branches."""
+
+    provider_reaction_replacement_digest: str | None = None
+    predecessor_provider_growth_digest: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedPredecessorCorrectionAuthoritySeal:
+    provenance_digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedPredecessorCorrectionAuthority:
+    reanchor_evidence_digest: str
+    material_finding_ids: tuple[str, ...]
+    finding_source_digest: str
+    _verification_seal: _VerifiedPredecessorCorrectionAuthoritySeal
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "reanchor_evidence_digest": self.reanchor_evidence_digest,
+            "material_finding_ids": list(self.material_finding_ids),
+            "finding_source_digest": self.finding_source_digest,
+        }
+
+
+def _seal_predecessor_correction_authority(
+    *,
+    reanchor_evidence_digest: str,
+    material_finding_ids: tuple[str, ...],
+    finding_source_digest: str,
+) -> _VerifiedPredecessorCorrectionAuthority:
+    """Bridge one already-verified rejected-candidate correction authority."""
+
+    projection = {
+        "reanchor_evidence_digest": reanchor_evidence_digest,
+        "material_finding_ids": list(material_finding_ids),
+        "finding_source_digest": finding_source_digest,
+    }
+    if (
+        not DIGEST.fullmatch(reanchor_evidence_digest)
+        or not DIGEST.fullmatch(finding_source_digest)
+        or not material_finding_ids
+        or len(material_finding_ids) != len(set(material_finding_ids))
+        or any(not IDENTITY.fullmatch(item) for item in material_finding_ids)
+    ):
+        raise SecurityBlocker(
+            "predecessor provider correction authority is malformed"
+        )
+    return _VerifiedPredecessorCorrectionAuthority(
+        reanchor_evidence_digest=reanchor_evidence_digest,
+        material_finding_ids=material_finding_ids,
+        finding_source_digest=finding_source_digest,
+        _verification_seal=_VerifiedPredecessorCorrectionAuthoritySeal(
+            provenance_digest=digest_json(projection)
+        ),
+    )
+
+
+def _seal_successor_classification(**values: Any) -> VerifiedSuccessorClassification:
+    """Internal bridge from the maintained detached-signature verifier."""
+
+    digest = values.get("classification_evidence_digest")
+    return VerifiedSuccessorClassification(
+        **values,
+        _verification_seal=_VerifiedSuccessorClassificationSeal(digest),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedValidationEvidenceSeal:
+    """Carry canonical provenance that consumers independently re-verify."""
+
+    provenance_json: str
 
 
 @dataclass(frozen=True)
@@ -1468,14 +2556,363 @@ class VerifiedValidationEvidence:
     final_attestation_digest: str
     source_validation_evidence_digest: str
     _verification_seal: object
+    delivery_issue_number: int | None = None
 
 
-def is_verified_validation_evidence(value: Any) -> bool:
-    """Reject caller-constructed validation summaries at trust boundaries."""
+def _validation_evidence_binding(value: VerifiedValidationEvidence) -> dict[str, Any]:
+    return {
+        "repository": value.repository,
+        "delivery_issue_number": value.delivery_issue_number,
+        "pull_request_number": value.pull_request_number,
+        "head_sha": value.head_sha,
+        "tree_sha": value.tree_sha,
+        "validation_receipt_digest": value.validation_receipt_digest,
+        "final_attestation_digest": value.final_attestation_digest,
+        "source_validation_evidence_digest": value.source_validation_evidence_digest,
+    }
 
-    return (
-        isinstance(value, VerifiedValidationEvidence)
-        and value._verification_seal is _VERIFIED_VALIDATION_EVIDENCE
+
+@dataclass(frozen=True)
+class AuthenticatedIntegrationCommit:
+    """Exact commit and actual signer proven by the canonical signature verifier."""
+
+    repository: str
+    head_sha: str
+    tree_sha: str
+    parent_shas: tuple[str, ...]
+    signer_kind: str
+    signer_identity: str
+    signature_fingerprint: str
+    signature_classification: str
+    signature_policy_digest: str
+    authentication_digest: str
+
+
+def _integration_commit_authentication_binding(
+    value: AuthenticatedIntegrationCommit,
+) -> dict[str, Any]:
+    return {
+        "repository": value.repository,
+        "head_sha": value.head_sha,
+        "tree_sha": value.tree_sha,
+        "parent_shas": list(value.parent_shas),
+        "signer_kind": value.signer_kind,
+        "signer_identity": value.signer_identity,
+        "signature_fingerprint": value.signature_fingerprint,
+        "signature_classification": value.signature_classification,
+        "signature_policy_digest": value.signature_policy_digest,
+    }
+
+
+def _actual_integration_signer(
+    verification_output: str, expected_signer: dict[str, str]
+) -> tuple[str, str]:
+    if not isinstance(verification_output, str) or not isinstance(
+        expected_signer, dict
+    ):
+        raise SecurityBlocker("integration commit signer evidence is malformed")
+    kind = expected_signer.get("kind")
+    identity = expected_signer.get("identity")
+    if kind == "SSH_PRINCIPAL" and isinstance(identity, str):
+        matches = re.findall(
+            r'(?m)^Good "git" signature for ([^\s]+) with ', verification_output
+        )
+        actual_identity = matches[0] if len(matches) == 1 else None
+    elif kind == "OPENPGP_FINGERPRINT" and isinstance(identity, str):
+        status_lines = re.findall(
+            r"(?m)^\[GNUPG:\] VALIDSIG ([^\r\n]+)$",
+            verification_output.upper(),
+        )
+        fields = status_lines[0].split() if len(status_lines) == 1 else []
+        if len(fields) not in {9, 10}:
+            raise SecurityBlocker(
+                "integration OpenPGP signer status is malformed or ambiguous"
+            )
+        signing_fingerprint = fields[0]
+        primary_fingerprint = fields[9] if len(fields) == 10 else signing_fingerprint
+        if not all(
+            re.fullmatch(r"[0-9A-F]{40,64}", fingerprint)
+            for fingerprint in {signing_fingerprint, primary_fingerprint}
+        ):
+            raise SecurityBlocker(
+                "integration OpenPGP signer status is malformed or ambiguous"
+            )
+        actual_identity = primary_fingerprint
+        identity = identity.upper()
+    else:
+        raise SecurityBlocker("integration expected signer is malformed")
+    if actual_identity != identity:
+        raise SecurityBlocker(
+            "integration commit signer does not match the explicitly accepted identity"
+        )
+    return kind, actual_identity
+
+
+def _actual_signature_fingerprint(
+    verification_output: str, signer_kind: str
+) -> str:
+    if signer_kind == "SSH_PRINCIPAL":
+        matches = re.findall(r"\b(SHA256:[A-Za-z0-9+/=]+)\b", verification_output)
+        if len(set(matches)) == 1:
+            return matches[0]
+    elif signer_kind == "OPENPGP_FINGERPRINT":
+        status_lines = re.findall(
+            r"(?m)^\[GNUPG:\] VALIDSIG ([^\r\n]+)$",
+            verification_output.upper(),
+        )
+        fields = status_lines[0].split() if len(status_lines) == 1 else []
+        if fields and re.fullmatch(r"[0-9A-F]{40,64}", fields[0]):
+            return fields[0]
+    raise SecurityBlocker("integration commit signature fingerprint is unavailable")
+
+
+def _run_integration_commit_git(
+    repository_root: Path, arguments: list[str]
+) -> subprocess.CompletedProcess[str]:
+    evidence = _load_evidence_helper()
+    try:
+        git_executable = evidence.resolve_trusted_executable("git")
+        environment = evidence.command_environment("git")
+    except evidence.CommandPolicyError as exc:
+        raise RecoverableLocalError(
+            "integration commit verification is unavailable"
+        ) from exc
+    try:
+        return subprocess.run(
+            [git_executable, *arguments],
+            cwd=repository_root,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=environment,
+            timeout=EXTERNAL_COMMAND_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RecoverableLocalError(
+            "integration commit verification is unavailable"
+        ) from exc
+
+
+def _repository_from_remote(value: str) -> str | None:
+    match = re.fullmatch(
+        r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+        r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?",
+        value.strip(),
+    )
+    return match.group(1) if match is not None else None
+
+
+def _commit_topology(commit_object: str) -> tuple[str, tuple[str, ...]]:
+    headers = commit_object.split("\n\n", 1)[0].splitlines()
+    trees = [line[5:].lower() for line in headers if line.startswith("tree ")]
+    parents = tuple(
+        line[7:].lower() for line in headers if line.startswith("parent ")
+    )
+    if (
+        len(trees) != 1
+        or not OID.fullmatch(trees[0])
+        or any(not OID.fullmatch(parent) for parent in parents)
+    ):
+        raise SecurityBlocker("integration commit topology is malformed")
+    return trees[0], parents
+
+
+def _authenticate_integration_commit(
+    *,
+    repository_root: Path | str,
+    repository: str,
+    head_sha: str,
+    expected_signer: dict[str, str],
+    signature_policy: dict[str, Any],
+) -> AuthenticatedIntegrationCommit:
+    """Authenticate the signed commit, its topology, signer, and trust context."""
+
+    if not isinstance(repository, str) or not REPOSITORY.fullmatch(repository):
+        raise SecurityBlocker("integration commit repository identity is malformed")
+    head = _require_oid(head_sha, "integration commit")
+    try:
+        root = Path(repository_root).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise RecoverableLocalError(
+            "integration commit repository is unavailable"
+        ) from exc
+    if not root.is_dir():
+        raise RecoverableLocalError("integration commit repository is unavailable")
+    origin = _run_integration_commit_git(root, ["remote", "get-url", "origin"])
+    if origin.returncode != 0 or _repository_from_remote(origin.stdout) != repository:
+        raise SecurityBlocker("integration commit repository identity changed")
+    commit_object = _run_integration_commit_git(root, ["cat-file", "commit", head])
+    if commit_object.returncode != 0:
+        raise SecurityBlocker("integration commit object is unavailable")
+    tree_sha, parent_shas = _commit_topology(commit_object.stdout)
+    verified_commit = _run_integration_commit_git(
+        root, ["verify-commit", "--raw", head]
+    )
+    evidence = _load_evidence_helper()
+    local_signature = evidence.interpret_local_signature(
+        verified_commit.returncode,
+        f"{verified_commit.stdout}\n{verified_commit.stderr}",
+        signature_format_hint=(
+            evidence._commit_signature_format(commit_object.stdout)
+            if commit_object.returncode == 0
+            else "unknown"
+        ),
+    )
+    verified = verify_commit_signatures(
+        [
+            {
+                "oid": head,
+                "source": "USER",
+                "local_signature": local_signature,
+                "github_verification": {
+                    "verified": False,
+                    "reason": "not_required",
+                },
+            }
+        ],
+        {**signature_policy, "require_github_verified": False},
+    )
+    if len(verified) != 1 or verified[0]["oid"] != head:
+        raise SecurityBlocker("integration commit signature identity changed")
+    verification_output = f"{verified_commit.stdout}\n{verified_commit.stderr}"
+    signer_kind, signer_identity = _actual_integration_signer(
+        verification_output, expected_signer
+    )
+    expected_format = "ssh" if signer_kind == "SSH_PRINCIPAL" else "openpgp"
+    if local_signature.get("format") != expected_format:
+        raise SecurityBlocker("integration commit signer format does not match policy")
+    fields = {
+        "repository": repository,
+        "head_sha": head,
+        "tree_sha": tree_sha,
+        "parent_shas": list(parent_shas),
+        "signer_kind": signer_kind,
+        "signer_identity": signer_identity,
+        "signature_fingerprint": _actual_signature_fingerprint(
+            verification_output, signer_kind
+        ),
+        "signature_classification": verified[0]["classification"],
+        "signature_policy_digest": digest_json(signature_policy),
+    }
+    return AuthenticatedIntegrationCommit(
+        **{**fields, "parent_shas": parent_shas},
+        authentication_digest=digest_json(fields),
+    )
+
+
+def authenticate_integration_commit(
+    *,
+    repository_root: Path | str,
+    repository: str,
+    head_sha: str,
+    expected_signer: dict[str, str],
+    signature_policy: dict[str, Any],
+) -> AuthenticatedIntegrationCommit:
+    return _authenticate_integration_commit(
+        repository_root=repository_root,
+        repository=repository,
+        head_sha=head_sha,
+        expected_signer=expected_signer,
+        signature_policy=signature_policy,
+    )
+
+
+def _authenticated_integration_commit_agrees(
+    value: Any,
+    *,
+    repository: str | None = None,
+    head_sha: str,
+    tree_sha: str | None = None,
+    parent_shas: list[str] | tuple[str, ...] | None = None,
+    expected_signer: dict[str, str],
+    signature_policy: dict[str, Any] | None = None,
+) -> bool:
+    try:
+        if not isinstance(value, AuthenticatedIntegrationCommit):
+            return False
+        binding = _integration_commit_authentication_binding(value)
+        if value.authentication_digest != digest_json(binding):
+            return False
+        expected_kind = (
+            expected_signer.get("kind")
+            if isinstance(expected_signer, dict)
+            else None
+        )
+        expected_identity = (
+            expected_signer.get("identity")
+            if isinstance(expected_signer, dict)
+            else None
+        )
+        if expected_kind == "OPENPGP_FINGERPRINT" and isinstance(
+            expected_identity, str
+        ):
+            expected_identity = expected_identity.upper()
+        return (
+            value.head_sha == head_sha.lower()
+            and value.signer_kind == expected_kind
+            and value.signer_identity == expected_identity
+            and (repository is None or value.repository == repository)
+            and (tree_sha is None or value.tree_sha == tree_sha.lower())
+            and (
+                parent_shas is None
+                or value.parent_shas
+                == tuple(parent.lower() for parent in parent_shas)
+            )
+            and (
+                signature_policy is None
+                or value.signature_policy_digest == digest_json(signature_policy)
+            )
+        )
+    except (AttributeError, KeyError, SecurityBlocker, TypeError, ValueError):
+        return False
+
+
+def _unregistered_validation_evidence(
+    *,
+    repository: str,
+    pull_request_number: int,
+    head_sha: str,
+    tree_sha: str,
+    validation_receipt_digest: str,
+    final_attestation_digest: str,
+    source_validation_evidence_digest: str,
+    delivery_issue_number: int | None = None,
+) -> VerifiedValidationEvidence:
+    fields = {
+        "repository": repository,
+        "delivery_issue_number": delivery_issue_number,
+        "pull_request_number": pull_request_number,
+        "head_sha": head_sha,
+        "tree_sha": tree_sha,
+        "validation_receipt_digest": validation_receipt_digest,
+        "final_attestation_digest": final_attestation_digest,
+        "source_validation_evidence_digest": source_validation_evidence_digest,
+    }
+    return VerifiedValidationEvidence(
+        repository=repository,
+        pull_request_number=pull_request_number,
+        head_sha=head_sha,
+        tree_sha=tree_sha,
+        validation_receipt_digest=validation_receipt_digest,
+        final_attestation_digest=final_attestation_digest,
+        source_validation_evidence_digest=source_validation_evidence_digest,
+        _verification_seal=None,
+        delivery_issue_number=delivery_issue_number,
+    )
+
+
+def _seal_validation_evidence(
+    value: VerifiedValidationEvidence, provenance: dict[str, Any]
+) -> VerifiedValidationEvidence:
+    seal = _VerifiedValidationEvidenceSeal(
+        canonical_json_bytes(provenance).decode("utf-8")
+    )
+    return VerifiedValidationEvidence(
+        **_validation_evidence_binding(value),
+        _verification_seal=seal,
     )
 
 
@@ -1503,6 +2940,1433 @@ def verify_reviewed_state_evidence(value: Any) -> StableFeedbackState:
     if value != reviewed.to_dict():
         raise SecurityBlocker("reviewed-state evidence is invalid or stale")
     return reviewed
+
+
+def _successor_source_inventory(
+    state: StableFeedbackState,
+) -> dict[tuple[str, str], tuple[str, str | None, dict[str, Any]]]:
+    inventory: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ] = {}
+
+    def add(
+        kind: str,
+        node_id: str,
+        digest: str,
+        thread_id: str | None,
+        item: dict[str, Any],
+    ) -> None:
+        key = (kind, node_id)
+        if key in inventory:
+            raise SecurityBlocker("stable feedback repeats a successor source")
+        inventory[key] = (digest, thread_id, item)
+
+    for reaction in state.feedback["pull_request_reactions"]:
+        add(
+            "PULL_REQUEST_REACTION",
+            reaction["mutation_id"],
+            digest_json(reaction),
+            None,
+            reaction,
+        )
+    for review in state.feedback["reviews"]:
+        add("REVIEW", review["node_id"], review["body_digest"], None, review)
+        for reaction in review["reactions"]:
+            add(
+                "REVIEW_REACTION",
+                reaction["mutation_id"],
+                digest_json(reaction),
+                None,
+                reaction,
+            )
+    for comment in state.feedback["conversation_comments"]:
+        add(
+            "CONVERSATION_COMMENT",
+            comment["node_id"],
+            comment["body_digest"],
+            None,
+            comment,
+        )
+        for reaction in comment["reactions"]:
+            add(
+                "CONVERSATION_REACTION",
+                reaction["mutation_id"],
+                digest_json(reaction),
+                None,
+                reaction,
+            )
+    for thread in state.feedback["threads"]:
+        for comment in thread["comments"]:
+            add(
+                "THREAD_COMMENT",
+                comment["node_id"],
+                comment["body_digest"],
+                thread["node_id"],
+                comment,
+            )
+            for reaction in comment["reactions"]:
+                add(
+                    "THREAD_COMMENT_REACTION",
+                    reaction["mutation_id"],
+                    digest_json(reaction),
+                    thread["node_id"],
+                    reaction,
+                )
+    return inventory
+
+
+def _source_actor_login(source: Any) -> str | None:
+    actor = source.get("actor") if isinstance(source, dict) else None
+    login = actor.get("login") if isinstance(actor, dict) else None
+    if not isinstance(login, str):
+        return None
+    return re.sub(r"\[bot\]$", "", login.strip().lower())
+
+
+def _verify_successor_transport(
+    value: Any,
+    *,
+    reviewed_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    current_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    resulting_head_sha: str,
+    rejected_candidate: bool = False,
+    reanchored_classified_review: bool = False,
+    require_codex_provider_transport: bool = False,
+) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
+    if not isinstance(value, list):
+        raise SecurityBlocker("successor provider transport evidence is malformed")
+    admitted_additions: set[tuple[str, str]] = set()
+    admitted_updates: set[tuple[str, str]] = set()
+    roles: list[str] = []
+    terminal_review_kinds: list[str] = []
+    for transport in value:
+        if not isinstance(transport, dict) or set(transport) != {
+            "role",
+            "kind",
+            "node_id",
+            "body",
+        }:
+            raise SecurityBlocker(
+                "successor provider transport evidence is malformed"
+            )
+        role = transport.get("role")
+        kind = transport.get("kind")
+        node_id = transport.get("node_id")
+        body = transport.get("body")
+        if (
+            role not in SUCCESSOR_TRANSPORT_ROLES
+            or kind
+            not in {"REVIEW", "CONVERSATION_COMMENT", "PULL_REQUEST_REACTION"}
+            or not isinstance(node_id, str)
+            or not IDENTITY.fullmatch(node_id)
+            or (body is not None and not isinstance(body, str))
+            or (isinstance(body, str) and len(body.encode("utf-8")) > 64 * 1024)
+        ):
+            raise SecurityBlocker(
+                "successor provider transport evidence is malformed"
+            )
+        key = (kind, node_id)
+        if key in admitted_additions or key in admitted_updates:
+            raise SecurityBlocker(
+                "successor provider transport evidence is duplicate or ambiguous"
+            )
+        observed = current_sources.get(key)
+        if observed is None or observed[1] is not None:
+            raise SecurityBlocker(
+                "successor provider transport source is absent or ambiguous"
+            )
+        source_digest, _thread_id, source = observed
+        if body is not None and digest_text(body) != source_digest:
+            raise SecurityBlocker("successor provider transport body changed")
+        login = _source_actor_login(source)
+        predecessor = reviewed_sources.get(key)
+
+        if role == "CODEX_SUMMARY_UPDATE":
+            if (
+                kind != "CONVERSATION_COMMENT"
+                or body is None
+                or login != CODEX_PROVIDER_LOGIN
+            ):
+                raise SecurityBlocker("Codex summary update is not authenticated")
+            verify_codex_provider_summary(body, head_sha=resulting_head_sha)
+            if predecessor is None:
+                admitted_additions.add(key)
+            else:
+                admitted_updates.add(key)
+        elif role in {"CODEX_REVIEW_REQUEST", "CODEX_SECURITY_REVIEW_REQUEST"}:
+            expected_body = (
+                "@codex review"
+                if role == "CODEX_REVIEW_REQUEST"
+                else "@codex security review"
+            )
+            if (
+                kind != "CONVERSATION_COMMENT"
+                or predecessor is not None
+                or body != expected_body
+                or not isinstance(login, str)
+                or login in {CODEX_PROVIDER_LOGIN, GITHUB_CODE_QUALITY_LOGIN}
+            ):
+                raise SecurityBlocker("Codex review request transport is invalid")
+            admitted_additions.add(key)
+        elif role in {
+            "CODEX_CODE_REVIEW_RESULT",
+            "CODEX_SECURITY_REVIEW_RESULT",
+        }:
+            no_finding_text = (
+                "Codex Review: Didn't find any major issues."
+                if role == "CODEX_CODE_REVIEW_RESULT"
+                else "No security issues were found in this pull request."
+            )
+            reviewed_commit = f"**Reviewed commit:** `{resulting_head_sha[:10]}`"
+            if (
+                kind != "CONVERSATION_COMMENT"
+                or predecessor is not None
+                or body is None
+                or no_finding_text not in body
+                or reviewed_commit not in body
+                or login != CODEX_PROVIDER_LOGIN
+            ):
+                raise SecurityBlocker("Codex review result transport is invalid")
+            admitted_additions.add(key)
+        elif role == "CODEX_REVIEW":
+            if rejected_candidate or reanchored_classified_review:
+                reviewed_commit = f"**Reviewed commit:** `{resulting_head_sha[:10]}`"
+                review_kind = (
+                    "SECURITY_REVIEW"
+                    if isinstance(body, str)
+                    and body.lstrip().startswith("### 🛡️ Codex Security Review")
+                    else "CODE_REVIEW"
+                    if isinstance(body, str)
+                    and body.lstrip().startswith("### 💡 Codex Review")
+                    else None
+                )
+                if (
+                    kind != "REVIEW"
+                    or predecessor is not None
+                    or review_kind is None
+                    or body.count(reviewed_commit) != 1
+                    or login != CODEX_PROVIDER_LOGIN
+                    or source.get("state") != "COMMENTED"
+                    or source.get("commit_oid") != resulting_head_sha
+                    or source_digest != digest_text(body)
+                ):
+                    raise SecurityBlocker(
+                        "Codex findings review transport is not head-bound"
+                    )
+                if reanchored_classified_review and review_kind != "CODE_REVIEW":
+                    raise SecurityBlocker(
+                        "classified Codex review transport is not a Code Review"
+                    )
+                terminal_review_kinds.append(review_kind)
+            elif (
+                kind != "REVIEW"
+                or predecessor is not None
+                or body is not None
+                or login != CODEX_PROVIDER_LOGIN
+                or source.get("commit_oid") != resulting_head_sha
+                or source_digest != digest_text("")
+            ):
+                raise SecurityBlocker("Codex review transport is not head-bound")
+            admitted_additions.add(key)
+        elif role == "CODEX_COMPLETION_REACTION":
+            if (
+                kind != "PULL_REQUEST_REACTION"
+                or predecessor is not None
+                or body is not None
+                or login != CODEX_PROVIDER_LOGIN
+                or source.get("content") != "THUMBS_UP"
+            ):
+                raise SecurityBlocker(
+                    "Codex completion reaction transport is invalid"
+                )
+            admitted_additions.add(key)
+        elif role == "GITHUB_CODE_QUALITY_REVIEW":
+            if (
+                kind != "REVIEW"
+                or predecessor is not None
+                or body is not None
+                or login != GITHUB_CODE_QUALITY_LOGIN
+                or source.get("commit_oid") != resulting_head_sha
+                or source_digest != digest_text("")
+            ):
+                raise SecurityBlocker(
+                    "GitHub Code Quality review transport is not head-bound"
+                )
+            admitted_additions.add(key)
+        roles.append(role)
+
+    codex_roles = [role for role in roles if role.startswith("CODEX_")]
+    if (
+        rejected_candidate
+        or reanchored_classified_review
+        or require_codex_provider_transport
+        or codex_roles
+    ):
+        if rejected_candidate:
+            required = frozenset(
+                {
+                    "CODEX_SUMMARY_UPDATE",
+                    "CODEX_REVIEW_REQUEST",
+                    "CODEX_SECURITY_REVIEW_REQUEST",
+                }
+            )
+        elif reanchored_classified_review:
+            required = REQUIRED_CODEX_CLASSIFIED_REVIEW_ROLES
+        else:
+            required = REQUIRED_CODEX_SUCCESSOR_ROLES
+        rejected_results_complete = (
+            roles.count("CODEX_CODE_REVIEW_RESULT")
+            + terminal_review_kinds.count("CODE_REVIEW")
+            == 1
+            and roles.count("CODEX_SECURITY_REVIEW_RESULT")
+            + terminal_review_kinds.count("SECURITY_REVIEW")
+            == 1
+        )
+        classified_review_complete = (
+            terminal_review_kinds.count("CODE_REVIEW") == 1
+            and terminal_review_kinds.count("SECURITY_REVIEW") == 0
+            and roles.count("CODEX_CODE_REVIEW_RESULT") == 0
+            and roles.count("CODEX_SECURITY_REVIEW_RESULT") == 1
+            and roles.count("CODEX_COMPLETION_REACTION") == 0
+        )
+        if (
+            not required.issubset(roles)
+            or any(roles.count(role) != 1 for role in required)
+            or (
+                rejected_candidate
+                and not rejected_results_complete
+            )
+            or (
+                reanchored_classified_review
+                and not classified_review_complete
+            )
+        ):
+            raise SecurityBlocker(
+                "Codex provider acquisition transport is incomplete or ambiguous"
+            )
+    return admitted_additions, admitted_updates
+
+
+def _verify_provider_completion_reaction_replacement(
+    value: Any,
+    *,
+    reviewed_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    current_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    provider_transport: Any,
+) -> tuple[str, str]:
+    """Authenticate one exact Codex-owned completion-reaction replacement."""
+
+    if (
+        not isinstance(value, dict)
+        or set(value) != PROVIDER_COMPLETION_REACTION_REPLACEMENT_FIELDS
+        or value.get("provider_login") != CODEX_PROVIDER_LOGIN
+        or value.get("reaction_content") != "THUMBS_UP"
+    ):
+        raise SecurityBlocker(
+            "provider completion reaction replacement is malformed"
+        )
+    removed_id = value.get("removed_reaction_id")
+    replacement_id = value.get("replacement_reaction_id")
+    if (
+        not isinstance(removed_id, str)
+        or not IDENTITY.fullmatch(removed_id)
+        or not isinstance(replacement_id, str)
+        or not IDENTITY.fullmatch(replacement_id)
+        or removed_id == replacement_id
+    ):
+        raise SecurityBlocker(
+            "provider completion reaction replacement identity is invalid"
+        )
+    removed_key = ("PULL_REQUEST_REACTION", removed_id)
+    replacement_key = ("PULL_REQUEST_REACTION", replacement_id)
+    removed = reviewed_sources.get(removed_key)
+    replacement = current_sources.get(replacement_key)
+    reaction_kinds = {
+        "PULL_REQUEST_REACTION",
+        "REVIEW_REACTION",
+        "CONVERSATION_REACTION",
+        "THREAD_COMMENT_REACTION",
+    }
+    removed_reactions = {
+        key
+        for key in set(reviewed_sources) - set(current_sources)
+        if key[0] in reaction_kinds
+    }
+    added_reactions = {
+        key
+        for key in set(current_sources) - set(reviewed_sources)
+        if key[0] in reaction_kinds
+    }
+    if (
+        removed is None
+        or removed[1] is not None
+        or removed_key in current_sources
+        or replacement is None
+        or replacement[1] is not None
+        or replacement_key in reviewed_sources
+        or removed[2].get("content") != "THUMBS_UP"
+        or replacement[2].get("content") != "THUMBS_UP"
+        or _source_actor_login(removed[2]) != CODEX_PROVIDER_LOGIN
+        or _source_actor_login(replacement[2]) != CODEX_PROVIDER_LOGIN
+        or removed[2].get("actor") != replacement[2].get("actor")
+        or removed_reactions != {removed_key}
+        or added_reactions != {replacement_key}
+    ):
+        raise SecurityBlocker(
+            "provider completion reaction replacement is not provider-owned"
+        )
+    completion_transport = (
+        [
+            item
+            for item in provider_transport
+            if isinstance(item, dict)
+            and item.get("role") == "CODEX_COMPLETION_REACTION"
+        ]
+        if isinstance(provider_transport, list)
+        else []
+    )
+    if completion_transport != [
+        {
+            "role": "CODEX_COMPLETION_REACTION",
+            "kind": "PULL_REQUEST_REACTION",
+            "node_id": replacement_id,
+            "body": None,
+        }
+    ]:
+        raise SecurityBlocker(
+            "provider completion reaction replacement transport is invalid"
+        )
+    return removed_id, replacement_id
+
+
+def _verify_provider_completion_reaction_removal(
+    value: Any,
+    *,
+    reviewed_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    current_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    provider_transport: Any,
+) -> str:
+    """Authenticate the bounded completion-reaction removal during re-review."""
+
+    if (
+        not isinstance(value, dict)
+        or set(value)
+        != {"provider_login", "reaction_content", "removed_reaction_id"}
+        or value.get("provider_login") != CODEX_PROVIDER_LOGIN
+        or value.get("reaction_content") != "THUMBS_UP"
+    ):
+        raise SecurityBlocker("provider completion reaction removal is malformed")
+    removed_id = value.get("removed_reaction_id")
+    if not isinstance(removed_id, str) or not IDENTITY.fullmatch(removed_id):
+        raise SecurityBlocker(
+            "provider completion reaction removal identity is invalid"
+        )
+    removed_key = ("PULL_REQUEST_REACTION", removed_id)
+    removed = reviewed_sources.get(removed_key)
+    reaction_kinds = {
+        "PULL_REQUEST_REACTION",
+        "REVIEW_REACTION",
+        "CONVERSATION_REACTION",
+        "THREAD_COMMENT_REACTION",
+    }
+    removed_reactions = {
+        key
+        for key in set(reviewed_sources) - set(current_sources)
+        if key[0] in reaction_kinds
+    }
+    added_reactions = {
+        key
+        for key in set(current_sources) - set(reviewed_sources)
+        if key[0] in reaction_kinds
+    }
+    if (
+        removed is None
+        or removed[1] is not None
+        or removed_key in current_sources
+        or removed[2].get("content") != "THUMBS_UP"
+        or removed[2].get("actor") != CODEX_REACTION_PROVIDER
+        or removed_reactions != {removed_key}
+        or added_reactions
+    ):
+        raise SecurityBlocker(
+            "provider completion reaction removal is not provider-owned"
+        )
+    if not isinstance(provider_transport, list) or any(
+        isinstance(item, dict)
+        and item.get("role") == "CODEX_COMPLETION_REACTION"
+        for item in provider_transport
+    ):
+        raise SecurityBlocker(
+            "provider completion reaction removal transport is invalid"
+        )
+    return removed_id
+
+
+def _verify_predecessor_provider_feedback(
+    value: Any,
+    *,
+    reviewed: StableFeedbackState,
+    current: StableFeedbackState,
+    reviewed_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    current_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    correction_authority: Any,
+) -> tuple[set[tuple[str, str]], set[str]]:
+    """Bind exact-CURRENT provider growth to existing re-anchor correction scope."""
+
+    authority_projection = (
+        correction_authority.to_dict()
+        if isinstance(
+            correction_authority, _VerifiedPredecessorCorrectionAuthority
+        )
+        else None
+    )
+    if (
+        authority_projection is None
+        or not isinstance(
+            correction_authority._verification_seal,
+            _VerifiedPredecessorCorrectionAuthoritySeal,
+        )
+        or correction_authority._verification_seal.provenance_digest
+        != digest_json(authority_projection)
+    ):
+        raise SecurityBlocker(
+            "predecessor provider correction authority is unauthenticated"
+        )
+    if (
+        not isinstance(value, dict)
+        or set(value)
+        != {"correction_authority", "provider_transport", "material_findings"}
+        or value.get("correction_authority") != authority_projection
+    ):
+        raise SecurityBlocker(
+            "predecessor provider feedback authority is invalid or stale"
+        )
+
+    transport = value.get("provider_transport")
+    if not isinstance(transport, list) or len(transport) != 1:
+        raise SecurityBlocker(
+            "predecessor provider review transport is incomplete or ambiguous"
+        )
+    review = transport[0]
+    if not isinstance(review, dict) or not isinstance(review.get("body"), str):
+        raise SecurityBlocker("predecessor provider review transport is malformed")
+    try:
+        review_body_size = len(review["body"].encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise SecurityBlocker(
+            "predecessor provider review body is not valid UTF-8"
+        ) from exc
+    if (
+        set(review) != {"role", "kind", "node_id", "body"}
+        or review.get("role") != "COPILOT_PREDECESSOR_REVIEW"
+        or review.get("kind") != "REVIEW"
+        or not isinstance(review.get("node_id"), str)
+        or not IDENTITY.fullmatch(review["node_id"])
+        or review_body_size > 64 * 1024
+    ):
+        raise SecurityBlocker("predecessor provider review transport is malformed")
+    review_key = ("REVIEW", review["node_id"])
+    observed_review = current_sources.get(review_key)
+    if (
+        review_key in reviewed_sources
+        or observed_review is None
+        or observed_review[1] is not None
+        or observed_review[0] != digest_text(review["body"])
+        or observed_review[2].get("actor") != COPILOT_REVIEW_PROVIDER
+        or observed_review[2].get("state") != "COMMENTED"
+        or observed_review[2].get("commit_oid") != reviewed.head_sha
+        or reviewed.head_sha == current.head_sha
+    ):
+        raise SecurityBlocker(
+            "predecessor provider review is not exact-CURRENT feedback"
+        )
+
+    findings = value.get("material_findings")
+    if (
+        not isinstance(findings, list)
+        or not findings
+        or len(findings) != len(correction_authority.material_finding_ids)
+    ):
+        raise SecurityBlocker(
+            "predecessor material finding inventory is incomplete or ambiguous"
+        )
+    current_threads = {
+        item["node_id"]: item for item in current.feedback["threads"]
+    }
+    reviewed_thread_ids = {
+        item["node_id"] for item in reviewed.feedback["threads"]
+    }
+    correction_ids: set[str] = set()
+    thread_ids: set[str] = set()
+    admitted = {review_key}
+    for finding in findings:
+        if (
+            not isinstance(finding, dict)
+            or set(finding) != {"correction_finding_id", "thread_id", "sources"}
+        ):
+            raise SecurityBlocker("predecessor material finding is malformed")
+        correction_id = finding.get("correction_finding_id")
+        thread_id = finding.get("thread_id")
+        sources = finding.get("sources")
+        if (
+            correction_id not in correction_authority.material_finding_ids
+            or correction_id in correction_ids
+            or not isinstance(thread_id, str)
+            or not re.fullmatch(r"PRRT_[A-Za-z0-9_-]+", thread_id)
+            or thread_id in reviewed_thread_ids
+            or thread_id in thread_ids
+            or not isinstance(sources, list)
+            or len(sources) != 1
+        ):
+            raise SecurityBlocker(
+                "predecessor material finding authority is incomplete or replayed"
+            )
+        thread = current_threads.get(thread_id)
+        source = sources[0]
+        if (
+            not isinstance(thread, dict)
+            or thread.get("is_resolved") is not False
+            or len(thread.get("comments", [])) != 1
+            or not isinstance(source, dict)
+            or set(source) != {"kind", "node_id", "digest"}
+            or source.get("kind") != "THREAD_COMMENT"
+        ):
+            raise SecurityBlocker(
+                "predecessor material finding does not identify one live thread"
+            )
+        source_node_id = source.get("node_id")
+        source_digest = source.get("digest")
+        if (
+            not isinstance(source_node_id, str)
+            or not IDENTITY.fullmatch(source_node_id)
+            or not isinstance(source_digest, str)
+            or not DIGEST.fullmatch(source_digest)
+        ):
+            raise SecurityBlocker(
+                "predecessor material finding source identity is malformed"
+            )
+        source_key = ("THREAD_COMMENT", source_node_id)
+        observed_source = current_sources.get(source_key)
+        comment = thread["comments"][0]
+        if (
+            source_key in admitted
+            or source_key in reviewed_sources
+            or observed_source is None
+            or observed_source[:2] != (source_digest, thread_id)
+            or observed_source[2].get("actor") != COPILOT_REVIEW_PROVIDER
+            or comment.get("node_id") != source_node_id
+            or comment.get("body_digest") != source_digest
+            or comment.get("reply_to_id") is not None
+            or comment.get("reactions") != []
+        ):
+            raise SecurityBlocker(
+                "predecessor material finding source is stale or substituted"
+            )
+        correction_ids.add(correction_id)
+        thread_ids.add(thread_id)
+        admitted.add(source_key)
+    if correction_ids != set(correction_authority.material_finding_ids):
+        raise SecurityBlocker(
+            "predecessor material findings differ from correction authority"
+        )
+    return admitted, thread_ids
+
+
+def _verify_successor_findings(
+    value: Any,
+    *,
+    reviewed_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    current_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    repository: str,
+    pull_request_number: int,
+    resulting_head_sha: str,
+    current_threads: dict[str, dict[str, Any]],
+    classified_codex_review: bool = False,
+) -> set[tuple[str, str]]:
+    """Keep ordinary successor safety fail-closed for every material finding."""
+
+    return _verify_successor_findings_with_policy(
+        value,
+        reviewed_sources=reviewed_sources,
+        current_sources=current_sources,
+        repository=repository,
+        pull_request_number=pull_request_number,
+        resulting_head_sha=resulting_head_sha,
+        current_threads=current_threads,
+        rejected_candidate=False,
+        classified_codex_review=classified_codex_review,
+    )
+
+
+def _verify_rejected_successor_findings(
+    value: Any,
+    *,
+    reviewed_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    current_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    repository: str,
+    pull_request_number: int,
+    resulting_head_sha: str,
+    current_threads: dict[str, dict[str, Any]],
+) -> set[tuple[str, str]]:
+    """Admit only authenticated material findings for diagnostic re-anchoring."""
+
+    return _verify_successor_findings_with_policy(
+        value,
+        reviewed_sources=reviewed_sources,
+        current_sources=current_sources,
+        repository=repository,
+        pull_request_number=pull_request_number,
+        resulting_head_sha=resulting_head_sha,
+        current_threads=current_threads,
+        rejected_candidate=True,
+        classified_codex_review=False,
+    )
+
+
+def _verify_successor_findings_with_policy(
+    value: Any,
+    *,
+    reviewed_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    current_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    repository: str,
+    pull_request_number: int,
+    resulting_head_sha: str,
+    current_threads: dict[str, dict[str, Any]],
+    rejected_candidate: bool,
+    classified_codex_review: bool,
+) -> set[tuple[str, str]]:
+    if not isinstance(value, list):
+        raise SecurityBlocker("successor finding evidence is malformed")
+    admitted: set[tuple[str, str]] = set()
+    finding_ids: set[str] = set()
+    for finding in value:
+        if not isinstance(finding, dict) or set(finding) != {
+            "sources",
+            "classification_evidence",
+        }:
+            raise SecurityBlocker("successor finding evidence is malformed")
+        verified_classification = finding.get("classification_evidence")
+        if (
+            not isinstance(verified_classification, VerifiedSuccessorClassification)
+            or not isinstance(
+                verified_classification._verification_seal,
+                _VerifiedSuccessorClassificationSeal,
+            )
+            or verified_classification._verification_seal.provenance_digest
+            != verified_classification.classification_evidence_digest
+            or verified_classification.repository != repository
+            or verified_classification.pull_request_number != pull_request_number
+            or verified_classification.head_sha != resulting_head_sha
+        ):
+            raise SecurityBlocker(
+                "successor finding classification is not authenticated"
+            )
+        finding_id = _require_string(
+            verified_classification.finding_id, "successor finding identity"
+        )
+        if finding_id in finding_ids:
+            raise SecurityBlocker("successor finding identity is repeated")
+        finding_ids.add(finding_id)
+        classification = verified_classification.classification
+        disposition = verified_classification.disposition
+        technically_blocking = verified_classification.technically_blocking
+        if rejected_candidate:
+            if (
+                technically_blocking is not True
+                or not verified_classification.technical_blockers
+                or (classification, disposition)
+                != ("IN_CONTRACT_DEFECT", "CANDIDATE_REJECTED_BEFORE_PUBLICATION")
+                or not DIGEST.fullmatch(
+                    verified_classification.classification_evidence_digest
+                )
+                or not DIGEST.fullmatch(
+                    verified_classification.finding_evidence_digest
+                )
+            ):
+                raise SecurityBlocker(
+                    "rejected successor finding is not authenticated material evidence"
+                )
+        else:
+            if technically_blocking is True:
+                raise SecurityBlocker(
+                    "material successor finding blocks continuation"
+                )
+            if classified_codex_review:
+                safe_decision = (
+                    classification,
+                    disposition,
+                ) in SUCCESSOR_SAFE_CLASSIFICATION_DECISIONS
+            else:
+                safe_decision = disposition in CLASSIFICATION_DISPOSITIONS.get(
+                    classification, frozenset()
+                )
+            if (
+                technically_blocking is not False
+                or not safe_decision
+                or not DIGEST.fullmatch(
+                    verified_classification.classification_evidence_digest
+                )
+                or not DIGEST.fullmatch(
+                    verified_classification.finding_evidence_digest
+                )
+                or verified_classification.technical_blockers
+            ):
+                raise SecurityBlocker(
+                    "successor finding lacks a complete safe classification"
+                )
+        thread_id = verified_classification.thread_id
+        if thread_id is not None and (
+            not isinstance(thread_id, str)
+            or not re.fullmatch(r"PRRT_[A-Za-z0-9_-]+", thread_id)
+        ):
+            raise SecurityBlocker("successor finding thread identity is malformed")
+        sources = finding.get("sources")
+        if not isinstance(sources, list) or not sources:
+            raise SecurityBlocker("successor finding sources are missing")
+        signed_sources = {
+            (kind, node_id): (digest, source_thread_id)
+            for kind, node_id, digest, source_thread_id in verified_classification.source_bindings
+        }
+        if len(signed_sources) != len(verified_classification.source_bindings):
+            raise SecurityBlocker("successor signed finding source is repeated")
+        for source in sources:
+            if not isinstance(source, dict) or set(source) != {
+                "kind",
+                "node_id",
+                "digest",
+            }:
+                raise SecurityBlocker("successor finding source is malformed")
+            key = (source.get("kind"), source.get("node_id"))
+            observed = current_sources.get(key)
+            signed = signed_sources.get(key)
+            if (
+                key in admitted
+                or key in reviewed_sources
+                or observed is None
+                or signed is None
+                or signed[0] != source.get("digest")
+                or observed[:2] != signed
+            ):
+                raise SecurityBlocker(
+                    "successor finding source is stale, repeated, or predecessor-owned"
+                )
+            admitted.add(key)
+        if set(signed_sources) != {
+            (source["kind"], source["node_id"]) for source in sources
+        }:
+            raise SecurityBlocker("successor signed finding sources are incomplete")
+        if thread_id is None:
+            if classified_codex_review:
+                raise SecurityBlocker(
+                    "classified Codex finding is not thread-bound"
+                )
+            if (
+                verified_classification.top_level_comment_node_id is not None
+                or verified_classification.finding_body_digest is not None
+                or verified_classification.reply_count != 0
+                or verified_classification.is_resolved is not None
+                or verified_classification.is_outdated is not None
+            ):
+                raise SecurityBlocker(
+                    "successor source-only classification is malformed"
+                )
+        else:
+            top_level_key = (
+                "THREAD_COMMENT",
+                verified_classification.top_level_comment_node_id,
+            )
+            top_level = current_sources.get(
+                top_level_key
+            )
+            thread = current_threads.get(thread_id)
+            if (
+                verified_classification.is_resolved is not False
+                or top_level is None
+                or top_level[:2]
+                != (verified_classification.finding_body_digest, thread_id)
+                or not isinstance(thread, dict)
+                or thread["is_resolved"] != verified_classification.is_resolved
+                or thread["is_outdated"] != verified_classification.is_outdated
+                or len(thread["comments"]) - 1
+                != verified_classification.reply_count
+            ):
+                raise SecurityBlocker(
+                    "successor finding classification does not bind the live finding"
+                )
+            if classified_codex_review and (
+                _source_actor_login(top_level[2]) != CODEX_PROVIDER_LOGIN
+                or top_level_key not in signed_sources
+                or any(
+                    source_thread_id != thread_id
+                    or _source_actor_login(current_sources[source_key][2])
+                    != CODEX_PROVIDER_LOGIN
+                    for source_key, (
+                        _digest,
+                        source_thread_id,
+                    ) in signed_sources.items()
+                )
+            ):
+                raise SecurityBlocker(
+                    "classified Codex finding source is not provider-owned"
+                )
+    return admitted
+
+
+def _verify_predecessor_preservation(
+    reviewed: StableFeedbackState,
+    current: StableFeedbackState,
+    *,
+    authorized_thread_ids: set[str],
+    admitted_updates: set[tuple[str, str]],
+    removed_provider_reaction_id: str | None = None,
+) -> None:
+    for category, identity_key in (
+        ("pull_request_reactions", "mutation_id"),
+        ("reviews", "node_id"),
+        ("conversation_comments", "node_id"),
+    ):
+        predecessor = {item[identity_key]: item for item in reviewed.feedback[category]}
+        successor = {item[identity_key]: item for item in current.feedback[category]}
+        for node_id, expected in predecessor.items():
+            observed = successor.get(node_id)
+            key = (
+                "PULL_REQUEST_REACTION"
+                if category == "pull_request_reactions"
+                else "REVIEW"
+                if category == "reviews"
+                else "CONVERSATION_COMMENT",
+                node_id,
+            )
+            if key in admitted_updates:
+                comparable = copy.deepcopy(observed)
+                if isinstance(comparable, dict):
+                    comparable["body_digest"] = expected["body_digest"]
+                    comparable["updated_at"] = expected["updated_at"]
+                if comparable != expected:
+                    raise SecurityBlocker(
+                        "provider summary update altered predecessor authority"
+                    )
+            elif (
+                category == "pull_request_reactions"
+                and node_id == removed_provider_reaction_id
+                and observed is None
+            ):
+                continue
+            elif observed != expected:
+                if (
+                    category not in {"reviews", "conversation_comments"}
+                    or not isinstance(observed, dict)
+                ):
+                    raise SecurityBlocker(
+                        "successor removed or changed predecessor feedback"
+                    )
+                expected_reactions = {
+                    item["mutation_id"]: item for item in expected["reactions"]
+                }
+                observed_reactions = {
+                    item["mutation_id"]: item for item in observed["reactions"]
+                }
+                if any(
+                    observed_reactions.get(reaction_id) != reaction
+                    for reaction_id, reaction in expected_reactions.items()
+                ):
+                    raise SecurityBlocker("successor changed a predecessor reaction")
+                comparable = copy.deepcopy(observed)
+                comparable["reactions"] = expected["reactions"]
+                if comparable != expected:
+                    raise SecurityBlocker(
+                        "successor removed or changed predecessor feedback"
+                    )
+
+    predecessor_threads = {
+        item["node_id"]: item for item in reviewed.feedback["threads"]
+    }
+    successor_threads = {
+        item["node_id"]: item for item in current.feedback["threads"]
+    }
+    for thread_id, expected_thread in predecessor_threads.items():
+        observed_thread = successor_threads.get(thread_id)
+        if not isinstance(observed_thread, dict):
+            raise SecurityBlocker("successor removed a predecessor thread")
+        expected_comments = {
+            item["node_id"]: item for item in expected_thread["comments"]
+        }
+        observed_comments = {
+            item["node_id"]: item for item in observed_thread["comments"]
+        }
+        for comment_id, expected_comment in expected_comments.items():
+            observed_comment = observed_comments.get(comment_id)
+            if not isinstance(observed_comment, dict):
+                raise SecurityBlocker("successor removed a predecessor reply")
+            expected_reactions = {
+                item["mutation_id"]: item for item in expected_comment["reactions"]
+            }
+            observed_reactions = {
+                item["mutation_id"]: item for item in observed_comment["reactions"]
+            }
+            if any(
+                observed_reactions.get(reaction_id) != reaction
+                for reaction_id, reaction in expected_reactions.items()
+            ):
+                raise SecurityBlocker("successor changed a predecessor reaction")
+            comparable = copy.deepcopy(observed_comment)
+            comparable["reactions"] = expected_comment["reactions"]
+            if comparable != expected_comment:
+                raise SecurityBlocker("successor changed a predecessor comment")
+        is_resolved = observed_thread["is_resolved"]
+        if (
+            expected_thread["is_resolved"] is False
+            and is_resolved is True
+            and thread_id in authorized_thread_ids
+        ):
+            is_resolved = False
+        is_outdated = observed_thread["is_outdated"]
+        if expected_thread["is_outdated"] is False and is_outdated is True:
+            is_outdated = False
+        if (
+            is_resolved != expected_thread["is_resolved"]
+            or is_outdated != expected_thread["is_outdated"]
+        ):
+            raise SecurityBlocker("successor changed predecessor thread state")
+
+
+def _verify_authenticated_feedback_growth(
+    reviewed: StableFeedbackState,
+    current: StableFeedbackState,
+    *,
+    resulting_head_sha: str,
+    authorized_thread_ids: set[str],
+    successor_evidence: Any,
+    rejected_candidate: bool = False,
+    reanchored_classified_review: bool = False,
+    require_codex_provider_transport: bool = False,
+    predecessor_correction_authority: Any = None,
+) -> _VerifiedFeedbackGrowth:
+    expected_keys = {
+        "schema_version",
+        "repository",
+        "pull_request_number",
+        "predecessor_state_digest",
+        "resulting_head_sha",
+        "resulting_state_digest",
+        "provider_transport",
+        "successor_findings",
+    }
+    schema_version = successor_evidence.get("schema_version") if isinstance(
+        successor_evidence, dict
+    ) else None
+    provider_reaction_replacement = (
+        rejected_candidate and schema_version == "1.2"
+    )
+    predecessor_provider_growth = (
+        reanchored_classified_review and schema_version == "1.2"
+    )
+    if provider_reaction_replacement:
+        expected_keys.add("provider_completion_reaction_replacement")
+    if predecessor_provider_growth:
+        expected_keys.add("predecessor_provider_feedback")
+        expected_keys.add("provider_completion_reaction_removal")
+    expected_schema_version = (
+        "1.2"
+        if provider_reaction_replacement
+        else "1.2"
+        if predecessor_provider_growth
+        else "1.1"
+        if rejected_candidate or reanchored_classified_review
+        else "1.0"
+    )
+    if (
+        not isinstance(successor_evidence, dict)
+        or set(successor_evidence) != expected_keys
+        or any(SECRET_VALUE.search(item) for item in _all_strings(successor_evidence))
+        or schema_version != expected_schema_version
+        or successor_evidence.get("repository") != reviewed.repository
+        or successor_evidence.get("pull_request_number")
+        != reviewed.pull_request_number
+        or successor_evidence.get("predecessor_state_digest")
+        != reviewed.state_digest
+        or successor_evidence.get("resulting_head_sha") != resulting_head_sha
+        or successor_evidence.get("resulting_state_digest") != current.state_digest
+    ):
+        raise SecurityBlocker("successor safety evidence is invalid or stale")
+    reviewed_sources = _successor_source_inventory(reviewed)
+    current_sources = _successor_source_inventory(current)
+    predecessor_additions: set[tuple[str, str]] = set()
+    predecessor_growth_thread_ids: set[str] = set()
+    if predecessor_provider_growth:
+        (
+            predecessor_additions,
+            predecessor_growth_thread_ids,
+        ) = _verify_predecessor_provider_feedback(
+            successor_evidence["predecessor_provider_feedback"],
+            reviewed=reviewed,
+            current=current,
+            reviewed_sources=reviewed_sources,
+            current_sources=current_sources,
+            correction_authority=predecessor_correction_authority,
+        )
+    transport_additions, transport_updates = _verify_successor_transport(
+        successor_evidence["provider_transport"],
+        reviewed_sources=reviewed_sources,
+        current_sources=current_sources,
+        resulting_head_sha=resulting_head_sha,
+        rejected_candidate=rejected_candidate,
+        reanchored_classified_review=reanchored_classified_review,
+        require_codex_provider_transport=require_codex_provider_transport,
+    )
+    replacement_ids = None
+    removed_reaction_id = None
+    if provider_reaction_replacement:
+        replacement_ids = _verify_provider_completion_reaction_replacement(
+            successor_evidence["provider_completion_reaction_replacement"],
+            reviewed_sources=reviewed_sources,
+            current_sources=current_sources,
+            provider_transport=successor_evidence["provider_transport"],
+        )
+    elif predecessor_provider_growth:
+        removed_reaction_id = _verify_provider_completion_reaction_removal(
+            successor_evidence["provider_completion_reaction_removal"],
+            reviewed_sources=reviewed_sources,
+            current_sources=current_sources,
+            provider_transport=successor_evidence["provider_transport"],
+        )
+    finding_arguments = {
+        "reviewed_sources": reviewed_sources,
+        "current_sources": current_sources,
+        "repository": reviewed.repository,
+        "pull_request_number": reviewed.pull_request_number,
+        "resulting_head_sha": resulting_head_sha,
+        "current_threads": {
+            item["node_id"]: item for item in current.feedback["threads"]
+        },
+    }
+    if rejected_candidate:
+        finding_additions = _verify_rejected_successor_findings(
+            successor_evidence["successor_findings"], **finding_arguments
+        )
+    else:
+        finding_additions = _verify_successor_findings(
+            successor_evidence["successor_findings"],
+            **finding_arguments,
+            classified_codex_review=reanchored_classified_review,
+        )
+    if (
+        reanchored_classified_review
+        and not successor_evidence["successor_findings"]
+    ):
+        raise SecurityBlocker(
+            "classified Codex review has no authenticated suggestion"
+        )
+    overlapping_additions = transport_additions & finding_additions
+    rejected_review_sources = {
+        (item["kind"], item["node_id"])
+        for item in successor_evidence["provider_transport"]
+        if isinstance(item, dict) and item.get("role") == "CODEX_REVIEW"
+    }
+    if overlapping_additions and (
+        not rejected_candidate
+        or not overlapping_additions.issubset(rejected_review_sources)
+    ):
+        raise SecurityBlocker("successor feedback has ambiguous authority")
+    expected_additions = set(current_sources) - set(reviewed_sources)
+    if expected_additions != (
+        predecessor_additions | transport_additions | finding_additions
+    ):
+        raise SecurityBlocker(
+            "successor feedback contains an unauthenticated addition"
+        )
+    _verify_predecessor_preservation(
+        reviewed,
+        current,
+        authorized_thread_ids=authorized_thread_ids,
+        admitted_updates=transport_updates,
+        removed_provider_reaction_id=(
+            replacement_ids[0]
+            if replacement_ids is not None
+            else removed_reaction_id
+        ),
+    )
+
+    reviewed_thread_ids = {
+        item["node_id"] for item in reviewed.feedback["threads"]
+    }
+    current_thread_ids = {item["node_id"] for item in current.feedback["threads"]}
+    finding_thread_ids = {
+        item["classification_evidence"].thread_id
+        for item in successor_evidence["successor_findings"]
+        if isinstance(item, dict)
+        and isinstance(
+            item.get("classification_evidence"), VerifiedSuccessorClassification
+        )
+        and item["classification_evidence"].thread_id is not None
+    }
+    if current_thread_ids - reviewed_thread_ids != (
+        finding_thread_ids | predecessor_growth_thread_ids
+    ) - reviewed_thread_ids:
+        raise SecurityBlocker(
+            "successor thread lacks complete classification authority"
+        )
+    reaction_replacement_digest = (
+        None
+        if replacement_ids is None
+        else digest_json(
+            {
+                "domain": (
+                    "secpal.rejected-successor-provider-reaction-replacement/v1"
+                ),
+                "repository": reviewed.repository,
+                "pull_request_number": reviewed.pull_request_number,
+                "predecessor_state_digest": reviewed.state_digest,
+                "resulting_head_sha": resulting_head_sha,
+                "resulting_state_digest": current.state_digest,
+                "provider_transport": successor_evidence["provider_transport"],
+                "provider_completion_reaction_replacement": successor_evidence[
+                    "provider_completion_reaction_replacement"
+                ],
+            }
+        )
+    )
+    predecessor_growth_digest = (
+        None
+        if not predecessor_provider_growth
+        else digest_json(
+            {
+                "domain": "secpal.reanchored-predecessor-provider-growth/v1",
+                "repository": reviewed.repository,
+                "pull_request_number": reviewed.pull_request_number,
+                "predecessor_head_sha": reviewed.head_sha,
+                "resulting_head_sha": current.head_sha,
+                "predecessor_state_digest": reviewed.state_digest,
+                "resulting_state_digest": current.state_digest,
+                "provider_feedback": successor_evidence[
+                    "predecessor_provider_feedback"
+                ],
+                "provider_completion_reaction_removal": successor_evidence[
+                    "provider_completion_reaction_removal"
+                ],
+            }
+        )
+    )
+    return _VerifiedFeedbackGrowth(
+        provider_reaction_replacement_digest=reaction_replacement_digest,
+        predecessor_provider_growth_digest=predecessor_growth_digest,
+    )
+
+
+def verify_stable_feedback_successor(
+    reviewed: StableFeedbackState,
+    current: StableFeedbackState,
+    *,
+    resulting_head_sha: str,
+    authorized_thread_ids: Iterable[str],
+    successor_safety_evidence: Any = None,
+) -> None:
+    """Authenticate predecessor feedback after one exact source-head advance."""
+
+    resulting_head_sha = _require_oid(resulting_head_sha, "resulting feedback head")
+    if (
+        not isinstance(authorized_thread_ids, (list, tuple))
+        or not authorized_thread_ids
+        or any(
+            not isinstance(item, str)
+            or not re.fullmatch(r"PRRT_[A-Za-z0-9_-]+", item)
+            for item in authorized_thread_ids
+        )
+        or len(authorized_thread_ids) != len(set(authorized_thread_ids))
+    ):
+        raise SecurityBlocker("authorized continuation threads are malformed")
+    authorized = set(authorized_thread_ids)
+    if (
+        not isinstance(reviewed, StableFeedbackState)
+        or not isinstance(current, StableFeedbackState)
+        or current.repository != reviewed.repository
+        or current.pull_request_number != reviewed.pull_request_number
+        or current.pr_state != "OPEN"
+        or current.head_sha != resulting_head_sha
+        or current.base_ref != reviewed.base_ref
+        or current.base_sha != reviewed.base_sha
+    ):
+        raise SecurityBlocker(
+            "current stable feedback does not identify the exact source successor"
+        )
+    normalized = copy.deepcopy(current.feedback)
+    reviewed_threads = {
+        item["node_id"]: item for item in reviewed.feedback["threads"]
+    }
+    for thread in normalized["threads"]:
+        expected = reviewed_threads.get(thread["node_id"])
+        if (
+            expected is not None
+            and expected["is_resolved"] is False
+            and thread["is_resolved"] is True
+            and thread["node_id"] in authorized
+        ):
+            thread["is_resolved"] = False
+        if (
+            expected is not None
+            and expected["is_outdated"] is False
+            and thread["is_outdated"] is True
+        ):
+            thread["is_outdated"] = False
+    if digest_json(normalized) == reviewed.feedback_digest:
+        return
+    if successor_safety_evidence is None:
+        raise SecurityBlocker(
+            "current stable feedback differs from the reviewed predecessor"
+        )
+    _verify_authenticated_feedback_growth(
+        reviewed,
+        current,
+        resulting_head_sha=resulting_head_sha,
+        authorized_thread_ids=authorized,
+        successor_evidence=successor_safety_evidence,
+    )
+
+
+def verify_reanchored_stable_feedback_successor(
+    reviewed: StableFeedbackState,
+    current: StableFeedbackState,
+    *,
+    resulting_head_sha: str,
+    successor_safety_evidence: Any,
+    predecessor_correction_authority: Any = None,
+) -> str | None:
+    """Require fresh exact-head providers for a re-anchored corrected successor."""
+
+    resulting_head_sha = _require_oid(resulting_head_sha, "resulting feedback head")
+    if (
+        not isinstance(reviewed, StableFeedbackState)
+        or not isinstance(current, StableFeedbackState)
+        or current.repository != reviewed.repository
+        or current.pull_request_number != reviewed.pull_request_number
+        or reviewed.pr_state != "OPEN"
+        or current.pr_state != "OPEN"
+        or reviewed.head_sha == current.head_sha
+        or current.head_sha != resulting_head_sha
+        or current.base_ref != reviewed.base_ref
+        or current.base_sha != reviewed.base_sha
+        or not isinstance(successor_safety_evidence, dict)
+    ):
+        raise SecurityBlocker(
+            "corrected successor feedback does not preserve replacement identity"
+        )
+    classified_review = successor_safety_evidence.get("schema_version") in {
+        "1.1",
+        "1.2",
+    }
+    growth = _verify_authenticated_feedback_growth(
+        reviewed,
+        current,
+        resulting_head_sha=resulting_head_sha,
+        authorized_thread_ids=set(),
+        successor_evidence=successor_safety_evidence,
+        reanchored_classified_review=classified_review,
+        require_codex_provider_transport=True,
+        predecessor_correction_authority=predecessor_correction_authority,
+    )
+    return growth.predecessor_provider_growth_digest
+
+
+def verify_rejected_stable_feedback_successor(
+    reviewed: StableFeedbackState,
+    rejected: StableFeedbackState,
+    *,
+    resulting_head_sha: str,
+    rejected_successor_evidence: Any,
+) -> VerifiedRejectedSuccessorFindings:
+    """Authenticate material findings on one immutable unpublished successor."""
+
+    resulting_head_sha = _require_oid(
+        resulting_head_sha, "rejected successor feedback head"
+    )
+    if (
+        not isinstance(reviewed, StableFeedbackState)
+        or not isinstance(rejected, StableFeedbackState)
+        or not isinstance(rejected_successor_evidence, dict)
+        or rejected.repository != reviewed.repository
+        or rejected.pull_request_number != reviewed.pull_request_number
+        or reviewed.pr_state != "OPEN"
+        or rejected.pr_state != "OPEN"
+        or rejected.head_sha != resulting_head_sha
+        or rejected.head_sha == reviewed.head_sha
+        or rejected.base_ref != reviewed.base_ref
+        or rejected.base_sha != reviewed.base_sha
+    ):
+        raise SecurityBlocker(
+            "rejected stable feedback does not identify the exact successor"
+        )
+    growth = _verify_authenticated_feedback_growth(
+        reviewed,
+        rejected,
+        resulting_head_sha=resulting_head_sha,
+        authorized_thread_ids=set(),
+        successor_evidence=rejected_successor_evidence,
+        rejected_candidate=True,
+    )
+    findings = rejected_successor_evidence["successor_findings"]
+    classifications = [item["classification_evidence"] for item in findings]
+    finding_ids = tuple(sorted(item.finding_id for item in classifications))
+    if not finding_ids or len(finding_ids) != len(set(finding_ids)):
+        raise SecurityBlocker("rejected successor material findings are missing")
+    thread_ids = tuple(
+        sorted(
+            {
+                item.thread_id
+                for item in classifications
+                if item.thread_id is not None
+            }
+        )
+    )
+    source_bindings = tuple(
+        sorted(
+            source
+            for item in classifications
+            for source in item.source_bindings
+        )
+    )
+    if len(source_bindings) != len(set(source_bindings)):
+        raise SecurityBlocker("rejected successor finding sources are repeated")
+    return VerifiedRejectedSuccessorFindings(
+        predecessor_state_digest=reviewed.state_digest,
+        rejected_state_digest=rejected.state_digest,
+        finding_ids=finding_ids,
+        thread_ids=thread_ids,
+        source_bindings=source_bindings,
+        classification_evidence_digests=tuple(
+            sorted(item.classification_evidence_digest for item in classifications)
+        ),
+        provider_reaction_replacement_digest=(
+            growth.provider_reaction_replacement_digest
+        ),
+    )
 
 
 def normalize_resolution_eligibility_evidence(
@@ -1600,6 +4464,49 @@ def normalize_resolution_eligibility_evidence(
             "resolution eligibility evidence contains duplicate threads"
         )
     return copy.deepcopy(value)
+
+
+def continuation_material_finding_projection(
+    reviewed_state: StableFeedbackState,
+    eligibility: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    """Derive only provider-observed material Continuation finding identities."""
+
+    eligible_threads = eligibility.get("eligible_threads")
+    if not isinstance(eligible_threads, list) or not eligible_threads:
+        raise SecurityBlocker(
+            "exceptional continuation requires material corrected findings"
+        )
+    reviewed_threads = {
+        item["node_id"]: item for item in reviewed_state.feedback["threads"]
+    }
+    finding_ids: list[str] = []
+    thread_ids: list[str] = []
+    for item in eligible_threads:
+        thread = reviewed_threads.get(item["thread_id"])
+        observed_comment_ids = (
+            {comment["node_id"] for comment in thread["comments"]}
+            if isinstance(thread, dict)
+            else set()
+        )
+        if (
+            item["classification"] != "VALID_ACTIONABLE"
+            or item["disposition"] != "CORRECTED_AND_VERIFIED"
+            or item["follow_up"] is not None
+            or not set(item["finding_ids"]).issubset(observed_comment_ids)
+        ):
+            raise SecurityBlocker(
+                "exceptional continuation finding lacks stable feedback authority"
+            )
+        finding_ids.extend(item["finding_ids"])
+        thread_ids.append(item["thread_id"])
+    finding_ids.sort()
+    thread_ids.sort()
+    if len(finding_ids) != len(set(finding_ids)):
+        raise SecurityBlocker(
+            "exceptional continuation finding identities are repeated"
+        )
+    return finding_ids, thread_ids
 
 
 @dataclass
@@ -2056,6 +4963,7 @@ def create_validation_receipt(
     eligibility_evidence_digest: str | None = None,
     integration_evidence_digest: str | None = None,
     exceptional_recovery_evidence_digest: str | None = None,
+    exceptional_continuation_evidence_digest: str | None = None,
 ) -> dict[str, Any]:
     gates = registry.get("manual_gates") if isinstance(registry, dict) else None
     normalized_gates = validate_manual_gate_evidence(manual_gate_evidence, gates)
@@ -2090,13 +4998,26 @@ def create_validation_receipt(
             exceptional_recovery_evidence_digest,
             "exceptional recovery evidence digest",
         )
+    if exceptional_continuation_evidence_digest is not None:
+        fields["exceptional_continuation_evidence_digest"] = _require_digest(
+            exceptional_continuation_evidence_digest,
+            "exceptional continuation evidence digest",
+        )
+    if (
+        exceptional_recovery_evidence_digest is not None
+        and exceptional_continuation_evidence_digest is not None
+    ):
+        raise SecurityBlocker(
+            "Recovery and Continuation evidence kinds are mutually exclusive"
+        )
     return {**fields, "receipt_digest": digest_json(fields)}
 
 
-def create_validation_attestation(
+def _create_validation_attestation(
     *,
     repository: str,
     head_sha: str,
+    receipt_head_sha: str,
     registry: dict[str, Any],
     command_set: list[dict[str, Any]],
     successful_result: bool,
@@ -2107,7 +5028,7 @@ def create_validation_attestation(
         raise SecurityBlocker("validation receipt is missing")
     expected_receipt = create_validation_receipt(
         repository=repository,
-        head_sha=reviewed_state.head_sha,
+        head_sha=receipt_head_sha,
         validated_tree_sha=validation_receipt.get("validated_tree_sha"),
         registry=registry,
         command_set=command_set,
@@ -2122,6 +5043,9 @@ def create_validation_attestation(
         ),
         exceptional_recovery_evidence_digest=validation_receipt.get(
             "exceptional_recovery_evidence_digest"
+        ),
+        exceptional_continuation_evidence_digest=validation_receipt.get(
+            "exceptional_continuation_evidence_digest"
         ),
     )
     if validation_receipt != expected_receipt:
@@ -2154,7 +5078,35 @@ def create_validation_attestation(
         fields["exceptional_recovery_evidence_digest"] = validation_receipt[
             "exceptional_recovery_evidence_digest"
         ]
+    if "exceptional_continuation_evidence_digest" in validation_receipt:
+        fields["exceptional_continuation_evidence_digest"] = validation_receipt[
+            "exceptional_continuation_evidence_digest"
+        ]
     return {**fields, "attestation_digest": digest_json(fields)}
+
+
+def create_validation_attestation(
+    *,
+    repository: str,
+    head_sha: str,
+    registry: dict[str, Any],
+    command_set: list[dict[str, Any]],
+    successful_result: bool,
+    reviewed_state: StableFeedbackState,
+    validation_receipt: Any,
+) -> dict[str, Any]:
+    """Assemble ordinary validation evidence at the reviewed head."""
+
+    return _create_validation_attestation(
+        repository=repository,
+        head_sha=head_sha,
+        receipt_head_sha=reviewed_state.head_sha,
+        registry=registry,
+        command_set=command_set,
+        successful_result=successful_result,
+        reviewed_state=reviewed_state,
+        validation_receipt=validation_receipt,
+    )
 
 
 def create_ready_integration_attestation(
@@ -2173,22 +5125,27 @@ def create_ready_integration_attestation(
         raise SecurityBlocker(
             "Ready integration cannot be combined with exceptional recovery"
         )
+    if "exceptional_continuation_evidence_digest" in validation_receipt:
+        raise SecurityBlocker(
+            "Ready integration cannot be combined with exceptional continuation"
+        )
 
-    ordinary = create_validation_attestation(
-        repository=repository,
-        head_sha=head_sha,
-        registry=registry,
-        command_set=command_set,
-        successful_result=True,
-        reviewed_state=reviewed_state,
-        validation_receipt=validation_receipt,
-    )
     normalized = normalize_ready_integration_evidence(
         integration_evidence,
         repository=repository,
         reviewed_state=reviewed_state,
         registry=registry,
         validated_tree_sha=validation_receipt.get("validated_tree_sha"),
+    )
+    ordinary = _create_validation_attestation(
+        repository=repository,
+        head_sha=head_sha,
+        receipt_head_sha=normalized["prior_delivery_head_sha"],
+        registry=registry,
+        command_set=command_set,
+        successful_result=True,
+        reviewed_state=reviewed_state,
+        validation_receipt=validation_receipt,
     )
     if validation_receipt.get("integration_evidence_digest") != digest_json(normalized):
         raise SecurityBlocker("validation receipt does not bind the Ready integration evidence")
@@ -2253,7 +5210,9 @@ def verify_eligibility_bound_ready_integration_attestation(
     commit_tree_sha: str,
     commit_validation_receipt_digest: str | None,
     commit_integration_evidence_digest: str | None,
-) -> None:
+    repository_root: Path | str,
+    signature_policy: dict[str, Any],
+) -> VerifiedValidationEvidence:
     """Verify the closed integration-resolution attestation kind."""
 
     if (
@@ -2274,7 +5233,7 @@ def verify_eligibility_bound_ready_integration_attestation(
         raise SecurityBlocker(
             "Ready integration receipt and attestation eligibility differ"
         )
-    verify_ready_integration_attestation(
+    return verify_ready_integration_attestation(
         attestation,
         repository=repository,
         head_sha=head_sha,
@@ -2287,10 +5246,12 @@ def verify_eligibility_bound_ready_integration_attestation(
         commit_tree_sha=commit_tree_sha,
         commit_validation_receipt_digest=commit_validation_receipt_digest,
         commit_integration_evidence_digest=commit_integration_evidence_digest,
+        repository_root=repository_root,
+        signature_policy=signature_policy,
     )
 
 
-def verify_ready_integration_attestation(
+def _verify_ready_integration_attestation_unsealed(
     attestation: Any,
     *,
     repository: str,
@@ -2304,7 +5265,10 @@ def verify_ready_integration_attestation(
     commit_tree_sha: str,
     commit_validation_receipt_digest: str | None,
     commit_integration_evidence_digest: str | None,
-) -> None:
+    repository_root: Path | str,
+    signature_policy: dict[str, Any],
+) -> VerifiedValidationEvidence:
+    reviewed_state = _require_reviewed_state_identity(repository, reviewed_state)
     normalized = normalize_ready_integration_evidence(
         integration_evidence,
         repository=repository,
@@ -2312,6 +5276,11 @@ def verify_ready_integration_attestation(
         registry=registry,
         validated_tree_sha=commit_tree_sha,
     )
+    if (
+        not isinstance(signature_policy, dict)
+        or signature_policy != registry.get("signature_policy")
+    ):
+        raise SecurityBlocker("integration signature policy context changed")
     if commit_parent_shas != normalized["ordered_parent_shas"]:
         raise SecurityBlocker("integration attestation ordered parents changed")
     if (
@@ -2330,9 +5299,55 @@ def verify_ready_integration_attestation(
     )
     if not isinstance(attestation, dict) or attestation != expected:
         raise SecurityBlocker("Ready integration attestation is invalid or stale")
+    source_binding = {
+        "repository": normalized["repository"],
+        "delivery_issue_number": normalized["delivery_issue_number"],
+        "pull_request_number": normalized["pull_request_number"],
+        "head_sha": head_sha,
+        "tree_sha": normalized["validated_tree_sha"],
+        "ordered_parent_shas": normalized["ordered_parent_shas"],
+        "current_main": normalized["target_base"],
+        "validation_receipt_digest": validation_receipt["receipt_digest"],
+        "final_attestation_digest": expected["attestation_digest"],
+        "integration_evidence": normalized,
+        "reviewed_state_digest": reviewed_state.state_digest,
+        "reviewed_feedback_digest": reviewed_state.feedback_digest,
+        "expected_signer": normalized["expected_signer"],
+        "evidence_schema_version": normalized["schema_version"],
+        "evidence_kind": normalized["kind"],
+        "attestation_schema_version": expected["schema_version"],
+        "attestation_kind": expected["kind"],
+    }
+    authenticated_integration_commit = authenticate_integration_commit(
+        repository_root=repository_root,
+        repository=repository,
+        head_sha=head_sha,
+        expected_signer=normalized["expected_signer"],
+        signature_policy=signature_policy,
+    )
+    if not _authenticated_integration_commit_agrees(
+        authenticated_integration_commit,
+        repository=repository,
+        head_sha=head_sha,
+        tree_sha=commit_tree_sha,
+        parent_shas=commit_parent_shas,
+        expected_signer=normalized["expected_signer"],
+        signature_policy=signature_policy,
+    ):
+        raise SecurityBlocker("authenticated integration commit is required")
+    return _unregistered_validation_evidence(
+        repository=normalized["repository"],
+        delivery_issue_number=normalized["delivery_issue_number"],
+        pull_request_number=normalized["pull_request_number"],
+        head_sha=head_sha,
+        tree_sha=normalized["validated_tree_sha"],
+        validation_receipt_digest=validation_receipt["receipt_digest"],
+        final_attestation_digest=expected["attestation_digest"],
+        source_validation_evidence_digest=digest_json(source_binding),
+    )
 
 
-def verify_validation_attestation(
+def _verify_validation_attestation_unsealed(
     attestation: Any,
     *,
     repository: str,
@@ -2343,6 +5358,7 @@ def verify_validation_attestation(
     commit_parent_sha: str,
     commit_tree_sha: str,
     commit_validation_receipt_digest: str | None,
+    delivery_issue_number: int | None = None,
 ) -> VerifiedValidationEvidence:
     reviewed_state = _require_reviewed_state_identity(repository, reviewed_state)
     reviewed_pull_request = reviewed_state.pull_request_number
@@ -2367,6 +5383,9 @@ def verify_validation_attestation(
         ),
         exceptional_recovery_evidence_digest=attestation.get(
             "exceptional_recovery_evidence_digest"
+        ),
+        exceptional_continuation_evidence_digest=attestation.get(
+            "exceptional_continuation_evidence_digest"
         ),
     )
     if (
@@ -2399,16 +5418,190 @@ def verify_validation_attestation(
         "reviewed_state_digest": reviewed_state.state_digest,
         "reviewed_feedback_digest": reviewed_state.feedback_digest,
     }
-    return VerifiedValidationEvidence(
+    if delivery_issue_number is not None:
+        if (
+            not isinstance(delivery_issue_number, int)
+            or isinstance(delivery_issue_number, bool)
+            or delivery_issue_number <= 0
+        ):
+            raise SecurityBlocker("delivery issue identity is invalid")
+        source_binding["delivery_issue_number"] = delivery_issue_number
+    return _unregistered_validation_evidence(
         repository=repository,
+        delivery_issue_number=delivery_issue_number,
         pull_request_number=reviewed_pull_request,
         head_sha=head_sha,
         tree_sha=commit_tree_sha,
         validation_receipt_digest=receipt["receipt_digest"],
         final_attestation_digest=expected["attestation_digest"],
         source_validation_evidence_digest=digest_json(source_binding),
-        _verification_seal=_VERIFIED_VALIDATION_EVIDENCE,
     )
+
+
+def verify_ready_integration_attestation(
+    attestation: Any,
+    *,
+    repository: str,
+    head_sha: str,
+    registry: dict[str, Any],
+    command_set: list[dict[str, Any]],
+    reviewed_state: StableFeedbackState,
+    validation_receipt: dict[str, Any],
+    integration_evidence: dict[str, Any],
+    commit_parent_shas: list[str],
+    commit_tree_sha: str,
+    commit_validation_receipt_digest: str | None,
+    commit_integration_evidence_digest: str | None,
+    repository_root: Path | str,
+    signature_policy: dict[str, Any],
+) -> VerifiedValidationEvidence:
+    result = _verify_ready_integration_attestation_unsealed(
+        attestation,
+        repository=repository,
+        head_sha=head_sha,
+        registry=registry,
+        command_set=command_set,
+        reviewed_state=reviewed_state,
+        validation_receipt=validation_receipt,
+        integration_evidence=integration_evidence,
+        commit_parent_shas=commit_parent_shas,
+        commit_tree_sha=commit_tree_sha,
+        commit_validation_receipt_digest=commit_validation_receipt_digest,
+        commit_integration_evidence_digest=commit_integration_evidence_digest,
+        repository_root=repository_root,
+        signature_policy=signature_policy,
+    )
+    provenance = {
+        "kind": "READY_INTEGRATION",
+        "attestation": copy.deepcopy(attestation),
+        "repository": repository,
+        "head_sha": head_sha,
+        "registry": copy.deepcopy(registry),
+        "command_set": copy.deepcopy(command_set),
+        "reviewed_state": reviewed_state.to_dict(),
+        "validation_receipt": copy.deepcopy(validation_receipt),
+        "integration_evidence": copy.deepcopy(integration_evidence),
+        "commit_parent_shas": list(commit_parent_shas),
+        "commit_tree_sha": commit_tree_sha,
+        "commit_validation_receipt_digest": commit_validation_receipt_digest,
+        "commit_integration_evidence_digest": commit_integration_evidence_digest,
+        "repository_root": str(Path(repository_root).resolve()),
+        "signature_policy": copy.deepcopy(signature_policy),
+    }
+    return _seal_validation_evidence(result, provenance)
+
+
+def verify_validation_attestation(
+    attestation: Any,
+    *,
+    repository: str,
+    head_sha: str,
+    registry: dict[str, Any],
+    command_set: list[dict[str, Any]],
+    reviewed_state: StableFeedbackState,
+    commit_parent_sha: str,
+    commit_tree_sha: str,
+    commit_validation_receipt_digest: str | None,
+    delivery_issue_number: int | None = None,
+) -> VerifiedValidationEvidence:
+    result = _verify_validation_attestation_unsealed(
+        attestation,
+        repository=repository,
+        head_sha=head_sha,
+        registry=registry,
+        command_set=command_set,
+        reviewed_state=reviewed_state,
+        commit_parent_sha=commit_parent_sha,
+        commit_tree_sha=commit_tree_sha,
+        commit_validation_receipt_digest=commit_validation_receipt_digest,
+        delivery_issue_number=delivery_issue_number,
+    )
+    provenance = {
+        "kind": "ORDINARY",
+        "attestation": copy.deepcopy(attestation),
+        "repository": repository,
+        "head_sha": head_sha,
+        "registry": copy.deepcopy(registry),
+        "command_set": copy.deepcopy(command_set),
+        "reviewed_state": reviewed_state.to_dict(),
+        "commit_parent_sha": commit_parent_sha,
+        "commit_tree_sha": commit_tree_sha,
+        "commit_validation_receipt_digest": commit_validation_receipt_digest,
+        "delivery_issue_number": delivery_issue_number,
+    }
+    return _seal_validation_evidence(result, provenance)
+
+
+def is_verified_validation_evidence(value: Any) -> bool:
+    """Re-verify canonical provenance instead of trusting caller-held authority."""
+
+    try:
+        if not isinstance(value, VerifiedValidationEvidence) or not isinstance(
+            value._verification_seal, _VerifiedValidationEvidenceSeal
+        ):
+            return False
+        raw = value._verification_seal.provenance_json
+        provenance = json.loads(raw)
+        if (
+            not isinstance(provenance, dict)
+            or canonical_json_bytes(provenance).decode("utf-8") != raw
+        ):
+            return False
+        reviewed_state = StableFeedbackState.from_payload(
+            provenance["reviewed_state"]
+        )
+        kind = provenance.get("kind")
+        if kind == "ORDINARY":
+            verified = _verify_validation_attestation_unsealed(
+                provenance["attestation"],
+                repository=provenance["repository"],
+                head_sha=provenance["head_sha"],
+                registry=provenance["registry"],
+                command_set=provenance["command_set"],
+                reviewed_state=reviewed_state,
+                commit_parent_sha=provenance["commit_parent_sha"],
+                commit_tree_sha=provenance["commit_tree_sha"],
+                commit_validation_receipt_digest=provenance[
+                    "commit_validation_receipt_digest"
+                ],
+                delivery_issue_number=provenance.get("delivery_issue_number"),
+            )
+        elif kind == "READY_INTEGRATION":
+            verified = _verify_ready_integration_attestation_unsealed(
+                provenance["attestation"],
+                repository=provenance["repository"],
+                head_sha=provenance["head_sha"],
+                registry=provenance["registry"],
+                command_set=provenance["command_set"],
+                reviewed_state=reviewed_state,
+                validation_receipt=provenance["validation_receipt"],
+                integration_evidence=provenance["integration_evidence"],
+                commit_parent_shas=provenance["commit_parent_shas"],
+                commit_tree_sha=provenance["commit_tree_sha"],
+                commit_validation_receipt_digest=provenance[
+                    "commit_validation_receipt_digest"
+                ],
+                commit_integration_evidence_digest=provenance[
+                    "commit_integration_evidence_digest"
+                ],
+                repository_root=provenance["repository_root"],
+                signature_policy=provenance["signature_policy"],
+            )
+        else:
+            return False
+        return _validation_evidence_binding(verified) == _validation_evidence_binding(
+            value
+        )
+    except (
+        AttributeError,
+        KeyError,
+        OSError,
+        RecoverableLocalError,
+        SecurityBlocker,
+        TypeError,
+        ValueError,
+    ):
+        return False
 
 
 def verify_commit_signatures(
@@ -2479,7 +5672,18 @@ def verify_commit_signatures(
 
 def _classified_feedback_sources(
     reviewed_state: StableFeedbackState,
+    *,
+    include_resolved: bool = False,
+    include_resolved_threads: bool | None = None,
 ) -> dict[tuple[str, str], tuple[str, str | None]]:
+    if include_resolved_threads is not None:
+        if include_resolved is not False or not isinstance(
+            include_resolved_threads, bool
+        ):
+            raise SecurityBlocker(
+                "resolved-feedback selection is malformed or ambiguous"
+            )
+        include_resolved = include_resolved_threads
     expected: dict[tuple[str, str], tuple[str, str | None]] = {}
 
     def add(kind: str, node_id: str, source_digest: str, thread_id: str | None) -> None:
@@ -2519,7 +5723,7 @@ def _classified_feedback_sources(
                 None,
             )
     for thread in reviewed_state.feedback["threads"]:
-        if thread["is_resolved"] is True:
+        if thread["is_resolved"] is True and not include_resolved:
             continue
         for comment in thread["comments"]:
             add(
@@ -2536,6 +5740,371 @@ def _classified_feedback_sources(
                     thread["node_id"],
                 )
     return expected
+
+
+def derive_ready_source_recovery_safety_facts(
+    *,
+    tooling_authority_main: str,
+    repository: str,
+    pull_request_number: int,
+    head_sha: str,
+    tree_sha: str,
+    parent_shas: list[str] | tuple[str, ...],
+    expected_base_ref: str,
+    expected_base_sha: str,
+    reviewed_state: StableFeedbackState,
+    review_decision: str,
+    feedback_findings: Any,
+    fresh_validation_receipt: Any,
+    registry: dict[str, Any],
+    command_set: list[dict[str, Any]],
+    approval_required: bool = False,
+    current_safety_profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Derive canonical unsigned facts; this result carries no authority."""
+
+    policy_head = _require_oid(tooling_authority_main, "recovery tooling authority")
+    reviewed = _require_reviewed_state_identity(repository, reviewed_state)
+    pr = _require_positive_integer(
+        pull_request_number, "Ready-source recovery pull request"
+    )
+    head = _require_oid(head_sha, "Ready-source recovery head")
+    tree = _require_oid(tree_sha, "Ready-source recovery tree")
+    parents = tuple(
+        _require_oid(item, "Ready-source recovery parent") for item in parent_shas
+    ) if isinstance(parent_shas, (list, tuple)) else ()
+    if len(parents) != 1:
+        raise SecurityBlocker(
+            "Ready-source recovery requires the exact sole-parent delivery topology"
+        )
+    base_ref = _require_string(
+        expected_base_ref, "Ready-source recovery target base"
+    )
+    base_sha = _require_oid(
+        expected_base_sha, "Ready-source recovery target base SHA"
+    )
+    if (
+        reviewed.pull_request_number != pr
+        or reviewed.head_sha != head
+        or reviewed.base_ref != base_ref
+        or reviewed.base_sha != base_sha
+        or reviewed.pr_state != "OPEN"
+    ):
+        raise SecurityBlocker(
+            "Ready-source recovery reviewed delivery identity changed"
+        )
+    if not isinstance(approval_required, bool):
+        raise SecurityBlocker(
+            "Ready-source recovery approval policy is malformed"
+        )
+    if (
+        review_decision == "REVIEW_REQUIRED"
+        or review_decision not in {"NONE", "APPROVED"}
+        or (review_decision == "NONE" and approval_required)
+    ):
+        raise SecurityBlocker(
+            "Ready-source recovery has a blocking or ambiguous review decision"
+        )
+    if not isinstance(feedback_findings, list):
+        raise SecurityBlocker("Ready-source recovery feedback assessment is missing")
+    expected_sources = _classified_feedback_sources(
+        reviewed, include_resolved=True
+    )
+    review_threads = {
+        item["node_id"]
+        for item in reviewed.feedback["threads"]
+    }
+    normalized_findings: list[dict[str, Any]] = []
+    classified_sources: set[tuple[str, str]] = set()
+    finding_ids: set[str] = set()
+    for item in feedback_findings:
+        fields = {
+            "finding_id", "thread_id", "sources", "classification",
+            "disposition", "evidence_digest", "technically_blocking",
+        }
+        if not isinstance(item, dict) or set(item) != fields:
+            raise SecurityBlocker(
+                "Ready-source recovery feedback finding is malformed"
+            )
+        finding_id = _require_string(
+            item["finding_id"], "Ready-source recovery finding identity"
+        )
+        if finding_id in finding_ids:
+            raise SecurityBlocker(
+                "Ready-source recovery repeats a feedback finding"
+            )
+        finding_ids.add(finding_id)
+        classification = item["classification"]
+        disposition = item["disposition"]
+        if (
+            classification not in CLASSIFICATION_DISPOSITIONS
+            or disposition not in CLASSIFICATION_DISPOSITIONS[classification]
+            or item["technically_blocking"] is not False
+        ):
+            raise SecurityBlocker(
+                "Ready-source recovery feedback is technically blocking or unclassified"
+            )
+        thread_id = item["thread_id"]
+        if thread_id is not None:
+            thread_id = _require_string(
+                thread_id, "Ready-source recovery thread identity"
+            )
+            if thread_id not in review_threads:
+                raise SecurityBlocker(
+                    "Ready-source recovery finding thread identity changed"
+                )
+        sources = item["sources"]
+        if not isinstance(sources, list) or not sources:
+            raise SecurityBlocker(
+                "Ready-source recovery finding requires feedback sources"
+            )
+        normalized_sources: list[dict[str, str]] = []
+        for source in sources:
+            if not isinstance(source, dict) or set(source) != {
+                "kind", "node_id", "digest"
+            }:
+                raise SecurityBlocker(
+                    "Ready-source recovery feedback source is malformed"
+                )
+            kind = source["kind"]
+            node_id = _require_string(
+                source["node_id"], "Ready-source recovery feedback source identity"
+            )
+            digest = _require_digest(
+                source["digest"], "Ready-source recovery feedback source"
+            )
+            key = (kind, node_id)
+            if (
+                kind not in SOURCE_KINDS
+                or key in classified_sources
+                or expected_sources.get(key) != (digest, thread_id)
+            ):
+                raise SecurityBlocker(
+                    "Ready-source recovery feedback source identity changed"
+                )
+            classified_sources.add(key)
+            normalized_sources.append(
+                {"kind": kind, "node_id": node_id, "digest": digest}
+            )
+        normalized_findings.append(
+            {
+                "finding_id": finding_id,
+                "thread_id": thread_id,
+                "sources": normalized_sources,
+                "classification": classification,
+                "disposition": disposition,
+                "evidence_digest": _require_digest(
+                    item["evidence_digest"],
+                    "Ready-source recovery finding evidence",
+                ),
+                "technically_blocking": False,
+            }
+        )
+    if classified_sources != set(expected_sources):
+        raise SecurityBlocker(
+            "Ready-source recovery feedback coverage is incomplete"
+        )
+    covered_threads = {
+        item["thread_id"] for item in normalized_findings
+        if item["thread_id"] is not None
+    }
+    if covered_threads != review_threads:
+        raise SecurityBlocker(
+            "Ready-source recovery review-thread inventory is ambiguous"
+        )
+    limits = registry.get("limits") if isinstance(registry, dict) else None
+    maximum_items = (
+        limits.get("maximum_items") if isinstance(limits, dict) else None
+    )
+    source_count = sum(len(item["sources"]) for item in normalized_findings)
+    if (
+        not isinstance(maximum_items, int)
+        or isinstance(maximum_items, bool)
+        or maximum_items < 1
+        or len(normalized_findings) + source_count > maximum_items
+    ):
+        raise SecurityBlocker("Ready-source recovery feedback evidence is oversized")
+    if not isinstance(fresh_validation_receipt, dict):
+        raise SecurityBlocker("Ready-source recovery validation receipt is missing")
+    if any(
+        field in fresh_validation_receipt
+        for field in (
+            "eligibility_evidence_digest", "integration_evidence_digest",
+            "exceptional_recovery_evidence_digest",
+        )
+    ):
+        raise SecurityBlocker(
+            "Ready-source recovery validation receipt claims unrelated authority"
+        )
+    if current_safety_profile is None:
+        schema_version = "1.0"
+        validation_execution_origin = "MAINTAINED_REGISTERED_EXECUTION"
+    else:
+        profile_fields = {
+            "schema_version", "policy", "harness", "validation_command_set",
+            "validation_command_set_digest", "timeout_seconds",
+            "required_invariants", "validation_results",
+        }
+        harness = current_safety_profile.get("harness") if isinstance(
+            current_safety_profile, dict
+        ) else None
+        commands = current_safety_profile.get("validation_command_set") if isinstance(
+            current_safety_profile, dict
+        ) else None
+        invariants = current_safety_profile.get("required_invariants") if isinstance(
+            current_safety_profile, dict
+        ) else None
+        results = current_safety_profile.get("validation_results") if isinstance(
+            current_safety_profile, dict
+        ) else None
+        if (
+            not isinstance(current_safety_profile, dict)
+            or set(current_safety_profile) != profile_fields
+            or current_safety_profile.get("schema_version") != "1.0"
+            or current_safety_profile.get("policy")
+            != "READY_SOURCE_RECOVERY_CURRENT_SAFETY"
+            or current_safety_profile.get("timeout_seconds") != 120
+            or not isinstance(harness, list) or len(harness) != 1
+            or set(harness[0]) != {"path", "mode", "blob_oid", "size"}
+            or harness[0].get("path")
+            != "tests/ready-source-recovery-current-safety.py"
+            or harness[0].get("mode") not in {"100644", "100755"}
+            or not isinstance(harness[0].get("size"), int)
+            or isinstance(harness[0].get("size"), bool)
+            or harness[0].get("size") < 1
+            or not isinstance(harness[0].get("blob_oid"), str)
+            or not OID.fullmatch(harness[0]["blob_oid"])
+            or not isinstance(commands, list) or len(commands) != 1
+            or commands[0] != {
+                "argv": ["python3", harness[0]["path"]],
+                "working_directory": ".",
+                "purpose": "Validate Ready-source recovery current safety",
+            }
+            or current_safety_profile.get("validation_command_set_digest")
+            != digest_json(commands)
+            or not isinstance(invariants, list) or not invariants
+            or any(not isinstance(item, str) or not item for item in invariants)
+            or invariants != sorted(set(invariants))
+            or results != [{
+                "command_digest": digest_json(commands[0]),
+                "exit_status": 0,
+                "successful": True,
+            }]
+            or registry.get("ready_source_recovery_current_safety")
+            != current_safety_profile
+            or command_set != commands
+        ):
+            raise SecurityBlocker(
+                "Ready-source recovery current-safety profile is invalid"
+            )
+        schema_version = "1.1"
+        validation_execution_origin = (
+            "ACCEPTED_MAIN_EXACT_SOURCE_CURRENT_SAFETY"
+        )
+    expected_receipt = create_validation_receipt(
+        repository=repository,
+        head_sha=head,
+        validated_tree_sha=tree,
+        registry=registry,
+        command_set=command_set,
+        successful_result=True,
+        reviewed_state=reviewed,
+        manual_gate_evidence=fresh_validation_receipt.get(
+            "manual_gate_evidence"
+        ),
+    )
+    if fresh_validation_receipt != expected_receipt:
+        raise SecurityBlocker(
+            "Ready-source recovery validation receipt is invalid or stale"
+        )
+    assessment = {
+        "review_decision": review_decision,
+        "approval_required": approval_required,
+        "findings": normalized_findings,
+    }
+    facts = {
+        "schema_version": schema_version,
+        "kind": "SECPAL_READY_SOURCE_RECOVERY_SAFETY_FACTS",
+        "tooling_authority_main": policy_head,
+        "repository": repository,
+        "pull_request_number": pr,
+        "head_sha": head,
+        "tree_sha": tree,
+        "parent_shas": list(parents),
+        "expected_base_ref": base_ref,
+        "expected_base_sha": base_sha,
+        "reviewed_state": reviewed.to_dict(),
+        "review_decision": review_decision,
+        "approval_required": approval_required,
+        "feedback_findings": normalized_findings,
+        "policy_binding": copy.deepcopy(registry),
+        "command_set": copy.deepcopy(command_set),
+        "fresh_validation_receipt": copy.deepcopy(expected_receipt),
+        "reviewed_state_digest": reviewed.state_digest,
+        "reviewed_feedback_digest": reviewed.feedback_digest,
+        "feedback_assessment_digest": digest_json(assessment),
+        "fresh_validation_receipt_digest": expected_receipt["receipt_digest"],
+        "validation_execution_origin": validation_execution_origin,
+    }
+    return {**facts, "safety_facts_digest": digest_json(facts)}
+
+
+def verify_ready_source_recovery_safety_facts(value: Any) -> dict[str, Any]:
+    """Recompute complete unsigned facts before an authorization signs them."""
+
+    fields = {
+        "schema_version", "kind", "tooling_authority_main", "repository",
+        "pull_request_number", "head_sha", "tree_sha", "parent_shas",
+        "expected_base_ref", "expected_base_sha", "reviewed_state",
+        "review_decision", "approval_required", "feedback_findings",
+        "policy_binding", "command_set",
+        "fresh_validation_receipt", "reviewed_state_digest",
+        "reviewed_feedback_digest", "feedback_assessment_digest",
+        "fresh_validation_receipt_digest", "validation_execution_origin",
+        "safety_facts_digest",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise SecurityBlocker("Ready-source recovery safety facts are malformed")
+    unsigned = {
+        key: copy.deepcopy(item) for key, item in value.items()
+        if key != "safety_facts_digest"
+    }
+    if value["safety_facts_digest"] != digest_json(unsigned):
+        raise SecurityBlocker("Ready-source recovery safety-facts digest mismatch")
+    version = value["schema_version"]
+    origins = {
+        "1.0": "MAINTAINED_REGISTERED_EXECUTION",
+        "1.1": "ACCEPTED_MAIN_EXACT_SOURCE_CURRENT_SAFETY",
+    }
+    if (
+        version not in origins
+        or value["kind"] != "SECPAL_READY_SOURCE_RECOVERY_SAFETY_FACTS"
+        or value["validation_execution_origin"] != origins[version]
+    ):
+        raise SecurityBlocker("Ready-source recovery safety-facts type is invalid")
+    reviewed = StableFeedbackState.from_payload(value["reviewed_state"])
+    derived = derive_ready_source_recovery_safety_facts(
+        tooling_authority_main=value["tooling_authority_main"],
+        repository=value["repository"],
+        pull_request_number=value["pull_request_number"],
+        head_sha=value["head_sha"], tree_sha=value["tree_sha"],
+        parent_shas=value["parent_shas"],
+        expected_base_ref=value["expected_base_ref"],
+        expected_base_sha=value["expected_base_sha"],
+        reviewed_state=reviewed, review_decision=value["review_decision"],
+        approval_required=value["approval_required"],
+        feedback_findings=value["feedback_findings"],
+        fresh_validation_receipt=value["fresh_validation_receipt"],
+        registry=value["policy_binding"], command_set=value["command_set"],
+        current_safety_profile=(
+            value["policy_binding"].get("ready_source_recovery_current_safety")
+            if version == "1.1" and isinstance(value["policy_binding"], dict)
+            else None
+        ),
+    )
+    if derived != value:
+        raise SecurityBlocker("Ready-source recovery safety facts are inconsistent")
+    return derived
 
 
 def _verify_classified_findings(
@@ -3035,6 +6604,11 @@ def atomic_write_json(path: Path, value: Any) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary_name, target)
+        directory_descriptor = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
     except BaseException:
         try:
             os.close(descriptor)

@@ -3484,33 +3484,46 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
         f"Review and AI-triage bar: {format_bullets(triage)}. "
         "When shared behavior crosses repository boundaries, inspect affected linked roots that are in scope and identify dependency-ordered rollout risks."
     )
+    publication_guard = (
+        "Before programmatic PR creation or body editing, materialize the exact candidate PR body in a file, "
+        "apply the effective repository PR-template/evidence contract, and run every available local PR-body validator, "
+        "including the canonical local PR evidence validator, against that exact file content and intended Draft/Ready state. "
+        "Do not publish or edit the PR if validation fails. Publish only the unchanged validated file with --body-file. "
+    )
     pr_prompt = collapse_spaces(
         f"Write a concise English PR body for {spec['display_name']}. Apply {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
+        f"{publication_guard}"
         f"Keep the PR to one topic and apply these change-reporting rules: {format_bullets(change_tracking)}. "
         "Summarize the problem and evidence, the user-, API-, contract-, or governance-visible change, validations actually run, changelog applicability, linked-repository impact, and proven tracked follow-ups when applicable."
     )
     draft_pr_prompt = collapse_spaces(
         f"Create a draft PR in English for {spec['display_name']}. Apply {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
+        f"{publication_guard}"
         f"Keep one topic per branch and apply: {format_bullets(change_tracking)}. "
         "Summarize the current problem and evidence, the change, validations already run, and any in-scope dependency or unresolved check that prevents readiness."
     )
     merge_prompt = collapse_spaces(
         f"Before merge for {spec['display_name']}, stop on the first failed check and enforce the current SecPal instructions from {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
+        "Before mutation, derive the lifecycle operation and its exact preconditions from authenticated current maintained repository authority. "
+        "Treat prompt expectations as assertions to verify, never as lifecycle authority. "
+        "If they conflict, fail closed before mutation and report the discrepancy. "
         f"Required validation gate: {format_bullets(validation)}. "
         f"Also enforce: {format_bullets(select_bullets(runtime_rules, ['coherent topic', 'one topic', 'scope', 'bypass'], 4))}."
     )
     merge_and_push_prompt = collapse_spaces(
         f"Before push and merge for {spec['display_name']}, apply {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
+        "A prompt or mechanical checkpoint alone invalidates no unrelated proof; a commit that advances HEAD invalidates head-bound proof. Within the same delivery, refresh only facts whose defined invalidators may have occurred and freshly read operation-specific volatile state at its boundary. "
         "First stage the complete intended change set before evaluating reusable validation evidence. "
         "Reuse only evidence that identifies the successful commands and binds the current repository, exact HEAD and parent, exact final staged tree, including every newly added path, validation registry, command set, and required manual-gate evidence. "
         "Treat that evidence as stale if any bound value, staged content, or tracked content changed, and do not stage additional content after deciding to reuse it. "
         "Recheck the staged-tree identity immediately before committing and pushing. "
         "Do not rerun a check that already passed for that exact unchanged bound state. "
         "Run only missing required checks once. "
+        "Conditionally authorized merge remains bounded by the freshly evaluated maintained merge gate. "
         f"Then verify: {format_bullets(select_bullets(validation, ['validation', 'smallest relevant', 'complete required', 'lint', 'typecheck', 'build', 'pest', 'reuse'], 7))}. "
         f"Apply the commit and communication rules: {format_bullets(change_tracking)}. "
         "Do not bypass hooks or force operations."

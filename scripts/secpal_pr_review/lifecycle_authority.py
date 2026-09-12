@@ -34,7 +34,9 @@ from .fast_path import (
     digest_json,
     is_verified_validation_evidence,
     verify_commit_signatures,
+    verify_ready_source_recovery_safety_facts,
 )
+from . import pre_enrollment_integration
 
 
 SCHEMA_VERSION = "1.0"
@@ -55,10 +57,43 @@ EXACT_ADOPTION_AUTHORIZATION_KIND = "SECPAL_EXACT_STATE_ADOPTION_AUTHORIZATION"
 EXACT_ADOPTION_AUTHORIZATION_DOMAIN = "secpal.exact-state-adoption-authorization/v1"
 EXACT_ADOPTION_EVIDENCE_KIND = "SECPAL_EXACT_STATE_ADOPTION_EVIDENCE"
 EXACT_ADOPTION_EVIDENCE_DOMAIN = "secpal.exact-state-adoption-evidence/v1"
+EXACT_ADOPTION_CONSUMPTION_VERSION = "2.0"
+EXACT_ADOPTION_LOSS_VERSION = "3.0"
+EXACT_ADOPTION_LOSS_EVIDENCE_DOMAIN = "secpal.exact-state-adoption-evidence/v3"
+EXACT_ADOPTION_LOSS_AUTHORIZATION_DOMAIN = "secpal.exact-state-adoption-authorization/v3"
+EXACT_ADOPTION_LOSS_PROOF_DOMAIN = "secpal.exact-state-adoption-proof/v3"
+EXACT_ADOPTION_CONSUMPTION_EVIDENCE_DOMAIN = (
+    "secpal.exact-state-adoption-evidence/v2"
+)
+EXACT_ADOPTION_CONSUMPTION_AUTHORIZATION_DOMAIN = (
+    "secpal.exact-state-adoption-authorization/v2"
+)
+EXACT_ADOPTION_CONSUMPTION_PROOF_DOMAIN = (
+    "secpal.exact-state-adoption-proof/v2"
+)
+PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_KIND = (
+    "SECPAL_PRE_ENROLLMENT_REVIEW_BUDGET_CONSUMPTION_ADMISSION"
+)
+PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_DOMAIN = (
+    "secpal.pre-enrollment-review-budget-consumption-admission/v1"
+)
+PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_VERSION = "1.0"
+REVIEW_CONSUMPTION_PROVENANCE_UNAVAILABLE = (
+    "HISTORICAL_REVIEW_CONSUMPTION_PROVENANCE_UNAVAILABLE"
+)
+CONSERVATIVE_REVIEW_BUDGET_ASSERTION = (
+    "NORMAL_UNRESTRICTED_REVIEW_BUDGET_CONSERVATIVELY_CONSUMED"
+)
 EXACT_ADOPTION_PROOF_MODE = "exact_state_adoption"
 NATIVE_PROOF_MODE = "native_lifecycle"
 PUBLICATION_EVIDENCE_KIND = "SECPAL_PUBLISHED_LIFECYCLE_EVIDENCE"
 PUBLICATION_EVIDENCE_DOMAIN = "secpal.published-lifecycle-evidence/v1"
+READY_SOURCE_RECOVERY_AUTHORIZATION_KIND = (
+    "SECPAL_READY_SOURCE_RECOVERY_AUTHORIZATION"
+)
+READY_SOURCE_RECOVERY_AUTHORIZATION_DOMAIN = (
+    "secpal.ready-source-recovery-authorization/v1"
+)
 
 MAX_UNRESTRICTED_REVIEWS = 1
 MAX_REMEDIATION_CYCLES = 2
@@ -143,6 +178,27 @@ class VerifiedLifecycleAuthority:
 
 
 _VERIFIED_EXACT_ADOPTION_EVIDENCE = object()
+_VERIFIED_REVIEW_BUDGET_ADMISSION = object()
+
+
+@dataclass(frozen=True)
+class VerifiedPreEnrollmentReviewBudgetConsumptionAdmission:
+    """One migration-role-authenticated conservative finite-budget fact."""
+
+    admission_digest: str
+    admission_id: str
+    repository: str
+    delivery_issue: int
+    pull_request: int
+    head_sha: str
+    tree_sha: str
+    observed_history_digest: str
+    intended_state_digest: str
+    adoption_timestamp: str
+    adoption_context_digest: str
+    signer_identity: str
+    canonical_admission: dict[str, Any]
+    _verification_seal: object
 
 
 @dataclass(frozen=True)
@@ -162,7 +218,9 @@ class VerifiedExactStateAdoptionExternalEvidence:
     observed_pre_enrollment_history: tuple[dict[str, Any], ...]
     intended_state: dict[str, Any]
     supporting_evidence_digests: tuple[str, ...]
+    review_budget_consumption_admission: dict[str, Any] | None
     _verification_seal: object
+    validation_evidence_loss_admission: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -203,6 +261,83 @@ class BootstrapGenesisRepair:
 
 
 @dataclass(frozen=True)
+class BootstrapSourceRecoveryValidation:
+    """Accepted result of one exact immutable-source recovery validation."""
+
+    kind: str
+    source_head_sha: str
+    source_tree_sha: str
+    command_set_digest: str
+    result: str
+    validation_digest: str
+
+
+@dataclass(frozen=True)
+class BootstrapSourceRecoveryTechnicalSecurityGate:
+    """Accepted bounded technical/security assessment of one exact source."""
+
+    kind: str
+    source_head_sha: str
+    source_tree_sha: str
+    review_scope: str
+    feedback_inventory_digest: str
+    resolved_review_thread_count: int
+    conversation_comment_count: int
+    review_decision: str
+    result: str
+    gate_digest: str
+
+
+@dataclass(frozen=True)
+class BootstrapSourceEvidenceLossRecovery:
+    """One accepted-main authority for unavailable historical source evidence."""
+
+    schema_version: str
+    kind: str
+    historical_evidence_status: str
+    source_admission_digest: str
+    recovery_validation: BootstrapSourceRecoveryValidation
+    technical_security_gate: BootstrapSourceRecoveryTechnicalSecurityGate
+    recovery_digest: str
+
+
+@dataclass(frozen=True)
+class BootstrapSourceAdmissionPolicy:
+    """One exact implementation source admitted by accepted-main policy."""
+
+    schema_version: str
+    kind: str
+    subtype: str
+    repository: str
+    delivery_issue: int
+    pull_request: int
+    source_head_sha: str
+    source_tree_sha: str
+    source_parent_sha: str
+    validation_receipt_digest: str | None
+    final_attestation_digest: str | None
+    source_signer_identity: str
+    implementation_path: str
+    implementation_blob_oid: str | None
+    entrypoint: str | None
+    purpose: str
+    source_pr_state: str
+    source_pr_draft: bool
+    source_base_ref: str
+    policy_source: str | None
+    signer_policy_identity: str | None
+    command: str | None
+    historical_evidence_status: str | None
+    validation_registry_path: str | None
+    validation_command_set: tuple[dict[str, Any], ...]
+    validation_command_set_digest: str | None
+    validation_results: tuple[dict[str, Any], ...]
+    validation_result_digest: str | None
+    admission_digest: str
+    evidence_loss_recovery: BootstrapSourceEvidenceLossRecovery | None = None
+
+
+@dataclass(frozen=True)
 class HistoricalCompatibilityPublication:
     """One exact pre-admission native enrollment allowed by maintained policy."""
 
@@ -234,6 +369,7 @@ class LifecycleTrustPolicy:
     publication_ruleset_id: int = 0
     publication_required_rules: frozenset[str] = frozenset()
     bootstrap_genesis_repairs: tuple[BootstrapGenesisRepair, ...] = ()
+    bootstrap_source_admissions: tuple[BootstrapSourceAdmissionPolicy, ...] = ()
     historical_compatibility_publications: tuple[
         HistoricalCompatibilityPublication, ...
     ] = ()
@@ -307,6 +443,26 @@ STATE_FIELDS = frozenset(
         "exceptional_continuation_history",
     }
 )
+READY_SOURCE_RECOVERY_AUTHORIZATION_FIELDS = frozenset(
+    {
+        "schema_version", "kind", "domain", "purpose", "repository",
+        "delivery_issue", "pull_request", "head_sha", "tree_sha",
+        "parent_shas", "expected_target_base_ref", "expected_target_base_sha",
+        "expected_commit_signer", "commit_signature_evidence_digest",
+        "lifecycle_id", "current_authority_digest",
+        "current_publication_oid", "current_publication_digest",
+        "lifecycle_state", "reviewed_state_digest",
+        "reviewed_feedback_digest", "review_decision",
+        "recovery_safety_facts",
+        "feedback_assessment_digest", "fresh_validation_receipt_digest",
+        "historical_validation_receipt_digest",
+        "historical_final_attestation_digest",
+        "historical_evidence_loss_proof_digest",
+        "historical_evidence_status", "historical_bytes_reconstructed",
+        "authorization_id", "bounded_uses", "signer_identity", "signature",
+        "authorization_digest",
+    }
+)
 HISTORY_FIELDS = frozenset(
     {"sequence", "transition_kind", "event_authorization_digest"}
 )
@@ -329,6 +485,7 @@ INITIALIZATION_FIELDS = frozenset(
         "initialization_digest",
     }
 )
+INITIALIZATION_WITH_HEAD_PROOF_FIELDS = INITIALIZATION_FIELDS | {"initial_head_proof"}
 BUNDLE_FIELDS = frozenset(
     {
         "schema_version",
@@ -382,6 +539,12 @@ EXACT_ADOPTION_EVIDENCE_FIELDS = frozenset(
         "adoption_evidence_digest",
     }
 )
+EXACT_ADOPTION_CONSUMPTION_EVIDENCE_FIELDS = frozenset(
+    EXACT_ADOPTION_EVIDENCE_FIELDS | {"review_budget_consumption_admission"}
+)
+EXACT_ADOPTION_LOSS_EVIDENCE_FIELDS = frozenset(
+    EXACT_ADOPTION_CONSUMPTION_EVIDENCE_FIELDS | {"validation_evidence_loss_admission"}
+)
 EXACT_ADOPTION_AUTHORIZATION_FIELDS = frozenset(
     {
         "schema_version", "kind", "domain", "proof_version", "repository",
@@ -397,6 +560,31 @@ EXACT_ADOPTION_PROOF_FIELDS = frozenset(
         "kind", "domain", "historical_proof_mode", "lifecycle_id",
         "authorization", "authorization_digest", "signer_identity", "signature",
         "proof_digest",
+    }
+)
+EXACT_ADOPTION_CONSUMPTION_PROOF_FIELDS = frozenset(
+    (EXACT_ADOPTION_CONSUMPTION_EVIDENCE_FIELDS - {"kind", "domain"})
+    | {
+        "kind", "domain", "historical_proof_mode", "lifecycle_id",
+        "authorization", "authorization_digest", "signer_identity", "signature",
+        "proof_digest",
+    }
+)
+EXACT_ADOPTION_LOSS_PROOF_FIELDS = frozenset(
+    EXACT_ADOPTION_CONSUMPTION_PROOF_FIELDS | {"validation_evidence_loss_admission"}
+)
+PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_FIELDS = frozenset(
+    {
+        "schema_version", "kind", "domain", "admission_id", "repository",
+        "delivery_issue", "pull_request", "head_sha", "tree_sha",
+        "pull_request_state", "commit_signature_evidence_digest",
+        "validation_receipt_digest", "source_validation_evidence_digest",
+        "adoption_source_evidence_digest", "observed_history_digest",
+        "intended_state_digest", "adoption_timestamp",
+        "provider_review_submission_count",
+        "admitted_unrestricted_review_count", "historical_provenance_status",
+        "assertion", "bounded_uses", "adoption_context_digest",
+        "signer_identity", "signature", "admission_digest",
     }
 )
 EXACT_ADOPTION_PUBLICATION_FIELDS = frozenset(
@@ -577,11 +765,12 @@ def create_delivery_initialization(
     final_attestation_digest: str,
     signer_identity: str,
     signer: Signer,
+    initial_head_proof: pre_enrollment_integration.VerifiedInitialHeadProof | None = None,
 ) -> dict[str, Any]:
-    """Create signed ordinary-delivery initialization evidence."""
+    """Create signed initialization for an ordinary or verified typed initial head."""
 
     fields = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": "1.1" if initial_head_proof is not None else SCHEMA_VERSION,
         "kind": INITIALIZATION_KIND,
         "domain": INITIALIZATION_DOMAIN,
         "repository": _require_repository(repository),
@@ -596,6 +785,30 @@ def create_delivery_initialization(
         ),
         "signer_identity": _require_identity(signer_identity, "initialization signer"),
     }
+    if initial_head_proof is not None:
+        if not pre_enrollment_integration.is_verified_initial_head_proof(
+            initial_head_proof
+        ):
+            raise LifecycleAuthorityError(
+                "initial-head proof was not returned by the maintained verifier"
+            )
+        proof = initial_head_proof.to_dict()
+        if (
+            proof["kind"]
+            != pre_enrollment_integration.INITIAL_HEAD_PROOF_KIND
+            or proof["repository"] != fields["repository"]
+            or proof["delivery_issue"] != fields["delivery_issue"]
+            or proof["pull_request"] != fields["pull_request"]
+            or proof["initial_head_sha"] != fields["initial_head_sha"]
+            or proof["validation_receipt_digest"]
+            != fields["validation_receipt_digest"]
+            or proof["final_attestation_digest"]
+            != fields["final_attestation_digest"]
+        ):
+            raise LifecycleAuthorityError(
+                "verified pre-enrollment initial-head proof identity changed"
+            )
+        fields["initial_head_proof"] = proof
     signature = _normalize_signature(
         signer(canonical_json_bytes(fields), INITIALIZATION_DOMAIN), signer_identity
     )
@@ -610,10 +823,15 @@ def _verify_delivery_initialization(
     signature_verifier: SignatureVerifier,
     require_maintained_anchor: bool = True,
 ) -> dict[str, Any]:
-    initialization = _require_closed(
-        value, INITIALIZATION_FIELDS, "delivery initialization"
+    if not isinstance(value, dict):
+        raise LifecycleAuthorityError("delivery initialization schema is not closed")
+    expected_fields = (
+        INITIALIZATION_WITH_HEAD_PROOF_FIELDS
+        if value.get("schema_version") == "1.1"
+        else INITIALIZATION_FIELDS
     )
-    if initialization["schema_version"] != SCHEMA_VERSION:
+    initialization = _require_closed(value, expected_fields, "delivery initialization")
+    if initialization["schema_version"] not in {SCHEMA_VERSION, "1.1"}:
         raise LifecycleAuthorityError("unknown delivery-initialization version")
     if (
         initialization["kind"] != INITIALIZATION_KIND
@@ -628,6 +846,35 @@ def _verify_delivery_initialization(
     head = _require_oid(initialization["initial_head_sha"], "initial head")
     _require_digest(initialization["validation_receipt_digest"], "validation receipt")
     _require_digest(initialization["final_attestation_digest"], "final attestation")
+    if initialization["schema_version"] == "1.1":
+        proof = _require_closed(
+            initialization["initial_head_proof"],
+            frozenset(
+                {
+                    "kind", "repository", "delivery_issue", "pull_request",
+                    "initial_head_sha", "validation_receipt_digest",
+                    "final_attestation_digest", "integration_evidence_digest",
+                }
+            ),
+            "initial-head proof",
+        )
+        if (
+            proof["kind"] != pre_enrollment_integration.INITIAL_HEAD_PROOF_KIND
+            or proof["repository"] != repository
+            or proof["delivery_issue"] != issue
+            or proof["pull_request"] != pull_request
+            or proof["initial_head_sha"] != head
+            or proof["validation_receipt_digest"]
+            != initialization["validation_receipt_digest"]
+            or proof["final_attestation_digest"]
+            != initialization["final_attestation_digest"]
+        ):
+            raise LifecycleAuthorityError(
+                "authenticated pre-enrollment initial-head proof is inconsistent"
+            )
+        _require_digest(
+            proof["integration_evidence_digest"], "integration evidence"
+        )
     signer = _require_identity(initialization["signer_identity"], "initialization signer")
     signed = {
         key: copy.deepcopy(item)
@@ -664,13 +911,15 @@ def _verify_delivery_initialization(
     return copy.deepcopy(initialization)
 
 
-def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
-    """Load lifecycle trust only from the installed maintained registry."""
+def _parse_lifecycle_trust_policy(
+    registry_document: bytes | str, repository: str
+) -> LifecycleTrustPolicy:
+    """Parse one repository policy from canonical closed registry bytes."""
 
     try:
-        registry = loads_closed_json(_TRUST_REGISTRY.read_bytes())
-    except OSError as exc:
-        raise LifecycleAuthorityError("maintained lifecycle trust registry is unavailable") from exc
+        registry = loads_closed_json(registry_document)
+    except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
+        raise LifecycleAuthorityError("maintained lifecycle trust registry is invalid") from exc
     if not isinstance(registry, dict) or registry.get("schema_version") != "1.0":
         raise LifecycleAuthorityError("maintained lifecycle trust registry is invalid")
     entries = registry.get("repositories")
@@ -699,6 +948,7 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
             "publication_ruleset_id",
             "publication_required_rules",
             "bootstrap_genesis_repairs",
+            "bootstrap_source_admissions",
             "historical_compatibility_publications",
             "delivery_initializations",
         }
@@ -940,6 +1190,392 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
                 ),
             )
         )
+    source_common_fields = frozenset(
+        {
+            "schema_version", "kind", "subtype", "repository",
+            "delivery_issue", "pull_request", "source_head_sha",
+            "source_tree_sha", "source_parent_sha",
+            "validation_receipt_digest", "final_attestation_digest",
+            "source_signer_identity", "implementation_path",
+            "purpose", "source_pr_state", "source_pr_draft", "source_base_ref",
+            "admission_digest",
+        }
+    )
+    pre_enrollment_source_fields = frozenset(
+        {
+            "schema_version", "kind", "subtype", "repository",
+            "delivery_issue", "pull_request", "source_head_sha",
+            "source_tree_sha", "source_parent_sha", "source_signer_identity",
+            "signer_policy_identity", "implementation_path",
+            "implementation_blob_oid", "entrypoint", "command", "purpose",
+            "source_pr_state", "source_pr_draft", "source_base_ref",
+            "policy_source", "historical_evidence_status",
+            "validation_registry_path", "validation_command_set",
+            "validation_command_set_digest", "validation_results",
+            "validation_result_digest", "admission_digest",
+        }
+    )
+    source_recovery_field = "evidence_loss_recovery"
+    raw_sources = policy["bootstrap_source_admissions"]
+    if not isinstance(raw_sources, list):
+        raise LifecycleAuthorityError("bootstrap source-admission policy is invalid")
+    source_admissions: list[BootstrapSourceAdmissionPolicy] = []
+    source_identities: set[tuple[int, int, str]] = set()
+    source_digests: set[str] = set()
+    for value in raw_sources:
+        if not isinstance(value, dict):
+            raise LifecycleAuthorityError("bootstrap source admission is invalid")
+        subtype = value.get("subtype")
+        if subtype == "FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE":
+            source_fields = source_common_fields | {"entrypoint"}
+        elif subtype == "PR_REVIEW_EVIDENCE_HELPER_SOURCE":
+            source_fields = source_common_fields | {
+                "implementation_blob_oid", "policy_source"
+            }
+        elif subtype == "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE":
+            source_fields = pre_enrollment_source_fields
+        else:
+            raise LifecycleAuthorityError("bootstrap source admission subtype is unknown")
+        allowed_fields = {source_fields}
+        if subtype == "FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE":
+            allowed_fields.add(source_fields | {source_recovery_field})
+        if frozenset(value) not in allowed_fields:
+            raise LifecycleAuthorityError("bootstrap source admission is not closed")
+        if (
+            subtype == "PR_REVIEW_EVIDENCE_HELPER_SOURCE"
+            and source_recovery_field in value
+        ):
+            raise LifecycleAuthorityError(
+                "byte-only bootstrap source cannot claim evidence-loss recovery"
+            )
+        item = copy.deepcopy(value)
+        unsigned = {key: copy.deepcopy(item[key]) for key in source_fields - {"admission_digest"}}
+        repository_identity = _require_repository(item["repository"])
+        delivery_issue = _require_positive_int(item["delivery_issue"], "source delivery issue")
+        pull_request = _require_positive_int(item["pull_request"], "source pull request")
+        head = _require_oid(item["source_head_sha"], "source head")
+        identity = (delivery_issue, pull_request, item["purpose"])
+        admission_digest = _require_digest(item["admission_digest"], "source admission")
+        executable_source = subtype == "FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE"
+        byte_source = subtype == "PR_REVIEW_EVIDENCE_HELPER_SOURCE"
+        pre_enrollment_source = (
+            subtype == "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE"
+        )
+        implementation_blob = (
+            _require_oid(item["implementation_blob_oid"], "source implementation blob")
+            if byte_source or pre_enrollment_source else None
+        )
+        validation_commands = item.get("validation_command_set", [])
+        validation_results = item.get("validation_results", [])
+        if pre_enrollment_source:
+            commands_valid = (
+                isinstance(validation_commands, list)
+                and 0 < len(validation_commands) <= 4
+                and all(
+                    isinstance(command, dict)
+                    and set(command) == {"argv", "working_directory", "purpose"}
+                    and isinstance(command["argv"], list)
+                    and len(command["argv"]) == 4
+                    and command["argv"][:3] == ["python3", "-m", "unittest"]
+                    and isinstance(command["argv"][3], str)
+                    and re.fullmatch(
+                        r"tests/[a-z0-9-]+-unit\.py", command["argv"][3]
+                    )
+                    and command["working_directory"] == "."
+                    and isinstance(command["purpose"], str)
+                    and command["purpose"]
+                    and command["purpose"] == command["purpose"].strip()
+                    for command in validation_commands
+                )
+            )
+            results_valid = (
+                isinstance(validation_results, list)
+                and len(validation_results) == len(validation_commands)
+                and all(
+                    isinstance(result, dict)
+                    and set(result) == {
+                        "command_digest", "exit_status", "successful"
+                    }
+                    and result["command_digest"] == digest_json(command)
+                    and result["exit_status"] == 0
+                    and result["successful"] is True
+                    for command, result in zip(
+                        validation_commands, validation_results, strict=True
+                    )
+                )
+            )
+        if (
+            item["schema_version"] != SCHEMA_VERSION
+            or item["kind"] != "BOOTSTRAP_SOURCE_ADMISSION"
+            or repository_identity != repository
+            or item["source_signer_identity"] not in signers
+            or (
+                executable_source
+                and (
+                    item["implementation_path"]
+                    != "scripts/secpal_pr_review/lifecycle_execution.py"
+                    or item["entrypoint"] != "execute_lifecycle_transition"
+                    or item["purpose"] != "FIRST_READY_EXECUTOR_BOOTSTRAP"
+                )
+            )
+            or (
+                byte_source
+                and (
+                    item["implementation_path"] != "scripts/secpal-pr-review.py"
+                    or item["purpose"]
+                    != "PR_REVIEW_EVIDENCE_HELPER_SOURCE_ADMISSION"
+                    or item["policy_source"]
+                    != "ACCEPTED_MAIN_REPOSITORY_REGISTRY"
+                )
+            )
+            or (
+                pre_enrollment_source
+                and (
+                    item["implementation_path"]
+                    != "scripts/secpal-pr-review-actions.py"
+                    or item["entrypoint"] != "main"
+                    or item["command"] != "integrate-pre-enrollment-draft"
+                    or item["purpose"]
+                    != "PRE_ENROLLMENT_IMPLEMENTATION_BOOTSTRAP"
+                    or item["policy_source"]
+                    != "ACCEPTED_MAIN_REPOSITORY_REGISTRY"
+                    or item["signer_policy_identity"]
+                    != "MAINTAINED_LIFECYCLE_SIGNER_POLICY"
+                    or item["source_signer_identity"]
+                    not in transition_signers
+                    or item["historical_evidence_status"]
+                    != "HISTORICAL_EVIDENCE_UNAVAILABLE"
+                    or item["validation_registry_path"]
+                    != ".agents/skills/secpal-pr-review/references/repositories.json"
+                    or not commands_valid
+                    or item["validation_command_set_digest"]
+                    != digest_json(validation_commands)
+                    or not results_valid
+                    or item["validation_result_digest"]
+                    != digest_json(validation_results)
+                )
+            )
+            or item["source_pr_state"] != "OPEN"
+            or (
+                (executable_source or pre_enrollment_source)
+                and item["source_pr_draft"] is not True
+            )
+            or (
+                byte_source
+                and type(item["source_pr_draft"]) is not bool
+            )
+            or item["source_base_ref"] != "main"
+            or admission_digest != digest_json(unsigned)
+            or identity in source_identities
+            or admission_digest in source_digests
+        ):
+            raise LifecycleAuthorityError(
+                "bootstrap source admissions are ambiguous or mismatched"
+            )
+        source_identities.add(identity)
+        source_digests.add(admission_digest)
+        recovery = None
+        if source_recovery_field in item:
+            recovery_fields = frozenset(
+                {
+                    "schema_version",
+                    "kind",
+                    "historical_evidence_status",
+                    "source_admission_digest",
+                    "recovery_validation",
+                    "technical_security_gate",
+                    "recovery_digest",
+                }
+            )
+            raw_recovery = _require_closed(
+                item[source_recovery_field],
+                recovery_fields,
+                "bootstrap source evidence-loss recovery",
+            )
+            validation_fields = frozenset(
+                {
+                    "kind",
+                    "source_head_sha",
+                    "source_tree_sha",
+                    "command_set_digest",
+                    "result",
+                    "validation_digest",
+                }
+            )
+            raw_validation = _require_closed(
+                raw_recovery["recovery_validation"],
+                validation_fields,
+                "bootstrap source recovery validation",
+            )
+            gate_fields = frozenset(
+                {
+                    "kind",
+                    "source_head_sha",
+                    "source_tree_sha",
+                    "review_scope",
+                    "feedback_inventory_digest",
+                    "resolved_review_thread_count",
+                    "conversation_comment_count",
+                    "review_decision",
+                    "result",
+                    "gate_digest",
+                }
+            )
+            raw_gate = _require_closed(
+                raw_recovery["technical_security_gate"],
+                gate_fields,
+                "bootstrap source recovery technical/security gate",
+            )
+            validation_digest = _require_digest(
+                raw_validation["validation_digest"], "source recovery validation"
+            )
+            gate_digest = _require_digest(
+                raw_gate["gate_digest"], "source recovery technical/security gate"
+            )
+            feedback_inventory_digest = _require_digest(
+                raw_gate["feedback_inventory_digest"],
+                "source recovery feedback inventory",
+            )
+            recovery_digest = _require_digest(
+                raw_recovery["recovery_digest"], "source evidence-loss recovery"
+            )
+            if (
+                raw_recovery["schema_version"] != SCHEMA_VERSION
+                or raw_recovery["kind"]
+                != "BOOTSTRAP_SOURCE_EVIDENCE_LOSS_RECOVERY"
+                or raw_recovery["historical_evidence_status"]
+                != "HISTORICAL_EVIDENCE_UNAVAILABLE_BUT_EXACT_RECOVERY_AUTHORIZED"
+                or raw_recovery["source_admission_digest"] != admission_digest
+                or raw_validation["kind"]
+                != "EXACT_BOOTSTRAP_SOURCE_RECOVERY_VALIDATION"
+                or raw_validation["source_head_sha"] != head
+                or raw_validation["source_tree_sha"] != item["source_tree_sha"]
+                or raw_validation["result"] != "PASSED"
+                or validation_digest
+                != digest_json(
+                    {
+                        key: copy.deepcopy(value)
+                        for key, value in raw_validation.items()
+                        if key != "validation_digest"
+                    }
+                )
+                or raw_gate["kind"]
+                != "BOOTSTRAP_SOURCE_RECOVERY_TECHNICAL_SECURITY_GATE"
+                or raw_gate["source_head_sha"] != head
+                or raw_gate["source_tree_sha"] != item["source_tree_sha"]
+                or raw_gate["review_scope"]
+                != "EXACT_IMMUTABLE_BOOTSTRAP_EXECUTOR"
+                or raw_gate["resolved_review_thread_count"] != 2
+                or raw_gate["conversation_comment_count"] != 0
+                or raw_gate["review_decision"] != "NONE"
+                or raw_gate["result"]
+                != "NO_OPEN_TECHNICAL_OR_SECURITY_FINDINGS"
+                or gate_digest
+                != digest_json(
+                    {
+                        key: copy.deepcopy(value)
+                        for key, value in raw_gate.items()
+                        if key != "gate_digest"
+                    }
+                )
+                or recovery_digest
+                != digest_json(
+                    {
+                        key: copy.deepcopy(value)
+                        for key, value in raw_recovery.items()
+                        if key != "recovery_digest"
+                    }
+                )
+            ):
+                raise LifecycleAuthorityError(
+                    "bootstrap source evidence-loss recovery is invalid"
+                )
+            recovery = BootstrapSourceEvidenceLossRecovery(
+                schema_version=raw_recovery["schema_version"],
+                kind=raw_recovery["kind"],
+                historical_evidence_status=raw_recovery[
+                    "historical_evidence_status"
+                ],
+                source_admission_digest=raw_recovery["source_admission_digest"],
+                recovery_validation=BootstrapSourceRecoveryValidation(
+                    kind=raw_validation["kind"],
+                    source_head_sha=raw_validation["source_head_sha"],
+                    source_tree_sha=raw_validation["source_tree_sha"],
+                    command_set_digest=_require_digest(
+                        raw_validation["command_set_digest"],
+                        "source recovery validation command set",
+                    ),
+                    result=raw_validation["result"],
+                    validation_digest=validation_digest,
+                ),
+                technical_security_gate=BootstrapSourceRecoveryTechnicalSecurityGate(
+                    kind=raw_gate["kind"],
+                    source_head_sha=raw_gate["source_head_sha"],
+                    source_tree_sha=raw_gate["source_tree_sha"],
+                    review_scope=raw_gate["review_scope"],
+                    feedback_inventory_digest=feedback_inventory_digest,
+                    resolved_review_thread_count=raw_gate[
+                        "resolved_review_thread_count"
+                    ],
+                    conversation_comment_count=raw_gate[
+                        "conversation_comment_count"
+                    ],
+                    review_decision=raw_gate["review_decision"],
+                    result=raw_gate["result"],
+                    gate_digest=gate_digest,
+                ),
+                recovery_digest=recovery_digest,
+            )
+        source_admissions.append(
+            BootstrapSourceAdmissionPolicy(
+                schema_version=item["schema_version"],
+                kind=item["kind"],
+                subtype=item["subtype"],
+                repository=repository_identity,
+                delivery_issue=delivery_issue,
+                pull_request=pull_request,
+                source_head_sha=head,
+                source_tree_sha=_require_oid(item["source_tree_sha"], "source tree"),
+                source_parent_sha=_require_oid(item["source_parent_sha"], "source parent"),
+                validation_receipt_digest=(
+                    None if pre_enrollment_source else _require_digest(
+                        item["validation_receipt_digest"], "source validation receipt"
+                    )
+                ),
+                final_attestation_digest=(
+                    None if pre_enrollment_source else _require_digest(
+                        item["final_attestation_digest"], "source final attestation"
+                    )
+                ),
+                source_signer_identity=item["source_signer_identity"],
+                implementation_path=item["implementation_path"],
+                implementation_blob_oid=implementation_blob,
+                entrypoint=(
+                    item["entrypoint"]
+                    if executable_source or pre_enrollment_source else None
+                ),
+                purpose=item["purpose"],
+                source_pr_state=item["source_pr_state"],
+                source_pr_draft=item["source_pr_draft"],
+                source_base_ref=item["source_base_ref"],
+                policy_source=(
+                    item["policy_source"]
+                    if byte_source or pre_enrollment_source else None
+                ),
+                signer_policy_identity=item.get("signer_policy_identity"),
+                command=item.get("command"),
+                historical_evidence_status=item.get("historical_evidence_status"),
+                validation_registry_path=item.get("validation_registry_path"),
+                validation_command_set=tuple(copy.deepcopy(validation_commands)),
+                validation_command_set_digest=item.get(
+                    "validation_command_set_digest"
+                ),
+                validation_results=tuple(copy.deepcopy(validation_results)),
+                validation_result_digest=item.get("validation_result_digest"),
+                admission_digest=admission_digest,
+                evidence_loss_recovery=recovery,
+            )
+        )
     compatibility_fields = frozenset(
         {
             "repository",
@@ -1042,12 +1678,25 @@ def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
         publication_ruleset_id=ruleset_id,
         publication_required_rules=frozenset(required_rules),
         bootstrap_genesis_repairs=tuple(repairs),
+        bootstrap_source_admissions=tuple(source_admissions),
         historical_compatibility_publications=tuple(
             compatibility_publications
         ),
         signers=signers,
         initialization_anchors=tuple(anchors),
     )
+
+
+def _load_lifecycle_trust_policy(repository: str) -> LifecycleTrustPolicy:
+    """Load lifecycle trust only from the installed maintained registry."""
+
+    try:
+        registry_document = _TRUST_REGISTRY.read_bytes()
+    except OSError as exc:
+        raise LifecycleAuthorityError(
+            "maintained lifecycle trust registry is unavailable"
+        ) from exc
+    return _parse_lifecycle_trust_policy(registry_document, repository)
 
 
 def _load_delivery_signature_policy(repository: str) -> dict[str, Any]:
@@ -1083,12 +1732,11 @@ def _load_trusted_command_helper() -> Any:
         loaded_path = getattr(loaded, "__file__", None)
         if (
             not isinstance(loaded_path, str)
-            or Path(loaded_path).resolve() != _EVIDENCE_HELPER.resolve()
+            or Path(loaded_path).absolute() != _EVIDENCE_HELPER.absolute()
         ):
             raise LifecycleAuthorityError(
                 "maintained command trust helper has an unexpected path"
             )
-        return loaded
     spec = importlib.util.spec_from_file_location(module_name, _EVIDENCE_HELPER)
     if spec is None or spec.loader is None:
         raise LifecycleAuthorityError("maintained command trust helper is unavailable")
@@ -1172,10 +1820,14 @@ def _verify_openpgp_signature(
     payload: bytes,
     signature_value: str,
     signer: TrustedSigner,
+    *,
+    command_environment: Mapping[str, str] | None = None,
 ) -> None:
     if not signer.openpgp_fingerprints:
         raise LifecycleAuthorityError("trusted signer has no OpenPGP credential")
     executable, environment = _trusted_signature_command("gpg")
+    if command_environment is not None:
+        environment = dict(command_environment)
     with tempfile.TemporaryDirectory(prefix="secpal-lifecycle-openpgp-") as directory:
         root = Path(directory)
         payload_file = root / "payload"
@@ -1216,7 +1868,11 @@ def _verify_openpgp_signature(
             raise LifecycleAuthorityError("OpenPGP lifecycle signature is invalid")
 
 
-def _policy_signature_verifier(policy: LifecycleTrustPolicy) -> SignatureVerifier:
+def _policy_signature_verifier(
+    policy: LifecycleTrustPolicy,
+    *,
+    command_environment: Mapping[str, str] | None = None,
+) -> SignatureVerifier:
     def verify(
         payload: bytes,
         signature: Mapping[str, Any],
@@ -1230,7 +1886,12 @@ def _policy_signature_verifier(policy: LifecycleTrustPolicy) -> SignatureVerifie
         if signature_format == "ssh":
             _verify_ssh_signature(payload, signature["value"], credential, domain)
         elif signature_format == "openpgp":
-            _verify_openpgp_signature(payload, signature["value"], credential)
+            _verify_openpgp_signature(
+                payload,
+                signature["value"],
+                credential,
+                command_environment=command_environment,
+            )
         else:
             raise LifecycleAuthorityError("lifecycle signature format is unknown")
         return VerifiedSignature(expected_signer, signature_format)
@@ -1632,6 +2293,7 @@ def issue_lifecycle_authority(
     accepted_event_signers: frozenset[str],
     accepted_authority_signers: frozenset[str],
     signature_verifier: SignatureVerifier,
+    current_head_evidence: VerifiedValidationEvidence | None = None,
 ) -> dict[str, Any]:
     """Verify predecessor/event authority, derive state, and sign one snapshot."""
 
@@ -1671,6 +2333,39 @@ def issue_lifecycle_authority(
             verified.state, event["transition_kind"], event["event_digest"]
         )
     fields = _authority_unsigned_fields(event=event, predecessor=predecessor, state=state)
+    head_changed = (
+        predecessor is not None
+        and event["resulting_head_sha"] != event["predecessor_head_sha"]
+    )
+    if current_head_evidence is not None:
+        if (
+            not head_changed
+            or not is_verified_validation_evidence(current_head_evidence)
+            or current_head_evidence.repository != event["repository"]
+            or (
+                current_head_evidence.delivery_issue_number is not None
+                and current_head_evidence.delivery_issue_number
+                != event["delivery_issue"]
+            )
+            or current_head_evidence.pull_request_number != event["pull_request"]
+            or current_head_evidence.head_sha != event["resulting_head_sha"]
+        ):
+            raise LifecycleAuthorityError(
+                "head-changing successor current evidence is invalid"
+            )
+        fields["current_head_evidence"] = {
+            "head_sha": current_head_evidence.head_sha,
+            "tree_sha": current_head_evidence.tree_sha,
+            "validation_receipt_digest": (
+                current_head_evidence.validation_receipt_digest
+            ),
+            "source_validation_evidence_digest": (
+                current_head_evidence.source_validation_evidence_digest
+            ),
+            "final_attestation_digest": (
+                current_head_evidence.final_attestation_digest
+            ),
+        }
     fields["signer_identity"] = _require_identity(signer_identity, "authority signer")
     if fields["signer_identity"] not in accepted_authority_signers:
         raise LifecycleAuthorityError("authority signer is not independently accepted")
@@ -1691,10 +2386,6 @@ def _verify_authority_shape(
 ) -> dict[str, Any]:
     fields = set(value) if isinstance(value, Mapping) else set()
     has_current_evidence = fields == AUTHORITY_FIELDS | {"current_head_evidence"}
-    if has_current_evidence and not allow_adopted_observations:
-        raise LifecycleAuthorityError(
-            "ordinary lifecycle authority cannot carry adopted current evidence"
-        )
     authority = _require_closed(
         value,
         AUTHORITY_FIELDS | ({"current_head_evidence"} if has_current_evidence else set()),
@@ -1731,19 +2422,19 @@ def _verify_authority_shape(
         current = _require_closed(
             authority["current_head_evidence"],
             CURRENT_HEAD_EVIDENCE_FIELDS,
-            "adopted current-head evidence",
+            "current-head evidence",
         )
         if current["head_sha"] != authority["head_sha"]:
             raise LifecycleAuthorityError(
-                "adopted current-head evidence does not bind authority head"
+                "current-head evidence does not bind authority head"
             )
-        _require_oid(current["tree_sha"], "adopted current tree")
+        _require_oid(current["tree_sha"], "current tree")
         for field in (
             "validation_receipt_digest",
             "source_validation_evidence_digest",
             "final_attestation_digest",
         ):
-            _require_digest(current[field], f"adopted current {field}")
+            _require_digest(current[field], f"current {field}")
     signer = _require_identity(authority["signer_identity"], "authority signer")
     signed = {
         key: copy.deepcopy(item) for key, item in authority.items() if key != "authority_digest"
@@ -1793,6 +2484,10 @@ def _verify_lifecycle_authority_objects(
     previous: dict[str, Any] | None = None
     current_state: dict[str, Any] | None = None
     verified_authority: dict[str, Any] | None = None
+    current_tree: str | None = None
+    current_receipt: str | None = None
+    current_source: str | None = None
+    current_attestation: str | None = None
     for index, raw in enumerate(authority_chain):
         item = _verify_authority_shape(
             raw,
@@ -1852,6 +2547,31 @@ def _verify_lifecycle_authority_objects(
         )
         if item["pull_request"] != resulting_pr:
             raise LifecycleAuthorityError("authority pull-request continuity is invalid")
+        current_evidence = item.get("current_head_evidence")
+        delivery_identity_changed = (
+            event["predecessor_head_sha"] is not None
+            and (
+                event["resulting_head_sha"] != event["predecessor_head_sha"]
+                or (previous is not None and resulting_pr != previous["pull_request"])
+            )
+        )
+        if current_evidence is not None:
+            if (
+                event["predecessor_head_sha"] is None
+                or event["resulting_head_sha"] == event["predecessor_head_sha"]
+            ):
+                raise LifecycleAuthorityError(
+                    "unchanged lifecycle successor cannot replace current evidence"
+                )
+            current_tree = current_evidence["tree_sha"]
+            current_receipt = current_evidence["validation_receipt_digest"]
+            current_source = current_evidence["source_validation_evidence_digest"]
+            current_attestation = current_evidence["final_attestation_digest"]
+        elif delivery_identity_changed:
+            current_tree = None
+            current_receipt = None
+            current_source = None
+            current_attestation = None
         previous = item
         current_state = derived
         verified_authority = item
@@ -1870,6 +2590,10 @@ def _verify_lifecycle_authority_objects(
         head_sha=verified_authority["head_sha"],
         state=copy.deepcopy(current_state),
         authority_signer_identity=verified_authority["signer_identity"],
+        tree_sha=current_tree,
+        validation_receipt_digest=current_receipt,
+        source_validation_evidence_digest=current_source,
+        adoption_source_evidence_digest=current_attestation,
     )
     if expected is not None:
         _compare_expected(result, expected)
@@ -2040,8 +2764,255 @@ def _require_adoption_timestamp(value: Any, label: str) -> str:
     return value
 
 
+def _review_budget_admission_context(
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    head_sha: str,
+    tree_sha: str,
+    pull_request_state: str,
+    commit_signature_evidence_digest: str,
+    validation_receipt_digest: str,
+    source_validation_evidence_digest: str,
+    adoption_source_evidence_digest: str,
+    observed_history_digest: str,
+    intended_state_digest: str,
+    adoption_timestamp: str,
+) -> dict[str, Any]:
+    """Canonical exact adoption context authorized by one budget admission."""
+
+    if pull_request_state != "OPEN":
+        raise LifecycleAuthorityError(
+            "review-budget admission requires an open delivery"
+        )
+    return {
+        "repository": _require_repository(repository),
+        "delivery_issue": _require_positive_int(
+            delivery_issue, "review-budget admission delivery issue"
+        ),
+        "pull_request": _require_positive_int(
+            pull_request, "review-budget admission pull request"
+        ),
+        "head_sha": _require_oid(head_sha, "review-budget admission head"),
+        "tree_sha": _require_oid(tree_sha, "review-budget admission tree"),
+        "pull_request_state": pull_request_state,
+        "commit_signature_evidence_digest": _require_digest(
+            commit_signature_evidence_digest,
+            "review-budget admission commit signature evidence",
+        ),
+        "validation_receipt_digest": _require_digest(
+            validation_receipt_digest, "review-budget admission validation receipt"
+        ),
+        "source_validation_evidence_digest": _require_digest(
+            source_validation_evidence_digest,
+            "review-budget admission source validation evidence",
+        ),
+        "adoption_source_evidence_digest": _require_digest(
+            adoption_source_evidence_digest,
+            "review-budget admission adoption-time source evidence",
+        ),
+        "observed_history_digest": _require_digest(
+            observed_history_digest, "review-budget admission observed history"
+        ),
+        "intended_state_digest": _require_digest(
+            intended_state_digest, "review-budget admission intended state"
+        ),
+        "adoption_timestamp": _require_adoption_timestamp(
+            adoption_timestamp, "review-budget admission timestamp"
+        ),
+    }
+
+
+def create_pre_enrollment_review_budget_consumption_admission(
+    *,
+    admission_id: str,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    head_sha: str,
+    tree_sha: str,
+    pull_request_state: str,
+    commit_signature_evidence_digest: str,
+    validation_receipt_digest: str,
+    source_validation_evidence_digest: str,
+    adoption_source_evidence_digest: str,
+    observed_pre_enrollment_history: Sequence[Mapping[str, Any]],
+    intended_state: Mapping[str, Any],
+    adoption_timestamp: str,
+    signer_identity: str,
+    signer: Signer,
+) -> dict[str, Any]:
+    """Sign one conservative consumed-budget fact, never a historical review."""
+
+    state = _validate_state(
+        dict(intended_state), allow_adopted_observations=True
+    )
+    history = _normalize_observed_pre_enrollment_history(
+        list(observed_pre_enrollment_history),
+        expected_head=_require_oid(head_sha, "review-budget admission head"),
+        intended_state=state,
+        review_budget_consumption_admitted=True,
+    )
+    context = _review_budget_admission_context(
+        repository=repository,
+        delivery_issue=delivery_issue,
+        pull_request=pull_request,
+        head_sha=head_sha,
+        tree_sha=tree_sha,
+        pull_request_state=pull_request_state,
+        commit_signature_evidence_digest=commit_signature_evidence_digest,
+        validation_receipt_digest=validation_receipt_digest,
+        source_validation_evidence_digest=source_validation_evidence_digest,
+        adoption_source_evidence_digest=adoption_source_evidence_digest,
+        observed_history_digest=digest_json(history),
+        intended_state_digest=digest_json(state),
+        adoption_timestamp=adoption_timestamp,
+    )
+    fields = {
+        "schema_version": PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_VERSION,
+        "kind": PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_KIND,
+        "domain": PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_DOMAIN,
+        "admission_id": _require_identity(
+            admission_id, "review-budget admission identity"
+        ),
+        **context,
+        "provider_review_submission_count": 0,
+        "admitted_unrestricted_review_count": MAX_UNRESTRICTED_REVIEWS,
+        "historical_provenance_status": (
+            REVIEW_CONSUMPTION_PROVENANCE_UNAVAILABLE
+        ),
+        "assertion": CONSERVATIVE_REVIEW_BUDGET_ASSERTION,
+        "bounded_uses": 1,
+        "adoption_context_digest": digest_json(context),
+        "signer_identity": _require_identity(
+            signer_identity, "review-budget admission signer"
+        ),
+    }
+    signature = _normalize_signature(
+        signer(
+            canonical_json_bytes(fields),
+            PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_DOMAIN,
+        ),
+        fields["signer_identity"],
+    )
+    signed = {**fields, "signature": signature}
+    return {**signed, "admission_digest": digest_json(signed)}
+
+
+def verify_pre_enrollment_review_budget_consumption_admission(
+    value: Any,
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    head_sha: str,
+    tree_sha: str,
+    pull_request_state: str,
+    commit_signature_evidence_digest: str,
+    validation_receipt_digest: str,
+    source_validation_evidence_digest: str,
+    adoption_source_evidence_digest: str,
+    observed_history_digest: str,
+    intended_state_digest: str,
+    adoption_timestamp: str,
+) -> VerifiedPreEnrollmentReviewBudgetConsumptionAdmission:
+    """Verify the sole review-count input accepted by exact adoption v1.1."""
+
+    admission = _require_closed(
+        value,
+        PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_FIELDS,
+        "pre-enrollment review-budget consumption admission",
+    )
+    context = _review_budget_admission_context(
+        repository=repository,
+        delivery_issue=delivery_issue,
+        pull_request=pull_request,
+        head_sha=head_sha,
+        tree_sha=tree_sha,
+        pull_request_state=pull_request_state,
+        commit_signature_evidence_digest=commit_signature_evidence_digest,
+        validation_receipt_digest=validation_receipt_digest,
+        source_validation_evidence_digest=source_validation_evidence_digest,
+        adoption_source_evidence_digest=adoption_source_evidence_digest,
+        observed_history_digest=observed_history_digest,
+        intended_state_digest=intended_state_digest,
+        adoption_timestamp=adoption_timestamp,
+    )
+    if (
+        admission["schema_version"]
+        != PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_VERSION
+        or admission["kind"] != PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_KIND
+        or admission["domain"] != PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_DOMAIN
+        or admission["provider_review_submission_count"] != 0
+        or isinstance(admission["provider_review_submission_count"], bool)
+        or admission["admitted_unrestricted_review_count"]
+        != MAX_UNRESTRICTED_REVIEWS
+        or isinstance(admission["admitted_unrestricted_review_count"], bool)
+        or admission["historical_provenance_status"]
+        != REVIEW_CONSUMPTION_PROVENANCE_UNAVAILABLE
+        or admission["assertion"] != CONSERVATIVE_REVIEW_BUDGET_ASSERTION
+        or admission["bounded_uses"] != 1
+        or isinstance(admission["bounded_uses"], bool)
+        or admission["adoption_context_digest"] != digest_json(context)
+        or any(admission[field] != expected for field, expected in context.items())
+    ):
+        raise LifecycleAuthorityError(
+            "pre-enrollment review-budget admission scope changed"
+        )
+    admission_id = _require_identity(
+        admission["admission_id"], "review-budget admission identity"
+    )
+    signer_identity = _require_identity(
+        admission["signer_identity"], "review-budget admission signer"
+    )
+    signed = {
+        key: copy.deepcopy(item)
+        for key, item in admission.items()
+        if key != "admission_digest"
+    }
+    admission_digest = _require_digest(
+        admission["admission_digest"], "review-budget admission"
+    )
+    if admission_digest != digest_json(signed):
+        raise LifecycleAuthorityError(
+            "pre-enrollment review-budget admission digest mismatch"
+        )
+    policy = _load_lifecycle_trust_policy(context["repository"])
+    _verify_signature(
+        canonical_json_bytes(
+            _unsigned(admission, "admission_digest", "signature")
+        ),
+        admission["signature"],
+        signer_identity,
+        PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_DOMAIN,
+        policy.legacy_adoption_signer_identities,
+        _policy_signature_verifier(policy),
+    )
+    return VerifiedPreEnrollmentReviewBudgetConsumptionAdmission(
+        admission_digest=admission_digest,
+        admission_id=admission_id,
+        repository=context["repository"],
+        delivery_issue=context["delivery_issue"],
+        pull_request=context["pull_request"],
+        head_sha=context["head_sha"],
+        tree_sha=context["tree_sha"],
+        observed_history_digest=context["observed_history_digest"],
+        intended_state_digest=context["intended_state_digest"],
+        adoption_timestamp=context["adoption_timestamp"],
+        adoption_context_digest=admission["adoption_context_digest"],
+        signer_identity=signer_identity,
+        canonical_admission=copy.deepcopy(admission),
+        _verification_seal=_VERIFIED_REVIEW_BUDGET_ADMISSION,
+    )
+
+
 def _normalize_observed_pre_enrollment_history(
-    value: Any, *, expected_head: str, intended_state: Mapping[str, Any]
+    value: Any,
+    *,
+    expected_head: str,
+    intended_state: Mapping[str, Any],
+    review_budget_consumption_admitted: bool = False,
 ) -> list[dict[str, Any]]:
     """Normalize factual observations without recasting them as lifecycle events."""
 
@@ -2127,9 +3098,25 @@ def _normalize_observed_pre_enrollment_history(
             if draft:
                 raise LifecycleAuthorityError("observed Draft chronology contains hidden churn")
             draft = True
+    provider_review_count = kinds.count("REVIEW_SUBMITTED")
+    if review_budget_consumption_admitted and (
+        provider_review_count != 0
+        or state["unrestricted_review_count"] != MAX_UNRESTRICTED_REVIEWS
+    ):
+        raise LifecycleAuthorityError(
+            "provider review and review-budget admission modes are ambiguous"
+        )
     if (
         kinds.count("PR_CREATED_DRAFT") != 1
-        or kinds.count("REVIEW_SUBMITTED") != state["unrestricted_review_count"]
+        or (
+            not review_budget_consumption_admitted
+            and provider_review_count != state["unrestricted_review_count"]
+        )
+        or (
+            state["remediation_cycle_count"] > 0
+            and state["unrestricted_review_count"]
+            != MAX_UNRESTRICTED_REVIEWS
+        )
         or kinds.count("REMEDIATION_HEAD_OBSERVED")
         != state["remediation_cycle_count"]
         or kinds.count("EXCEPTIONAL_RECOVERY_OBSERVED")
@@ -2201,6 +3188,20 @@ def _normalize_observed_pre_enrollment_history(
     return normalized
 
 
+def verify_pre_enrollment_validation_evidence_loss_admission(serialized: bytes | str) -> Any:
+    from . import validation_evidence_loss
+
+    return validation_evidence_loss.verify(serialized)
+
+
+def issue_pre_enrollment_validation_evidence_loss_admission(
+    repository: str, delivery_issue: int,
+) -> dict[str, Any]:
+    from . import validation_evidence_loss
+
+    return validation_evidence_loss.issue(repository, delivery_issue)
+
+
 def authenticate_exact_state_adoption_external_evidence(
     *,
     repository: str,
@@ -2210,9 +3211,11 @@ def authenticate_exact_state_adoption_external_evidence(
     tree_sha: str,
     pull_request_state: str,
     commit_signature_evidence: Mapping[str, Any],
-    validation_evidence: VerifiedValidationEvidence,
+    validation_evidence: VerifiedValidationEvidence | None,
     observed_pre_enrollment_history: Sequence[Mapping[str, Any]],
     intended_state: Mapping[str, Any],
+    review_budget_consumption_admission: Mapping[str, Any] | None = None,
+    validation_evidence_loss_admission: Any = None,
 ) -> VerifiedExactStateAdoptionExternalEvidence:
     """Authenticate external artifacts before any adoption proof is assembled."""
 
@@ -2223,8 +3226,31 @@ def authenticate_exact_state_adoption_external_evidence(
     tree = _require_oid(tree_sha, "adopted tree")
     if pull_request_state != "OPEN":
         raise LifecycleAuthorityError("adoption requires an open delivery")
-    if not is_verified_validation_evidence(validation_evidence) or (
+    loss = None
+    if validation_evidence_loss_admission is not None:
+        from . import validation_evidence_loss
+
+        if validation_evidence is not None:
+            raise LifecycleAuthorityError("historical evidence cannot downgrade into loss admission")
+        loss = validation_evidence_loss._verified_document(validation_evidence_loss_admission)
+        if review_budget_consumption_admission is None or any(
+            loss[field] != expected for field, expected in {
+                "repository": repository, "delivery_issue": issue, "pull_request": pr,
+                "head_sha": head, "tree_sha": tree, "pull_request_state": pull_request_state,
+                "observed_pre_enrollment_history": list(observed_pre_enrollment_history),
+                "intended_state": dict(intended_state),
+            }.items()
+        ):
+            raise LifecycleAuthorityError("loss admission scope or independent review budget is missing")
+        receipt_digest = loss["historical_validation_receipt_digest"]
+        source_digest = digest_json(loss["current_safety"])
+        adoption_digest = loss["admission_digest"]
+    elif not is_verified_validation_evidence(validation_evidence) or (
         validation_evidence.repository != repository
+        or (
+            validation_evidence.delivery_issue_number is not None
+            and validation_evidence.delivery_issue_number != issue
+        )
         or validation_evidence.pull_request_number != pr
         or validation_evidence.head_sha != head
         or validation_evidence.tree_sha != tree
@@ -2232,6 +3258,10 @@ def authenticate_exact_state_adoption_external_evidence(
         raise LifecycleAuthorityError(
             "adoption validation evidence does not bind the delivery"
         )
+    else:
+        receipt_digest = validation_evidence.validation_receipt_digest
+        source_digest = validation_evidence.source_validation_evidence_digest
+        adoption_digest = validation_evidence.final_attestation_digest
     commit = copy.deepcopy(dict(commit_signature_evidence))
     try:
         verified_commits = verify_commit_signatures(
@@ -2246,20 +3276,51 @@ def authenticate_exact_state_adoption_external_evidence(
             "adoption commit signature evidence changed identity"
         )
     signature_evidence_digest = digest_json(verified_commits[0])
+    if loss is not None and signature_evidence_digest != loss["commit_signature_evidence_digest"]:
+        raise LifecycleAuthorityError("loss admission source signature changed")
     state = _validate_state(
         dict(intended_state), allow_adopted_observations=True
     )
+    has_review_budget_admission = review_budget_consumption_admission is not None
     history = _normalize_observed_pre_enrollment_history(
         list(observed_pre_enrollment_history),
         expected_head=head,
         intended_state=state,
+        review_budget_consumption_admitted=has_review_budget_admission,
     )
+    verified_review_budget_admission = None
+    if review_budget_consumption_admission is not None:
+        verified_review_budget_admission = (
+            verify_pre_enrollment_review_budget_consumption_admission(
+                review_budget_consumption_admission,
+                repository=repository,
+                delivery_issue=issue,
+                pull_request=pr,
+                head_sha=head,
+                tree_sha=tree,
+                pull_request_state=pull_request_state,
+                commit_signature_evidence_digest=signature_evidence_digest,
+                validation_receipt_digest=receipt_digest,
+                source_validation_evidence_digest=source_digest,
+                adoption_source_evidence_digest=adoption_digest,
+                observed_history_digest=digest_json(history),
+                intended_state_digest=digest_json(state),
+                adoption_timestamp=review_budget_consumption_admission.get(
+                    "adoption_timestamp"
+                ),
+            )
+        )
     supporting_digests = tuple(sorted({
-        validation_evidence.validation_receipt_digest,
-        validation_evidence.source_validation_evidence_digest,
-        validation_evidence.final_attestation_digest,
+        receipt_digest,
+        source_digest,
+        adoption_digest,
         signature_evidence_digest,
         digest_json(history),
+        *(
+            ()
+            if verified_review_budget_admission is None
+            else (verified_review_budget_admission.admission_digest,)
+        ),
     }))
     return VerifiedExactStateAdoptionExternalEvidence(
         repository=repository,
@@ -2269,16 +3330,355 @@ def authenticate_exact_state_adoption_external_evidence(
         tree_sha=tree,
         pull_request_state=pull_request_state,
         commit_signature_evidence_digest=signature_evidence_digest,
-        validation_receipt_digest=validation_evidence.validation_receipt_digest,
-        source_validation_evidence_digest=(
-            validation_evidence.source_validation_evidence_digest
-        ),
-        adoption_source_evidence_digest=validation_evidence.final_attestation_digest,
+        validation_receipt_digest=receipt_digest,
+        source_validation_evidence_digest=source_digest,
+        adoption_source_evidence_digest=adoption_digest,
         observed_pre_enrollment_history=tuple(copy.deepcopy(history)),
         intended_state=copy.deepcopy(state),
         supporting_evidence_digests=supporting_digests,
+        review_budget_consumption_admission=(
+            None
+            if verified_review_budget_admission is None
+            else copy.deepcopy(
+                verified_review_budget_admission.canonical_admission
+            )
+        ),
         _verification_seal=_VERIFIED_EXACT_ADOPTION_EVIDENCE,
+        validation_evidence_loss_admission=loss,
     )
+
+
+def _ready_source_recovery_state(
+    value: Mapping[str, Any], *, historical_proof_mode: str
+) -> dict[str, Any]:
+    if historical_proof_mode not in {
+        NATIVE_PROOF_MODE,
+        LEGACY_PROOF_MODE,
+        EXACT_ADOPTION_PROOF_MODE,
+    }:
+        raise LifecycleAuthorityError("Ready-source recovery proof mode is invalid")
+    state = _validate_state(
+        dict(value),
+        allow_adopted_observations=historical_proof_mode == EXACT_ADOPTION_PROOF_MODE,
+    )
+    if (
+        state["unrestricted_review_count"] != 1
+        or not 0 <= state["remediation_cycle_count"] <= 2
+        or state["cycle_3_absent"] is not True
+        or state["draft"] is not False
+        or state["ready"] is not True
+        or state["ready_transition_count"] != 1
+        or len(state["ready_history"]) != 1
+        or not 0 <= state["exceptional_recovery_count"] <= 1
+        or not 0 <= state["exceptional_continuation_count"] <= 1
+    ):
+        raise LifecycleAuthorityError(
+            "Ready-source recovery requires the exact bounded Ready lifecycle"
+        )
+    return state
+
+
+def ready_source_recovery_commit_signature_binding_digest(
+    *, head_sha: str, expected_signer: Mapping[str, Any], signature_format: str
+) -> str:
+    """Project only signature facts independently reproducible by the consumer."""
+
+    signer = copy.deepcopy(dict(expected_signer))
+    if set(signer) != {"kind", "identity"}:
+        raise LifecycleAuthorityError("Ready-source recovery commit signer is malformed")
+    kind = signer["kind"]
+    identity = _require_identity(
+        signer["identity"], "Ready-source recovery commit signer"
+    )
+    expected_format = {
+        "SSH_PRINCIPAL": "ssh",
+        "OPENPGP_FINGERPRINT": "openpgp",
+    }.get(kind)
+    if signature_format != expected_format:
+        raise LifecycleAuthorityError(
+            "Ready-source recovery commit signature format changed"
+        )
+    return digest_json(
+        {
+            "oid": _require_oid(head_sha, "Ready-source recovery signed head"),
+            "source": "USER",
+            "signer_identity": identity,
+            "classification": f"LOCAL_{signature_format.upper()}_VERIFIED",
+        }
+    )
+
+
+def _sign_ready_source_recovery_authorization(
+    *,
+    current_lifecycle: VerifiedLifecycleAuthority,
+    current_publication_oid: str,
+    current_publication_digest: str,
+    recovery_safety_facts: Mapping[str, Any],
+    commit_signature_evidence: Mapping[str, Any],
+    historical_validation_receipt_digest: str,
+    historical_final_attestation_digest: str,
+    historical_evidence_loss_proof_digest: str,
+    authorization_id: str,
+    bounded_uses: int,
+    expected_commit_signer: Mapping[str, Any],
+    signer_identity: str,
+    signer: Signer,
+) -> dict[str, Any]:
+    """Sign one bounded recovery without claiming historical-byte reconstruction."""
+
+    if not isinstance(current_lifecycle, VerifiedLifecycleAuthority):
+        raise LifecycleAuthorityError("current lifecycle authority is not verified")
+    try:
+        safety = verify_ready_source_recovery_safety_facts(
+            copy.deepcopy(dict(recovery_safety_facts))
+        )
+    except (SecurityBlocker, TypeError, ValueError) as exc:
+        raise LifecycleAuthorityError("Ready-source recovery safety facts are invalid") from exc
+    state = _ready_source_recovery_state(
+        current_lifecycle.state,
+        historical_proof_mode=current_lifecycle.historical_proof_mode,
+    )
+    if (
+        current_lifecycle.repository != safety["repository"]
+        or current_lifecycle.pull_request != safety["pull_request_number"]
+        or current_lifecycle.head_sha != safety["head_sha"]
+    ):
+        raise LifecycleAuthorityError(
+            "Ready-source recovery safety does not bind CURRENT lifecycle"
+        )
+    if bounded_uses != 1 or isinstance(bounded_uses, bool):
+        raise LifecycleAuthorityError("Ready-source recovery authorization must have one use")
+    signer_value = copy.deepcopy(dict(expected_commit_signer))
+    if set(signer_value) != {"kind", "identity"}:
+        raise LifecycleAuthorityError("Ready-source recovery commit signer is malformed")
+    signer_kind = signer_value["kind"]
+    signer_name = _require_identity(
+        signer_value["identity"], "Ready-source recovery commit signer"
+    )
+    if signer_kind not in {"SSH_PRINCIPAL", "OPENPGP_FINGERPRINT"}:
+        raise LifecycleAuthorityError(
+            "Ready-source recovery commit signer kind is unsupported"
+        )
+    commit = copy.deepcopy(dict(commit_signature_evidence))
+    if (
+        commit.get("oid") != safety["head_sha"]
+        or commit.get("source") != "USER"
+        or commit.get("signer_identity") != signer_name
+    ):
+        raise LifecycleAuthorityError(
+            "Ready-source recovery commit signature identity changed"
+        )
+    try:
+        verified_commits = verify_commit_signatures(
+            [commit], _load_delivery_signature_policy(current_lifecycle.repository)
+        )
+    except SecurityBlocker as exc:
+        raise LifecycleAuthorityError(
+            "Ready-source recovery commit signature is invalid"
+        ) from exc
+    if len(verified_commits) != 1 or verified_commits[0]["oid"] != safety["head_sha"]:
+        raise LifecycleAuthorityError(
+            "Ready-source recovery commit signature evidence is ambiguous"
+        )
+    fields = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": READY_SOURCE_RECOVERY_AUTHORIZATION_KIND,
+        "domain": READY_SOURCE_RECOVERY_AUTHORIZATION_DOMAIN,
+        "purpose": "READY_INTEGRATION_PRIOR_AUTHORITY",
+        "repository": current_lifecycle.repository,
+        "delivery_issue": current_lifecycle.delivery_issue,
+        "pull_request": current_lifecycle.pull_request,
+        "head_sha": safety["head_sha"],
+        "tree_sha": safety["tree_sha"],
+        "parent_shas": list(safety["parent_shas"]),
+        "expected_target_base_ref": safety["expected_base_ref"],
+        "expected_target_base_sha": safety["expected_base_sha"],
+        "expected_commit_signer": {
+            "kind": signer_kind,
+            "identity": signer_name,
+        },
+        "commit_signature_evidence_digest": (
+            ready_source_recovery_commit_signature_binding_digest(
+                head_sha=safety["head_sha"],
+                expected_signer=signer_value,
+                signature_format=commit["local_signature"].get("format"),
+            )
+        ),
+        "lifecycle_id": current_lifecycle.lifecycle_id,
+        "current_authority_digest": current_lifecycle.authority_digest,
+        "current_publication_oid": _require_oid(
+            current_publication_oid, "Ready-source recovery CURRENT publication"
+        ),
+        "current_publication_digest": _require_digest(
+            current_publication_digest,
+            "Ready-source recovery CURRENT publication",
+        ),
+        "lifecycle_state": copy.deepcopy(state),
+        "recovery_safety_facts": copy.deepcopy(safety),
+        "reviewed_state_digest": safety["reviewed_state_digest"],
+        "reviewed_feedback_digest": safety["reviewed_feedback_digest"],
+        "review_decision": safety["review_decision"],
+        "feedback_assessment_digest": safety["feedback_assessment_digest"],
+        "fresh_validation_receipt_digest": (
+            safety["fresh_validation_receipt_digest"]
+        ),
+        "historical_validation_receipt_digest": _require_digest(
+            historical_validation_receipt_digest,
+            "historical validation-receipt provenance",
+        ),
+        "historical_final_attestation_digest": _require_digest(
+            historical_final_attestation_digest,
+            "historical final-attestation provenance",
+        ),
+        "historical_evidence_loss_proof_digest": _require_digest(
+            historical_evidence_loss_proof_digest,
+            "historical evidence-loss proof",
+        ),
+        "historical_evidence_status": "PROVEN_PRE_PERSISTENCE_PACKAGE_UNAVAILABLE",
+        "historical_bytes_reconstructed": False,
+        "authorization_id": _require_identity(
+            authorization_id, "Ready-source recovery authorization"
+        ),
+        "bounded_uses": 1,
+        "signer_identity": _require_identity(
+            signer_identity, "Ready-source recovery authorization signer"
+        ),
+    }
+    signature = _normalize_signature(
+        signer(
+            canonical_json_bytes(fields),
+            READY_SOURCE_RECOVERY_AUTHORIZATION_DOMAIN,
+        ),
+        fields["signer_identity"],
+    )
+    signed = {**fields, "signature": signature}
+    return {**signed, "authorization_digest": digest_json(signed)}
+
+
+def verify_ready_source_recovery_authorization(
+    value: Any,
+    *,
+    current_lifecycle: VerifiedLifecycleAuthority,
+    current_publication_oid: str,
+    current_publication_digest: str,
+) -> dict[str, Any]:
+    """Authenticate a recovery authorization against exact published CURRENT authority."""
+
+    item = _require_closed(
+        value,
+        READY_SOURCE_RECOVERY_AUTHORIZATION_FIELDS,
+        "Ready-source recovery authorization",
+    )
+    try:
+        safety = verify_ready_source_recovery_safety_facts(
+            item["recovery_safety_facts"]
+        )
+    except (SecurityBlocker, TypeError, ValueError) as exc:
+        raise LifecycleAuthorityError("Ready-source recovery safety facts are invalid") from exc
+    state = _ready_source_recovery_state(
+        item["lifecycle_state"],
+        historical_proof_mode=current_lifecycle.historical_proof_mode,
+    )
+    signer = item.get("expected_commit_signer")
+    parents = item.get("parent_shas")
+    if (
+        item["schema_version"] != SCHEMA_VERSION
+        or item["kind"] != READY_SOURCE_RECOVERY_AUTHORIZATION_KIND
+        or item["domain"] != READY_SOURCE_RECOVERY_AUTHORIZATION_DOMAIN
+        or item["purpose"] != "READY_INTEGRATION_PRIOR_AUTHORITY"
+        or item["repository"] != current_lifecycle.repository
+        or item["delivery_issue"] != current_lifecycle.delivery_issue
+        or item["pull_request"] != current_lifecycle.pull_request
+        or item["head_sha"] != current_lifecycle.head_sha
+        or item["lifecycle_id"] != current_lifecycle.lifecycle_id
+        or item["current_authority_digest"] != current_lifecycle.authority_digest
+        or item["current_publication_oid"] != current_publication_oid
+        or item["current_publication_digest"] != current_publication_digest
+        or state != current_lifecycle.state
+        or safety["repository"] != item["repository"]
+        or safety["pull_request_number"] != item["pull_request"]
+        or safety["head_sha"] != item["head_sha"]
+        or safety["tree_sha"] != item["tree_sha"]
+        or safety["parent_shas"] != item["parent_shas"]
+        or safety["expected_base_ref"] != item["expected_target_base_ref"]
+        or safety["expected_base_sha"] != item["expected_target_base_sha"]
+        or safety["reviewed_state_digest"] != item["reviewed_state_digest"]
+        or safety["reviewed_feedback_digest"] != item["reviewed_feedback_digest"]
+        or safety["review_decision"] != item["review_decision"]
+        or safety["feedback_assessment_digest"]
+        != item["feedback_assessment_digest"]
+        or safety["fresh_validation_receipt_digest"]
+        != item["fresh_validation_receipt_digest"]
+        or (
+            current_lifecycle.validation_receipt_digest is not None
+            and item["historical_validation_receipt_digest"]
+            != current_lifecycle.validation_receipt_digest
+        )
+        or (
+            current_lifecycle.adoption_source_evidence_digest is not None
+            and item["historical_final_attestation_digest"]
+            != current_lifecycle.adoption_source_evidence_digest
+        )
+        or item["historical_evidence_status"]
+        != "PROVEN_PRE_PERSISTENCE_PACKAGE_UNAVAILABLE"
+        or item["historical_bytes_reconstructed"] is not False
+        or item["bounded_uses"] != 1
+        or isinstance(item["bounded_uses"], bool)
+        or item["review_decision"] not in {"NONE", "APPROVED"}
+        or not isinstance(parents, list)
+        or len(parents) != 1
+        or not isinstance(signer, dict)
+        or set(signer) != {"kind", "identity"}
+        or signer["kind"] not in {"SSH_PRINCIPAL", "OPENPGP_FINGERPRINT"}
+    ):
+        raise LifecycleAuthorityError(
+            "Ready-source recovery authorization scope changed"
+        )
+    _require_repository(item["repository"])
+    _require_positive_int(item["delivery_issue"], "Ready-source recovery issue")
+    _require_positive_int(item["pull_request"], "Ready-source recovery pull request")
+    for field in (
+        "head_sha", "tree_sha", "current_publication_oid",
+    ):
+        _require_oid(item[field], field)
+    _require_oid(parents[0], "Ready-source recovery parent")
+    _require_identity(item["expected_target_base_ref"], "Ready-source recovery base ref")
+    _require_oid(item["expected_target_base_sha"], "Ready-source recovery base")
+    _require_identity(signer["identity"], "Ready-source recovery commit signer")
+    for field in (
+        "commit_signature_evidence_digest", "current_authority_digest",
+        "current_publication_digest", "reviewed_state_digest",
+        "reviewed_feedback_digest", "feedback_assessment_digest",
+        "fresh_validation_receipt_digest",
+        "historical_validation_receipt_digest",
+        "historical_final_attestation_digest",
+        "historical_evidence_loss_proof_digest", "authorization_digest",
+    ):
+        _require_digest(item[field], field)
+    _require_identity(item["authorization_id"], "Ready-source recovery authorization")
+    authorization_signer = _require_identity(
+        item["signer_identity"], "Ready-source recovery authorization signer"
+    )
+    signed = {
+        key: copy.deepcopy(field) for key, field in item.items()
+        if key != "authorization_digest"
+    }
+    if item["authorization_digest"] != digest_json(signed):
+        raise LifecycleAuthorityError(
+            "Ready-source recovery authorization digest mismatch"
+        )
+    policy = _load_lifecycle_trust_policy(item["repository"])
+    _verify_signature(
+        canonical_json_bytes(
+            _unsigned(item, "authorization_digest", "signature")
+        ),
+        item["signature"],
+        authorization_signer,
+        READY_SOURCE_RECOVERY_AUTHORIZATION_DOMAIN,
+        policy.transition_signer_identities,
+        _policy_signature_verifier(policy),
+    )
+    return copy.deepcopy(item)
 
 
 def _assemble_exact_state_adoption_evidence(
@@ -2289,6 +3689,8 @@ def _assemble_exact_state_adoption_evidence(
     observed_pre_enrollment_history: Sequence[Mapping[str, Any]],
     intended_state: Mapping[str, Any], adoption_timestamp: str,
     supporting_evidence_digests: Sequence[str],
+    review_budget_consumption_admission: Mapping[str, Any] | None = None,
+    validation_evidence_loss_admission: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble canonical proof fields from already authenticated evidence."""
 
@@ -2303,7 +3705,12 @@ def _assemble_exact_state_adoption_evidence(
         dict(intended_state), allow_adopted_observations=True
     )
     history = _normalize_observed_pre_enrollment_history(
-        list(observed_pre_enrollment_history), expected_head=head, intended_state=state
+        list(observed_pre_enrollment_history),
+        expected_head=head,
+        intended_state=state,
+        review_budget_consumption_admitted=(
+            review_budget_consumption_admission is not None
+        ),
     )
     timestamp = _require_adoption_timestamp(adoption_timestamp, "adoption timestamp")
     observation_instant = _parse_adoption_timestamp(
@@ -2316,11 +3723,65 @@ def _assemble_exact_state_adoption_evidence(
         raise LifecycleAuthorityError("adoption supporting evidence is ambiguous")
     for digest in supporting:
         _require_digest(digest, "adoption supporting evidence")
+    verified_review_budget_admission = None
+    if review_budget_consumption_admission is not None:
+        verified_review_budget_admission = (
+            verify_pre_enrollment_review_budget_consumption_admission(
+                review_budget_consumption_admission,
+                repository=repository,
+                delivery_issue=issue,
+                pull_request=pr,
+                head_sha=head,
+                tree_sha=tree,
+                pull_request_state=pull_request_state,
+                commit_signature_evidence_digest=commit_signature_evidence_digest,
+                validation_receipt_digest=validation_receipt_digest,
+                source_validation_evidence_digest=source_validation_evidence_digest,
+                adoption_source_evidence_digest=adoption_source_evidence_digest,
+                observed_history_digest=digest_json(history),
+                intended_state_digest=digest_json(state),
+                adoption_timestamp=timestamp,
+            )
+        )
+        if verified_review_budget_admission.admission_digest not in supporting:
+            raise LifecycleAuthorityError(
+                "review-budget admission is absent from supporting evidence"
+            )
+    version = (
+        SCHEMA_VERSION
+        if verified_review_budget_admission is None
+        else EXACT_ADOPTION_CONSUMPTION_VERSION
+    )
+    domain = (
+        EXACT_ADOPTION_EVIDENCE_DOMAIN
+        if verified_review_budget_admission is None
+        else EXACT_ADOPTION_CONSUMPTION_EVIDENCE_DOMAIN
+    )
+    loss = None
+    if validation_evidence_loss_admission is not None:
+        from . import validation_evidence_loss
+
+        loss = validation_evidence_loss._verify_document(validation_evidence_loss_admission)
+        if verified_review_budget_admission is None or any(
+            loss[field] != expected for field, expected in {
+                "repository": repository, "delivery_issue": issue, "pull_request": pr,
+                "head_sha": head, "tree_sha": tree, "pull_request_state": pull_request_state,
+                "commit_signature_evidence_digest": commit_signature_evidence_digest,
+                "historical_validation_receipt_digest": validation_receipt_digest,
+                "observed_pre_enrollment_history": history, "intended_state": state,
+                "adoption_timestamp": timestamp, "admission_digest": adoption_source_evidence_digest,
+            }.items()
+        ) or digest_json(loss["current_safety"]) != source_validation_evidence_digest:
+            raise LifecycleAuthorityError("loss admission does not bind exact adoption evidence")
+        if loss["admission_digest"] not in supporting:
+            raise LifecycleAuthorityError("loss admission is missing from supporting evidence")
+        version = EXACT_ADOPTION_LOSS_VERSION
+        domain = EXACT_ADOPTION_LOSS_EVIDENCE_DOMAIN
     fields = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": version,
         "kind": EXACT_ADOPTION_EVIDENCE_KIND,
-        "domain": EXACT_ADOPTION_EVIDENCE_DOMAIN,
-        "proof_version": SCHEMA_VERSION,
+        "domain": domain,
+        "proof_version": version,
         "repository": repository,
         "delivery_issue": issue,
         "pull_request": pr,
@@ -2354,6 +3815,12 @@ def _assemble_exact_state_adoption_evidence(
             [item for item in history if item["kind"] == "HEAD_ADVANCED_OBSERVED"]
         ),
     }
+    if verified_review_budget_admission is not None:
+        fields["review_budget_consumption_admission"] = copy.deepcopy(
+            verified_review_budget_admission.canonical_admission
+        )
+    if loss is not None:
+        fields["validation_evidence_loss_admission"] = loss
     return {**fields, "adoption_evidence_digest": digest_json(fields)}
 
 
@@ -2388,18 +3855,43 @@ def create_exact_state_adoption_evidence(
         intended_state=evidence.intended_state,
         adoption_timestamp=adoption_timestamp,
         supporting_evidence_digests=evidence.supporting_evidence_digests,
+        review_budget_consumption_admission=(
+            evidence.review_budget_consumption_admission
+        ),
+        validation_evidence_loss_admission=evidence.validation_evidence_loss_admission,
     )
 
 
 def _verify_exact_state_adoption_evidence(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise LifecycleAuthorityError("exact-state adoption evidence is malformed")
+    fields = frozenset(value)
+    loss_admission = None
+    if fields == EXACT_ADOPTION_EVIDENCE_FIELDS:
+        expected_version = SCHEMA_VERSION
+        expected_domain = EXACT_ADOPTION_EVIDENCE_DOMAIN
+        review_budget_admission = None
+    elif fields == EXACT_ADOPTION_CONSUMPTION_EVIDENCE_FIELDS:
+        expected_version = EXACT_ADOPTION_CONSUMPTION_VERSION
+        expected_domain = EXACT_ADOPTION_CONSUMPTION_EVIDENCE_DOMAIN
+        review_budget_admission = value.get("review_budget_consumption_admission")
+    elif fields == EXACT_ADOPTION_LOSS_EVIDENCE_FIELDS:
+        expected_version = EXACT_ADOPTION_LOSS_VERSION
+        expected_domain = EXACT_ADOPTION_LOSS_EVIDENCE_DOMAIN
+        review_budget_admission = value.get("review_budget_consumption_admission")
+        loss_admission = value.get("validation_evidence_loss_admission")
+    else:
+        raise LifecycleAuthorityError(
+            "exact-state adoption evidence contains unknown or missing fields"
+        )
     evidence = _require_closed(
-        value, EXACT_ADOPTION_EVIDENCE_FIELDS, "exact-state adoption evidence"
+        value, fields, "exact-state adoption evidence"
     )
     if (
-        evidence["schema_version"] != SCHEMA_VERSION
-        or evidence["proof_version"] != SCHEMA_VERSION
+        evidence["schema_version"] != expected_version
+        or evidence["proof_version"] != expected_version
         or evidence["kind"] != EXACT_ADOPTION_EVIDENCE_KIND
-        or evidence["domain"] != EXACT_ADOPTION_EVIDENCE_DOMAIN
+        or evidence["domain"] != expected_domain
         or evidence["ordinary_lifecycle_events"] != []
         or evidence["commit_signature_status"] != "VERIFIED"
     ):
@@ -2418,6 +3910,8 @@ def _verify_exact_state_adoption_evidence(value: Any) -> dict[str, Any]:
         intended_state=evidence["intended_state"],
         adoption_timestamp=evidence["adoption_timestamp"],
         supporting_evidence_digests=evidence["supporting_evidence_digests"],
+        review_budget_consumption_admission=review_budget_admission,
+        validation_evidence_loss_admission=loss_admission,
     )
     if rebuilt != evidence:
         raise LifecycleAuthorityError("exact-state adoption evidence binding changed")
@@ -2431,11 +3925,21 @@ def create_exact_state_adoption_authorization(
     """Sign one exact-scope, one-use authorization independently of the proof."""
 
     evidence = _verify_exact_state_adoption_evidence(adoption_evidence)
+    consumption_mode = (
+        evidence["proof_version"] == EXACT_ADOPTION_CONSUMPTION_VERSION
+    )
+    authorization_domain = (
+        EXACT_ADOPTION_CONSUMPTION_AUTHORIZATION_DOMAIN
+        if consumption_mode
+        else EXACT_ADOPTION_AUTHORIZATION_DOMAIN
+    )
+    if evidence["proof_version"] == EXACT_ADOPTION_LOSS_VERSION:
+        authorization_domain = EXACT_ADOPTION_LOSS_AUTHORIZATION_DOMAIN
     fields = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": evidence["proof_version"],
         "kind": EXACT_ADOPTION_AUTHORIZATION_KIND,
-        "domain": EXACT_ADOPTION_AUTHORIZATION_DOMAIN,
-        "proof_version": SCHEMA_VERSION,
+        "domain": authorization_domain,
+        "proof_version": evidence["proof_version"],
         "repository": evidence["repository"],
         "delivery_issue": evidence["delivery_issue"],
         "pull_request": evidence["pull_request"],
@@ -2450,7 +3954,7 @@ def create_exact_state_adoption_authorization(
     if bounded_uses != 1 or isinstance(bounded_uses, bool):
         raise LifecycleAuthorityError("exact-state adoption authorization must have one use")
     signature = _normalize_signature(
-        signer(canonical_json_bytes(fields), EXACT_ADOPTION_AUTHORIZATION_DOMAIN),
+        signer(canonical_json_bytes(fields), authorization_domain),
         fields["signer_identity"],
     )
     signed = {**fields, "signature": signature}
@@ -2465,11 +3969,18 @@ def create_exact_state_adoption_proof(
 
     evidence = _verify_exact_state_adoption_evidence(adoption_evidence)
     authorization_item = copy.deepcopy(dict(authorization))
+    proof_domain = (
+        EXACT_ADOPTION_CONSUMPTION_PROOF_DOMAIN
+        if evidence["proof_version"] == EXACT_ADOPTION_CONSUMPTION_VERSION
+        else EXACT_ADOPTION_PROOF_DOMAIN
+    )
+    if evidence["proof_version"] == EXACT_ADOPTION_LOSS_VERSION:
+        proof_domain = EXACT_ADOPTION_LOSS_PROOF_DOMAIN
     fields = {
         **{key: copy.deepcopy(value) for key, value in evidence.items()
            if key not in {"kind", "domain"}},
         "kind": EXACT_ADOPTION_PROOF_KIND,
-        "domain": EXACT_ADOPTION_PROOF_DOMAIN,
+        "domain": proof_domain,
         "historical_proof_mode": EXACT_ADOPTION_PROOF_MODE,
         "lifecycle_id": f"lifecycle-adoption:{evidence['adoption_evidence_digest']}",
         "authorization": authorization_item,
@@ -2477,7 +3988,7 @@ def create_exact_state_adoption_proof(
         "signer_identity": _require_identity(signer_identity, "exact adoption signer"),
     }
     signature = _normalize_signature(
-        signer(canonical_json_bytes(fields), EXACT_ADOPTION_PROOF_DOMAIN),
+        signer(canonical_json_bytes(fields), proof_domain),
         fields["signer_identity"],
     )
     signed = {**fields, "signature": signature}
@@ -2489,22 +4000,47 @@ def verify_exact_state_adoption_proof(
 ) -> VerifiedLifecycleAuthority:
     """Authenticate one exact adopted baseline using maintained adoption trust."""
 
+    if not isinstance(proof_value, Mapping):
+        raise LifecycleAuthorityError("exact-state adoption proof is malformed")
+    proof_fields = frozenset(proof_value)
+    if proof_fields == EXACT_ADOPTION_PROOF_FIELDS:
+        expected_version = SCHEMA_VERSION
+        evidence_fields = EXACT_ADOPTION_EVIDENCE_FIELDS
+        evidence_domain = EXACT_ADOPTION_EVIDENCE_DOMAIN
+        authorization_domain = EXACT_ADOPTION_AUTHORIZATION_DOMAIN
+        proof_domain = EXACT_ADOPTION_PROOF_DOMAIN
+    elif proof_fields == EXACT_ADOPTION_CONSUMPTION_PROOF_FIELDS:
+        expected_version = EXACT_ADOPTION_CONSUMPTION_VERSION
+        evidence_fields = EXACT_ADOPTION_CONSUMPTION_EVIDENCE_FIELDS
+        evidence_domain = EXACT_ADOPTION_CONSUMPTION_EVIDENCE_DOMAIN
+        authorization_domain = EXACT_ADOPTION_CONSUMPTION_AUTHORIZATION_DOMAIN
+        proof_domain = EXACT_ADOPTION_CONSUMPTION_PROOF_DOMAIN
+    elif proof_fields == EXACT_ADOPTION_LOSS_PROOF_FIELDS:
+        expected_version = EXACT_ADOPTION_LOSS_VERSION
+        evidence_fields = EXACT_ADOPTION_LOSS_EVIDENCE_FIELDS
+        evidence_domain = EXACT_ADOPTION_LOSS_EVIDENCE_DOMAIN
+        authorization_domain = EXACT_ADOPTION_LOSS_AUTHORIZATION_DOMAIN
+        proof_domain = EXACT_ADOPTION_LOSS_PROOF_DOMAIN
+    else:
+        raise LifecycleAuthorityError(
+            "exact-state adoption proof contains unknown or missing fields"
+        )
     proof = _require_closed(
-        proof_value, EXACT_ADOPTION_PROOF_FIELDS, "exact-state adoption proof"
+        proof_value, proof_fields, "exact-state adoption proof"
     )
     if (
-        proof["schema_version"] != SCHEMA_VERSION
-        or proof["proof_version"] != SCHEMA_VERSION
+        proof["schema_version"] != expected_version
+        or proof["proof_version"] != expected_version
         or proof["kind"] != EXACT_ADOPTION_PROOF_KIND
-        or proof["domain"] != EXACT_ADOPTION_PROOF_DOMAIN
+        or proof["domain"] != proof_domain
         or proof["historical_proof_mode"] != EXACT_ADOPTION_PROOF_MODE
     ):
         raise LifecycleAuthorityError("exact-state adoption proof semantics are unknown")
     evidence = _verify_exact_state_adoption_evidence(
         {
-            **{key: copy.deepcopy(proof[key]) for key in EXACT_ADOPTION_EVIDENCE_FIELDS},
+            **{key: copy.deepcopy(proof[key]) for key in evidence_fields},
             "kind": EXACT_ADOPTION_EVIDENCE_KIND,
-            "domain": EXACT_ADOPTION_EVIDENCE_DOMAIN,
+            "domain": evidence_domain,
         }
     )
     expected_lifecycle = f"lifecycle-adoption:{evidence['adoption_evidence_digest']}"
@@ -2518,10 +4054,10 @@ def verify_exact_state_adoption_proof(
         "exact-state adoption authorization",
     )
     if (
-        authorization["schema_version"] != SCHEMA_VERSION
-        or authorization["proof_version"] != SCHEMA_VERSION
+        authorization["schema_version"] != expected_version
+        or authorization["proof_version"] != expected_version
         or authorization["kind"] != EXACT_ADOPTION_AUTHORIZATION_KIND
-        or authorization["domain"] != EXACT_ADOPTION_AUTHORIZATION_DOMAIN
+        or authorization["domain"] != authorization_domain
         or authorization["bounded_uses"] != 1
         or isinstance(authorization["bounded_uses"], bool)
         or any(
@@ -2553,7 +4089,7 @@ def verify_exact_state_adoption_proof(
             _unsigned(authorization, "authorization_digest", "signature")
         ),
         authorization["signature"], authorization_signer,
-        EXACT_ADOPTION_AUTHORIZATION_DOMAIN,
+        authorization_domain,
         policy.legacy_adoption_signer_identities, verifier,
     )
     proof_signer = _require_identity(proof["signer_identity"], "exact adoption signer")
@@ -2566,7 +4102,7 @@ def verify_exact_state_adoption_proof(
         raise LifecycleAuthorityError("exact-state adoption proof digest mismatch")
     _verify_signature(
         canonical_json_bytes(_unsigned(proof, "proof_digest", "signature")),
-        proof["signature"], proof_signer, EXACT_ADOPTION_PROOF_DOMAIN,
+        proof["signature"], proof_signer, proof_domain,
         policy.legacy_adoption_signer_identities, verifier,
     )
     result = VerifiedLifecycleAuthority(
@@ -2808,6 +4344,11 @@ def issue_exact_state_adoption_successor_authority(
         if (
             not is_verified_validation_evidence(current_head_evidence)
             or current_head_evidence.repository != predecessor.repository
+            or (
+                current_head_evidence.delivery_issue_number is not None
+                and current_head_evidence.delivery_issue_number
+                != predecessor.delivery_issue
+            )
             or current_head_evidence.pull_request_number != resulting_pr
             or current_head_evidence.head_sha != event["resulting_head_sha"]
         ):

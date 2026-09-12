@@ -81,6 +81,11 @@ them divergently.
 
 ## Commits and Communication
 
+- Before creating or editing a PR body, materialize the exact candidate body,
+  apply the effective PR-template/evidence contract, and run every available
+  local PR-body validator against that exact body and intended Draft/Ready state.
+  Failed validation blocks publication. Evidence completeness follows the
+  canonical lifecycle-aware `scripts/validate-pull-request-evidence.sh` validator.
 - All commits must be cryptographically signed. SSH and OpenPGP signatures are
   both valid; use the user's existing Git signing configuration without
   changing its format.

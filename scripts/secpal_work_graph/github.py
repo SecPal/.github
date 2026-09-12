@@ -403,7 +403,9 @@ def _required_connections(mode: str, include_reverse_dependencies: bool = False)
     if mode == DEPENDENCY:
         return ("blockedBy",)
     if mode == MUTATION_TARGET:
-        return ("blockedBy", "blocking")
+        # Post-write unchanged-relationship verification covers every mutation
+        # target, including exact endpoints outside the owning subtree.
+        return REQUIRED_CONNECTIONS + ("blocking",)
     return ()
 
 

@@ -75,6 +75,67 @@ Apply these rules only when the session says it is running inside Polyscope.
 - Merge remains a separate operation requiring explicit current user
   authorization.
 
+## Delivery continuity and authority
+
+- Perform the relevant full preflight on first entry to a delivery. During the
+  same delivery, use delta preflight: refresh only facts whose defined
+  invalidators may have occurred and freshly read operation-specific volatile
+  state at a critical mutation boundary. A new prompt, internal phase, or tool
+  handoff alone invalidates no proof and does not require a complete graph, ADR,
+  issue, PR, and CI reread. A commit that advances `HEAD` invalidates head-bound
+  proof while leaving unrelated proof subject to its own invalidator.
+- Reuse PR/head-bound, staged-tree/validation, lifecycle CURRENT,
+  and stable-feedback proof until a relevant head, tree, CURRENT publication,
+  or feedback/reviewed-head change invalidates it. Work-graph proof validity
+  comes only from `docs/work-graph-contract.md` and its canonical reader.
+  Keep readiness and merge evidence short-lived and read it at the actual
+  boundary. Do not create a freshness database, schema, signer, or daemon.
+- Before each lifecycle mutation, derive the canonical operation and exact
+  preconditions from authenticated current maintained repository authority.
+  Prompt expectations may bind identity, intent, scope, mutation budget,
+  acceptance, and stop conditions; treat them as assertions to verify, never as
+  lifecycle authority. Fail closed before mutation and report any discrepancy.
+- Within current authority, commit, push, Draft PR creation, maintained GitHub
+  fallback PR creation, receipt or attestation binding, lifecycle publication,
+  eligible Ready transition, bounded provider observation, classification,
+  in-contract remediation, eligible thread resolution, conditionally authorized
+  merge, and bounded read-back are mechanical checkpoints. Do not request a new
+  prompt solely because one was reached.
+- A current instruction may conditionally authorize a later exact mutation if
+  and only if its freshly evaluated maintained gate passes for the unchanged
+  authenticated candidate. This remains explicit current authority. New user
+  authority is required for material scope expansion, an independently
+  deliverable responsibility, Exceptional Recovery, an unresolved material
+  trade-off, or another operation not already authorized.
+- Prefer native Polyscope PR creation when exposed. If unavailable, continue an
+  already-authorized delivery through the smallest maintained GitHub fallback;
+  preserve PR identity and report the actual creation path and whether native
+  workspace association is authenticated. Tool availability grants no
+  lifecycle authority.
+
+## Automated review terminality
+
+- Do not infer review completion from absent comments or zero threads. A
+  configured triggered review provider that is queued, pending, running,
+  failed, or indeterminate blocks stable-feedback capture and merge even when
+  CI is green and GitHub reports mergeability.
+- Capture one stable-feedback batch only after every triggered provider has
+  affirmative successful terminal evidence, then classify the complete batch
+  before coherent remediation. Relevant later feedback or reviewed-head change
+  invalidates that snapshot. Remediation does not authorize a second
+  unrestricted external review cycle.
+- When a current full-delivery instruction authorizes review completion
+  observation, wait inside that invocation at bounded 60-to-90-second intervals
+  for at most about 30 minutes. Observe only maintained review-provider status,
+  not unrelated hosted CI. On expiry report `REVIEW_NOT_TERMINAL`, the exact
+  head, and non-terminal providers without claiming a user decision is needed;
+  the same workspace may resume later.
+- After remediation changes a candidate, repeat focused validation and the
+  final-candidate self-review. For material security or authority changes,
+  reassess the design from first principles and actively attempt to defeat the
+  final trust boundary. Do not impose that heavyweight audit on an ordinary
+  small correction.
+
 ## Canonical Work-Graph Execution
 
 - Under `docs/work-graph-contract.md`, canonical work-graph semantics are

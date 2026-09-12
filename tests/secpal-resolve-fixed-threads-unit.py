@@ -14,12 +14,20 @@ import subprocess
 import sys
 import tempfile
 from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import replace
 from io import StringIO
 from pathlib import Path
 from typing import Any, Sequence
 from unittest import TestCase, main, mock
 
 ROOT = Path(__file__).resolve().parents[1]
+# This public-only vector was generated in a disposable bubblewrap PID, network,
+# and runtime-socket namespace. Its private key was destroyed with that sandbox.
+OPENPGP_FIXTURE_ROOT = ROOT / "tests/fixtures/secpal-resolve-fixed-threads"
+OPENPGP_FIXTURE_ARTIFACT = OPENPGP_FIXTURE_ROOT / "openpgp-artifact.txt"
+OPENPGP_FIXTURE_PUBLIC_KEY = OPENPGP_FIXTURE_ROOT / "openpgp-public-key.asc"
+OPENPGP_FIXTURE_SIGNATURE = OPENPGP_FIXTURE_ROOT / "openpgp-signature.asc"
+OPENPGP_FIXTURE_FINGERPRINT = "00DC685679E00C93940505E3778A78CD1F7BF5FE"
 sys.path.insert(0, str(ROOT / "scripts"))
 SCRIPT = ROOT / "scripts/secpal-resolve-fixed-threads.py"
 SPEC = importlib.util.spec_from_file_location("secpal_resolve_fixed_threads", SCRIPT)
@@ -58,6 +66,7 @@ class FakeGit:
         repository: str = "SecPal/api",
         signature_valid: bool = True,
         signature_format: str = "ssh",
+        signer_identity: str = "fixture",
         signer_fingerprint: str = "SHA256:fixtureDeliverySigner",
         signing_key: str = "/tmp/fixture-signing-key",
         second_parent: str | None = None,
@@ -70,6 +79,7 @@ class FakeGit:
         self.repository = repository
         self.signature_valid = signature_valid
         self.signature_format = signature_format
+        self.signer_identity = signer_identity
         self.signer_fingerprint = signer_fingerprint
         self.signing_key = signing_key
         self.second_parent = second_parent
@@ -130,7 +140,7 @@ class FakeGit:
                 return subprocess.CompletedProcess(call, 1, "", "bad signature")
             if self.signature_format == "ssh":
                 stdout = (
-                    'Good "git" signature for fixture with ED25519 key '
+                    f'Good "git" signature for {self.signer_identity} with ED25519 key '
                     f"{self.signer_fingerprint}\n"
                 )
             else:
@@ -164,6 +174,12 @@ def _current_registry_git(
 def _current_registry_git_result(
     arguments: list[str], *, allow_failure: bool = False
 ) -> tuple[int, str]:
+    if arguments == ["rev-parse", "HEAD"]:
+        merge_head = _current_registry_git(
+            ROOT, ["rev-parse", "--verify", "MERGE_HEAD"], allow_failure=True
+        )
+        if merge_head.returncode == 0:
+            return merge_head.returncode, merge_head.stdout
     result = _current_registry_git(
         ROOT, arguments, allow_failure=allow_failure
     )
@@ -656,8 +672,53 @@ def recovery_validation_payloads(
     return receipt, attestation
 
 
+def continuation_validation_payloads(
+    reviewed: dict[str, Any],
+    eligibility_evidence_digest: str,
+    *,
+    expected_head: str = "c" * 40,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    binding = MODULE._validation_registry_binding(
+        MODULE._load_repository_entry(reviewed["repository"])
+    )
+    stable = MODULE.fast_path.StableFeedbackState.from_payload(reviewed)
+    receipt = MODULE.fast_path.create_validation_receipt(
+        repository=reviewed["repository"],
+        head_sha=reviewed["head_sha"],
+        validated_tree_sha="f" * 40,
+        registry=binding,
+        command_set=binding["validation"],
+        successful_result=True,
+        reviewed_state=stable,
+        manual_gate_evidence=[
+            {
+                "gate": gate,
+                "satisfied": True,
+                "evidence": f"Verified continuation evidence {index}",
+            }
+            for index, gate in enumerate(binding["manual_gates"], start=1)
+        ],
+        eligibility_evidence_digest=eligibility_evidence_digest,
+        exceptional_continuation_evidence_digest="8" * 64,
+    )
+    attestation = MODULE.fast_path.create_validation_attestation(
+        repository=reviewed["repository"],
+        head_sha=expected_head,
+        registry=binding,
+        command_set=binding["validation"],
+        successful_result=True,
+        reviewed_state=stable,
+        validation_receipt=receipt,
+    )
+    return receipt, attestation
+
+
 def integration_validation_payloads(
-    reviewed: dict[str, Any], eligibility_digest: str, *, expected_head: str
+    reviewed: dict[str, Any],
+    eligibility_digest: str | None,
+    *,
+    expected_head: str,
+    delivery_issue: int = 673,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     binding = MODULE._validation_registry_binding(
         MODULE._load_repository_entry(reviewed["repository"])
@@ -669,7 +730,7 @@ def integration_validation_payloads(
         "kind": "TWO_PARENT_READY_INTEGRATION",
         "authorization_id": "ready-integration-authorization-001",
         "repository": reviewed["repository"],
-        "delivery_issue_number": 673,
+        "delivery_issue_number": delivery_issue,
         "pull_request_number": reviewed["pull_request_number"],
         "prior_delivery_head_sha": reviewed["head_sha"],
         "prior_authority_digest": "a" * 64,
@@ -810,6 +871,8 @@ def late_disposition_payload(
     repository: str = "SecPal/api",
     signer_format: str = "ssh",
     signer_fingerprint: str = "SHA256:fixtureDeliverySigner",
+    classification: str = "INVALID_FALSE_OR_MISLEADING",
+    disposition: str = "DISPROVEN_WITH_EVIDENCE",
 ) -> dict[str, Any]:
     reply_state = [
         {
@@ -821,7 +884,11 @@ def late_disposition_payload(
         for node_id, database_id, reply_body, reply_to_id in (replies or [])
     ]
     return {
-        "schema_version": "1.0",
+        "schema_version": MODULE.late_disposition.disposition_schema_version_for_decision(
+            classification,
+            disposition,
+            final_eligibility_absent=False,
+        ),
         "kind": "LATE_FEEDBACK_DISPOSITION",
         "repository": repository,
         "delivery_issue_number": delivery_issue,
@@ -850,8 +917,8 @@ def late_disposition_payload(
                 "reply_count": len(reply_state),
                 "is_resolved": False,
                 "is_outdated": False,
-                "classification": "INVALID_FALSE_OR_MISLEADING",
-                "disposition": "DISPROVEN_WITH_EVIDENCE",
+                "classification": classification,
+                "disposition": disposition,
                 "technically_blocking": False,
                 "classification_evidence_digest": "d" * 64,
                 "authorized_action": "RESOLVE_REVIEW_THREAD",
@@ -946,19 +1013,92 @@ def run_late_resolution_fixture(
     final_eligibility_thread_ids: Sequence[str] | None = None,
     apply: bool = True,
     signature_error: Exception | None = None,
+    classification: str = "INVALID_FALSE_OR_MISLEADING",
+    disposition: str = "DISPROVEN_WITH_EVIDENCE",
+    historical_ready_integration: bool = False,
+    historical_source_mutator: Any | None = None,
+    historical_fake_eligibility: bool = False,
 ) -> tuple[dict[str, Any], FakeGh, FakeGit]:
     root = Path(directory)
-    reviewed, attestation, _eligibility, git = (
-        write_authenticated_resolution_inputs(
-            directory,
-            [final_reviewed_thread_id],
-            eligibility_thread_ids=final_eligibility_thread_ids,
+    if historical_ready_integration:
+        reviewed = reviewed_state_payload(final_reviewed_thread_id, [])
+        integration, receipt, attestation = integration_validation_payloads(
+            reviewed,
+            None,
+            expected_head="c" * 40,
+            delivery_issue=724,
         )
-    )
+        if historical_source_mutator is not None:
+            historical_source_mutator(integration, receipt, attestation)
+        (root / "reviewed.json").write_text(
+            json.dumps(reviewed), encoding="utf-8"
+        )
+        (root / "validation.json").write_text(
+            json.dumps(attestation), encoding="utf-8"
+        )
+        (root / "integration.json").write_text(
+            json.dumps(integration), encoding="utf-8"
+        )
+        (root / "receipt.json").write_text(
+            json.dumps(receipt), encoding="utf-8"
+        )
+        if historical_fake_eligibility:
+            (root / "eligibility.json").write_text("{}", encoding="utf-8")
+        git = FakeGit(
+            expected_head=attestation["head_sha"],
+            reviewed_head=reviewed["head_sha"],
+            tree=attestation["validated_tree_sha"],
+            receipt_digest=attestation["validation_receipt_digest"],
+            second_parent=reviewed["base_sha"],
+            integration_digest=receipt["integration_evidence_digest"],
+        )
+    else:
+        reviewed, attestation, _eligibility, git = (
+            write_authenticated_resolution_inputs(
+                directory,
+                [final_reviewed_thread_id],
+                eligibility_thread_ids=final_eligibility_thread_ids,
+            )
+        )
     body = "The reported recovery behavior is not present."
-    artifact = late_disposition_payload(attestation, body=body)
+    artifact = late_disposition_payload(
+        (
+            {**attestation, "eligibility_evidence_digest": "e" * 64}
+            if historical_ready_integration
+            else attestation
+        ),
+        body=body,
+        classification=(
+            "INVALID_FALSE_OR_MISLEADING"
+            if historical_ready_integration
+            else classification
+        ),
+        disposition=(
+            "DISPROVEN_WITH_EVIDENCE"
+            if historical_ready_integration
+            else disposition
+        ),
+    )
+    if historical_ready_integration:
+        artifact["threads"][0]["classification"] = classification
+        artifact["threads"][0]["disposition"] = disposition
+        artifact["schema_version"] = (
+            MODULE.late_disposition.disposition_schema_version_for_decision(
+                classification,
+                disposition,
+                final_eligibility_absent=False,
+                no_commit_bound_ready_integration_eligibility=True,
+            )
+        )
+        artifact.pop("final_eligibility_evidence_digest")
+        artifact["final_eligibility_status"] = (
+            "NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY"
+        )
     classification = {
-        "schema_version": "1.0",
+        "schema_version": MODULE.late_disposition.schema_version_for_decision(
+            artifact["threads"][0]["classification"],
+            artifact["threads"][0]["disposition"],
+        ),
         "kind": "LATE_FEEDBACK_CLASSIFICATION",
         "repository": "SecPal/api",
         "delivery_issue_number": 724,
@@ -1041,11 +1181,26 @@ def run_late_resolution_fixture(
             final_reviewed_state_path=root / "reviewed.json",
             expected_final_reviewed_state_digest=reviewed["state_digest"],
             final_validation_evidence_path=root / "validation.json",
-            final_eligibility_evidence_path=root / "eligibility.json",
+            final_eligibility_evidence_path=(
+                None
+                if historical_ready_integration
+                and not historical_fake_eligibility
+                else root / "eligibility.json"
+            ),
             late_classification_evidence_path=classification_path,
             late_classification_signature_path=classification_signature_path,
             late_disposition_evidence_path=artifact_path,
             late_disposition_signature_path=signature_path,
+            integration_evidence_path=(
+                root / "integration.json"
+                if historical_ready_integration
+                else None
+            ),
+            integration_validation_receipt_path=(
+                root / "receipt.json"
+                if historical_ready_integration
+                else None
+            ),
         )
     return result, github, git
 
@@ -1055,9 +1210,14 @@ def run_late_classification_origin_fixture(
     *,
     reviewed_thread_id: str,
     eligibility_thread_ids: Sequence[str],
+    technically_blocking: bool = False,
+    technical_blockers: Sequence[str] = (),
     target_thread_id: str = "PRRT_LATE_ORIGIN_TARGET",
     target_database_id: Any = 1001,
     artifact_signer: mock.Mock | None = None,
+    classification: str = "INVALID_FALSE_OR_MISLEADING",
+    disposition: str = "DISPROVEN_WITH_EVIDENCE",
+    ready_integration: bool = False,
 ) -> tuple[dict[str, Any], mock.Mock]:
     root = Path(directory)
     delivery = root / "delivery"
@@ -1070,10 +1230,20 @@ def run_late_classification_origin_fixture(
         [(f"PRRC_ROOT_{reviewed_thread_id}", body, None)],
     )
     eligibility = eligibility_payload(reviewed, eligibility_thread_ids)
-    attestation = validation_attestation_payload(
-        reviewed,
-        MODULE._digest_json(eligibility),
-    )
+    integration: dict[str, Any] | None = None
+    if ready_integration:
+        integration, receipt, attestation = integration_validation_payloads(
+            reviewed,
+            MODULE._digest_json(eligibility),
+            expected_head="c" * 40,
+            delivery_issue=724,
+        )
+    else:
+        receipt = None
+        attestation = validation_attestation_payload(
+            reviewed,
+            MODULE._digest_json(eligibility),
+        )
     (delivery / "reviewed.json").write_text(
         json.dumps(reviewed), encoding="utf-8"
     )
@@ -1083,11 +1253,21 @@ def run_late_classification_origin_fixture(
     (delivery / "eligibility.json").write_text(
         json.dumps(eligibility), encoding="utf-8"
     )
+    if integration is not None:
+        (delivery / "integration.json").write_text(
+            json.dumps(integration), encoding="utf-8"
+        )
     git = FakeGit(
         expected_head=attestation["head_sha"],
         reviewed_head=reviewed["head_sha"],
         tree=attestation["validated_tree_sha"],
         receipt_digest=attestation["validation_receipt_digest"],
+        second_parent=(reviewed["base_sha"] if ready_integration else None),
+        integration_digest=(
+            receipt["integration_evidence_digest"]
+            if receipt is not None
+            else None
+        ),
     )
     response = target_response(
         target_thread_id,
@@ -1129,25 +1309,1569 @@ def run_late_classification_origin_fixture(
             thread_id=target_thread_id,
             finding_id="LF-LATE-ORIGIN",
             finding_evidence_digest=hashlib.sha256(body.encode()).hexdigest(),
-            classification="INVALID_FALSE_OR_MISLEADING",
-            disposition="DISPROVEN_WITH_EVIDENCE",
-            technically_blocking=False,
-            technical_blockers=(),
+            classification=classification,
+            disposition=disposition,
+            technically_blocking=technically_blocking,
+            technical_blockers=technical_blockers,
             output_path=output / "classification.json",
             signature_output_path=output / "classification.sig",
+            integration_evidence_path=(
+                delivery / "integration.json" if ready_integration else None
+            ),
         )
     return result, signer
 
 
+def final_eligibility_absence_fixture(
+    directory: str,
+    *,
+    reviewed_thread_ids: Sequence[str] = (),
+    eligibility: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    feedback = {
+        "pull_request_reactions": [],
+        "reviews": [],
+        "conversation_comments": [],
+        "threads": [
+            {
+                "node_id": thread_id,
+                "is_resolved": False,
+                "is_outdated": False,
+                "comments": [],
+            }
+            for thread_id in reviewed_thread_ids
+        ],
+    }
+    identity = {
+        "repository": "SecPal/.github",
+        "pull_request_number": 821,
+        "head_sha": "548edfb9ba8d68a86653c536aa29a96ac84c28fc",
+        "base_ref": "main",
+        "base_sha": "a5a7b0704645659a5db7df820b2d448de3859560",
+        "pr_state": "OPEN",
+    }
+    reviewed = {
+        "schema_version": "1.0",
+        **identity,
+        **feedback,
+        "feedback_digest": MODULE._digest_json(feedback),
+        "state_digest": MODULE._digest_json({**identity, "feedback": feedback}),
+    }
+    entry = copy.deepcopy(MODULE._load_repository_entry("SecPal/.github"))
+    binding = MODULE._validation_registry_binding(entry)
+    stable = MODULE.fast_path.StableFeedbackState.from_payload(reviewed)
+    gates = [
+        {"gate": gate, "satisfied": True, "evidence": f"Fixture gate {index}"}
+        for index, gate in enumerate(binding["manual_gates"], start=1)
+    ]
+    eligibility_digest = MODULE._digest_json(eligibility) if eligibility else None
+    receipt = MODULE.fast_path.create_validation_receipt(
+        repository="SecPal/.github",
+        head_sha=reviewed["head_sha"],
+        validated_tree_sha="b26b43004b75340de5c761b00727202b6cd9e255",
+        registry=binding,
+        command_set=binding["validation"],
+        successful_result=True,
+        reviewed_state=stable,
+        manual_gate_evidence=gates,
+        eligibility_evidence_digest=eligibility_digest,
+    )
+    attestation = MODULE.fast_path.create_validation_attestation(
+        repository="SecPal/.github",
+        head_sha="3bd4dcd08c0c1b9852eeff487c0ecbc2102b02d9",
+        registry=binding,
+        command_set=binding["validation"],
+        successful_result=True,
+        reviewed_state=stable,
+        validation_receipt=receipt,
+    )
+    recovery_fields = {
+        "schema_version": "1.0",
+        "kind": "FINAL_ELIGIBILITY_ABSENCE_RECOVERY",
+        "repository": "SecPal/.github",
+        "delivery_issue": 810,
+        "pull_request": 821,
+        "final_head_sha": attestation["head_sha"],
+        "final_tree_sha": attestation["validated_tree_sha"],
+        "final_reviewed_state_digest": reviewed["state_digest"],
+        "final_validation_receipt_digest": receipt["receipt_digest"],
+        "final_attestation_digest": attestation["attestation_digest"],
+        "final_delivery_signer": {
+            "format": "ssh",
+            "fingerprint": "SHA256:fixtureDeliverySigner",
+        },
+        "expected_final_reviewed_thread_count": 0,
+        "expected_final_eligibility_status": "ABSENT_NOT_AUTHENTICATED",
+    }
+    entry["final_eligibility_absence_recoveries"] = [
+        {**recovery_fields, "recovery_digest": MODULE._digest_json(recovery_fields)}
+    ]
+    root = Path(directory)
+    (root / "reviewed.json").write_text(json.dumps(reviewed), encoding="utf-8")
+    (root / "attestation.json").write_text(
+        json.dumps(attestation), encoding="utf-8"
+    )
+    if eligibility is not None:
+        (root / "eligibility.json").write_text(
+            json.dumps(eligibility), encoding="utf-8"
+        )
+    return entry, reviewed, receipt, attestation
+
+
 class ResolveFixedThreadsTests(TestCase):
+    def test_resolver_registry_projection_is_owned_by_fast_path(self) -> None:
+        entry = copy.deepcopy(MODULE._load_repository_entry("SecPal/.github"))
+        expected = {"canonical_projection": True}
+        with mock.patch.object(
+            MODULE.fast_path,
+            "validation_registry_projection",
+            return_value=expected,
+        ) as projection:
+            self.assertIs(MODULE._validation_registry_binding(entry), expected)
+        projection.assert_called_once_with(entry)
+
+    def test_resolver_loads_closed_additive_policy_before_projection(self) -> None:
+        registry = json.loads(MODULE.REGISTRY_PATH.read_text(encoding="utf-8"))
+        entry = next(
+            item
+            for item in registry["repositories"]
+            if item["repository"] == "SecPal/.github"
+        )
+        entry["pre_enrollment_integration_policy"] = {
+            "schema_version": "1.0",
+            "command": "integrate-pre-enrollment-draft",
+            "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+            "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+            "maximum_candidates": 1,
+            "maximum_pushes": 1,
+            "force_push": False,
+            "automatic_retry": False,
+            "merge_pull_request": False,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            registry_path = Path(directory) / "repositories.json"
+            registry_path.write_text(json.dumps(registry), encoding="utf-8")
+            with mock.patch.object(MODULE, "REGISTRY_PATH", registry_path):
+                selected = MODULE._load_repository_entry("SecPal/.github")
+
+        self.assertEqual(
+            MODULE._validation_registry_binding(selected)[
+                "pre_enrollment_integration_policy"
+            ],
+            entry["pre_enrollment_integration_policy"],
+        )
+
+    def test_validation_registry_projection_matches_attester_with_additive_policy(
+        self,
+    ) -> None:
+        entry = copy.deepcopy(MODULE._load_repository_entry("SecPal/.github"))
+        policy = {
+            "schema_version": "1.0",
+            "command": "integrate-pre-enrollment-draft",
+            "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+            "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+            "maximum_candidates": 1,
+            "maximum_pushes": 1,
+            "force_push": False,
+            "automatic_retry": False,
+            "merge_pull_request": False,
+        }
+        entry["pre_enrollment_integration_policy"] = policy
+
+        attester_projection = MODULE.fast_path.validation_registry_projection(entry)
+        resolver_projection = MODULE._validation_registry_binding(entry)
+        self.assertEqual(resolver_projection, attester_projection)
+
+        reviewed_payload = reviewed_state_payload(
+            "PRRT_registryProjection", [("COMMENT_registryProjection", "Finding", None)]
+        )
+        reviewed_payload["repository"] = "SecPal/.github"
+        identity = {
+            key: reviewed_payload[key]
+            for key in (
+                "repository",
+                "pull_request_number",
+                "head_sha",
+                "base_ref",
+                "base_sha",
+                "pr_state",
+            )
+        }
+        feedback = {
+            key: reviewed_payload[key]
+            for key in (
+                "pull_request_reactions",
+                "reviews",
+                "conversation_comments",
+                "threads",
+            )
+        }
+        reviewed_payload["feedback_digest"] = MODULE._digest_json(feedback)
+        reviewed_payload["state_digest"] = MODULE._digest_json(
+            {**identity, "feedback": feedback}
+        )
+        reviewed = MODULE.fast_path.StableFeedbackState.from_payload(
+            reviewed_payload
+        )
+        gates = [
+            {"gate": gate, "satisfied": True, "evidence": f"Fixture gate {index}"}
+            for index, gate in enumerate(
+                attester_projection["manual_gates"], start=1
+            )
+        ]
+        receipt = MODULE.fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed.head_sha,
+            validated_tree_sha="d" * 40,
+            registry=attester_projection,
+            command_set=attester_projection["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            manual_gate_evidence=gates,
+        )
+        attestation = MODULE.fast_path.create_validation_attestation(
+            repository="SecPal/.github",
+            head_sha="c" * 40,
+            registry=attester_projection,
+            command_set=attester_projection["validation"],
+            successful_result=True,
+            reviewed_state=reviewed,
+            validation_receipt=receipt,
+        )
+        MODULE.fast_path.verify_validation_attestation(
+            attestation,
+            repository="SecPal/.github",
+            head_sha="c" * 40,
+            registry=resolver_projection,
+            command_set=resolver_projection["validation"],
+            reviewed_state=reviewed,
+            commit_parent_sha=reviewed.head_sha,
+            commit_tree_sha="d" * 40,
+            commit_validation_receipt_digest=receipt["receipt_digest"],
+        )
+
     def setUp(self) -> None:
-        central_git = mock.patch.object(
+        self._central_registry_patch = mock.patch.object(
             MODULE.fast_path,
             "_central_git_result",
             side_effect=_current_registry_git_result,
         )
-        central_git.start()
-        self.addCleanup(central_git.stop)
+        self._central_registry_patch.start()
+        self.addCleanup(self._central_registry_patch.stop)
+        self._integration_git_patch = mock.patch.object(
+            MODULE.fast_path,
+            "_run_integration_commit_git",
+            side_effect=lambda root, arguments: MODULE._run_git(
+                root, tuple(arguments), allow_failure=True
+            ),
+        )
+        self._integration_git_patch.start()
+        self.addCleanup(self._integration_git_patch.stop)
+
+    def _openpgp_fixture_environment(self, root: Path) -> dict[str, str]:
+        (root / ".config").mkdir()
+        (root / ".gnupg").mkdir(mode=0o700)
+        environment = MODULE.late_disposition.signing_environment(
+            account_home=root
+        )
+        executable = MODULE.late_disposition._trusted_executable("gpg")
+        packets = subprocess.run(
+            [executable, "--batch", "--list-packets", OPENPGP_FIXTURE_PUBLIC_KEY],
+            check=True,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+        ).stdout
+        self.assertIn(":public key packet:", packets)
+        self.assertNotIn(":secret key packet:", packets)
+        self.assertNotIn(":secret sub key packet:", packets)
+        subprocess.run(
+            [executable, "--batch", "--no-tty", "--import", OPENPGP_FIXTURE_PUBLIC_KEY],
+            check=True,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+        )
+        keys = subprocess.run(
+            [executable, "--batch", "--with-colons", "--list-keys"],
+            check=True,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+        ).stdout
+        self.assertIn(f"fpr:::::::::{OPENPGP_FIXTURE_FINGERPRINT}:", keys)
+        return environment
+
+    def test_exact_821_final_eligibility_absence_requires_accepted_recovery(
+        self,
+    ) -> None:
+        feedback = {
+            "pull_request_reactions": [],
+            "reviews": [],
+            "conversation_comments": [],
+            "threads": [],
+        }
+        identity = {
+            "repository": "SecPal/.github",
+            "pull_request_number": 821,
+            "head_sha": "548edfb9ba8d68a86653c536aa29a96ac84c28fc",
+            "base_ref": "main",
+            "base_sha": "a5a7b0704645659a5db7df820b2d448de3859560",
+            "pr_state": "OPEN",
+        }
+        reviewed = {
+            "schema_version": "1.0",
+            **identity,
+            **feedback,
+            "feedback_digest": MODULE._digest_json(feedback),
+            "state_digest": MODULE._digest_json({**identity, "feedback": feedback}),
+        }
+        self.assertEqual(
+            reviewed["state_digest"],
+            "8ab3d9eec9a831cdc0257c4835f264816079a1d5d57c02e4bf5700989b1a52ee",
+        )
+        entry = copy.deepcopy(MODULE._load_repository_entry("SecPal/.github"))
+        binding = MODULE._validation_registry_binding(entry)
+        stable = MODULE.fast_path.StableFeedbackState.from_payload(reviewed)
+        gates = [
+            {"gate": gate, "satisfied": True, "evidence": f"Fixture gate {index}"}
+            for index, gate in enumerate(binding["manual_gates"], start=1)
+        ]
+        receipt = MODULE.fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed["head_sha"],
+            validated_tree_sha="b26b43004b75340de5c761b00727202b6cd9e255",
+            registry=binding,
+            command_set=binding["validation"],
+            successful_result=True,
+            reviewed_state=stable,
+            manual_gate_evidence=gates,
+            eligibility_evidence_digest=None,
+        )
+        attestation = MODULE.fast_path.create_validation_attestation(
+            repository="SecPal/.github",
+            head_sha="3bd4dcd08c0c1b9852eeff487c0ecbc2102b02d9",
+            registry=binding,
+            command_set=binding["validation"],
+            successful_result=True,
+            reviewed_state=stable,
+            validation_receipt=receipt,
+        )
+        self.assertNotIn("eligibility_evidence_digest", receipt)
+        self.assertNotIn("eligibility_evidence_digest", attestation)
+        recovery_fields = {
+            "schema_version": "1.0",
+            "kind": "FINAL_ELIGIBILITY_ABSENCE_RECOVERY",
+            "repository": "SecPal/.github",
+            "delivery_issue": 810,
+            "pull_request": 821,
+            "final_head_sha": "3bd4dcd08c0c1b9852eeff487c0ecbc2102b02d9",
+            "final_tree_sha": "b26b43004b75340de5c761b00727202b6cd9e255",
+            "final_reviewed_state_digest": reviewed["state_digest"],
+            "final_validation_receipt_digest": receipt["receipt_digest"],
+            "final_attestation_digest": attestation["attestation_digest"],
+            "final_delivery_signer": {
+                "format": "ssh",
+                "fingerprint": "SHA256:fixtureDeliverySigner",
+            },
+            "expected_final_reviewed_thread_count": 0,
+            "expected_final_eligibility_status": "ABSENT_NOT_AUTHENTICATED",
+        }
+        entry["final_eligibility_absence_recoveries"] = [
+            {
+                **recovery_fields,
+                "recovery_digest": MODULE._digest_json(recovery_fields),
+            }
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "reviewed.json").write_text(
+                json.dumps(reviewed), encoding="utf-8"
+            )
+            (root / "attestation.json").write_text(
+                json.dumps(attestation), encoding="utf-8"
+            )
+            with mock.patch.object(
+                MODULE, "_load_repository_entry", return_value=entry
+            ):
+                boundary = load_final_feedback_boundary(
+                    repository="SecPal/.github",
+                    delivery_issue=810,
+                    number=821,
+                    expected_head="3bd4dcd08c0c1b9852eeff487c0ecbc2102b02d9",
+                    final_reviewed_state_path=root / "reviewed.json",
+                    expected_final_reviewed_state_digest=reviewed["state_digest"],
+                    final_validation_evidence_path=root / "attestation.json",
+                    final_eligibility_evidence_path=None,
+                )
+
+        self.assertEqual(
+            boundary.eligibility_mode,
+            MODULE.FinalEligibilityMode.AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE,
+        )
+        self.assertIsNone(boundary.eligibility)
+
+    def test_exact_821_absence_policy_record_is_canonical(self) -> None:
+        entry = MODULE._load_repository_entry("SecPal/.github")
+        records = entry["final_eligibility_absence_recoveries"]
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(
+            {
+                key: record[key]
+                for key in (
+                    "repository",
+                    "delivery_issue",
+                    "pull_request",
+                    "final_head_sha",
+                    "final_tree_sha",
+                    "final_reviewed_state_digest",
+                    "final_validation_receipt_digest",
+                    "final_attestation_digest",
+                    "expected_final_reviewed_thread_count",
+                    "expected_final_eligibility_status",
+                )
+            },
+            {
+                "repository": "SecPal/.github",
+                "delivery_issue": 810,
+                "pull_request": 821,
+                "final_head_sha": "3bd4dcd08c0c1b9852eeff487c0ecbc2102b02d9",
+                "final_tree_sha": "b26b43004b75340de5c761b00727202b6cd9e255",
+                "final_reviewed_state_digest": "8ab3d9eec9a831cdc0257c4835f264816079a1d5d57c02e4bf5700989b1a52ee",
+                "final_validation_receipt_digest": "8554874ecf0013d9e2f43ba3e060f3bf57987eac3caf142e05c49253a491b1aa",
+                "final_attestation_digest": "d9be593f444a9fa24ce301b236eaaf41776c0230b08cfcd0a2e23ac55f17e05e",
+                "expected_final_reviewed_thread_count": 0,
+                "expected_final_eligibility_status": "ABSENT_NOT_AUTHENTICATED",
+            },
+        )
+        fields = {key: value for key, value in record.items() if key != "recovery_digest"}
+        self.assertEqual(record["recovery_digest"], MODULE._digest_json(fields))
+
+    def test_final_eligibility_absence_policy_rejects_identity_and_schema_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            entry, _reviewed, _receipt, attestation = (
+                final_eligibility_absence_fixture(directory)
+            )
+        base = entry["final_eligibility_absence_recoveries"][0]
+        cases = {
+            "absent": [],
+            "wrong repository": [{**base, "repository": "SecPal/api"}],
+            "wrong issue": [{**base, "delivery_issue": 811}],
+            "wrong PR": [{**base, "pull_request": 822}],
+            "wrong head": [{**base, "final_head_sha": "0" * 40}],
+            "cross source": [{**base, "repository": "SecPal/frontend"}],
+            "duplicate": [base, copy.deepcopy(base)],
+            "unknown field": [{**base, "caller_status": "ABSENT"}],
+            "malformed digest": [{**base, "recovery_digest": "invalid"}],
+        }
+        for label, records in cases.items():
+            changed = copy.deepcopy(entry)
+            changed["final_eligibility_absence_recoveries"] = records
+            if len(records) == 1 and label in {"wrong issue", "wrong PR", "wrong head"}:
+                fields = {
+                    key: value for key, value in records[0].items()
+                    if key != "recovery_digest"
+                }
+                records[0]["recovery_digest"] = MODULE._digest_json(fields)
+            with self.subTest(label=label), self.assertRaises(MODULE.ResolutionError):
+                MODULE._load_final_eligibility_absence(
+                    changed,
+                    repository="SecPal/.github",
+                    delivery_issue=810,
+                    pull_request=821,
+                    final_head_sha=attestation["head_sha"],
+                )
+
+    def test_final_eligibility_absence_rejects_bound_evidence_drift(self) -> None:
+        cases = (
+            ("final_tree_sha", "0" * 40),
+            ("final_reviewed_state_digest", "0" * 64),
+            ("final_validation_receipt_digest", "0" * 64),
+            ("final_attestation_digest", "0" * 64),
+        )
+        for field, value in cases:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                entry, reviewed, _receipt, attestation = (
+                    final_eligibility_absence_fixture(directory)
+                )
+                record = entry["final_eligibility_absence_recoveries"][0]
+                record[field] = value
+                fields = {key: item for key, item in record.items() if key != "recovery_digest"}
+                record["recovery_digest"] = MODULE._digest_json(fields)
+                with mock.patch.object(MODULE, "_load_repository_entry", return_value=entry), self.assertRaisesRegex(
+                    MODULE.ResolutionError, "binding is invalid or stale"
+                ):
+                    load_final_feedback_boundary(
+                        repository="SecPal/.github",
+                        delivery_issue=810,
+                        number=821,
+                        expected_head=attestation["head_sha"],
+                        final_reviewed_state_path=Path(directory) / "reviewed.json",
+                        expected_final_reviewed_state_digest=reviewed["state_digest"],
+                        final_validation_evidence_path=Path(directory) / "attestation.json",
+                        final_eligibility_evidence_path=None,
+                    )
+
+    def test_final_eligibility_absence_rejects_threads_or_present_eligibility(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            entry, reviewed, _receipt, attestation = final_eligibility_absence_fixture(
+                directory, reviewed_thread_ids=("PRRT_ALREADY_PRESENT",)
+            )
+            with mock.patch.object(MODULE, "_load_repository_entry", return_value=entry), self.assertRaisesRegex(
+                MODULE.ResolutionError, "binding is invalid or stale"
+            ):
+                load_final_feedback_boundary(
+                    repository="SecPal/.github", delivery_issue=810, number=821,
+                    expected_head=attestation["head_sha"],
+                    final_reviewed_state_path=Path(directory) / "reviewed.json",
+                    expected_final_reviewed_state_digest=reviewed["state_digest"],
+                    final_validation_evidence_path=Path(directory) / "attestation.json",
+                    final_eligibility_evidence_path=None,
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            entry, reviewed, _receipt, attestation = (
+                final_eligibility_absence_fixture(directory)
+            )
+            attestation["eligibility_evidence_digest"] = None
+            (Path(directory) / "attestation.json").write_text(
+                json.dumps(attestation), encoding="utf-8"
+            )
+            with mock.patch.object(
+                MODULE, "_load_repository_entry", return_value=entry
+            ), self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "eligibility digest is missing or malformed",
+            ):
+                load_final_feedback_boundary(
+                    repository="SecPal/.github",
+                    delivery_issue=810,
+                    number=821,
+                    expected_head=attestation["head_sha"],
+                    final_reviewed_state_path=Path(directory) / "reviewed.json",
+                    expected_final_reviewed_state_digest=reviewed["state_digest"],
+                    final_validation_evidence_path=Path(directory)
+                    / "attestation.json",
+                    final_eligibility_evidence_path=None,
+                )
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = {
+                "schema_version": "1.1",
+                "repository": "SecPal/.github",
+                "pull_request_number": 821,
+                "reviewed_head_sha": "548edfb9ba8d68a86653c536aa29a96ac84c28fc",
+                "reviewed_state_digest": "unused",
+                "eligible_threads": [],
+            }
+            entry, reviewed, _receipt, attestation = final_eligibility_absence_fixture(
+                directory, eligibility=manifest
+            )
+            with mock.patch.object(MODULE, "_load_repository_entry", return_value=entry), self.assertRaisesRegex(
+                MODULE.ResolutionError, "rejects an authenticated eligibility digest"
+            ):
+                load_final_feedback_boundary(
+                    repository="SecPal/.github", delivery_issue=810, number=821,
+                    expected_head=attestation["head_sha"],
+                    final_reviewed_state_path=Path(directory) / "reviewed.json",
+                    expected_final_reviewed_state_digest=reviewed["state_digest"],
+                    final_validation_evidence_path=Path(directory) / "attestation.json",
+                    final_eligibility_evidence_path=None,
+                )
+
+    def test_supplied_eligibility_never_falls_back_to_absence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entry, reviewed, _receipt, attestation = final_eligibility_absence_fixture(
+                directory
+            )
+            malformed = {"schema_version": "1.1", "eligible_threads": []}
+            binding = MODULE._validation_registry_binding(entry)
+            stable = MODULE.fast_path.StableFeedbackState.from_payload(reviewed)
+            receipt = MODULE.fast_path.create_validation_receipt(
+                repository="SecPal/.github", head_sha=reviewed["head_sha"],
+                validated_tree_sha=attestation["validated_tree_sha"], registry=binding,
+                command_set=binding["validation"], successful_result=True,
+                reviewed_state=stable, manual_gate_evidence=attestation["manual_gate_evidence"],
+                eligibility_evidence_digest=MODULE._digest_json(malformed),
+            )
+            supplied_attestation = MODULE.fast_path.create_validation_attestation(
+                repository="SecPal/.github", head_sha=attestation["head_sha"], registry=binding,
+                command_set=binding["validation"], successful_result=True,
+                reviewed_state=stable, validation_receipt=receipt,
+            )
+            (root / "attestation.json").write_text(json.dumps(supplied_attestation), encoding="utf-8")
+            (root / "eligibility.json").write_text(json.dumps(malformed), encoding="utf-8")
+            with mock.patch.object(MODULE, "_load_repository_entry", return_value=entry), self.assertRaisesRegex(
+                MODULE.ResolutionError, "eligibility evidence is unavailable or malformed"
+            ):
+                load_final_feedback_boundary(
+                    repository="SecPal/.github", delivery_issue=810, number=821,
+                    expected_head=supplied_attestation["head_sha"],
+                    final_reviewed_state_path=root / "reviewed.json",
+                    expected_final_reviewed_state_digest=reviewed["state_digest"],
+                    final_validation_evidence_path=root / "attestation.json",
+                    final_eligibility_evidence_path=root / "eligibility.json",
+                )
+
+    def test_valid_supplied_eligibility_uses_ordinary_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _entry, seed_reviewed, _receipt, _attestation = (
+                final_eligibility_absence_fixture(directory)
+            )
+            manifest = eligibility_payload(seed_reviewed, ())
+            entry, reviewed, _receipt, attestation = final_eligibility_absence_fixture(
+                directory, eligibility=manifest
+            )
+            with mock.patch.object(MODULE, "_load_repository_entry", return_value=entry):
+                boundary = load_final_feedback_boundary(
+                    repository="SecPal/.github", delivery_issue=810, number=821,
+                    expected_head=attestation["head_sha"],
+                    final_reviewed_state_path=root / "reviewed.json",
+                    expected_final_reviewed_state_digest=reviewed["state_digest"],
+                    final_validation_evidence_path=root / "attestation.json",
+                    final_eligibility_evidence_path=root / "eligibility.json",
+                )
+        self.assertEqual(boundary.eligibility_mode, MODULE.FinalEligibilityMode.AUTHENTICATED_ELIGIBILITY_MANIFEST)
+        self.assertIsNotNone(boundary.eligibility)
+        self.assertIsNone(boundary.eligibility_absence)
+
+    def test_manifest_boundary_without_eligibility_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _entry, seed_reviewed, _receipt, _attestation = (
+                final_eligibility_absence_fixture(directory)
+            )
+            manifest = eligibility_payload(seed_reviewed, ())
+            entry, reviewed, _receipt, attestation = (
+                final_eligibility_absence_fixture(directory, eligibility=manifest)
+            )
+            with mock.patch.object(MODULE, "_load_repository_entry", return_value=entry):
+                valid = load_final_feedback_boundary(
+                    repository="SecPal/.github",
+                    delivery_issue=810,
+                    number=821,
+                    expected_head=attestation["head_sha"],
+                    final_reviewed_state_path=root / "reviewed.json",
+                    expected_final_reviewed_state_digest=reviewed["state_digest"],
+                    final_validation_evidence_path=root / "attestation.json",
+                    final_eligibility_evidence_path=root / "eligibility.json",
+                )
+        malformed = MODULE.FinalFeedbackBoundary(
+            valid.reviewed,
+            valid.validation,
+            MODULE.FinalEligibilityMode.AUTHENTICATED_ELIGIBILITY_MANIFEST,
+            None,
+            None,
+        )
+        with self.assertRaises(MODULE.ResolutionError):
+            MODULE.require_late_target_origin(malformed, "PRRT_LATE_TARGET")
+
+    def test_final_feedback_boundary_shape_matrix_fails_closed(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as manifest_directory,
+            tempfile.TemporaryDirectory() as absence_directory,
+        ):
+            manifest_root = Path(manifest_directory)
+            _entry, seed_reviewed, _receipt, _attestation = (
+                final_eligibility_absence_fixture(manifest_directory)
+            )
+            manifest = eligibility_payload(seed_reviewed, ())
+            manifest_entry, manifest_reviewed, _receipt, manifest_attestation = (
+                final_eligibility_absence_fixture(
+                    manifest_directory,
+                    eligibility=manifest,
+                )
+            )
+            with mock.patch.object(
+                MODULE,
+                "_load_repository_entry",
+                return_value=manifest_entry,
+            ):
+                valid_manifest = load_final_feedback_boundary(
+                    repository="SecPal/.github",
+                    delivery_issue=810,
+                    number=821,
+                    expected_head=manifest_attestation["head_sha"],
+                    final_reviewed_state_path=manifest_root / "reviewed.json",
+                    expected_final_reviewed_state_digest=manifest_reviewed[
+                        "state_digest"
+                    ],
+                    final_validation_evidence_path=manifest_root
+                    / "attestation.json",
+                    final_eligibility_evidence_path=manifest_root
+                    / "eligibility.json",
+                )
+
+            absence_root = Path(absence_directory)
+            absence_entry, absence_reviewed, _receipt, absence_attestation = (
+                final_eligibility_absence_fixture(absence_directory)
+            )
+            with mock.patch.object(
+                MODULE,
+                "_load_repository_entry",
+                return_value=absence_entry,
+            ):
+                valid_absence = load_final_feedback_boundary(
+                    repository="SecPal/.github",
+                    delivery_issue=810,
+                    number=821,
+                    expected_head=absence_attestation["head_sha"],
+                    final_reviewed_state_path=absence_root / "reviewed.json",
+                    expected_final_reviewed_state_digest=absence_reviewed[
+                        "state_digest"
+                    ],
+                    final_validation_evidence_path=absence_root / "attestation.json",
+                    final_eligibility_evidence_path=None,
+                )
+
+        manifest_validation = valid_manifest.validation
+        manifest_eligibility = valid_manifest.eligibility
+        absence_validation = valid_absence.validation
+        absence = valid_absence.eligibility_absence
+        assert manifest_eligibility is not None
+        assert absence is not None
+        fabricated_absence = replace(absence, _verification_seal=object())
+        different_absence = replace(absence)
+        cases = {
+            "manifest without eligibility": replace(
+                valid_manifest,
+                eligibility=None,
+            ),
+            "manifest with absence": replace(
+                valid_manifest,
+                eligibility_absence=absence,
+            ),
+            "manifest with absence validation kind": replace(
+                valid_manifest,
+                validation=replace(
+                    manifest_validation,
+                    kind="final-eligibility-absence-attestation",
+                ),
+            ),
+            "manifest with validation-bound absence": replace(
+                valid_manifest,
+                validation=replace(
+                    manifest_validation,
+                    final_eligibility_absence=absence,
+                ),
+            ),
+            "manifest with missing validation digest": replace(
+                valid_manifest,
+                validation=replace(
+                    manifest_validation,
+                    eligibility_evidence_digest=None,
+                ),
+            ),
+            "manifest with digest mismatch": replace(
+                valid_manifest,
+                eligibility=replace(
+                    manifest_eligibility,
+                    evidence_digest="0" * 64,
+                ),
+            ),
+            "absence with eligibility": replace(
+                valid_absence,
+                eligibility=manifest_eligibility,
+            ),
+            "absence without authority": replace(
+                valid_absence,
+                eligibility_absence=None,
+            ),
+            "absence without validation-bound authority": replace(
+                valid_absence,
+                validation=replace(
+                    absence_validation,
+                    final_eligibility_absence=None,
+                ),
+            ),
+            "absence with unsealed authority": replace(
+                valid_absence,
+                eligibility_absence=fabricated_absence,
+                validation=replace(
+                    absence_validation,
+                    final_eligibility_absence=fabricated_absence,
+                ),
+            ),
+            "absence with manifest validation kind": replace(
+                valid_absence,
+                validation=replace(absence_validation, kind="attestation"),
+            ),
+            "absence with validation digest": replace(
+                valid_absence,
+                validation=replace(
+                    absence_validation,
+                    eligibility_evidence_digest="0" * 64,
+                ),
+            ),
+            "absence with reviewed threads": replace(
+                valid_absence,
+                reviewed=replace(
+                    valid_absence.reviewed,
+                    thread_ids=frozenset(("PRRT_FINAL_THREAD",)),
+                ),
+            ),
+            "absence with different validation authority": replace(
+                valid_absence,
+                eligibility_absence=different_absence,
+            ),
+            "unknown mode": replace(valid_absence, eligibility_mode="UNKNOWN"),
+        }
+        for label, boundary in cases.items():
+            with self.subTest(label=label), self.assertRaises(
+                MODULE.ResolutionError
+            ):
+                MODULE.require_late_target_origin(
+                    boundary,
+                    "PRRT_LATE_TARGET",
+                )
+
+    def test_valid_final_feedback_boundary_shapes_reach_origin_guard(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as manifest_directory,
+            tempfile.TemporaryDirectory() as absence_directory,
+        ):
+            manifest_root = Path(manifest_directory)
+            _entry, seed_reviewed, _receipt, _attestation = (
+                final_eligibility_absence_fixture(manifest_directory)
+            )
+            manifest = eligibility_payload(seed_reviewed, ())
+            manifest_entry, reviewed, _receipt, attestation = (
+                final_eligibility_absence_fixture(
+                    manifest_directory,
+                    eligibility=manifest,
+                )
+            )
+            with mock.patch.object(
+                MODULE,
+                "_load_repository_entry",
+                return_value=manifest_entry,
+            ):
+                manifest_boundary = load_final_feedback_boundary(
+                    repository="SecPal/.github",
+                    delivery_issue=810,
+                    number=821,
+                    expected_head=attestation["head_sha"],
+                    final_reviewed_state_path=manifest_root / "reviewed.json",
+                    expected_final_reviewed_state_digest=reviewed["state_digest"],
+                    final_validation_evidence_path=manifest_root
+                    / "attestation.json",
+                    final_eligibility_evidence_path=manifest_root
+                    / "eligibility.json",
+                )
+            absence_root = Path(absence_directory)
+            absence_entry, reviewed, _receipt, attestation = (
+                final_eligibility_absence_fixture(absence_directory)
+            )
+            with mock.patch.object(
+                MODULE,
+                "_load_repository_entry",
+                return_value=absence_entry,
+            ):
+                absence_boundary = load_final_feedback_boundary(
+                    repository="SecPal/.github",
+                    delivery_issue=810,
+                    number=821,
+                    expected_head=attestation["head_sha"],
+                    final_reviewed_state_path=absence_root / "reviewed.json",
+                    expected_final_reviewed_state_digest=reviewed["state_digest"],
+                    final_validation_evidence_path=absence_root / "attestation.json",
+                    final_eligibility_evidence_path=None,
+                )
+        MODULE.require_late_target_origin(manifest_boundary, "PRRT_LATE_TARGET")
+        MODULE.require_late_target_origin(absence_boundary, "PRRT_LATE_TARGET")
+
+    def test_final_eligibility_absence_directly_rejects_ready_attestations(
+        self,
+    ) -> None:
+        for kind in (
+            "READY_INTEGRATION_VALIDATION_ATTESTATION",
+            "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION",
+        ):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                entry, reviewed_payload, _receipt, attestation = (
+                    final_eligibility_absence_fixture(directory)
+                )
+                absence = MODULE._load_final_eligibility_absence(
+                    entry,
+                    repository="SecPal/.github",
+                    delivery_issue=810,
+                    pull_request=821,
+                    final_head_sha=attestation["head_sha"],
+                )
+                reviewed = MODULE.load_reviewed_state(
+                    root / "reviewed.json",
+                    "SecPal/.github",
+                    821,
+                    reviewed_payload["state_digest"],
+                    (),
+                )
+                ready = {**attestation, "kind": kind}
+                (root / "ready.json").write_text(
+                    json.dumps(ready),
+                    encoding="utf-8",
+                )
+                with mock.patch.object(
+                    MODULE,
+                    "_load_repository_entry",
+                    return_value=entry,
+                ), self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "rejects Ready integration",
+                ):
+                    load_validation_evidence(
+                        root / "ready.json",
+                        "SecPal/.github",
+                        attestation["head_sha"],
+                        reviewed,
+                        final_eligibility_absence=absence,
+                    )
+
+    def test_validation_digest_none_is_confined_to_absence_kind(self) -> None:
+        reviewed = MODULE.ReviewedState(
+            "a" * 40,
+            "b" * 64,
+            "c" * 64,
+            {},
+            frozenset(),
+            {},
+        )
+        for kind in ("attestation", "eligibility-bound-ready-integration"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                validation = MODULE.ValidationEvidence(
+                    kind,
+                    "d" * 64,
+                    "e" * 40,
+                    "f" * 64,
+                    None,
+                )
+                with self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "validation evidence binding is invalid or stale",
+                ):
+                    MODULE.verify_local_fix_commit(
+                        Path(directory),
+                        "SecPal/api",
+                        "e" * 40,
+                        reviewed,
+                        validation,
+                    )
+
+    def test_cli_rejects_caller_injected_absence_facts(self) -> None:
+        with self.assertRaises(SystemExit):
+            MODULE.parse_args([
+                "--repo", "SecPal/.github", "--pr", "821", "--repo-root", ".",
+                "--expected-head", "3bd4dcd08c0c1b9852eeff487c0ecbc2102b02d9",
+                "--reviewed-state", "reviewed.json", "--expected-reviewed-state-digest", "8" * 64,
+                "--validation-evidence", "attestation.json", "--delivery-issue", "810",
+                "--late-classification-evidence", "classification.json",
+                "--late-classification-signature", "classification.sig",
+                "--late-disposition-evidence", "disposition.json",
+                "--late-disposition-signature", "disposition.sig",
+                "--thread-id", "PRRT_target", "--expected-empty",
+            ])
+
+    def test_late_disposition_absence_artifact_binds_recovery_not_manifest(
+        self,
+    ) -> None:
+        signer = MODULE.late_disposition.SignerIdentity(
+            "ssh", "SHA256:fixtureDeliverySigner"
+        )
+        artifact = late_disposition_payload(
+            {
+                "head_sha": "c" * 40,
+                "validated_tree_sha": "f" * 40,
+                "validation_receipt_digest": "a" * 64,
+                "attestation_digest": "b" * 64,
+                "eligibility_evidence_digest": "e" * 64,
+            }
+        )
+        artifact["schema_version"] = "1.1"
+        artifact.pop("final_eligibility_evidence_digest")
+        artifact["final_eligibility_status"] = (
+            "NO_ELIGIBILITY_WAS_AUTHENTICATED_AT_FINAL_VALIDATION"
+        )
+        artifact["final_eligibility_absence_recovery_digest"] = "7" * 64
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact_path = root / "late.json"
+            signature_path = root / "late.sig"
+            artifact_path.write_bytes(
+                MODULE.late_disposition.canonical_json_bytes(artifact)
+            )
+            signature_path.write_text("fixture", encoding="utf-8")
+            with mock.patch.object(
+                MODULE.late_disposition,
+                "verify_detached_signature",
+                return_value=artifact_path.read_bytes(),
+            ):
+                parsed = MODULE.late_disposition.parse_artifact(
+                    artifact_path,
+                    signature_path,
+                    expected_signer=signer,
+                    repository="SecPal/api",
+                    delivery_issue_number=724,
+                    pull_request_number=123,
+                    head_sha="c" * 40,
+                    validated_tree_sha="f" * 40,
+                    validation_receipt_digest=artifact[
+                        "validation_receipt_digest"
+                    ],
+                    validation_attestation_digest=artifact[
+                        "validation_attestation_digest"
+                    ],
+                    final_eligibility_evidence_digest=None,
+                    final_eligibility_absence_recovery_digest="7" * 64,
+                    thread_ids=("PRRT_LATE_NON_BLOCKING",),
+                )
+        self.assertEqual(parsed.threads[0].thread_id, "PRRT_LATE_NON_BLOCKING")
+
+        informational = copy.deepcopy(artifact)
+        informational["schema_version"] = "1.3"
+        informational["threads"][0]["classification"] = "INFORMATIONAL"
+        informational["threads"][0]["disposition"] = "NON_ACTIONABLE"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact_path = root / "late.json"
+            signature_path = root / "late.sig"
+            artifact_path.write_bytes(
+                MODULE.late_disposition.canonical_json_bytes(informational)
+            )
+            signature_path.write_text("fixture", encoding="utf-8")
+            with mock.patch.object(
+                MODULE.late_disposition,
+                "verify_detached_signature",
+                return_value=artifact_path.read_bytes(),
+            ):
+                parsed = MODULE.late_disposition.parse_artifact(
+                    artifact_path,
+                    signature_path,
+                    expected_signer=signer,
+                    repository="SecPal/api",
+                    delivery_issue_number=724,
+                    pull_request_number=123,
+                    head_sha="c" * 40,
+                    validated_tree_sha="f" * 40,
+                    validation_receipt_digest=informational[
+                        "validation_receipt_digest"
+                    ],
+                    validation_attestation_digest=informational[
+                        "validation_attestation_digest"
+                    ],
+                    final_eligibility_evidence_digest=None,
+                    final_eligibility_absence_recovery_digest="7" * 64,
+                    thread_ids=("PRRT_LATE_NON_BLOCKING",),
+                )
+        self.assertEqual(parsed.threads[0].classification, "INFORMATIONAL")
+
+        artifact["final_eligibility_evidence_digest"] = "e" * 64
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact_path = root / "late.json"
+            signature_path = root / "late.sig"
+            artifact_path.write_bytes(
+                MODULE.late_disposition.canonical_json_bytes(artifact)
+            )
+            signature_path.write_text("fixture", encoding="utf-8")
+            with mock.patch.object(
+                MODULE.late_disposition,
+                "verify_detached_signature",
+                return_value=artifact_path.read_bytes(),
+            ), self.assertRaisesRegex(
+                MODULE.late_disposition.LateDispositionError,
+                "shape is unsupported",
+            ):
+                MODULE.late_disposition.parse_artifact(
+                    artifact_path,
+                    signature_path,
+                    expected_signer=signer,
+                    repository="SecPal/api",
+                    delivery_issue_number=724,
+                    pull_request_number=123,
+                    head_sha="c" * 40,
+                    validated_tree_sha="f" * 40,
+                    validation_receipt_digest=artifact["validation_receipt_digest"],
+                    validation_attestation_digest=artifact["validation_attestation_digest"],
+                    final_eligibility_evidence_digest=None,
+                    final_eligibility_absence_recovery_digest="7" * 64,
+                    thread_ids=("PRRT_LATE_NON_BLOCKING",),
+                )
+
+    def test_late_disposition_expected_mode_replay_fails_closed(self) -> None:
+        signer = MODULE.late_disposition.SignerIdentity(
+            "ssh",
+            "SHA256:fixtureDeliverySigner",
+        )
+        manifest = late_disposition_payload(
+            {
+                "head_sha": "c" * 40,
+                "validated_tree_sha": "f" * 40,
+                "validation_receipt_digest": "a" * 64,
+                "attestation_digest": "b" * 64,
+                "eligibility_evidence_digest": "e" * 64,
+            }
+        )
+        absence = copy.deepcopy(manifest)
+        absence["schema_version"] = "1.1"
+        absence.pop("final_eligibility_evidence_digest")
+        absence["final_eligibility_status"] = (
+            "NO_ELIGIBILITY_WAS_AUTHENTICATED_AT_FINAL_VALIDATION"
+        )
+        absence["final_eligibility_absence_recovery_digest"] = "7" * 64
+        neither = copy.deepcopy(absence)
+        neither.pop("final_eligibility_status")
+        neither.pop("final_eligibility_absence_recovery_digest")
+        mixed = copy.deepcopy(absence)
+        mixed["final_eligibility_evidence_digest"] = "e" * 64
+        cases = (
+            ("manifest as absence", manifest, None, "7" * 64),
+            ("absence as manifest", absence, "e" * 64, None),
+            ("neither mode shape", neither, None, "7" * 64),
+            ("mixed mode shape", mixed, None, "7" * 64),
+        )
+        for label, artifact, manifest_digest, recovery_digest in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                artifact_path = root / "late.json"
+                signature_path = root / "late.sig"
+                artifact_path.write_bytes(
+                    MODULE.late_disposition.canonical_json_bytes(artifact)
+                )
+                signature_path.write_text("fixture", encoding="utf-8")
+                with mock.patch.object(
+                    MODULE.late_disposition,
+                    "verify_detached_signature",
+                    return_value=artifact_path.read_bytes(),
+                ), self.assertRaisesRegex(
+                    MODULE.late_disposition.LateDispositionError,
+                    "shape is unsupported",
+                ):
+                    MODULE.late_disposition.parse_artifact(
+                        artifact_path,
+                        signature_path,
+                        expected_signer=signer,
+                        repository="SecPal/api",
+                        delivery_issue_number=724,
+                        pull_request_number=123,
+                        head_sha="c" * 40,
+                        validated_tree_sha="f" * 40,
+                        validation_receipt_digest="a" * 64,
+                        validation_attestation_digest="b" * 64,
+                        final_eligibility_evidence_digest=manifest_digest,
+                        final_eligibility_absence_recovery_digest=recovery_digest,
+                        thread_ids=("PRRT_LATE_NON_BLOCKING",),
+                    )
+
+    def test_late_classification_cannot_cross_final_eligibility_modes(self) -> None:
+        def sign(
+            artifact: dict[str, Any],
+            artifact_output: Path,
+            signature_output: Path,
+            **_kwargs: Any,
+        ) -> None:
+            artifact_output.write_bytes(
+                MODULE.late_disposition.canonical_json_bytes(artifact)
+            )
+            signature_output.write_text("fixture", encoding="utf-8")
+
+        def create_classification(
+            root: Path,
+            output: Path,
+            entry: dict[str, Any],
+            reviewed: dict[str, Any],
+            receipt: dict[str, Any],
+            attestation: dict[str, Any],
+            eligibility_path: Path | None,
+        ) -> FakeGit:
+            git = FakeGit(
+                expected_head=attestation["head_sha"],
+                reviewed_head=reviewed["head_sha"],
+                tree=attestation["validated_tree_sha"],
+                receipt_digest=receipt["receipt_digest"],
+                repository="SecPal/.github",
+            )
+            body = "Exact independently classified non-blocking finding."
+            response = target_response(
+                "PRRT_LATE_CROSS_MODE",
+                head=attestation["head_sha"],
+                repository="SecPal/.github",
+                number=821,
+                comments=[("PRRC_LATE_CROSS_MODE", body, None)],
+            )
+            with (
+                mock.patch.object(MODULE, "_load_repository_entry", return_value=entry),
+                mock.patch.object(MODULE, "_run_git", git),
+                mock.patch.object(MODULE, "_run_gh", FakeGh([response, response])),
+                mock.patch.object(
+                    MODULE,
+                    "_late_signing_key",
+                    return_value="/fixture/key",
+                ),
+                mock.patch.object(
+                    MODULE.late_disposition,
+                    "sign_artifact",
+                    side_effect=sign,
+                ),
+            ):
+                MODULE.create_late_classification_artifact(
+                    "SecPal/.github",
+                    810,
+                    821,
+                    attestation["head_sha"],
+                    repository_root=root,
+                    final_reviewed_state_path=root / "reviewed.json",
+                    expected_final_reviewed_state_digest=reviewed["state_digest"],
+                    final_validation_evidence_path=root / "attestation.json",
+                    final_eligibility_evidence_path=eligibility_path,
+                    thread_id="PRRT_LATE_CROSS_MODE",
+                    finding_id="LF-LATE-CROSS-MODE",
+                    finding_evidence_digest=hashlib.sha256(body.encode()).hexdigest(),
+                    classification="INVALID_FALSE_OR_MISLEADING",
+                    disposition="DISPROVEN_WITH_EVIDENCE",
+                    technically_blocking=False,
+                    technical_blockers=(),
+                    output_path=output / "classification.json",
+                    signature_output_path=output / "classification.sig",
+                )
+            return git
+
+        for source_mode in ("manifest", "absence"):
+            with (
+                self.subTest(source_mode=source_mode),
+                tempfile.TemporaryDirectory() as directory,
+                tempfile.TemporaryDirectory() as output_directory,
+            ):
+                root = Path(directory)
+                output = Path(output_directory)
+                if source_mode == "manifest":
+                    _entry, seed, _receipt, _attestation = (
+                        final_eligibility_absence_fixture(directory)
+                    )
+                    manifest = eligibility_payload(seed, ())
+                    entry, reviewed, receipt, attestation = (
+                        final_eligibility_absence_fixture(
+                            directory,
+                            eligibility=manifest,
+                        )
+                    )
+                    source_path = root / "eligibility.json"
+                    attempted_path = None
+                    error = "rejects an authenticated eligibility digest"
+                else:
+                    entry, reviewed, receipt, attestation = (
+                        final_eligibility_absence_fixture(directory)
+                    )
+                    manifest = eligibility_payload(reviewed, ())
+                    (root / "eligibility.json").write_text(
+                        json.dumps(manifest),
+                        encoding="utf-8",
+                    )
+                    source_path = None
+                    attempted_path = root / "eligibility.json"
+                    error = "eligibility digest is missing or malformed"
+                git = create_classification(
+                    root,
+                    output,
+                    entry,
+                    reviewed,
+                    receipt,
+                    attestation,
+                    source_path,
+                )
+                with (
+                    mock.patch.object(
+                        MODULE,
+                        "_load_repository_entry",
+                        return_value=entry,
+                    ),
+                    mock.patch.object(MODULE, "_run_git", git),
+                    self.assertRaisesRegex(MODULE.ResolutionError, error),
+                ):
+                    MODULE.create_late_disposition_artifact(
+                        "SecPal/.github",
+                        810,
+                        821,
+                        attestation["head_sha"],
+                        repository_root=root,
+                        final_reviewed_state_path=root / "reviewed.json",
+                        expected_final_reviewed_state_digest=reviewed["state_digest"],
+                        final_validation_evidence_path=root / "attestation.json",
+                        final_eligibility_evidence_path=attempted_path,
+                        classification_evidence_path=output
+                        / "classification.json",
+                        classification_signature_path=output
+                        / "classification.sig",
+                        output_path=output / "disposition.json",
+                        signature_output_path=output / "disposition.sig",
+                    )
+
+    def test_exact_absence_boundary_authenticates_late_target_origin(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            tempfile.TemporaryDirectory() as output_directory,
+        ):
+            root = Path(directory)
+            output = Path(output_directory)
+            entry, reviewed, receipt, attestation = final_eligibility_absence_fixture(
+                directory
+            )
+            git = FakeGit(
+                expected_head=attestation["head_sha"],
+                reviewed_head=reviewed["head_sha"],
+                tree=attestation["validated_tree_sha"],
+                receipt_digest=receipt["receipt_digest"],
+                repository="SecPal/.github",
+            )
+            body = "Exact independently classified non-blocking finding."
+            response = target_response(
+                "PRRT_LATE_ABSENCE_TARGET",
+                head=attestation["head_sha"],
+                repository="SecPal/.github",
+                number=821,
+                comments=[("PRRC_LATE_ABSENCE_ROOT", body, None)],
+            )
+
+            def sign(
+                artifact: dict[str, Any],
+                artifact_output: Path,
+                signature_output: Path,
+                **_kwargs: Any,
+            ) -> None:
+                artifact_output.write_bytes(
+                    MODULE.late_disposition.canonical_json_bytes(artifact)
+                )
+                signature_output.write_text("fixture", encoding="utf-8")
+
+            with (
+                mock.patch.object(MODULE, "_load_repository_entry", return_value=entry),
+                mock.patch.object(MODULE, "_run_git", git),
+                mock.patch.object(MODULE, "_run_gh", FakeGh([response, response])),
+                mock.patch.object(MODULE, "_late_signing_key", return_value="/fixture/key"),
+                mock.patch.object(
+                    MODULE.late_disposition, "sign_artifact", side_effect=sign
+                ),
+            ):
+                result = MODULE.create_late_classification_artifact(
+                    "SecPal/.github",
+                    810,
+                    821,
+                    attestation["head_sha"],
+                    repository_root=root,
+                    final_reviewed_state_path=root / "reviewed.json",
+                    expected_final_reviewed_state_digest=reviewed["state_digest"],
+                    final_validation_evidence_path=root / "attestation.json",
+                    final_eligibility_evidence_path=None,
+                    thread_id="PRRT_LATE_ABSENCE_TARGET",
+                    finding_id="LF-LATE-ABSENCE",
+                    finding_evidence_digest=hashlib.sha256(body.encode()).hexdigest(),
+                    classification="INVALID_FALSE_OR_MISLEADING",
+                    disposition="DISPROVEN_WITH_EVIDENCE",
+                    technically_blocking=False,
+                    technical_blockers=(),
+                    output_path=output / "classification.json",
+                    signature_output_path=output / "classification.sig",
+                )
+            self.assertEqual(result["status"], "LATE_CLASSIFICATION_AUTHENTICATED")
+            self.assertFalse((root / "eligibility.json").exists())
+
+            git.signer_fingerprint = "SHA256:substitutedSigner"
+            with mock.patch.object(MODULE, "_load_repository_entry", return_value=entry), mock.patch.object(
+                MODULE, "_run_git", git
+            ), self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "absence recovery signer is invalid or stale",
+            ):
+                boundary = load_final_feedback_boundary(
+                    repository="SecPal/.github", delivery_issue=810, number=821,
+                    expected_head=attestation["head_sha"],
+                    final_reviewed_state_path=root / "reviewed.json",
+                    expected_final_reviewed_state_digest=reviewed["state_digest"],
+                    final_validation_evidence_path=root / "attestation.json",
+                    final_eligibility_evidence_path=None,
+                )
+                MODULE.verify_local_fix_commit(
+                    root, "SecPal/.github", attestation["head_sha"],
+                    boundary.reviewed, boundary.validation,
+                    require_signer_identity=True,
+                )
+
+    def test_absence_boundary_late_evidence_resolver_dry_run_roundtrip(
+        self,
+    ) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            tempfile.TemporaryDirectory() as output_directory,
+        ):
+            root = Path(directory)
+            output = Path(output_directory)
+            entry, reviewed, receipt, attestation = (
+                final_eligibility_absence_fixture(directory)
+            )
+            recovery_digest = entry["final_eligibility_absence_recoveries"][0][
+                "recovery_digest"
+            ]
+            git = FakeGit(
+                expected_head=attestation["head_sha"],
+                reviewed_head=reviewed["head_sha"],
+                tree=attestation["validated_tree_sha"],
+                receipt_digest=receipt["receipt_digest"],
+                repository="SecPal/.github",
+            )
+            body = "Exact independently classified non-blocking finding."
+            thread_id = "PRRT_LATE_ABSENCE_ROUNDTRIP"
+            response = target_response(
+                thread_id,
+                head=attestation["head_sha"],
+                repository="SecPal/.github",
+                number=821,
+                comments=[("PRRC_LATE_ABSENCE_ROUNDTRIP", body, None)],
+            )
+            github = FakeGh([response, response, response, response, response])
+
+            def sign(
+                artifact: dict[str, Any],
+                artifact_output: Path,
+                signature_output: Path,
+                **_kwargs: Any,
+            ) -> None:
+                artifact_output.write_bytes(
+                    MODULE.late_disposition.canonical_json_bytes(artifact)
+                )
+                signature_output.write_text("fixture", encoding="utf-8")
+
+            def verify_signature(
+                artifact_path: Path,
+                _signature_path: Path,
+                _expected_signer: Any,
+                **_kwargs: Any,
+            ) -> bytes:
+                return artifact_path.read_bytes()
+
+            common = {
+                "repository_root": root,
+                "final_reviewed_state_path": root / "reviewed.json",
+                "expected_final_reviewed_state_digest": reviewed["state_digest"],
+                "final_validation_evidence_path": root / "attestation.json",
+                "final_eligibility_evidence_path": None,
+            }
+            with (
+                mock.patch.object(MODULE, "_load_repository_entry", return_value=entry),
+                mock.patch.object(MODULE, "_run_git", git),
+                mock.patch.object(MODULE, "_run_gh", github),
+                mock.patch.object(
+                    MODULE,
+                    "_late_signing_key",
+                    return_value="/fixture/key",
+                ),
+                mock.patch.object(
+                    MODULE.late_disposition,
+                    "sign_artifact",
+                    side_effect=sign,
+                ),
+                mock.patch.object(
+                    MODULE.late_disposition,
+                    "verify_detached_signature",
+                    side_effect=verify_signature,
+                ),
+            ):
+                classification = MODULE.create_late_classification_artifact(
+                    "SecPal/.github",
+                    810,
+                    821,
+                    attestation["head_sha"],
+                    **common,
+                    thread_id=thread_id,
+                    finding_id="LF-LATE-ABSENCE-ROUNDTRIP",
+                    finding_evidence_digest=hashlib.sha256(body.encode()).hexdigest(),
+                    classification="INVALID_FALSE_OR_MISLEADING",
+                    disposition="DISPROVEN_WITH_EVIDENCE",
+                    technically_blocking=False,
+                    technical_blockers=(),
+                    output_path=output / "classification.json",
+                    signature_output_path=output / "classification.sig",
+                )
+                disposition = MODULE.create_late_disposition_artifact(
+                    "SecPal/.github",
+                    810,
+                    821,
+                    attestation["head_sha"],
+                    **common,
+                    classification_evidence_path=output / "classification.json",
+                    classification_signature_path=output / "classification.sig",
+                    output_path=output / "disposition.json",
+                    signature_output_path=output / "disposition.sig",
+                )
+                result = MODULE.resolve_late_disposition_threads(
+                    "SecPal/.github",
+                    810,
+                    821,
+                    attestation["head_sha"],
+                    (thread_id,),
+                    apply=False,
+                    **common,
+                    late_classification_evidence_path=output
+                    / "classification.json",
+                    late_classification_signature_path=output
+                    / "classification.sig",
+                    late_disposition_evidence_path=output / "disposition.json",
+                    late_disposition_signature_path=output / "disposition.sig",
+                )
+                with self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "must cover requested threads exactly",
+                ):
+                    MODULE.resolve_late_disposition_threads(
+                        "SecPal/.github",
+                        810,
+                        821,
+                        attestation["head_sha"],
+                        ("PRRT_SUBSTITUTED_TARGET",),
+                        apply=False,
+                        **common,
+                        late_classification_evidence_path=output
+                        / "classification.json",
+                        late_classification_signature_path=output
+                        / "classification.sig",
+                        late_disposition_evidence_path=output / "disposition.json",
+                        late_disposition_signature_path=output / "disposition.sig",
+                    )
+
+            disposition_payload = json.loads(
+                (output / "disposition.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                classification["status"],
+                "LATE_CLASSIFICATION_AUTHENTICATED",
+            )
+            self.assertEqual(disposition["status"], "LATE_DISPOSITION_AUTHENTICATED")
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["mode"], "dry-run")
+            self.assertEqual(result["pending"], [thread_id])
+            self.assertEqual(disposition_payload["schema_version"], "1.1")
+            self.assertEqual(
+                disposition_payload[
+                    "final_eligibility_absence_recovery_digest"
+                ],
+                recovery_digest,
+            )
+            self.assertEqual(
+                disposition_payload["final_eligibility_status"],
+                "NO_ELIGIBILITY_WAS_AUTHENTICATED_AT_FINAL_VALIDATION",
+            )
+            self.assertNotIn(
+                "final_eligibility_evidence_digest",
+                disposition_payload,
+            )
+            self.assertFalse((root / "eligibility.json").exists())
+            self.assertFalse(
+                any("mutation" in " ".join(call).lower() for call in github.calls)
+            )
 
     def test_lifecycle_helper_import_ignores_repository_root_shadow(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1387,6 +3111,39 @@ class ResolveFixedThreadsTests(TestCase):
                     reviewed,
                 )
 
+    def test_validation_loader_retains_continuation_receipt_digest(self) -> None:
+        thread_id = "PRRT_CONTINUATION_LOADER"
+        reviewed_payload = reviewed_state_payload(thread_id, [])
+        eligibility = eligibility_payload(reviewed_payload, (thread_id,))
+        _receipt, attestation = continuation_validation_payloads(
+            reviewed_payload, MODULE._digest_json(eligibility)
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reviewed_path = root / "reviewed.json"
+            attestation_path = root / "attestation.json"
+            reviewed_path.write_text(json.dumps(reviewed_payload), encoding="utf-8")
+            attestation_path.write_text(json.dumps(attestation), encoding="utf-8")
+            reviewed = MODULE.load_reviewed_state(
+                reviewed_path,
+                reviewed_payload["repository"],
+                reviewed_payload["pull_request_number"],
+                reviewed_payload["state_digest"],
+                (thread_id,),
+            )
+
+            validation = load_validation_evidence(
+                attestation_path,
+                reviewed_payload["repository"],
+                attestation["head_sha"],
+                reviewed,
+            )
+
+        self.assertEqual(
+            validation.attestation["exceptional_continuation_evidence_digest"],
+            "8" * 64,
+        )
+
     def test_recovery_authority_consumer_cross_binds_shared_verifier(self) -> None:
         thread_id = "PRRT_RECOVERY_CONSUMER"
         reviewed_payload = reviewed_state_payload(thread_id, [])
@@ -1512,6 +3269,173 @@ class ResolveFixedThreadsTests(TestCase):
                     recovery_evidence_path=recovery_path,
                     recovery_authorization_path=authorization_path,
                 )
+
+    def test_continuation_authority_consumer_retains_exact_evidence_chain(self) -> None:
+        continuation_digest = "9" * 64
+        validation = MODULE.ValidationEvidence(
+            kind="attestation",
+            evidence_digest="1" * 64,
+            validated_tree_sha="2" * 40,
+            validation_receipt_digest="3" * 64,
+            eligibility_evidence_digest="4" * 64,
+            attestation={
+                "exceptional_continuation_evidence_digest": continuation_digest
+            },
+        )
+        reviewed = MODULE.ReviewedState(
+            head_sha="5" * 40,
+            state_digest="6" * 64,
+            feedback_digest="7" * 64,
+            targets={},
+            thread_ids=frozenset(),
+            payload={"schema_version": "1.0"},
+        )
+        eligibility_payload = {"schema_version": "1.1"}
+        eligibility = MODULE.EligibilityEvidence(
+            MODULE._digest_json(eligibility_payload),
+            MODULE._canonical_json_bytes(eligibility_payload),
+            (),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence_path = root / "continuation.json"
+            authorization_path = root / "authorization.json"
+            successor_path = root / "successor-safety.json"
+            evidence_path.write_text(
+                '{"schema_version":"1.0"}', encoding="utf-8"
+            )
+            authorization_path.write_bytes(b"signed continuation authorization")
+            successor_path.write_text(
+                '{"schema_version":"1.0"}', encoding="utf-8"
+            )
+            verifier = mock.Mock(
+                return_value=mock.Mock(continuation_digest=continuation_digest)
+            )
+            with mock.patch.object(
+                MODULE.lifecycle_orchestration,
+                "verify_exceptional_continuation_authority",
+                verifier,
+            ):
+                MODULE.verify_continuation_bound_source_authority(
+                    validation,
+                    reviewed,
+                    eligibility,
+                    repository_root=root,
+                    repository="SecPal/.github",
+                    delivery_issue=883,
+                    pull_request=884,
+                    resulting_head_sha="8" * 40,
+                    continuation_evidence_path=evidence_path,
+                    continuation_authorization_path=authorization_path,
+                    successor_safety_evidence_path=successor_path,
+                )
+
+        verifier.assert_called_once_with(
+            {"schema_version": "1.0"},
+            orchestration_authorization=b"signed continuation authorization",
+            reviewed_state_evidence={"schema_version": "1.0"},
+            eligibility_evidence=eligibility_payload,
+            successor_safety_evidence={"schema_version": "1.0"},
+            repository_root=root,
+            repository="SecPal/.github",
+            delivery_issue=883,
+            pull_request=884,
+            resulting_head_sha="8" * 40,
+        )
+
+    def test_continuation_authority_consumer_rejects_missing_or_substituted_kind(self) -> None:
+        reviewed = MODULE.ReviewedState(
+            head_sha="5" * 40,
+            state_digest="6" * 64,
+            feedback_digest="7" * 64,
+            targets={},
+            thread_ids=frozenset(),
+            payload={},
+        )
+        eligibility = MODULE.EligibilityEvidence(
+            MODULE._digest_json({}), MODULE._canonical_json_bytes({}), ()
+        )
+        ordinary = MODULE.ValidationEvidence(
+            kind="attestation",
+            evidence_digest="1" * 64,
+            validated_tree_sha="2" * 40,
+            validation_receipt_digest="3" * 64,
+            eligibility_evidence_digest="4" * 64,
+            attestation={"exceptional_recovery_evidence_digest": "9" * 64},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence_path = root / "continuation.json"
+            authorization_path = root / "authorization.json"
+            evidence_path.write_text("{}", encoding="utf-8")
+            authorization_path.write_bytes(b"signed")
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "rejects Exceptional Continuation authority",
+            ):
+                MODULE.verify_continuation_bound_source_authority(
+                    ordinary,
+                    reviewed,
+                    eligibility,
+                    repository_root=root,
+                    repository="SecPal/.github",
+                    delivery_issue=883,
+                    pull_request=884,
+                    resulting_head_sha="8" * 40,
+                    continuation_evidence_path=evidence_path,
+                    continuation_authorization_path=authorization_path,
+                )
+
+    def test_reanchored_continuation_cannot_authorize_any_thread_resolution(self) -> None:
+        validation = MODULE.ValidationEvidence(
+            kind="attestation",
+            evidence_digest="1" * 64,
+            validated_tree_sha="2" * 40,
+            validation_receipt_digest="3" * 64,
+            eligibility_evidence_digest="4" * 64,
+            attestation={"exceptional_continuation_evidence_digest": "5" * 64},
+        )
+        reviewed = MODULE.ReviewedState(
+            head_sha="6" * 40,
+            state_digest="7" * 64,
+            feedback_digest="8" * 64,
+            targets={},
+            thread_ids=frozenset(),
+            payload={},
+        )
+        eligibility = MODULE.EligibilityEvidence(
+            MODULE._digest_json({}), MODULE._canonical_json_bytes({}), ()
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence_path = root / "continuation.json"
+            authorization_path = root / "authorization.json"
+            evidence_path.write_text(
+                '{"schema_version":"1.1","reanchor":{}}', encoding="utf-8"
+            )
+            authorization_path.write_bytes(b"signed")
+            with (
+                mock.patch.object(
+                    MODULE.lifecycle_orchestration,
+                    "verify_exceptional_continuation_authority",
+                ) as verifier,
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError, "no thread-resolution authority"
+                ),
+            ):
+                MODULE.verify_continuation_bound_source_authority(
+                    validation,
+                    reviewed,
+                    eligibility,
+                    repository_root=root,
+                    repository="SecPal/.github",
+                    delivery_issue=902,
+                    pull_request=901,
+                    resulting_head_sha="9" * 40,
+                    continuation_evidence_path=evidence_path,
+                    continuation_authorization_path=authorization_path,
+                )
+            verifier.assert_not_called()
 
     def test_recovery_bound_attestation_uses_canonical_source_verifier(self) -> None:
         thread_id = "PRRT_RECOVERY_BOUND"
@@ -1924,23 +3848,25 @@ class ResolveFixedThreadsTests(TestCase):
                     integration_path,
                 )
 
-    def test_historical_ready_integration_attestation_cannot_authorize_resolution(
+    def test_historical_ready_integration_requires_exact_receipt_for_source_authority(
         self,
     ) -> None:
         reviewed = reviewed_state_payload(
             "PRRT_HISTORICAL_INTEGRATION",
             [("PRRC_HISTORICAL_INTEGRATION", "Historical finding.", None)],
         )
-        payload = {
-            "schema_version": "1.1",
-            "kind": "READY_INTEGRATION_VALIDATION_ATTESTATION",
-            "head_sha": "c" * 40,
-        }
+        integration, _receipt, payload = integration_validation_payloads(
+            reviewed,
+            None,
+            expected_head="c" * 40,
+        )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "validation.json"
             reviewed_path = Path(directory) / "reviewed.json"
+            integration_path = Path(directory) / "integration.json"
             path.write_text(json.dumps(payload), encoding="utf-8")
             reviewed_path.write_text(json.dumps(reviewed), encoding="utf-8")
+            integration_path.write_text(json.dumps(integration), encoding="utf-8")
             state = MODULE.load_reviewed_state(
                 reviewed_path,
                 "SecPal/api",
@@ -1950,15 +3876,138 @@ class ResolveFixedThreadsTests(TestCase):
             )
             with self.assertRaisesRegex(
                 MODULE.ResolutionError,
-                "historical Ready integration attestation is not resolution authority",
+                "historical Ready integration requires its validation receipt",
             ):
                 load_validation_evidence(
                     path,
                     "SecPal/api",
                     "c" * 40,
                     state,
-                    Path(directory) / "integration.json",
+                    integration_path,
                 )
+
+    def test_historical_ready_source_and_detached_authority_resolve_exact_thread(
+        self,
+    ) -> None:
+        decisions = (
+            ("VALID_ACTIONABLE", "CORRECTED_AND_VERIFIED"),
+            ("INVALID_FALSE_OR_MISLEADING", "DISPROVEN_WITH_EVIDENCE"),
+        )
+        for classification, disposition in decisions:
+            with self.subTest(
+                classification=classification,
+                disposition=disposition,
+            ), tempfile.TemporaryDirectory() as directory:
+                result, github, git = run_late_resolution_fixture(
+                    directory,
+                    historical_ready_integration=True,
+                    final_reviewed_thread_id="PRRT_LATE_NON_BLOCKING",
+                    classification=classification,
+                    disposition=disposition,
+                )
+
+                self.assertEqual(result["status"], "success")
+                self.assertEqual(result["resolved"], ["PRRT_LATE_NON_BLOCKING"])
+                self.assertEqual(
+                    result["eligibility_path"], "authenticated_late_disposition"
+                )
+                self.assertEqual(
+                    sum(
+                        f"query={MODULE.RESOLVE_MUTATION}" in call
+                        for call in github.calls
+                    ),
+                    1,
+                )
+                self.assertFalse(
+                    any(call[0] in {"commit", "push"} for call in git.calls)
+                )
+                MODULE.evidence.validate_against_authoritative_schema(
+                    json.loads(
+                        (Path(directory) / "late-classification.json").read_text(
+                            encoding="utf-8"
+                        )
+                    ),
+                    ROOT
+                    / ".agents/skills/secpal-pr-review/references/late-classification.schema.json",
+                    "late classification evidence",
+                )
+                MODULE.evidence.validate_against_authoritative_schema(
+                    json.loads(
+                        (Path(directory) / "late-disposition.json").read_text(
+                            encoding="utf-8"
+                        )
+                    ),
+                    ROOT
+                    / ".agents/skills/secpal-pr-review/references/late-disposition.schema.json",
+                    "late-disposition evidence",
+                )
+
+    def test_historical_ready_source_eligibility_omission_is_exact(self) -> None:
+        mutations = {
+            "receipt null eligibility": lambda _integration, receipt, _attestation: (
+                receipt.update({"eligibility_evidence_digest": None})
+            ),
+            "receipt invented eligibility": lambda _integration, receipt, _attestation: (
+                receipt.update({"eligibility_evidence_digest": "e" * 64})
+            ),
+            "attestation null eligibility": lambda _integration, _receipt, attestation: (
+                attestation.update({"eligibility_evidence_digest": None})
+            ),
+            "attestation invented eligibility": lambda _integration, _receipt, attestation: (
+                attestation.update({"eligibility_evidence_digest": "e" * 64})
+            ),
+        }
+        for label, mutation in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                with self.assertRaises(MODULE.ResolutionError):
+                    run_late_resolution_fixture(
+                        directory,
+                        historical_ready_integration=True,
+                        historical_source_mutator=mutation,
+                    )
+
+    def test_historical_ready_source_is_not_standalone_resolution_authority(
+        self,
+    ) -> None:
+        arguments = [
+            "--repo",
+            "SecPal/api",
+            "--pr",
+            "123",
+            "--repo-root",
+            "/delivery",
+            "--expected-head",
+            "a" * 40,
+            "--reviewed-state",
+            "reviewed.json",
+            "--expected-reviewed-state-digest",
+            "b" * 64,
+            "--validation-evidence",
+            "attestation.json",
+            "--integration-evidence",
+            "integration.json",
+            "--integration-validation-receipt",
+            "receipt.json",
+            "--thread-id",
+            "PRRT_exampleOne",
+        ]
+        with redirect_stderr(StringIO()) as error, self.assertRaises(SystemExit):
+            MODULE.parse_args(arguments)
+        self.assertIn(
+            "historical integration receipt is valid only for late disposition",
+            error.getvalue(),
+        )
+
+    def test_historical_ready_source_rejects_fake_eligibility_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(
+            MODULE.ResolutionError,
+            "rejects supplied eligibility evidence",
+        ):
+            run_late_resolution_fixture(
+                directory,
+                historical_ready_integration=True,
+                historical_fake_eligibility=True,
+            )
 
     def test_eligibility_bound_ready_integration_authorizes_exact_thread(self) -> None:
         thread_id = "PRRT_INTEGRATION_ELIGIBLE"
@@ -2017,6 +4066,303 @@ class ResolveFixedThreadsTests(TestCase):
         self.assertEqual(result["pending"], [thread_id])
         self.assertEqual(result["status"], "success")
 
+    def test_ready_integration_translates_recoverable_authenticator_failure(
+        self,
+    ) -> None:
+        thread_id = "PRRT_INTEGRATION_AUTH_UNAVAILABLE"
+        reviewed = reviewed_state_payload(thread_id, [])
+        eligibility = eligibility_payload(reviewed, (thread_id,))
+        integration, receipt, attestation = integration_validation_payloads(
+            reviewed,
+            MODULE._digest_json(eligibility),
+            expected_head="c" * 40,
+        )
+        git = FakeGit(
+            expected_head=attestation["head_sha"],
+            reviewed_head=reviewed["head_sha"],
+            second_parent=reviewed["base_sha"],
+            tree=attestation["validated_tree_sha"],
+            receipt_digest=receipt["receipt_digest"],
+            integration_digest=MODULE.fast_path.digest_json(integration),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, value in (
+                ("reviewed.json", reviewed),
+                ("validation.json", attestation),
+                ("eligibility.json", eligibility),
+                ("integration.json", integration),
+            ):
+                (root / name).write_text(json.dumps(value), encoding="utf-8")
+            with (
+                mock.patch.object(MODULE, "_run_git", git),
+                mock.patch.object(
+                    MODULE.fast_path,
+                    "authenticate_integration_commit",
+                    side_effect=MODULE.fast_path.RecoverableLocalError(
+                        "integration commit verification is unavailable"
+                    ),
+                ),
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "integration commit verification is unavailable",
+                ),
+            ):
+                MODULE.resolve_threads(
+                    "SecPal/api",
+                    123,
+                    attestation["head_sha"],
+                    (thread_id,),
+                    apply=False,
+                    repository_root=root,
+                    reviewed_state_path=root / "reviewed.json",
+                    expected_reviewed_state_digest=reviewed["state_digest"],
+                    validation_evidence_path=root / "validation.json",
+                    eligibility_evidence_path=root / "eligibility.json",
+                    integration_evidence_path=root / "integration.json",
+                )
+
+    def test_eligibility_bound_ready_integration_rejects_wrong_actual_signer(
+        self,
+    ) -> None:
+        thread_id = "PRRT_INTEGRATION_WRONG_SIGNER"
+        comment = ("PRRC_INTEGRATION_ROOT", "Intentional protocol body.", None)
+        reviewed = reviewed_state_payload(thread_id, [comment])
+        eligibility = eligibility_payload(reviewed, (thread_id,))
+        integration, receipt, attestation = integration_validation_payloads(
+            reviewed,
+            MODULE._digest_json(eligibility),
+            expected_head="c" * 40,
+        )
+        git = FakeGit(
+            expected_head="c" * 40,
+            reviewed_head=reviewed["head_sha"],
+            second_parent=reviewed["base_sha"],
+            tree=attestation["validated_tree_sha"],
+            receipt_digest=receipt["receipt_digest"],
+            integration_digest=MODULE.fast_path.digest_json(integration),
+            signer_identity="other",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, value in (
+                ("reviewed.json", reviewed),
+                ("validation.json", attestation),
+                ("eligibility.json", eligibility),
+                ("integration.json", integration),
+            ):
+                (root / name).write_text(json.dumps(value), encoding="utf-8")
+            github = mock.Mock()
+            with (
+                mock.patch.object(MODULE, "_run_git", git),
+                mock.patch.object(MODULE, "_run_gh", github),
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError, "explicitly accepted identity"
+                ),
+            ):
+                MODULE.resolve_threads(
+                    "SecPal/api",
+                    123,
+                    "c" * 40,
+                    (thread_id,),
+                    apply=False,
+                    repository_root=root,
+                    reviewed_state_path=root / "reviewed.json",
+                    expected_reviewed_state_digest=reviewed["state_digest"],
+                    validation_evidence_path=root / "validation.json",
+                    eligibility_evidence_path=root / "eligibility.json",
+                    integration_evidence_path=root / "integration.json",
+                )
+            github.assert_not_called()
+
+    def test_ready_integration_source_authenticates_late_classification(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result, _signer = run_late_classification_origin_fixture(
+                directory,
+                reviewed_thread_id="PRRT_LATE_ORIGIN_TARGET",
+                eligibility_thread_ids=(),
+                ready_integration=True,
+                classification="INFORMATIONAL",
+                disposition="NON_ACTIONABLE",
+            )
+
+            delivery = root / "delivery"
+            output = root / "output"
+            reviewed = json.loads(
+                (delivery / "reviewed.json").read_text(encoding="utf-8")
+            )
+            attestation = json.loads(
+                (delivery / "validation.json").read_text(encoding="utf-8")
+            )
+            integration = json.loads(
+                (delivery / "integration.json").read_text(encoding="utf-8")
+            )
+            body = "Exact independently classified non-blocking finding."
+            response = target_response(
+                "PRRT_LATE_ORIGIN_TARGET",
+                head=attestation["head_sha"],
+                comments=[("PRRC_LATE_ORIGIN_ROOT", body, None)],
+            )
+            git = FakeGit(
+                expected_head=attestation["head_sha"],
+                reviewed_head=reviewed["head_sha"],
+                second_parent=reviewed["base_sha"],
+                tree=attestation["validated_tree_sha"],
+                receipt_digest=attestation["validation_receipt_digest"],
+                integration_digest=MODULE.fast_path.digest_json(integration),
+            )
+
+            def sign(
+                artifact: dict[str, Any],
+                artifact_output: Path,
+                signature_output: Path,
+                **_kwargs: Any,
+            ) -> None:
+                artifact_output.write_bytes(
+                    MODULE.late_disposition.canonical_json_bytes(artifact)
+                )
+                signature_output.write_text("fixture signature", encoding="utf-8")
+
+            def verify_signature(
+                artifact_path: Path,
+                _signature_path: Path,
+                _expected_signer: Any,
+                **_kwargs: Any,
+            ) -> bytes:
+                return artifact_path.read_bytes()
+
+            with (
+                mock.patch.object(MODULE, "_run_git", git),
+                mock.patch.object(MODULE, "_run_gh", FakeGh([response, response])),
+                mock.patch.object(MODULE, "_late_signing_key", return_value="/key"),
+                mock.patch.object(
+                    MODULE.late_disposition,
+                    "verify_detached_signature",
+                    side_effect=verify_signature,
+                ),
+                mock.patch.object(
+                    MODULE.late_disposition,
+                    "sign_artifact",
+                    side_effect=sign,
+                ),
+            ):
+                disposition = MODULE.create_late_disposition_artifact(
+                    "SecPal/api",
+                    724,
+                    123,
+                    attestation["head_sha"],
+                    repository_root=delivery,
+                    final_reviewed_state_path=delivery / "reviewed.json",
+                    expected_final_reviewed_state_digest=reviewed["state_digest"],
+                    final_validation_evidence_path=delivery / "validation.json",
+                    final_eligibility_evidence_path=delivery / "eligibility.json",
+                    classification_evidence_path=output / "classification.json",
+                    classification_signature_path=output / "classification.sig",
+                    output_path=output / "disposition.json",
+                    signature_output_path=output / "disposition.sig",
+                    integration_evidence_path=delivery / "integration.json",
+                )
+
+            with (
+                mock.patch.object(MODULE, "_run_git", git),
+                mock.patch.object(MODULE, "_run_gh", FakeGh([response, response])),
+                mock.patch.object(
+                    MODULE.late_disposition,
+                    "verify_detached_signature",
+                    side_effect=verify_signature,
+                ),
+            ):
+                resolved = MODULE.resolve_late_disposition_threads(
+                    "SecPal/api",
+                    724,
+                    123,
+                    attestation["head_sha"],
+                    ("PRRT_LATE_ORIGIN_TARGET",),
+                    apply=False,
+                    repository_root=delivery,
+                    final_reviewed_state_path=delivery / "reviewed.json",
+                    expected_final_reviewed_state_digest=reviewed["state_digest"],
+                    final_validation_evidence_path=delivery / "validation.json",
+                    final_eligibility_evidence_path=delivery / "eligibility.json",
+                    late_classification_evidence_path=output / "classification.json",
+                    late_classification_signature_path=output / "classification.sig",
+                    late_disposition_evidence_path=output / "disposition.json",
+                    late_disposition_signature_path=output / "disposition.sig",
+                    integration_evidence_path=delivery / "integration.json",
+                )
+
+        self.assertEqual(result["status"], "LATE_CLASSIFICATION_AUTHENTICATED")
+        self.assertEqual(result["origin"], "REVIEWED_BUT_INELIGIBLE")
+        self.assertEqual(disposition["status"], "LATE_DISPOSITION_AUTHENTICATED")
+        self.assertEqual(resolved["status"], "success")
+        self.assertEqual(resolved["pending"], ["PRRT_LATE_ORIGIN_TARGET"])
+
+    def test_ready_integration_late_source_requires_exact_evidence_family(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_late_classification_origin_fixture(
+                directory,
+                reviewed_thread_id="PRRT_LATE_ORIGIN_TARGET",
+                eligibility_thread_ids=(),
+                ready_integration=True,
+                classification="INFORMATIONAL",
+                disposition="NON_ACTIONABLE",
+            )
+            reviewed_path = root / "delivery/reviewed.json"
+            reviewed = json.loads(reviewed_path.read_text(encoding="utf-8"))
+            common = {
+                "repository": "SecPal/api",
+                "number": 123,
+                "expected_head": "c" * 40,
+                "final_reviewed_state_path": reviewed_path,
+                "expected_final_reviewed_state_digest": reviewed["state_digest"],
+                "final_validation_evidence_path": root / "delivery/validation.json",
+                "final_eligibility_evidence_path": root / "delivery/eligibility.json",
+            }
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "integration resolution requires canonical integration evidence",
+            ):
+                load_final_feedback_boundary(delivery_issue=724, **common)
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "delivery issue is invalid or stale",
+            ):
+                load_final_feedback_boundary(
+                    delivery_issue=725,
+                    integration_evidence_path=root / "delivery/integration.json",
+                    **common,
+                )
+
+    def test_ordinary_late_source_rejects_integration_only_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reviewed, attestation, _eligibility, _git = (
+                write_authenticated_resolution_inputs(
+                    directory,
+                    ["PRRT_FINAL_KNOWN"],
+                    eligibility_thread_ids=(),
+                )
+            )
+            integration_path = root / "integration.json"
+            integration_path.write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "ordinary validation attestation rejects integration-only evidence",
+            ):
+                load_final_feedback_boundary(
+                    repository="SecPal/api",
+                    delivery_issue=724,
+                    number=123,
+                    expected_head=attestation["head_sha"],
+                    final_reviewed_state_path=root / "reviewed.json",
+                    expected_final_reviewed_state_digest=reviewed["state_digest"],
+                    final_validation_evidence_path=root / "validation.json",
+                    final_eligibility_evidence_path=root / "eligibility.json",
+                    integration_evidence_path=integration_path,
+                )
+
     def test_late_classification_rejects_missing_or_malformed_root_database_id(
         self,
     ) -> None:
@@ -2054,19 +4400,20 @@ class ResolveFixedThreadsTests(TestCase):
                     )
                 signer.assert_not_called()
 
-    def test_cycle2_late_origin_rejects_preexisting_thread_omitted_from_eligibility(
+    def test_post_freeze_accepts_reviewed_but_ineligible_informational_decision(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(
-                MODULE.ResolutionError,
-                "present in authenticated final reviewed state",
-            ):
-                run_late_classification_origin_fixture(
-                    directory,
-                    reviewed_thread_id="PRRT_LATE_ORIGIN_TARGET",
-                    eligibility_thread_ids=(),
-                )
+            result, signer = run_late_classification_origin_fixture(
+                directory,
+                reviewed_thread_id="PRRT_LATE_ORIGIN_TARGET",
+                eligibility_thread_ids=(),
+                classification="INFORMATIONAL",
+                disposition="NON_ACTIONABLE",
+            )
+        self.assertEqual(result["status"], "LATE_CLASSIFICATION_AUTHENTICATED")
+        self.assertEqual(result["origin"], "REVIEWED_BUT_INELIGIBLE")
+        signer.assert_called_once()
 
     def test_cycle2_late_origin_rejects_commit_bound_eligible_thread(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2106,14 +4453,150 @@ class ResolveFixedThreadsTests(TestCase):
         self.assertEqual(result["status"], "LATE_CLASSIFICATION_AUTHENTICATED")
         signer.assert_called_once()
 
+    def test_post_freeze_accepts_absent_informational_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result, signer = run_late_classification_origin_fixture(
+                directory,
+                reviewed_thread_id="PRRT_FINAL_KNOWN",
+                eligibility_thread_ids=(),
+                classification="INFORMATIONAL",
+                disposition="NON_ACTIONABLE",
+            )
+        self.assertEqual(result["origin"], "ABSENT_FROM_BOTH")
+        signer.assert_called_once()
+
+    def test_post_freeze_decision_authority_is_closed_and_origin_derived(
+        self,
+    ) -> None:
+        invalid = (
+            "INVALID_FALSE_OR_MISLEADING",
+            "DISPROVEN_WITH_EVIDENCE",
+        )
+        valid = ("VALID_ACTIONABLE", "CORRECTED_AND_VERIFIED")
+        informational = ("INFORMATIONAL", "NON_ACTIONABLE")
+        self.assertEqual(
+            MODULE.late_disposition.POST_FREEZE_DECISIONS,
+            frozenset({valid, invalid, informational}),
+        )
+        self.assertEqual(
+            MODULE.late_disposition.POST_FREEZE_ORIGIN_DECISIONS,
+            {
+                "REVIEWED_BUT_INELIGIBLE": frozenset(
+                    {valid, invalid, informational}
+                ),
+                "ABSENT_FROM_BOTH": frozenset({invalid, informational}),
+            },
+        )
+        self.assertEqual(
+            MODULE.late_disposition.SCHEMA_VERSION_DECISIONS,
+            {
+                "1.0": frozenset({invalid}),
+                "1.1": frozenset({informational}),
+                "1.3": frozenset({valid}),
+            },
+        )
+        self.assertEqual(
+            MODULE.late_disposition.schema_version_for_decision(*invalid),
+            "1.0",
+        )
+        self.assertEqual(
+            MODULE.late_disposition.schema_version_for_decision(*informational),
+            "1.1",
+        )
+        self.assertEqual(
+            MODULE.late_disposition.schema_version_for_decision(*valid),
+            "1.3",
+        )
+        self.assertEqual(
+            MODULE.late_disposition.DISPOSITION_SCHEMA_VERSION_POLICY,
+            {
+                "1.0": (False, invalid),
+                "1.1": (True, invalid),
+                "1.2": (False, informational),
+                "1.3": (True, informational),
+                "1.7": (False, valid),
+            },
+        )
+        for final_eligibility_absent, decision, schema_version in (
+            (False, invalid, "1.0"),
+            (True, invalid, "1.1"),
+            (False, informational, "1.2"),
+            (True, informational, "1.3"),
+            (False, valid, "1.7"),
+        ):
+            self.assertEqual(
+                MODULE.late_disposition.disposition_schema_version_for_decision(
+                    *decision,
+                    final_eligibility_absent=final_eligibility_absent,
+                ),
+                schema_version,
+            )
+
+        self.assertNotIn(
+            "NON_BLOCKING",
+            {
+                value
+                for decision in MODULE.late_disposition.POST_FREEZE_DECISIONS
+                for value in decision
+            },
+        )
+
+    def test_post_freeze_rejects_arbitrary_decisions_before_signing(self) -> None:
+        decisions = (
+            ("VALID_ACTIONABLE", "CORRECTED_AND_VERIFIED"),
+            ("INFORMATIONAL", "PENDING"),
+            ("ARBITRARY", "NON_ACTIONABLE"),
+        )
+        for classification, disposition in decisions:
+            signer = mock.Mock()
+            with (
+                self.subTest(
+                    classification=classification,
+                    disposition=disposition,
+                ),
+                tempfile.TemporaryDirectory() as directory,
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "decision is unsupported",
+                ),
+            ):
+                run_late_classification_origin_fixture(
+                    directory,
+                    reviewed_thread_id="PRRT_FINAL_KNOWN",
+                    eligibility_thread_ids=(),
+                    classification=classification,
+                    disposition=disposition,
+                    artifact_signer=signer,
+                )
+            signer.assert_not_called()
+
+    def test_post_freeze_rejects_all_technical_blockers_before_signing(
+        self,
+    ) -> None:
+        for blocker in sorted(MODULE.late_disposition.TECHNICAL_BLOCKERS):
+            signer = mock.Mock()
+            with (
+                self.subTest(blocker=blocker),
+                tempfile.TemporaryDirectory() as directory,
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "decision is unsupported",
+                ),
+            ):
+                run_late_classification_origin_fixture(
+                    directory,
+                    reviewed_thread_id="PRRT_FINAL_KNOWN",
+                    eligibility_thread_ids=(),
+                    classification="INFORMATIONAL",
+                    disposition="NON_ACTIONABLE",
+                    technically_blocking=True,
+                    technical_blockers=(blocker,),
+                    artifact_signer=signer,
+                )
+            signer.assert_not_called()
+
     def test_cycle2_disposition_reverifies_authenticated_final_origin(self) -> None:
         cases = (
-            (
-                "pre-existing",
-                "PRRT_LATE_NON_BLOCKING",
-                (),
-                "present in authenticated final reviewed state",
-            ),
             (
                 "commit-bound",
                 "PRRT_LATE_NON_BLOCKING",
@@ -2155,6 +4638,16 @@ class ResolveFixedThreadsTests(TestCase):
                 )
                 with (
                     mock.patch.object(MODULE, "_run_git", git),
+                    mock.patch.object(
+                        MODULE.late_disposition,
+                        "parse_classification_artifact",
+                        return_value=mock.Mock(
+                            thread=mock.Mock(
+                                classification="INVALID_FALSE_OR_MISLEADING",
+                                disposition="DISPROVEN_WITH_EVIDENCE",
+                            )
+                        ),
+                    ),
                     self.assertRaisesRegex(MODULE.ResolutionError, error),
                 ):
                     MODULE.create_late_disposition_artifact(
@@ -2175,12 +4668,6 @@ class ResolveFixedThreadsTests(TestCase):
 
     def test_cycle2_resolver_reverifies_authenticated_final_origin(self) -> None:
         cases = (
-            (
-                "pre-existing",
-                "PRRT_LATE_NON_BLOCKING",
-                (),
-                "present in authenticated final reviewed state",
-            ),
             (
                 "commit-bound",
                 "PRRT_LATE_NON_BLOCKING",
@@ -2371,6 +4858,7 @@ class ResolveFixedThreadsTests(TestCase):
                 with self.assertRaises(MODULE.ResolutionError):
                     load_final_feedback_boundary(
                         repository="SecPal/api",
+                        delivery_issue=724,
                         number=123,
                         expected_head=attestation["head_sha"],
                         final_reviewed_state_path=root / "reviewed.json",
@@ -2424,6 +4912,7 @@ class ResolveFixedThreadsTests(TestCase):
                 with self.assertRaises(MODULE.ResolutionError):
                     load_final_feedback_boundary(
                         repository="SecPal/api",
+                        delivery_issue=724,
                         number=123,
                         expected_head=attestation["head_sha"],
                         final_reviewed_state_path=root / "reviewed.json",
@@ -2517,6 +5006,7 @@ class ResolveFixedThreadsTests(TestCase):
             ):
                 load_final_feedback_boundary(
                     repository="SecPal/api",
+                    delivery_issue=724,
                     number=123,
                     expected_head=attestation["head_sha"],
                     final_reviewed_state_path=root / "reviewed.json",
@@ -2536,6 +5026,78 @@ class ResolveFixedThreadsTests(TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["pending"], ["PRRT_LATE_NON_BLOCKING"])
         self.assertEqual(len(github.calls), 1)
+
+    def test_reviewed_but_ineligible_corrected_thread_reaches_guarded_dry_run(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result, github, _git = run_late_resolution_fixture(
+                directory,
+                apply=False,
+                final_reviewed_thread_id="PRRT_LATE_NON_BLOCKING",
+                final_eligibility_thread_ids=(),
+                classification="VALID_ACTIONABLE",
+                disposition="CORRECTED_AND_VERIFIED",
+            )
+            artifact = json.loads(
+                (Path(directory) / "late-disposition.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["origin"], "REVIEWED_BUT_INELIGIBLE")
+        self.assertEqual(result["pending"], ["PRRT_LATE_NON_BLOCKING"])
+        self.assertEqual(len(github.calls), 1)
+        MODULE.evidence.validate_against_authoritative_schema(
+            artifact,
+            ROOT
+            / ".agents/skills/secpal-pr-review/references/late-disposition.schema.json",
+            "late disposition evidence",
+        )
+
+    def test_post_freeze_informational_resolution_accepts_both_derived_origins(
+        self,
+    ) -> None:
+        cases = (
+            ("PRRT_LATE_NON_BLOCKING", "REVIEWED_BUT_INELIGIBLE"),
+            ("PRRT_FINAL_KNOWN", "ABSENT_FROM_BOTH"),
+        )
+        for reviewed_thread, expected_origin in cases:
+            with (
+                self.subTest(origin=expected_origin),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                result, github, _git = run_late_resolution_fixture(
+                    directory,
+                    apply=False,
+                    final_reviewed_thread_id=reviewed_thread,
+                    final_eligibility_thread_ids=(),
+                    classification="INFORMATIONAL",
+                    disposition="NON_ACTIONABLE",
+                )
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["origin"], expected_origin)
+            self.assertEqual(len(github.calls), 1)
+
+    def test_post_freeze_v1_disposition_cannot_gain_informational_meaning(
+        self,
+    ) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "late-disposition thread is ineligible",
+            ),
+        ):
+            run_late_resolution_fixture(
+                directory,
+                apply=False,
+                classification="INFORMATIONAL",
+                disposition="NON_ACTIONABLE",
+                artifact_mutator=lambda value: value.update(
+                    {"schema_version": "1.0"}
+                ),
+            )
 
     def test_post_push_late_feedback_deadlock_requires_detached_authority(
         self,
@@ -2628,7 +5190,9 @@ class ResolveFixedThreadsTests(TestCase):
             root = Path(directory)
             reviewed, attestation, _eligibility, git = (
                 write_authenticated_resolution_inputs(
-                    directory, ["PRRT_FINAL_KNOWN"]
+                    directory,
+                    ["PRRT_LATE_NON_BLOCKING"],
+                    eligibility_thread_ids=(),
                 )
             )
             signing_key = Path(key_directory) / "signing-key"
@@ -2677,8 +5241,8 @@ class ResolveFixedThreadsTests(TestCase):
                         reply_count=0,
                         is_resolved=False,
                         is_outdated=False,
-                        classification="INVALID_FALSE_OR_MISLEADING",
-                        disposition="DISPROVEN_WITH_EVIDENCE",
+                        classification="INFORMATIONAL",
+                        disposition="NON_ACTIONABLE",
                         technically_blocking=False,
                         classification_evidence_digest="d" * 64,
                     ),
@@ -2735,8 +5299,8 @@ class ResolveFixedThreadsTests(TestCase):
                         thread_id="PRRT_LATE_NON_BLOCKING",
                         finding_id="LF-LATE-1",
                         finding_evidence_digest="c" * 64,
-                        classification="INVALID_FALSE_OR_MISLEADING",
-                        disposition="DISPROVEN_WITH_EVIDENCE",
+                        classification="INFORMATIONAL",
+                        disposition="NON_ACTIONABLE",
                         technically_blocking=False,
                         technical_blockers=(),
                         output_path=classification_path,
@@ -2766,6 +5330,14 @@ class ResolveFixedThreadsTests(TestCase):
             self.assertEqual(
                 classification_result["status"],
                 "LATE_CLASSIFICATION_AUTHENTICATED",
+            )
+            self.assertEqual(
+                classification_result["origin"],
+                "REVIEWED_BUT_INELIGIBLE",
+            )
+            self.assertEqual(
+                result["origin"],
+                "REVIEWED_BUT_INELIGIBLE",
             )
             self.assertEqual(
                 classification_artifact["thread"]["technical_blockers"], []
@@ -2935,15 +5507,189 @@ class ResolveFixedThreadsTests(TestCase):
                         artifact_mutator=mutation,
                     )
 
-    def test_late_disposition_runtime_payload_matches_canonical_schema(self) -> None:
+    def test_post_freeze_runtime_payloads_match_canonical_schemas(self) -> None:
         reviewed = reviewed_state_payload("PRRT_FINAL_KNOWN", [])
         attestation = validation_attestation_payload(reviewed)
-        MODULE.evidence.validate_against_authoritative_schema(
-            late_disposition_payload(attestation),
-            ROOT
-            / ".agents/skills/secpal-pr-review/references/late-disposition.schema.json",
-            "late-disposition evidence",
+        decisions = (
+            ("INVALID_FALSE_OR_MISLEADING", "DISPROVEN_WITH_EVIDENCE"),
+            ("INFORMATIONAL", "NON_ACTIONABLE"),
         )
+        for classification, disposition in decisions:
+            late_payload = late_disposition_payload(
+                attestation,
+                classification=classification,
+                disposition=disposition,
+            )
+            classification_thread = {
+                key: value
+                for key, value in late_payload["threads"][0].items()
+                if key
+                not in {"classification_evidence_digest", "authorized_action"}
+            }
+            classification_thread["technical_blockers"] = []
+            classification_payload = {
+                "schema_version": MODULE.late_disposition.schema_version_for_decision(
+                    classification,
+                    disposition,
+                ),
+                "kind": "LATE_FEEDBACK_CLASSIFICATION",
+                "repository": "SecPal/api",
+                "delivery_issue_number": 724,
+                "pull_request_number": 123,
+                "head_sha": attestation["head_sha"],
+                "delivery_signer": {
+                    "format": "ssh",
+                    "fingerprint": "SHA256:fixtureDeliverySigner",
+                },
+                "authorized_purpose": "AUTHORIZE_LATE_FEEDBACK_DISPOSITION",
+                "finding_id": "LF-LATE-SCHEMA",
+                "finding_evidence_digest": "c" * 64,
+                "thread": classification_thread,
+            }
+            with self.subTest(
+                classification=classification,
+                disposition=disposition,
+            ):
+                MODULE.evidence.validate_against_authoritative_schema(
+                    classification_payload,
+                    ROOT
+                    / ".agents/skills/secpal-pr-review/references/late-classification.schema.json",
+                    "late classification evidence",
+                )
+                MODULE.evidence.validate_against_authoritative_schema(
+                    late_payload,
+                    ROOT
+                    / ".agents/skills/secpal-pr-review/references/late-disposition.schema.json",
+                    "late-disposition evidence",
+                )
+
+    def test_late_classification_malformed_decision_types_fail_closed(self) -> None:
+        signer = MODULE.late_disposition.SignerIdentity(
+            "ssh", "SHA256:fixtureDeliverySigner"
+        )
+        reviewed = reviewed_state_payload("PRRT_FINAL_KNOWN", [])
+        attestation = validation_attestation_payload(reviewed)
+        disposition = late_disposition_payload(attestation)
+        thread = {
+            key: value
+            for key, value in disposition["threads"][0].items()
+            if key not in {"classification_evidence_digest", "authorized_action"}
+        }
+        thread["technical_blockers"] = []
+        artifact = {
+            "schema_version": "1.0",
+            "kind": "LATE_FEEDBACK_CLASSIFICATION",
+            "repository": "SecPal/api",
+            "delivery_issue_number": 724,
+            "pull_request_number": 123,
+            "head_sha": attestation["head_sha"],
+            "delivery_signer": {
+                "format": "ssh",
+                "fingerprint": signer.fingerprint,
+            },
+            "authorized_purpose": "AUTHORIZE_LATE_FEEDBACK_DISPOSITION",
+            "finding_id": "LF-MALFORMED-TYPE",
+            "finding_evidence_digest": "c" * 64,
+            "thread": thread,
+        }
+        cases = (
+            ("schema_version", []),
+            ("schema_version", {}),
+            ("schema_version", 1),
+            ("schema_version", None),
+            ("classification", []),
+            ("classification", {}),
+            ("classification", 1),
+            ("classification", None),
+            ("disposition", []),
+            ("disposition", {}),
+            ("disposition", 1),
+            ("disposition", None),
+        )
+        for field, value in cases:
+            changed = copy.deepcopy(artifact)
+            target = changed if field == "schema_version" else changed["thread"]
+            target[field] = value
+            canonical = MODULE.late_disposition.canonical_json_bytes(changed)
+            with self.subTest(field=field, value=value), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                artifact_path = root / "classification.json"
+                signature_path = root / "classification.sig"
+                artifact_path.write_bytes(canonical)
+                signature_path.write_text("fixture", encoding="utf-8")
+                with mock.patch.object(
+                    MODULE.late_disposition,
+                    "verify_detached_signature",
+                    return_value=canonical,
+                ), self.assertRaises(MODULE.late_disposition.LateDispositionError):
+                    MODULE.late_disposition.parse_classification_artifact(
+                        artifact_path,
+                        signature_path,
+                        expected_signer=signer,
+                        repository="SecPal/api",
+                        delivery_issue_number=724,
+                        pull_request_number=123,
+                        head_sha=attestation["head_sha"],
+                        thread_id="PRRT_LATE_NON_BLOCKING",
+                    )
+
+    def test_late_disposition_malformed_decision_types_fail_closed(self) -> None:
+        signer = MODULE.late_disposition.SignerIdentity(
+            "ssh", "SHA256:fixtureDeliverySigner"
+        )
+        reviewed = reviewed_state_payload("PRRT_FINAL_KNOWN", [])
+        attestation = validation_attestation_payload(reviewed)
+        artifact = late_disposition_payload(attestation)
+        cases = (
+            ("schema_version", []),
+            ("schema_version", {}),
+            ("schema_version", 1),
+            ("schema_version", None),
+            ("classification", []),
+            ("classification", {}),
+            ("classification", 1),
+            ("classification", None),
+            ("disposition", []),
+            ("disposition", {}),
+            ("disposition", 1),
+            ("disposition", None),
+        )
+        for field, value in cases:
+            changed = copy.deepcopy(artifact)
+            target = changed if field == "schema_version" else changed["threads"][0]
+            target[field] = value
+            canonical = MODULE.late_disposition.canonical_json_bytes(changed)
+            with self.subTest(field=field, value=value), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                artifact_path = root / "disposition.json"
+                signature_path = root / "disposition.sig"
+                artifact_path.write_bytes(canonical)
+                signature_path.write_text("fixture", encoding="utf-8")
+                with mock.patch.object(
+                    MODULE.late_disposition,
+                    "verify_detached_signature",
+                    return_value=canonical,
+                ), self.assertRaises(MODULE.late_disposition.LateDispositionError):
+                    MODULE.late_disposition.parse_artifact(
+                        artifact_path,
+                        signature_path,
+                        expected_signer=signer,
+                        repository="SecPal/api",
+                        delivery_issue_number=724,
+                        pull_request_number=123,
+                        head_sha=attestation["head_sha"],
+                        validated_tree_sha=attestation["validated_tree_sha"],
+                        validation_receipt_digest=attestation[
+                            "validation_receipt_digest"
+                        ],
+                        validation_attestation_digest=attestation[
+                            "attestation_digest"
+                        ],
+                        final_eligibility_evidence_digest=attestation[
+                            "eligibility_evidence_digest"
+                        ],
+                        thread_ids=("PRRT_LATE_NON_BLOCKING",),
+                    )
 
     def test_late_disposition_alternate_valid_signer_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3067,62 +5813,110 @@ class ResolveFixedThreadsTests(TestCase):
                     artifact, signature, first_signer, environment=environment
                 )
 
-    def test_detached_openpgp_signature_is_hermetic_and_signer_bound(self) -> None:
+    def test_openpgp_signing_contract_is_hermetic_and_signer_bound(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / ".config").mkdir()
-            gnupg = root / ".gnupg"
-            gnupg.mkdir(mode=0o700)
-            environment = MODULE.late_disposition.signing_environment(
-                account_home=root
-            )
-            subprocess.run(
-                [
-                    "/usr/bin/gpg",
-                    "--batch",
-                    "--no-tty",
-                    "--passphrase",
-                    "",
-                    "--quick-generate-key",
-                    "SecPal Fixture <fixture@example.invalid>",
-                    "ed25519",
-                    "sign",
-                    "0",
-                ],
-                check=True,
-                env=environment,
-                capture_output=True,
-            )
-            keys = subprocess.run(
-                ["/usr/bin/gpg", "--batch", "--with-colons", "--list-secret-keys"],
-                check=True,
-                env=environment,
-                capture_output=True,
-                text=True,
-            ).stdout
-            fingerprint = next(
-                line.split(":")[9]
-                for line in keys.splitlines()
-                if line.startswith("fpr:")
+            environment = self._openpgp_fixture_environment(root)
+            payload = json.loads(OPENPGP_FIXTURE_ARTIFACT.read_bytes())
+            self.assertEqual(
+                MODULE.late_disposition.canonical_json_bytes(payload),
+                OPENPGP_FIXTURE_ARTIFACT.read_bytes(),
             )
             signer = MODULE.late_disposition.SignerIdentity(
-                "openpgp", fingerprint
+                "openpgp", OPENPGP_FIXTURE_FINGERPRINT
             )
             artifact = root / "artifact.json"
             signature = root / "artifact.asc"
-            MODULE.late_disposition.sign_artifact(
-                {"schema_version": "fixture", "value": 1},
-                artifact,
-                signature,
-                signer=signer,
-                signing_key=fingerprint,
-                environment=environment,
+            original_run = MODULE.late_disposition._run_signature_command
+            original_verify = MODULE.late_disposition.verify_detached_signature
+            signing_call: dict[str, Any] = {}
+
+            def replace_private_signing_operation(
+                executable: str,
+                arguments: Sequence[str],
+                *,
+                environment: dict[str, str],
+                stdin: bytes | None = None,
+            ) -> Any:
+                if "--detach-sign" not in arguments:
+                    return original_run(
+                        executable,
+                        arguments,
+                        environment=environment,
+                        stdin=stdin,
+                    )
+                output = Path(arguments[arguments.index("--output") + 1])
+                signed_artifact = Path(arguments[-1])
+                signing_call.update(
+                    executable=executable,
+                    arguments=tuple(arguments),
+                    environment=dict(environment),
+                    stdin=stdin,
+                    artifact=signed_artifact.read_bytes(),
+                )
+                output.write_bytes(OPENPGP_FIXTURE_SIGNATURE.read_bytes())
+                return subprocess.CompletedProcess(
+                    (executable, *arguments), 0, b"", b""
+                )
+
+            with (
+                mock.patch.object(
+                    MODULE.late_disposition,
+                    "_run_signature_command",
+                    side_effect=replace_private_signing_operation,
+                ),
+                mock.patch.object(
+                    MODULE.late_disposition,
+                    "verify_detached_signature",
+                    wraps=original_verify,
+                ) as verifier,
+            ):
+                MODULE.late_disposition.sign_artifact(
+                    payload,
+                    artifact,
+                    signature,
+                    signer=signer,
+                    signing_key=OPENPGP_FIXTURE_FINGERPRINT,
+                    environment=environment,
+                    signature_namespace=(
+                        MODULE.late_disposition.CLASSIFICATION_SIGNATURE_NAMESPACE
+                    ),
+                )
+
+            self.assertEqual(
+                signing_call["executable"],
+                MODULE.late_disposition._trusted_executable("gpg"),
+            )
+            arguments = signing_call["arguments"]
+            self.assertEqual(
+                arguments[:6],
+                (
+                    "--batch",
+                    "--no-tty",
+                    "--armor",
+                    "--local-user",
+                    OPENPGP_FIXTURE_FINGERPRINT,
+                    "--output",
+                ),
+            )
+            self.assertEqual(arguments[7], "--detach-sign")
+            self.assertEqual(Path(arguments[6]).name, "artifact.sig")
+            self.assertEqual(Path(arguments[8]).name, "artifact.json")
+            self.assertEqual(signing_call["environment"], environment)
+            self.assertIsNone(signing_call["stdin"])
+            self.assertEqual(
+                signing_call["artifact"], OPENPGP_FIXTURE_ARTIFACT.read_bytes()
+            )
+            verifier.assert_called_once()
+            self.assertEqual(
+                verifier.call_args.kwargs["signature_namespace"],
+                MODULE.late_disposition.CLASSIFICATION_SIGNATURE_NAMESPACE,
             )
             MODULE.late_disposition.verify_detached_signature(
                 artifact, signature, signer, environment=environment
             )
             alternate = MODULE.late_disposition.SignerIdentity(
-                "openpgp", "A" * len(fingerprint)
+                "openpgp", "A" * len(OPENPGP_FIXTURE_FINGERPRINT)
             )
             with self.assertRaisesRegex(
                 MODULE.late_disposition.LateDispositionError,
@@ -3131,6 +5925,31 @@ class ResolveFixedThreadsTests(TestCase):
                 MODULE.late_disposition.verify_detached_signature(
                     artifact, signature, alternate, environment=environment
                 )
+            failed_artifact = root / "failed.json"
+            failed_signature = root / "failed.asc"
+            with (
+                mock.patch.object(
+                    MODULE.late_disposition,
+                    "_run_signature_command",
+                    return_value=subprocess.CompletedProcess(
+                        ("/usr/bin/gpg",), 1, b"", b"signing failed"
+                    ),
+                ),
+                self.assertRaisesRegex(
+                    MODULE.late_disposition.LateDispositionError,
+                    "late-disposition signing failed",
+                ),
+            ):
+                MODULE.late_disposition.sign_artifact(
+                    payload,
+                    failed_artifact,
+                    failed_signature,
+                    signer=signer,
+                    signing_key=OPENPGP_FIXTURE_FINGERPRINT,
+                    environment=environment,
+                )
+            self.assertFalse(failed_artifact.exists())
+            self.assertFalse(failed_signature.exists())
 
     def test_detached_artifact_rejects_missing_signature_and_duplicate_keys(
         self,
@@ -3404,6 +6223,27 @@ class ResolveFixedThreadsTests(TestCase):
                 evidence.evidence_digest,
                 hashlib.sha256(artifact.read_bytes()).hexdigest(),
             )
+            informational_payload = copy.deepcopy(payload)
+            informational_payload["thread"]["classification"] = "INFORMATIONAL"
+            informational_payload["thread"]["disposition"] = "NON_ACTIONABLE"
+            sign(informational_payload, key, signer)
+            with self.assertRaisesRegex(
+                MODULE.late_disposition.LateDispositionError,
+                "not resolution-eligible",
+            ):
+                parse()
+            informational_payload["schema_version"] = "1.1"
+            sign(informational_payload, key, signer)
+            informational_evidence = parse()
+            self.assertEqual(
+                informational_evidence.thread.classification,
+                "INFORMATIONAL",
+            )
+            self.assertEqual(
+                informational_evidence.thread.disposition,
+                "NON_ACTIONABLE",
+            )
+
             exact_live = MODULE.ThreadState(
                 thread_id="PRRT_exactLateFinding",
                 is_resolved=False,
@@ -3505,7 +6345,7 @@ class ResolveFixedThreadsTests(TestCase):
             ):
                 parse()
 
-    def test_cycle1_r2_openpgp_verifies_captured_bytes_not_mutable_paths(
+    def test_signed_successor_classification_binds_pr_905_finding_and_states(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3515,53 +6355,210 @@ class ResolveFixedThreadsTests(TestCase):
             environment = MODULE.late_disposition.signing_environment(
                 account_home=root
             )
-            subprocess.run(
-                [
-                    "/usr/bin/gpg",
-                    "--batch",
-                    "--no-tty",
-                    "--passphrase",
-                    "",
-                    "--quick-generate-key",
-                    "SecPal Cycle 1 <cycle1@example.invalid>",
-                    "ed25519",
-                    "sign",
-                    "0",
+            key = root / "successor-classification-key"
+            alternate_key = root / "alternate-successor-key"
+            for key_path in (key, alternate_key):
+                subprocess.run(
+                    [
+                        "/usr/bin/ssh-keygen",
+                        "-q",
+                        "-t",
+                        "ed25519",
+                        "-N",
+                        "",
+                        "-f",
+                        str(key_path),
+                    ],
+                    check=True,
+                    env=environment,
+                    capture_output=True,
+                )
+
+            def identity(key_path: Path) -> MODULE.late_disposition.SignerIdentity:
+                fingerprint = subprocess.run(
+                    [
+                        "/usr/bin/ssh-keygen",
+                        "-lf",
+                        f"{key_path}.pub",
+                        "-E",
+                        "sha256",
+                    ],
+                    check=True,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                ).stdout.split()[1]
+                return MODULE.late_disposition.SignerIdentity("ssh", fingerprint)
+
+            signer = identity(key)
+            alternate = identity(alternate_key)
+            artifact = root / "successor-classification.json"
+            signature = root / "successor-classification.sig"
+            predecessor_state = "a" * 64
+            resulting_state = "b" * 64
+            head = "18a6d02d8c548a4a010fc93c5f8d09d89427f1b2"
+            thread_id = "PRRT_kwDOQFR1MM6hk-YJ"
+            comment_id = "PRRC_kwDOQFR1MM7t72Mn"
+            body_digest = (
+                "6d2f2240da81d5b30595fa239d6989311bb0c1191fafcb861d7194472a45df3a"
+            )
+            payload = {
+                "schema_version": "1.2",
+                "kind": "LATE_FEEDBACK_CLASSIFICATION",
+                "repository": "SecPal/.github",
+                "delivery_issue_number": 894,
+                "pull_request_number": 905,
+                "head_sha": head,
+                "predecessor_state_digest": predecessor_state,
+                "resulting_state_digest": resulting_state,
+                "delivery_signer": {
+                    "format": "ssh",
+                    "fingerprint": signer.fingerprint,
+                },
+                "authorized_purpose": (
+                    "AUTHENTICATE_CONTINUATION_SUCCESSOR_SAFETY"
+                ),
+                "finding_id": comment_id,
+                "finding_evidence_digest": "c" * 64,
+                "thread": {
+                    "thread_id": thread_id,
+                    "top_level_comment_node_id": comment_id,
+                    "top_level_comment_database_id": 3991888679,
+                    "finding_body_digest": body_digest,
+                    "reply_state_digest": MODULE._digest_json([]),
+                    "reply_count": 0,
+                    "is_resolved": False,
+                    "is_outdated": False,
+                    "classification": "INVALID_FALSE_OR_MISLEADING",
+                    "disposition": "DISPROVEN_WITH_EVIDENCE",
+                    "technically_blocking": False,
+                    "technical_blockers": [],
+                },
+                "sources": [
+                    {
+                        "kind": "THREAD_COMMENT",
+                        "node_id": comment_id,
+                        "digest": body_digest,
+                        "thread_id": thread_id,
+                    }
                 ],
-                check=True,
-                env=environment,
-                capture_output=True,
+            }
+
+            def sign(value, key_path=key, signer_identity=signer):
+                MODULE.late_disposition.sign_artifact(
+                    value,
+                    artifact,
+                    signature,
+                    signer=signer_identity,
+                    signing_key=str(key_path),
+                    environment=environment,
+                    signature_namespace=(
+                        MODULE.late_disposition.CLASSIFICATION_SIGNATURE_NAMESPACE
+                    ),
+                )
+
+            def parse():
+                return MODULE.late_disposition.parse_successor_classification_artifact(
+                    artifact,
+                    signature,
+                    expected_signer=signer,
+                    repository="SecPal/.github",
+                    delivery_issue_number=894,
+                    pull_request_number=905,
+                    head_sha=head,
+                    predecessor_state_digest=predecessor_state,
+                    resulting_state_digest=resulting_state,
+                    signature_environment=environment,
+                )
+
+            sign(payload)
+            verified = parse()
+            self.assertEqual(verified.finding_id, comment_id)
+            self.assertEqual(
+                verified.sources,
+                (("THREAD_COMMENT", comment_id, body_digest, thread_id),),
             )
-            keys = subprocess.run(
-                ["/usr/bin/gpg", "--batch", "--with-colons", "--list-secret-keys"],
-                check=True,
-                env=environment,
-                capture_output=True,
-                text=True,
-            ).stdout
-            fingerprint = next(
-                line.split(":")[9]
-                for line in keys.splitlines()
-                if line.startswith("fpr:")
-            )
+
+            for label, mutate in (
+                (
+                    "cross repository",
+                    lambda value: value.update(repository="SecPal/other"),
+                ),
+                (
+                    "cross PR",
+                    lambda value: value.update(pull_request_number=906),
+                ),
+                (
+                    "cross head",
+                    lambda value: value.update(head_sha="d" * 40),
+                ),
+                (
+                    "predecessor Stable Feedback drift",
+                    lambda value: value.update(predecessor_state_digest="d" * 64),
+                ),
+                (
+                    "resulting Stable Feedback drift",
+                    lambda value: value.update(resulting_state_digest="d" * 64),
+                ),
+                (
+                    "ambiguous repeated source",
+                    lambda value: value["sources"].append(
+                        copy.deepcopy(value["sources"][0])
+                    ),
+                ),
+                (
+                    "VALID_ACTIONABLE",
+                    lambda value: value["thread"].update(
+                        classification="VALID_ACTIONABLE",
+                        disposition="CORRECTED_AND_VERIFIED",
+                    ),
+                ),
+                (
+                    "material finding",
+                    lambda value: value["thread"].update(
+                        technically_blocking=True,
+                        technical_blockers=["P1"],
+                    ),
+                ),
+            ):
+                changed = copy.deepcopy(payload)
+                mutate(changed)
+                sign(changed)
+                with self.subTest(label=label), self.assertRaises(
+                    MODULE.late_disposition.LateDispositionError
+                ):
+                    parse()
+
+            changed = copy.deepcopy(payload)
+            changed["delivery_signer"]["fingerprint"] = alternate.fingerprint
+            sign(changed, alternate_key, alternate)
+            with self.assertRaisesRegex(
+                MODULE.late_disposition.LateDispositionError,
+                "signer does not match final delivery signer",
+            ):
+                parse()
+
+            signature.write_bytes(b"")
+            with self.assertRaises(MODULE.late_disposition.LateDispositionError):
+                parse()
+
+    def test_cycle1_r2_openpgp_verifies_captured_bytes_not_mutable_paths(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            environment = self._openpgp_fixture_environment(root)
             signer = MODULE.late_disposition.SignerIdentity(
-                "openpgp", fingerprint
+                "openpgp", OPENPGP_FIXTURE_FINGERPRINT
             )
             artifact = root / "artifact.json"
             signature = root / "artifact.asc"
-            MODULE.late_disposition.sign_artifact(
-                {"schema_version": "fixture", "value": "signed-B"},
-                artifact,
-                signature,
-                signer=signer,
-                signing_key=fingerprint,
-                environment=environment,
-            )
-            signed_b = artifact.read_bytes()
+            signed_b = OPENPGP_FIXTURE_ARTIFACT.read_bytes()
             unsigned_a = MODULE.late_disposition.canonical_json_bytes(
                 {"schema_version": "fixture", "value": "unsigned-A"}
             )
             artifact.write_bytes(unsigned_a)
+            signature.write_bytes(OPENPGP_FIXTURE_SIGNATURE.read_bytes())
             original_run = MODULE.late_disposition._run_signature_command
 
             def race_artifact(
@@ -3606,21 +6603,8 @@ class ResolveFixedThreadsTests(TestCase):
                     signer,
                     environment=environment,
                 )
-            classification_payload = {
-                "kind": "LATE_FEEDBACK_CLASSIFICATION",
-                "value": "openpgp",
-            }
-            MODULE.late_disposition.sign_artifact(
-                classification_payload,
-                artifact,
-                signature,
-                signer=signer,
-                signing_key=fingerprint,
-                environment=environment,
-                signature_namespace=(
-                    MODULE.late_disposition.CLASSIFICATION_SIGNATURE_NAMESPACE
-                ),
-            )
+            classification_payload = json.loads(signed_b)
+            artifact.write_bytes(signed_b)
             self.assertEqual(
                 MODULE.late_disposition.verify_detached_signature(
                     artifact,
@@ -5755,22 +8739,25 @@ class ResolveFixedThreadsTests(TestCase):
         cases = {
             "thread": (
                 MODULE.RepositoryLimits(20, 6, 100),
-                [],
+                {first: [], second: []},
                 MODULE._consume_thread,
             ),
             "comment": (
                 MODULE.RepositoryLimits(20, 100, 6),
-                [("PRRC_root", "review body", None)],
+                {
+                    first: [("PRRC_firstRoot", "review body", None)],
+                    second: [("PRRC_secondRoot", "review body", None)],
+                },
                 MODULE._consume_comment,
             ),
         }
-        for label, (limits, comments, consume) in cases.items():
+        for label, (limits, comments_by_thread, consume) in cases.items():
             fake = FakeGh(
                 [
-                    target_response(first, comments=comments),
-                    target_response(second, comments=comments),
-                    target_response(first, comments=comments),
-                    target_response(first, comments=comments),
+                    target_response(first, comments=comments_by_thread[first]),
+                    target_response(second, comments=comments_by_thread[second]),
+                    target_response(first, comments=comments_by_thread[first]),
+                    target_response(first, comments=comments_by_thread[first]),
                     resolve_response(first),
                 ]
             )
@@ -5797,8 +8784,12 @@ class ResolveFixedThreadsTests(TestCase):
                     (first, second),
                     apply=True,
                     expected_targets={
-                        first: expected_thread_state(first, comments),
-                        second: expected_thread_state(second, comments),
+                        first: expected_thread_state(
+                            first, comments_by_thread[first]
+                        ),
+                        second: expected_thread_state(
+                            second, comments_by_thread[second]
+                        ),
                     },
                     eligibility_manifest=manifest,
                     follow_up_verifier=consume_follow_up_capacity,
@@ -5861,7 +8852,7 @@ class ResolveFixedThreadsTests(TestCase):
                 ]
             )
 
-    def test_cycle2_late_cli_requires_distinct_final_eligibility_artifact(
+    def test_late_cli_allows_only_policy_selected_final_eligibility_absence(
         self,
     ) -> None:
         arguments = [
@@ -5892,8 +8883,8 @@ class ResolveFixedThreadsTests(TestCase):
             "--thread-id",
             "PRRT_exampleOne",
         ]
-        with self.assertRaises(SystemExit):
-            MODULE.parse_args(arguments)
+        absence = MODULE.parse_args(arguments)
+        self.assertIsNone(absence.final_eligibility_evidence)
         parsed = MODULE.parse_args(
             [
                 *arguments,
@@ -5914,6 +8905,420 @@ class ResolveFixedThreadsTests(TestCase):
                     "--eligibility-evidence",
                     "ordinary-eligibility.json",
                 ]
+            )
+
+    def test_late_producer_clis_require_manifest_for_integration_evidence(
+        self,
+    ) -> None:
+        common = [
+            "--repo",
+            "SecPal/api",
+            "--delivery-issue",
+            "724",
+            "--pr",
+            "123",
+            "--repo-root",
+            "/delivery",
+            "--expected-head",
+            "a" * 40,
+            "--final-reviewed-state",
+            "reviewed.json",
+            "--expected-final-reviewed-state-digest",
+            "b" * 64,
+            "--final-validation-evidence",
+            "attestation.json",
+        ]
+        producer_arguments = (
+            (
+                ROOT / "scripts/secpal-create-late-classification.py",
+                [
+                    *common,
+                    "--thread-id",
+                    "PRRT_exampleOne",
+                    "--finding-id",
+                    "LF-LATE-1",
+                    "--finding-evidence-digest",
+                    "c" * 64,
+                    "--classification",
+                    "INFORMATIONAL",
+                    "--disposition",
+                    "NON_ACTIONABLE",
+                    "--technically-blocking",
+                    "false",
+                    "--output",
+                    "/tmp/classification.json",
+                    "--signature-output",
+                    "/tmp/classification.sig",
+                ],
+            ),
+            (
+                ROOT / "scripts/secpal-create-late-disposition.py",
+                [
+                    *common,
+                    "--classification-evidence",
+                    "classification.json",
+                    "--classification-signature",
+                    "classification.sig",
+                    "--output",
+                    "/tmp/disposition.json",
+                    "--signature-output",
+                    "/tmp/disposition.sig",
+                ],
+            ),
+        )
+
+        for index, (script, arguments) in enumerate(producer_arguments):
+            spec = importlib.util.spec_from_file_location(
+                f"late_producer_cli_{index}", script
+            )
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader if spec is not None else None)
+            producer = importlib.util.module_from_spec(spec)
+            assert spec is not None and spec.loader is not None
+            sys.modules[spec.name] = producer
+            try:
+                spec.loader.exec_module(producer)
+                with redirect_stderr(StringIO()) as error, self.assertRaises(
+                    SystemExit
+                ):
+                    producer.parse_args(
+                        [*arguments, "--integration-evidence", "integration.json"]
+                    )
+                self.assertIn(
+                    "--integration-evidence requires "
+                    "final eligibility or the historical validation receipt",
+                    error.getvalue(),
+                )
+                ordinary = producer.parse_args(arguments)
+                self.assertIsNone(ordinary.integration_evidence)
+                integration = producer.parse_args(
+                    [
+                        *arguments,
+                        "--final-eligibility-evidence",
+                        "eligibility.json",
+                        "--integration-evidence",
+                        "integration.json",
+                    ]
+                )
+                self.assertEqual(integration.integration_evidence, "integration.json")
+                historical = producer.parse_args(
+                    [
+                        *arguments,
+                        "--final-validation-receipt",
+                        "receipt.json",
+                        "--integration-evidence",
+                        "integration.json",
+                    ]
+                )
+                self.assertEqual(historical.final_validation_receipt, "receipt.json")
+            finally:
+                sys.modules.pop(spec.name, None)
+
+    def test_cli_partitions_commit_bound_manifest_and_absence_modes(self) -> None:
+        base = [
+            "--repo",
+            "SecPal/api",
+            "--pr",
+            "123",
+            "--repo-root",
+            "/delivery",
+            "--expected-head",
+            "a" * 40,
+            "--reviewed-state",
+            "reviewed.json",
+            "--expected-reviewed-state-digest",
+            "b" * 64,
+            "--validation-evidence",
+            "attestation.json",
+            "--thread-id",
+            "PRRT_exampleOne",
+        ]
+        ordinary = [*base, "--eligibility-evidence", "eligibility.json"]
+        late = [
+            *base,
+            "--delivery-issue",
+            "724",
+            "--late-classification-evidence",
+            "classification.json",
+            "--late-classification-signature",
+            "classification.sig",
+            "--late-disposition-evidence",
+            "disposition.json",
+            "--late-disposition-signature",
+            "disposition.sig",
+        ]
+
+        for label, arguments in (
+            (
+                "ordinary and final eligibility",
+                [
+                    *ordinary,
+                    "--final-eligibility-evidence",
+                    "final-eligibility.json",
+                ],
+            ),
+            (
+                "final eligibility alone",
+                [
+                    *base,
+                    "--final-eligibility-evidence",
+                    "final-eligibility.json",
+                ],
+            ),
+        ):
+            error = StringIO()
+            with self.subTest(label=label), redirect_stderr(error):
+                with self.assertRaises(SystemExit):
+                    MODULE.parse_args(arguments)
+                self.assertIn(
+                    "final eligibility evidence is valid only for late disposition",
+                    error.getvalue(),
+                )
+
+        commit_bound = MODULE.parse_args(ordinary)
+        self.assertEqual(commit_bound.eligibility_evidence, "eligibility.json")
+        manifest = MODULE.parse_args(
+            [
+                *late,
+                "--final-eligibility-evidence",
+                "final-eligibility.json",
+            ]
+        )
+        self.assertEqual(
+            manifest.final_eligibility_evidence,
+            "final-eligibility.json",
+        )
+        absence = MODULE.parse_args(late)
+        self.assertIsNone(absence.final_eligibility_evidence)
+        historical = MODULE.parse_args(
+            [
+                *late,
+                "--integration-evidence",
+                "integration.json",
+                "--integration-validation-receipt",
+                "receipt.json",
+            ]
+        )
+        self.assertEqual(
+            historical.integration_validation_receipt,
+            "receipt.json",
+        )
+
+        rejected = (
+            (
+                "ordinary delivery issue without Exceptional Recovery",
+                [*ordinary, "--delivery-issue", "790"],
+            ),
+            (
+                "partial late tuple with final eligibility",
+                [
+                    *base,
+                    "--late-classification-evidence",
+                    "classification.json",
+                    "--final-eligibility-evidence",
+                    "final-eligibility.json",
+                ],
+            ),
+            (
+                "late tuple with ordinary eligibility",
+                [*late, "--eligibility-evidence", "eligibility.json"],
+            ),
+            (
+                "late tuple with Exceptional Recovery",
+                [
+                    *late,
+                    "--exceptional-recovery-evidence",
+                    "recovery.json",
+                    "--exceptional-recovery-authorization",
+                    "authorization.json",
+                ],
+            ),
+        )
+        for label, arguments in rejected:
+            with self.subTest(label=label), redirect_stderr(StringIO()):
+                with self.assertRaises(SystemExit):
+                    MODULE.parse_args(arguments)
+
+        exceptional = MODULE.parse_args(
+            [
+                *ordinary,
+                "--delivery-issue",
+                "790",
+                "--exceptional-recovery-evidence",
+                "recovery.json",
+                "--exceptional-recovery-authorization",
+                "authorization.json",
+            ]
+        )
+        self.assertEqual(exceptional.delivery_issue, 790)
+        integration = MODULE.parse_args(
+            [*ordinary, "--integration-evidence", "integration.json"]
+        )
+        self.assertEqual(integration.integration_evidence, "integration.json")
+        late_integration = MODULE.parse_args(
+            [
+                *late,
+                "--final-eligibility-evidence",
+                "final-eligibility.json",
+                "--integration-evidence",
+                "integration.json",
+            ]
+        )
+        self.assertEqual(late_integration.integration_evidence, "integration.json")
+
+    def test_cli_forwards_every_accepted_security_evidence_option(self) -> None:
+        base = [
+            "--repo",
+            "SecPal/api",
+            "--pr",
+            "123",
+            "--repo-root",
+            "/delivery",
+            "--expected-head",
+            "a" * 40,
+            "--reviewed-state",
+            "reviewed.json",
+            "--expected-reviewed-state-digest",
+            "b" * 64,
+            "--validation-evidence",
+            "attestation.json",
+            "--thread-id",
+            "PRRT_exampleOne",
+        ]
+        late = [
+            *base,
+            "--delivery-issue",
+            "724",
+            "--late-classification-evidence",
+            "classification.json",
+            "--late-classification-signature",
+            "classification.sig",
+            "--late-disposition-evidence",
+            "disposition.json",
+            "--late-disposition-signature",
+            "disposition.sig",
+        ]
+        report = {"status": "success"}
+
+        ordinary_invocations = (
+            (
+                [*base, "--eligibility-evidence", "eligibility.json"],
+                {
+                    "eligibility_evidence_path": "eligibility.json",
+                },
+            ),
+            (
+                [
+                    *base,
+                    "--eligibility-evidence",
+                    "eligibility.json",
+                    "--integration-evidence",
+                    "integration.json",
+                ],
+                {
+                    "eligibility_evidence_path": "eligibility.json",
+                    "integration_evidence_path": "integration.json",
+                },
+            ),
+            (
+                [
+                    *base,
+                    "--eligibility-evidence",
+                    "eligibility.json",
+                    "--delivery-issue",
+                    "790",
+                    "--exceptional-recovery-evidence",
+                    "recovery.json",
+                    "--exceptional-recovery-authorization",
+                    "authorization.json",
+                ],
+                {
+                    "eligibility_evidence_path": "eligibility.json",
+                    "exceptional_recovery_delivery_issue": 790,
+                    "exceptional_recovery_evidence_path": "recovery.json",
+                    "exceptional_recovery_authorization_path": (
+                        "authorization.json"
+                    ),
+                },
+            ),
+        )
+        for arguments, expected in ordinary_invocations:
+            with (
+                self.subTest(arguments=arguments),
+                mock.patch.object(
+                    MODULE,
+                    "resolve_threads",
+                    return_value=report,
+                ) as resolver,
+                mock.patch.object(
+                    MODULE,
+                    "resolve_late_disposition_threads",
+                ) as late_resolver,
+                redirect_stdout(StringIO()),
+            ):
+                self.assertEqual(MODULE.main(arguments), 0)
+                late_resolver.assert_not_called()
+                called = resolver.call_args.kwargs
+                for key, value in expected.items():
+                    self.assertEqual(called[key], value)
+
+        for final_eligibility in ("final-eligibility.json", None):
+            arguments = list(late)
+            if final_eligibility is not None:
+                arguments.extend(
+                    ["--final-eligibility-evidence", final_eligibility]
+                )
+            with (
+                self.subTest(final_eligibility=final_eligibility),
+                mock.patch.object(MODULE, "resolve_threads") as ordinary,
+                mock.patch.object(
+                    MODULE,
+                    "resolve_late_disposition_threads",
+                    return_value=report,
+                ) as resolver,
+                redirect_stdout(StringIO()),
+            ):
+                self.assertEqual(MODULE.main(arguments), 0)
+                ordinary.assert_not_called()
+                resolver.assert_called_once_with(
+                    "SecPal/api",
+                    724,
+                    123,
+                    "a" * 40,
+                    ("PRRT_exampleOne",),
+                    apply=False,
+                    repository_root="/delivery",
+                    final_reviewed_state_path="reviewed.json",
+                    expected_final_reviewed_state_digest="b" * 64,
+                    final_validation_evidence_path="attestation.json",
+                    final_eligibility_evidence_path=final_eligibility,
+                    late_classification_evidence_path="classification.json",
+                    late_classification_signature_path="classification.sig",
+                    late_disposition_evidence_path="disposition.json",
+                    late_disposition_signature_path="disposition.sig",
+                )
+
+        integration_arguments = [
+            *late,
+            "--final-eligibility-evidence",
+            "final-eligibility.json",
+            "--integration-evidence",
+            "integration.json",
+        ]
+        with (
+            mock.patch.object(MODULE, "resolve_threads") as ordinary,
+            mock.patch.object(
+                MODULE,
+                "resolve_late_disposition_threads",
+                return_value=report,
+            ) as resolver,
+            redirect_stdout(StringIO()),
+        ):
+            self.assertEqual(MODULE.main(integration_arguments), 0)
+            ordinary.assert_not_called()
+            self.assertEqual(
+                resolver.call_args.kwargs["integration_evidence_path"],
+                "integration.json",
             )
 
     def test_recovery_authority_cli_requires_exact_closed_input_set(self) -> None:
@@ -6195,29 +9600,25 @@ class ResolveFixedThreadsTests(TestCase):
 
     def test_historical_attestation_uses_bound_central_registry_history(self) -> None:
         thread_id = "PRRT_HISTORICAL_REGISTRY"
-        current_registry = json.loads(
-            MODULE.REGISTRY_PATH.read_text(encoding="utf-8")
+        historical_head = "e78db9eeb0973d1f5853c4abfafa26e6cc8ab289"
+        historical_registry = json.loads(
+            REAL_SUBPROCESS_RUN(
+                [
+                    "git",
+                    "show",
+                    f"{historical_head}:{MODULE.fast_path.DELIVERY_REGISTRY_PATH}",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
         )
-        historical_registry = copy.deepcopy(current_registry)
-        historical_registry["fixed_thread_resolution"][
-            "allowed_github_operations"
-        ].remove("AUTHENTICATE_LIFECYCLE_PUBLICATION_PROTECTION")
         historical_entry = next(
             entry
             for entry in historical_registry["repositories"]
             if entry["repository"] == "SecPal/.github"
         )
-        historical_entry["focused_validation"] = [
-            command
-            for command in historical_entry["focused_validation"]
-            if command["argv"]
-            != [
-                "python3",
-                "-m",
-                "unittest",
-                "tests/secpal-exceptional-recovery-authority-unit.py",
-            ]
-        ]
         historical_binding = MODULE._validation_registry_binding(
             historical_entry
         )
@@ -6232,10 +9633,7 @@ class ResolveFixedThreadsTests(TestCase):
         current_binding = MODULE._validation_registry_binding(
             MODULE._load_repository_entry("SecPal/.github")
         )
-        self.assertEqual(
-            MODULE.fast_path.digest_json(current_binding),
-            "cc36bf9c14796f925b628ae6884857d2405eb5f06b4d6f1bddcced80e2b6a635",
-        )
+        self.assertNotEqual(current_binding, historical_binding)
 
         with tempfile.TemporaryDirectory() as directory:
             repository_root = Path(directory) / "repository"
