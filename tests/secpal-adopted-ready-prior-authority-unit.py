@@ -17,6 +17,10 @@ from unittest import TestCase, main, mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from scripts.secpal_pr_review import legacy_enrolled_package_loss as legacy_loss
+
 SPEC = importlib.util.spec_from_file_location(
     "secpal_adopted_ready_prior_authority_actions",
     ROOT / "scripts/secpal-pr-review-actions.py",
@@ -60,6 +64,7 @@ LEGACY_PR = 793
 LEGACY_HEAD = "5b8a661cec134256cf31273ab30c38b048999978"
 LEGACY_TREE = "c98663dbcde480c1dcac7858595dabff3cb2fd2c"
 LEGACY_PARENT = "401f0886fdfee9525ced24f703e31087dfa35096"
+LEGACY_REVIEWED_HEAD = "15b0934cc8bd00055311c65eeb9a5e3144e4fe8a"
 LEGACY_LIFECYCLE = (
     "lifecycle-adoption:"
     "67799903a7b2c1ffc6e0fafaf18d3127c39b0d02c94928ec4ec33396e21e85f6"
@@ -289,6 +294,69 @@ def legacy_published() -> SimpleNamespace:
     )
 
 
+def legacy_loss_authentication() -> dict[str, object]:
+    current = legacy_published()
+    proof_value = legacy_proof()
+    safety = {
+        "accepted_main_sha": "9" * 40,
+        "repository_admission_digest": "a" * 64,
+        "current_command_set_digest": "b" * 64,
+        "current_signature_policy_digest": "c" * 64,
+        "source_signer_identity": SIGNER,
+        "ready_prior_authority_schema_version": "1.2",
+        "ready_integration_schema_version": "1.2",
+        "operation": "READY_INTEGRATION_PRIOR_AUTHORITY",
+        "trust_source": "AUTHENTICATED_PROTECTED_MAIN",
+        "integration_transition": "HEAD_ADVANCED",
+        "reviewed_state_digest": REVIEWED_STATE,
+        "reviewed_feedback_digest": REVIEWED_FEEDBACK,
+        "thread_resolution_authority": 0,
+        "recovery_consumed": False,
+        "successful_result": True,
+    }
+    safety["current_safety_digest"] = fast_path.digest_json(safety)
+    return {
+        "schema_version": "1.0",
+        "kind": "SECPAL_LEGACY_ENROLLED_PACKAGE_LOSS_AUTHENTICATION",
+        "domain": "secpal.legacy-enrolled-package-loss-authentication/v1",
+        "authority_temporality": "AUTHENTICATED_NOW_NOT_HISTORICAL",
+        "repository": REPOSITORY,
+        "delivery_issue": LEGACY_ISSUE,
+        "pull_request": LEGACY_PR,
+        "lifecycle_id": LEGACY_LIFECYCLE,
+        "historical_proof_mode": "exact_state_adoption",
+        "proof_version": "1.0",
+        "adoption_proof_digest": LEGACY_PROOF,
+        "adoption_authorization_id": proof_value["authorization"]["authorization_id"],
+        "adoption_authorization_digest": LEGACY_AUTHORIZATION,
+        "current_authority_digest": LEGACY_PROOF,
+        "current_publication_oid": LEGACY_CURRENT_OID,
+        "current_publication_digest": LEGACY_CURRENT_DIGEST,
+        "head_sha": LEGACY_HEAD,
+        "tree_sha": LEGACY_TREE,
+        "parent_sha": LEGACY_PARENT,
+        "source_signer_identity": SIGNER,
+        "commit_signature_evidence_digest": LEGACY_SIGNATURE,
+        "historical_provider_summary_digest": "1" * 64,
+        "evidence_time_registry_digest": LEGACY_REGISTRY,
+        "historical_command_set_digest": LEGACY_COMMAND_SET,
+        "source_validation_evidence_digest": LEGACY_SOURCE_VALIDATION,
+        "historical_validation_receipt_digest": LEGACY_RECEIPT,
+        "historical_final_attestation_digest": LEGACY_ATTESTATION,
+        "observed_history_digest": proof_value["observed_history_digest"],
+        "intended_state_digest": proof_value["intended_state_digest"],
+        "head_advanced_count": 0,
+        "head_advanced_history_digest": proof_value["head_advanced_history_digest"],
+        "accepted_main_sha": "9" * 40,
+        "loss_policy_record_digest": "d" * 64,
+        "package_store_survey_digest": "e" * 64,
+        "historical_package_status": "UNAVAILABLE",
+        "historical_bytes_reconstructed": False,
+        "current_safety": safety,
+        "thread_resolution_authority": 0,
+        "recovery_consumed": False,
+        "authentication_digest": "f" * 64,
+    }
 class AdoptedReadyPriorAuthorityTests(TestCase):
     def test_authority_imports_ignore_repository_bytecode_caches(self) -> None:
         cache_root = Path(actions.sys.pycache_prefix).resolve(strict=True)
@@ -325,8 +393,15 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
                     "signer": {"kind": "SSH_PRINCIPAL", "identity": SIGNER},
                 },
             ),
+            mock.patch.object(
+                lifecycle_authority,
+                "authenticate_legacy_enrolled_validation_evidence_loss",
+                side_effect=lifecycle_authority.LifecycleAuthorityError(
+                    "no maintained legacy loss"
+                ),
+            ),
         ):
-            return actions._derive_exact_state_adoption_v3_ready_prior_authority(
+            return actions._derive_exact_state_adoption_ready_prior_authority(
                 repository_root=ROOT.parent,
                 repository=REPOSITORY,
                 delivery_issue=ISSUE,
@@ -336,30 +411,16 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
                 reviewed_feedback_digest=reviewed_feedback_digest,
             )
 
-    def test_target_827_shape_derives_v3_ready_prior_authority(self) -> None:
-        manifest = self.derive()
-        self.assertEqual(manifest["schema_version"], "1.2")
-        self.assertEqual(manifest["source_authority_mode"], "EXACT_STATE_ADOPTION_V3")
-        self.assertEqual(manifest["prior_delivery_head_sha"], HEAD)
-        self.assertEqual(manifest["prior_delivery_tree_sha"], TREE)
-        self.assertEqual(manifest["source_authority"]["source_parent_sha"], PARENT)
-        self.assertEqual(manifest["source_authority"]["adoption_proof_digest"], PROOF)
-        self.assertEqual(manifest["source_authority"]["loss_admission_digest"], LOSS)
-        self.assertEqual(manifest["source_authority"]["review_budget_admission_digest"], BUDGET)
-        self.assertEqual(manifest["source_authority"]["enrollment_publication"]["object_oid"], ENROLLMENT_OID)
-        self.assertEqual(manifest["lifecycle"]["ready_transition_count"], 1)
-        self.assertEqual(manifest["historical_companions"], {
-            "reviewed_state_bytes": "UNAVAILABLE",
-            "validation_receipt_bytes": "UNAVAILABLE",
-            "final_attestation_bytes": "UNAVAILABLE",
-            "historical_bytes_reconstructed": False,
-        })
-        self.assertEqual(
-            fast_path.normalize_ready_integration_prior_authority(manifest), manifest
-        )
-
-    def test_target_792_shape_derives_authenticated_legacy_loss_authority(self) -> None:
-        current = legacy_published()
+    def derive_legacy(
+        self,
+        current: SimpleNamespace | None = None,
+        authenticated_loss: dict[str, object] | None = None,
+        *,
+        reviewed_state_digest: str | None = None,
+        reviewed_feedback_digest: str | None = None,
+    ) -> dict[str, object]:
+        current = current or legacy_published()
+        authenticated_loss = authenticated_loss or legacy_loss_authentication()
         with (
             mock.patch.object(
                 actions,
@@ -390,14 +451,51 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
                     "signer": {"kind": "SSH_PRINCIPAL", "identity": SIGNER},
                 },
             ),
+            mock.patch.object(
+                lifecycle_authority,
+                "authenticate_legacy_enrolled_validation_evidence_loss",
+                return_value=object(),
+            ),
+            mock.patch.object(
+                lifecycle_authority,
+                "legacy_enrolled_validation_evidence_loss_binding",
+                return_value=authenticated_loss,
+            ),
         ):
-            manifest = actions._derive_exact_state_adoption_v3_ready_prior_authority(
+            return actions._derive_exact_state_adoption_ready_prior_authority(
                 repository_root=ROOT.parent,
                 repository=REPOSITORY,
                 delivery_issue=LEGACY_ISSUE,
                 pull_request=LEGACY_PR,
                 binding={"signature_policy": {"accepted_formats": ["ssh"]}},
+                reviewed_state_digest=reviewed_state_digest,
+                reviewed_feedback_digest=reviewed_feedback_digest,
             )
+
+    def test_target_827_shape_derives_v3_ready_prior_authority(self) -> None:
+        manifest = self.derive()
+        self.assertEqual(manifest["schema_version"], "1.2")
+        self.assertEqual(manifest["source_authority_mode"], "EXACT_STATE_ADOPTION_V3")
+        self.assertEqual(manifest["prior_delivery_head_sha"], HEAD)
+        self.assertEqual(manifest["prior_delivery_tree_sha"], TREE)
+        self.assertEqual(manifest["source_authority"]["source_parent_sha"], PARENT)
+        self.assertEqual(manifest["source_authority"]["adoption_proof_digest"], PROOF)
+        self.assertEqual(manifest["source_authority"]["loss_admission_digest"], LOSS)
+        self.assertEqual(manifest["source_authority"]["review_budget_admission_digest"], BUDGET)
+        self.assertEqual(manifest["source_authority"]["enrollment_publication"]["object_oid"], ENROLLMENT_OID)
+        self.assertEqual(manifest["lifecycle"]["ready_transition_count"], 1)
+        self.assertEqual(manifest["historical_companions"], {
+            "reviewed_state_bytes": "UNAVAILABLE",
+            "validation_receipt_bytes": "UNAVAILABLE",
+            "final_attestation_bytes": "UNAVAILABLE",
+            "historical_bytes_reconstructed": False,
+        })
+        self.assertEqual(
+            fast_path.normalize_ready_integration_prior_authority(manifest), manifest
+        )
+
+    def test_target_792_shape_derives_authenticated_legacy_loss_authority(self) -> None:
+        manifest = self.derive_legacy()
         self.assertEqual(manifest["schema_version"], "1.2")
         self.assertEqual(
             manifest["source_authority_mode"],
@@ -421,6 +519,298 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
         self.assertEqual(
             fast_path.normalize_ready_integration_prior_authority(manifest), manifest
         )
+
+    def test_legacy_loss_exact_delivery_and_digest_bindings_fail_closed(self) -> None:
+        mutations = {
+            "repository": "SecPal/api",
+            "delivery_issue": 791,
+            "pull_request": 794,
+            "lifecycle_id": "lifecycle-adoption:" + "0" * 64,
+            "historical_proof_mode": "native_lifecycle",
+            "proof_version": "2.0",
+            "current_publication_oid": "0" * 40,
+            "current_publication_digest": "0" * 64,
+            "head_sha": "0" * 40,
+            "tree_sha": "0" * 40,
+            "parent_sha": "0" * 40,
+            "source_signer_identity": "alternate@secpal.app",
+            "commit_signature_evidence_digest": "0" * 64,
+            "source_validation_evidence_digest": "0" * 64,
+            "historical_validation_receipt_digest": "0" * 64,
+            "historical_final_attestation_digest": "0" * 64,
+            "observed_history_digest": "0" * 64,
+            "intended_state_digest": "0" * 64,
+            "head_advanced_count": 1,
+            "head_advanced_history_digest": "0" * 64,
+            "adoption_proof_digest": "0" * 64,
+            "adoption_authorization_id": "invented:792",
+            "adoption_authorization_digest": "0" * 64,
+            "accepted_main_sha": "0" * 40,
+            "historical_package_status": "NOT_SUPPLIED",
+            "historical_bytes_reconstructed": True,
+            "thread_resolution_authority": 1,
+            "recovery_consumed": True,
+        }
+        for field, value in mutations.items():
+            authentication = legacy_loss_authentication()
+            authentication[field] = value
+            with self.subTest(field=field), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                self.derive_legacy(authenticated_loss=authentication)
+
+    def test_legacy_loss_current_safety_is_accepted_main_selected(self) -> None:
+        mutations = {
+            "accepted_main_sha": "0" * 40,
+            "operation": "THREAD_RESOLUTION",
+            "trust_source": "CANDIDATE",
+            "integration_transition": "PR_REBOUND",
+            "ready_prior_authority_schema_version": "1.1",
+            "ready_integration_schema_version": "1.1",
+            "thread_resolution_authority": 1,
+            "recovery_consumed": True,
+            "successful_result": False,
+        }
+        for field, value in mutations.items():
+            authentication = legacy_loss_authentication()
+            authentication["current_safety"][field] = value
+            with self.subTest(field=field), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                self.derive_legacy(authenticated_loss=authentication)
+
+    def test_legacy_loss_lifecycle_is_finite_and_has_no_ready_churn(self) -> None:
+        mutations = {
+            "draft": True,
+            "ready": False,
+            "unrestricted_review_count": 2,
+            "remediation_cycle_count": 3,
+            "ready_transition_count": 2,
+            "exceptional_recovery_count": 1,
+            "exceptional_continuation_count": 1,
+            "cycle_3_absent": False,
+        }
+        for field, value in mutations.items():
+            current = legacy_published()
+            current.lifecycle.state[field] = value
+            with self.subTest(field=field), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                self.derive_legacy(current=current)
+        current = legacy_published()
+        current.lifecycle.state["ready_history"][0]["transition_kind"] = (
+            "READY_TO_DRAFT"
+        )
+        with self.assertRaises(fast_path.SecurityBlocker):
+            self.derive_legacy(current=current)
+
+    def test_legacy_loss_reviewed_predecessor_matches_current_safety(self) -> None:
+        self.derive_legacy(
+            reviewed_state_digest=REVIEWED_STATE,
+            reviewed_feedback_digest=REVIEWED_FEEDBACK,
+        )
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "reviewed predecessor"
+        ):
+            self.derive_legacy(
+                reviewed_state_digest="0" * 64,
+                reviewed_feedback_digest=REVIEWED_FEEDBACK,
+            )
+
+    def test_legacy_loss_normalization_rejects_laundering_and_thread_authority(self) -> None:
+        manifest = self.derive_legacy()
+        cases = [
+            ("historical_companions", "reviewed_state_bytes", "AVAILABLE"),
+            ("historical_companions", "historical_bytes_reconstructed", True),
+            ("source_authority", "thread_resolution_authority", 1),
+            ("source_authority", "recovery_consumed", True),
+            ("source_authority", "package_store_survey_digest", "0" * 64),
+        ]
+        for section, field, value in cases:
+            candidate = copy.deepcopy(manifest)
+            candidate[section][field] = value
+            with self.subTest(field=field), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                actions._require_exact_adopted_ready_manifest(candidate, manifest)
+
+    def test_legacy_loss_store_survey_is_bounded_and_fail_closed(self) -> None:
+        record = legacy_loss._validate_record(
+            json.loads(
+                (ROOT / "policies/legacy-enrolled-package-loss.json").read_text()
+            )["authentications"][0]
+        )
+        current = SimpleNamespace(
+            publication_oid=LEGACY_CURRENT_OID,
+            publication_digest=LEGACY_CURRENT_DIGEST,
+        )
+
+        def git_projection(
+            _root: Path, arguments: list[str], _label: str
+        ) -> str:
+            if arguments == ["remote", "get-url", "origin"]:
+                return "git@github.com:SecPal/.github.git\n"
+            if arguments[0] == "show":
+                return ".context/\n"
+            head = arguments[-1].split("^", 1)[0]
+            history = next(item for item in record["source_history"] if item["head_sha"] == head)
+            if arguments[0] == "rev-parse":
+                return history["tree_sha"] + "\n"
+            if arguments[0] == "rev-list":
+                return f'{head} {history["parent_sha"]}\n'
+            if arguments[0] == "ls-tree":
+                return ".gitignore\nAGENTS.md\n"
+            raise AssertionError(arguments)
+
+        with mock.patch.object(
+            legacy_loss, "_git_text", side_effect=git_projection
+        ):
+            survey = legacy_loss._survey_package_stores(ROOT, record, current)
+        self.assertEqual(survey["result"], "UNAVAILABLE")
+        self.assertFalse(survey["historical_bytes_reconstructed"])
+
+        def tracked_artifact(
+            root: Path, arguments: list[str], label: str
+        ) -> str:
+            result = git_projection(root, arguments, label)
+            if arguments[0] == "ls-tree":
+                return result + ".context/validation-receipt.json\n"
+            return result
+
+        with mock.patch.object(
+            legacy_loss, "_git_text", side_effect=tracked_artifact
+        ), self.assertRaisesRegex(
+            legacy_loss.authority.LifecycleAuthorityError,
+            "bytes exist or a maintained store is unsurveyed",
+        ):
+            legacy_loss._survey_package_stores(ROOT, record, current)
+
+    def test_legacy_loss_policy_digest_binds_every_historical_identity(self) -> None:
+        source = json.loads(
+            (ROOT / "policies/legacy-enrolled-package-loss.json").read_text()
+        )["authentications"][0]
+        legacy_loss._validate_record(source)
+        for field in (
+            "evidence_time_registry_digest",
+            "historical_command_set_digest",
+            "source_validation_evidence_digest",
+            "historical_validation_receipt_digest",
+            "historical_final_attestation_digest",
+            "historical_provider_summary_digest",
+            "current_publication_digest",
+            "package_store_survey_digest",
+        ):
+            changed = copy.deepcopy(source)
+            changed[field] = "0" * 64
+            with self.subTest(field=field), self.assertRaises(
+                legacy_loss.authority.LifecycleAuthorityError
+            ):
+                legacy_loss._validate_record(changed)
+        changed = copy.deepcopy(source)
+        changed["persistence_contract"]["unsurveyed_maintained_stores"] = [
+            "CALLER_WORKSPACE"
+        ]
+        with self.assertRaisesRegex(
+            legacy_loss.authority.LifecycleAuthorityError,
+            "persistence boundary",
+        ):
+            legacy_loss._validate_record(changed)
+
+    def test_legacy_provider_summary_requires_exact_pinned_bytes(self) -> None:
+        body = "\n".join([
+            fast_path.CODEX_REVIEW_SUMMARY_MARKER,
+            "| Review | Status | Commit | Review trigger |",
+            "| --- | --- | --- | --- |",
+            (
+                "| 📝 **Code Review** | ✅ **Completed** | "
+                f"`{LEGACY_REVIEWED_HEAD[:7]}` | Manual request |"
+            ),
+        ])
+        binding = legacy_loss.VerifiedLegacyProviderHeadBinding(
+            repository=REPOSITORY,
+            delivery_issue=LEGACY_ISSUE,
+            pull_request=LEGACY_PR,
+            lifecycle_id=LEGACY_LIFECYCLE,
+            current_head_sha=LEGACY_HEAD,
+            provider_head_sha=LEGACY_REVIEWED_HEAD,
+            current_authority_digest=LEGACY_PROOF,
+            current_publication_oid=LEGACY_CURRENT_OID,
+            current_publication_digest=LEGACY_CURRENT_DIGEST,
+            adoption_proof_digest=LEGACY_PROOF,
+            historical_provider_summary_digest=fast_path.digest_text(body),
+        )
+        with mock.patch.object(
+            legacy_loss.VerifiedLegacyProviderHeadBinding,
+            "_reauthenticate",
+        ):
+            binding.verify_historical_provider_summary(
+                body=body,
+                repository=REPOSITORY,
+                pull_request=LEGACY_PR,
+                current_head_sha=LEGACY_HEAD,
+            )
+            actions._require_review_providers_terminal(
+                {
+                    "headRefOid": LEGACY_HEAD,
+                    "isDraft": False,
+                    "comments": {
+                        "nodes": [{
+                            "body": body,
+                            "author": {"login": "chatgpt-codex-connector"},
+                        }],
+                        "pageInfo": {"hasNextPage": False},
+                    },
+                    "reviewRequests": {
+                        "nodes": [],
+                        "pageInfo": {"hasNextPage": False},
+                    },
+                },
+                repository=REPOSITORY,
+                pull_request_number=LEGACY_PR,
+                ready_source_provider_binding=binding,
+            )
+            for changed in (
+                body + "\ncaller text",
+                body.replace("Completed", "Running"),
+                body + "\n| 🔒 **Security Review** | ✅ **Completed** | `5b8a661` | Manual request |",
+            ):
+                with self.subTest(changed=changed[-20:]), self.assertRaises(
+                    legacy_loss.fast_path.SecurityBlocker
+                ):
+                    binding.verify_historical_provider_summary(
+                        body=changed,
+                        repository=REPOSITORY,
+                        pull_request=LEGACY_PR,
+                        current_head_sha=LEGACY_HEAD,
+                    )
+
+    def test_legacy_loss_binding_rejects_caller_created_or_changed_facts(self) -> None:
+        authentication = legacy_loss_authentication()
+        unsigned = copy.deepcopy(authentication)
+        unsigned.pop("authentication_digest")
+        authentication["authentication_digest"] = (
+            legacy_loss.authority.digest_json(unsigned)
+        )
+        sealed = legacy_loss.VerifiedLegacyEnrolledPackageLoss(
+            authentication, legacy_loss._VERIFIED
+        )
+        self.assertEqual(
+            legacy_loss.verified_binding(sealed), authentication
+        )
+        with self.assertRaisesRegex(
+            legacy_loss.authority.LifecycleAuthorityError, "verifier-derived"
+        ):
+            legacy_loss.verified_binding(authentication)
+        changed = copy.deepcopy(authentication)
+        changed["head_sha"] = "0" * 40
+        with self.assertRaisesRegex(
+            legacy_loss.authority.LifecycleAuthorityError, "digest changed"
+        ):
+            legacy_loss.verified_binding(
+                legacy_loss.VerifiedLegacyEnrolledPackageLoss(
+                    changed, legacy_loss._VERIFIED
+                )
+            )
 
     def test_v12_reviewed_predecessor_matches_authenticated_current_safety(self) -> None:
         self.derive(
@@ -574,7 +964,7 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
                 "candidate-local Ready prior-authority bridge is forbidden"
             ),
         ), self.assertRaisesRegex(fast_path.SecurityBlocker, "candidate-local"):
-            actions._derive_exact_state_adoption_v3_ready_prior_authority(
+            actions._derive_exact_state_adoption_ready_prior_authority(
                 repository_root=ROOT.parent,
                 repository=REPOSITORY,
                 delivery_issue=ISSUE,
@@ -632,7 +1022,7 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
                     candidate_actions.read_bytes(),
                     (ROOT / "scripts/secpal-pr-review-actions.py").read_bytes(),
                 )
-                manifest = actions._derive_exact_state_adoption_v3_ready_prior_authority(
+                manifest = actions._derive_exact_state_adoption_ready_prior_authority(
                     repository_root=candidate_root,
                     repository=REPOSITORY,
                     delivery_issue=ISSUE,
@@ -885,7 +1275,7 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
                 fast_path.SecurityBlocker, "publication verifier is unavailable"
             ),
         ):
-            actions._derive_exact_state_adoption_v3_ready_prior_authority(
+            actions._derive_exact_state_adoption_ready_prior_authority(
                 repository_root=ROOT.parent,
                 repository=REPOSITORY,
                 delivery_issue=ISSUE,
@@ -935,7 +1325,7 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             mock.patch.object(actions, "_read_json", return_value=manifest),
             mock.patch.object(
                 actions,
-                "_derive_exact_state_adoption_v3_ready_prior_authority",
+                "_derive_exact_state_adoption_ready_prior_authority",
                 return_value=manifest,
             ),
             mock.patch.object(actions, "_verify_prior_authority_tag") as tag,
@@ -988,7 +1378,7 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             mock.patch.object(actions, "_read_json", return_value=manifest),
             mock.patch.object(
                 actions,
-                "_derive_exact_state_adoption_v3_ready_prior_authority",
+                "_derive_exact_state_adoption_ready_prior_authority",
                 return_value=manifest,
             ),
             mock.patch.object(actions, "_verify_prior_authority_tag") as tag,
@@ -1051,7 +1441,7 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
         with (
             mock.patch.object(actions, "_read_json", return_value=ordinary),
             mock.patch.object(
-                actions, "_derive_exact_state_adoption_v3_ready_prior_authority"
+                actions, "_derive_exact_state_adoption_ready_prior_authority"
             ) as bridge,
             self.assertRaisesRegex(fast_path.SecurityBlocker, "historical companions"),
         ):

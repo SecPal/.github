@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-12 - Authenticate Legacy Enrolled Evidence Loss
+
+**Fixed:**
+
+- Authenticate the bounded historical validation-package loss for the exact
+  enrolled Ready delivery in issue 792 without backdating authority or
+  reconstructing historical companion documents.
+- Feed the verifier-derived loss fact through the existing Exact-State-Adoption
+  Ready prior-authority bridge while preserving current-policy safety, finite
+  lifecycle limits, replay resistance, and zero thread-resolution authority.
+
 ## 2026-09-11 - Separate Recovered Base Provenance From Current Main
 
 **Fixed:**

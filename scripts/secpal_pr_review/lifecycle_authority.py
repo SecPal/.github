@@ -4955,3 +4955,25 @@ def lifecycle_authority_binding(result: VerifiedLifecycleAuthority) -> dict[str,
         "verified_facts": facts,
     }
     return {**fields, "binding_digest": digest_json(fields)}
+
+
+def authenticate_legacy_enrolled_validation_evidence_loss(
+    repository: str,
+    delivery_issue: int,
+    repository_root: Path,
+) -> Any:
+    """Authenticate the maintained post-enrollment package-loss exception."""
+
+    from . import legacy_enrolled_package_loss
+
+    return legacy_enrolled_package_loss.authenticate(
+        repository, delivery_issue, repository_root
+    )
+
+
+def legacy_enrolled_validation_evidence_loss_binding(value: Any) -> dict[str, Any]:
+    """Expose only the sealed canonical facts from the package-loss verifier."""
+
+    from . import legacy_enrolled_package_loss
+
+    return legacy_enrolled_package_loss.verified_binding(value)

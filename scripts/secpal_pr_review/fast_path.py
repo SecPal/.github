@@ -1108,7 +1108,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         else "RECOVERED"
         if schema_version == "1.2"
         and keys == READY_INTEGRATION_RECOVERED_PRIOR_AUTHORITY_KEYS
-        else "ADOPTED_V3"
+        else "ADOPTED"
         if schema_version == "1.2"
         and keys == READY_INTEGRATION_ADOPTED_PRIOR_AUTHORITY_KEYS
         else None
@@ -1145,7 +1145,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         "exceptional_continuations",
         "cycle_3",
     }
-    if authority_mode == "ADOPTED_V3":
+    if authority_mode == "ADOPTED":
         lifecycle_keys |= {
             "ready_transition_count",
             "ready_history",
@@ -1187,8 +1187,16 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         or not 0 <= continuations <= 1
     ):
         raise SecurityBlocker("Ready integration prior lifecycle authority is invalid")
-    if authority_mode == "ADOPTED_V3":
+    if authority_mode == "ADOPTED":
         ready_history = lifecycle.get("ready_history")
+        source_mode = value.get("source_authority_mode")
+        ready_history_keys = (
+            {"sequence", "transition_kind", "event_authorization_digest"}
+            if source_mode == "EXACT_STATE_ADOPTION_V3"
+            else {"sequence", "transition_kind", "observation_digest"}
+            if source_mode == "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS"
+            else None
+        )
         if (
             lifecycle.get("historical_proof_mode") != "exact_state_adoption"
             or isinstance(lifecycle.get("ready_transition_count"), bool)
@@ -1196,12 +1204,15 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             or not isinstance(ready_history, list)
             or len(ready_history) != 1
             or not isinstance(ready_history[0], dict)
-            or set(ready_history[0])
-            != {"sequence", "transition_kind", "event_authorization_digest"}
+            or set(ready_history[0]) != ready_history_keys
             or ready_history[0].get("sequence") != 1
             or ready_history[0].get("transition_kind") != "DRAFT_TO_READY"
             or not _require_digest(
-                ready_history[0].get("event_authorization_digest"),
+                ready_history[0].get(
+                    "event_authorization_digest"
+                    if source_mode == "EXACT_STATE_ADOPTION_V3"
+                    else "observation_digest"
+                ),
                 "Ready integration transition authorization",
             )
             or lifecycle.get("exceptional_recovery_history") != []
@@ -1232,7 +1243,9 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
                 value.get("prior_final_attestation_digest"),
                 "prior final attestation",
             )
-            if authority_mode != "ADOPTED_V3"
+            if authority_mode != "ADOPTED"
+            or value.get("source_authority_mode")
+            == "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS"
             else value.get("prior_final_attestation_digest")
         ),
         "expected_signer": {"kind": signer_kind, "identity": signer_identity},
@@ -1291,11 +1304,18 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             "historical_bytes_reconstructed": False,
         }
         return normalized
-    if normalized["prior_final_attestation_digest"] is not None:
+    source_mode = value.get("source_authority_mode")
+    if (
+        source_mode == "EXACT_STATE_ADOPTION_V3"
+        and normalized["prior_final_attestation_digest"] is not None
+    ):
         raise SecurityBlocker(
             "adopted Ready authority cannot claim a historical final attestation"
         )
-    if value.get("source_authority_mode") != "EXACT_STATE_ADOPTION_V3":
+    if source_mode not in {
+        "EXACT_STATE_ADOPTION_V3",
+        "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS",
+    }:
         raise SecurityBlocker("adopted Ready source authority mode is unsupported")
     companions = value.get("historical_companions")
     expected_companions = {
@@ -1307,6 +1327,10 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
     if companions != expected_companions:
         raise SecurityBlocker("adopted Ready historical companion status is invalid")
     source = value.get("source_authority")
+    if source_mode == "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS":
+        return _normalize_legacy_enrolled_ready_source(
+            normalized, source, source_mode, companions
+        )
     source_keys = {
         "proof_version",
         "source_parent_sha",
@@ -1390,6 +1414,115 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             raise SecurityBlocker("adopted Ready transition changed the source head")
     normalized.update(
         source_authority_mode="EXACT_STATE_ADOPTION_V3",
+        source_authority=copy.deepcopy(source),
+        historical_companions=copy.deepcopy(companions),
+    )
+    return normalized
+
+
+def _normalize_legacy_enrolled_ready_source(
+    normalized: dict[str, Any],
+    source: Any,
+    source_mode: str,
+    companions: dict[str, Any],
+) -> dict[str, Any]:
+    """Normalize the closed accepted-main authentication for legacy loss."""
+
+    source_keys = {
+        "proof_version",
+        "source_parent_sha",
+        "source_signer_identity",
+        "commit_signature_evidence_digest",
+        "historical_provider_summary_digest",
+        "evidence_time_registry_digest",
+        "historical_command_set_digest",
+        "source_validation_evidence_digest",
+        "historical_receipt_provenance_digest",
+        "historical_final_attestation_provenance_digest",
+        "current_safety_digest",
+        "observed_history_digest",
+        "intended_state_digest",
+        "head_advanced_count",
+        "head_advanced_history_digest",
+        "loss_authentication_digest",
+        "loss_policy_record_digest",
+        "package_store_survey_digest",
+        "accepted_main_sha",
+        "adoption_proof_digest",
+        "adoption_authorization_id",
+        "adoption_authorization_digest",
+        "enrollment_publication",
+        "ready_transition_observation_digest",
+        "thread_resolution_authority",
+        "recovery_consumed",
+    }
+    if not isinstance(source, dict) or set(source) != source_keys:
+        raise SecurityBlocker("legacy enrolled Ready source authority is malformed")
+    enrollment = source.get("enrollment_publication")
+    head_advanced_count = source.get("head_advanced_count")
+    if (
+        source.get("proof_version") != "1.0"
+        or _require_oid(source.get("source_parent_sha"), "adopted source parent")
+        == normalized["prior_delivery_head_sha"]
+        or not _require_string(
+            source.get("source_signer_identity"), "adopted source signer"
+        )
+        or source.get("source_signer_identity")
+        != normalized["expected_signer"]["identity"]
+        or isinstance(head_advanced_count, bool)
+        or head_advanced_count != 0
+        or source.get("thread_resolution_authority") != 0
+        or source.get("recovery_consumed") is not False
+        or not isinstance(enrollment, dict)
+        or set(enrollment) != {"object_oid", "publication_digest"}
+        or _require_oid(
+            enrollment.get("object_oid"), "legacy enrollment publication"
+        )
+        != normalized["publication"]["object_oid"]
+        or _require_digest(
+            enrollment.get("publication_digest"), "legacy enrollment publication"
+        )
+        != normalized["publication"]["publication_digest"]
+        or source.get("historical_receipt_provenance_digest")
+        != normalized["prior_validation_receipt_digest"]
+        or source.get("historical_final_attestation_provenance_digest")
+        != normalized["prior_final_attestation_digest"]
+        or source.get("ready_transition_observation_digest")
+        != normalized["lifecycle"]["ready_history"][0]["observation_digest"]
+    ):
+        raise SecurityBlocker("legacy enrolled Ready source authority is invalid")
+    for field, label in (
+        ("commit_signature_evidence_digest", "adopted commit signature evidence"),
+        ("historical_provider_summary_digest", "historical provider summary"),
+        ("evidence_time_registry_digest", "historical registry"),
+        ("historical_command_set_digest", "historical command set"),
+        ("source_validation_evidence_digest", "historical source validation"),
+        ("historical_receipt_provenance_digest", "historical receipt provenance"),
+        (
+            "historical_final_attestation_provenance_digest",
+            "historical final-attestation provenance",
+        ),
+        ("current_safety_digest", "adopted current safety"),
+        ("observed_history_digest", "adopted observed history"),
+        ("intended_state_digest", "adopted intended state"),
+        ("head_advanced_history_digest", "adopted head history"),
+        ("loss_authentication_digest", "legacy package-loss authentication"),
+        ("loss_policy_record_digest", "legacy package-loss policy"),
+        ("package_store_survey_digest", "legacy package-store survey"),
+        ("adoption_proof_digest", "exact adoption proof"),
+        ("adoption_authorization_digest", "exact adoption authorization"),
+        (
+            "ready_transition_observation_digest",
+            "legacy Ready transition observation",
+        ),
+    ):
+        _require_digest(source.get(field), label)
+    _require_oid(source.get("accepted_main_sha"), "accepted main")
+    _require_string(
+        source.get("adoption_authorization_id"), "exact adoption authorization"
+    )
+    normalized.update(
+        source_authority_mode=source_mode,
         source_authority=copy.deepcopy(source),
         historical_companions=copy.deepcopy(companions),
     )
