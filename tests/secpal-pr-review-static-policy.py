@@ -850,6 +850,7 @@ LOADED_MODULE_ATTRIBUTES = {
         },
         "lifecycle_orchestration": {
             "LifecycleOrchestrationError",
+            "verify_collision_continuation_authority",
             "verify_exceptional_recovery_authority",
             "verify_exceptional_continuation_authority",
         },

@@ -709,7 +709,7 @@ def disposition_schema_version_for_decision(
     raise LateDispositionError("late disposition decision is not schema-authorized")
 
 
-def parse_classification_artifact(
+def _parse_classification_artifact(
     artifact_path: Path,
     signature_path: Path,
     *,
@@ -720,6 +720,7 @@ def parse_classification_artifact(
     head_sha: str,
     thread_id: str,
     signature_environment: dict[str, str] | None = None,
+    allow_resolved: bool,
 ) -> ClassificationEvidence:
     canonical = verify_detached_signature(
         artifact_path,
@@ -817,7 +818,8 @@ def parse_classification_artifact(
         or not isinstance(item.get("reply_count"), int)
         or isinstance(item.get("reply_count"), bool)
         or item["reply_count"] < 0
-        or item.get("is_resolved") is not False
+        or not isinstance(item.get("is_resolved"), bool)
+        or (item["is_resolved"] and not allow_resolved)
         or not isinstance(item.get("is_outdated"), bool)
         or not isinstance(technically_blocking, bool)
     ):
@@ -846,7 +848,7 @@ def parse_classification_artifact(
             finding_body_digest=item["finding_body_digest"],
             reply_state_digest=item["reply_state_digest"],
             reply_count=item["reply_count"],
-            is_resolved=False,
+            is_resolved=item["is_resolved"],
             is_outdated=item["is_outdated"],
             classification=classification,
             disposition=disposition,
@@ -854,6 +856,66 @@ def parse_classification_artifact(
             classification_evidence_digest=digest,
         ),
         technical_blockers=tuple(blockers),
+    )
+
+
+def parse_classification_artifact(
+    artifact_path: Path,
+    signature_path: Path,
+    *,
+    expected_signer: SignerIdentity,
+    repository: str,
+    delivery_issue_number: int,
+    pull_request_number: int,
+    head_sha: str,
+    thread_id: str,
+    signature_environment: dict[str, str] | None = None,
+) -> ClassificationEvidence:
+    """Verify the ordinary unresolved, resolution-eligible classification."""
+
+    return _parse_classification_artifact(
+        artifact_path,
+        signature_path,
+        expected_signer=expected_signer,
+        repository=repository,
+        delivery_issue_number=delivery_issue_number,
+        pull_request_number=pull_request_number,
+        head_sha=head_sha,
+        thread_id=thread_id,
+        signature_environment=signature_environment,
+        allow_resolved=False,
+    )
+
+
+def parse_preserved_thread_classification_artifact(
+    artifact_path: Path,
+    signature_path: Path,
+    *,
+    expected_signer: SignerIdentity,
+    repository: str,
+    delivery_issue_number: int,
+    pull_request_number: int,
+    head_sha: str,
+    thread_id: str,
+    signature_environment: dict[str, str] | None = None,
+) -> ClassificationEvidence:
+    """Verify a prior classification while preserving its signed thread state.
+
+    This read-only collision-predecessor boundary grants no resolution
+    eligibility. The ordinary parser retains its unresolved-only semantics.
+    """
+
+    return _parse_classification_artifact(
+        artifact_path,
+        signature_path,
+        expected_signer=expected_signer,
+        repository=repository,
+        delivery_issue_number=delivery_issue_number,
+        pull_request_number=pull_request_number,
+        head_sha=head_sha,
+        thread_id=thread_id,
+        signature_environment=signature_environment,
+        allow_resolved=True,
     )
 
 

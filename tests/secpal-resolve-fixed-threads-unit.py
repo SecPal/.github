@@ -3343,6 +3343,84 @@ class ResolveFixedThreadsTests(TestCase):
             resulting_head_sha="8" * 40,
         )
 
+    def test_collision_continuation_uses_typed_zero_thread_authority(self) -> None:
+        continuation_digest = "9" * 64
+        validation = MODULE.ValidationEvidence(
+            kind="attestation",
+            evidence_digest="1" * 64,
+            validated_tree_sha="2" * 40,
+            validation_receipt_digest="3" * 64,
+            eligibility_evidence_digest="4" * 64,
+            attestation={
+                "exceptional_continuation_evidence_digest": continuation_digest
+            },
+        )
+        reviewed = MODULE.ReviewedState(
+            head_sha="5" * 40,
+            state_digest="6" * 64,
+            feedback_digest="7" * 64,
+            targets={},
+            thread_ids=frozenset(),
+            payload={"schema_version": "1.0"},
+        )
+        eligibility_payload = {"schema_version": "1.1", "eligible_threads": []}
+        eligibility = MODULE.EligibilityEvidence(
+            MODULE._digest_json(eligibility_payload),
+            MODULE._canonical_json_bytes(eligibility_payload),
+            (),
+        )
+        collision = {
+            "schema_version": "1.1",
+            "trigger": "IMMUTABLE_EVIDENCE_VERSION_COLLISION",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence_path = root / "continuation.json"
+            authorization_path = root / "authorization.json"
+            evidence_path.write_text(json.dumps(collision), encoding="utf-8")
+            authorization_path.write_bytes(b"signed collision authorization")
+            verifier = mock.Mock(
+                return_value=mock.Mock(
+                    continuation_digest=continuation_digest,
+                    finding_ids=(),
+                    thread_ids=(),
+                )
+            )
+            with mock.patch.object(
+                MODULE.lifecycle_orchestration,
+                "verify_collision_continuation_authority",
+                verifier,
+                create=True,
+            ), mock.patch.object(
+                MODULE.lifecycle_orchestration,
+                "verify_exceptional_continuation_authority",
+                side_effect=AssertionError("collision reached material verifier"),
+            ):
+                MODULE.verify_continuation_bound_source_authority(
+                    validation,
+                    reviewed,
+                    eligibility,
+                    repository_root=root,
+                    repository="SecPal/.github",
+                    delivery_issue=883,
+                    pull_request=884,
+                    resulting_head_sha="8" * 40,
+                    continuation_evidence_path=evidence_path,
+                    continuation_authorization_path=authorization_path,
+                )
+
+        verifier.assert_called_once_with(
+            collision,
+            orchestration_authorization=b"signed collision authorization",
+            reviewed_state_evidence={"schema_version": "1.0"},
+            eligibility_evidence=eligibility_payload,
+            repository_root=root,
+            repository="SecPal/.github",
+            delivery_issue=883,
+            pull_request=884,
+            resulting_head_sha="8" * 40,
+        )
+
     def test_continuation_authority_consumer_rejects_missing_or_substituted_kind(self) -> None:
         reviewed = MODULE.ReviewedState(
             head_sha="5" * 40,

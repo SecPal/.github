@@ -3615,6 +3615,7 @@ def _verify_successor_findings(
         current_threads=current_threads,
         rejected_candidate=False,
         classified_codex_review=classified_codex_review,
+        allow_resolved_threads=False,
     )
 
 
@@ -3644,6 +3645,34 @@ def _verify_rejected_successor_findings(
         current_threads=current_threads,
         rejected_candidate=True,
         classified_codex_review=False,
+        allow_resolved_threads=False,
+    )
+
+
+def _verify_predecessor_findings(
+    value: Any,
+    *,
+    current_sources: dict[
+        tuple[str, str], tuple[str, str | None, dict[str, Any]]
+    ],
+    repository: str,
+    pull_request_number: int,
+    resulting_head_sha: str,
+    current_threads: dict[str, dict[str, Any]],
+) -> set[tuple[str, str]]:
+    """Authenticate prior findings without deriving thread-resolution authority."""
+
+    return _verify_successor_findings_with_policy(
+        value,
+        reviewed_sources={},
+        current_sources=current_sources,
+        repository=repository,
+        pull_request_number=pull_request_number,
+        resulting_head_sha=resulting_head_sha,
+        current_threads=current_threads,
+        rejected_candidate=False,
+        classified_codex_review=False,
+        allow_resolved_threads=True,
     )
 
 
@@ -3662,6 +3691,7 @@ def _verify_successor_findings_with_policy(
     current_threads: dict[str, dict[str, Any]],
     rejected_candidate: bool,
     classified_codex_review: bool,
+    allow_resolved_threads: bool,
 ) -> set[tuple[str, str]]:
     if not isinstance(value, list):
         raise SecurityBlocker("successor finding evidence is malformed")
@@ -3808,7 +3838,11 @@ def _verify_successor_findings_with_policy(
             )
             thread = current_threads.get(thread_id)
             if (
-                verified_classification.is_resolved is not False
+                not isinstance(verified_classification.is_resolved, bool)
+                or (
+                    verified_classification.is_resolved
+                    and not allow_resolved_threads
+                )
                 or top_level is None
                 or top_level[:2]
                 != (verified_classification.finding_body_digest, thread_id)
@@ -4181,6 +4215,38 @@ def _verify_authenticated_feedback_growth(
     )
 
 
+def _verify_feedback_successor_identity(
+    reviewed: StableFeedbackState, current: StableFeedbackState, resulting_head_sha: str,
+) -> None:
+    if (
+        not isinstance(reviewed, StableFeedbackState)
+        or not isinstance(current, StableFeedbackState)
+        or current.repository != reviewed.repository
+        or current.pull_request_number != reviewed.pull_request_number
+        or current.pr_state != "OPEN"
+        or current.head_sha != resulting_head_sha
+        or current.base_ref != reviewed.base_ref
+        or current.base_sha != reviewed.base_sha
+    ):
+        raise SecurityBlocker(
+            "current stable feedback does not identify the exact source successor"
+        )
+
+
+def verify_collision_feedback_successor(
+    reviewed: StableFeedbackState, current: StableFeedbackState, *,
+    resulting_head_sha: str, successor_safety_evidence: Any,
+) -> None:
+    """Use existing provider-growth admission with no thread-resolution grant."""
+
+    resulting_head_sha = _require_oid(resulting_head_sha, "resulting feedback head")
+    _verify_feedback_successor_identity(reviewed, current, resulting_head_sha)
+    _verify_authenticated_feedback_growth(
+        reviewed, current, resulting_head_sha=resulting_head_sha,
+        authorized_thread_ids=set(), successor_evidence=successor_safety_evidence,
+    )
+
+
 def verify_stable_feedback_successor(
     reviewed: StableFeedbackState,
     current: StableFeedbackState,
@@ -4204,19 +4270,7 @@ def verify_stable_feedback_successor(
     ):
         raise SecurityBlocker("authorized continuation threads are malformed")
     authorized = set(authorized_thread_ids)
-    if (
-        not isinstance(reviewed, StableFeedbackState)
-        or not isinstance(current, StableFeedbackState)
-        or current.repository != reviewed.repository
-        or current.pull_request_number != reviewed.pull_request_number
-        or current.pr_state != "OPEN"
-        or current.head_sha != resulting_head_sha
-        or current.base_ref != reviewed.base_ref
-        or current.base_sha != reviewed.base_sha
-    ):
-        raise SecurityBlocker(
-            "current stable feedback does not identify the exact source successor"
-        )
+    _verify_feedback_successor_identity(reviewed, current, resulting_head_sha)
     normalized = copy.deepcopy(current.feedback)
     reviewed_threads = {
         item["node_id"]: item for item in reviewed.feedback["threads"]
@@ -4464,6 +4518,60 @@ def normalize_resolution_eligibility_evidence(
             "resolution eligibility evidence contains duplicate threads"
         )
     return copy.deepcopy(value)
+
+
+def verify_clean_feedback_gate(
+    reviewed: "StableFeedbackState", safety_evidence: Any,
+) -> None:
+    """Require terminal providers and complete safe classification of actual sources.
+
+This consumes the existing authenticated successor-safety representation for
+one state, without deriving a successor, resolving a thread, or inventing a
+trigger finding. Transport and classification admission retain their owners.
+"""
+
+    expected = {
+        "schema_version", "repository", "pull_request_number", "predecessor_state_digest",
+        "resulting_head_sha", "resulting_state_digest", "provider_transport", "successor_findings",
+    }
+    if (
+        not isinstance(safety_evidence, dict) or set(safety_evidence) != expected
+        or safety_evidence["schema_version"] != "1.0"
+        or safety_evidence["repository"] != reviewed.repository
+        or safety_evidence["pull_request_number"] != reviewed.pull_request_number
+        or safety_evidence["predecessor_state_digest"] != reviewed.state_digest
+        or safety_evidence["resulting_state_digest"] != reviewed.state_digest
+        or safety_evidence["resulting_head_sha"] != reviewed.head_sha
+        or reviewed.pr_state != "OPEN"
+    ):
+        raise SecurityBlocker("clean predecessor feedback evidence is invalid or stale")
+    if any(SECRET_VALUE.search(item) for item in _all_strings(safety_evidence)):
+        raise SecurityBlocker(
+            "clean predecessor feedback evidence contains secret-like text"
+        )
+    transport = safety_evidence["provider_transport"]
+    if not isinstance(transport, list):
+        raise SecurityBlocker("clean predecessor provider evidence is malformed")
+    summaries = [item for item in transport if isinstance(item, dict) and item.get("role") == "CODEX_SUMMARY_UPDATE"]
+    if len(summaries) != 1:
+        raise SecurityBlocker("clean predecessor requires exact terminal provider evidence")
+    sources = _successor_source_inventory(reviewed)
+    summary_key = (summaries[0].get("kind"), summaries[0].get("node_id"))
+    summary_source = sources.get(summary_key)
+    if summary_source is None:
+        raise SecurityBlocker("clean predecessor provider summary is absent")
+    additions, updates = _verify_successor_transport(
+        transport, reviewed_sources={summary_key: summary_source},
+        current_sources=sources, resulting_head_sha=reviewed.head_sha,
+    )
+    findings = _verify_predecessor_findings(
+        safety_evidence["successor_findings"], current_sources=sources,
+        repository=reviewed.repository, pull_request_number=reviewed.pull_request_number,
+        resulting_head_sha=reviewed.head_sha,
+        current_threads={item["node_id"]: item for item in reviewed.feedback["threads"]},
+    )
+    if (additions | updates) & findings or set(sources) != additions | updates | findings:
+        raise SecurityBlocker("clean predecessor feedback contains an unclassified source")
 
 
 def continuation_material_finding_projection(
