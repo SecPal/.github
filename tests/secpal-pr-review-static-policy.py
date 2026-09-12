@@ -231,6 +231,26 @@ EXACT_SOURCE_SAFETY_CALLS = (
     ),
 )
 
+FAST_PATH_CALLS = (*FAST_PATH_CALLS,
+    ProcessCall(
+        None,
+        "_central_git_result",
+        "executable",
+        "arguments",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("cwd", "CENTRAL_REGISTRY_ROOT"),
+            ("encoding", "'utf-8'"),
+            ("env", "evidence.command_environment('git')"),
+            ("errors", "'replace'"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("text", "True"),
+            ("timeout", "30"),
+        ),
+    ),
+)
+
 RESOLVER_CALLS = (
     ProcessCall(
         None,
@@ -614,6 +634,7 @@ DIRECT_MODULE_ATTRIBUTES = {
     },
     "fast_path.py": {
         "importlib": {"util"},
+        "subprocess": {"DEVNULL", "TimeoutExpired", "run"},
         "sys": {"modules"},
         "tempfile": {"mkstemp"},
     },
@@ -704,8 +725,14 @@ LOADED_MODULE_ATTRIBUTES = {
             "normalize_ready_integration_prior_authority",
             "normalize_exceptional_recovery_evidence",
             "normalize_exceptional_continuation_evidence",
+            "PROHIBITED_REGISTRY_OPERATIONS",
+            "REGISTRY_CONFIGURATION_KEYS",
+            "load_immutable_delivery_registry_binding",
             "validate_manual_gate_evidence",
+            "validation_registry_binding",
             "validation_registry_projection",
+            "validate_registry_command",
+            "validate_repository_registry_structure",
             "verify_commit_signatures",
             "verify_codex_provider_summary",
             "verify_validation_attestation",
@@ -741,10 +768,13 @@ LOADED_MODULE_ATTRIBUTES = {
     "fast_path.py": {
         "evidence": {
             "CommandPolicyError",
+            "ContractError",
             "_commit_signature_format",
             "command_environment",
             "interpret_local_signature",
             "resolve_trusted_executable",
+            "validate_against_authoritative_schema",
+            "validate_config",
         },
         "follow_up": {
             "FollowUpError",
@@ -1453,6 +1483,7 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_read_authenticated_follow_up",
     "_resolve_trusted_markdown_node",
     "_load_repository_entry",
+    "_immutable_delivery_registry_binding",
     "_load_final_eligibility_absence",
     "_reject_nonfinite_json_constant",
     "_reject_duplicate_json_object",
@@ -1564,6 +1595,10 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
     ),
     DynamicImportCall(
         ("verify_local_fix_commit",),
+        "_run_git",
+    ),
+    DynamicImportCall(
+        ("load_validation_evidence",),
         "_run_git",
     ),
     DynamicImportCall(
