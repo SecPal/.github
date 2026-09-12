@@ -1707,18 +1707,21 @@ def collision_complete_validation(
         )
         entry, binding = _collision_validation_authority(root, collision)
         profile = binding["collision_validation_authority"]
-        with exact_source_safety.collision_validation_root(
-            Path(__file__).resolve().parents[2],
-            source_root=repository_root,
-            profile=profile,
-            expected_profile=profile,
-        ) as execution_root:
-            yield CollisionValidationExecution(
-                collision=_seal_collision(collision),
-                repository_entry=copy.deepcopy(entry),
-                registry_binding=copy.deepcopy(binding),
-                execution_root=execution_root,
-            )
+        try:
+            with exact_source_safety.collision_validation_root(
+                Path(__file__).resolve().parents[2],
+                source_root=repository_root,
+                profile=profile,
+                expected_profile=profile,
+            ) as execution_root:
+                yield CollisionValidationExecution(
+                    collision=_seal_collision(collision),
+                    repository_entry=copy.deepcopy(entry),
+                    registry_binding=copy.deepcopy(binding),
+                    execution_root=execution_root,
+                )
+        finally:
+            _require_accepted_issuer(main)
 
 
 def collision_validation_binding_for_commit(
@@ -1761,6 +1764,7 @@ def collision_validation_binding_for_commit(
             protected_main=main,
         )
         _entry, binding = _collision_validation_authority(root, collision)
+        _require_accepted_issuer(main)
         return _seal_collision(collision), binding
 
 

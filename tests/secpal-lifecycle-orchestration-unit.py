@@ -8,9 +8,10 @@ from __future__ import annotations
 import ast
 import copy
 import base64
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import inspect
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -619,7 +620,7 @@ class CollisionCompositionFixture:
             root, repository=REPOSITORY, delivery_issue=ISSUE, pull_request=PR,
             predecessor_head=self.predecessor, resulting_tree=self.resulting_tree, protected_main=self.main,
         )
-        _entry, self.registry = version_collision._collision_validation_authority(
+        _, self.registry = version_collision._collision_validation_authority(
             root, proof,
         )
         state = self.lifecycle.state
@@ -1968,6 +1969,11 @@ def test_historical_v12_evidence_stays_pinned():
                             path.symlink_to("secpal-pr-review-actions-unit.py"),
                         ),
                     ),
+                    (
+                        "special file",
+                        "unregistered.pipe",
+                        os.mkfifo,
+                    ),
                 )
                 for label, relative, mutate in mutations:
                     with self.subTest(label=label), self.assertRaises(
@@ -2008,14 +2014,35 @@ def test_historical_v12_evidence_stays_pinned():
             capture_output=True,
             text=True,
         ).stdout.strip()
-        with version_collision._authenticated_source_checkout(
-            REPO_ROOT,
-            predecessor,
-            None,
-            resulting_tree=resulting_tree,
-            accepted_main=accepted_main,
-            include_validation_authority=True,
-        ) as (root, main):
+        try:
+            version_collision._git(
+                REPO_ROOT,
+                [
+                    "rev-list",
+                    "--objects",
+                    "--missing=error",
+                    predecessor,
+                    accepted_main,
+                ],
+                version_collision.MAX_DELTA_BYTES,
+            )
+        except version_collision.VersionCollisionError:
+            self.skipTest(
+                "the read-only #786 object closure is not present in this clone"
+            )
+        with (
+            mock.patch.object(
+                version_collision, "_observe_main", return_value=accepted_main,
+            ),
+            version_collision._authenticated_source_checkout(
+                REPO_ROOT,
+                predecessor,
+                None,
+                resulting_tree=resulting_tree,
+                accepted_main=accepted_main,
+                include_validation_authority=True,
+            ) as (root, main),
+        ):
             collision = version_collision._derive_collision_tree(
                 root,
                 repository=REPOSITORY,
@@ -2460,6 +2487,55 @@ def test_historical_v12_evidence_stays_pinned():
             ):
                 version_collision._require_accepted_issuer(main)
         verify.assert_called_once_with(Path(version_collision.__file__).resolve().parents[2], main)
+
+        collision = {"resulting_tree": "c" * 40}
+        binding = {"collision_validation_authority": {}}
+        final_issuer_check = mock.Mock()
+        with (
+            mock.patch.object(
+                version_collision,
+                "_authenticate_installed_collision_issuer",
+                return_value=main,
+            ),
+            mock.patch.object(
+                version_collision, "_require_current_collision_predecessor",
+            ),
+            mock.patch.object(
+                version_collision,
+                "_authenticated_source_checkout",
+                return_value=nullcontext((Path("source"), main)),
+            ),
+            mock.patch.object(
+                version_collision,
+                "_derive_collision_tree",
+                return_value=collision,
+            ),
+            mock.patch.object(
+                version_collision,
+                "_collision_validation_authority",
+                return_value=({"repository": REPOSITORY}, binding),
+            ),
+            mock.patch.object(
+                exact_source_safety,
+                "collision_validation_root",
+                return_value=nullcontext(Path("execution")),
+            ),
+            mock.patch.object(
+                version_collision,
+                "_require_accepted_issuer",
+                final_issuer_check,
+            ),
+        ):
+            with version_collision.collision_complete_validation(
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                pull_request=PR,
+                predecessor_head="b" * 40,
+                resulting_tree="c" * 40,
+                repository_root=Path("candidate"),
+            ) as execution:
+                self.assertEqual(execution.execution_root, Path("execution"))
+        final_issuer_check.assert_called_once_with(main)
 
     def test_collision_source_safety_detects_hidden_index_substitution(self) -> None:
         from scripts.secpal_pr_review import exact_source_safety

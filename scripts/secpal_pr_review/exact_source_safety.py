@@ -710,6 +710,10 @@ def _verify_collision_validation_root(
             raise authority.LifecycleAuthorityError(
                 "collision validation source contains a symlink"
             )
+        if not path.is_dir() and not path.is_file():
+            raise authority.LifecycleAuthorityError(
+                "collision validation source contains a special file"
+            )
         if path.is_file() and path.relative_to(root).as_posix() not in expected_by_path:
             if path.suffix not in {".pyc", ".pyo"} or "__pycache__" not in path.parts:
                 raise authority.LifecycleAuthorityError(
