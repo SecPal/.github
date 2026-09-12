@@ -502,6 +502,51 @@ composition so a main transition requires a fresh run. Schema `1.1` remains the
 ordinary companion-backed form;
 malformed or incomplete `1.1` input cannot fall through to `1.2`.
 
+One closed source variant of that same schema-1.2 bridge authenticates the
+legacy-enrolled package loss for `SecPal/.github` issue 792 / PR 793. It is not
+the version-3 pre-enrollment loss admission: protected main authenticates the
+loss now, after enrollment, and never claims that the authority existed at the
+historical Ready transition. The existing
+`READY_INTEGRATION_PRIOR_AUTHORITY` kind, annotated-tag namespace,
+`HEAD_ADVANCED` integration semantics, and downstream lifecycle verifier remain
+unchanged.
+
+Protected main selects the sole exact record in
+`policies/legacy-enrolled-package-loss.json`. The verifier independently binds
+the repository, issue, PR, lifecycle identity, exact CURRENT publication,
+version-1 exact-state-adoption proof, signed source head/tree/sole parent and
+signer, evidence-time registry and command set, source-validation, validation-
+receipt and final-attestation digest identities, and the complete finite Ready
+state. Current protected-main registry, signer, schema, operation, trust and
+integration policy remain separately authoritative for present-day admission;
+historical policy is never substituted for current safety.
+
+The historical adoption proof selects its single reviewed head. A pinned exact
+digest authenticates the legacy one-row Codex completion summary produced before
+dual Code/Security summary rows became current policy; this neither fabricates a
+Security Review nor requests another provider review. All current feedback is
+still captured completely and bound to the resulting source projection, while
+ordinary and recovered Ready sources retain their existing terminal-provider
+rules.
+
+Package loss is a bounded maintained-store conclusion, not a caller flag or an
+attempt to prove global nonexistence. The verifier authenticates all source
+commits observed by the adopted history, confirms the workflow's `.context/`
+output scope was gitignored and no companion artifact was committed, and
+confirms that the protected lifecycle publication retains digest identities but
+no companion bytes. The maintained persistence inventory has no unsearched
+store and no retained local-session store. Any tracked artifact, unsurveyed
+maintained store, stale CURRENT, available or reissued bytes, reconstructed
+document, alternate signer, cross-delivery identity, Ready/Draft churn, extra
+review or Ready transition, remediation beyond two, exceptional history, or
+Cycle 3 fails closed.
+
+The normalized historical companions remain exactly `UNAVAILABLE` with
+`historical_bytes_reconstructed=false`. Receipt and final-attestation digests
+are identities only; they cannot mint matching documents. This source authority
+sets `thread_resolution_authority=0` and consumes no Recovery, so it cannot
+resolve, classify, or confer eligibility on any issue-792 review thread.
+
 For a later head-changing ordinary successor, the immutable adoption proof
 remains the genesis while the signed successor authority binds verifier-derived
 current-head tree, receipt, final attestation, and source-evidence identity.

@@ -486,6 +486,27 @@ publication supply durable provenance and the single use. Issuance alone neither
 enrolls nor authorizes review, remediation, Ready, thread resolution or recovery.
 The #787 bootstrap and existing role credential selection remain separate.
 
+### `secpal_pr_review/legacy_enrolled_package_loss.py`
+
+Owns the accepted-main-selected authentication for the single legacy-enrolled
+Ready package-loss case. Unlike pre-enrollment loss admission, it authenticates
+the bounded historical loss now and does not sign, mutate or backdate the
+historical lifecycle. It reopens exact-state-adoption CURRENT, verifies the
+source signature and sole-parent topology, reauthenticates the evidence-time
+registry, surveys the maintained durable stores, and applies current registry
+and integration safety before returning a sealed binding. Its exact accepted-
+main record pins the legacy one-row Codex completion summary and derives the
+reviewed head from signed adoption history, without claiming or requesting a
+later Security Review; complete current feedback is still captured and bound.
+
+The binding feeds the existing schema-1.2
+`READY_INTEGRATION_PRIOR_AUTHORITY` derivation under the closed
+`EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS` source mode. Historical companion
+bytes stay `UNAVAILABLE`; authenticated receipt and final-attestation digests
+remain identities rather than reconstruction material. The mode grants zero
+thread-resolution authority, consumes no Recovery, and cannot be selected by a
+caller-created mapping.
+
 ### `secpal_pr_review/bootstrap_source_admission.py`
 
 Authenticates exact immutable implementation sources through one accepted-main
