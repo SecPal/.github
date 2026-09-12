@@ -40,7 +40,13 @@ SIGNER = "aroviqen@secpal.app"
 PROOF = "8b6494b62e0b60ff5a5bfb70d0433196d7db3fed309a34c9392363ccff53c972"
 AUTHORIZATION = "a4b5f488430b349370a309d99744323aea1776cc3975928e079f36026a090e4c"
 LOSS = "996c5a8af805f406e02ebb0cac7e3dc3eb30e9a335c1782262c54b410282b5a2"
-CURRENT_SAFETY = {"receipt_digest": "6" * 64}
+REVIEWED_STATE = "6" * 64
+REVIEWED_FEEDBACK = "7" * 64
+CURRENT_SAFETY = {
+    "receipt_digest": "8" * 64,
+    "reviewed_state_digest": REVIEWED_STATE,
+    "reviewed_feedback_digest": REVIEWED_FEEDBACK,
+}
 SAFETY = fast_path.digest_json(CURRENT_SAFETY)
 BUDGET = "cb9b4be5ef026a088ec33eeb367c32db0b99bc7363241fc4b3ebbd805a4ecf21"
 ENROLLMENT_OID = "37ffb1110e5f95829bcc3612ede8ac48092744fa"
@@ -174,7 +180,13 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
         cache_root = Path(actions.sys.pycache_prefix).resolve(strict=True)
         self.assertFalse(cache_root.is_relative_to(ROOT))
 
-    def derive(self, current: SimpleNamespace | None = None) -> dict[str, object]:
+    def derive(
+        self,
+        current: SimpleNamespace | None = None,
+        *,
+        reviewed_state_digest: str | None = None,
+        reviewed_feedback_digest: str | None = None,
+    ) -> dict[str, object]:
         current = current or published()
         with (
             mock.patch.object(
@@ -206,6 +218,8 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
                 delivery_issue=ISSUE,
                 pull_request=PR,
                 binding={"signature_policy": {"accepted_formats": ["ssh"]}},
+                reviewed_state_digest=reviewed_state_digest,
+                reviewed_feedback_digest=reviewed_feedback_digest,
             )
 
     def test_target_827_shape_derives_v3_ready_prior_authority(self) -> None:
@@ -229,6 +243,23 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
         self.assertEqual(
             fast_path.normalize_ready_integration_prior_authority(manifest), manifest
         )
+
+    def test_v12_reviewed_predecessor_matches_authenticated_current_safety(self) -> None:
+        self.derive(
+            reviewed_state_digest=REVIEWED_STATE,
+            reviewed_feedback_digest=REVIEWED_FEEDBACK,
+        )
+        for field in ("reviewed_state_digest", "reviewed_feedback_digest"):
+            arguments = {
+                "reviewed_state_digest": REVIEWED_STATE,
+                "reviewed_feedback_digest": REVIEWED_FEEDBACK,
+            }
+            arguments[field] = "0" * 64
+            with self.subTest(field=field), self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "authenticated adopted Ready safety",
+            ):
+                self.derive(**arguments)
 
     def test_requires_exactly_one_real_ready_transition_and_finite_history(self) -> None:
         cases = {
@@ -691,6 +722,8 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             "prior_delivery_head_sha": HEAD,
             "prior_authority_digest": fast_path.digest_json(manifest),
             "prior_authority_tag_object_sha": "9" * 40,
+            "reviewed_state_digest": REVIEWED_STATE,
+            "reviewed_feedback_digest": REVIEWED_FEEDBACK,
             "eligibility": {
                 "lifecycle_identity": manifest["lifecycle"]["identity"],
                 "unrestricted_reviews_before": 1,
@@ -760,6 +793,8 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             "pull_request_number": PR,
             "prior_delivery_head_sha": HEAD,
             "prior_authority_digest": fast_path.digest_json(manifest),
+            "reviewed_state_digest": REVIEWED_STATE,
+            "reviewed_feedback_digest": REVIEWED_FEEDBACK,
         }
         arguments = SimpleNamespace(
             repo=REPOSITORY,

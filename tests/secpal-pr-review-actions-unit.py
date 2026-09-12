@@ -8880,6 +8880,24 @@ class FastPathTests(TestCase):
             actions._command_attest_validation(arguments)
         verify_prior.assert_not_called()
 
+        arguments.expected_head = prior_ready_head
+        arguments.integration_evidence = ""
+        with (
+            mock.patch.object(
+                actions,
+                "_attestation_local_state",
+                return_value=(prior_ready_head, ""),
+            ),
+            mock.patch.object(actions, "_load_fast_state", return_value=reviewed),
+            mock.patch.object(actions, "load_registry", return_value={}),
+            mock.patch.object(actions, "select_repository", return_value=entry),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "reviewed feedback head does not match --expected-head",
+            ),
+        ):
+            actions._command_attest_validation(arguments)
+
     def test_real_signed_two_parent_candidate_reproduces_sole_parent_failure(
         self,
     ) -> None:

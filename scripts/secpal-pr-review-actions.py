@@ -6416,6 +6416,8 @@ def _derive_exact_state_adoption_v3_ready_prior_authority(
     delivery_issue: int,
     pull_request: int,
     binding: dict[str, Any],
+    reviewed_state_digest: str | None = None,
+    reviewed_feedback_digest: str | None = None,
 ) -> dict[str, Any]:
     """Derive the v3-adopted source projection from protected CURRENT."""
 
@@ -6515,6 +6517,7 @@ def _derive_exact_state_adoption_v3_ready_prior_authority(
     loss = proof.get("validation_evidence_loss_admission")
     budget = proof.get("review_budget_consumption_admission")
     authorization = proof.get("authorization")
+    current_safety = loss.get("current_safety") if isinstance(loss, dict) else None
     if (
         not isinstance(loss, dict)
         or not isinstance(budget, dict)
@@ -6532,7 +6535,7 @@ def _derive_exact_state_adoption_v3_ready_prior_authority(
         or loss.get("historical_validation_receipt_digest")
         != proof.get("validation_receipt_digest")
         or proof.get("source_validation_evidence_digest")
-        != fast_path.digest_json(loss.get("current_safety"))
+        != fast_path.digest_json(current_safety)
         or budget.get("admission_digest")
         != next(
             (
@@ -6545,6 +6548,19 @@ def _derive_exact_state_adoption_v3_ready_prior_authority(
     ):
         raise fast_path.SecurityBlocker(
             "Exact-State-Adoption v3 source provenance is invalid"
+        )
+    if (reviewed_state_digest is None) != (reviewed_feedback_digest is None):
+        raise fast_path.SecurityBlocker(
+            "adopted Ready reviewed-state selectors are incomplete"
+        )
+    if reviewed_state_digest is not None and (
+        not isinstance(current_safety, dict)
+        or current_safety.get("reviewed_state_digest") != reviewed_state_digest
+        or current_safety.get("reviewed_feedback_digest")
+        != reviewed_feedback_digest
+    ):
+        raise fast_path.SecurityBlocker(
+            "integration reviewed predecessor differs from authenticated adopted Ready safety"
         )
     source_commit = _verified_prior_delivery_commit(
         repository_root,
@@ -6827,6 +6843,10 @@ def _verify_ready_integration_prior_authority(
             delivery_issue=arguments.delivery_issue,
             pull_request=integration_evidence["pull_request_number"],
             binding=binding,
+            reviewed_state_digest=integration_evidence["reviewed_state_digest"],
+            reviewed_feedback_digest=integration_evidence[
+                "reviewed_feedback_digest"
+            ],
         )
         _require_exact_adopted_ready_manifest(authority, derived)
         if required_paths[4] != _canonical_ready_prior_authority_tag_ref(authority):
@@ -7231,7 +7251,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
     integration_evidence_path = getattr(arguments, "integration_evidence", None)
     if (
         not arguments.bind_commit
-        and integration_evidence_path is None
+        and not integration_evidence_path
         and reviewed.head_sha != arguments.expected_head
     ):
         raise fast_path.SecurityBlocker(
