@@ -295,7 +295,6 @@ def legacy_published() -> SimpleNamespace:
 
 
 def legacy_loss_authentication() -> dict[str, object]:
-    current = legacy_published()
     proof_value = legacy_proof()
     safety = {
         "accepted_main_sha": "9" * 40,
