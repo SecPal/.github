@@ -7228,14 +7228,18 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         raise fast_path.SecurityBlocker(
             "reviewed feedback repository does not match --repo"
         )
-    if not arguments.bind_commit and reviewed.head_sha != arguments.expected_head:
+    integration_evidence_path = getattr(arguments, "integration_evidence", None)
+    if (
+        not arguments.bind_commit
+        and integration_evidence_path is None
+        and reviewed.head_sha != arguments.expected_head
+    ):
         raise fast_path.SecurityBlocker(
             "reviewed feedback head does not match --expected-head"
         )
     registry = load_registry(arguments.registry)
     entry = select_repository(registry, arguments.repo)
     binding = _fast_registry_binding(entry)
-    integration_evidence_path = getattr(arguments, "integration_evidence", None)
     pre_enrollment_evidence_path = getattr(
         arguments, "pre_enrollment_integration_evidence", None
     )
@@ -7776,6 +7780,10 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             validated_tree_sha=tree,
         )
         _verify_integration_selection(integration_evidence, arguments)
+        if head != integration_evidence["prior_delivery_head_sha"]:
+            raise fast_path.SecurityBlocker(
+                "local head does not match the authenticated prior Ready parent"
+            )
         _verify_ready_integration_prior_authority(
             arguments=arguments,
             repository_root=repository_root,
