@@ -143,7 +143,7 @@ READY_INTEGRATION_COMMON_KEYS = frozenset(
 )
 READY_INTEGRATION_KEYS_BY_VERSION = {
     "1.1": READY_INTEGRATION_COMMON_KEYS | {"manual_conflict_resolution_delta"},
-    "1.2": READY_INTEGRATION_COMMON_KEYS | {"authenticated_resolution_delta"},
+    "1.3": READY_INTEGRATION_COMMON_KEYS | {"authenticated_resolution_delta"},
 }
 READY_INTEGRATION_ATTESTATION_BY_VERSION = {
     ("1.1", False): ("1.1", "READY_INTEGRATION_VALIDATION_ATTESTATION"),
@@ -152,11 +152,11 @@ READY_INTEGRATION_ATTESTATION_BY_VERSION = {
         True,
     ): ("1.2", "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"),
     (
-        "1.2",
+        "1.3",
         False,
     ): ("1.3", "AUTHENTICATED_RESOLUTION_READY_INTEGRATION_VALIDATION_ATTESTATION"),
     (
-        "1.2",
+        "1.3",
         True,
     ): (
         "1.4",
@@ -652,7 +652,7 @@ def normalize_ready_integration_evidence(
         else "authenticated_resolution_delta"
     )
     raw_delta = value.get(delta_field)
-    if schema_version == "1.2":
+    if schema_version == "1.3":
         limits = registry.get("limits") if isinstance(registry, dict) else None
         maximum_items = limits.get("maximum_items") if isinstance(limits, dict) else None
         if (
