@@ -1683,6 +1683,17 @@ class LifecycleOrchestrationTests(TestCase):
         subprocess.run(
             ["git", "-C", str(source), "init", "--quiet"], check=True,
         )
+        # The fixture proves source-object-database immutability, so suppress
+        # Git's environment-dependent background maintenance before either
+        # local transport can schedule it.
+        for key, value in (
+            ("maintenance.auto", "false"),
+            ("gc.auto", "0"),
+            ("fetch.writeCommitGraph", "false"),
+        ):
+            subprocess.run(
+                ["git", "-C", str(source), "config", key, value], check=True,
+            )
         subprocess.run(
             [
                 "git", "-C", str(source), "fetch", "--quiet", "--no-tags",
