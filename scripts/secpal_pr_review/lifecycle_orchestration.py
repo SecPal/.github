@@ -2574,6 +2574,9 @@ def collision_validation_binding_for_historical_attestation(
                 repository_root=repository_root,
                 protected_main=collision.get("protected_main"),
                 expected_signer=expected_signer,
+                expected_collision_digest=continuation_evidence.get(
+                    "collision_digest"
+                ),
             )
         )
         authenticated_collision = sealed.to_dict()
@@ -2705,6 +2708,9 @@ def verify_collision_continuation_authority(
                 repository_root=repository_root,
                 protected_main=authorized_collision.get("protected_main"),
                 expected_signer=continuation["expected_signer"],
+                expected_collision_digest=continuation[
+                    "collision_digest"
+                ],
             )
         )
         authenticated_collision = sealed_collision.to_dict()
@@ -3173,12 +3179,24 @@ def issue_collision_continuation_authorization(
     if item["successor_safety_evidence"] is not None:
         raise LifecycleOrchestrationError("collision authorization must precede successor publication")
     observed, lifecycle, _ = _authenticated_current(repository, delivery_issue, publication.verify_current_lifecycle_authority)
+    current_main = version_collision._authenticate_installed_collision_issuer()
     live = _capture_current_stable_feedback(repository, lifecycle.pull_request)
+    continuation = item["continuation_document"]
+
+    def authenticated_epoch_reader(**arguments: Any) -> tuple[
+        version_collision.VerifiedVersionCollision,
+        dict[str, Any],
+        fast_path.AuthenticatedIntegrationCommit,
+        str,
+    ]:
+        return version_collision.collision_validation_binding_for_issuance(
+            **arguments,
+            expected_collision_digest=continuation.get("collision_digest"),
+        )
+
     scope, reviewed, _ = _collision_scope(
         item, observed=observed, resulting_head=_oid(resulting_head, "collision successor"),
-        collision_validation_reader=(
-            version_collision.collision_validation_binding_for_commit
-        ),
+        collision_validation_reader=authenticated_epoch_reader,
     )
     if live.to_dict() != reviewed.to_dict() or item["continuation_document"]["authorization_id"] != authorization_id:
         raise LifecycleOrchestrationError("collision authorization differs from exact live predecessor")
@@ -3193,7 +3211,7 @@ def issue_collision_continuation_authorization(
         final.publication_oid != observed.publication_oid
         or final.publication_digest != observed.publication_digest
         or _capture_current_stable_feedback(repository, lifecycle.pull_request).to_dict() != live.to_dict()
-        or version_collision._observe_main() != scope["collision"]["protected_main"]
+        or version_collision._observe_main() != current_main
     ):
         raise LifecycleOrchestrationError("collision predecessor changed before authorization signing")
     policy = authority._load_lifecycle_trust_policy(repository)
@@ -3220,16 +3238,36 @@ def publish_collision_continuation(
     item = _closed_request(request)
     if item.get("event_kind") != "CONTINUATION_COMMIT_PUSHED":
         raise LifecycleOrchestrationError("collision publication requires the continuation event")
-    _collision_request(item.get("continuation_evidence"))
+    collision_item = _collision_request(item.get("continuation_evidence"))
     observed = publication.verify_current_lifecycle_authority(repository, delivery_issue)
+    current_main = version_collision._authenticate_installed_collision_issuer()
+    authorization = _verify_user_authorization(
+        item["authorization"], observed, observed.lifecycle
+    )
+    collision_scope = authorization.get("scope", {}).get("collision", {})
+
+    def authenticated_epoch_reader(**arguments: Any) -> tuple[
+        version_collision.VerifiedVersionCollision,
+        dict[str, Any],
+        fast_path.AuthenticatedIntegrationCommit,
+        str,
+    ]:
+        return version_collision._historical_collision_validation_binding_for_commit(
+            **arguments,
+            protected_main=collision_scope.get("protected_main"),
+            expected_collision_digest=collision_item["continuation_document"].get(
+                "collision_digest"
+            ),
+        )
+
     validation: list[tuple[fast_path.VerifiedValidationEvidence, str]] = []
     decision = _orchestrate_event(
         repository, delivery_issue, item, current_reader=lambda *_args: observed,
+        collision_validation_reader=authenticated_epoch_reader,
         _collision_validation_output=validation,
     )
     if decision.lifecycle_transition != "EXCEPTIONAL_CONTINUATION" or len(validation) != 1:
         raise LifecycleOrchestrationError("collision publication has no complete admitted transition")
-    authorization = _verify_user_authorization(item["authorization"], observed, observed.lifecycle)
     signers = lifecycle_execution._production_signing_authorities(repository, authorization["signer_identity"])
     successor = lifecycle_execution._append_successor_evidence(
         observed, authorization, signers, resulting_head_sha=item["head_sha"], current_head_evidence=validation[0][0],
@@ -3245,7 +3283,7 @@ def publish_collision_continuation(
         or actual_pr.repository != repository or actual_pr.pull_request != observed.lifecycle.pull_request
         or actual_pr.head_sha != item["head_sha"] or actual_pr.state != "OPEN" or actual_pr.draft is not False
         or final_feedback.state_digest != validation[0][1]
-        or final_protected_main != authorization["scope"]["collision"]["protected_main"]
+        or final_protected_main != current_main
     ):
         raise LifecycleOrchestrationError("collision publication predecessor or live Ready successor drifted")
     published = publication.advance_current_terminal(

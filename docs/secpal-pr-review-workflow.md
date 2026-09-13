@@ -775,7 +775,13 @@ database.
 Continuation issuance and historical read-back recompute that same collision
 validation authority and pass its complete registry binding directly to the
 ordinary receipt and final-attestation verifier. They never reconstruct the
-receipt from the current issuer registry. The schema-1.1 collision Continuation
+receipt from the current issuer registry. Before signing, issuance searches the
+bounded accepted-main history and accepts only the epoch whose independently
+reconstructed collision projection matches the collision digest already bound
+by the receipt and final attestation. Each candidate epoch must independently
+remain an ancestor of current accepted main; the caller and candidate cannot
+name the epoch. Historical read-back supplies the already signed epoch to the
+same projection and requires the same collision digest. The schema-1.1 collision Continuation
 document binds the collision digest; the unchanged schema-1.0 receipt binds the
 head, tree, registry, command set, successful result and Continuation digest;
 and the unchanged schema-1.0 attestation binds that receipt and the same source

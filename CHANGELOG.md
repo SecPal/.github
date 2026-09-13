@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-13 - Bind Collision Continuation Issuance Epoch
+
+**Fixed:**
+
+- Select immutable-version-collision Continuation issuance authority from the
+  bounded accepted-main epoch whose independently reconstructed collision
+  identity is already bound by the validation receipt and final attestation.
+- Reuse the authenticated historical collision projection for issuance and
+  verification while preserving current-main trust policy, ordinary
+  material-feedback Continuation, and existing evidence schemas.
+
 ## 2026-09-13 - Bind Collision Continuation Validation Epoch
 
 **Fixed:**

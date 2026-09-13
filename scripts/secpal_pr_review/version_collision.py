@@ -2781,8 +2781,65 @@ def _historical_collision_validation_binding_for_commit(
     repository_root: Path,
     protected_main: str,
     expected_signer: dict[str, str],
+    expected_collision_digest: str,
 ) -> tuple[VerifiedVersionCollision, dict[str, Any], Any, str]:
     """Recompute receipt authority after lifecycle authenticates the transition."""
+
+    return _collision_validation_binding_for_authenticated_epoch(
+        repository=repository,
+        delivery_issue=delivery_issue,
+        pull_request=pull_request,
+        predecessor_head=predecessor_head,
+        resulting_head=resulting_head,
+        repository_root=repository_root,
+        expected_signer=expected_signer,
+        expected_collision_digest=expected_collision_digest,
+        protected_main=protected_main,
+        require_current_predecessor=False,
+    )
+
+
+def collision_validation_binding_for_issuance(
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    predecessor_head: str,
+    resulting_head: str,
+    repository_root: Path,
+    expected_signer: dict[str, str],
+    expected_collision_digest: str,
+) -> tuple[VerifiedVersionCollision, dict[str, Any], Any, str]:
+    """Select pre-signature collision authority without caller epoch input."""
+
+    return _collision_validation_binding_for_authenticated_epoch(
+        repository=repository,
+        delivery_issue=delivery_issue,
+        pull_request=pull_request,
+        predecessor_head=predecessor_head,
+        resulting_head=resulting_head,
+        repository_root=repository_root,
+        expected_signer=expected_signer,
+        expected_collision_digest=expected_collision_digest,
+        protected_main=None,
+        require_current_predecessor=True,
+    )
+
+
+def _collision_validation_binding_for_authenticated_epoch(
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    predecessor_head: str,
+    resulting_head: str,
+    repository_root: Path,
+    expected_signer: dict[str, str],
+    expected_collision_digest: str,
+    protected_main: str | None,
+    require_current_predecessor: bool,
+) -> tuple[VerifiedVersionCollision, dict[str, Any], Any, str]:
+    """Select the collision validation epoch from accepted history and evidence."""
 
     _validate_public_collision_request(
         repository,
@@ -2793,8 +2850,44 @@ def _historical_collision_validation_binding_for_commit(
         repository_root,
     )
     current_main = _authenticate_installed_collision_issuer()
-    protected_main = _oid(protected_main)
-    _require_historical_collision_issuer(protected_main, current_main)
+    if require_current_predecessor:
+        _require_current_collision_predecessor(
+            repository, delivery_issue, pull_request, predecessor_head,
+        )
+    if re.fullmatch(r"[0-9a-f]{64}", expected_collision_digest) is None:
+        raise VersionCollisionError(
+            "authenticated collision digest is malformed"
+        )
+    if protected_main is None:
+        candidates = _accepted_collision_validation_epochs(current_main)
+    else:
+        candidate = _oid(protected_main)
+        candidates = [candidate]
+
+    selected = None
+    for candidate in candidates:
+        _require_historical_collision_issuer(_oid(candidate), current_main)
+        try:
+            collision = _derive_collision_from_git(
+                repository_root,
+                repository=repository,
+                delivery_issue=delivery_issue,
+                pull_request=pull_request,
+                predecessor_head=predecessor_head,
+                resulting_head=resulting_head,
+                protected_main=_oid(candidate),
+            )
+        except VersionCollisionError:
+            continue
+        if digest_json(
+            validation_collision_projection(collision)
+        ) == expected_collision_digest:
+            selected = candidate
+            break
+    if selected is None:
+        raise VersionCollisionError(
+            "authenticated collision validation epoch is unavailable"
+        )
     return _collision_validation_binding_for_commit(
         repository=repository,
         delivery_issue=delivery_issue,
@@ -2802,10 +2895,38 @@ def _historical_collision_validation_binding_for_commit(
         predecessor_head=predecessor_head,
         resulting_head=resulting_head,
         repository_root=repository_root,
-        main=protected_main,
+        main=selected,
         trust_root_main=current_main,
         expected_signer=expected_signer,
     )
+
+
+def _accepted_collision_validation_epochs(current_main: str) -> tuple[str, ...]:
+    """Read the finite epoch candidates only from installed accepted history."""
+
+    current_main = _oid(current_main)
+    installed = Path(__file__).resolve().parents[2]
+    raw = _git(
+        installed,
+        ["rev-list", "--topo-order", current_main],
+        MAX_IMPORTED_COMMITS * 41,
+    )
+    try:
+        candidates = tuple(raw.decode("ascii", errors="strict").split())
+    except UnicodeDecodeError as exc:
+        raise VersionCollisionError(
+            "accepted collision epoch history is malformed"
+        ) from exc
+    if (
+        not candidates
+        or len(candidates) > MAX_IMPORTED_COMMITS
+        or candidates[0] != current_main
+        or any(_oid(candidate) != candidate for candidate in candidates)
+    ):
+        raise VersionCollisionError(
+            "accepted collision epoch history exceeds the bound"
+        )
+    return candidates
 
 
 def _collision_validation_binding_for_commit(
