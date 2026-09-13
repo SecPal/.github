@@ -887,6 +887,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "schema_version_for_decision",
         },
         "lifecycle_orchestration": {
+            "collision_validation_binding_for_historical_attestation",
             "LifecycleOrchestrationError",
             "verify_collision_continuation_authority",
             "verify_exceptional_recovery_authority",

@@ -784,7 +784,10 @@ collision-validation profile, its authenticated epoch and dependency identities
 remain transitive bindings without another evidence version. This historical
 epoch selection applies only to the immutable-version-collision trigger;
 material-feedback Continuation continues to use its accepted current-policy
-semantics.
+semantics. Collision source inventory uses the pinned accepted AST
+representation for its implementation digest, so a verifier runtime upgrade
+cannot reinterpret otherwise identical historical source bytes; populated
+syntax outside that pinned profile fails closed.
 
 `issue_collision_continuation_authorization` reuses the existing schema-1.0
 lifecycle-orchestration authorization signer/family. Its exact one-use scope

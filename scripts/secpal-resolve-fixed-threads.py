@@ -996,6 +996,9 @@ def load_validation_evidence(
     integration_validation_receipt_path: Path | None = None,
     final_eligibility_absence: FinalEligibilityAbsence | None = None,
     repository_root: Path,
+    exceptional_continuation_delivery_issue: int | None = None,
+    exceptional_continuation_evidence_path: Path | None = None,
+    exceptional_continuation_authorization_path: Path | None = None,
 ) -> ValidationEvidence:
     try:
         payload = json.loads(
@@ -1015,12 +1018,88 @@ def load_validation_evidence(
     if not isinstance(payload, dict):
         raise ResolutionError("validation evidence is unavailable or malformed")
     _load_repository_entry(repository)
-    registry_binding = _immutable_delivery_registry_binding(
-        expected_head,
-        repository,
-        payload.get("registry_digest", ""),
-        payload.get("command_set_digest", ""),
-    )
+    collision_receipt_digest = None
+    if (
+        exceptional_continuation_evidence_path is None
+    ) != (
+        exceptional_continuation_authorization_path is None
+    ):
+        raise ResolutionError(
+            "collision validation requires both Continuation evidence and "
+            "its authorization"
+        )
+    if (
+        exceptional_continuation_evidence_path is not None
+        and exceptional_continuation_authorization_path is not None
+    ):
+        try:
+            continuation = json.loads(
+                exceptional_continuation_evidence_path.read_text(
+                    encoding="utf-8"
+                ),
+                parse_constant=_reject_nonfinite_json_constant,
+                object_pairs_hook=_reject_duplicate_json_object,
+            )
+            collision = (
+                isinstance(continuation, dict)
+                and continuation.get("schema_version") == "1.1"
+                and continuation.get("trigger")
+                == "IMMUTABLE_EVIDENCE_VERSION_COLLISION"
+            )
+            if collision:
+                if (
+                    not isinstance(
+                        exceptional_continuation_delivery_issue, int
+                    )
+                    or isinstance(
+                        exceptional_continuation_delivery_issue, bool
+                    )
+                    or exceptional_continuation_delivery_issue < 1
+                ):
+                    raise ResolutionError(
+                        "collision validation requires its delivery issue"
+                    )
+                registry_binding, collision_receipt_digest = (
+                    lifecycle_orchestration
+                    .collision_validation_binding_for_historical_attestation(
+                        continuation,
+                        orchestration_authorization=(
+                            exceptional_continuation_authorization_path
+                            .read_bytes()
+                        ),
+                        repository_root=repository_root,
+                        repository=repository,
+                        delivery_issue=(
+                            exceptional_continuation_delivery_issue
+                        ),
+                        pull_request=reviewed.payload[
+                            "pull_request_number"
+                        ],
+                        resulting_head_sha=expected_head,
+                    )
+                )
+            else:
+                registry_binding = _immutable_delivery_registry_binding(
+                    expected_head,
+                    repository,
+                    payload.get("registry_digest", ""),
+                    payload.get("command_set_digest", ""),
+                )
+        except (
+            OSError,
+            ValueError,
+            lifecycle_orchestration.LifecycleOrchestrationError,
+        ) as exc:
+            raise ResolutionError(
+                "collision validation registry authority is invalid or stale"
+            ) from exc
+    else:
+        registry_binding = _immutable_delivery_registry_binding(
+            expected_head,
+            repository,
+            payload.get("registry_digest", ""),
+            payload.get("command_set_digest", ""),
+        )
     if final_eligibility_absence is not None and (
         not isinstance(final_eligibility_absence, FinalEligibilityAbsence)
         or final_eligibility_absence._verification_seal
@@ -1202,6 +1281,13 @@ def load_validation_evidence(
                 "validation evidence does not match the fix commit"
             )
         raise ResolutionError("validation evidence is invalid or stale")
+    if (
+        collision_receipt_digest is not None
+        and receipt["receipt_digest"] != collision_receipt_digest
+    ):
+        raise ResolutionError(
+            "collision validation receipt differs from isolated authority"
+        )
     if final_eligibility_absence is not None:
         record = final_eligibility_absence._policy_record
         if (
@@ -3425,6 +3511,19 @@ def resolve_threads(
         reviewed,
         Path(integration_evidence_path) if integration_evidence_path else None,
         repository_root=Path(repository_root),
+        exceptional_continuation_delivery_issue=(
+            exceptional_continuation_delivery_issue
+        ),
+        exceptional_continuation_evidence_path=(
+            Path(exceptional_continuation_evidence_path)
+            if exceptional_continuation_evidence_path is not None
+            else None
+        ),
+        exceptional_continuation_authorization_path=(
+            Path(exceptional_continuation_authorization_path)
+            if exceptional_continuation_authorization_path is not None
+            else None
+        ),
     )
     verify_local_fix_commit(
         Path(repository_root),
