@@ -751,7 +751,7 @@ class CurrentIdentityFixtures(unittest.TestCase):
             predecessor_head=self.predecessor, resulting_tree=self.resulting_tree, protected_main=self.main,
         )
         if authenticated_registry:
-            _entry, self.registry = (
+            _, self.registry = (
                 version_collision._collision_validation_authority(root, proof)
             )
         state = self.lifecycle.state
@@ -4790,16 +4790,25 @@ def historical_v12_fixture():
         with tempfile.TemporaryDirectory() as directory:
             fixture = CollisionCompositionFixture(Path(directory))
             current = [fixture.observed]
+            current_main = "f" * 40
             original = orchestration._orchestrate_event
             signers = lifecycle_execution.SigningAuthorities(
                 fixture.identity, fixture.sign, fixture.identity, fixture.sign, fixture.identity, fixture.sign,
             )
 
             def execute(repository, issue, request, **kwargs):
+                self.assertIn("collision_validation_reader", kwargs)
                 kwargs.update(current_reader=lambda *_args: current[0],
-                              feedback_reader=lambda *_args: fixture.current,
-                              collision_validation_reader=fixture.collision_validation_reader)
+                              feedback_reader=lambda *_args: fixture.current)
                 return original(repository, issue, request, **kwargs)
+
+            def historical_reader(**arguments):
+                self.assertEqual(arguments.pop("protected_main"), fixture.main)
+                self.assertEqual(
+                    arguments.pop("expected_collision_digest"),
+                    fixture.document["collision_digest"],
+                )
+                return fixture.collision_validation_reader(**arguments)
 
             def advance(raw, **kwargs):
                 self.assertEqual(kwargs["signer_identity"], fixture.identity)
@@ -4821,7 +4830,11 @@ def historical_v12_fixture():
                 lifecycle_execution, "_read_live_github", return_value=SimpleNamespace(
                     repository=REPOSITORY, pull_request=PR, head_sha=fixture.resulting, state="OPEN", draft=False),
             ), mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=fixture.current), mock.patch.object(
-                version_collision, "_observe_main", return_value=fixture.main,
+                version_collision, "_authenticate_installed_collision_issuer", return_value=current_main,
+            ), mock.patch.object(
+                version_collision, "_historical_collision_validation_binding_for_commit", side_effect=historical_reader,
+            ), mock.patch.object(
+                version_collision, "_observe_main", return_value=current_main,
             ), mock.patch.object(lifecycle_publication, "advance_current_terminal", side_effect=advance) as publication_write:
                 request = fixture.request()
                 result = orchestration.publish_collision_continuation(REPOSITORY, ISSUE, request)
@@ -4892,6 +4905,10 @@ def historical_v12_fixture():
             ), mock.patch.object(
                 orchestration, "_capture_current_stable_feedback", side_effect=capture,
             ), mock.patch.object(
+                version_collision,
+                "_authenticate_installed_collision_issuer",
+                return_value=fixture.main,
+            ), mock.patch.object(
                 version_collision, "_observe_main", side_effect=observe_main,
             ), mock.patch.object(
                 lifecycle_publication,
@@ -4908,7 +4925,7 @@ def historical_v12_fixture():
                 publication_write.assert_not_called()
 
     def test_collision_successor_provider_failures_cannot_publish(self) -> None:
-        from scripts.secpal_pr_review import lifecycle_execution, lifecycle_publication
+        from scripts.secpal_pr_review import lifecycle_execution, lifecycle_publication, version_collision
 
         with tempfile.TemporaryDirectory() as directory:
             fixture = CollisionCompositionFixture(Path(directory))
@@ -4925,6 +4942,10 @@ def historical_v12_fixture():
                 orchestration.bootstrap_source_admission, "_read_protected_main_registry", side_effect=fixture.registry_reader,
             ), mock.patch.object(lifecycle_publication, "verify_current_lifecycle_authority", return_value=fixture.observed), mock.patch.object(
                 orchestration, "_orchestrate_event", side_effect=execute,
+            ), mock.patch.object(
+                version_collision,
+                "_authenticate_installed_collision_issuer",
+                return_value=fixture.main,
             ), mock.patch.object(lifecycle_execution, "_append_successor_evidence", side_effect=AssertionError("unsafe provider reached signing")) as append, mock.patch.object(
                 lifecycle_publication, "advance_current_terminal", side_effect=AssertionError("unsafe provider reached publication"),
             ) as publish:
@@ -5005,6 +5026,10 @@ def historical_v12_fixture():
                 orchestration.bootstrap_source_admission, "_read_protected_main_registry", side_effect=fixture.registry_reader,
             ), mock.patch.object(lifecycle_publication, "verify_current_lifecycle_authority", side_effect=lambda *_args: observed[0]), mock.patch.object(
                 orchestration, "_orchestrate_event", side_effect=execute,
+            ), mock.patch.object(
+                version_collision,
+                "_authenticate_installed_collision_issuer",
+                return_value=fixture.main,
             ), mock.patch.object(lifecycle_execution, "_append_successor_evidence", side_effect=AssertionError("negative reached successor signing")) as append, mock.patch.object(
                 lifecycle_publication, "advance_current_terminal", side_effect=AssertionError("negative reached protected publication"),
             ) as publish:
