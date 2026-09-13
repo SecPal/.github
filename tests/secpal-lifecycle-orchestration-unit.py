@@ -521,6 +521,7 @@ class CollisionCompositionFixture:
         historical_thread: bool = False,
         historical_thread_resolved: bool = False,
         validation_harness: bool = False,
+        authenticated_registry: bool = False,
         validation_prerequisite_on_predecessor_only: bool = False,
         validation_prerequisite_unconsumed_bytes: int = 0,
     ):
@@ -749,6 +750,10 @@ class CurrentIdentityFixtures(unittest.TestCase):
             root, repository=REPOSITORY, delivery_issue=ISSUE, pull_request=PR,
             predecessor_head=self.predecessor, resulting_tree=self.resulting_tree, protected_main=self.main,
         )
+        if authenticated_registry:
+            _entry, self.registry = (
+                version_collision._collision_validation_authority(root, proof)
+            )
         state = self.lifecycle.state
         self.document = {
             "schema_version": "1.1", "kind": "READY_EXCEPTIONAL_CONTINUATION",
@@ -4307,6 +4312,9 @@ def historical_v12_fixture():
                         repository_root=fixture.root,
                         protected_main=fixture.main,
                         expected_signer=fixture.document["expected_signer"],
+                        expected_collision_digest=fixture.document[
+                            "collision_digest"
+                        ],
                     )
                 )
 
@@ -4322,6 +4330,111 @@ def historical_v12_fixture():
             self.assertEqual(source.head_sha, fixture.resulting)
             self.assertEqual(source.parent_shas, (fixture.predecessor,))
             self.assertEqual(receipt_digest, fixture.receipt["receipt_digest"])
+
+    def test_collision_issuer_selects_authenticated_validation_epoch(self) -> None:
+        from scripts.secpal_pr_review import (
+            lifecycle_execution,
+            lifecycle_publication,
+            version_collision,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            def fixture_requirements(path, _blob_oid, source):
+                return (
+                    version_collision._validation_object_prerequisites(
+                        path, source,
+                    ),
+                    (),
+                    (),
+                )
+
+            with mock.patch.object(
+                version_collision,
+                "_validation_object_requirements",
+                side_effect=fixture_requirements,
+            ):
+                fixture = CollisionCompositionFixture(
+                    Path(directory),
+                    validation_harness=True,
+                    authenticated_registry=True,
+                )
+            later_main = fixture.commit(
+                fixture.git("rev-parse", fixture.main + "^{tree}"),
+                "later accepted main",
+                fixture.main,
+            )
+            evidence = copy.deepcopy(fixture.evidence)
+            evidence["successor_safety_evidence"] = None
+            with mock.patch.object(
+                version_collision,
+                "_authenticate_installed_collision_issuer",
+                return_value=later_main,
+            ), mock.patch.object(
+                version_collision, "_observe_main", return_value=later_main,
+            ), mock.patch.object(
+                version_collision, "_require_accepted_issuer",
+            ), mock.patch.object(
+                version_collision, "_require_historical_collision_issuer",
+            ), mock.patch.object(
+                version_collision,
+                "_accepted_collision_validation_epochs",
+                return_value=(later_main, fixture.main),
+            ), mock.patch.object(
+                version_collision,
+                "_validation_object_requirements",
+                side_effect=fixture_requirements,
+            ), mock.patch.object(
+                authority,
+                "_load_lifecycle_trust_policy",
+                return_value=fixture.policy,
+            ), mock.patch.object(
+                lifecycle_publication,
+                "verify_current_lifecycle_authority",
+                return_value=fixture.observed,
+            ), mock.patch.object(
+                orchestration,
+                "_capture_current_stable_feedback",
+                return_value=fixture.reviewed,
+            ), mock.patch.object(
+                lifecycle_execution,
+                "_read_live_github",
+                return_value=lifecycle_execution.LivePullRequest(
+                    REPOSITORY, PR, "OPEN", fixture.predecessor, False,
+                ),
+            ), mock.patch.object(
+                lifecycle_execution,
+                "_policy_role_signer",
+                return_value=(fixture.identity, fixture.sign),
+            ):
+                issued = orchestration.issue_collision_continuation_authorization(
+                    repository=REPOSITORY,
+                    delivery_issue=ISSUE,
+                    authorization_id=fixture.document["authorization_id"],
+                    reason="Exact independent version collision",
+                    resulting_head=fixture.resulting,
+                    evidence=evidence,
+                )
+
+            with mock.patch.object(
+                authority,
+                "_load_lifecycle_trust_policy",
+                return_value=fixture.policy,
+            ):
+                verified = orchestration._verify_user_authorization(
+                    issued, fixture.observed, fixture.lifecycle,
+                )
+            self.assertEqual(
+                verified["scope"]["collision"]["protected_main"],
+                fixture.main,
+            )
+            self.assertEqual(
+                fast_path.digest_json(
+                    version_collision.validation_collision_projection(
+                        verified["scope"]["collision"]
+                    )
+                ),
+                fixture.document["collision_digest"],
+            )
 
     def test_collision_rejects_predecessor_before_source_acquisition(self) -> None:
         from scripts.secpal_pr_review import version_collision
@@ -4430,7 +4543,7 @@ def historical_v12_fixture():
                     version_collision, "_observe_main", return_value=fixture.main,
                 ), mock.patch.object(version_collision, "_require_accepted_issuer"), mock.patch.object(
                     version_collision,
-                    "collision_validation_binding_for_commit",
+                    "collision_validation_binding_for_issuance",
                     side_effect=fixture.collision_validation_reader,
                 ), mock.patch.object(
                     lifecycle_publication,
@@ -4642,6 +4755,9 @@ def historical_v12_fixture():
                 repository_root=fixture.root,
                 protected_main=fixture.main,
                 expected_signer=fixture.document["expected_signer"],
+                expected_collision_digest=fixture.document[
+                    "collision_digest"
+                ],
             )
 
             self.assertEqual(verified.finding_ids, ())
