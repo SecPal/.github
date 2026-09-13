@@ -3414,6 +3414,7 @@ class ResolveFixedThreadsTests(TestCase):
             orchestration_authorization=b"signed collision authorization",
             reviewed_state_evidence={"schema_version": "1.0"},
             eligibility_evidence=eligibility_payload,
+            validation_attestation=validation.attestation,
             repository_root=root,
             repository="SecPal/.github",
             delivery_issue=883,

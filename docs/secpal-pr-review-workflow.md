@@ -772,6 +772,20 @@ projection, runtime, index, object-dependency and candidate-tree identity, and
 also rechecks the external source repository without writing to its object
 database.
 
+Continuation issuance and historical read-back recompute that same collision
+validation authority and pass its complete registry binding directly to the
+ordinary receipt and final-attestation verifier. They never reconstruct the
+receipt from the current issuer registry. The schema-1.1 collision Continuation
+document binds the collision digest; the unchanged schema-1.0 receipt binds the
+head, tree, registry, command set, successful result and Continuation digest;
+and the unchanged schema-1.0 attestation binds that receipt and the same source
+and validation identities. Because the registry digest also covers the closed
+collision-validation profile, its authenticated epoch and dependency identities
+remain transitive bindings without another evidence version. This historical
+epoch selection applies only to the immutable-version-collision trigger;
+material-feedback Continuation continues to use its accepted current-policy
+semantics.
+
 `issue_collision_continuation_authorization` reuses the existing schema-1.0
 lifecycle-orchestration authorization signer/family. Its exact one-use scope
 binds CURRENT publication OID/digest, authority/lifecycle/PR/delivery identities,

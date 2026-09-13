@@ -1546,12 +1546,6 @@ def _read_source(root: Path, commit: str) -> bytes:
     return _read_bounded_blob(root, commit, SOURCE_PATH)
 
 
-def _read_authenticated_registry(root: Path, protected_main: str) -> bytes:
-    """Read the fixed registry blob already imported from accepted main."""
-
-    return _read_bounded_blob(root, protected_main, TRUST_REGISTRY_PATH)
-
-
 def _changed_paths(root: Path, before: str, after: str, limit: int) -> tuple[str, ...]:
     raw = _git(root, ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z",
                       "--no-renames", _oid(before), _oid(after), "--"], limit * 1025)
@@ -2646,6 +2640,60 @@ def collision_validation_binding_for_commit(
     _require_current_collision_predecessor(
         repository, delivery_issue, pull_request, predecessor_head,
     )
+    return _collision_validation_binding_for_commit(
+        repository=repository,
+        delivery_issue=delivery_issue,
+        pull_request=pull_request,
+        predecessor_head=predecessor_head,
+        resulting_head=resulting_head,
+        repository_root=repository_root,
+        main=main,
+    )
+
+
+def _historical_collision_validation_binding_for_commit(
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    predecessor_head: str,
+    resulting_head: str,
+    repository_root: Path,
+) -> tuple[VerifiedVersionCollision, dict[str, Any]]:
+    """Recompute receipt authority after lifecycle authenticates the transition."""
+
+    _validate_public_collision_request(
+        repository,
+        delivery_issue,
+        pull_request,
+        predecessor_head,
+        resulting_head,
+        repository_root,
+    )
+    main = _authenticate_installed_collision_issuer()
+    return _collision_validation_binding_for_commit(
+        repository=repository,
+        delivery_issue=delivery_issue,
+        pull_request=pull_request,
+        predecessor_head=predecessor_head,
+        resulting_head=resulting_head,
+        repository_root=repository_root,
+        main=main,
+    )
+
+
+def _collision_validation_binding_for_commit(
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    predecessor_head: str,
+    resulting_head: str,
+    repository_root: Path,
+    main: str,
+) -> tuple[VerifiedVersionCollision, dict[str, Any]]:
+    """Compose one already selected accepted-main collision validation epoch."""
+
     with _authenticated_source_checkout(
         repository_root,
         predecessor_head,

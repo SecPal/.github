@@ -2061,6 +2061,7 @@ def verify_continuation_bound_source_authority(
                 orchestration_authorization=continuation_authorization,
                 reviewed_state_evidence=reviewed.payload,
                 eligibility_evidence=eligibility_evidence,
+                validation_attestation=validation.attestation,
                 repository_root=repository_root,
                 repository=repository,
                 delivery_issue=delivery_issue,
