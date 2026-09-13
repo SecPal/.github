@@ -32,12 +32,41 @@ MAX_REPLACEMENTS = 4096
 MAX_CHANGED_PATHS = 32
 MAX_DELTA_BYTES = 4 * 1024 * 1024
 MAX_IMPORTED_OBJECTS = 4096
-MAX_IMPORTED_BYTES = 8 * 1024 * 1024
+# The minimal authenticated #786 closure is 9,952,044 bytes. A 16 MiB global
+# policy leaves 6,825,172 bytes of fixed headroom while the materially different
+# candidate and historical classes remain independently capped below.
+MAX_IMPORTED_BYTES = 16 * 1024 * 1024
+MAX_CANDIDATE_VALIDATION_BYTES = 8 * 1024 * 1024
+MAX_HISTORICAL_PREREQUISITE_BYTES = 3 * 1024 * 1024
 MAX_IMPORTED_COMMITS = 2048
 MAX_COMMIT_DEPTH = 1024
 MAX_PARENT_FANOUT = 64
 MAX_TREE_DEPTH = 64
 MAX_COMMIT_BYTES = 64 * 1024
+HISTORY_COMMIT_OBJECTS = "HISTORY_COMMIT_OBJECTS"
+STRUCTURAL_TREE_OBJECTS = "STRUCTURAL_TREE_OBJECTS"
+OWNER_SOURCE_BLOBS = "OWNER_SOURCE_BLOBS"
+DERIVED_RENUMBER_OBJECTS = "DERIVED_RENUMBER_OBJECTS"
+CANDIDATE_VALIDATION_TREE_CLOSURE = "CANDIDATE_VALIDATION_TREE_CLOSURE"
+ACCEPTED_HARNESS_BLOBS = "ACCEPTED_HARNESS_BLOBS"
+VALIDATION_DEPENDENCY_BLOBS = "VALIDATION_DEPENDENCY_BLOBS"
+HISTORICAL_PREREQUISITE_TREES = "HISTORICAL_PREREQUISITE_TREES"
+OTHER = "OTHER"
+IMPORT_CATEGORIES = (
+    HISTORY_COMMIT_OBJECTS,
+    STRUCTURAL_TREE_OBJECTS,
+    OWNER_SOURCE_BLOBS,
+    DERIVED_RENUMBER_OBJECTS,
+    CANDIDATE_VALIDATION_TREE_CLOSURE,
+    ACCEPTED_HARNESS_BLOBS,
+    VALIDATION_DEPENDENCY_BLOBS,
+    HISTORICAL_PREREQUISITE_TREES,
+    OTHER,
+)
+IMPORT_CATEGORY_BYTE_LIMITS = {
+    CANDIDATE_VALIDATION_TREE_CLOSURE: MAX_CANDIDATE_VALIDATION_BYTES,
+    HISTORICAL_PREREQUISITE_TREES: MAX_HISTORICAL_PREREQUISITE_BYTES,
+}
 _VERSION = re.compile(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})", re.ASCII)
 _VERSION_BYTES = frozenset(b"0123456789.")
 _OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", re.ASCII)
@@ -63,6 +92,62 @@ COLLISION_VALIDATION_BUNDLE_PATHS = (
 COLLISION_VALIDATION_SNAPSHOT_PATHS = (
     "tests/secpal-pr-review-skill-policy.sh",
 )
+# Each closed inventory is keyed by the accepted fixture blob identity. The
+# bundle list contains its audited external ref-delta bases and the exact
+# historical blobs read by the registered merge-tree fixture; reachability from
+# its authenticated prerequisite commits is independently verified.
+COLLISION_VALIDATION_BUNDLE_BASE_OBJECTS = {
+    "56f589c7e9ab6c5e2e6c7fd2db3444a7dd7561e9": (
+        ("tree", "43642afd3066209f07912228781e368bbfea17d4"),
+        ("tree", "b116142f42dde678905e4ea6b35ad65090333564"),
+        ("tree", "9bc987d14d1a9ce7f6e40fa3b0d17e8c523f0a23"),
+        ("tree", "ab94780c2df070f759808926bfe5bf3c2ceddfe2"),
+        ("tree", "231ee8e47376f09e4b984188aab19b5b76080d9c"),
+        ("tree", "a7e256784f302e80cf4f1aab07df4f0698867519"),
+        ("tree", "5f14bde41978b9bf9c12a981883d39c8e8657db1"),
+        ("tree", "8a893666ee6dc2ea8cb64d6e03ef160af4dfe951"),
+        ("tree", "67fadcbe1fa0c67a658129c2825e143ca6f39ba4"),
+        ("tree", "9a78b1448d2b7a296dae0e9796e8a7c51969b679"),
+        ("blob", "88144c97182c95559e6e0064a7f4f24fb918ffc0"),
+        ("blob", "62058f49cbc88320963d362dd1ed11c9bcd2c9dc"),
+        ("blob", "660f1c27c5b0ab577a9de71a4bca3a806d736f0d"),
+        ("blob", "63e57c2df58a0415691d0d0870fa954b676e5bd3"),
+        ("blob", "24f6e6cf116bbb741843d8da3e4a189e16923174"),
+        ("blob", "046d34ff115127ef7e3b459ebe7620056738f80f"),
+        ("blob", "46e5f260802319bf3ee05d1dbb3c0cda9d9e1639"),
+        ("blob", "aedf34c46a49bb589169f2b2a1ac664b4b86bbfc"),
+        ("blob", "edb184325addf9da3c2fe279acb8403b914cfeb1"),
+        ("blob", "b8a27537f7a5685f2745a03da362008742f260ea"),
+        ("blob", "78d379455cf3e4b34d023e67d621e67c20bdc18b"),
+        ("blob", "b1dc232e42f9dd6c6dff889d303ff44126acbc3e"),
+        ("blob", "3c803689e5f66ba8a16419518c8ae0655b4160d8"),
+        ("blob", "810eb90147a30c7e9f35db4386f91a234785e577"),
+        ("blob", "36c54529315959d1838fe7b1ce6c51d1f58cd5e2"),
+        ("blob", "1d682656a9b02b5ad7c2d7a63c220767d8eb169f"),
+        ("blob", "98b9698e0e31a5551a69473065076253655fa71e"),
+        ("blob", "5f613c67edeff7c4f7c358925b7c0c21fa04f410"),
+        ("blob", "6581da724b8ecdc2a9231cf73ed1e958d52e4e71"),
+        ("blob", "c2266b400d624852272a82280ddd682a6c1943fe"),
+        ("blob", "043eecd6dd1b4f028f100933323187e2a76630eb"),
+        ("blob", "a0181f81f8dc6dac119723771342a80a4678f5d1"),
+        ("blob", "3368d9a45f9a3594c0a7fcebe35b12ba1e7711c6"),
+        ("blob", "aae1c50e908524d4caf7936b5749de2f2ad9956f"),
+        ("blob", "53471ce2e8e7386772df82e36f70ad0e75907a0d"),
+    ),
+}
+# The accepted snapshot command reads only these baseline paths. Its commit and
+# root tree still authenticate their identities; unrelated baseline blobs do not
+# become execution or materialization authority.
+COLLISION_VALIDATION_SNAPSHOT_PREREQUISITE_PATHS = {
+    "ebb541cd2b02fa7da51f3a08b509c76b2b7326d9": (
+        "scripts/secpal-pr-review.py",
+        "templates/polyscope-codex-AGENTS.md",
+        ".github/workflows/copilot-review-memory.yml",
+        "scripts/copilot-review-tool.sh",
+        "docs/copilot-review-automation.md",
+        "AGENTS.md",
+    ),
+}
 FAMILY_KIND = "TWO_PARENT_READY_INTEGRATION"
 TRIGGER = "IMMUTABLE_EVIDENCE_VERSION_COLLISION"
 
@@ -977,6 +1062,7 @@ class CollisionValidationExecution:
     registry_binding: dict[str, Any]
     execution_root: Path
     verify_execution_root: Any
+    object_accounting: dict[str, Any]
 
 
 def _read_bounded_blob(root: Path, treeish: str, path: str) -> bytes:
@@ -1177,6 +1263,41 @@ def _validation_object_prerequisites(
     )
 
 
+def _validation_object_requirements(
+    path: str,
+    blob_oid: str,
+    source: bytes,
+) -> tuple[
+    tuple[str, ...],
+    tuple[tuple[str, str], ...],
+    tuple[tuple[str, str], ...],
+]:
+    """Bind exact execution requirements to one authenticated fixture blob."""
+
+    prerequisites = _validation_object_prerequisites(path, source)
+    if path in COLLISION_VALIDATION_BUNDLE_PATHS:
+        required_objects = COLLISION_VALIDATION_BUNDLE_BASE_OBJECTS.get(
+            _oid(blob_oid)
+        )
+        if required_objects is None:
+            raise VersionCollisionError(
+                "accepted validation bundle object requirements are unavailable"
+            )
+        return prerequisites, required_objects, ()
+    required_paths = COLLISION_VALIDATION_SNAPSHOT_PREREQUISITE_PATHS.get(
+        _oid(blob_oid)
+    )
+    if required_paths is None or len(prerequisites) != 1:
+        raise VersionCollisionError(
+            "accepted validation snapshot requirements are unavailable"
+        )
+    return (
+        prerequisites,
+        (),
+        tuple((prerequisites[0], path) for path in required_paths),
+    )
+
+
 def _collision_validation_authority(
     root: Path,
     collision: dict[str, Any],
@@ -1333,7 +1454,9 @@ def _collision_validation_authority(
             raise VersionCollisionError(
                 "candidate object fixture differs from accepted main"
             )
-        prerequisites = _validation_object_prerequisites(path, accepted[3])
+        prerequisites, required_objects, required_paths = (
+            _validation_object_requirements(path, accepted[1], accepted[3])
+        )
         prerequisite_trees = []
         for commit in prerequisites:
             try:
@@ -1352,6 +1475,14 @@ def _collision_validation_authority(
             "blob_oid": accepted[1],
             "size": accepted[2],
             "prerequisites": prerequisite_trees,
+            "required_objects": [
+                {"kind": kind, "oid": oid}
+                for kind, oid in required_objects
+            ],
+            "required_paths": [
+                {"commit": commit, "path": required_path}
+                for commit, required_path in required_paths
+            ],
         })
 
     issuer_sources = []
@@ -1538,10 +1669,120 @@ class _BoundedObjectImporter:
         self.commit_trees: dict[str, str] = {}
         self.complete_trees: set[str] = set()
         self.total_bytes = 0
+        self._object_memberships: dict[str, set[str]] = {}
+        self._object_references: dict[str, int] = {}
+        self._physical_attribution: dict[str, str] = {}
+        self._physical_bytes_by_category = {
+            category: 0 for category in IMPORT_CATEGORIES
+        }
+        self._historical_phase_start_bytes: int | None = None
+
+    def _record_reference(self, oid: str, category: str) -> None:
+        if category not in IMPORT_CATEGORIES:
+            raise VersionCollisionError(
+                "source object accounting category is unsupported"
+            )
+        self._object_memberships.setdefault(oid, set()).add(category)
+        self._object_references[oid] = self._object_references.get(oid, 0) + 1
+
+    def _check_physical_capacity(self, size: int, category: str) -> None:
+        if self.total_bytes + size > MAX_IMPORTED_BYTES:
+            raise VersionCollisionError(
+                "source object closure exceeds the byte bound"
+            )
+        category_limit = IMPORT_CATEGORY_BYTE_LIMITS.get(category)
+        if (
+            category_limit is not None
+            and self._physical_bytes_by_category[category] + size
+            > category_limit
+        ):
+            raise VersionCollisionError(
+                "source object closure exceeds the "
+                + category.lower().replace("_", "-")
+                + " byte bound"
+            )
+
+    def _record_physical_import(
+        self, oid: str, kind: str, raw: bytes, category: str,
+    ) -> None:
+        self.imported.add(oid)
+        self.objects[oid] = raw
+        self.object_kinds[oid] = kind
+        self.total_bytes += len(raw)
+        self._physical_attribution[oid] = category
+        self._physical_bytes_by_category[category] += len(raw)
+
+    def accounting(self) -> dict[str, Any]:
+        """Return ephemeral OID-deduplicated diagnostics with fixed attribution.
+
+        The first category in the closed acquisition order that physically
+        materializes an OID owns its sole byte charge. Later categories retain
+        semantic membership without another physical charge.
+        """
+
+        bytes_by_category = {category: 0 for category in IMPORT_CATEGORIES}
+        objects_by_category = {category: 0 for category in IMPORT_CATEGORIES}
+        semantic_objects_by_category = {
+            category: 0 for category in IMPORT_CATEGORIES
+        }
+        semantic_bytes_by_category = {
+            category: 0 for category in IMPORT_CATEGORIES
+        }
+        object_memberships = []
+        for oid, raw in sorted(self.objects.items()):
+            memberships = self._object_memberships.get(oid, {OTHER})
+            ordered = [
+                category for category in IMPORT_CATEGORIES
+                if category in memberships
+            ]
+            attributed = self._physical_attribution[oid]
+            bytes_by_category[attributed] += len(raw)
+            objects_by_category[attributed] += 1
+            for category in ordered:
+                semantic_objects_by_category[category] += 1
+                semantic_bytes_by_category[category] += len(raw)
+            object_memberships.append({
+                "oid": oid,
+                "kind": self.object_kinds[oid],
+                "bytes": len(raw),
+                "memberships": ordered,
+                "attributed_category": attributed,
+                "references": self._object_references.get(oid, 0),
+            })
+        historical_bytes = bytes_by_category[HISTORICAL_PREREQUISITE_TREES]
+        historical_start = self._historical_phase_start_bytes
+        return {
+            "physical_byte_attribution_rule": (
+                "FIRST_PHYSICAL_MATERIALIZATION_IN_CLOSED_IMPORT_ORDER"
+            ),
+            "total_unique_objects": len(self.objects),
+            "total_unique_bytes": sum(len(raw) for raw in self.objects.values()),
+            "source_bytes_before_historical_prerequisites": (
+                None
+                if historical_start is None
+                else historical_start
+                - bytes_by_category[DERIVED_RENUMBER_OBJECTS]
+            ),
+            "unique_bytes_before_historical_prerequisites": historical_start,
+            "bytes_required_by_historical_prerequisites": historical_bytes,
+            "final_minimal_required_bytes": sum(
+                len(raw) for raw in self.objects.values()
+            ),
+            "bytes_by_category": bytes_by_category,
+            "objects_by_category": objects_by_category,
+            "semantic_objects_by_category": semantic_objects_by_category,
+            "semantic_bytes_by_category": semantic_bytes_by_category,
+            "duplicate_oid_references": sum(
+                max(0, item["references"] - 1)
+                for item in object_memberships
+            ),
+            "object_memberships": object_memberships,
+        }
 
     @staticmethod
     def _tree_entries(raw: bytes) -> tuple[tuple[bytes, bytes, str], ...]:
         entries = []
+        names: set[bytes] = set()
         offset = 0
         while offset < len(raw):
             delimiter = raw.find(b"\x00", offset)
@@ -1555,8 +1796,10 @@ class _BoundedObjectImporter:
                 or not metadata[1]
                 or b"/" in metadata[1]
                 or metadata[1] in {b".", b".."}
+                or metadata[1] in names
             ):
                 raise VersionCollisionError("source tree object mode or name is malformed")
+            names.add(metadata[1])
             entries.append(
                 (metadata[0], metadata[1], raw[delimiter + 1:delimiter + 21].hex())
             )
@@ -1570,6 +1813,7 @@ class _BoundedObjectImporter:
         depth: int,
         *,
         import_blobs: bool,
+        category: str,
     ) -> None:
         for mode, _name, child in self._tree_entries(raw):
             if mode == b"40000":
@@ -1578,9 +1822,12 @@ class _BoundedObjectImporter:
                     "tree",
                     depth + 1,
                     import_blobs=import_blobs,
+                    category=category,
                 )
             elif mode != b"160000" and import_blobs:
-                self.transfer(child, "blob", depth + 1)
+                self.transfer(
+                    child, "blob", depth + 1, category=category,
+                )
         if import_blobs:
             self.complete_trees.add(oid)
 
@@ -1591,8 +1838,10 @@ class _BoundedObjectImporter:
         depth: int = 0,
         *,
         import_blobs: bool = True,
+        category: str = OTHER,
     ) -> bytes:
         oid = _oid(oid)
+        self._record_reference(oid, category)
         if depth > MAX_TREE_DEPTH:
             raise VersionCollisionError("source object closure exceeds the bound")
         if oid in self.objects:
@@ -1607,22 +1856,19 @@ class _BoundedObjectImporter:
                     raw,
                     depth,
                     import_blobs=True,
+                    category=category,
                 )
             return raw
         if len(self.imported) >= MAX_IMPORTED_OBJECTS:
             raise VersionCollisionError("source object closure exceeds the bound")
-        self.imported.add(oid)
         raw = self._read_source_object(oid, kind)
-        self.total_bytes += len(raw)
-        if self.total_bytes > MAX_IMPORTED_BYTES:
-            raise VersionCollisionError("source object closure exceeds the byte bound")
+        self._check_physical_capacity(len(raw), category)
         written = publication._run_git(
             self.destination, ["hash-object", "-w", "-t", kind, "--stdin"], input_bytes=raw,
         )
         if written.returncode != 0 or written.stdout != (oid + "\n").encode("ascii"):
             raise VersionCollisionError("verified source object import failed")
-        self.objects[oid] = raw
-        self.object_kinds[oid] = kind
+        self._record_physical_import(oid, kind, raw, category)
         self.source_objects[oid] = (kind, raw)
         if kind == "tree":
             self._transfer_tree_children(
@@ -1630,6 +1876,7 @@ class _BoundedObjectImporter:
                 raw,
                 depth,
                 import_blobs=import_blobs,
+                category=category,
             )
         return raw
 
@@ -1666,14 +1913,18 @@ class _BoundedObjectImporter:
                     "source object bytes changed during collision authentication"
                 )
 
-    def transfer_path(self, tree: str, path: str) -> str:
+    def transfer_path(
+        self, tree: str, path: str, *, category: str = OTHER,
+    ) -> str:
         """Transfer the exact blob named by one already bounded tree path."""
 
         tree = _oid(tree)
         encoded_parts = _path(path).encode("utf-8").split(b"/")
         current = tree
         for index, part in enumerate(encoded_parts):
-            raw = self.transfer(current, "tree", import_blobs=False)
+            raw = self.transfer(
+                current, "tree", import_blobs=False, category=category,
+            )
             matches = [
                 (mode, child)
                 for mode, name, child in self._tree_entries(raw)
@@ -1684,21 +1935,76 @@ class _BoundedObjectImporter:
             mode, child = matches[0]
             final = index == len(encoded_parts) - 1
             if final:
-                if mode == b"40000" or mode == b"160000":
-                    raise VersionCollisionError("required source tree path is not a blob")
-                self.transfer(child, "blob")
+                if mode not in {b"100644", b"100755"}:
+                    raise VersionCollisionError(
+                        "required source tree path is not a regular blob"
+                    )
+                self.transfer(child, "blob", category=category)
                 return child
             if mode != b"40000":
                 raise VersionCollisionError("required source tree path is malformed")
             current = child
         raise VersionCollisionError("required source tree path is unavailable")
 
+    def transfer_tree_inventory(
+        self, tree: str, *, category: str,
+    ) -> dict[str, str]:
+        """Authenticate tree reachability without materializing every blob."""
+
+        inventory: dict[str, str] = {}
+        pending = [(_oid(tree), 0)]
+        while pending:
+            oid, depth = pending.pop()
+            if depth > MAX_TREE_DEPTH:
+                raise VersionCollisionError(
+                    "source object closure exceeds the bound"
+                )
+            existing = inventory.get(oid)
+            if existing is not None:
+                if existing != "tree":
+                    raise VersionCollisionError(
+                        "source object identity changed type"
+                    )
+                continue
+            raw = self.transfer(
+                oid,
+                "tree",
+                depth,
+                import_blobs=False,
+                category=category,
+            )
+            inventory[oid] = "tree"
+            for mode, _name, child in reversed(self._tree_entries(raw)):
+                if mode == b"40000":
+                    kind = "tree"
+                    pending.append((child, depth + 1))
+                elif mode in {b"100644", b"100755"}:
+                    kind = "blob"
+                else:
+                    raise VersionCollisionError(
+                        "historical prerequisite contains a forbidden object type"
+                    )
+                previous = inventory.get(child)
+                if previous is not None and previous != kind:
+                    raise VersionCollisionError(
+                        "source object identity changed type"
+                    )
+                if kind == "blob":
+                    inventory[child] = kind
+                if len(inventory) > MAX_IMPORTED_OBJECTS:
+                    raise VersionCollisionError(
+                        "historical prerequisite inventory exceeds the object bound"
+                    )
+        return inventory
+
     def commit(self, oid: str) -> tuple[str, tuple[str, ...]]:
         from . import fast_path
 
         try:
             return fast_path._commit_topology(
-                self.transfer(oid, "commit").decode("utf-8", errors="strict")
+                self.transfer(
+                    oid, "commit", category=HISTORY_COMMIT_OBJECTS,
+                ).decode("utf-8", errors="strict")
             )
         except (UnicodeError, fast_path.SecurityBlocker) as exc:
             raise VersionCollisionError("source commit headers are malformed") from exc
@@ -1778,6 +2084,7 @@ class _BoundedObjectImporter:
         """Write one independently reconstructed object into the isolated DB."""
 
         oid = _oid(oid)
+        self._record_reference(oid, DERIVED_RENUMBER_OBJECTS)
         if kind not in {"blob", "tree"}:
             raise VersionCollisionError("derived object type is unsupported")
         limit = MAX_BLOB_BYTES
@@ -1797,10 +2104,7 @@ class _BoundedObjectImporter:
             return
         if len(self.imported) >= MAX_IMPORTED_OBJECTS:
             raise VersionCollisionError("source object closure exceeds the bound")
-        if self.total_bytes + len(raw) > MAX_IMPORTED_BYTES:
-            raise VersionCollisionError(
-                "source object closure exceeds the byte bound"
-            )
+        self._check_physical_capacity(len(raw), DERIVED_RENUMBER_OBJECTS)
         written = publication._run_git(
             self.destination,
             ["hash-object", "-w", "-t", kind, "--stdin"],
@@ -1810,10 +2114,78 @@ class _BoundedObjectImporter:
             "ascii"
         ):
             raise VersionCollisionError("verified derived object import failed")
-        self.imported.add(oid)
-        self.objects[oid] = raw
-        self.object_kinds[oid] = kind
-        self.total_bytes += len(raw)
+        self._record_physical_import(
+            oid, kind, raw, DERIVED_RENUMBER_OBJECTS,
+        )
+
+
+def _transfer_validation_object_requirements(
+    importer: _BoundedObjectImporter,
+    prerequisites: tuple[str, ...],
+    required_objects: tuple[tuple[str, str], ...],
+    required_paths: tuple[tuple[str, str], ...],
+) -> None:
+    """Acquire only execution-consumed objects from authenticated prerequisites."""
+
+    if importer._historical_phase_start_bytes is None:
+        importer._historical_phase_start_bytes = importer.total_bytes
+    if (
+        not prerequisites
+        or len(prerequisites) != len(set(prerequisites))
+        or len(required_objects) != len(set(required_objects))
+        or len(required_paths) != len(set(required_paths))
+    ):
+        raise VersionCollisionError(
+            "validation prerequisite requirements are ambiguous"
+        )
+    prerequisite_trees = {}
+    for commit in prerequisites:
+        if commit not in importer.commit_trees:
+            raise VersionCollisionError(
+                "validation prerequisite is outside authenticated history"
+            )
+        importer.transfer(
+            commit, "commit", category=HISTORICAL_PREREQUISITE_TREES,
+        )
+        prerequisite_trees[commit] = importer.commit_trees[commit]
+
+    reachable: dict[str, str] = {}
+    if required_objects:
+        for tree in prerequisite_trees.values():
+            for oid, kind in importer.transfer_tree_inventory(
+                tree, category=HISTORICAL_PREREQUISITE_TREES,
+            ).items():
+                previous = reachable.get(oid)
+                if previous is not None and previous != kind:
+                    raise VersionCollisionError(
+                        "historical prerequisite object changed type"
+                    )
+                reachable[oid] = kind
+                if len(reachable) > MAX_IMPORTED_OBJECTS:
+                    raise VersionCollisionError(
+                        "historical prerequisite inventory exceeds the object bound"
+                    )
+        for kind, oid in required_objects:
+            if kind not in {"tree", "blob"} or reachable.get(_oid(oid)) != kind:
+                raise VersionCollisionError(
+                    "validation bundle base is outside authenticated prerequisites"
+                )
+            importer.transfer(
+                oid,
+                kind,
+                import_blobs=kind != "tree",
+                category=HISTORICAL_PREREQUISITE_TREES,
+            )
+
+    for commit, path in required_paths:
+        tree = prerequisite_trees.get(_oid(commit))
+        if tree is None:
+            raise VersionCollisionError(
+                "validation snapshot path has no authenticated prerequisite"
+            )
+        importer.transfer_path(
+            tree, path, category=HISTORICAL_PREREQUISITE_TREES,
+        )
 
 
 def _git_object_oid(kind: str, raw: bytes, oid_length: int) -> str:
@@ -1838,7 +2210,13 @@ def _plan_collision_tree_reconstruction(
     current = predecessor_tree
     frames: list[tuple[bytes, tuple[tuple[bytes, bytes, str], ...], int]] = []
     for index, part in enumerate(parts):
-        raw = importer.transfer(current, "tree", index, import_blobs=False)
+        raw = importer.transfer(
+            current,
+            "tree",
+            index,
+            import_blobs=False,
+            category=STRUCTURAL_TREE_OBJECTS,
+        )
         entries = importer._tree_entries(raw)
         matches = [
             position
@@ -1896,7 +2274,7 @@ def _import_successor(
         if import_tree:
             importer.transfer(resulting_tree, "tree")
         return resulting_tree
-    commit = importer.transfer(selected, "commit")
+    commit = importer.transfer(selected, "commit", category=OTHER)
     try:
         tree, parents = fast_path._commit_topology(commit.decode("utf-8", errors="strict"))
     except (UnicodeError, fast_path.SecurityBlocker) as exc:
@@ -1912,7 +2290,7 @@ def _import_successor(
 def _authenticated_source_checkout(
     source: Path, predecessor: str, resulting: str | None, *, resulting_tree: str | None = None,
     accepted_main: str | None = None, include_validation_authority: bool = False,
-) -> Iterator[tuple[Path, str]]:
+) -> Iterator[tuple[Path, str, _BoundedObjectImporter]]:
     from . import lifecycle_authority as authority
 
     if (resulting is None) == (resulting_tree is None):
@@ -1944,14 +2322,19 @@ def _authenticated_source_checkout(
         }
         base_tree = importer.commit_trees[base]
         for tree in {*trees.values(), base_tree}:
-            importer.transfer(tree, "tree", import_blobs=False)
+            importer.transfer(
+                tree,
+                "tree",
+                import_blobs=False,
+                category=STRUCTURAL_TREE_OBJECTS,
+            )
         scope_paths = _changed_paths(root, base, predecessor, 4096)
         if SOURCE_PATH not in scope_paths:
             raise VersionCollisionError(
                 "collision owner is outside the authenticated delivery scope"
             )
         for tree in (base_tree, trees[main], trees[predecessor]):
-            importer.transfer_path(tree, SOURCE_PATH)
+            importer.transfer_path(tree, SOURCE_PATH, category=OWNER_SOURCE_BLOBS)
         sources = {
             head: _read_source(root, head)
             for head in (base, main, predecessor)
@@ -2014,27 +2397,46 @@ def _authenticated_source_checkout(
             raise VersionCollisionError(
                 "accepted trust registry path differs from the collision profile"
             )
-        importer.transfer_path(trees[main], TRUST_REGISTRY_PATH)
+        importer.transfer_path(trees[main], TRUST_REGISTRY_PATH, category=OTHER)
         if include_validation_authority:
-            importer.transfer(recomputed_tree, "tree")
-            accepted_paths = {
-                TRUST_REGISTRY_PATH,
-                TRUST_REGISTRY_SCHEMA_PATH,
-                *COLLISION_VALIDATION_DEPENDENCY_PATHS,
-                *COLLISION_VALIDATION_BUNDLE_PATHS,
-                *COLLISION_VALIDATION_SNAPSHOT_PATHS,
-            }
-            for path in accepted_paths:
-                importer.transfer_path(base_tree, path)
-                importer.transfer_path(trees[predecessor], path)
+            importer.transfer(
+                recomputed_tree,
+                "tree",
+                category=CANDIDATE_VALIDATION_TREE_CLOSURE,
+            )
+            accepted_paths = (
+                (TRUST_REGISTRY_PATH, OTHER),
+                (TRUST_REGISTRY_SCHEMA_PATH, OTHER),
+                *(
+                    (path, VALIDATION_DEPENDENCY_BLOBS)
+                    for path in COLLISION_VALIDATION_DEPENDENCY_PATHS
+                ),
+                *(
+                    (path, VALIDATION_DEPENDENCY_BLOBS)
+                    for path in COLLISION_VALIDATION_BUNDLE_PATHS
+                ),
+                *(
+                    (path, VALIDATION_DEPENDENCY_BLOBS)
+                    for path in COLLISION_VALIDATION_SNAPSHOT_PATHS
+                ),
+            )
+            for path, category in accepted_paths:
+                importer.transfer_path(base_tree, path, category=category)
+                importer.transfer_path(
+                    trees[predecessor], path, category=category,
+                )
             for path in COLLISION_VALIDATION_PROJECTION_PATHS:
-                importer.transfer_path(trees[predecessor], path)
+                importer.transfer_path(
+                    trees[predecessor], path, category=ACCEPTED_HARNESS_BLOBS,
+                )
             for path in (
                 COLLISION_AUTHORITY_PATH,
                 EXACT_SOURCE_SAFETY_PATH,
                 VALIDATION_ACTIONS_PATH,
             ):
-                importer.transfer_path(trees[main], path)
+                importer.transfer_path(
+                    trees[main], path, category=ACCEPTED_HARNESS_BLOBS,
+                )
             for path in (
                 *COLLISION_VALIDATION_BUNDLE_PATHS,
                 *COLLISION_VALIDATION_SNAPSHOT_PATHS,
@@ -2049,19 +2451,24 @@ def _authenticated_source_checkout(
                     raise VersionCollisionError(
                         "candidate object fixture differs from accepted main"
                     )
-                for prerequisite in _validation_object_prerequisites(
-                    path, accepted_fixture[3]
-                ):
+                requirements = _validation_object_requirements(
+                    path, accepted_fixture[1], accepted_fixture[3]
+                )
+                for prerequisite in requirements[0]:
                     if prerequisite not in protected_main_history:
                         raise VersionCollisionError(
                             "validation bundle prerequisite is outside protected-main history"
                         )
-                    importer.transfer(
-                        importer.commit_trees[prerequisite], "tree"
-                    )
+                _transfer_validation_object_requirements(
+                    importer, *requirements,
+                )
         for path in changed_paths:
-            importer.transfer_path(trees[predecessor], path)
-            importer.transfer_path(recomputed_tree, path)
+            importer.transfer_path(
+                trees[predecessor], path, category=OWNER_SOURCE_BLOBS,
+            )
+            importer.transfer_path(
+                recomputed_tree, path, category=OWNER_SOURCE_BLOBS,
+            )
         if not set(changed_paths) <= set(scope_paths):
             raise VersionCollisionError(
                 "collision renumber extends outside the authenticated delivery scope"
@@ -2074,7 +2481,7 @@ def _authenticated_source_checkout(
         ), encoding="utf-8")
         _git(root, ["config", "gpg.ssh.allowedSignersFile", str(allowed)], 4096)
         try:
-            yield root, main
+            yield root, main, importer
         finally:
             importer.verify_source_objects_unchanged()
             if _source_repository_state(source) != source_repository_state:
@@ -2117,7 +2524,7 @@ def authenticate_collision_source(
         predecessor_head,
         resulting_head,
         accepted_main=main,
-    ) as (root, main):
+    ) as (root, main, _importer):
         return _seal_collision(_derive_collision_from_git(
             root, repository=repository, delivery_issue=delivery_issue, pull_request=pull_request,
             predecessor_head=predecessor_head, resulting_head=resulting_head, protected_main=main,
@@ -2148,7 +2555,7 @@ def prepare_collision_tree(
         None,
         resulting_tree=resulting_tree,
         accepted_main=main,
-    ) as (root, main):
+    ) as (root, main, _importer):
         return _seal_collision(_derive_collision_tree(
             root, repository=repository, delivery_issue=delivery_issue, pull_request=pull_request,
             predecessor_head=predecessor_head, resulting_tree=resulting_tree, protected_main=main,
@@ -2186,7 +2593,7 @@ def collision_complete_validation(
         resulting_tree=resulting_tree,
         accepted_main=main,
         include_validation_authority=True,
-    ) as (root, main):
+    ) as (root, main, importer):
         collision = _derive_collision_tree(
             root,
             repository=repository,
@@ -2210,6 +2617,7 @@ def collision_complete_validation(
                     registry_binding=copy.deepcopy(binding),
                     execution_root=execution_root,
                     verify_execution_root=verify_execution_root,
+                    object_accounting=importer.accounting(),
                 )
         finally:
             _require_accepted_issuer(main)
@@ -2244,7 +2652,7 @@ def collision_validation_binding_for_commit(
         resulting_head,
         accepted_main=main,
         include_validation_authority=True,
-    ) as (root, main):
+    ) as (root, main, _importer):
         collision = _derive_collision_from_git(
             root,
             repository=repository,

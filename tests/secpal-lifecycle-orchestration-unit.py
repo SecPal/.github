@@ -522,6 +522,7 @@ class CollisionCompositionFixture:
         historical_thread_resolved: bool = False,
         validation_harness: bool = False,
         validation_prerequisite_on_predecessor_only: bool = False,
+        validation_prerequisite_unconsumed_bytes: int = 0,
     ):
         from scripts.secpal_pr_review import version_collision
 
@@ -654,9 +655,18 @@ class CurrentIdentityFixtures(unittest.TestCase):
                 "tests/secpal-pr-review-actions-unit.py",
                 "tests/secpal-resolve-fixed-threads-unit.py",
             )
+            if validation_prerequisite_unconsumed_bytes:
+                historical_unconsumed = root / "historical-unconsumed.bin"
+                historical_unconsumed.write_bytes(
+                    b"x" * validation_prerequisite_unconsumed_bytes
+                )
+                self.git("add", "historical-unconsumed.bin")
             validation_prerequisite = self.commit(
                 self.git("write-tree"), "validation prerequisite"
             )
+            if validation_prerequisite_unconsumed_bytes:
+                self.git("rm", "--cached", "--quiet", "historical-unconsumed.bin")
+                historical_unconsumed.unlink()
             bundle_path = root / version_collision.COLLISION_VALIDATION_BUNDLE_PATHS[0]
             bundle_path.parent.mkdir(parents=True, exist_ok=True)
             bundle_path.write_bytes(
@@ -675,6 +685,21 @@ class CurrentIdentityFixtures(unittest.TestCase):
                 + b'"\n'
             )
             snapshot_path.chmod(0o755)
+            self.validation_prerequisite = validation_prerequisite
+            self.bundle_blob_oid = self.git(
+                "hash-object",
+                version_collision.COLLISION_VALIDATION_BUNDLE_PATHS[0],
+            )
+            self.snapshot_blob_oid = self.git(
+                "hash-object",
+                version_collision.COLLISION_VALIDATION_SNAPSHOT_PATHS[0],
+            )
+            self.validation_required_blob = self.git(
+                "rev-parse",
+                validation_prerequisite
+                + ":"
+                + version_collision.COLLISION_AUTHORITY_PATH,
+            )
             self.git(
                 "add",
                 version_collision.COLLISION_VALIDATION_BUNDLE_PATHS[0],
@@ -1649,6 +1674,378 @@ def _provider_feedback_response(
         }
     }
 class LifecycleOrchestrationTests(TestCase):
+    @staticmethod
+    def _issue786_closed_source(root: Path) -> Path:
+        """Construct the fixed accepted-main/candidate object universe."""
+
+        source = root / "issue786-closed-source"
+        source.mkdir()
+        subprocess.run(
+            ["git", "-C", str(source), "init", "--quiet"], check=True,
+        )
+        # The fixture proves source-object-database immutability, so suppress
+        # Git's environment-dependent background maintenance before either
+        # local transport can schedule it.
+        for key, value in (
+            ("maintenance.auto", "false"),
+            ("gc.auto", "0"),
+            ("fetch.writeCommitGraph", "false"),
+        ):
+            subprocess.run(
+                ["git", "-C", str(source), "config", key, value], check=True,
+            )
+        subprocess.run(
+            [
+                "git", "-C", str(source), "fetch", "--quiet", "--no-tags",
+                str(Path(__file__).resolve().parents[1]),
+                "471739a201f483c2e5c26eb5955527907d415eff",
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git", "-C", str(source), "fetch", "--quiet", "--no-tags",
+                str(
+                    Path(__file__).resolve().parent
+                    / "fixtures/secpal-pr-review-actions/issue786-collision-head.bundle"
+                ),
+                "refs/remotes/origin/pr-789:refs/heads/issue786",
+            ],
+            check=True,
+        )
+        for oid in (
+            "471739a201f483c2e5c26eb5955527907d415eff",
+            "62b023f8e2807d0077b291e7af9a280888f1076c",
+            "833eef2afc063ae777e7e2b64b2f252e3fe1e49e",
+        ):
+            completed = subprocess.run(
+                ["git", "-C", str(source), "cat-file", "-t", oid],
+                env={"GIT_NO_LAZY_FETCH": "1"},
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            if completed.stdout.strip() != "commit":
+                raise AssertionError("closed fixture authority is not a commit")
+        if (source / ".git/objects/info/alternates").exists():
+            raise AssertionError("closed fixture unexpectedly uses object alternates")
+        if subprocess.run(
+            ["git", "-C", str(source), "config", "--get-regexp", "^remote\\."],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode == 0:
+            raise AssertionError("closed fixture unexpectedly retains a remote")
+        return source
+
+    @staticmethod
+    def _git_object_database_snapshot(root: Path) -> tuple[tuple[str, str], ...]:
+        objects = root / ".git/objects"
+        return tuple(
+            (
+                path.relative_to(objects).as_posix(),
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+            )
+            for path in sorted(objects.rglob("*"))
+            if path.is_file()
+        )
+
+    def test_issue786_full_historical_closure_reproduces_accepted_bound(
+        self,
+    ) -> None:
+        from contextlib import contextmanager
+        from scripts.secpal_pr_review import exact_source_safety, version_collision
+
+        @contextmanager
+        def no_dependencies(_root: Path):
+            yield {}
+
+        observed_before_historical = []
+
+        def transfer_full_historical_closure(
+            importer, prerequisites, _required_objects, _required_paths,
+        ):
+            accounting = importer.accounting()
+            observed_before_historical.append(accounting)
+            for commit in prerequisites:
+                importer.transfer(
+                    commit,
+                    "commit",
+                    category=version_collision.HISTORICAL_PREREQUISITE_TREES,
+                )
+                importer.transfer(
+                    importer.commit_trees[commit],
+                    "tree",
+                    category=version_collision.HISTORICAL_PREREQUISITE_TREES,
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = self._issue786_closed_source(Path(directory))
+            derived = "fa4b8626c75a109cefa24beec1095bb7abf1580f"
+            self.assertNotEqual(
+                subprocess.run(
+                    ["git", "-C", str(source), "cat-file", "-e", derived],
+                    env={"GIT_NO_LAZY_FETCH": "1"},
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                ).returncode,
+                0,
+            )
+            before = self._git_object_database_snapshot(source)
+            complete_validation_reached = False
+            with (
+                mock.patch.object(
+                    version_collision,
+                    "_authenticate_installed_collision_issuer",
+                    return_value="471739a201f483c2e5c26eb5955527907d415eff",
+                ),
+                mock.patch.object(
+                    version_collision,
+                    "_observe_main",
+                    return_value="471739a201f483c2e5c26eb5955527907d415eff",
+                ),
+                mock.patch.object(
+                    version_collision, "_require_current_collision_predecessor",
+                ),
+                mock.patch.object(version_collision, "_require_accepted_issuer"),
+                mock.patch.object(
+                    exact_source_safety,
+                    "_collision_validation_dependencies",
+                    no_dependencies,
+                ),
+                mock.patch.object(
+                    version_collision,
+                    "_transfer_validation_object_requirements",
+                    side_effect=transfer_full_historical_closure,
+                ),
+                mock.patch.object(
+                    version_collision, "MAX_IMPORTED_BYTES", 8 * 1024 * 1024,
+                ),
+                mock.patch.object(
+                    version_collision, "IMPORT_CATEGORY_BYTE_LIMITS", {},
+                ),
+                self.assertRaisesRegex(
+                    version_collision.VersionCollisionError,
+                    "source object closure exceeds the byte bound",
+                ),
+            ):
+                with version_collision.collision_complete_validation(
+                    repository=REPOSITORY,
+                    delivery_issue=786,
+                    pull_request=789,
+                    predecessor_head=(
+                        "62b023f8e2807d0077b291e7af9a280888f1076c"
+                    ),
+                    resulting_tree=derived,
+                    repository_root=source,
+                ):
+                    complete_validation_reached = True
+
+            self.assertFalse(complete_validation_reached)
+            self.assertEqual(len(observed_before_historical), 1)
+            accounting = observed_before_historical[0]
+            self.assertEqual(accounting["total_unique_bytes"], 7_973_066)
+            self.assertEqual(
+                accounting["total_unique_bytes"]
+                - accounting["bytes_by_category"][
+                    version_collision.DERIVED_RENUMBER_OBJECTS
+                ],
+                7_867_055,
+            )
+            self.assertEqual(self._git_object_database_snapshot(source), before)
+            self.assertNotEqual(
+                subprocess.run(
+                    ["git", "-C", str(source), "cat-file", "-e", derived],
+                    env={"GIT_NO_LAZY_FETCH": "1"},
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                ).returncode,
+                0,
+            )
+
+    def test_issue786_minimal_validation_closure_is_exact_and_deduplicated(
+        self,
+    ) -> None:
+        from contextlib import contextmanager
+        from scripts.secpal_pr_review import exact_source_safety, version_collision
+
+        @contextmanager
+        def no_dependencies(_root: Path):
+            yield {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = self._issue786_closed_source(Path(directory))
+            before = self._git_object_database_snapshot(source)
+            with (
+                mock.patch.object(
+                    version_collision,
+                    "_authenticate_installed_collision_issuer",
+                    return_value="471739a201f483c2e5c26eb5955527907d415eff",
+                ),
+                mock.patch.object(
+                    version_collision,
+                    "_observe_main",
+                    return_value="471739a201f483c2e5c26eb5955527907d415eff",
+                ),
+                mock.patch.object(
+                    version_collision, "_require_current_collision_predecessor",
+                ),
+                mock.patch.object(version_collision, "_require_accepted_issuer"),
+                mock.patch.object(
+                    exact_source_safety,
+                    "_collision_validation_dependencies",
+                    no_dependencies,
+                ),
+            ):
+                with version_collision.collision_complete_validation(
+                    repository=REPOSITORY,
+                    delivery_issue=786,
+                    pull_request=789,
+                    predecessor_head=(
+                        "62b023f8e2807d0077b291e7af9a280888f1076c"
+                    ),
+                    resulting_tree=(
+                        "fa4b8626c75a109cefa24beec1095bb7abf1580f"
+                    ),
+                    repository_root=source,
+                ) as execution:
+                    accounting = execution.object_accounting
+                    collision = execution.collision.to_dict()
+                    self.assertEqual(
+                        collision["resulting_tree"],
+                        "fa4b8626c75a109cefa24beec1095bb7abf1580f",
+                    )
+                    self.assertEqual(collision["occupied_version"], "1.2")
+                    self.assertEqual(collision["free_version"], "1.3")
+                    dependencies = execution.registry_binding[
+                        "collision_validation_authority"
+                    ]["validation_object_dependencies"]
+                    self.assertEqual(len(dependencies), 2)
+                    self.assertEqual(
+                        sum(
+                            requirement["kind"] == "tree"
+                            for requirement in dependencies[0][
+                                "required_objects"
+                            ]
+                        ),
+                        10,
+                    )
+                    self.assertEqual(
+                        sum(
+                            requirement["kind"] == "blob"
+                            for requirement in dependencies[0][
+                                "required_objects"
+                            ]
+                        ),
+                        25,
+                    )
+                    self.assertEqual(
+                        len(dependencies[1]["required_paths"]), 6,
+                    )
+                    for command in (
+                        [
+                            "python3",
+                            "tests/secpal-pr-review-actions-unit.py",
+                            (
+                                "FastPathTests."
+                                "test_prior_771_resolved_tree_accepts_"
+                                "authenticated_separator_lines"
+                            ),
+                        ],
+                        ["./tests/secpal-pr-review-skill-policy.sh"],
+                    ):
+                        completed = subprocess.run(
+                            command,
+                            cwd=execution.execution_root,
+                            stdin=subprocess.DEVNULL,
+                            capture_output=True,
+                            check=False,
+                        )
+                        self.assertEqual(
+                            completed.returncode,
+                            0,
+                            completed.stderr.decode(errors="replace"),
+                        )
+                    execution.verify_execution_root()
+
+            self.assertEqual(accounting["total_unique_objects"], 997)
+            self.assertEqual(accounting["total_unique_bytes"], 9_952_044)
+            self.assertEqual(
+                accounting["source_bytes_before_historical_prerequisites"],
+                7_867_055,
+            )
+            self.assertEqual(
+                accounting["unique_bytes_before_historical_prerequisites"],
+                7_973_066,
+            )
+            self.assertEqual(
+                accounting["bytes_required_by_historical_prerequisites"],
+                1_978_978,
+            )
+            self.assertEqual(
+                accounting["final_minimal_required_bytes"], 9_952_044,
+            )
+            self.assertEqual(accounting["duplicate_oid_references"], 345)
+            self.assertEqual(
+                accounting["bytes_by_category"],
+                {
+                    version_collision.HISTORY_COMMIT_OBJECTS: 883_335,
+                    version_collision.STRUCTURAL_TREE_OBJECTS: 55_948,
+                    version_collision.OWNER_SOURCE_BLOBS: 476_338,
+                    version_collision.DERIVED_RENUMBER_OBJECTS: 106_011,
+                    version_collision.CANDIDATE_VALIDATION_TREE_CLOSURE: (
+                        5_891_218
+                    ),
+                    version_collision.ACCEPTED_HARNESS_BLOBS: 521_869,
+                    version_collision.VALIDATION_DEPENDENCY_BLOBS: 0,
+                    version_collision.HISTORICAL_PREREQUISITE_TREES: (
+                        1_978_978
+                    ),
+                    version_collision.OTHER: 38_347,
+                },
+            )
+            self.assertEqual(
+                accounting["objects_by_category"],
+                {
+                    version_collision.HISTORY_COMMIT_OBJECTS: 500,
+                    version_collision.STRUCTURAL_TREE_OBJECTS: 69,
+                    version_collision.OWNER_SOURCE_BLOBS: 3,
+                    version_collision.DERIVED_RENUMBER_OBJECTS: 4,
+                    version_collision.CANDIDATE_VALIDATION_TREE_CLOSURE: 357,
+                    version_collision.ACCEPTED_HARNESS_BLOBS: 3,
+                    version_collision.VALIDATION_DEPENDENCY_BLOBS: 0,
+                    version_collision.HISTORICAL_PREREQUISITE_TREES: 60,
+                    version_collision.OTHER: 1,
+                },
+            )
+            # Full historical recursion was unnecessary (4,009,524 bytes fell
+            # to 1,978,978), yet the minimal closure still exceeds 8 MiB.
+            # Therefore the authenticated root-cause decision is BOTH.
+            self.assertLess(1_978_978, 4_009_524)
+            self.assertGreater(
+                accounting["final_minimal_required_bytes"], 8 * 1024 * 1024,
+            )
+            self.assertEqual(
+                sum(accounting["bytes_by_category"].values()),
+                accounting["total_unique_bytes"],
+            )
+            self.assertEqual(
+                sum(accounting["objects_by_category"].values()),
+                accounting["total_unique_objects"],
+            )
+            self.assertTrue(
+                all(
+                    item["references"] >= len(item["memberships"])
+                    for item in accounting["object_memberships"]
+                )
+            )
+            self.assertEqual(self._git_object_database_snapshot(source), before)
+
     def test_collision_preparation_recomputes_tree_absent_from_closed_source(
         self,
     ) -> None:
@@ -1846,6 +2243,22 @@ class LifecycleOrchestrationTests(TestCase):
                     "_collision_validation_dependencies",
                     no_dependencies,
                 ),
+                mock.patch.dict(
+                    version_collision.COLLISION_VALIDATION_BUNDLE_BASE_OBJECTS,
+                    {
+                        fixture.bundle_blob_oid: (
+                            ("blob", fixture.validation_required_blob),
+                        ),
+                    },
+                ),
+                mock.patch.dict(
+                    version_collision.COLLISION_VALIDATION_SNAPSHOT_PREREQUISITE_PATHS,
+                    {
+                        fixture.snapshot_blob_oid: (
+                            version_collision.COLLISION_AUTHORITY_PATH,
+                        ),
+                    },
+                ),
                 mock.patch.object(
                     version_collision,
                     "_BoundedObjectImporter",
@@ -2020,6 +2433,22 @@ class LifecycleOrchestrationTests(TestCase):
                     "_collision_validation_dependencies",
                     no_dependencies,
                 ),
+                mock.patch.dict(
+                    version_collision.COLLISION_VALIDATION_BUNDLE_BASE_OBJECTS,
+                    {
+                        fixture.bundle_blob_oid: (
+                            ("blob", fixture.validation_required_blob),
+                        ),
+                    },
+                ),
+                mock.patch.dict(
+                    version_collision.COLLISION_VALIDATION_SNAPSHOT_PREREQUISITE_PATHS,
+                    {
+                        fixture.snapshot_blob_oid: (
+                            version_collision.COLLISION_AUTHORITY_PATH,
+                        ),
+                    },
+                ),
                 self.assertRaisesRegex(
                     version_collision.VersionCollisionError,
                     "outside protected-main history",
@@ -2034,6 +2463,157 @@ class LifecycleOrchestrationTests(TestCase):
                     repository_root=fixture.root,
                 ):
                     pass
+
+    def test_collision_validation_omits_unconsumed_historical_blobs(self) -> None:
+        from contextlib import contextmanager
+        from scripts.secpal_pr_review import exact_source_safety, version_collision
+
+        @contextmanager
+        def no_dependencies(_root: Path):
+            yield {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = CollisionCompositionFixture(
+                Path(directory),
+                validation_harness=True,
+                validation_prerequisite_unconsumed_bytes=(
+                    version_collision.MAX_BLOB_BYTES + 1
+                ),
+            )
+            with (
+                mock.patch.object(
+                    version_collision,
+                    "_authenticate_installed_collision_issuer",
+                    return_value=fixture.main,
+                ),
+                mock.patch.object(
+                    version_collision,
+                    "_require_current_collision_predecessor",
+                    return_value=fixture.observed,
+                ),
+                mock.patch.object(
+                    version_collision, "_observe_main", return_value=fixture.main,
+                ),
+                mock.patch.object(version_collision, "_require_accepted_issuer"),
+                mock.patch.object(
+                    authority,
+                    "_load_lifecycle_trust_policy",
+                    return_value=fixture.policy,
+                ),
+                mock.patch.object(
+                    exact_source_safety,
+                    "_collision_validation_dependencies",
+                    no_dependencies,
+                ),
+                mock.patch.dict(
+                    version_collision.COLLISION_VALIDATION_BUNDLE_BASE_OBJECTS,
+                    {
+                        fixture.bundle_blob_oid: (
+                            ("blob", fixture.validation_required_blob),
+                        ),
+                    },
+                ),
+                mock.patch.dict(
+                    version_collision.COLLISION_VALIDATION_SNAPSHOT_PREREQUISITE_PATHS,
+                    {
+                        fixture.snapshot_blob_oid: (
+                            version_collision.COLLISION_AUTHORITY_PATH,
+                        ),
+                    },
+                ),
+            ):
+                with version_collision.collision_complete_validation(
+                    repository=REPOSITORY,
+                    delivery_issue=ISSUE,
+                    pull_request=PR,
+                    predecessor_head=fixture.predecessor,
+                    resulting_tree=fixture.resulting_tree,
+                    repository_root=fixture.root,
+                ) as execution:
+                    dependencies = execution.registry_binding[
+                        "collision_validation_authority"
+                    ]["validation_object_dependencies"]
+                    self.assertEqual(len(dependencies), 2)
+                    self.assertTrue(dependencies[0]["required_objects"])
+                    self.assertTrue(dependencies[1]["required_paths"])
+
+    def test_collision_validation_requirements_are_closed_issuer_authority(
+        self,
+    ) -> None:
+        from scripts.secpal_pr_review import exact_source_safety, version_collision
+
+        prerequisite = "a" * 40
+        bundle_source = (
+            b"# v2 git bundle\n-"
+            + prerequisite.encode("ascii")
+            + b" prerequisite\n"
+            + prerequisite.encode("ascii")
+            + b" refs/heads/fixture\n\nPACKx"
+        )
+        with self.assertRaisesRegex(
+            version_collision.VersionCollisionError,
+            "object requirements are unavailable",
+        ):
+            version_collision._validation_object_requirements(
+                version_collision.COLLISION_VALIDATION_BUNDLE_PATHS[0],
+                "f" * 40,
+                bundle_source,
+            )
+        with self.assertRaisesRegex(
+            version_collision.VersionCollisionError,
+            "snapshot requirements are unavailable",
+        ):
+            version_collision._validation_object_requirements(
+                version_collision.COLLISION_VALIDATION_SNAPSHOT_PATHS[0],
+                "f" * 40,
+                b'P21_BASELINE="' + prerequisite.encode("ascii") + b'"\n',
+            )
+        self.assertEqual(
+            version_collision.MAX_IMPORTED_BYTES,
+            exact_source_safety._COLLISION_MAX_AGGREGATE_BYTES,
+        )
+        self.assertEqual(
+            version_collision.MAX_CANDIDATE_VALIDATION_BYTES,
+            exact_source_safety._COLLISION_MAX_CANDIDATE_BYTES,
+        )
+        self.assertEqual(
+            version_collision.MAX_HISTORICAL_PREREQUISITE_BYTES,
+            exact_source_safety._COLLISION_MAX_HISTORICAL_BYTES,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            destination = Path(directory) / "destination"
+            for root in (source, destination):
+                root.mkdir()
+                subprocess.run(
+                    ["git", "-C", str(root), "init", "--quiet"],
+                    check=True,
+                )
+            oid = subprocess.run(
+                ["git", "-C", str(source), "hash-object", "-w", "--stdin"],
+                input=b"object",
+                check=True,
+                capture_output=True,
+            ).stdout.decode().strip()
+            importer = version_collision._BoundedObjectImporter(
+                source, destination,
+            )
+            with self.assertRaisesRegex(
+                version_collision.VersionCollisionError,
+                "accounting category is unsupported",
+            ):
+                importer.transfer(oid, "blob", category="CALLER_SELECTED")
+            with self.assertRaisesRegex(
+                version_collision.VersionCollisionError,
+                "requirements are ambiguous",
+            ):
+                version_collision._transfer_validation_object_requirements(
+                    importer,
+                    (prerequisite,),
+                    (("blob", oid), ("blob", oid)),
+                    (),
+                )
 
     def test_collision_importer_rechecks_consumed_source_object_bytes(self) -> None:
         from scripts.secpal_pr_review import version_collision
@@ -2158,6 +2738,206 @@ class LifecycleOrchestrationTests(TestCase):
                 authority.LifecycleAuthorityError, "object.*identity",
             ):
                 exact_source_safety._verify_collision_validation_root(*arguments)
+
+    def test_collision_tree_parser_rejects_duplicate_entry_names(self) -> None:
+        from scripts.secpal_pr_review import exact_source_safety, version_collision
+
+        raw = (
+            b"100644 duplicate\0" + b"a" * 20
+            + b"100755 duplicate\0" + b"b" * 20
+        )
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "tree object is malformed",
+        ):
+            exact_source_safety._collision_tree_entries(raw, 40)
+        with self.assertRaisesRegex(
+            version_collision.VersionCollisionError,
+            "tree object mode or name is malformed",
+        ):
+            version_collision._BoundedObjectImporter._tree_entries(raw)
+
+    def test_collision_required_tree_does_not_materialize_child_blobs(
+        self,
+    ) -> None:
+        from scripts.secpal_pr_review import version_collision
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            destination = root / "destination"
+            source.mkdir()
+            destination.mkdir()
+            for repository in (source, destination):
+                subprocess.run(
+                    ["git", "-C", str(repository), "init", "--quiet"],
+                    check=True,
+                )
+            subprocess.run(
+                [
+                    "git", "-C", str(source), "config", "user.name",
+                    "Collision Fixture",
+                ],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git", "-C", str(source), "config", "user.email",
+                    "collision-fixture@secpal.test",
+                ],
+                check=True,
+            )
+
+            def git(*arguments: str, data: bytes | None = None) -> str:
+                return subprocess.run(
+                    ["git", "-C", str(source), *arguments], input=data,
+                    check=True, capture_output=True,
+                ).stdout.decode().strip()
+
+            blob = git("hash-object", "-w", "--stdin", data=b"unconsumed")
+            tree = git(
+                "mktree", "-z",
+                data=f"100644 blob {blob}\tchild\0".encode(),
+            )
+            commit = git("commit-tree", tree, "-m", "prerequisite")
+            importer = version_collision._BoundedObjectImporter(
+                source, destination,
+            )
+            importer.history(commit)
+            version_collision._transfer_validation_object_requirements(
+                importer, (commit,), (("tree", tree),), (),
+            )
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "-C", str(destination), "cat-file", "-t", tree],
+                    check=True, capture_output=True, text=True,
+                ).stdout.strip(),
+                "tree",
+            )
+            self.assertNotEqual(
+                subprocess.run(
+                    ["git", "-C", str(destination), "cat-file", "-e", blob],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, check=False,
+                ).returncode,
+                0,
+            )
+
+    def test_collision_source_verifier_class_boundaries_deduplicate_oids(
+        self,
+    ) -> None:
+        from scripts.secpal_pr_review import exact_source_safety
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(
+                ["git", "-C", str(root), "init", "--quiet"], check=True,
+            )
+            subprocess.run(
+                [
+                    "git", "-C", str(root), "config", "user.name",
+                    "Collision Fixture",
+                ],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git", "-C", str(root), "config", "user.email",
+                    "collision-fixture@secpal.test",
+                ],
+                check=True,
+            )
+            dependency = root / "dependency.bin"
+            dependency.write_bytes(b"shared")
+            dependency.chmod(0o644)
+            subprocess.run(
+                ["git", "-C", str(root), "add", "dependency.bin"],
+                check=True,
+            )
+            tree = subprocess.run(
+                ["git", "-C", str(root), "write-tree"], check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            blob = subprocess.run(
+                ["git", "-C", str(root), "hash-object", "dependency.bin"],
+                check=True, capture_output=True, text=True,
+            ).stdout.strip()
+            commit = subprocess.run(
+                ["git", "-C", str(root), "commit-tree", tree, "-m", "base"],
+                check=True, capture_output=True, text=True,
+            ).stdout.strip()
+
+            def size(oid: str) -> int:
+                return int(subprocess.run(
+                    ["git", "-C", str(root), "cat-file", "-s", oid],
+                    check=True, capture_output=True, text=True,
+                ).stdout)
+
+            candidate_bytes = size(tree) + size(blob)
+            historical_bytes = size(commit)
+            arguments = (
+                root,
+                tree,
+                {"dependency.bin": ("100644", blob)},
+                {},
+                {},
+                [{
+                    "path": "dependency.bin",
+                    "mode": "100644",
+                    "blob_oid": blob,
+                    "size": len(b"shared"),
+                    "prerequisites": [{"commit": commit, "tree": tree}],
+                    "required_objects": [{"kind": "blob", "oid": blob}],
+                    "required_paths": [],
+                }],
+                tree,
+                exact_source_safety._collision_git_state(root),
+            )
+            with (
+                mock.patch.object(
+                    exact_source_safety,
+                    "_COLLISION_MAX_CANDIDATE_BYTES",
+                    candidate_bytes,
+                ),
+                mock.patch.object(
+                    exact_source_safety,
+                    "_COLLISION_MAX_HISTORICAL_BYTES",
+                    historical_bytes,
+                ),
+            ):
+                exact_source_safety._verify_collision_validation_root(
+                    *arguments,
+                )
+            with mock.patch.object(
+                exact_source_safety,
+                "_COLLISION_MAX_CANDIDATE_BYTES",
+                candidate_bytes - 1,
+            ):
+                with self.assertRaisesRegex(
+                    authority.LifecycleAuthorityError,
+                    "candidate closure exceeds the byte bound",
+                ):
+                    exact_source_safety._verify_collision_validation_root(
+                        *arguments,
+                    )
+            with (
+                mock.patch.object(
+                    exact_source_safety,
+                    "_COLLISION_MAX_CANDIDATE_BYTES",
+                    candidate_bytes,
+                ),
+                mock.patch.object(
+                    exact_source_safety,
+                    "_COLLISION_MAX_HISTORICAL_BYTES",
+                    historical_bytes - 1,
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    authority.LifecycleAuthorityError,
+                    "historical closure exceeds the byte bound",
+                ):
+                    exact_source_safety._verify_collision_validation_root(
+                        *arguments,
+                    )
 
     def test_collision_validation_rejects_private_git_state_mutation(self) -> None:
         from scripts.secpal_pr_review import exact_source_safety
@@ -2408,6 +3188,245 @@ def historical_v12_fixture():
                 git(destination, "cat-file", "blob", wanted),
                 'owner = "1.2"',
             )
+
+    def test_collision_importer_accounts_unique_oids_across_semantic_phases(
+        self,
+    ) -> None:
+        from scripts.secpal_pr_review import version_collision
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            destination = Path(directory) / "destination"
+            for root in (source, destination):
+                root.mkdir()
+                subprocess.run(
+                    ["git", "-C", str(root), "init", "--quiet"], check=True,
+                )
+            payload = b"one physical object"
+            oid = subprocess.run(
+                ["git", "-C", str(source), "hash-object", "-w", "--stdin"],
+                input=payload,
+                check=True,
+                capture_output=True,
+            ).stdout.decode().strip()
+            importer = version_collision._BoundedObjectImporter(
+                source, destination,
+            )
+            importer.transfer(
+                oid,
+                "blob",
+                category=version_collision.HISTORY_COMMIT_OBJECTS,
+            )
+            importer.transfer(
+                oid,
+                "blob",
+                category=version_collision.OTHER,
+            )
+            importer.materialize_derived("blob", oid, payload)
+
+            accounting = importer.accounting()
+            self.assertEqual(accounting["total_unique_objects"], 1)
+            self.assertEqual(accounting["total_unique_bytes"], len(payload))
+            self.assertEqual(accounting["duplicate_oid_references"], 2)
+            self.assertEqual(
+                accounting["bytes_by_category"],
+                {
+                    category: (
+                        len(payload)
+                        if category == version_collision.HISTORY_COMMIT_OBJECTS
+                        else 0
+                    )
+                    for category in version_collision.IMPORT_CATEGORIES
+                },
+            )
+            self.assertEqual(
+                accounting["objects_by_category"][
+                    version_collision.HISTORY_COMMIT_OBJECTS
+                ],
+                1,
+            )
+            self.assertEqual(
+                accounting["semantic_bytes_by_category"],
+                {
+                    category: (
+                        len(payload)
+                        if category in {
+                            version_collision.HISTORY_COMMIT_OBJECTS,
+                            version_collision.DERIVED_RENUMBER_OBJECTS,
+                            version_collision.OTHER,
+                        }
+                        else 0
+                    )
+                    for category in version_collision.IMPORT_CATEGORIES
+                },
+            )
+            self.assertEqual(
+                accounting["object_memberships"],
+                [
+                    {
+                        "oid": oid,
+                        "kind": "blob",
+                        "bytes": len(payload),
+                        "memberships": [
+                            version_collision.HISTORY_COMMIT_OBJECTS,
+                            version_collision.DERIVED_RENUMBER_OBJECTS,
+                            version_collision.OTHER,
+                        ],
+                        "attributed_category": (
+                            version_collision.HISTORY_COMMIT_OBJECTS
+                        ),
+                        "references": 3,
+                    }
+                ],
+            )
+
+    def test_collision_importer_accepts_maxima_and_rejects_max_plus_one(
+        self,
+    ) -> None:
+        from scripts.secpal_pr_review import version_collision
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            subprocess.run(
+                ["git", "-C", str(source), "init", "--quiet"], check=True,
+            )
+
+            def git(*arguments: str, data: bytes | None = None) -> str:
+                return subprocess.run(
+                    ["git", "-C", str(source), *arguments],
+                    input=data,
+                    check=True,
+                    capture_output=True,
+                ).stdout.decode().strip()
+
+            def importer(label: str):
+                destination = root / label
+                destination.mkdir()
+                subprocess.run(
+                    ["git", "-C", str(destination), "init", "--quiet"],
+                    check=True,
+                )
+                return version_collision._BoundedObjectImporter(
+                    source, destination,
+                )
+
+            blob_at_max = git("hash-object", "-w", "--stdin", data=b"1234")
+            blob_plus_one = git(
+                "hash-object", "-w", "--stdin", data=b"12345",
+            )
+            another_blob = git("hash-object", "-w", "--stdin", data=b"x")
+
+            with (
+                mock.patch.object(version_collision, "MAX_IMPORTED_BYTES", 4),
+                mock.patch.object(
+                    version_collision, "IMPORT_CATEGORY_BYTE_LIMITS", {},
+                ),
+            ):
+                bounded = importer("global-bytes")
+                bounded.transfer(blob_at_max, "blob")
+                with self.assertRaisesRegex(
+                    version_collision.VersionCollisionError, "byte bound",
+                ):
+                    bounded.transfer(another_blob, "blob")
+
+            with mock.patch.object(version_collision, "MAX_IMPORTED_OBJECTS", 1):
+                bounded = importer("objects")
+                bounded.transfer(blob_at_max, "blob")
+                with self.assertRaisesRegex(
+                    version_collision.VersionCollisionError, "closure.*bound",
+                ):
+                    bounded.transfer(another_blob, "blob")
+
+            with mock.patch.object(version_collision, "MAX_BLOB_BYTES", 4):
+                bounded = importer("blob-size")
+                bounded.transfer(blob_at_max, "blob")
+                with self.assertRaisesRegex(
+                    version_collision.VersionCollisionError,
+                    "object exceeds the bound",
+                ):
+                    bounded.transfer(blob_plus_one, "blob")
+
+            for index, category in enumerate((
+                version_collision.CANDIDATE_VALIDATION_TREE_CLOSURE,
+                version_collision.HISTORICAL_PREREQUISITE_TREES,
+            )):
+                with self.subTest(category=category), mock.patch.object(
+                    version_collision,
+                    "IMPORT_CATEGORY_BYTE_LIMITS",
+                    {category: 4},
+                ):
+                    bounded = importer(f"class-{index}")
+                    bounded.transfer(
+                        blob_at_max, "blob", category=category,
+                    )
+                    with self.assertRaisesRegex(
+                        version_collision.VersionCollisionError, "byte bound",
+                    ):
+                        bounded.transfer(
+                            another_blob, "blob", category=category,
+                        )
+
+            empty = git("mktree", data=b"")
+            tree_depth_one = git(
+                "mktree", "-z",
+                data=f"040000 tree {empty}\tleaf\0".encode(),
+            )
+            tree_depth_two = git(
+                "mktree", "-z",
+                data=f"040000 tree {tree_depth_one}\tmiddle\0".encode(),
+            )
+            with mock.patch.object(version_collision, "MAX_TREE_DEPTH", 1):
+                importer("tree-depth-max").transfer(tree_depth_one, "tree")
+                with self.assertRaisesRegex(
+                    version_collision.VersionCollisionError, "closure.*bound",
+                ):
+                    importer("tree-depth-plus-one").transfer(
+                        tree_depth_two, "tree",
+                    )
+
+            git("config", "user.name", "Collision Fixture")
+            git("config", "user.email", "collision-fixture@secpal.test")
+
+            def commit(message: str, *parents: str) -> str:
+                arguments = ["commit-tree", empty, "-m", message]
+                for parent in parents:
+                    arguments.extend(("-p", parent))
+                return git(*arguments)
+
+            commit_zero = commit("depth zero")
+            commit_one = commit("depth one", commit_zero)
+            commit_two = commit("depth two", commit_one)
+            with mock.patch.object(version_collision, "MAX_IMPORTED_COMMITS", 2):
+                importer("commit-count-max").history(commit_one)
+                with self.assertRaisesRegex(
+                    version_collision.VersionCollisionError,
+                    "history count",
+                ):
+                    importer("commit-count-plus-one").history(commit_two)
+            with mock.patch.object(version_collision, "MAX_COMMIT_DEPTH", 1):
+                importer("commit-depth-max").history(commit_one)
+                with self.assertRaisesRegex(
+                    version_collision.VersionCollisionError,
+                    "history depth",
+                ):
+                    importer("commit-depth-plus-one").history(commit_two)
+
+            second_parent = commit("second parent")
+            third_parent = commit("third parent")
+            fanout_at_max = commit(
+                "fanout max", commit_zero, second_parent,
+            )
+            fanout_plus_one = commit(
+                "fanout plus one", commit_zero, second_parent, third_parent,
+            )
+            with mock.patch.object(version_collision, "MAX_PARENT_FANOUT", 2):
+                importer("fanout-max").history(fanout_at_max)
+                with self.assertRaisesRegex(
+                    version_collision.VersionCollisionError, "parent fanout",
+                ):
+                    importer("fanout-plus-one").history(fanout_plus_one)
 
     def test_collision_importer_enforces_depth_for_cached_tree_objects(self) -> None:
         from scripts.secpal_pr_review import version_collision

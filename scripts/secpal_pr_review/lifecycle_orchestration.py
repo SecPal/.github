@@ -2894,7 +2894,7 @@ def _collision_scope(
         )
     with version_collision._authenticated_source_checkout(
         Path(item["repository_root"]), observed.lifecycle.head_sha, resulting_head,
-    ) as (root, main):
+    ) as (root, main, _importer):
         def read_collision(**arguments: Any) -> version_collision.VerifiedVersionCollision:
             arguments.pop("repository_root")
             return version_collision._seal_collision(version_collision._derive_collision_from_git(
