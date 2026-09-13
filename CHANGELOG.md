@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-13 - Bind Collision Continuation Validation Epoch
+
+**Fixed:**
+
+- Verify immutable-version-collision Continuation receipts and final
+  attestations with the exact merge-base validation registry, command set, and
+  dependency identities authenticated by collision Complete Validation.
+- Preserve current protected main as verifier and trust-policy authority while
+  leaving ordinary material-feedback Continuation semantics and existing
+  evidence versions unchanged.
+
 ## 2026-09-13 - Bound Collision Validation Object Closure
 
 **Fixed:**

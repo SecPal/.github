@@ -2105,6 +2105,8 @@ def _authenticate_continuation_commit(
     predecessor_head_sha: str,
     resulting_head_sha: str,
     expected_signer: Any,
+    *,
+    authenticated_source: fast_path.AuthenticatedIntegrationCommit | None = None,
 ) -> fast_path.AuthenticatedIntegrationCommit:
     """Reuse the ordinary signed-commit verifier for the one-parent successor."""
 
@@ -2135,17 +2137,31 @@ def _authenticate_continuation_commit(
             raise LifecycleOrchestrationError(
                 "Exceptional Continuation source signer is not authorized"
             )
-        verified = fast_path.authenticate_integration_commit(
-            repository_root=repository_root,
+        signature_policy = {
+            "require_github_verified": False,
+            "require_local_verified": True,
+            "accepted_formats": sorted(policy.accepted_formats),
+        }
+        if authenticated_source is None:
+            verified = fast_path.authenticate_integration_commit(
+                repository_root=repository_root,
+                repository=repository,
+                head_sha=resulting_head_sha,
+                expected_signer=dict(expected_signer),
+                signature_policy=signature_policy,
+            )
+        elif fast_path._authenticated_integration_commit_agrees(
+            authenticated_source,
             repository=repository,
             head_sha=resulting_head_sha,
             expected_signer=dict(expected_signer),
-            signature_policy={
-                "require_github_verified": False,
-                "require_local_verified": True,
-                "accepted_formats": sorted(policy.accepted_formats),
-            },
-        )
+            signature_policy=signature_policy,
+        ):
+            verified = authenticated_source
+        else:
+            raise fast_path.SecurityBlocker(
+                "preauthenticated collision source identity changed"
+            )
     except (
         authority.LifecycleAuthorityError,
         fast_path.RecoverableLocalError,
@@ -2500,12 +2516,99 @@ def verify_exceptional_continuation_authority(
     )
 
 
+def collision_validation_binding_for_historical_attestation(
+    continuation_evidence: Any,
+    *,
+    orchestration_authorization: bytes | str,
+    repository_root: Path,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    resulting_head_sha: str,
+) -> tuple[dict[str, Any], str]:
+    """Authenticate collision receipt policy before generic evidence loading."""
+
+    try:
+        repository = authority._require_repository(repository)
+        delivery_issue = _positive_int(delivery_issue, "delivery issue")
+        pull_request = _positive_int(pull_request, "pull request")
+        resulting_head_sha = _oid(resulting_head_sha, "resulting head")
+        authorization = _verify_signed_user_authorization(
+            orchestration_authorization, repository
+        )
+        scope = authorization.get("scope")
+        scope_mapping = scope if isinstance(scope, Mapping) else {}
+        collision = scope_mapping.get("collision")
+        expected_signer = (
+            continuation_evidence.get("expected_signer")
+            if isinstance(continuation_evidence, Mapping)
+            else None
+        )
+        if (
+            not isinstance(collision, dict)
+            or authorization.get("delivery_issue") != delivery_issue
+            or authorization.get("pull_request") != pull_request
+            or authorization.get("operation") != "EXCEPTIONAL_CONTINUATION"
+            or scope_mapping.get("trigger") != version_collision.TRIGGER
+            or scope_mapping.get("predecessor_head_sha")
+            != authorization.get("head_sha")
+            or scope_mapping.get("resulting_head_sha") != resulting_head_sha
+            or collision.get("predecessor_head")
+            != authorization.get("head_sha")
+            or collision.get("resulting_head") != resulting_head_sha
+            or not isinstance(continuation_evidence, Mapping)
+            or continuation_evidence.get("schema_version") != "1.1"
+            or continuation_evidence.get("trigger")
+            != version_collision.TRIGGER
+        ):
+            raise LifecycleOrchestrationError(
+                "collision Continuation preload authority is invalid"
+            )
+        sealed, binding, _source, receipt_digest = (
+            version_collision._historical_collision_validation_binding_for_commit(
+                repository=repository,
+                delivery_issue=delivery_issue,
+                pull_request=pull_request,
+                predecessor_head=authorization["head_sha"],
+                resulting_head=resulting_head_sha,
+                repository_root=repository_root,
+                protected_main=collision.get("protected_main"),
+                expected_signer=expected_signer,
+            )
+        )
+        authenticated_collision = sealed.to_dict()
+        if (
+            collision != authenticated_collision
+            or continuation_evidence.get("collision_digest")
+            != fast_path.digest_json(
+                version_collision.validation_collision_projection(
+                    authenticated_collision
+                )
+            )
+        ):
+            raise LifecycleOrchestrationError(
+                "collision Continuation preload authority changed"
+            )
+        return copy.deepcopy(binding), receipt_digest
+    except (
+        KeyError,
+        TypeError,
+        authority.LifecycleAuthorityError,
+        publication.LifecyclePublicationError,
+        version_collision.VersionCollisionError,
+    ) as exc:
+        raise LifecycleOrchestrationError(
+            "collision Continuation preload authority is invalid"
+        ) from exc
+
+
 def verify_collision_continuation_authority(
     continuation_evidence: Any,
     *,
     orchestration_authorization: bytes | str,
     reviewed_state_evidence: Any,
     eligibility_evidence: Any,
+    validation_attestation: Any,
     repository_root: Path,
     repository: str,
     delivery_issue: int,
@@ -2567,31 +2670,81 @@ def verify_collision_continuation_authority(
         raise LifecycleOrchestrationError(
             "collision Continuation signed lifecycle identity changed"
         )
+    scope = authorization.get("scope")
+    authorized_collision = (
+        scope.get("collision") if isinstance(scope, Mapping) else None
+    )
+    if not isinstance(authorized_collision, Mapping):
+        raise LifecycleOrchestrationError(
+            "collision Continuation authorization scope is invalid"
+        )
 
     try:
         predecessor_state = authority._validate_state(copy.deepcopy(predecessor.state))
         successor_state = authority._validate_state(copy.deepcopy(successor.state))
         reviewed = fast_path.verify_reviewed_state_evidence(reviewed_state_evidence)
+        continuation = fast_path.normalize_exceptional_continuation_evidence(
+            continuation_evidence,
+            repository=repository,
+            reviewed_state=reviewed,
+            validated_tree_sha=authorized_collision.get("resulting_tree"),
+            eligibility_evidence=eligibility_evidence,
+        )
+        (
+            sealed_collision,
+            validation_registry,
+            authenticated_source,
+            receipt_digest,
+        ) = (
+            version_collision._historical_collision_validation_binding_for_commit(
+                repository=repository,
+                delivery_issue=delivery_issue,
+                pull_request=pull_request,
+                predecessor_head=predecessor.head_sha,
+                resulting_head=resulting_head_sha,
+                repository_root=repository_root,
+                protected_main=authorized_collision.get("protected_main"),
+                expected_signer=continuation["expected_signer"],
+            )
+        )
+        authenticated_collision = sealed_collision.to_dict()
         source = _authenticate_continuation_commit(
             repository_root,
             repository,
             predecessor.head_sha,
             resulting_head_sha,
-            continuation_evidence.get("expected_signer")
-            if isinstance(continuation_evidence, Mapping)
-            else None,
+            continuation["expected_signer"],
+            authenticated_source=authenticated_source,
         )
-        prior_tree = _immutable_commit_tree(
-            repository_root, repository, predecessor.head_sha
-        )
-        continuation = fast_path.normalize_exceptional_continuation_evidence(
-            continuation_evidence,
+        prior_tree = authenticated_collision["predecessor_tree"]
+        validation = fast_path.verify_validation_attestation(
+            validation_attestation,
             repository=repository,
+            head_sha=resulting_head_sha,
+            registry=validation_registry,
+            command_set=validation_registry["validation"],
             reviewed_state=reviewed,
-            validated_tree_sha=source.tree_sha,
-            eligibility_evidence=eligibility_evidence,
+            commit_parent_sha=predecessor.head_sha,
+            commit_tree_sha=source.tree_sha,
+            commit_validation_receipt_digest=receipt_digest,
+            delivery_issue_number=delivery_issue,
         )
-    except (authority.LifecycleAuthorityError, fast_path.SecurityBlocker) as exc:
+        if validation_attestation.get(
+            "exceptional_continuation_evidence_digest"
+        ) != fast_path.digest_json(continuation):
+            raise LifecycleOrchestrationError(
+                "validation attestation does not bind collision Continuation"
+            )
+    except (
+        KeyError,
+        OSError,
+        TypeError,
+        UnicodeDecodeError,
+        authority.LifecycleAuthorityError,
+        fast_path.SecurityBlocker,
+        publication.LifecyclePublicationError,
+        version_collision.VersionCollisionError,
+    ) as exc:
         raise LifecycleOrchestrationError(
             "collision Continuation evidence is invalid or stale"
         ) from exc
@@ -2657,12 +2810,18 @@ def verify_collision_continuation_authority(
         or continuation["prior_ready_tree_sha"] != prior_tree
         or continuation["continuation_tree_sha"] != source.tree_sha
         or continuation["lifecycle"] != lifecycle_projection
+        or successor.tree_sha != validation.tree_sha
+        or successor.validation_receipt_digest
+        != validation.validation_receipt_digest
+        or successor.source_validation_evidence_digest
+        != validation.source_validation_evidence_digest
+        or successor.adoption_source_evidence_digest
+        != validation.final_attestation_digest
     ):
         raise LifecycleOrchestrationError(
             "collision Continuation projection differs from verified authority"
         )
 
-    scope = authorization.get("scope")
     scope_fields = {
         "trigger",
         "pull_request",
@@ -2700,10 +2859,15 @@ def verify_collision_continuation_authority(
             or collision.get("predecessor_tree") != prior_tree
             or collision.get("resulting_head") != resulting_head_sha
             or collision.get("resulting_tree") != source.tree_sha
+            or collision != authenticated_collision
             or continuation["collision_digest"]
             != fast_path.digest_json(
                 version_collision.validation_collision_projection(collision)
             )
+            or scope["validation_attestation_digest"]
+            != validation.final_attestation_digest
+            or scope["validation_receipt_digest"]
+            != validation.validation_receipt_digest
         ):
             raise LifecycleOrchestrationError(
                 "collision Continuation authorization scope is invalid"
@@ -2878,52 +3042,63 @@ def _collision_predecessor_gate(
 
 def _collision_scope(
     item: Mapping[str, Any], *, observed: Any, resulting_head: str,
-    collision_reader: Callable[..., version_collision.VerifiedVersionCollision],
+    collision_validation_reader: Callable[
+        ...,
+        tuple[
+            version_collision.VerifiedVersionCollision,
+            dict[str, Any],
+            fast_path.AuthenticatedIntegrationCommit,
+            str,
+        ],
+    ],
 ) -> tuple[dict[str, Any], fast_path.StableFeedbackState, fast_path.VerifiedValidationEvidence]:
     _require_continuation_predecessor(
         observed.lifecycle.state, observed.lifecycle.head_sha, resulting_head,
     )
     predecessor_gate = _collision_predecessor_gate(item, observed.lifecycle)
-    if collision_reader is not version_collision.authenticate_collision_source:
-        return _collision_scope_from_source(
-            item,
-            observed=observed,
+    root = Path(item["repository_root"]).resolve(strict=True)
+    sealed, validation_registry, source, receipt_digest = (
+        collision_validation_reader(
+            repository=observed.lifecycle.repository,
+            delivery_issue=observed.lifecycle.delivery_issue,
+            pull_request=observed.lifecycle.pull_request,
+            predecessor_head=observed.lifecycle.head_sha,
             resulting_head=resulting_head,
-            collision_reader=collision_reader,
-            predecessor_gate=predecessor_gate,
+            repository_root=root,
+            expected_signer=item["continuation_document"].get(
+                "expected_signer"
+            ),
         )
-    with version_collision._authenticated_source_checkout(
-        Path(item["repository_root"]), observed.lifecycle.head_sha, resulting_head,
-    ) as (root, main, _importer):
-        def read_collision(**arguments: Any) -> version_collision.VerifiedVersionCollision:
-            arguments.pop("repository_root")
-            return version_collision._seal_collision(version_collision._derive_collision_from_git(
-                root, protected_main=main, **arguments,
-            ))
-
-        return _collision_scope_from_source(
-            {**item, "repository_root": str(root)}, observed=observed, resulting_head=resulting_head,
-            collision_reader=read_collision, predecessor_gate=predecessor_gate,
-        )
+    )
+    return _collision_scope_from_source(
+        {**item, "repository_root": str(root)},
+        observed=observed,
+        resulting_head=resulting_head,
+        sealed_collision=sealed,
+        predecessor_gate=predecessor_gate,
+        validation_registry=validation_registry,
+        authenticated_source=source,
+        receipt_digest=receipt_digest,
+    )
 
 
 def _collision_scope_from_source(
     item: Mapping[str, Any], *, observed: Any, resulting_head: str,
-    collision_reader: Callable[..., version_collision.VerifiedVersionCollision],
+    sealed_collision: version_collision.VerifiedVersionCollision,
     predecessor_gate: tuple[fast_path.StableFeedbackState, Any],
+    validation_registry: dict[str, Any],
+    authenticated_source: fast_path.AuthenticatedIntegrationCommit,
+    receipt_digest: str,
 ) -> tuple[dict[str, Any], fast_path.StableFeedbackState, fast_path.VerifiedValidationEvidence]:
     lifecycle = observed.lifecycle
     _require_continuation_predecessor(lifecycle.state, lifecycle.head_sha, resulting_head)
     reviewed, safety = predecessor_gate
     root = Path(item["repository_root"]).resolve(strict=True)
-    sealed = collision_reader(
-        repository=lifecycle.repository, delivery_issue=lifecycle.delivery_issue,
-        pull_request=lifecycle.pull_request, predecessor_head=lifecycle.head_sha,
-        resulting_head=resulting_head, repository_root=root,
-    )
-    if not isinstance(sealed, version_collision.VerifiedVersionCollision):
+    if not isinstance(
+        sealed_collision, version_collision.VerifiedVersionCollision
+    ):
         raise LifecycleOrchestrationError("collision authority requires a verifier-sealed result")
-    collision = sealed.to_dict()
+    collision = sealed_collision.to_dict()
     if any(collision.get(key) != value for key, value in {
         "repository": lifecycle.repository, "delivery_issue": lifecycle.delivery_issue,
         "pull_request": lifecycle.pull_request, "predecessor_head": lifecycle.head_sha,
@@ -2952,25 +3127,16 @@ def _collision_scope_from_source(
     ):
         raise LifecycleOrchestrationError("continuation evidence differs from authenticated collision")
     source = _authenticate_continuation_commit(
-        root, lifecycle.repository, lifecycle.head_sha, resulting_head, document["expected_signer"],
+        root,
+        lifecycle.repository,
+        lifecycle.head_sha,
+        resulting_head,
+        document["expected_signer"],
+        authenticated_source=authenticated_source,
     )
     if source.tree_sha != collision["resulting_tree"]:
         raise LifecycleOrchestrationError("collision successor tree differs from signed source")
-    raw_registry = authority.loads_closed_json(
-        version_collision._read_authenticated_registry(
-            root, collision["protected_main"]
-        )
-    )
-    entries = [entry for entry in raw_registry.get("repositories", [])
-               if isinstance(entry, dict) and entry.get("repository") == lifecycle.repository]
-    if len(entries) != 1:
-        raise LifecycleOrchestrationError("collision validation has no unique accepted registry")
-    registry = fast_path.validation_registry_projection(entries[0])
-    trailer = publication._run_git(root, ["show", "-s",
-        "--format=%(trailers:key=SecPal-Validation-Receipt,valueonly,separator=%x00)", resulting_head])
-    if trailer.returncode != 0 or len(trailer.stdout) > 256:
-        raise LifecycleOrchestrationError("collision signed validation receipt is unavailable")
-    receipt_digest = trailer.stdout.decode("ascii").strip()
+    registry = copy.deepcopy(validation_registry)
     if re.fullmatch(r"[0-9a-f]{64}", receipt_digest) is None:
         raise LifecycleOrchestrationError("collision signed validation receipt is absent or ambiguous")
     attestation = item["validation_attestation"]
@@ -3010,7 +3176,9 @@ def issue_collision_continuation_authorization(
     live = _capture_current_stable_feedback(repository, lifecycle.pull_request)
     scope, reviewed, _ = _collision_scope(
         item, observed=observed, resulting_head=_oid(resulting_head, "collision successor"),
-        collision_reader=version_collision.authenticate_collision_source,
+        collision_validation_reader=(
+            version_collision.collision_validation_binding_for_commit
+        ),
     )
     if live.to_dict() != reviewed.to_dict() or item["continuation_document"]["authorization_id"] != authorization_id:
         raise LifecycleOrchestrationError("collision authorization differs from exact live predecessor")
@@ -3193,7 +3361,15 @@ def _orchestrate_event(
     feedback_reader: Callable[
         [str, int], fast_path.StableFeedbackState
     ] = _capture_current_stable_feedback,
-    collision_reader: Callable[..., version_collision.VerifiedVersionCollision] = version_collision.authenticate_collision_source,
+    collision_validation_reader: Callable[
+        ...,
+        tuple[
+            version_collision.VerifiedVersionCollision,
+            dict[str, Any],
+            fast_path.AuthenticatedIntegrationCommit,
+            str,
+        ],
+    ] = version_collision.collision_validation_binding_for_commit,
     _collision_validation_output: list[tuple[fast_path.VerifiedValidationEvidence, str]] | None = None,
     reanchor_verifier: Callable[
         ..., VerifiedRejectedContinuationReanchor
@@ -3405,7 +3581,7 @@ def _orchestrate_event(
             try:
                 scope, reviewed, validation = _collision_scope(
                     collision_item, observed=observed, resulting_head=request_head,
-                    collision_reader=collision_reader,
+                    collision_validation_reader=collision_validation_reader,
                 )
                 if collision_item["continuation_document"]["authorization_id"] != verified_authorization.get("authorization_id"):
                     raise LifecycleOrchestrationError("collision continuation authorization identity changed")

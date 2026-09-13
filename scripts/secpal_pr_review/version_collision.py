@@ -896,6 +896,118 @@ def _verify_owner_renumber(source: bytes, occupied: str, delta: dict[str, Any]) 
         raise VersionCollisionError("version identity edit extends outside its implementation, tests or documentation")
 
 
+_PINNED_IMPLEMENTATION_AST_FIELDS = {
+    "And": (),
+    "Assign": ("targets", "value", "type_comment"),
+    "Attribute": ("value", "attr", "ctx"),
+    "BoolOp": ("op", "values"),
+    "Call": ("func", "args", "keywords"),
+    "Compare": ("left", "ops", "comparators"),
+    "Constant": ("value", "kind"),
+    "Dict": ("keys", "values"),
+    "Eq": (),
+    "Expr": ("value",),
+    "FunctionDef": (
+        "name",
+        "args",
+        "body",
+        "decorator_list",
+        "returns",
+        "type_comment",
+        "type_params",
+    ),
+    "GeneratorExp": ("elt", "generators"),
+    "Gt": (),
+    "If": ("test", "body", "orelse"),
+    "IfExp": ("test", "body", "orelse"),
+    "In": (),
+    "Is": (),
+    "IsNot": (),
+    "List": ("elts", "ctx"),
+    "ListComp": ("elt", "generators"),
+    "Load": (),
+    "Lt": (),
+    "LtE": (),
+    "Name": ("id", "ctx"),
+    "Not": (),
+    "NotEq": (),
+    "NotIn": (),
+    "Or": (),
+    "Raise": ("exc", "cause"),
+    "Return": ("value",),
+    "Set": ("elts",),
+    "Store": (),
+    "Subscript": ("value", "slice", "ctx"),
+    "Tuple": ("elts", "ctx"),
+    "UnaryOp": ("op", "operand"),
+    "arg": ("arg", "annotation", "type_comment"),
+    "arguments": (
+        "posonlyargs",
+        "args",
+        "vararg",
+        "kwonlyargs",
+        "kw_defaults",
+        "kwarg",
+        "defaults",
+    ),
+    "comprehension": ("target", "iter", "ifs", "is_async"),
+    "keyword": ("arg", "value"),
+}
+
+
+def _pinned_implementation_ast_dump(value: Any) -> str:
+    """Serialize owner functions with the accepted Python 3.12 AST shape."""
+
+    if isinstance(value, ast.AST):
+        node_name = type(value).__name__
+        fields = _PINNED_IMPLEMENTATION_AST_FIELDS.get(node_name)
+        if fields is None:
+            raise VersionCollisionError(
+                "version authority function uses an unsupported syntax node: "
+                f"{node_name}"
+            )
+        extra_fields = set(getattr(type(value), "_fields", ())) - set(fields)
+        if any(
+            hasattr(value, field)
+            and getattr(value, field) not in (None, [])
+            for field in extra_fields
+        ):
+            raise VersionCollisionError(
+                "version authority function uses unsupported runtime syntax"
+            )
+        dumped_fields = []
+        for field in fields:
+            if not hasattr(value, field):
+                if (node_name, field) == ("FunctionDef", "type_params"):
+                    field_value = []
+                else:
+                    raise VersionCollisionError(
+                        "version authority AST profile is unavailable"
+                    )
+            else:
+                field_value = getattr(value, field)
+            if field_value is None and (node_name, field) != (
+                "Constant",
+                "value",
+            ):
+                continue
+            dumped_fields.append(
+                f"{field}={_pinned_implementation_ast_dump(field_value)}"
+            )
+        return f"{node_name}({', '.join(dumped_fields)})"
+    if isinstance(value, list):
+        return "[" + ", ".join(
+            _pinned_implementation_ast_dump(item) for item in value
+        ) + "]"
+    if isinstance(value, (str, bytes, int, float, complex, bool, type(None))):
+        return repr(value)
+    if value is Ellipsis:
+        return repr(value)
+    raise VersionCollisionError(
+        "version authority AST value is outside the pinned profile"
+    )
+
+
 def inventory_from_source(source: bytes) -> dict[str, Any]:
     """Parse the maintained Ready-integration declaration forms without execution.
 
@@ -976,7 +1088,10 @@ This parser is observation/normalization, not protected-main authentication.
                 _version(identity[0])
                 attestations.append({"eligibility_bound": bound, "version": identity[0], "kind": identity[1]})
             versions[version] = {"fields": sorted(fields), "attestations": attestations}
-        implementation = [ast.dump(function, include_attributes=False) for function in (normalizer, attestation)]
+        implementation = [
+            _pinned_implementation_ast_dump(function)
+            for function in (normalizer, attestation)
+        ]
         return {"kind": kind, "versions": versions, "implementation_digest": digest_json(implementation)}
     except (TypeError, KeyError, RecursionError, UnicodeError) as exc:
         raise VersionCollisionError("immutable version inventory is malformed") from exc
@@ -1544,12 +1659,6 @@ def _collision_validation_authority(
 
 def _read_source(root: Path, commit: str) -> bytes:
     return _read_bounded_blob(root, commit, SOURCE_PATH)
-
-
-def _read_authenticated_registry(root: Path, protected_main: str) -> bytes:
-    """Read the fixed registry blob already imported from accepted main."""
-
-    return _read_bounded_blob(root, protected_main, TRUST_REGISTRY_PATH)
 
 
 def _changed_paths(root: Path, before: str, after: str, limit: int) -> tuple[str, ...]:
@@ -2289,7 +2398,8 @@ def _import_successor(
 @contextmanager
 def _authenticated_source_checkout(
     source: Path, predecessor: str, resulting: str | None, *, resulting_tree: str | None = None,
-    accepted_main: str | None = None, include_validation_authority: bool = False,
+    accepted_main: str | None = None, trust_root_main: str | None = None,
+    include_validation_authority: bool = False,
 ) -> Iterator[tuple[Path, str, _BoundedObjectImporter]]:
     from . import lifecycle_authority as authority
 
@@ -2302,6 +2412,7 @@ def _authenticated_source_checkout(
         if accepted_main is None
         else _oid(accepted_main)
     )
+    current_main = main if trust_root_main is None else _oid(trust_root_main)
     source = source.resolve(strict=True)
     source_repository_state = _source_repository_state(source)
     with tempfile.TemporaryDirectory(prefix="secpal-collision-source-") as directory:
@@ -2488,7 +2599,7 @@ def _authenticated_source_checkout(
                 raise VersionCollisionError(
                     "source repository changed during collision authentication"
                 )
-            if _observe_main() != main:
+            if _observe_main() != current_main:
                 raise VersionCollisionError(
                     "protected main drifted during collision authentication"
                 )
@@ -2631,7 +2742,8 @@ def collision_validation_binding_for_commit(
     predecessor_head: str,
     resulting_head: str,
     repository_root: Path,
-) -> tuple[VerifiedVersionCollision, dict[str, Any]]:
+    expected_signer: dict[str, str],
+) -> tuple[VerifiedVersionCollision, dict[str, Any], Any, str]:
     """Recompute the receipt authority for one signed collision candidate."""
 
     _validate_public_collision_request(
@@ -2646,11 +2758,79 @@ def collision_validation_binding_for_commit(
     _require_current_collision_predecessor(
         repository, delivery_issue, pull_request, predecessor_head,
     )
+    return _collision_validation_binding_for_commit(
+        repository=repository,
+        delivery_issue=delivery_issue,
+        pull_request=pull_request,
+        predecessor_head=predecessor_head,
+        resulting_head=resulting_head,
+        repository_root=repository_root,
+        main=main,
+        trust_root_main=main,
+        expected_signer=expected_signer,
+    )
+
+
+def _historical_collision_validation_binding_for_commit(
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    predecessor_head: str,
+    resulting_head: str,
+    repository_root: Path,
+    protected_main: str,
+    expected_signer: dict[str, str],
+) -> tuple[VerifiedVersionCollision, dict[str, Any], Any, str]:
+    """Recompute receipt authority after lifecycle authenticates the transition."""
+
+    _validate_public_collision_request(
+        repository,
+        delivery_issue,
+        pull_request,
+        predecessor_head,
+        resulting_head,
+        repository_root,
+    )
+    current_main = _authenticate_installed_collision_issuer()
+    protected_main = _oid(protected_main)
+    _require_historical_collision_issuer(protected_main, current_main)
+    return _collision_validation_binding_for_commit(
+        repository=repository,
+        delivery_issue=delivery_issue,
+        pull_request=pull_request,
+        predecessor_head=predecessor_head,
+        resulting_head=resulting_head,
+        repository_root=repository_root,
+        main=protected_main,
+        trust_root_main=current_main,
+        expected_signer=expected_signer,
+    )
+
+
+def _collision_validation_binding_for_commit(
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    predecessor_head: str,
+    resulting_head: str,
+    repository_root: Path,
+    main: str,
+    trust_root_main: str,
+    expected_signer: dict[str, str],
+) -> tuple[VerifiedVersionCollision, dict[str, Any], Any, str]:
+    """Compose one already selected accepted-main collision validation epoch."""
+
+    from . import fast_path
+    from . import lifecycle_authority as authority
+
     with _authenticated_source_checkout(
         repository_root,
         predecessor_head,
         resulting_head,
         accepted_main=main,
+        trust_root_main=trust_root_main,
         include_validation_authority=True,
     ) as (root, main, _importer):
         collision = _derive_collision_from_git(
@@ -2663,8 +2843,51 @@ def collision_validation_binding_for_commit(
             protected_main=main,
         )
         _entry, binding = _collision_validation_authority(root, collision)
-        _require_accepted_issuer(main)
-        return _seal_collision(collision), binding
+        policy = authority._load_lifecycle_trust_policy(repository)
+        signature_policy = {
+            "require_github_verified": False,
+            "require_local_verified": True,
+            "accepted_formats": sorted(policy.accepted_formats),
+        }
+        source = fast_path.authenticate_integration_commit(
+            repository_root=root,
+            repository=repository,
+            head_sha=resulting_head,
+            expected_signer=expected_signer,
+            signature_policy=signature_policy,
+        )
+        receipt_digest = _git(
+            root,
+            [
+                "show",
+                "-s",
+                "--format=%(trailers:key=SecPal-Validation-Receipt,"
+                "valueonly,separator=%x00)",
+                resulting_head,
+            ],
+            256,
+        ).decode("ascii").strip()
+        if re.fullmatch(r"[0-9a-f]{64}", receipt_digest) is None:
+            raise VersionCollisionError(
+                "collision signed validation receipt is absent or ambiguous"
+            )
+        return _seal_collision(collision), binding, source, receipt_digest
+
+
+def _require_historical_collision_issuer(
+    protected_main: str, current_main: str,
+) -> None:
+    """Require a signed historical issuer to remain in accepted-main history."""
+
+    root = Path(__file__).resolve().parents[2]
+    result = publication._run_git(
+        root,
+        ["merge-base", "--is-ancestor", protected_main, current_main],
+    )
+    if result.returncode != 0 or result.stdout:
+        raise VersionCollisionError(
+            "collision protected-main issuer is not accepted history"
+        )
 
 
 def _validate_public_collision_request(

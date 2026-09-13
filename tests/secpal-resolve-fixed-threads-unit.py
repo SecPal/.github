@@ -3414,12 +3414,220 @@ class ResolveFixedThreadsTests(TestCase):
             orchestration_authorization=b"signed collision authorization",
             reviewed_state_evidence={"schema_version": "1.0"},
             eligibility_evidence=eligibility_payload,
+            validation_attestation=validation.attestation,
             repository_root=root,
             repository="SecPal/.github",
             delivery_issue=883,
             pull_request=884,
             resulting_head_sha="8" * 40,
         )
+
+    def test_collision_validation_loader_uses_authenticated_epoch_binding(
+        self,
+    ) -> None:
+        fixture_reviewed = reviewed_state_payload("PRRT_COLLISION", [])
+        reviewed_payload = MODULE.fast_path.StableFeedbackState(
+            repository="SecPal/.github",
+            pull_request_number=fixture_reviewed["pull_request_number"],
+            head_sha=fixture_reviewed["head_sha"],
+            base_ref=fixture_reviewed["base_ref"],
+            base_sha=fixture_reviewed["base_sha"],
+            pr_state=fixture_reviewed["pr_state"],
+            feedback={
+                key: fixture_reviewed[key]
+                for key in (
+                    "pull_request_reactions",
+                    "reviews",
+                    "conversation_comments",
+                    "threads",
+                )
+            },
+        ).to_dict()
+        binding = MODULE._validation_registry_binding(
+            MODULE._load_repository_entry("SecPal/.github")
+        )
+        binding = copy.deepcopy(binding)
+        binding["collision_validation_authority"] = {
+            "validation_epoch": "a" * 40,
+            "validation_dependencies": [{"blob_oid": "b" * 40}],
+        }
+        continuation = {
+            "schema_version": "1.1",
+            "trigger": "IMMUTABLE_EVIDENCE_VERSION_COLLISION",
+            "expected_signer": {
+                "kind": "SSH_PRINCIPAL",
+                "identity": "aroviqen@secpal.app",
+            },
+            "collision_digest": "c" * 64,
+        }
+        continuation_digest = MODULE.fast_path.digest_json(continuation)
+        stable = MODULE.fast_path.StableFeedbackState.from_payload(
+            reviewed_payload
+        )
+        eligibility_payload = {
+            "schema_version": "1.1",
+            "repository": "SecPal/.github",
+            "pull_request_number": 123,
+            "reviewed_head_sha": reviewed_payload["head_sha"],
+            "reviewed_state_digest": reviewed_payload["state_digest"],
+            "eligible_threads": [
+                {
+                    "thread_id": "PRRT_COLLISION",
+                    "classification": "VALID_ACTIONABLE",
+                    "disposition": "CORRECTED_AND_VERIFIED",
+                    "finding_ids": ["collision-epoch-binding"],
+                    "evidence_digest": "e" * 64,
+                    "follow_up": None,
+                }
+            ],
+        }
+        eligibility_digest = MODULE.fast_path.digest_json(
+            eligibility_payload
+        )
+        gates = [
+            {
+                "gate": gate,
+                "satisfied": True,
+                "evidence": f"verified collision gate {index}",
+            }
+            for index, gate in enumerate(binding["manual_gates"], start=1)
+        ]
+        receipt = MODULE.fast_path.create_validation_receipt(
+            repository="SecPal/.github",
+            head_sha=reviewed_payload["head_sha"],
+            validated_tree_sha="f" * 40,
+            registry=binding,
+            command_set=binding["validation"],
+            successful_result=True,
+            reviewed_state=stable,
+            manual_gate_evidence=gates,
+            eligibility_evidence_digest=eligibility_digest,
+            exceptional_continuation_evidence_digest=continuation_digest,
+        )
+        attestation = MODULE.fast_path.create_validation_attestation(
+            repository="SecPal/.github",
+            head_sha="d" * 40,
+            registry=binding,
+            command_set=binding["validation"],
+            successful_result=True,
+            reviewed_state=stable,
+            validation_receipt=receipt,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reviewed_path = root / "reviewed.json"
+            attestation_path = root / "attestation.json"
+            continuation_path = root / "continuation.json"
+            authorization_path = root / "authorization.json"
+            eligibility_path = root / "eligibility.json"
+            for path, value in (
+                (reviewed_path, reviewed_payload),
+                (attestation_path, attestation),
+                (continuation_path, continuation),
+                (eligibility_path, eligibility_payload),
+            ):
+                path.write_text(json.dumps(value), encoding="utf-8")
+            authorization_path.write_bytes(b"signed collision authorization")
+            loaded_reviewed = MODULE.load_reviewed_state(
+                reviewed_path,
+                "SecPal/.github",
+                123,
+                reviewed_payload["state_digest"],
+                ("PRRT_COLLISION",),
+            )
+            with mock.patch.object(
+                MODULE.lifecycle_orchestration,
+                "collision_validation_binding_for_historical_attestation",
+                return_value=(binding, receipt["receipt_digest"]),
+            ) as epoch_binding, mock.patch.object(
+                MODULE,
+                "_immutable_delivery_registry_binding",
+                side_effect=AssertionError("current registry was substituted"),
+            ):
+                validation = MODULE.load_validation_evidence(
+                    attestation_path,
+                    "SecPal/.github",
+                    "d" * 40,
+                    loaded_reviewed,
+                    repository_root=root,
+                    exceptional_continuation_delivery_issue=930,
+                    exceptional_continuation_evidence_path=continuation_path,
+                    exceptional_continuation_authorization_path=(
+                        authorization_path
+                    ),
+                )
+                target = MODULE.TargetRead(
+                    repository="SecPal/.github",
+                    pull_request_number=123,
+                    state="OPEN",
+                    head_sha="d" * 40,
+                    api_pages=1,
+                    thread=MODULE.ThreadState(
+                        thread_id="PRRT_COLLISION",
+                        is_resolved=False,
+                        is_outdated=False,
+                        comments=(),
+                    ),
+                )
+                with mock.patch.object(
+                    MODULE, "verify_local_fix_commit"
+                ), mock.patch.object(
+                    MODULE, "verify_recovery_bound_source_authority"
+                ), mock.patch.object(
+                    MODULE, "verify_continuation_bound_source_authority"
+                ), mock.patch.object(
+                    MODULE, "read_target_thread", return_value=target
+                ):
+                    result = MODULE.resolve_threads(
+                        "SecPal/.github",
+                        123,
+                        "d" * 40,
+                        ("PRRT_COLLISION",),
+                        apply=False,
+                        repository_root=root,
+                        reviewed_state_path=reviewed_path,
+                        expected_reviewed_state_digest=(
+                            reviewed_payload["state_digest"]
+                        ),
+                        validation_evidence_path=attestation_path,
+                        eligibility_evidence_path=eligibility_path,
+                        exceptional_continuation_delivery_issue=930,
+                        exceptional_continuation_evidence_path=(
+                            continuation_path
+                        ),
+                        exceptional_continuation_authorization_path=(
+                            authorization_path
+                        ),
+                    )
+            with self.assertRaisesRegex(
+                MODULE.ResolutionError,
+                "requires both Continuation evidence",
+            ):
+                MODULE.load_validation_evidence(
+                    attestation_path,
+                    "SecPal/.github",
+                    "d" * 40,
+                    loaded_reviewed,
+                    repository_root=root,
+                    exceptional_continuation_delivery_issue=930,
+                    exceptional_continuation_evidence_path=continuation_path,
+                )
+
+        self.assertEqual(epoch_binding.call_count, 2)
+        epoch_binding.assert_called_with(
+            continuation,
+            orchestration_authorization=b"signed collision authorization",
+            repository_root=root,
+            repository="SecPal/.github",
+            delivery_issue=930,
+            pull_request=123,
+            resulting_head_sha="d" * 40,
+        )
+        self.assertEqual(validation.registry_binding, binding)
+        self.assertEqual(
+            validation.validation_receipt_digest, receipt["receipt_digest"]
+        )
+        self.assertEqual(result["status"], "success")
 
     def test_continuation_authority_consumer_rejects_missing_or_substituted_kind(self) -> None:
         reviewed = MODULE.ReviewedState(

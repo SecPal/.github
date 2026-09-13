@@ -7771,7 +7771,12 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             )
             try:
                 collision_helper = _load_collision_validation_helper()
-                sealed_collision, binding = (
+                (
+                    sealed_collision,
+                    binding,
+                    _collision_source,
+                    collision_receipt_digest,
+                ) = (
                     collision_helper.collision_validation_binding_for_commit(
                         repository=arguments.repo,
                         delivery_issue=(
@@ -7785,6 +7790,9 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                         ],
                         resulting_head=head,
                         repository_root=repository_root,
+                        expected_signer=binding_continuation[
+                            "expected_signer"
+                        ],
                     )
                 )
                 collision = sealed_collision.to_dict()
@@ -7799,6 +7807,10 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             ):
                 raise fast_path.SecurityBlocker(
                     "collision validation authority differs from continuation evidence"
+                )
+            if receipt.get("receipt_digest") != collision_receipt_digest:
+                raise fast_path.SecurityBlocker(
+                    "collision validation receipt changed after isolated authentication"
                 )
         if binding is None:
             raise fast_path.SecurityBlocker(
