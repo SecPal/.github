@@ -914,6 +914,7 @@ def _collision_tree_entries(
     oid_bytes = 20 if oid_length == 40 else 32
     offset = 0
     entries = []
+    names: set[bytes] = set()
     while offset < len(raw):
         delimiter = raw.find(b"\0", offset)
         if delimiter < 0 or delimiter + 1 + oid_bytes > len(raw):
@@ -927,10 +928,12 @@ def _collision_tree_entries(
             or not metadata[1]
             or b"/" in metadata[1]
             or metadata[1] in {b".", b".."}
+            or metadata[1] in names
         ):
             raise authority.LifecycleAuthorityError(
                 "collision tree object is malformed"
             )
+        names.add(metadata[1])
         try:
             name = metadata[1].decode("utf-8", errors="strict")
         except UnicodeDecodeError as exc:

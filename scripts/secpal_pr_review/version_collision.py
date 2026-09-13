@@ -32,8 +32,8 @@ MAX_REPLACEMENTS = 4096
 MAX_CHANGED_PATHS = 32
 MAX_DELTA_BYTES = 4 * 1024 * 1024
 MAX_IMPORTED_OBJECTS = 4096
-# The minimal authenticated #786 closure is 10,286,316 bytes. A 16 MiB global
-# policy leaves 6,490,900 bytes of fixed headroom while the materially different
+# The minimal authenticated #786 closure is 9,952,044 bytes. A 16 MiB global
+# policy leaves 6,825,172 bytes of fixed headroom while the materially different
 # candidate and historical classes remain independently capped below.
 MAX_IMPORTED_BYTES = 16 * 1024 * 1024
 MAX_CANDIDATE_VALIDATION_BYTES = 8 * 1024 * 1024
@@ -93,8 +93,9 @@ COLLISION_VALIDATION_SNAPSHOT_PATHS = (
     "tests/secpal-pr-review-skill-policy.sh",
 )
 # Each closed inventory is keyed by the accepted fixture blob identity. The
-# bundle list contains exactly its audited external ref-delta bases; reachability
-# from its authenticated prerequisite commits is independently verified.
+# bundle list contains its audited external ref-delta bases and the exact
+# historical blobs read by the registered merge-tree fixture; reachability from
+# its authenticated prerequisite commits is independently verified.
 COLLISION_VALIDATION_BUNDLE_BASE_OBJECTS = {
     "56f589c7e9ab6c5e2e6c7fd2db3444a7dd7561e9": (
         ("tree", "43642afd3066209f07912228781e368bbfea17d4"),
@@ -122,6 +123,16 @@ COLLISION_VALIDATION_BUNDLE_BASE_OBJECTS = {
         ("blob", "3c803689e5f66ba8a16419518c8ae0655b4160d8"),
         ("blob", "810eb90147a30c7e9f35db4386f91a234785e577"),
         ("blob", "36c54529315959d1838fe7b1ce6c51d1f58cd5e2"),
+        ("blob", "1d682656a9b02b5ad7c2d7a63c220767d8eb169f"),
+        ("blob", "98b9698e0e31a5551a69473065076253655fa71e"),
+        ("blob", "5f613c67edeff7c4f7c358925b7c0c21fa04f410"),
+        ("blob", "6581da724b8ecdc2a9231cf73ed1e958d52e4e71"),
+        ("blob", "c2266b400d624852272a82280ddd682a6c1943fe"),
+        ("blob", "043eecd6dd1b4f028f100933323187e2a76630eb"),
+        ("blob", "a0181f81f8dc6dac119723771342a80a4678f5d1"),
+        ("blob", "3368d9a45f9a3594c0a7fcebe35b12ba1e7711c6"),
+        ("blob", "aae1c50e908524d4caf7936b5749de2f2ad9956f"),
+        ("blob", "53471ce2e8e7386772df82e36f70ad0e75907a0d"),
     ),
 }
 # The accepted snapshot command reads only these baseline paths. Its commit and
@@ -1771,6 +1782,7 @@ class _BoundedObjectImporter:
     @staticmethod
     def _tree_entries(raw: bytes) -> tuple[tuple[bytes, bytes, str], ...]:
         entries = []
+        names: set[bytes] = set()
         offset = 0
         while offset < len(raw):
             delimiter = raw.find(b"\x00", offset)
@@ -1784,8 +1796,10 @@ class _BoundedObjectImporter:
                 or not metadata[1]
                 or b"/" in metadata[1]
                 or metadata[1] in {b".", b".."}
+                or metadata[1] in names
             ):
                 raise VersionCollisionError("source tree object mode or name is malformed")
+            names.add(metadata[1])
             entries.append(
                 (metadata[0], metadata[1], raw[delimiter + 1:delimiter + 21].hex())
             )
@@ -2157,7 +2171,10 @@ def _transfer_validation_object_requirements(
                     "validation bundle base is outside authenticated prerequisites"
                 )
             importer.transfer(
-                oid, kind, category=HISTORICAL_PREREQUISITE_TREES,
+                oid,
+                kind,
+                import_blobs=kind != "tree",
+                category=HISTORICAL_PREREQUISITE_TREES,
             )
 
     for commit, path in required_paths:

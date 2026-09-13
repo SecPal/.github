@@ -1922,6 +1922,31 @@ class LifecycleOrchestrationTests(TestCase):
                     )
                     self.assertEqual(collision["occupied_version"], "1.2")
                     self.assertEqual(collision["free_version"], "1.3")
+                    dependencies = execution.registry_binding[
+                        "collision_validation_authority"
+                    ]["validation_object_dependencies"]
+                    self.assertEqual(len(dependencies), 2)
+                    self.assertEqual(
+                        sum(
+                            requirement["kind"] == "tree"
+                            for requirement in dependencies[0][
+                                "required_objects"
+                            ]
+                        ),
+                        10,
+                    )
+                    self.assertEqual(
+                        sum(
+                            requirement["kind"] == "blob"
+                            for requirement in dependencies[0][
+                                "required_objects"
+                            ]
+                        ),
+                        25,
+                    )
+                    self.assertEqual(
+                        len(dependencies[1]["required_paths"]), 6,
+                    )
                     for command in (
                         [
                             "python3",
@@ -1948,8 +1973,8 @@ class LifecycleOrchestrationTests(TestCase):
                         )
                     execution.verify_execution_root()
 
-            self.assertEqual(accounting["total_unique_objects"], 1_004)
-            self.assertEqual(accounting["total_unique_bytes"], 10_286_316)
+            self.assertEqual(accounting["total_unique_objects"], 997)
+            self.assertEqual(accounting["total_unique_bytes"], 9_952_044)
             self.assertEqual(
                 accounting["source_bytes_before_historical_prerequisites"],
                 7_867_055,
@@ -1960,12 +1985,12 @@ class LifecycleOrchestrationTests(TestCase):
             )
             self.assertEqual(
                 accounting["bytes_required_by_historical_prerequisites"],
-                2_313_250,
+                1_978_978,
             )
             self.assertEqual(
-                accounting["final_minimal_required_bytes"], 10_286_316,
+                accounting["final_minimal_required_bytes"], 9_952_044,
             )
-            self.assertEqual(accounting["duplicate_oid_references"], 818)
+            self.assertEqual(accounting["duplicate_oid_references"], 345)
             self.assertEqual(
                 accounting["bytes_by_category"],
                 {
@@ -1979,7 +2004,7 @@ class LifecycleOrchestrationTests(TestCase):
                     version_collision.ACCEPTED_HARNESS_BLOBS: 521_869,
                     version_collision.VALIDATION_DEPENDENCY_BLOBS: 0,
                     version_collision.HISTORICAL_PREREQUISITE_TREES: (
-                        2_313_250
+                        1_978_978
                     ),
                     version_collision.OTHER: 38_347,
                 },
@@ -1994,14 +2019,14 @@ class LifecycleOrchestrationTests(TestCase):
                     version_collision.CANDIDATE_VALIDATION_TREE_CLOSURE: 357,
                     version_collision.ACCEPTED_HARNESS_BLOBS: 3,
                     version_collision.VALIDATION_DEPENDENCY_BLOBS: 0,
-                    version_collision.HISTORICAL_PREREQUISITE_TREES: 67,
+                    version_collision.HISTORICAL_PREREQUISITE_TREES: 60,
                     version_collision.OTHER: 1,
                 },
             )
             # Full historical recursion was unnecessary (4,009,524 bytes fell
-            # to 2,313,250), yet the minimal closure still exceeds 8 MiB.
+            # to 1,978,978), yet the minimal closure still exceeds 8 MiB.
             # Therefore the authenticated root-cause decision is BOTH.
-            self.assertLess(2_313_250, 4_009_524)
+            self.assertLess(1_978_978, 4_009_524)
             self.assertGreater(
                 accounting["final_minimal_required_bytes"], 8 * 1024 * 1024,
             )
@@ -2713,6 +2738,206 @@ class LifecycleOrchestrationTests(TestCase):
                 authority.LifecycleAuthorityError, "object.*identity",
             ):
                 exact_source_safety._verify_collision_validation_root(*arguments)
+
+    def test_collision_tree_parser_rejects_duplicate_entry_names(self) -> None:
+        from scripts.secpal_pr_review import exact_source_safety, version_collision
+
+        raw = (
+            b"100644 duplicate\0" + b"a" * 20
+            + b"100755 duplicate\0" + b"b" * 20
+        )
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "tree object is malformed",
+        ):
+            exact_source_safety._collision_tree_entries(raw, 40)
+        with self.assertRaisesRegex(
+            version_collision.VersionCollisionError,
+            "tree object mode or name is malformed",
+        ):
+            version_collision._BoundedObjectImporter._tree_entries(raw)
+
+    def test_collision_required_tree_does_not_materialize_child_blobs(
+        self,
+    ) -> None:
+        from scripts.secpal_pr_review import version_collision
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            destination = root / "destination"
+            source.mkdir()
+            destination.mkdir()
+            for repository in (source, destination):
+                subprocess.run(
+                    ["git", "-C", str(repository), "init", "--quiet"],
+                    check=True,
+                )
+            subprocess.run(
+                [
+                    "git", "-C", str(source), "config", "user.name",
+                    "Collision Fixture",
+                ],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git", "-C", str(source), "config", "user.email",
+                    "collision-fixture@secpal.test",
+                ],
+                check=True,
+            )
+
+            def git(*arguments: str, data: bytes | None = None) -> str:
+                return subprocess.run(
+                    ["git", "-C", str(source), *arguments], input=data,
+                    check=True, capture_output=True,
+                ).stdout.decode().strip()
+
+            blob = git("hash-object", "-w", "--stdin", data=b"unconsumed")
+            tree = git(
+                "mktree", "-z",
+                data=f"100644 blob {blob}\tchild\0".encode(),
+            )
+            commit = git("commit-tree", tree, "-m", "prerequisite")
+            importer = version_collision._BoundedObjectImporter(
+                source, destination,
+            )
+            importer.history(commit)
+            version_collision._transfer_validation_object_requirements(
+                importer, (commit,), (("tree", tree),), (),
+            )
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "-C", str(destination), "cat-file", "-t", tree],
+                    check=True, capture_output=True, text=True,
+                ).stdout.strip(),
+                "tree",
+            )
+            self.assertNotEqual(
+                subprocess.run(
+                    ["git", "-C", str(destination), "cat-file", "-e", blob],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, check=False,
+                ).returncode,
+                0,
+            )
+
+    def test_collision_source_verifier_class_boundaries_deduplicate_oids(
+        self,
+    ) -> None:
+        from scripts.secpal_pr_review import exact_source_safety
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(
+                ["git", "-C", str(root), "init", "--quiet"], check=True,
+            )
+            subprocess.run(
+                [
+                    "git", "-C", str(root), "config", "user.name",
+                    "Collision Fixture",
+                ],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git", "-C", str(root), "config", "user.email",
+                    "collision-fixture@secpal.test",
+                ],
+                check=True,
+            )
+            dependency = root / "dependency.bin"
+            dependency.write_bytes(b"shared")
+            dependency.chmod(0o644)
+            subprocess.run(
+                ["git", "-C", str(root), "add", "dependency.bin"],
+                check=True,
+            )
+            tree = subprocess.run(
+                ["git", "-C", str(root), "write-tree"], check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            blob = subprocess.run(
+                ["git", "-C", str(root), "hash-object", "dependency.bin"],
+                check=True, capture_output=True, text=True,
+            ).stdout.strip()
+            commit = subprocess.run(
+                ["git", "-C", str(root), "commit-tree", tree, "-m", "base"],
+                check=True, capture_output=True, text=True,
+            ).stdout.strip()
+
+            def size(oid: str) -> int:
+                return int(subprocess.run(
+                    ["git", "-C", str(root), "cat-file", "-s", oid],
+                    check=True, capture_output=True, text=True,
+                ).stdout)
+
+            candidate_bytes = size(tree) + size(blob)
+            historical_bytes = size(commit)
+            arguments = (
+                root,
+                tree,
+                {"dependency.bin": ("100644", blob)},
+                {},
+                {},
+                [{
+                    "path": "dependency.bin",
+                    "mode": "100644",
+                    "blob_oid": blob,
+                    "size": len(b"shared"),
+                    "prerequisites": [{"commit": commit, "tree": tree}],
+                    "required_objects": [{"kind": "blob", "oid": blob}],
+                    "required_paths": [],
+                }],
+                tree,
+                exact_source_safety._collision_git_state(root),
+            )
+            with (
+                mock.patch.object(
+                    exact_source_safety,
+                    "_COLLISION_MAX_CANDIDATE_BYTES",
+                    candidate_bytes,
+                ),
+                mock.patch.object(
+                    exact_source_safety,
+                    "_COLLISION_MAX_HISTORICAL_BYTES",
+                    historical_bytes,
+                ),
+            ):
+                exact_source_safety._verify_collision_validation_root(
+                    *arguments,
+                )
+            with mock.patch.object(
+                exact_source_safety,
+                "_COLLISION_MAX_CANDIDATE_BYTES",
+                candidate_bytes - 1,
+            ):
+                with self.assertRaisesRegex(
+                    authority.LifecycleAuthorityError,
+                    "candidate closure exceeds the byte bound",
+                ):
+                    exact_source_safety._verify_collision_validation_root(
+                        *arguments,
+                    )
+            with (
+                mock.patch.object(
+                    exact_source_safety,
+                    "_COLLISION_MAX_CANDIDATE_BYTES",
+                    candidate_bytes,
+                ),
+                mock.patch.object(
+                    exact_source_safety,
+                    "_COLLISION_MAX_HISTORICAL_BYTES",
+                    historical_bytes - 1,
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    authority.LifecycleAuthorityError,
+                    "historical closure exceeds the byte bound",
+                ):
+                    exact_source_safety._verify_collision_validation_root(
+                        *arguments,
+                    )
 
     def test_collision_validation_rejects_private_git_state_mutation(self) -> None:
         from scripts.secpal_pr_review import exact_source_safety
