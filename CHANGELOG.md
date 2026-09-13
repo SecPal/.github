@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-13 - Bound Collision Validation Object Closure
+
+**Fixed:**
+
+- Materialize only the authenticated historical Git objects and paths consumed
+  by the registered collision Complete Validation commands, while retaining
+  exact tree-reachability and object-hash verification.
+- Account for imported objects once by Git identity across semantic phases and
+  enforce fixed candidate, historical-prerequisite, aggregate, object, history,
+  tree-depth, and individual-object limits.
+
 ## 2026-09-12 - Authenticate Legacy Enrolled Evidence Loss
 
 **Fixed:**

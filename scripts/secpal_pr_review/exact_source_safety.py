@@ -28,7 +28,9 @@ _GIT_OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", re.ASCII)
 _COLLISION_MAX_OBJECTS = 4096
 _COLLISION_MAX_OBJECT_BYTES = 1024 * 1024
 _COLLISION_MAX_COMMIT_BYTES = 64 * 1024
-_COLLISION_MAX_AGGREGATE_BYTES = 8 * 1024 * 1024
+_COLLISION_MAX_AGGREGATE_BYTES = 16 * 1024 * 1024
+_COLLISION_MAX_CANDIDATE_BYTES = 8 * 1024 * 1024
+_COLLISION_MAX_HISTORICAL_BYTES = 3 * 1024 * 1024
 _COLLISION_MAX_TREE_DEPTH = 64
 _COLLISION_MAX_GIT_STATE_FILES = _COLLISION_MAX_OBJECTS + 128
 _COLLISION_MAX_GIT_STATE_BYTES = _COLLISION_MAX_AGGREGATE_BYTES * 2
@@ -896,36 +898,139 @@ def _verify_collision_tree_closure(
         raw = _collision_object_bytes(root, oid, "tree", verified)
         if already_verified:
             continue
-        oid_bytes = 20 if len(oid) == 40 else 32
-        offset = 0
-        children: list[tuple[str, str]] = []
-        while offset < len(raw):
-            delimiter = raw.find(b"\0", offset)
-            if delimiter < 0 or delimiter + 1 + oid_bytes > len(raw):
-                raise authority.LifecycleAuthorityError(
-                    "collision tree object is malformed"
-                )
-            metadata = raw[offset:delimiter].split(b" ", 1)
-            if (
-                len(metadata) != 2
-                or metadata[0] not in {b"40000", b"100644", b"100755"}
-                or not metadata[1]
-                or b"/" in metadata[1]
-                or metadata[1] in {b".", b".."}
-            ):
-                raise authority.LifecycleAuthorityError(
-                    "collision tree object is malformed"
-                )
-            child = raw[delimiter + 1:delimiter + 1 + oid_bytes].hex()
-            children.append(
-                ("tree" if metadata[0] == b"40000" else "blob", child)
-            )
-            offset = delimiter + 1 + oid_bytes
-        for kind, child in reversed(children):
+        for mode, _name, child in reversed(
+            _collision_tree_entries(raw, len(oid))
+        ):
+            kind = "tree" if mode == "40000" else "blob"
             if kind == "tree":
                 pending.append((child, depth + 1))
             else:
                 _collision_object_bytes(root, child, kind, verified)
+
+
+def _collision_tree_entries(
+    raw: bytes, oid_length: int,
+) -> tuple[tuple[str, str, str], ...]:
+    oid_bytes = 20 if oid_length == 40 else 32
+    offset = 0
+    entries = []
+    while offset < len(raw):
+        delimiter = raw.find(b"\0", offset)
+        if delimiter < 0 or delimiter + 1 + oid_bytes > len(raw):
+            raise authority.LifecycleAuthorityError(
+                "collision tree object is malformed"
+            )
+        metadata = raw[offset:delimiter].split(b" ", 1)
+        if (
+            len(metadata) != 2
+            or metadata[0] not in {b"40000", b"100644", b"100755"}
+            or not metadata[1]
+            or b"/" in metadata[1]
+            or metadata[1] in {b".", b".."}
+        ):
+            raise authority.LifecycleAuthorityError(
+                "collision tree object is malformed"
+            )
+        try:
+            name = metadata[1].decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise authority.LifecycleAuthorityError(
+                "collision tree object is malformed"
+            ) from exc
+        child = raw[delimiter + 1:delimiter + 1 + oid_bytes].hex()
+        entries.append((metadata[0].decode("ascii"), name, child))
+        offset = delimiter + 1 + oid_bytes
+    return tuple(entries)
+
+
+def _verify_collision_tree_inventory(
+    root: Path,
+    tree: str,
+    verified: dict[str, tuple[str, bytes]],
+) -> dict[str, str]:
+    """Authenticate reachable identities while reading tree objects only."""
+
+    inventory: dict[str, str] = {}
+    pending = [(tree, 0)]
+    while pending:
+        oid, depth = pending.pop()
+        if depth > _COLLISION_MAX_TREE_DEPTH:
+            raise authority.LifecycleAuthorityError(
+                "collision object closure exceeds the tree-depth bound"
+            )
+        existing = inventory.get(oid)
+        if existing is not None:
+            if existing != "tree":
+                raise authority.LifecycleAuthorityError(
+                    "collision object identity changed type"
+                )
+            continue
+        raw = _collision_object_bytes(root, oid, "tree", verified)
+        inventory[oid] = "tree"
+        for mode, _name, child in reversed(
+            _collision_tree_entries(raw, len(oid))
+        ):
+            kind = "tree" if mode == "40000" else "blob"
+            previous = inventory.get(child)
+            if previous is not None and previous != kind:
+                raise authority.LifecycleAuthorityError(
+                    "collision object identity changed type"
+                )
+            if kind == "tree":
+                pending.append((child, depth + 1))
+            else:
+                inventory[child] = kind
+            if len(inventory) > _COLLISION_MAX_OBJECTS:
+                raise authority.LifecycleAuthorityError(
+                    "collision object closure exceeds the object bound"
+                )
+    return inventory
+
+
+def _verify_collision_tree_path(
+    root: Path,
+    tree: str,
+    relative: str,
+    verified: dict[str, tuple[str, bytes]],
+) -> None:
+    """Rehash one exact blob path rooted in an authenticated historical tree."""
+
+    path = Path(relative)
+    if (
+        not relative
+        or path.is_absolute()
+        or ".." in path.parts
+        or path.as_posix() != relative
+        or len(path.parts) > _COLLISION_MAX_TREE_DEPTH
+    ):
+        raise authority.LifecycleAuthorityError(
+            "collision historical path is malformed"
+        )
+    current = tree
+    for index, part in enumerate(path.parts):
+        raw = _collision_object_bytes(root, current, "tree", verified)
+        matches = [
+            (mode, child)
+            for mode, name, child in _collision_tree_entries(raw, len(current))
+            if name == part
+        ]
+        if len(matches) != 1:
+            raise authority.LifecycleAuthorityError(
+                "collision historical path is unavailable"
+            )
+        mode, child = matches[0]
+        final = index == len(path.parts) - 1
+        if final:
+            if mode not in {"100644", "100755"}:
+                raise authority.LifecycleAuthorityError(
+                    "collision historical path is not a regular blob"
+                )
+            _collision_object_bytes(root, child, "blob", verified)
+        elif mode != "40000":
+            raise authority.LifecycleAuthorityError(
+                "collision historical path is malformed"
+            )
+        current = child
 
 
 def _verify_collision_validation_root(
@@ -987,15 +1092,34 @@ def _verify_collision_validation_root(
         )
     verified_objects: dict[str, tuple[str, bytes]] = {}
     _verify_collision_tree_closure(root, candidate_tree, verified_objects)
+    candidate_bytes = sum(len(raw) for _kind, raw in verified_objects.values())
+    if candidate_bytes > _COLLISION_MAX_CANDIDATE_BYTES:
+        raise authority.LifecycleAuthorityError(
+            "collision candidate closure exceeds the byte bound"
+        )
     observed_prerequisites: dict[str, str] = {}
-    verified_trees: set[str] = set()
+    tree_inventories: dict[str, dict[str, str]] = {}
     for dependency in object_dependencies:
-        if not isinstance(dependency, Mapping):
+        if (
+            not isinstance(dependency, Mapping)
+            or set(dependency)
+            != {
+                "path",
+                "mode",
+                "blob_oid",
+                "size",
+                "prerequisites",
+                "required_objects",
+                "required_paths",
+            }
+        ):
             raise authority.LifecycleAuthorityError(
                 "collision object dependency profile is malformed"
             )
         path = dependency.get("path")
         prerequisites = dependency.get("prerequisites")
+        required_objects = dependency.get("required_objects")
+        required_paths = dependency.get("required_paths")
         if not isinstance(path, str):
             raise authority.LifecycleAuthorityError(
                 "collision object dependency profile is malformed"
@@ -1017,13 +1141,19 @@ def _verify_collision_validation_root(
             or dependency_size != dependency["size"]
             or not isinstance(prerequisites, list)
             or not prerequisites
+            or not isinstance(required_objects, list)
+            or not isinstance(required_paths, list)
         ):
             raise authority.LifecycleAuthorityError(
                 "collision object dependency profile is malformed"
             )
         dependency_prerequisites: set[str] = set()
+        dependency_trees: dict[str, str] = {}
         for prerequisite in prerequisites:
-            if not isinstance(prerequisite, Mapping):
+            if (
+                not isinstance(prerequisite, Mapping)
+                or set(prerequisite) != {"commit", "tree"}
+            ):
                 raise authority.LifecycleAuthorityError(
                     "collision object dependency profile is malformed"
                 )
@@ -1055,9 +1185,82 @@ def _verify_collision_validation_root(
                 )
             dependency_prerequisites.add(commit)
             observed_prerequisites[commit] = tree
-            if tree not in verified_trees:
-                _verify_collision_tree_closure(root, tree, verified_objects)
-                verified_trees.add(tree)
+            dependency_trees[commit] = tree
+
+        reachable: dict[str, str] = {}
+        observed_required_objects: set[tuple[str, str]] = set()
+        if required_objects:
+            for tree in dependency_trees.values():
+                inventory = tree_inventories.get(tree)
+                if inventory is None:
+                    inventory = _verify_collision_tree_inventory(
+                        root, tree, verified_objects,
+                    )
+                    tree_inventories[tree] = inventory
+                for oid, kind in inventory.items():
+                    previous = reachable.get(oid)
+                    if previous is not None and previous != kind:
+                        raise authority.LifecycleAuthorityError(
+                            "collision object dependency changed type"
+                        )
+                    reachable[oid] = kind
+                    if len(reachable) > _COLLISION_MAX_OBJECTS:
+                        raise authority.LifecycleAuthorityError(
+                            "collision object dependency exceeds the object bound"
+                        )
+            for requirement in required_objects:
+                if (
+                    not isinstance(requirement, Mapping)
+                    or set(requirement) != {"kind", "oid"}
+                    or requirement.get("kind") not in {"tree", "blob"}
+                    or not isinstance(requirement.get("oid"), str)
+                    or _GIT_OID.fullmatch(requirement["oid"]) is None
+                ):
+                    raise authority.LifecycleAuthorityError(
+                        "collision object dependency profile is malformed"
+                    )
+                item = (requirement["kind"], requirement["oid"])
+                if (
+                    item in observed_required_objects
+                    or reachable.get(item[1]) != item[0]
+                ):
+                    raise authority.LifecycleAuthorityError(
+                        "collision required object is not uniquely reachable"
+                    )
+                observed_required_objects.add(item)
+                _collision_object_bytes(
+                    root, item[1], item[0], verified_objects,
+                )
+
+        observed_required_paths: set[tuple[str, str]] = set()
+        for requirement in required_paths:
+            if (
+                not isinstance(requirement, Mapping)
+                or set(requirement) != {"commit", "path"}
+                or not isinstance(requirement.get("commit"), str)
+                or not isinstance(requirement.get("path"), str)
+            ):
+                raise authority.LifecycleAuthorityError(
+                    "collision object dependency profile is malformed"
+                )
+            item = (requirement["commit"], requirement["path"])
+            tree = dependency_trees.get(item[0])
+            if tree is None or item in observed_required_paths:
+                raise authority.LifecycleAuthorityError(
+                    "collision required path has no unique prerequisite"
+                )
+            observed_required_paths.add(item)
+            _verify_collision_tree_path(
+                root, tree, item[1], verified_objects,
+            )
+        if (
+            sum(len(raw) for _kind, raw in verified_objects.values())
+            - candidate_bytes
+            > _COLLISION_MAX_HISTORICAL_BYTES
+        ):
+            raise authority.LifecycleAuthorityError(
+                "collision historical closure exceeds the byte bound"
+            )
     _require_collision_git_state(root, git_state)
 
 
