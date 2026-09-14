@@ -4134,6 +4134,7 @@ def _verify_authenticated_feedback_growth(
     successor_evidence: Any,
     rejected_candidate: bool = False,
     reanchored_classified_review: bool = False,
+    collision_provider_growth: bool = False,
     require_codex_provider_transport: bool = False,
     predecessor_correction_authority: Any = None,
 ) -> _VerifiedFeedbackGrowth:
@@ -4150,19 +4151,48 @@ def _verify_authenticated_feedback_growth(
     schema_version = successor_evidence.get("schema_version") if isinstance(
         successor_evidence, dict
     ) else None
+    collision_reaction_removal = (
+        collision_provider_growth
+        and schema_version == "1.3"
+        and isinstance(successor_evidence, dict)
+        and "provider_completion_reaction_removal" in successor_evidence
+        and "provider_completion_reaction_replacement" not in successor_evidence
+    )
+    collision_reaction_replacement = (
+        collision_provider_growth
+        and schema_version == "1.3"
+        and isinstance(successor_evidence, dict)
+        and "provider_completion_reaction_replacement" in successor_evidence
+        and "provider_completion_reaction_removal" not in successor_evidence
+    )
+    collision_classified_review = (
+        collision_provider_growth
+        and isinstance(successor_evidence, dict)
+        and any(
+            isinstance(item, dict) and item.get("role") == "CODEX_REVIEW"
+            for item in successor_evidence.get("provider_transport", [])
+        )
+    )
+    classified_review = reanchored_classified_review or collision_classified_review
     provider_reaction_replacement = (
         rejected_candidate and schema_version == "1.2"
-    )
+    ) or collision_reaction_replacement
     predecessor_provider_growth = (
         reanchored_classified_review and schema_version == "1.2"
+    )
+    provider_reaction_removal = (
+        predecessor_provider_growth or collision_reaction_removal
     )
     if provider_reaction_replacement:
         expected_keys.add("provider_completion_reaction_replacement")
     if predecessor_provider_growth:
         expected_keys.add("predecessor_provider_feedback")
+    if provider_reaction_removal:
         expected_keys.add("provider_completion_reaction_removal")
     expected_schema_version = (
-        "1.2"
+        "1.3"
+        if collision_provider_growth
+        else "1.2"
         if provider_reaction_replacement
         else "1.2"
         if predecessor_provider_growth
@@ -4175,6 +4205,14 @@ def _verify_authenticated_feedback_growth(
         or set(successor_evidence) != expected_keys
         or any(SECRET_VALUE.search(item) for item in _all_strings(successor_evidence))
         or schema_version != expected_schema_version
+        or (
+            collision_provider_growth
+            and collision_reaction_removal == collision_reaction_replacement
+        )
+        or (
+            collision_provider_growth
+            and collision_reaction_removal != collision_classified_review
+        )
         or successor_evidence.get("repository") != reviewed.repository
         or successor_evidence.get("pull_request_number")
         != reviewed.pull_request_number
@@ -4206,7 +4244,7 @@ def _verify_authenticated_feedback_growth(
         current_sources=current_sources,
         resulting_head_sha=resulting_head_sha,
         rejected_candidate=rejected_candidate,
-        reanchored_classified_review=reanchored_classified_review,
+        reanchored_classified_review=classified_review,
         require_codex_provider_transport=require_codex_provider_transport,
     )
     replacement_ids = None
@@ -4218,7 +4256,7 @@ def _verify_authenticated_feedback_growth(
             current_sources=current_sources,
             provider_transport=successor_evidence["provider_transport"],
         )
-    elif predecessor_provider_growth:
+    elif provider_reaction_removal:
         removed_reaction_id = _verify_provider_completion_reaction_removal(
             successor_evidence["provider_completion_reaction_removal"],
             reviewed_sources=reviewed_sources,
@@ -4243,10 +4281,10 @@ def _verify_authenticated_feedback_growth(
         finding_additions = _verify_successor_findings(
             successor_evidence["successor_findings"],
             **finding_arguments,
-            classified_codex_review=reanchored_classified_review,
+            classified_codex_review=classified_review,
         )
     if (
-        reanchored_classified_review
+        classified_review
         and not successor_evidence["successor_findings"]
     ):
         raise SecurityBlocker(
@@ -4307,7 +4345,9 @@ def _verify_authenticated_feedback_growth(
         else digest_json(
             {
                 "domain": (
-                    "secpal.rejected-successor-provider-reaction-replacement/v1"
+                    "secpal.collision-successor-provider-reaction-replacement/v1"
+                    if collision_reaction_replacement
+                    else "secpal.rejected-successor-provider-reaction-replacement/v1"
                 ),
                 "repository": reviewed.repository,
                 "pull_request_number": reviewed.pull_request_number,
@@ -4377,6 +4417,10 @@ def verify_collision_feedback_successor(
     _verify_authenticated_feedback_growth(
         reviewed, current, resulting_head_sha=resulting_head_sha,
         authorized_thread_ids=set(), successor_evidence=successor_safety_evidence,
+        collision_provider_growth=(
+            isinstance(successor_safety_evidence, dict)
+            and successor_safety_evidence.get("schema_version") == "1.3"
+        ),
     )
 
 

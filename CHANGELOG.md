@@ -9,6 +9,19 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-14 - Authenticate Collision Successor Provider Drift
+
+**Fixed:**
+
+- Admit schema-1.3 collision-successor safety for the exact provider-owned
+  completion-reaction removal plus safely classified Codex findings-review
+  shape produced by mandatory exact-head acquisition.
+- Admit the corresponding exact completion-reaction replacement after a
+  no-finding acquisition while preserving complete provider transport,
+  predecessor feedback, material-finding, and no-resolution checks.
+- Preserve historical ordinary, rejected, re-anchored, collision-validation,
+  lifecycle-counter, and one-use Continuation semantics.
+
 ## 2026-09-13 - Bind Collision Continuation Issuance Epoch
 
 **Fixed:**

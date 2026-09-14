@@ -629,6 +629,14 @@ derived protected-main inventory and an exact byte-only renumber. Its maintained
 signed user authority and protected publication without finding/thread IDs or
 thread-resolution authority. See the collision-trigger procedure in
 [`docs/secpal-pr-review-workflow.md`](../docs/secpal-pr-review-workflow.md).
+Collision-successor safety schema `1.3` authenticates the provider-owned
+completion-reaction drift caused by mandatory exact-head acquisition. A
+no-finding acquisition must provide the exact replacement reaction and complete
+Code/Security no-finding transport. A findings acquisition must provide the
+exact removal, one head-bound Codex Code Review, the terminal Security result,
+and independently signed safe classifications for every unresolved suggestion.
+It rejects material or resolved findings, mixed reaction shapes, incomplete
+transport, and unrelated predecessor drift, and grants no resolution authority.
 Collision preparation reconstructs the fixed owner blob and containing tree
 chain from authenticated predecessor bytes, compares the independently hashed
 tree to the caller's expectation, and writes the match only to the isolated

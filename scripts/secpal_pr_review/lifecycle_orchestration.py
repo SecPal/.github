@@ -491,6 +491,7 @@ def _authenticate_successor_safety_evidence(
     resulting_head_sha: str,
     resulting_state_digest: str,
     reanchored_classified_review: bool = False,
+    collision_provider_growth: bool = False,
     predecessor_correction_authority: (
         VerifiedRejectedContinuationReanchor | None
     ) = None,
@@ -505,6 +506,7 @@ def _authenticate_successor_safety_evidence(
         resulting_state_digest=resulting_state_digest,
         rejected_candidate=False,
         reanchored_classified_review=reanchored_classified_review,
+        collision_provider_growth=collision_provider_growth,
         predecessor_correction_authority=predecessor_correction_authority,
     )
 
@@ -529,6 +531,7 @@ def _authenticate_rejected_successor_safety_evidence(
         resulting_state_digest=resulting_state_digest,
         rejected_candidate=True,
         reanchored_classified_review=False,
+        collision_provider_growth=False,
         predecessor_correction_authority=None,
     )
 
@@ -544,6 +547,7 @@ def _authenticate_successor_safety_evidence_with_policy(
     resulting_state_digest: str,
     rejected_candidate: bool,
     reanchored_classified_review: bool,
+    collision_provider_growth: bool,
     predecessor_correction_authority: VerifiedRejectedContinuationReanchor | None,
 ) -> Any:
     if value is None:
@@ -568,13 +572,33 @@ def _authenticate_successor_safety_evidence_with_policy(
     predecessor_provider_growth = (
         reanchored_classified_review and schema_version == "1.2"
     )
+    collision_reaction_removal = (
+        collision_provider_growth
+        and schema_version == "1.3"
+        and isinstance(value, Mapping)
+        and "provider_completion_reaction_removal" in value
+        and "provider_completion_reaction_replacement" not in value
+    )
+    collision_reaction_replacement = (
+        collision_provider_growth
+        and schema_version == "1.3"
+        and isinstance(value, Mapping)
+        and "provider_completion_reaction_replacement" in value
+        and "provider_completion_reaction_removal" not in value
+    )
+    provider_reaction_replacement = (
+        provider_reaction_replacement or collision_reaction_replacement
+    )
     if provider_reaction_replacement:
         expected_keys.add("provider_completion_reaction_replacement")
     if predecessor_provider_growth:
         expected_keys.add("predecessor_provider_feedback")
+    if predecessor_provider_growth or collision_reaction_removal:
         expected_keys.add("provider_completion_reaction_removal")
     expected_schema_version = (
-        "1.2"
+        "1.3"
+        if collision_provider_growth
+        else "1.2"
         if provider_reaction_replacement
         else "1.2"
         if predecessor_provider_growth
@@ -586,6 +610,10 @@ def _authenticate_successor_safety_evidence_with_policy(
         not isinstance(value, Mapping)
         or set(value) != expected_keys
         or schema_version != expected_schema_version
+        or (
+            collision_provider_growth
+            and collision_reaction_removal == collision_reaction_replacement
+        )
     ):
         raise LifecycleOrchestrationError(
             "successor safety evidence contains unknown or missing fields"
@@ -3629,11 +3657,16 @@ def _orchestrate_event(
                     verifier=authorization_verifier, verified_item=verified_authorization,
                 )
                 current = feedback_reader(repository, lifecycle.pull_request)
+                raw_successor = collision_item["successor_safety_evidence"]
                 successor = _authenticate_successor_safety_evidence(
-                    collision_item["successor_safety_evidence"], repository=repository,
+                    raw_successor, repository=repository,
                     delivery_issue=delivery_issue, pull_request=lifecycle.pull_request,
                     predecessor_state_digest=reviewed.state_digest, resulting_head_sha=request_head,
                     resulting_state_digest=current.state_digest,
+                    collision_provider_growth=(
+                        isinstance(raw_successor, Mapping)
+                        and raw_successor.get("schema_version") == "1.3"
+                    ),
                 )
                 if successor is None or not any(
                     isinstance(item, dict) and item.get("role") == "CODEX_SUMMARY_UPDATE"
