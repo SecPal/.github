@@ -808,6 +808,17 @@ Before publication, required exact-resulting-head providers must complete.
 Existing successor-safety evidence must preserve all predecessor sources and
 completely account for provider growth; material, unsafe or unclassified
 successor feedback rejects publication without recursive correction.
+Collision-successor safety schema 1.3 admits the two exact completion states
+that acquisition can produce after replacing a predecessor provider-owned
+`THUMBS_UP`: either one new provider-owned completion reaction after complete
+Code/Security no-finding transport, or removal without replacement when the
+Code Review contains suggestions. The latter requires the exact head-bound
+Codex review transport and a source-complete, independently signed safe
+classification for every live suggestion. Material findings, resolved
+suggestion threads, mixed removal/replacement shapes, another actor or reaction,
+incomplete transport, and unrelated feedback drift remain fail-closed. This
+schema grants no thread-resolution authority and does not alter historical
+ordinary, rejected, or re-anchored successor evidence.
 `publish_collision_continuation` admits `CONTINUATION_COMMIT_PUSHED`, rechecks
 CURRENT, live Ready head, protected main and Stable Feedback, and uses the
 existing signed lifecycle append/publication owner. Only

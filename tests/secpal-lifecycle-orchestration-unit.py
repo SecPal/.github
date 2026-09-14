@@ -5007,6 +5007,68 @@ def historical_v12_fixture():
                         append.assert_not_called()
                         publish.assert_not_called()
 
+    def test_collision_orchestration_selects_versioned_provider_growth(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = CollisionCompositionFixture(Path(directory))
+            with mock.patch.object(
+                authority,
+                "_load_lifecycle_trust_policy",
+                return_value=fixture.policy,
+            ):
+                request = fixture.request()
+            safety = request["continuation_evidence"][
+                "successor_safety_evidence"
+            ]
+            safety["schema_version"] = "1.3"
+            safety["provider_completion_reaction_removal"] = {
+                "provider_login": "chatgpt-codex-connector",
+                "reaction_content": "THUMBS_UP",
+                "removed_reaction_id": "REA_PREDECESSOR_COMPLETE",
+            }
+            modes = []
+            original_authenticate = (
+                orchestration._authenticate_successor_safety_evidence
+            )
+
+            def authenticate(value, **kwargs):
+                collision_mode = kwargs.get("collision_provider_growth", False)
+                modes.append(collision_mode)
+                if collision_mode:
+                    return value
+                return original_authenticate(value, **kwargs)
+
+            with (
+                mock.patch.object(
+                    authority,
+                    "_load_lifecycle_trust_policy",
+                    return_value=fixture.policy,
+                ),
+                mock.patch.object(
+                    orchestration,
+                    "_authenticate_successor_safety_evidence",
+                    side_effect=authenticate,
+                ),
+                mock.patch.object(
+                    fast_path,
+                    "verify_collision_feedback_successor",
+                ) as verify_successor,
+            ):
+                decision = orchestration._orchestrate_event(
+                    REPOSITORY,
+                    ISSUE,
+                    request,
+                    current_reader=lambda *_args: fixture.observed,
+                    feedback_reader=lambda *_args: fixture.current,
+                    collision_validation_reader=fixture.collision_validation_reader,
+                )
+
+            self.assertEqual(
+                decision.lifecycle_transition,
+                "EXCEPTIONAL_CONTINUATION",
+            )
+            self.assertEqual(modes, [False, True])
+            verify_successor.assert_called_once()
+
     def test_collision_fail_closed_matrix_never_reaches_publication(self) -> None:
         from scripts.secpal_pr_review import lifecycle_execution, lifecycle_publication, version_collision
 
@@ -7363,6 +7425,41 @@ def create_ready_integration_attestation(normalized, eligibility_bound):
                 resulting_state_digest=current.state_digest,
             )
 
+        collision_raw = copy.deepcopy(raw)
+        collision_raw["schema_version"] = "1.3"
+        collision_raw["provider_completion_reaction_removal"] = {
+            "provider_login": "chatgpt-codex-connector",
+            "reaction_content": "THUMBS_UP",
+            "removed_reaction_id": "REA_PREDECESSOR_COMPLETE",
+        }
+        with (
+            mock.patch.object(
+                orchestration,
+                "_successor_classification_signer",
+                return_value=late_disposition.SignerIdentity(
+                    "ssh", "SHA256:fixture"
+                ),
+            ),
+            mock.patch.object(
+                late_disposition,
+                "parse_successor_classification_artifact",
+                return_value=verified,
+            ),
+        ):
+            collision_authenticated = (
+                orchestration._authenticate_successor_safety_evidence(
+                    collision_raw,
+                    repository=REPOSITORY,
+                    delivery_issue=ISSUE,
+                    pull_request=PR,
+                    predecessor_state_digest=reviewed.state_digest,
+                    resulting_head_sha=NEXT_HEAD,
+                    resulting_state_digest=current.state_digest,
+                    collision_provider_growth=True,
+                )
+            )
+        self.assertEqual(collision_authenticated["schema_version"], "1.3")
+
         _anchor, _live, complete_pr_905 = (
             authenticated_pr_905_classified_codex_review()
         )
@@ -8371,6 +8468,115 @@ def create_ready_integration_attestation(normalized, eligibility_bound):
                 resulting_head_sha=current.head_sha,
                 successor_safety_evidence=evidence,
             )
+
+    def test_collision_accepts_classified_codex_review_and_reaction_removal(
+        self,
+    ) -> None:
+        reviewed, current, evidence = authenticated_pr_905_classified_codex_review()
+        current.feedback["reviews"] = [
+            review
+            for review in current.feedback["reviews"]
+            if review["actor"]["login"] != "copilot-pull-request-reviewer"
+        ]
+        current.feedback["threads"] = [
+            thread
+            for thread in current.feedback["threads"]
+            if thread["comments"][0]["actor"]["login"]
+            != "copilot-pull-request-reviewer"
+        ]
+        current.refresh_digests()
+        evidence["schema_version"] = "1.3"
+        evidence["resulting_state_digest"] = current.state_digest
+        evidence.pop("predecessor_provider_feedback")
+
+        fast_path.verify_collision_feedback_successor(
+            reviewed,
+            current,
+            resulting_head_sha=current.head_sha,
+            successor_safety_evidence=evidence,
+        )
+
+        for label, mutate in (
+            (
+                "material finding",
+                lambda changed_current, changed_evidence: changed_evidence[
+                    "successor_findings"
+                ][0].update(
+                    classification_evidence=fast_path._seal_successor_classification(
+                        **{
+                            key: value
+                            for key, value in changed_evidence[
+                                "successor_findings"
+                            ][0]["classification_evidence"].__dict__.items()
+                            if key != "_verification_seal"
+                        }
+                        | {
+                            "technically_blocking": True,
+                            "technical_blockers": ("P1",),
+                        }
+                    )
+                ),
+            ),
+            (
+                "resolved finding",
+                lambda changed_current, _changed_evidence: changed_current.feedback[
+                    "threads"
+                ][0].update(is_resolved=True),
+            ),
+            (
+                "wrong reaction actor",
+                lambda _changed_current, changed_evidence: changed_evidence[
+                    "provider_completion_reaction_removal"
+                ].update(provider_login="different-provider"),
+            ),
+        ):
+            changed_current = copy.deepcopy(current)
+            changed_evidence = copy.deepcopy(evidence)
+            mutate(changed_current, changed_evidence)
+            changed_current.refresh_digests()
+            changed_evidence["resulting_state_digest"] = (
+                changed_current.state_digest
+            )
+            with self.subTest(label=label), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                fast_path.verify_collision_feedback_successor(
+                    reviewed,
+                    changed_current,
+                    resulting_head_sha=changed_current.head_sha,
+                    successor_safety_evidence=changed_evidence,
+                )
+
+    def test_collision_accepts_provider_completion_reaction_replacement(
+        self,
+    ) -> None:
+        reviewed, current, evidence = authenticated_provider_reaction_replacement()
+        classification = evidence["successor_findings"][0][
+            "classification_evidence"
+        ]
+        evidence["successor_findings"][0]["classification_evidence"] = (
+            fast_path._seal_successor_classification(
+                **{
+                    key: value
+                    for key, value in classification.__dict__.items()
+                    if key != "_verification_seal"
+                }
+                | {
+                    "classification": "INVALID_FALSE_OR_MISLEADING",
+                    "disposition": "DISPROVEN_WITH_EVIDENCE",
+                    "technically_blocking": False,
+                    "technical_blockers": (),
+                }
+            )
+        )
+        evidence["schema_version"] = "1.3"
+
+        fast_path.verify_collision_feedback_successor(
+            reviewed,
+            current,
+            resulting_head_sha=current.head_sha,
+            successor_safety_evidence=evidence,
+        )
 
     def test_reanchored_successor_accepts_pr_905_classified_codex_review(
         self,
