@@ -2812,6 +2812,212 @@ printf 'Usage: fixture\\n'
             "historical_provider_summary_digest": "5" * 64,
         })
 
+    def accepted_successor_document(
+        self,
+    ) -> tuple[dict[str, Any], dict[str, Any], str]:
+        document = self.successor_document()
+        provider_head = document["source_history"][0]["head_sha"]
+        summary = "\n".join((
+            fast_path.CODEX_REVIEW_SUMMARY_MARKER,
+            f"| **Code Review** | ✅ **Completed** | `{provider_head[:7]}` |",
+        ))
+        document["historical_provider_summary_digest"] = fast_path.digest_text(
+            summary
+        )
+        record = {
+            "admission_schema_version": self.loss.ANCESTOR_SCHEMA_VERSION,
+            **{
+                field: copy.deepcopy(document[field])
+                for field in (
+                    "repository", "delivery_issue", "pull_request", "head_sha",
+                    "tree_sha", "parent_sha", "source_signer_identity",
+                    "historical_package_status",
+                    "historical_final_attestation_digest",
+                    "historical_bytes_reconstructed",
+                    "observed_pre_enrollment_history", "intended_state",
+                    "historical_provider_summary_digest",
+                )
+            },
+            "feedback_digest": document["current_safety"]["feedback_digest"],
+            "technical_decisions": copy.deepcopy(
+                document["current_safety"]["technical_decisions"]
+            ),
+            "current_safety_harness_path": (
+                self.loss.REGISTERED_CURRENT_SAFETY_PATH
+            ),
+        }
+        document["loss_proof_policy_digest"] = authority.digest_json(record)
+        document["accepted_main_sha"] = "c" * 40
+        return self.sign(document), record, summary
+
+    def test_accepted_v11_projects_existing_historical_provider_binding(self) -> None:
+        document, record, summary = self.accepted_successor_document()
+        with patch.object(
+            self.loss,
+            "_accepted_policy",
+            return_value=("c" * 40, record, object(), self.trust),
+        ):
+            binding = self.loss.authenticate_historical_provider_binding(
+                document
+            )
+
+        self.assertIsInstance(binding, self.loss.HistoricalProviderBinding)
+        self.assertEqual(binding.repository, document["repository"])
+        self.assertEqual(binding.pull_request, document["pull_request"])
+        self.assertEqual(binding.current_head_sha, document["head_sha"])
+        self.assertEqual(
+            binding.provider_head_sha,
+            document["source_history"][0]["head_sha"],
+        )
+        binding.verify_historical_provider_summary(
+            body=summary,
+            repository=document["repository"],
+            pull_request=document["pull_request"],
+            current_head_sha=document["head_sha"],
+        )
+        for changed_body, changed_repository, changed_pull_request in (
+            (summary + "\nchanged", document["repository"], document["pull_request"]),
+            (summary, "Other/project", document["pull_request"]),
+            (summary, document["repository"], document["pull_request"] + 1),
+        ):
+            with self.subTest(
+                changed_body=changed_body,
+                changed_repository=changed_repository,
+                changed_pull_request=changed_pull_request,
+            ), self.assertRaises(fast_path.SecurityBlocker):
+                binding.verify_historical_provider_summary(
+                    body=changed_body,
+                    repository=changed_repository,
+                    pull_request=changed_pull_request,
+                    current_head_sha=document["head_sha"],
+                )
+
+    def test_historical_provider_projection_rejects_v10_and_policy_replay(self) -> None:
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "requires v1.1"
+        ):
+            self.loss.authenticate_historical_provider_binding(self.document)
+
+        document, record, _summary = self.accepted_successor_document()
+        for changed_main, changed_record in (
+            ("c" * 40, {**record, "pull_request": record["pull_request"] + 1}),
+        ):
+            with self.subTest(
+                changed_main=changed_main,
+                changed_record=changed_record,
+            ), patch.object(
+                self.loss,
+                "_accepted_policy",
+                return_value=(changed_main, changed_record, object(), self.trust),
+            ), self.assertRaises(authority.LifecycleAuthorityError):
+                self.loss.authenticate_historical_provider_binding(document)
+
+    def test_historical_provider_projection_accepts_authenticated_policy_epoch(
+        self,
+    ) -> None:
+        document, record, _summary = self.accepted_successor_document()
+        current_main = "d" * 40
+        with patch.object(
+            self.loss,
+            "_accepted_policy",
+            return_value=(current_main, record, object(), self.trust),
+        ), patch.object(
+            self.loss, "_authenticate_accepted_policy_epoch"
+        ) as authenticate_epoch:
+            binding = self.loss.authenticate_historical_provider_binding(
+                document
+            )
+
+        self.assertEqual(
+            binding.provider_head_sha,
+            document["source_history"][0]["head_sha"],
+        )
+        authenticate_epoch.assert_called_once_with(
+            document["accepted_main_sha"],
+            current_main,
+            record,
+        )
+
+    def test_historical_policy_epoch_requires_ancestry_and_exact_record(
+        self,
+    ) -> None:
+        _document, record, _summary = self.accepted_successor_document()
+        policy = authority.canonical_json_bytes({
+            "schema_version": "1.0",
+            "admissions": [record],
+        })
+        accepted_main = "c" * 40
+        current_main = "d" * 40
+        successful = (
+            subprocess.CompletedProcess([], 0, b"", b""),
+            subprocess.CompletedProcess([], 0, policy, b""),
+        )
+        with patch.object(
+            self.loss,
+            "_accepted_main_commit_metadata",
+            return_value={"sha": accepted_main, "verified": True},
+        ), patch.object(
+            self.loss.publication, "_run_git", side_effect=successful
+        ):
+            self.loss._authenticate_accepted_policy_epoch(
+                accepted_main, current_main, record
+            )
+
+        failures = (
+            (
+                subprocess.CompletedProcess([], 1, b"", b""),
+                subprocess.CompletedProcess([], 0, policy, b""),
+            ),
+            (
+                subprocess.CompletedProcess([], 0, b"", b""),
+                subprocess.CompletedProcess(
+                    [],
+                    0,
+                    authority.canonical_json_bytes({
+                        "schema_version": "1.0",
+                        "admissions": [{**record, "pull_request": 999}],
+                    }),
+                    b"",
+                ),
+            ),
+        )
+        for results in failures:
+            with self.subTest(results=results), patch.object(
+                self.loss,
+                "_accepted_main_commit_metadata",
+                return_value={"sha": accepted_main, "verified": True},
+            ), patch.object(
+                self.loss.publication, "_run_git", side_effect=results
+            ), self.assertRaises(authority.LifecycleAuthorityError):
+                self.loss._authenticate_accepted_policy_epoch(
+                    accepted_main, current_main, record
+                )
+
+    def test_historical_provider_projection_rejects_ready_head_outside_history(
+        self,
+    ) -> None:
+        document, record, _summary = self.accepted_successor_document()
+        ready = next(
+            item for item in document["observed_pre_enrollment_history"]
+            if item["kind"] == "DRAFT_TO_READY_OBSERVED"
+        )
+        ready["head_sha"] = "9" * 40
+        document["intended_state"]["ready_history"][0][
+            "observation_digest"
+        ] = authority.digest_json(ready)
+        record["observed_pre_enrollment_history"] = copy.deepcopy(
+            document["observed_pre_enrollment_history"]
+        )
+        record["intended_state"] = copy.deepcopy(document["intended_state"])
+        document["loss_proof_policy_digest"] = authority.digest_json(record)
+        document = self.sign(document)
+        with patch.object(
+            self.loss,
+            "_accepted_policy",
+            return_value=("c" * 40, record, object(), self.trust),
+        ), self.assertRaises(authority.LifecycleAuthorityError):
+            self.loss.authenticate_historical_provider_binding(document)
+
     def test_successor_schema_authenticates_ready_ancestor_receipt_provenance(self) -> None:
         successor = self.successor_document()
         self.assertEqual(

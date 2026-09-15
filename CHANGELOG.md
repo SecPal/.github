@@ -9,6 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-15 - Bind Exact-Adoption Ready Provider Provenance
+
+**Fixed:**
+
+- Derive Ready-source recovery provider authority from an authenticated
+  Exact-State-Adoption CURRENT and its accepted validation-evidence-loss v1.1
+  historical provider binding when ordinary lifecycle events are intentionally
+  absent.
+- Preserve the existing Ready-remediation suffix path, fail closed when
+  independently derived provider heads conflict, and reauthenticate the
+  ephemeral binding before provider-summary use.
+
 ## 2026-09-15 - Authenticate Registered Repository Receipt Ancestry
 
 **Fixed:**

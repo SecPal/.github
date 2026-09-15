@@ -544,6 +544,109 @@ class LifecyclePublicationTests(TestCase):
         ).stdout.strip()
         return value
 
+    def exact_adoption_current(
+        self,
+        *,
+        ordinary_provider_head: str | None = None,
+        historical_provider_head: str = HEADS[0],
+    ) -> tuple[
+        publication.VerifiedLifecyclePublication,
+        dict[str, Any],
+        Any,
+    ]:
+        from scripts.secpal_pr_review import validation_evidence_loss as loss
+
+        state = authority.initial_state()
+        state.update(
+            unrestricted_review_count=1,
+            remediation_cycle_count=2,
+            draft=False,
+            ready=True,
+            ready_transition_count=1,
+        )
+        state["ready_history"] = [{
+            "sequence": 1,
+            "transition_kind": "DRAFT_TO_READY",
+            "observation_digest": "6" * 64,
+        }]
+        lifecycle = authority.VerifiedLifecycleAuthority(
+            authority_digest="7" * 64,
+            repository=REPOSITORY,
+            delivery_issue=ISSUE,
+            lifecycle_id="lifecycle-adoption:" + "8" * 64,
+            initialization_evidence_digest="8" * 64,
+            pull_request=PR,
+            head_sha=HEADS[2],
+            state=state,
+            authority_signer_identity=LEGACY_SIGNER,
+            historical_proof_mode=authority.EXACT_ADOPTION_PROOF_MODE,
+            legacy_adoption_checkpoint_digest="9" * 64,
+            tree_sha=HEADS[3],
+        )
+        loss_admission = {
+            "schema_version": "1.1",
+            "repository": REPOSITORY,
+            "delivery_issue": ISSUE,
+            "pull_request": PR,
+            "head_sha": HEADS[2],
+        }
+        proof = {
+            "repository": REPOSITORY,
+            "delivery_issue": ISSUE,
+            "pull_request": PR,
+            "head_sha": HEADS[2],
+            "lifecycle_id": lifecycle.lifecycle_id,
+            "validation_evidence_loss_admission": loss_admission,
+        }
+        events: list[dict[str, Any]] = []
+        snapshots: list[dict[str, Any]] = []
+        if ordinary_provider_head is not None:
+            before = copy.deepcopy(state)
+            before["remediation_cycle_count"] = 1
+            event = {
+                "transition_kind": "REMEDIATION_COMPLETED",
+                "repository": REPOSITORY,
+                "delivery_issue": ISSUE,
+                "pull_request": PR,
+                "lifecycle_id": lifecycle.lifecycle_id,
+                "predecessor_head_sha": ordinary_provider_head,
+                "resulting_head_sha": HEADS[2],
+                "event_digest": "a" * 64,
+            }
+            events.append(event)
+            snapshots.append({
+                "predecessor_head_sha": ordinary_provider_head,
+                "head_sha": HEADS[2],
+                "state_before": before,
+                "state_after": copy.deepcopy(state),
+            })
+        bundle = {
+            "schema_version": "1.0",
+            "kind": "SECPAL_EXACT_STATE_ADOPTION_PUBLICATION_EVIDENCE",
+            "domain": "secpal.exact-state-adoption-publication-evidence/v1",
+            "enrollment_mode": "EXACT_STATE_ADOPTION",
+            "exact_state_adoption_proof": proof,
+            "transition_authorizations": events,
+            "authority_chain": snapshots,
+        }
+        current = publication.VerifiedLifecyclePublication(
+            publication_oid="b" * 40,
+            publication_digest="c" * 64,
+            publication_branch=BRANCH,
+            journal_predecessor_oid="d" * 40,
+            predecessor_publication_oid=None,
+            lifecycle=lifecycle,
+            serialized_lifecycle_evidence=authority.canonical_json_bytes(bundle),
+        )
+        historical = loss.HistoricalProviderBinding(
+            repository=REPOSITORY,
+            pull_request=PR,
+            current_head_sha=HEADS[2],
+            provider_head_sha=historical_provider_head,
+            summary_digest="e" * 64,
+        )
+        return current, proof, historical
+
     def test_ready_source_provider_binding_derives_attested_ready_predecessor(self) -> None:
         chain = Chain()
         chain.append("INITIALIZED_DRAFT")
@@ -660,6 +763,257 @@ class LifecyclePublicationTests(TestCase):
             valid.append("REMEDIATION_COMPLETED", head=HEADS[3])
         with self.assertRaises(authority.LifecycleAuthorityError):
             valid.append("UNRESTRICTED_REVIEW_CONSUMED")
+
+    def test_exact_adoption_v11_derives_historical_provider_binding(self) -> None:
+        from scripts.secpal_pr_review import validation_evidence_loss as loss
+
+        current, proof, historical = self.exact_adoption_current()
+        with patch.object(
+            authority,
+            "_verify_lifecycle_authority_for_journal",
+            return_value=current.lifecycle,
+        ), patch.object(
+            authority,
+            "verify_exact_state_adoption_proof",
+            return_value=current.lifecycle,
+        ) as verify_adoption, patch.object(
+            loss,
+            "authenticate_historical_provider_binding",
+            return_value=historical,
+        ) as verify_loss:
+            binding = publication.derive_ready_source_recovery_provider_binding(
+                current
+            )
+
+        self.assertEqual(binding.provider_head_sha, historical.provider_head_sha)
+        self.assertEqual(binding.remediation_event_digests, ())
+        self.assertEqual(
+            binding.provider_binding_sources,
+            (publication.EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING,),
+        )
+        self.assertIs(binding.historical_provider_binding, historical)
+        verify_adoption.assert_called_once_with(proof)
+        verify_loss.assert_called_once_with(
+            proof["validation_evidence_loss_admission"]
+        )
+
+    def test_exact_adoption_requires_authenticated_v11_loss_provenance(self) -> None:
+        from scripts.secpal_pr_review import validation_evidence_loss as loss
+
+        current, proof, _historical = self.exact_adoption_current()
+        del proof["validation_evidence_loss_admission"]
+        parsed = json.loads(current.serialized_lifecycle_evidence)
+        parsed["exact_state_adoption_proof"] = proof
+        current = replace(
+            current,
+            serialized_lifecycle_evidence=authority.canonical_json_bytes(parsed),
+        )
+        with patch.object(
+            authority,
+            "_verify_lifecycle_authority_for_journal",
+            return_value=current.lifecycle,
+        ), patch.object(
+            authority,
+            "verify_exact_state_adoption_proof",
+            return_value=current.lifecycle,
+        ), patch.object(
+            loss, "authenticate_historical_provider_binding"
+        ) as verify_loss, self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "remediation lineage"
+        ):
+            publication.derive_ready_source_recovery_provider_binding(current)
+        verify_loss.assert_not_called()
+
+        current, _proof, _historical = self.exact_adoption_current()
+        with patch.object(
+            authority,
+            "_verify_lifecycle_authority_for_journal",
+            return_value=current.lifecycle,
+        ), patch.object(
+            authority,
+            "verify_exact_state_adoption_proof",
+            return_value=current.lifecycle,
+        ), patch.object(
+            loss,
+            "authenticate_historical_provider_binding",
+            side_effect=authority.LifecycleAuthorityError(
+                "historical provider binding requires v1.1 loss provenance"
+            ),
+        ), self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "v1.1 historical provenance"
+        ):
+            publication.derive_ready_source_recovery_provider_binding(current)
+
+    def test_exact_adoption_rejects_historical_binding_scope_substitution(self) -> None:
+        from scripts.secpal_pr_review import validation_evidence_loss as loss
+
+        current, _proof, historical = self.exact_adoption_current()
+        substitutions = (
+            replace(historical, repository="Other/project"),
+            replace(historical, pull_request=PR + 1),
+            replace(historical, current_head_sha=HEADS[3]),
+        )
+        for substituted in substitutions:
+            with self.subTest(substituted=substituted), patch.object(
+                authority,
+                "_verify_lifecycle_authority_for_journal",
+                return_value=current.lifecycle,
+            ), patch.object(
+                authority,
+                "verify_exact_state_adoption_proof",
+                return_value=current.lifecycle,
+            ), patch.object(
+                loss,
+                "authenticate_historical_provider_binding",
+                return_value=substituted,
+            ), self.assertRaisesRegex(
+                publication.LifecyclePublicationError,
+                "historical provenance is invalid",
+            ):
+                publication.derive_ready_source_recovery_provider_binding(current)
+
+    def test_exact_adoption_v11_rejects_conflicting_dual_derivation(self) -> None:
+        from scripts.secpal_pr_review import validation_evidence_loss as loss
+
+        current, _proof, historical = self.exact_adoption_current(
+            ordinary_provider_head=HEADS[1], historical_provider_head=HEADS[0]
+        )
+        with patch.object(
+            authority,
+            "_verify_lifecycle_authority_for_journal",
+            return_value=current.lifecycle,
+        ), patch.object(
+            authority,
+            "verify_exact_state_adoption_proof",
+            return_value=current.lifecycle,
+        ), patch.object(
+            loss,
+            "authenticate_historical_provider_binding",
+            return_value=historical,
+        ), self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "provider heads conflict"
+        ):
+            publication.derive_ready_source_recovery_provider_binding(current)
+
+    def test_exact_adoption_successor_preserves_ordinary_provider_derivation(
+        self,
+    ) -> None:
+        from scripts.secpal_pr_review import validation_evidence_loss as loss
+
+        current, proof, _historical = self.exact_adoption_current(
+            ordinary_provider_head=HEADS[1]
+        )
+        proof["head_sha"] = HEADS[1]
+        proof["validation_evidence_loss_admission"]["head_sha"] = HEADS[1]
+        parsed = json.loads(current.serialized_lifecycle_evidence)
+        parsed["exact_state_adoption_proof"] = proof
+        current = replace(
+            current,
+            serialized_lifecycle_evidence=authority.canonical_json_bytes(parsed),
+        )
+        adoption = replace(
+            current.lifecycle,
+            authority_digest="f" * 64,
+            head_sha=HEADS[1],
+        )
+        with patch.object(
+            authority,
+            "_verify_lifecycle_authority_for_journal",
+            return_value=current.lifecycle,
+        ), patch.object(
+            authority,
+            "verify_exact_state_adoption_proof",
+            return_value=adoption,
+        ), patch.object(
+            loss, "authenticate_historical_provider_binding"
+        ) as verify_loss:
+            binding = publication.derive_ready_source_recovery_provider_binding(
+                current
+            )
+
+        self.assertEqual(binding.provider_head_sha, HEADS[1])
+        self.assertEqual(
+            binding.provider_binding_sources,
+            (publication.ORDINARY_REMEDIATION_SUFFIX,),
+        )
+        verify_loss.assert_not_called()
+
+    def test_exact_adoption_matching_dual_derivation_is_deterministic(self) -> None:
+        from scripts.secpal_pr_review import validation_evidence_loss as loss
+
+        current, _proof, historical = self.exact_adoption_current(
+            ordinary_provider_head=HEADS[1], historical_provider_head=HEADS[1]
+        )
+        with patch.object(
+            authority,
+            "_verify_lifecycle_authority_for_journal",
+            return_value=current.lifecycle,
+        ), patch.object(
+            authority,
+            "verify_exact_state_adoption_proof",
+            return_value=current.lifecycle,
+        ), patch.object(
+            loss,
+            "authenticate_historical_provider_binding",
+            return_value=historical,
+        ):
+            binding = publication.derive_ready_source_recovery_provider_binding(
+                current
+            )
+
+        self.assertEqual(binding.provider_head_sha, HEADS[1])
+        self.assertEqual(
+            binding.provider_binding_sources,
+            (
+                publication.ORDINARY_REMEDIATION_SUFFIX,
+                publication.EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING,
+            ),
+        )
+
+    def test_exact_adoption_provider_binding_reauthenticates_before_use(self) -> None:
+        from scripts.secpal_pr_review import validation_evidence_loss as loss
+
+        current, _proof, historical = self.exact_adoption_current()
+        with patch.object(
+            authority,
+            "_verify_lifecycle_authority_for_journal",
+            return_value=current.lifecycle,
+        ), patch.object(
+            authority,
+            "verify_exact_state_adoption_proof",
+            return_value=current.lifecycle,
+        ), patch.object(
+            loss,
+            "authenticate_historical_provider_binding",
+            return_value=historical,
+        ):
+            binding = publication.derive_ready_source_recovery_provider_binding(
+                current
+            )
+            with patch.object(
+                publication,
+                "verify_current_lifecycle_authority",
+                return_value=current,
+            ):
+                self.assertEqual(
+                    binding.provider_head(
+                        repository=REPOSITORY,
+                        pull_request=PR,
+                        current_head_sha=HEADS[2],
+                    ),
+                    historical.provider_head_sha,
+                )
+                with self.assertRaisesRegex(
+                    publication.LifecyclePublicationError,
+                    "stale or substituted",
+                ):
+                    replace(
+                        binding, provider_head_sha=HEADS[1]
+                    ).provider_head(
+                        repository=REPOSITORY,
+                        pull_request=PR,
+                        current_head_sha=HEADS[2],
+                    )
 
     def test_pre_enrollment_absence_is_bound_to_the_observed_protected_tip(self) -> None:
         absence = publication.verify_pre_enrollment_absence(REPOSITORY, ISSUE)
