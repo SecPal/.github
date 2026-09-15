@@ -432,10 +432,14 @@ The lifecycle-authority suite is an unconditional registered validation command.
 
 ### `secpal_pr_review/validation_evidence_loss.py`
 
-Owns the version-1
+Owns the versioned
 `SECPAL_PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_ADMISSION` consumed only by
-exact-state-adoption version 3. Existing adoption versions 1/2 and ordinary
-commit-bound validation remain unchanged. Its semantic contract is the
+exact-state-adoption version 3. Schema 1.0 keeps the original `SecPal/.github`
+OPEN/Draft same-head receipt-trailer contract. Schema 1.1 admits only a central-
+registry repository with accepted lifecycle authority and binds a verifier-
+derived unique historical receipt ancestor through the complete authenticated
+delivery source history. Existing adoption versions 1/2 and ordinary commit-
+bound validation remain unchanged. Its semantic contract is the
 exact-state-adoption section of `docs/secpal-pr-review-workflow.md`.
 
 The maintained entry points are
@@ -458,13 +462,16 @@ protected branch SHA. No caller selects the repository, endpoint, fields or
 projection, and oversized unprojected provider output remains rejected.
 `_normalize_provider_representations` purely converts bounded external values
 to canonical typed facts; `_admit_observation` consumes only those facts, and
-`_assemble_source_facts` only assembles admitted facts. These responsibilities
-serve one exact-source contract, not a general source executor. The closed
+`_assemble_source_facts` only assembles admitted facts. Successor source-history
+authentication verifies exact edge order, trees, signatures and the sole
+receipt-bearing ancestor; callers cannot nominate that ancestor. These
+responsibilities serve one exact-source contract, not a general source executor.
+The closed
 `PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_CURRENT_SAFETY` profile uses the existing
 exact-source isolated Python runner (`-I -S -B`), temporary HOME, credential-free
-environment and 120-second bound. Its single maintained harness is
-`tests/pre-enrollment-current-safety.py`; authenticated blob identity, exact
-commands, result semantics and invariant coverage enter the policy binding.
+environment and 120-second bound. Each policy version names its one maintained
+accepted-main harness; authenticated blob identity, exact commands, result
+semantics and invariant coverage enter the policy binding.
 Failure reports expose only the closed invariant names, never captured child
 diagnostics. The harness exercises the parked candidate's APIs, which need not
 exist in an unrelated current-main implementation.

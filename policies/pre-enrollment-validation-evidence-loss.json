@@ -45,6 +45,241 @@
       ],
       "feedback_digest": "eb22d6f53b70b4262bcd2e8836f5e3a2ae1f68129410e608a518880ea5155b71",
       "technical_decisions": []
+    },
+    {
+      "admission_schema_version": "1.1",
+      "repository": "SecPal/deployment",
+      "delivery_issue": 235,
+      "pull_request": 136,
+      "head_sha": "93059bfa334b1ebfbf4f9c8258abf771376c4983",
+      "tree_sha": "51f50be6c7696be5d3f26025efc94036dc82388c",
+      "parent_sha": "4ae11237344297892b36d9e612f9418ce1a7b5bf",
+      "source_signer_identity": "aroviqen@secpal.app",
+      "historical_package_status": "UNAVAILABLE",
+      "historical_final_attestation_digest": null,
+      "historical_bytes_reconstructed": false,
+      "observed_pre_enrollment_history": [
+        {
+          "sequence": 1,
+          "kind": "PR_CREATED_DRAFT",
+          "observed_at": "2026-08-23T20:16:25Z",
+          "head_sha": "d89214795bc1bdf0e65d9bbf7c8b9647b7e1ebd6",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 2,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-08-29T06:29:23Z",
+          "head_sha": "2927f0e14516649dd405f89d802de986b7fbc53f",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 3,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-08-29T11:48:37Z",
+          "head_sha": "83d0c3720d342d0222e8dee9819e28d0c6739f84",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 4,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-08-29T20:44:57Z",
+          "head_sha": "293977ae93408a7bb812619de58649ab8a92d438",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 5,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-08-31T08:37:05Z",
+          "head_sha": "ba19fd983f084fc89fb8d562c241852e2db009b3",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 6,
+          "kind": "DRAFT_TO_READY_OBSERVED",
+          "observed_at": "2026-08-31T08:39:24Z",
+          "head_sha": "ba19fd983f084fc89fb8d562c241852e2db009b3",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 7,
+          "kind": "REMEDIATION_HEAD_OBSERVED",
+          "observed_at": "2026-08-31T08:55:10Z",
+          "head_sha": "e0789b8cdceb3695d197e29d168334a5b3c88e33",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 8,
+          "kind": "REMEDIATION_HEAD_OBSERVED",
+          "observed_at": "2026-08-31T09:06:15Z",
+          "head_sha": "e311f3ddd2e47dddd47635cac020ea64a224591e",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 9,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-09-15T10:15:14Z",
+          "head_sha": "4ae11237344297892b36d9e612f9418ce1a7b5bf",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 10,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-09-15T10:52:18Z",
+          "head_sha": "93059bfa334b1ebfbf4f9c8258abf771376c4983",
+          "reviewed_head_sha": null
+        }
+      ],
+      "intended_state": {
+        "unrestricted_review_count": 1,
+        "remediation_cycle_count": 2,
+        "cycle_3_absent": true,
+        "draft": false,
+        "ready": true,
+        "ready_transition_count": 1,
+        "ready_history": [
+          {
+            "sequence": 1,
+            "transition_kind": "DRAFT_TO_READY",
+            "observation_digest": "1af589b5f55399ba942f5ae869fd94acaff50818bfe18221b11e7068665d01cd"
+          }
+        ],
+        "exceptional_recovery_count": 0,
+        "exceptional_recovery_history": [],
+        "exceptional_continuation_count": 0,
+        "exceptional_continuation_history": []
+      },
+      "feedback_digest": "87e3406c544ee833c6789148692b0f8310f50f39b7864e7a50e015bcb5672e81",
+      "technical_decisions": [
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDOTqT8Oc8AAAABRmOlsg",
+          "source_digest": "aa7261d99fb97e8993034535fd5f9343218bf01aefc342e6a01c02571aae6cfd",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "fadf453e78a34e50d61975dffbd1977655a2aee5d04876fe166cf897bccc7708"
+        },
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDOTqT8Oc8AAAABRmOooQ",
+          "source_digest": "e6ef8dabaa85e0ddd39887647eec58a89d5572bb5b69fc28411d79f0247e670d",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "69b3be46ce3a7c44af6d92b97576671f5252fa1a1bc379e01fc7d613c844bdbb"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDOTqT8Oc8AAAABLd_Xvg",
+          "source_digest": "3d8d5105d16f7f0e2b41cb3503a730891b16e3e5bb170d615ca0e651ab73ca64",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "ffdb0961fb26b43f01c0abccc2b4a0d612c2c4e5afb816f106b4c1c54492c17e"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDOTqT8Oc8AAAABLeElqQ",
+          "source_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "b34d831540e51dc4fa45f11afa16d1799792e362f62fd1a01b37eb731678c9a1"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDOTqT8Oc8AAAABLeFO4A",
+          "source_digest": "e90cfe5a4de4d1835fc94551b3e9f7e0496f8f30b5730682d31415cc1e407fb3",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "0d74ba2dd852aaa0845729ed37c4a42e8fe7b7362d43b4f3050db950a3c16904"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDOTqT8Oc8AAAABLeJi_g",
+          "source_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "cf06a774c5790c42f1391e75941f0656a5e769e1b0d302604fcd26f5cdec768e"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDOTqT8Oc8AAAABLePNgw",
+          "source_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "fc619f926b7cc0eb33d7cb58713cf688c5224d99a28f5b8d4fd2818b0fd1f2d9"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOTqT8Oc7oC7Lk",
+          "source_digest": "426fa7e0f1c4563445e4df58e012bf56f190052cd74e75b590775ab72529de9c",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "c3969747f8078efcf1ed1aa09e78f16e8b7c123b9f56aeeeeeac3a64044e0b81"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOTqT8Oc7oCaY7",
+          "source_digest": "561a2c40c65d465673e7e311585cab54c2bc9c67da03b434e006cc766d4ac577",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "c55322daa07bdb6df8aa6f265654f5fa520de5a9720cccce2d7310b4bdf0852d"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOTqT8Oc7oCqq3",
+          "source_digest": "9a05777c6e4efa7d346f99b44218277cd0252f8a8ce60e0d4c302bd75d678c7c",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "a057aa6c4242bf7849c34d3a714ad763794e00a2d137bc80bd85ebd7b245c2ef"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOTqT8Oc7oCs6E",
+          "source_digest": "07d25ff9051061b027c5aaabd8536791d8f4aea66d331659a9ceeb345a1a623e",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "3654fa8378abb8b2ea1d90cae1208354168f19288466f0301d2b5a9519fbcce0"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOTqT8Oc7oCs6M",
+          "source_digest": "fd91ef6c8177c1e1429c944caf4981644b3b01b1ce8cb13b9e99b9ae9f6933f0",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "f9ce73b1f24e5af64f8ba5dfc1d8e29de18ca1e4798b918b63c94c4a1df59589"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOTqT8Oc7oCs6S",
+          "source_digest": "4951cb483063d66013582c76e3d27f7e860ed331f34e11aa63701ba8f371238d",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "05d6e6f6c13e0d9c1af918fb20afe60754592f3124b1b926efc12e60b732079e"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOTqT8Oc7oCs6T",
+          "source_digest": "69db042e6706e9ad5603d1ab74aae685a19b5a4548ea7743e95b98dd95f140d8",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "3df0bcb642b52e47b0b868ba2780ca0fd60276dcb96e2b1b6d8e7d454bb1061a"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOTqT8Oc7oCs6Y",
+          "source_digest": "a3fb397321a6a7ba085718f05cfd71058db24aa4d96daca5f684306c98fcfe55",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "5e8618fe7649eb187c6d24583cd533d6118fc1353f697d0eefdb5a95758f3cd6"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOTqT8Oc7oCs6d",
+          "source_digest": "6bb5938443ba35b58b679f9c3b16a67722d005f2ce6a5715cdf32a020e23907d",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "b0c123ea4a4f229f388595e4140afc1d873007f353d372f8ecfe6f9791cb7cf0"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOTqT8Oc7oCs6h",
+          "source_digest": "32b1c0b265769d2e66db42983d26c3a80adb73f17233a91d50cb0ef86302efb3",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "1a50a4d1fe1ef40f572567ce20f74c13530c4163abea1e9ae6f8fc295473b327"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOTqT8Oc7oCs6k",
+          "source_digest": "b37660a900f994bdd3ddf732ea493cae29bb15a7063f52bc417ca49b24adcb9e",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "402d46e24ae20db878b08986590b3c968bba2998e5cbd9d554cc1e7e0698b3fa"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOTqT8Oc7oCs6q",
+          "source_digest": "84536fea43d7077cad6a6bf83238af9d66457ba00643616b5bba6cf26f714578",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "3ba6a4c8e454c85af5c4d5dac13be1b5e69ce1c8984721e23502d934d6040388"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOTqT8Oc7oCs6z",
+          "source_digest": "ad1dbfd1714d4c43f0f9a7a7449c4fa643991cec48f88df047a8a40447748960",
+          "disposition": "DISPROVEN_WITH_EVIDENCE",
+          "evidence_digest": "3bbc76771c85e0b7999aaa366b15fe1835b0fd85de1f9539e970ca03f005afa3"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOTqT8Oc7oDOYt",
+          "source_digest": "017bd121df25b8e3fb5515d51fa51d91ec45ebb94a43133f93aea110c19fd67f",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "9af5bbfa7cc60a617f746ed844ec656659b3e858f3d98f7bb7a44cc34ff9d369"
+        }
+      ],
+      "historical_provider_summary_digest": "e6ef8dabaa85e0ddd39887647eec58a89d5572bb5b69fc28411d79f0247e670d",
+      "current_safety_harness_path": "tests/pre-enrollment-registered-repository-current-safety.py"
     }
   ]
 }

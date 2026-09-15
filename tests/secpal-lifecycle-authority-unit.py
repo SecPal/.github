@@ -10,7 +10,9 @@ from contextlib import nullcontext
 import copy
 from dataclasses import replace
 import hashlib
+import importlib.util
 import inspect
+import io
 import json
 import os
 import stat
@@ -2460,6 +2462,134 @@ class ValidationEvidenceLossTests(TestCase):
         paths = self.loss._current_validation_harness_paths("HEAD", helper, entry)
         self.assertEqual(paths, ("tests/pre-enrollment-current-safety.py",))
 
+    def test_successor_current_safety_uses_separate_accepted_main_harness(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            accepted = Path(directory) / "accepted"
+            source = Path(directory) / "source"
+            (accepted / "tests").mkdir(parents=True)
+            source.mkdir()
+            (source / "product.py").write_text("REGISTERED = True\n")
+            self.commit_fixture(source)
+            harness = (
+                "import json\n"
+                "def main(arguments):\n"
+                "    assert not arguments\n"
+                "    assert open('product.py', encoding='utf-8').read() == "
+                "'REGISTERED = True\\n'\n"
+                f"    print(json.dumps({list(self.loss.REGISTERED_CURRENT_SAFETY_INVARIANTS)!r}))\n"
+                "    return 0\n"
+            )
+            (accepted / self.loss.REGISTERED_CURRENT_SAFETY_PATH).write_text(
+                harness
+            )
+            main_oid = self.commit_fixture(accepted)
+            record = {
+                "admission_schema_version": self.loss.ANCESTOR_SCHEMA_VERSION,
+                "current_safety_harness_path": (
+                    self.loss.REGISTERED_CURRENT_SAFETY_PATH
+                ),
+            }
+            with patch.object(self.loss, "ROOT", accepted):
+                profile = self.loss._current_safety_profile_for_record(
+                    main_oid, record
+                )
+                self.assertEqual(
+                    [item["path"] for item in profile["harness"]],
+                    [self.loss.REGISTERED_CURRENT_SAFETY_PATH],
+                )
+                with self.loss._current_policy_validation_root(
+                    main_oid, source_root=source, helper=None, entry=None,
+                    profile=profile,
+                ) as execution_root:
+                    self.assertFalse(
+                        (execution_root / self.loss.CURRENT_SAFETY_PATH).exists()
+                    )
+                    self.loss._run_current_safety(
+                        main_oid, execution_root, profile
+                    )
+
+    def test_registered_harness_rejects_empty_and_semantically_inert_contracts(self) -> None:
+        path = REPO_ROOT / self.loss.REGISTERED_CURRENT_SAFETY_PATH
+        spec = importlib.util.spec_from_file_location(
+            "registered_current_safety", path
+        )
+        harness = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(harness)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in harness.REQUIRED_FILES:
+                (root / relative).parent.mkdir(parents=True, exist_ok=True)
+            (root / harness.REQUIRED_FILES[0]).write_text(
+                "\n".join(harness.DOCUMENT_TERMS)
+            )
+            schema = {
+                "evidence_class": "rocky-native",
+                "const": "rocky",
+                **{term.strip('"'): True for term in (
+                    "container_policy_package", "process_mcs",
+                    "cross_boundary_access_denied", "avc_denial_observed",
+                    "persistent_labels", "privileged", "seccomp_enabled",
+                    "digest_only_images", "podman_socket_mounted",
+                    "docker_socket_mounted", "installed_nevras",
+                )},
+            }
+            (root / harness.REQUIRED_FILES[1]).write_text(
+                json.dumps(schema, indent=2)
+            )
+            validator = """
+QUALIFIED_ROCKY_MINORS = frozenset({"10.2"})
+# glibc-loader-hwcaps rocky-aarch64-native validate_selinux_facts
+class ContractViolation(Exception):
+    pass
+def validate_platform_facts(inventory, facts):
+    if (facts['hostname'] != inventory['host']['hostname'] or
+            facts['architecture'] != inventory['host']['architecture'] or
+            facts['os']['version_id'] not in QUALIFIED_ROCKY_MINORS or
+            facts['cpu']['admission_method'] != 'glibc-loader-hwcaps' or
+            facts['cpu']['x86_64_level'] != 'x86-64-v3'):
+        raise ContractViolation()
+def validate_selinux_facts(selinux):
+    workload = selinux['workload']
+    if (workload['process_mcs'] != workload['storage_mcs'] or
+            workload['cross_boundary_process_mcs'] == workload['storage_mcs']):
+        raise ContractViolation()
+if __name__ == '__main__':
+    raise SystemExit(1)
+"""
+            validator_path = root / harness.REQUIRED_FILES[2]
+            validator_path.write_text(validator)
+            qualification = """#!/usr/bin/env bash
+readonly QUALIFIED_ROCKY_MINOR="10.2"
+# SELINUX_ISOLATION_INVARIANT_OWNER QUADLET_AUTHORITY_INVARIANT_OWNER
+administrator_path_admitted() { :; }
+effective_quadlet_service_admitted() { :; }
+least_authority_process_admitted() { :; }
+printf 'Usage: fixture\\n'
+"""
+            (root / harness.REQUIRED_FILES[3]).write_text(qualification)
+            quadlet = root / "config/production/quadlet/service.container"
+            quadlet.parent.mkdir(parents=True)
+            quadlet.write_text("[Container]\nImage=example@sha256:fixture\n")
+            original = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("sys.stdout", new=io.StringIO()):
+                    self.assertEqual(harness.main([]), 0)
+                    quadlet.write_text("")
+                    self.assertEqual(harness.main([]), 1)
+                    quadlet.write_text("[Container]\n")
+                    validator_path.write_text("not valid python :")
+                    self.assertEqual(harness.main([]), 1)
+                    validator_path.write_text(
+                        validator.replace(
+                            "        raise ContractViolation()",
+                            "        pass",
+                        )
+                    )
+                    self.assertEqual(harness.main([]), 1)
+            finally:
+                os.chdir(original)
+
     def test_current_safety_profile_rejects_implementation_overlay(self) -> None:
         with self.assertRaises(authority.LifecycleAuthorityError):
             self.loss._admit_current_safety_path("scripts/secpal_pr_review/fast_path.py")
@@ -2591,9 +2721,425 @@ class ValidationEvidenceLossTests(TestCase):
         fields.pop("admission_digest", None)
         fields.pop("signature", None)
         fields["signature"] = signer_for(fields["signer_identity"])(
-            authority.canonical_json_bytes(fields), self.loss.DOMAIN,
+            authority.canonical_json_bytes(fields), fields["domain"],
         )
         return {**fields, "admission_digest": authority.digest_json(fields)}
+
+    def successor_document(self) -> dict[str, Any]:
+        receipt_head = "1" * 40
+        current_head = self.record["head_sha"]
+        source_history = [
+            {
+                "head_sha": receipt_head,
+                "tree_sha": "2" * 40,
+                "parent_shas": ["3" * 40],
+                "committed_at": "2026-09-01T00:00:00Z",
+                "signer_identity": SIGNER,
+                "commit_signature_evidence_digest": "4" * 64,
+            },
+            {
+                "head_sha": current_head,
+                "tree_sha": self.record["tree_sha"],
+                "parent_shas": [receipt_head],
+                "committed_at": "2026-09-02T00:00:00Z",
+                "signer_identity": SIGNER,
+                "commit_signature_evidence_digest": "3" * 64,
+            },
+        ]
+        history = [
+            {
+                "sequence": 1,
+                "kind": "PR_CREATED_DRAFT",
+                "observed_at": "2026-09-01T00:00:00Z",
+                "head_sha": receipt_head,
+                "reviewed_head_sha": None,
+            },
+            {
+                "sequence": 2,
+                "kind": "DRAFT_TO_READY_OBSERVED",
+                "observed_at": "2026-09-01T12:00:00Z",
+                "head_sha": receipt_head,
+                "reviewed_head_sha": None,
+            },
+            {
+                "sequence": 3,
+                "kind": "REMEDIATION_HEAD_OBSERVED",
+                "observed_at": "2026-09-02T00:00:00Z",
+                "head_sha": current_head,
+                "reviewed_head_sha": None,
+            },
+        ]
+        state = authority.initial_state()
+        state.update(
+            unrestricted_review_count=1,
+            remediation_cycle_count=1,
+            draft=False,
+            ready=True,
+            ready_transition_count=1,
+        )
+        state["ready_history"] = [{
+            "sequence": 1,
+            "transition_kind": "DRAFT_TO_READY",
+            "observation_digest": authority.digest_json(history[1]),
+        }]
+        provenance = {
+            "repository": REPOSITORY,
+            "delivery_issue": 827,
+            "pull_request": 830,
+            "current_head_sha": current_head,
+            "current_tree_sha": self.record["tree_sha"],
+            "historical_receipt_head_sha": receipt_head,
+            "historical_validation_receipt_digest": self.record[
+                "historical_validation_receipt_digest"
+            ],
+            "source_history_digest": authority.digest_json(source_history),
+        }
+        return self.sign({
+            **self.document,
+            "schema_version": "1.1",
+            "domain": self.loss.ANCESTOR_DOMAIN,
+            "draft": False,
+            "parent_sha": receipt_head,
+            "observed_pre_enrollment_history": history,
+            "intended_state": state,
+            "adoption_timestamp": "2026-09-03T00:00:00Z",
+            "historical_receipt_head_sha": receipt_head,
+            "source_history": source_history,
+            "source_history_digest": provenance["source_history_digest"],
+            "historical_receipt_provenance_digest": authority.digest_json(
+                provenance
+            ),
+            "historical_provider_summary_digest": "5" * 64,
+        })
+
+    def test_successor_schema_authenticates_ready_ancestor_receipt_provenance(self) -> None:
+        successor = self.successor_document()
+        self.assertEqual(
+            self.loss._verify_document(successor), successor,
+            "registered Ready deliveries need a distinct immutable successor schema",
+        )
+
+    def test_version_10_same_head_receipt_semantics_remain_unchanged(self) -> None:
+        self.assertEqual(self.loss._verify_document(self.document), self.document)
+        self.assertEqual(self.document["schema_version"], "1.0")
+        self.assertEqual(self.document["domain"], self.loss.DOMAIN)
+        self.assertTrue(self.document["draft"])
+        for field in self.loss.ANCESTOR_FIELDS - self.loss.FIELDS:
+            self.assertNotIn(field, self.document)
+
+    def test_successor_rejects_provenance_replay_state_and_safety_substitution(self) -> None:
+        mutations = (
+            lambda value: value.update(repository="Other/project"),
+            lambda value: value.update(delivery_issue=999),
+            lambda value: value.update(pull_request=999),
+            lambda value: value.update(head_sha="a" * 40),
+            lambda value: value.update(tree_sha="b" * 40),
+            lambda value: value.update(parent_sha="c" * 40),
+            lambda value: value.update(historical_receipt_head_sha="d" * 40),
+            lambda value: value.update(historical_validation_receipt_digest="e" * 64),
+            lambda value: value.update(source_history_digest="f" * 64),
+            lambda value: value.update(historical_receipt_provenance_digest="0" * 64),
+            lambda value: value["current_safety"].update(successful_result=False),
+            lambda value: value.update(historical_bytes_reconstructed=True),
+            lambda value: value["intended_state"].update(unrestricted_review_count=0),
+            lambda value: value["intended_state"].update(remediation_cycle_count=0),
+            lambda value: value["intended_state"].update(ready_transition_count=0),
+            lambda value: value["intended_state"].update(cycle_3_absent=False),
+        )
+        for mutation in mutations:
+            changed = self.successor_document()
+            mutation(changed)
+            with self.subTest(mutation=mutation), self.assertRaises(
+                authority.LifecycleAuthorityError
+            ):
+                self.loss._verify_document(self.sign(changed))
+
+    def test_successor_rejects_wrong_edge_signer_and_current_head_substitution(self) -> None:
+        variants = []
+        wrong_edge = self.successor_document()
+        wrong_edge["source_history"][-1]["parent_shas"] = ["9" * 40]
+        variants.append(wrong_edge)
+        wrong_signer = self.successor_document()
+        wrong_signer["source_history"][0]["signer_identity"] = OTHER_SIGNER
+        variants.append(wrong_signer)
+        current_signature = self.successor_document()
+        current_signature["source_history"][-1][
+            "commit_signature_evidence_digest"
+        ] = "8" * 64
+        variants.append(current_signature)
+        current_trailer = self.successor_document()
+        current_trailer["historical_receipt_head_sha"] = current_trailer["head_sha"]
+        variants.append(current_trailer)
+        for changed in variants:
+            with self.subTest(changed=changed), self.assertRaises(
+                authority.LifecycleAuthorityError
+            ):
+                self.loss._verify_document(self.sign(changed))
+
+    def successor_commits(self) -> tuple[Any, ...]:
+        document = self.successor_document()
+        return tuple(
+            self.loss.CommitFacts(
+                head_sha=item["head_sha"], tree_sha=item["tree_sha"],
+                parent_shas=tuple(item["parent_shas"]),
+                committed_at=item["committed_at"], signature_verified=True,
+            )
+            for item in document["source_history"]
+        )
+
+    def test_source_history_derives_unique_ancestor_without_caller_selection(self) -> None:
+        document = self.successor_document()
+        record = {
+            "repository": document["repository"],
+            "delivery_issue": document["delivery_issue"],
+            "pull_request": document["pull_request"],
+            "head_sha": document["head_sha"],
+            "tree_sha": document["tree_sha"],
+            "parent_sha": document["parent_sha"],
+            "source_signer_identity": document["source_signer_identity"],
+        }
+        commits = self.successor_commits()
+
+        def git_text(root: Path, arguments: list[str]) -> str:
+            commit = next(item for item in commits if item.head_sha in arguments[-1])
+            if arguments[0] == "rev-parse":
+                return commit.tree_sha
+            return " ".join((commit.head_sha, *commit.parent_shas))
+
+        with patch.object(
+            self.loss.transport, "_git_text", side_effect=git_text,
+        ), patch.object(
+            self.loss, "_commit_signature", side_effect=["4" * 64, "3" * 64],
+        ), patch.object(
+            self.loss, "_optional_validation_receipt_trailer",
+            side_effect=[document["historical_validation_receipt_digest"], None],
+        ):
+            derived = self.loss._authenticate_source_history(
+                REPO_ROOT, record, commits, self.trust
+            )
+        self.assertEqual(
+            derived["historical_receipt_head_sha"],
+            document["historical_receipt_head_sha"],
+        )
+        self.assertEqual(
+            derived["historical_validation_receipt_digest"],
+            document["historical_validation_receipt_digest"],
+        )
+
+    def test_successor_fetch_depth_covers_every_admitted_history_commit(self) -> None:
+        record = {"admission_schema_version": self.loss.ANCESTOR_SCHEMA_VERSION}
+        commits = tuple(object() for _ in range(99))
+        self.assertEqual(self.loss._source_fetch_depth(record, commits), 100)
+        self.assertEqual(self.loss._source_fetch_depth(self.record, commits), 64)
+
+    def test_source_history_rejects_non_string_parent_as_closed_error(self) -> None:
+        document = self.successor_document()
+        document["source_history"][0]["parent_shas"] = [["3" * 40]]
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            self.loss._verify_document(self.sign(document))
+
+    def test_source_history_rejects_ambiguous_unrelated_and_signature_failures(self) -> None:
+        document = self.successor_document()
+        record = {
+            "repository": document["repository"],
+            "delivery_issue": document["delivery_issue"],
+            "pull_request": document["pull_request"],
+            "head_sha": document["head_sha"],
+            "tree_sha": document["tree_sha"],
+            "parent_sha": document["parent_sha"],
+            "source_signer_identity": document["source_signer_identity"],
+        }
+        commits = self.successor_commits()
+
+        def git_text(root: Path, arguments: list[str]) -> str:
+            commit = next(item for item in commits if item.head_sha in arguments[-1])
+            return (
+                commit.tree_sha if arguments[0] == "rev-parse"
+                else " ".join((commit.head_sha, *commit.parent_shas))
+            )
+
+        cases = (
+            ([document["historical_validation_receipt_digest"]] * 2, None),
+            ([None, document["historical_validation_receipt_digest"]], None),
+            ([None, None], None),
+            ([document["historical_validation_receipt_digest"], None],
+             authority.LifecycleAuthorityError("signature")),
+        )
+        for trailers, signature_failure in cases:
+            signature = (
+                ["4" * 64, "3" * 64]
+                if signature_failure is None
+                else signature_failure
+            )
+            with self.subTest(trailers=trailers), patch.object(
+                self.loss.transport, "_git_text", side_effect=git_text,
+            ), patch.object(
+                self.loss, "_commit_signature", side_effect=signature,
+            ), patch.object(
+                self.loss, "_optional_validation_receipt_trailer",
+                side_effect=trailers,
+            ), self.assertRaises(authority.LifecycleAuthorityError):
+                self.loss._authenticate_source_history(
+                    REPO_ROOT, record, commits, self.trust
+                )
+
+    def test_registered_repository_scope_requires_exact_registry_lifecycle_policy(self) -> None:
+        lifecycle = {"schema_version": "1.0"}
+        entry = {
+            "repository": "SecPal/deployment",
+            "lifecycle_authority_policy": lifecycle,
+        }
+        self.assertIs(
+            self.loss._admit_registered_repository_entry(
+                entry, "SecPal/deployment"
+            ),
+            entry,
+        )
+        for invalid in (
+            None,
+            {"repository": "Other/project", "lifecycle_authority_policy": lifecycle},
+            {"repository": "SecPal/deployment"},
+            {"repository": "SecPal/deployment", "lifecycle_authority_policy": None},
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(
+                authority.LifecycleAuthorityError
+            ):
+                self.loss._admit_registered_repository_entry(
+                    invalid, "SecPal/deployment"
+                )
+
+    def test_deployment_235_policy_is_exact_ready_and_provenance_free(self) -> None:
+        records = json.loads(
+            (REPO_ROOT / self.loss.POLICY_PATH).read_text()
+        )["admissions"]
+        record = next(
+            item for item in records
+            if item["repository"] == "SecPal/deployment"
+        )
+        self.assertEqual(record["admission_schema_version"], "1.1")
+        self.assertEqual(record["delivery_issue"], 235)
+        self.assertEqual(record["pull_request"], 136)
+        self.assertEqual(
+            record["head_sha"],
+            "93059bfa334b1ebfbf4f9c8258abf771376c4983",
+        )
+        self.assertEqual(
+            record["tree_sha"], "51f50be6c7696be5d3f26025efc94036dc82388c"
+        )
+        self.assertTrue(record["intended_state"]["ready"])
+        self.assertEqual(record["intended_state"]["unrestricted_review_count"], 1)
+        self.assertEqual(record["intended_state"]["remediation_cycle_count"], 2)
+        self.assertTrue(record["intended_state"]["cycle_3_absent"])
+        self.assertNotIn("historical_receipt_head_sha", record)
+        self.assertNotIn("historical_validation_receipt_digest", record)
+
+    def test_successor_loss_still_requires_review_budget_for_exact_adoption(self) -> None:
+        document = self.successor_document()
+        commit = {
+            "oid": document["head_sha"], "source": "USER",
+            "signer_identity": SIGNER,
+            "local_signature": {
+                "verified": True, "state": "valid", "format": "ssh",
+            },
+            "github_verification": {"verified": True, "reason": "valid"},
+        }
+        signature_policy = {
+            "accepted_formats": ["ssh"], "require_github_verified": True,
+        }
+        signature_digest = authority.digest_json(
+            fast_path.verify_commit_signatures([commit], signature_policy)[0]
+        )
+        document["commit_signature_evidence_digest"] = signature_digest
+        document["source_history"][-1][
+            "commit_signature_evidence_digest"
+        ] = signature_digest
+        document["source_history_digest"] = authority.digest_json(
+            document["source_history"]
+        )
+        provenance = {
+            "repository": document["repository"],
+            "delivery_issue": document["delivery_issue"],
+            "pull_request": document["pull_request"],
+            "current_head_sha": document["head_sha"],
+            "current_tree_sha": document["tree_sha"],
+            "historical_receipt_head_sha": document[
+                "historical_receipt_head_sha"
+            ],
+            "historical_validation_receipt_digest": document[
+                "historical_validation_receipt_digest"
+            ],
+            "source_history_digest": document["source_history_digest"],
+        }
+        document["historical_receipt_provenance_digest"] = authority.digest_json(
+            provenance
+        )
+        document = self.sign(document)
+        with patch.object(self.loss, "_reauthenticate"):
+            sealed = self.loss.verify(authority.canonical_json_bytes(document))
+        context = {
+            "repository": document["repository"],
+            "delivery_issue": document["delivery_issue"],
+            "pull_request": document["pull_request"],
+            "head_sha": document["head_sha"],
+            "tree_sha": document["tree_sha"],
+            "pull_request_state": "OPEN",
+            "commit_signature_evidence_digest": signature_digest,
+            "validation_receipt_digest": document[
+                "historical_validation_receipt_digest"
+            ],
+            "source_validation_evidence_digest": authority.digest_json(
+                document["current_safety"]
+            ),
+            "adoption_source_evidence_digest": document["admission_digest"],
+            "adoption_timestamp": document["adoption_timestamp"],
+        }
+        budget = authority.create_pre_enrollment_review_budget_consumption_admission(
+            **context,
+            admission_id="registered-ready-budget",
+            observed_pre_enrollment_history=document[
+                "observed_pre_enrollment_history"
+            ],
+            intended_state=document["intended_state"],
+            signer_identity=self.migration,
+            signer=signer_for(self.migration),
+        )
+        arguments = {
+            "repository": document["repository"],
+            "delivery_issue": document["delivery_issue"],
+            "pull_request": document["pull_request"],
+            "head_sha": document["head_sha"],
+            "tree_sha": document["tree_sha"],
+            "pull_request_state": "OPEN",
+            "commit_signature_evidence": commit,
+            "validation_evidence": None,
+            "validation_evidence_loss_admission": sealed,
+            "observed_pre_enrollment_history": document[
+                "observed_pre_enrollment_history"
+            ],
+            "intended_state": document["intended_state"],
+        }
+        with patch.object(
+            authority, "_load_delivery_signature_policy",
+            return_value=signature_policy,
+        ):
+            with self.assertRaisesRegex(
+                authority.LifecycleAuthorityError, "review budget"
+            ):
+                authority.authenticate_exact_state_adoption_external_evidence(
+                    **arguments
+                )
+            external = authority.authenticate_exact_state_adoption_external_evidence(
+                **arguments, review_budget_consumption_admission=budget
+            )
+        evidence = authority.create_exact_state_adoption_evidence(
+            verified_external_evidence=external,
+            adoption_timestamp=document["adoption_timestamp"],
+        )
+        self.assertEqual(evidence["proof_version"], "3.0")
+        self.assertEqual(external.intended_state["unrestricted_review_count"], 1)
+        self.assertEqual(external.intended_state["remediation_cycle_count"], 1)
+        self.assertTrue(external.intended_state["ready"])
+        self.assertTrue(external.intended_state["cycle_3_absent"])
 
     def test_public_verifier_reauthenticates_exact_signed_context(self) -> None:
         with patch.object(self.loss, "_acquire", return_value=self.acquired) as acquire:
@@ -2707,7 +3253,7 @@ class ValidationEvidenceLossTests(TestCase):
 
         validation_root = REPO_ROOT
         with patch.object(self.loss, "_accepted_policy", return_value=("c" * 40, self.record, entry, self.trust)), patch.object(
-            self.loss, "_observe", return_value=({}, reviewed)
+            self.loss, "_observe", return_value=({}, reviewed, ())
         ), patch.object(self.loss.transport, "_load_actions_helper", return_value=helper), patch.object(
             self.loss.transport, "_git"
         ), patch.object(self.loss.transport, "_git_text", side_effect=git_text), patch.object(
@@ -3473,6 +4019,7 @@ class ValidationEvidenceLossTests(TestCase):
             (4, ("sha",), "a" * 40), (4, ("commit", "tree", "sha"), "b" * 40),
             (4, ("commit", "verification", "verified"), False),
             (4, ("parents",), [{"sha": "d" * 40}]),
+            (2, (0, "parents", 0, "sha"), ["d" * 40]),
         ]
         for index, path, value in cases:
             with self.subTest(index=index, path=path):

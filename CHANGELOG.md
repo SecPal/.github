@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-15 - Authenticate Registered Repository Receipt Ancestry
+
+**Fixed:**
+
+- Extend Exact-State-Adoption validation-evidence-loss admission to registered
+  repositories with accepted lifecycle authority while preserving schema-1.0
+  same-head receipt semantics.
+- Authenticate the unique historical validation-receipt provenance through the
+  exact signed delivery source history, without reconstructing unavailable
+  historical evidence bytes or resetting finite review and Ready history.
+
 ## 2026-09-15 - Adopt Deployment Lifecycle Authority
 
 **Added:**
