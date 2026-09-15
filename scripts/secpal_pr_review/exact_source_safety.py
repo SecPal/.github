@@ -52,6 +52,53 @@ _COLLISION_CURRENT_IDENTITY_FIXTURES = {
     ),
 }
 
+_TWO_PROVENANCE_LAUNCHER = r"""
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+tooling_root = Path(sys.argv[1]).resolve(strict=True)
+candidate_root = Path(sys.argv[2]).resolve(strict=True)
+candidate_repository = sys.argv[3]
+target = sys.argv[4]
+entrypoint = sys.argv[5]
+if (
+    tooling_root == candidate_root
+    or tooling_root in candidate_root.parents
+    or candidate_root in tooling_root.parents
+):
+    raise RuntimeError("current-safety tooling and candidate roots are not separated")
+expected = (tooling_root / target).resolve(strict=True)
+if tooling_root not in expected.parents or not expected.is_file():
+    raise RuntimeError("current-safety harness escaped accepted tooling")
+stdlib = [value for value in sys.path if value and "site-packages" not in value]
+sys.path[:] = [str(tooling_root / "scripts"), *stdlib]
+os.environ["SECPAL_CURRENT_SAFETY_TOOLING_ROOT"] = str(tooling_root)
+os.environ["SECPAL_CURRENT_SAFETY_CANDIDATE_ROOT"] = str(candidate_root)
+os.environ["SECPAL_CURRENT_SAFETY_CANDIDATE_REPOSITORY"] = candidate_repository
+sys.argv = [target]
+spec = importlib.util.spec_from_file_location(
+    "secpal_current_safety_accepted_harness", expected
+)
+if spec is None or spec.loader is None:
+    raise RuntimeError("current-safety harness is unavailable")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+selected = getattr(module, entrypoint, None)
+if not callable(selected):
+    raise RuntimeError("current-safety harness entrypoint changed")
+raise SystemExit(selected([]))
+"""
+
+
+@dataclass(frozen=True)
+class CurrentSafetyExecutionRoots:
+    """Distinct authenticated roots for tooling authority and candidate source."""
+
+    tooling: Path
+    candidate: Path
+
 
 def _compatible_evidence_versions(
     occupied_version: str,
@@ -312,6 +359,30 @@ def admit_harness_path(relative: str, *, allowed_paths: frozenset[str]) -> str:
     return relative
 
 
+def admit_tooling_path(relative: str, *, allowed_paths: frozenset[str]) -> str:
+    """Admit one literal profile-owned governance implementation path."""
+
+    if not isinstance(relative, str):
+        raise authority.LifecycleAuthorityError("current safety tooling path is unsafe")
+    path = Path(relative)
+    if (
+        not relative
+        or path.is_absolute()
+        or ".." in path.parts
+        or path.as_posix() != relative
+        or relative not in allowed_paths
+        or not (
+            relative == "scripts/secpal-pr-review.py"
+            or relative == "scripts/secpal-pr-review-actions.py"
+            or relative.startswith("scripts/secpal_pr_review/")
+        )
+    ):
+        raise authority.LifecycleAuthorityError(
+            "current safety tooling path is not maintained"
+        )
+    return relative
+
+
 def _observe_harness_blob(
     repository_root: Path, commit_oid: str, relative: str,
 ) -> HarnessBlobObservation:
@@ -380,6 +451,30 @@ def harness_blob(
     return binding.mode, binding.blob_oid, binding.size
 
 
+def tooling_blob(
+    repository_root: Path,
+    accepted_main: str,
+    relative: str,
+    *,
+    allowed_paths: frozenset[str],
+) -> tuple[str, str, int]:
+    """Bind one regular governance implementation blob from accepted main."""
+
+    relative = admit_tooling_path(relative, allowed_paths=allowed_paths)
+    observation = _observe_harness_blob(repository_root, accepted_main, relative)
+    facts = _normalize_harness_blob(observation)
+    if (
+        facts.repository_path != relative
+        or facts.mode not in {"100644", "100755"}
+        or facts.object_type != "blob"
+        or facts.size is None
+    ):
+        raise authority.LifecycleAuthorityError(
+            "current safety tooling blob is invalid"
+        )
+    return facts.mode, facts.object_oid, facts.size
+
+
 def build_profile(
     repository_root: Path,
     accepted_main: str,
@@ -388,6 +483,7 @@ def build_profile(
     harness_paths: Sequence[str],
     purpose: str,
     required_invariants: Sequence[str],
+    tooling_paths: Sequence[str] = (),
     timeout_seconds: int = 120,
 ) -> dict[str, Any]:
     """Bind one closed profile to exact accepted-main harness blobs and commands."""
@@ -416,7 +512,7 @@ def build_profile(
         {"command_digest": authority.digest_json(command), "exit_status": 0, "successful": True}
         for command in commands
     ]
-    return {
+    profile = {
         "schema_version": "1.0",
         "policy": policy,
         "harness": harness,
@@ -426,6 +522,29 @@ def build_profile(
         "required_invariants": invariants,
         "validation_results": results,
     }
+    if tooling_paths:
+        tooling_allowed = frozenset(tooling_paths)
+        if len(tooling_allowed) != len(tooling_paths):
+            raise authority.LifecycleAuthorityError(
+                "current safety tooling paths are ambiguous"
+            )
+        tooling = []
+        for relative in tooling_paths:
+            path = admit_tooling_path(relative, allowed_paths=tooling_allowed)
+            mode, blob_oid, size = tooling_blob(
+                repository_root,
+                accepted_main,
+                path,
+                allowed_paths=tooling_allowed,
+            )
+            tooling.append(
+                {"path": path, "mode": mode, "blob_oid": blob_oid, "size": size}
+            )
+        profile.update(
+            execution_model="ACCEPTED_MAIN_TOOLING_WITH_EXACT_CANDIDATE",
+            tooling=tooling,
+        )
+    return profile
 
 
 def verify_source_bytes(
@@ -528,9 +647,12 @@ def _copy_harness_file(
     execution_root: Path,
     *,
     allowed_paths: frozenset[str],
+    tooling: bool = False,
 ) -> tuple[str, str, int]:
-    relative = admit_harness_path(binding.get("path"), allowed_paths=allowed_paths)
-    observed = harness_blob(
+    admit = admit_tooling_path if tooling else admit_harness_path
+    observe = tooling_blob if tooling else harness_blob
+    relative = admit(binding.get("path"), allowed_paths=allowed_paths)
+    observed = observe(
         repository_root, accepted_main, relative, allowed_paths=allowed_paths,
     )
     expected = (binding.get("mode"), binding.get("blob_oid"), binding.get("size"))
@@ -573,6 +695,24 @@ def _copy_harness_file(
         temporary.unlink(missing_ok=True)
     _verify_harness_file(repository_root, execution_root, relative, mode, blob_oid, size)
     return mode, blob_oid, size
+
+
+def _copy_tooling_file(
+    repository_root: Path,
+    accepted_main: str,
+    binding: Mapping[str, Any],
+    execution_root: Path,
+    *,
+    allowed_paths: frozenset[str],
+) -> tuple[str, str, int]:
+    return _copy_harness_file(
+        repository_root,
+        accepted_main,
+        binding,
+        execution_root,
+        allowed_paths=allowed_paths,
+        tooling=True,
+    )
 
 
 def _git_blob_oid(source: bytes) -> str:
@@ -1502,6 +1642,210 @@ def _verify_execution_root(
         _verify_harness_file(repository_root, root, relative, *binding)
 
 
+def _verify_root_separation(tooling_root: Path, candidate_root: Path) -> None:
+    try:
+        tooling = tooling_root.resolve(strict=True)
+        candidate = candidate_root.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise authority.LifecycleAuthorityError(
+            "current safety execution root is unavailable"
+        ) from exc
+    if (
+        tooling == candidate
+        or tooling in candidate.parents
+        or candidate in tooling.parents
+        or tooling_root.is_symlink()
+        or candidate_root.is_symlink()
+    ):
+        raise authority.LifecycleAuthorityError(
+            "current safety tooling and candidate roots must be distinct"
+        )
+
+
+def _reject_candidate_import_authority(
+    listing: str, *, candidate_repository: str,
+) -> None:
+    """Reject candidate-controlled Python startup and foreign issuer surfaces."""
+
+    paths = {
+        item.partition("\t")[2]
+        for item in listing.rstrip("\0").split("\0")
+        if item
+    }
+    startup = {
+        path
+        for path in paths
+        if Path(path).name in {"sitecustomize.py", "usercustomize.py"}
+        or Path(path).suffix == ".pth"
+    }
+    foreign_governance = {
+        path
+        for path in paths
+        if path == "secpal_pr_review.py"
+        or path.startswith("secpal_pr_review/")
+        or path == "scripts/secpal-pr-review-actions.py"
+        or path == "scripts/secpal_pr_review.py"
+        or path.startswith("scripts/secpal_pr_review/")
+    }
+    if startup or (
+        candidate_repository != "SecPal/.github" and foreign_governance
+    ):
+        raise authority.LifecycleAuthorityError(
+            "candidate source contains forbidden Python import authority"
+        )
+
+
+def _verify_tooling_root(
+    repository_root: Path,
+    root: Path,
+    bindings: Mapping[str, tuple[str, str, int]],
+) -> None:
+    expected = set(bindings)
+    directories = {
+        parent.as_posix()
+        for relative in expected
+        for parent in Path(relative).parents
+        if parent != Path(".")
+    }
+    observed: set[str] = set()
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise authority.LifecycleAuthorityError(
+                "current safety tooling contains symlink"
+            )
+        if path.is_dir():
+            if path.relative_to(root).as_posix() not in directories:
+                raise authority.LifecycleAuthorityError(
+                    "current safety tooling contains undeclared directory"
+                )
+            continue
+        relative = path.relative_to(root).as_posix()
+        if path.suffix in {".pyc", ".pyo"} or "__pycache__" in path.parts:
+            raise authority.LifecycleAuthorityError(
+                "current safety tooling contains bytecode"
+            )
+        observed.add(relative)
+    if observed != expected:
+        raise authority.LifecycleAuthorityError(
+            "current safety tooling contains undeclared files"
+        )
+    for relative, binding in bindings.items():
+        _verify_harness_file(repository_root, root, relative, *binding)
+
+
+@contextmanager
+def two_provenance_execution_roots(
+    repository_root: Path,
+    accepted_main: str,
+    *,
+    source_root: Path,
+    candidate_repository: str,
+    profile: Mapping[str, Any],
+) -> Iterator[CurrentSafetyExecutionRoots]:
+    """Materialize accepted tooling separately from immutable candidate source."""
+
+    source_root = source_root.resolve(strict=True)
+    repository_root = repository_root.resolve(strict=True)
+    if not isinstance(profile, Mapping):
+        raise authority.LifecycleAuthorityError(
+            "current safety two-provenance profile is malformed"
+        )
+    if (
+        not isinstance(candidate_repository, str)
+        or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", candidate_repository)
+        is None
+    ):
+        raise authority.LifecycleAuthorityError(
+            "current safety candidate repository is malformed"
+        )
+    harness = profile.get("harness")
+    tooling = profile.get("tooling")
+    if (
+        profile.get("execution_model")
+        != "ACCEPTED_MAIN_TOOLING_WITH_EXACT_CANDIDATE"
+        or not isinstance(harness, list)
+        or not harness
+        or not isinstance(tooling, list)
+        or not tooling
+        or any(not isinstance(item, Mapping) for item in [*harness, *tooling])
+    ):
+        raise authority.LifecycleAuthorityError(
+            "current safety two-provenance profile is malformed"
+        )
+    harness_paths = tuple(item.get("path") for item in harness)
+    tooling_paths = tuple(item.get("path") for item in tooling)
+    harness_allowed = frozenset(harness_paths)
+    tooling_allowed = frozenset(tooling_paths)
+    if (
+        len(harness_allowed) != len(harness_paths)
+        or len(tooling_allowed) != len(tooling_paths)
+        or harness_allowed.intersection(tooling_allowed)
+    ):
+        raise authority.LifecycleAuthorityError(
+            "current safety two-provenance inventory is ambiguous"
+        )
+    tree = transport._git_text(source_root, ["rev-parse", "HEAD^{tree}"]).strip()
+    listing = verify_source_bytes(source_root, tree)
+    _reject_candidate_import_authority(
+        listing, candidate_repository=candidate_repository,
+    )
+    candidate_listing = _candidate_listing_without_harness(listing)
+    with tempfile.TemporaryDirectory(
+        prefix="secpal-two-provenance-current-safety-"
+    ) as directory:
+        private = Path(directory)
+        private.chmod(0o700)
+        candidate_root = private / "candidate"
+        tooling_root = private / "tooling"
+        tooling_root.mkdir(mode=0o700)
+        try:
+            shutil.copytree(
+                source_root,
+                candidate_root,
+                symlinks=True,
+                ignore=shutil.ignore_patterns(".git"),
+            )
+            tests_root = candidate_root / "tests"
+            if tests_root.exists():
+                shutil.rmtree(tests_root)
+            bindings: dict[str, tuple[str, str, int]] = {}
+            for item in harness:
+                bindings[item["path"]] = _copy_harness_file(
+                    repository_root,
+                    accepted_main,
+                    item,
+                    tooling_root,
+                    allowed_paths=harness_allowed,
+                )
+            for item in tooling:
+                bindings[item["path"]] = _copy_tooling_file(
+                    repository_root,
+                    accepted_main,
+                    item,
+                    tooling_root,
+                    allowed_paths=tooling_allowed,
+                )
+        except OSError as exc:
+            raise authority.LifecycleAuthorityError(
+                "current safety two-provenance preparation failed"
+            ) from exc
+        _verify_root_separation(tooling_root, candidate_root)
+        _verify_execution_root(
+            repository_root, candidate_root, tree, candidate_listing, {},
+        )
+        _verify_tooling_root(repository_root, tooling_root, bindings)
+        roots = CurrentSafetyExecutionRoots(tooling_root, candidate_root)
+        try:
+            yield roots
+        finally:
+            _verify_root_separation(tooling_root, candidate_root)
+            _verify_execution_root(
+                repository_root, candidate_root, tree, candidate_listing, {},
+            )
+            _verify_tooling_root(repository_root, tooling_root, bindings)
+            verify_source_bytes(source_root, tree, expected_listing=listing)
+
+
 @contextmanager
 def execution_root(
     repository_root: Path,
@@ -1554,6 +1898,8 @@ def run_profile(
     profile: Mapping[str, Any],
     *,
     expected_profile: Mapping[str, Any],
+    candidate_root: Path | None = None,
+    candidate_repository: str | None = None,
 ) -> None:
     """Execute the exact closed profile through the isolated Python boundary."""
 
@@ -1571,11 +1917,27 @@ def run_profile(
             authority._load_trusted_command_helper(), Path(home),
         )
         for command in commands:
-            result = transport._run_isolated_python(
-                transport._isolated_python_command(
+            if "tooling" in profile:
+                if candidate_root is None or candidate_repository is None:
+                    raise authority.LifecycleAuthorityError(
+                        "current safety candidate execution boundary is missing"
+                    )
+                _verify_root_separation(root, candidate_root)
+                isolated_command = transport._isolated_python_command(
+                    _TWO_PROVENANCE_LAUNCHER,
+                    str(root),
+                    str(candidate_root),
+                    candidate_repository,
+                    command["argv"][1],
+                    "main",
+                )
+            else:
+                isolated_command = transport._isolated_python_command(
                     transport._ISOLATED_SOURCE_LAUNCHER,
                     "ENTRYPOINT", str(root), command["argv"][1], "main",
-                ),
+                )
+            result = transport._run_isolated_python(
+                isolated_command,
                 cwd=root, timeout=profile["timeout_seconds"], env=environment,
             )
             observed.append({
