@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-15 - Adopt Deployment Lifecycle Authority
+
+**Added:**
+
+- Admit `SecPal/deployment` to the maintained persistent lifecycle-authority
+  system with repository-local protected publication and the existing signer
+  roles, formats, and Exact-State-Adoption machinery.
+- Keep arbitrary review requests unsupported so legacy Ready deliveries recover
+  only from authenticated finite lifecycle history and verifier-derived source
+  authority.
+
 ## 2026-09-14 - Authenticate Collision Successor Provider Drift
 
 **Fixed:**
