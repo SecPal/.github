@@ -243,15 +243,101 @@ class ReadySourceRecoveryCurrentSafety(unittest.TestCase):
             "_validation_runner", "_issuer_source_verifier",
         }
 
+        class ModuleBindingVisitor(ast.NodeVisitor):
+            """Collect conservative bindings made while a module is loaded."""
+
+            def __init__(self):
+                self.bindings = []
+
+            def bind(self, name, node):
+                if name == "issue_ready_source_recovery_authorization":
+                    self.bindings.append(node)
+
+            def visit_Name(self, node):
+                if isinstance(node.ctx, (ast.Store, ast.Del)):
+                    self.bind(node.id, node)
+
+            def visit_FunctionDef(self, node):
+                self.bind(node.name, node)
+                for expression in [
+                    *node.decorator_list,
+                    *node.args.defaults,
+                    *(
+                        default for default in node.args.kw_defaults
+                        if default is not None
+                    ),
+                    *(argument.annotation for argument in [
+                        *node.args.posonlyargs,
+                        *node.args.args,
+                        *node.args.kwonlyargs,
+                    ] if argument.annotation is not None),
+                ]:
+                    self.visit(expression)
+                if node.args.vararg and node.args.vararg.annotation:
+                    self.visit(node.args.vararg.annotation)
+                if node.args.kwarg and node.args.kwarg.annotation:
+                    self.visit(node.args.kwarg.annotation)
+                if node.returns:
+                    self.visit(node.returns)
+
+            visit_AsyncFunctionDef = visit_FunctionDef
+
+            def visit_ClassDef(self, node):
+                self.bind(node.name, node)
+                for expression in [
+                    *node.decorator_list, *node.bases,
+                    *(keyword.value for keyword in node.keywords),
+                ]:
+                    self.visit(expression)
+
+            def visit_Lambda(self, _node):
+                return
+
+            def visit_Import(self, node):
+                for alias in node.names:
+                    self.bind(alias.asname or alias.name.split(".", 1)[0], node)
+
+            def visit_ImportFrom(self, node):
+                for alias in node.names:
+                    self.bind(alias.asname or alias.name, node)
+
+            def visit_ExceptHandler(self, node):
+                if node.name:
+                    self.bind(node.name, node)
+                if node.type:
+                    self.visit(node.type)
+                for statement in node.body:
+                    self.visit(statement)
+
+            def visit_MatchAs(self, node):
+                if node.pattern:
+                    self.visit(node.pattern)
+                if node.name:
+                    self.bind(node.name, node)
+
+            def visit_MatchStar(self, node):
+                if node.name:
+                    self.bind(node.name, node)
+
+            def visit_MatchMapping(self, node):
+                for key in node.keys:
+                    self.visit(key)
+                for pattern in node.patterns:
+                    self.visit(pattern)
+                if node.rest:
+                    self.bind(node.rest, node)
+
         def issuer_parameters(path):
             tree = ast.parse(path.read_bytes(), filename=str(path))
-            matches = [
-                node for node in tree.body
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and node.name == "issue_ready_source_recovery_authorization"
-            ]
-            self.assertEqual(len(matches), 1)
-            arguments = matches[0].args
+            visitor = ModuleBindingVisitor()
+            visitor.visit(tree)
+            self.assertEqual(len(visitor.bindings), 1)
+            definition = visitor.bindings[0]
+            self.assertIsInstance(
+                definition, (ast.FunctionDef, ast.AsyncFunctionDef),
+            )
+            self.assertFalse(definition.decorator_list)
+            arguments = definition.args
             return {
                 item.arg
                 for item in [*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs]

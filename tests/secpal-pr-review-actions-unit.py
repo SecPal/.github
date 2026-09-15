@@ -13735,6 +13735,8 @@ class ReadySourceCurrentSafetyTests(TestCase):
         files: dict[str, str] | None = None,
         governance_checkout: bool = False,
         symlink: tuple[str, str] | None = None,
+        append_files: dict[str, str] | None = None,
+        replace_files: dict[str, tuple[str, str]] | None = None,
     ) -> Path:
         self.candidate_index += 1
         root = self.root / f"candidate-{self.candidate_index}"
@@ -13749,6 +13751,14 @@ class ReadySourceCurrentSafetyTests(TestCase):
             destination = root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(value, encoding="utf-8")
+        for relative, value in (append_files or {}).items():
+            with (root / relative).open("a", encoding="utf-8") as output:
+                output.write(value)
+        for relative, (old, new) in (replace_files or {}).items():
+            path = root / relative
+            contents = path.read_text(encoding="utf-8")
+            self.assertEqual(contents.count(old), 1)
+            path.write_text(contents.replace(old, new), encoding="utf-8")
         if symlink is not None:
             (root / symlink[0]).symlink_to(symlink[1])
         subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
@@ -13808,6 +13818,41 @@ class ReadySourceCurrentSafetyTests(TestCase):
                 fast_path.SecurityBlocker, "current safety failed",
             ):
                 self.execute_current_safety(self.candidate(files=files))
+
+    def test_github_candidate_cannot_rebind_recovery_issuer(self) -> None:
+        candidate = self.candidate(
+            "SecPal/.github",
+            governance_checkout=True,
+            append_files={
+                "scripts/secpal-pr-review-actions.py": (
+                    "\ndef candidate_selected_issuer(*, _validation_runner):\n"
+                    "    return _validation_runner\n"
+                    "\nissue_ready_source_recovery_authorization = "
+                    "candidate_selected_issuer\n"
+                ),
+            },
+        )
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "current safety failed",
+        ):
+            self.execute_current_safety(candidate, "SecPal/.github")
+
+    def test_github_candidate_cannot_decorate_recovery_issuer(self) -> None:
+        candidate = self.candidate(
+            "SecPal/.github",
+            governance_checkout=True,
+            replace_files={
+                "scripts/secpal-pr-review-actions.py": (
+                    "\ndef issue_ready_source_recovery_authorization(\n",
+                    "\n@staticmethod\n"
+                    "def issue_ready_source_recovery_authorization(\n",
+                ),
+            },
+        )
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "current safety failed",
+        ):
+            self.execute_current_safety(candidate, "SecPal/.github")
 
     def test_host_python_paths_have_no_current_safety_authority(self) -> None:
         shadow = self.root / "host-shadow"
