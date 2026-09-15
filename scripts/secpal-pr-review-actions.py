@@ -166,6 +166,9 @@ READY_SOURCE_RECOVERY_CURRENT_SAFETY_INVARIANTS = (
     "prior_authority_signer",
     "stable_feedback_integrity",
 )
+READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS = tuple(
+    fast_path.READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS
+)
 
 
 def _load_pre_enrollment_integration_helper() -> Any:
@@ -4825,6 +4828,15 @@ def _verify_recovery_issuer_source(policy_head_sha: str) -> None:
         raise fast_path.SecurityBlocker(
             "Ready-source recovery issuer is not exact accepted-main tooling"
         )
+    if (
+        _require_accepted_main_bridge_source(
+            "SecPal/.github", expected_main=policy_head_sha,
+        )
+        != policy_head_sha
+    ):
+        raise fast_path.SecurityBlocker(
+            "Ready-source recovery issuer is not authenticated accepted main"
+        )
 
 
 def _ready_source_recovery_current_safety_profile(
@@ -4840,6 +4852,7 @@ def _ready_source_recovery_current_safety_profile(
             harness_paths=(READY_SOURCE_RECOVERY_CURRENT_SAFETY_PATH,),
             purpose="Validate Ready-source recovery current safety",
             required_invariants=READY_SOURCE_RECOVERY_CURRENT_SAFETY_INVARIANTS,
+            tooling_paths=READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS,
         )
     except (
         exact_source_safety.authority.LifecycleAuthorityError,
@@ -4854,8 +4867,9 @@ def _run_ready_source_recovery_current_safety(
     policy_head_sha: str,
     repository_root: Path,
     profile: dict[str, Any],
+    candidate_repository: str,
 ) -> bool:
-    """Run the selected profile without overlaying candidate implementation."""
+    """Run accepted tooling separately from exact candidate implementation."""
 
     expected = _ready_source_recovery_current_safety_profile(policy_head_sha)
     if profile != expected:
@@ -4863,14 +4877,19 @@ def _run_ready_source_recovery_current_safety(
             "Ready-source recovery current-safety profile changed"
         )
     try:
-        with exact_source_safety.execution_root(
+        with exact_source_safety.two_provenance_execution_roots(
             REPOSITORY_ROOT,
             policy_head_sha,
             source_root=repository_root,
+            candidate_repository=candidate_repository,
             profile=profile,
-        ) as root:
+        ) as roots:
             exact_source_safety.run_profile(
-                root, profile, expected_profile=expected,
+                roots.tooling,
+                profile,
+                expected_profile=expected,
+                candidate_root=roots.candidate,
+                candidate_repository=candidate_repository,
             )
     except (
         exact_source_safety.authority.LifecycleAuthorityError,
@@ -4960,7 +4979,10 @@ def _acquire_ready_source_recovery_facts(
             "Ready-source recovery feedback does not bind the candidate"
         )
     validation_result = _validation_runner(
-        policy_head_sha, root, copy.deepcopy(current_safety_profile)
+        policy_head_sha,
+        root,
+        copy.deepcopy(current_safety_profile),
+        repository,
     )
     if not validation_result:
         raise RegisteredValidationFailure(validation_result)

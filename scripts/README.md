@@ -128,13 +128,16 @@ and unresolved review threads in the classification universe, and selects the
 closed `READY_SOURCE_RECOVERY_CURRENT_SAFETY` profile itself. That profile binds
 the single `tests/ready-source-recovery-current-safety.py` harness by
 accepted-main blob mode, OID, and size, plus its exact command, invariant
-inventory, and successful result. The source-neutral exact-source runner shared
-with the pre-enrollment safety path copies candidate source into a private
-disposable root, removes candidate test bytes, overlays only the authenticated
-harness, executes through the isolated Python boundary, and authenticates
-candidate production bytes before and after. It never overlays accepted-main
-production implementation and does not replay unrelated current repository
-regressions. The issuer then re-verifies the complete package before signing.
+inventory, successful result, and closed governance dependency inventory. The
+source-neutral exact-source runner shared with the pre-enrollment safety path
+copies candidate source into one private disposable root and materializes the
+harness plus its minimal governance dependencies from accepted-main Git blobs
+into a distinct sibling tooling root. The isolated Python boundary admits only
+that tooling root for governance imports while retaining the candidate root as
+an explicit byte-exact source-assertion boundary. It authenticates both roots
+before and after execution, rejects candidate Python startup and foreign issuer
+shadow surfaces, and does not replay unrelated current repository regressions.
+The issuer then re-verifies the complete package before signing.
 If protected CURRENT proves a Ready-preserving remediation suffix, that fixed
 issuer may also derive the suffix predecessor as the sole acceptable Codex
 provider-summary head. The summary must retain terminal status and exact

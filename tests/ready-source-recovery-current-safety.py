@@ -4,19 +4,38 @@
 
 from __future__ import annotations
 
+import ast
 import copy
 import hashlib
-import importlib.util
 import inspect
 import io
 import json
+import os
 from pathlib import Path
+import re
 import sys
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.append(str(ROOT / "scripts"))
+CANDIDATE_ROOT = Path(
+    os.environ["SECPAL_CURRENT_SAFETY_CANDIDATE_ROOT"]
+).resolve(strict=True)
+CANDIDATE_REPOSITORY = os.environ[
+    "SECPAL_CURRENT_SAFETY_CANDIDATE_REPOSITORY"
+]
+if (
+    Path(os.environ["SECPAL_CURRENT_SAFETY_TOOLING_ROOT"]).resolve(strict=True)
+    != ROOT
+    or ROOT == CANDIDATE_ROOT
+    or ROOT in CANDIDATE_ROOT.parents
+    or CANDIDATE_ROOT in ROOT.parents
+    or re.fullmatch(
+        r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", CANDIDATE_REPOSITORY
+    )
+    is None
+):
+    raise RuntimeError("current-safety provenance roots are invalid")
 from secpal_pr_review import fast_path, lifecycle_authority as authority
 
 REPOSITORY = "example/project"
@@ -203,27 +222,53 @@ class ReadySourceRecoveryCurrentSafety(unittest.TestCase):
                 fast_path.StableFeedbackState.from_payload(changed)
 
     def test_candidate_issuer_separation(self):
-        spec = importlib.util.spec_from_file_location(
-            "ready_source_candidate_actions",
-            ROOT / "scripts/secpal-pr-review-actions.py",
-        )
-        if spec is None or spec.loader is None:
-            self.fail("candidate actions module has no executable loader")
-        actions = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = actions
-        spec.loader.exec_module(actions)
-        issuer = getattr(actions, "issue_ready_source_recovery_authorization", None)
-        if issuer is None:
-            self.assertFalse(
-                hasattr(actions, "_run_ready_source_recovery_current_safety")
-            )
-            return
-        parameters = inspect.signature(issuer).parameters
-        for forbidden in (
+        tooling_scripts = (ROOT / "scripts").resolve(strict=True)
+        for module in (fast_path, authority):
+            source = Path(module.__file__).resolve(strict=True)
+            self.assertIn(tooling_scripts, source.parents)
+            self.assertNotIn(CANDIDATE_ROOT, source.parents)
+        self.assertNotIn(str(CANDIDATE_ROOT), sys.path)
+        for module in tuple(sys.modules.values()):
+            source = getattr(module, "__file__", None)
+            if not isinstance(source, str):
+                continue
+            try:
+                resolved = Path(source).resolve(strict=True)
+            except OSError:
+                continue
+            self.assertNotIn(CANDIDATE_ROOT, resolved.parents)
+
+        forbidden = {
             "registry", "command_set", "safety_facts", "current_lifecycle",
             "_validation_runner", "_issuer_source_verifier",
-        ):
-            self.assertNotIn(forbidden, parameters)
+        }
+
+        def issuer_parameters(path):
+            tree = ast.parse(path.read_bytes(), filename=str(path))
+            matches = [
+                node for node in tree.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == "issue_ready_source_recovery_authorization"
+            ]
+            self.assertEqual(len(matches), 1)
+            arguments = matches[0].args
+            return {
+                item.arg
+                for item in [*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs]
+            }
+
+        accepted_actions = ROOT / "scripts/secpal-pr-review-actions.py"
+        self.assertTrue(accepted_actions.is_file())
+        self.assertFalse(forbidden.intersection(issuer_parameters(accepted_actions)))
+
+        candidate_actions = CANDIDATE_ROOT / "scripts/secpal-pr-review-actions.py"
+        if CANDIDATE_REPOSITORY == "SecPal/.github":
+            self.assertTrue(candidate_actions.is_file())
+            self.assertFalse(
+                forbidden.intersection(issuer_parameters(candidate_actions))
+            )
+        else:
+            self.assertFalse(candidate_actions.exists())
 
 
 def main(arguments):
