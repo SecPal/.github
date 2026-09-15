@@ -966,10 +966,34 @@ def _historical_provider_binding(
         raise authority.LifecycleAuthorityError(
             "loss source Ready chronology is ambiguous"
         )
-    provider_head = _effective_source_head(
-        provider.commits, ready[0].occurred_at
+    return _historical_provider_binding_for_ready(
+        record,
+        provider.commits,
+        ready[0].occurred_at,
     )
-    if provider_head == record["head_sha"]:
+
+
+def _historical_provider_binding_for_ready(
+    record: Mapping[str, Any],
+    commits: tuple[CommitFacts, ...],
+    ready_at: str,
+    *,
+    observed_ready_head: str | None = None,
+) -> HistoricalProviderBinding:
+    """Derive the v1.1 provider head from one authenticated Ready instant."""
+
+    provider_head = _effective_source_head(commits, ready_at)
+    if observed_ready_head is not None and provider_head != observed_ready_head:
+        raise authority.LifecycleAuthorityError(
+            "loss source Ready head changed"
+        )
+    source_heads = [item.head_sha for item in commits]
+    if (
+        not source_heads
+        or source_heads[-1] != record["head_sha"]
+        or source_heads.count(provider_head) != 1
+        or source_heads.index(provider_head) >= len(source_heads) - 1
+    ):
         raise authority.LifecycleAuthorityError(
             "historical review-provider head is not an ancestor"
         )
@@ -979,6 +1003,70 @@ def _historical_provider_binding(
         current_head_sha=record["head_sha"],
         provider_head_sha=provider_head,
         summary_digest=record["historical_provider_summary_digest"],
+    )
+
+
+def authenticate_historical_provider_binding(
+    admission: Any,
+) -> HistoricalProviderBinding:
+    """Project accepted v1.1 admission provenance into its maintained binding."""
+
+    document = _verify_document(admission)
+    if document["schema_version"] != ANCESTOR_SCHEMA_VERSION:
+        raise authority.LifecycleAuthorityError(
+            "historical provider binding requires v1.1 loss provenance"
+        )
+    main, record, _entry, _trust = _accepted_policy(
+        document["repository"], document["delivery_issue"]
+    )
+    record_fields = (
+        "repository", "delivery_issue", "pull_request", "head_sha",
+        "tree_sha", "parent_sha", "source_signer_identity",
+        "historical_package_status", "historical_final_attestation_digest",
+        "historical_bytes_reconstructed", "observed_pre_enrollment_history",
+        "intended_state", "historical_provider_summary_digest",
+    )
+    if (
+        _record_version(record) != ANCESTOR_SCHEMA_VERSION
+        or document["accepted_main_sha"] != main
+        or document["loss_proof_policy_digest"] != authority.digest_json(record)
+        or any(document[field] != record[field] for field in record_fields)
+        or document["current_safety"]["feedback_digest"]
+        != record["feedback_digest"]
+        or document["current_safety"]["technical_decisions"]
+        != record["technical_decisions"]
+    ):
+        raise authority.LifecycleAuthorityError(
+            "historical provider binding differs from accepted v1.1 policy"
+        )
+    history = document["observed_pre_enrollment_history"]
+    ready = [
+        item for item in history
+        if item["kind"] == "DRAFT_TO_READY_OBSERVED"
+    ]
+    draft = [
+        item for item in history
+        if item["kind"] == "READY_TO_DRAFT_OBSERVED"
+    ]
+    if len(ready) != 1 or draft:
+        raise authority.LifecycleAuthorityError(
+            "loss source Ready chronology is ambiguous"
+        )
+    commits = tuple(
+        CommitFacts(
+            head_sha=item["head_sha"],
+            tree_sha=item["tree_sha"],
+            parent_shas=tuple(item["parent_shas"]),
+            committed_at=item["committed_at"],
+            signature_verified=True,
+        )
+        for item in document["source_history"]
+    )
+    return _historical_provider_binding_for_ready(
+        document,
+        commits,
+        ready[0]["observed_at"],
+        observed_ready_head=ready[0]["head_sha"],
     )
 
 

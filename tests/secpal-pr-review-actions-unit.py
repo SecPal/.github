@@ -12779,6 +12779,38 @@ class FastPathTests(TestCase):
                         ready_source_provider_binding=binding,
                     )
 
+    def test_ready_source_accepts_exact_v11_historical_provider_summary(self) -> None:
+        binding = replace(
+            self._ready_source_provider_binding(),
+            remediation_event_digests=(),
+            provider_binding_sources=(
+                lifecycle_publication.
+                EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING,
+            ),
+        )
+        provider_state = self._codex_provider_state()
+        provider_state["comments"]["nodes"][0]["body"] = (
+            "<!-- codex-pull-request-review-summary -->\n"
+            "| Review | Status | Commit | Review trigger |\n"
+            "| --- | --- | --- | --- |\n"
+            "| **Code Review** | ✅ **Completed** | `fffffff` | ready |"
+        )
+        with mock.patch.object(
+            type(binding), "verify_historical_provider_summary"
+        ) as verify_summary:
+            actions._require_review_providers_terminal(
+                provider_state,
+                repository="SecPal/.github",
+                pull_request_number=1,
+                ready_source_provider_binding=binding,
+            )
+        verify_summary.assert_called_once_with(
+            body=provider_state["comments"]["nodes"][0]["body"],
+            repository="SecPal/.github",
+            pull_request=1,
+            current_head_sha=p21.HEAD,
+        )
+
     def test_ready_source_exact_current_head_still_requires_provider_identity(
         self,
     ) -> None:
