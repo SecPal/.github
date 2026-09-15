@@ -1530,6 +1530,37 @@ assert deployment["check_policy"] == {
     "require_branch_protection_evidence": True,
     "expected_skipped": "block",
 }, "SecPal/deployment check policy must remain strict"
+deployment_lifecycle = deployment.get("lifecycle_authority_policy")
+assert isinstance(deployment_lifecycle, dict), (
+    "SecPal/deployment must adopt maintained lifecycle authority"
+)
+canonical_lifecycle = next(
+    item for item in registry["repositories"]
+    if item["repository"] == "SecPal/.github"
+)["lifecycle_authority_policy"]
+for shared_field in (
+    "schema_version", "accepted_formats", "signers",
+    "transition_signer_identities", "authority_signer_identities",
+    "publication_signer_identities", "genesis_admission_signer_identities",
+    "legacy_adoption_signer_identities", "publication_branch",
+    "publication_required_rules",
+):
+    assert deployment_lifecycle[shared_field] == canonical_lifecycle[shared_field], (
+        f"SecPal/deployment lifecycle {shared_field} must reuse canonical trust"
+    )
+assert deployment_lifecycle["publication_remote_url"] == (
+    "https://github.com/SecPal/deployment.git"
+), "SecPal/deployment lifecycle publication must remain repository-local"
+assert deployment_lifecycle["publication_ruleset_id"] == 23459394, (
+    "SecPal/deployment lifecycle publication must use its exact protected ruleset"
+)
+for repository_specific_field in (
+    "bootstrap_genesis_repairs", "bootstrap_source_admissions",
+    "historical_compatibility_publications", "delivery_initializations",
+):
+    assert deployment_lifecycle[repository_specific_field] == [], (
+        f"SecPal/deployment lifecycle {repository_specific_field} must start empty"
+    )
 assert deployment["unsupported_operations"] == [
     "REVIEW_REQUEST", "READY_TRANSITION", "LABEL", "ISSUE",
     "REVIEW_SUBMISSION", "MERGE", "AUTO_MERGE", "COMMENT_DELETE",

@@ -4042,6 +4042,7 @@ class RegistryTests(TestCase):
                 "focused_validation",
                 "required_local_validation",
                 "signature_policy",
+                "lifecycle_authority_policy",
                 "check_policy",
                 "manual_gates",
                 "unsupported_operations",
