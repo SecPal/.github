@@ -13,7 +13,9 @@ import ast
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
+import tempfile
 
 
 INVARIANTS = [
@@ -46,6 +48,12 @@ VALIDATOR_TERMS = (
     'QUALIFIED_ROCKY_MINORS = frozenset({"10.2"})',
     "glibc-loader-hwcaps", "rocky-aarch64-native", "validate_selinux_facts",
 )
+QUALIFICATION_TERMS = (
+    'readonly QUALIFIED_ROCKY_MINOR="10.2"',
+    "administrator_path_admitted", "effective_quadlet_service_admitted",
+    "least_authority_process_admitted", "SELINUX_ISOLATION_INVARIANT_OWNER",
+    "QUADLET_AUTHORITY_INVARIANT_OWNER",
+)
 FORBIDDEN_QUADLET_TERMS = (
     "label=disable", "Network=host", "Privileged=true", "AutoUpdate=registry",
 )
@@ -64,6 +72,7 @@ def main(arguments: list[str]) -> int:
         document = REQUIRED_FILES[0].read_text(encoding="utf-8")
         schema = REQUIRED_FILES[1].read_text(encoding="utf-8")
         validator = REQUIRED_FILES[2].read_text(encoding="utf-8")
+        qualification = REQUIRED_FILES[3].read_text(encoding="utf-8")
         json.loads(schema)
         ast.parse(validator)
         quadlet_paths = sorted(Path("config/production/quadlet").glob("*"))
@@ -72,17 +81,96 @@ def main(arguments: list[str]) -> int:
             for path in quadlet_paths
             if path.is_file()
         )
-    except (OSError, UnicodeError, ValueError):
+        quadlets_valid = bool(quadlet_paths) and all(
+            path.is_file() and not path.is_symlink() and path.stat().st_size > 0
+            for path in quadlet_paths
+        )
+        semantic_probe = """
+import copy
+import importlib.util
+from pathlib import Path
+
+path = Path('scripts/validate-production-contract.py')
+spec = importlib.util.spec_from_file_location('registered_contract', path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+inventory = {'host': {'hostname': 'secpal-host.example.invalid',
+                      'architecture': 'amd64'}}
+facts = {'hostname': 'secpal-host.example.invalid', 'architecture': 'amd64',
+         'os': {'version_id': '10.2'},
+         'cpu': {'admission_method': 'glibc-loader-hwcaps',
+                 'x86_64_level': 'x86-64-v3'}}
+module.validate_platform_facts(inventory, facts)
+bad = copy.deepcopy(facts)
+bad['os']['version_id'] = '10.1'
+try:
+    module.validate_platform_facts(inventory, bad)
+except module.ContractViolation:
+    pass
+else:
+    raise SystemExit(1)
+selinux = {'workload': {'process_mcs': 's0:c1,c2',
+                        'storage_mcs': 's0:c1,c2',
+                        'cross_boundary_process_mcs': 's0:c3,c4'}}
+module.validate_selinux_facts(selinux)
+bad_selinux = copy.deepcopy(selinux)
+bad_selinux['workload']['cross_boundary_process_mcs'] = 's0:c1,c2'
+try:
+    module.validate_selinux_facts(bad_selinux)
+except module.ContractViolation:
+    pass
+else:
+    raise SystemExit(1)
+"""
+        semantic = subprocess.run(
+            [sys.executable, "-c", semantic_probe],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, timeout=30, check=False,
+        )
+        syntax = subprocess.run(
+            ["bash", "-n", str(REQUIRED_FILES[3])],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, timeout=10, check=False,
+        )
+        help_result = subprocess.run(
+            ["bash", str(REQUIRED_FILES[3]), "--help"],
+            stdin=subprocess.DEVNULL, capture_output=True,
+            timeout=10, check=False,
+        )
+        with tempfile.TemporaryDirectory(
+            prefix="secpal-registered-safety-"
+        ) as directory:
+            invalid = Path(directory) / "invalid.json"
+            invalid.write_text("{}\n", encoding="utf-8")
+            rejected = subprocess.run(
+                [
+                    sys.executable, str(REQUIRED_FILES[2]),
+                    "--inventory", str(invalid), "--host-facts", str(invalid),
+                    "--synthetic",
+                ],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=30, check=False,
+            )
+    except (
+        OSError, UnicodeError, ValueError, SyntaxError,
+        subprocess.SubprocessError,
+    ):
         print(json.dumps(["registered_validation"]))
         return 1
     if (
         any(term not in document for term in DOCUMENT_TERMS)
         or any(term not in schema for term in SCHEMA_TERMS)
         or any(term not in validator for term in VALIDATOR_TERMS)
-        or not quadlet_paths
+        or any(term not in qualification for term in QUALIFICATION_TERMS)
+        or not quadlets_valid
         or any(term in quadlets for term in FORBIDDEN_QUADLET_TERMS)
         or FORBIDDEN_ACTIVE_CONTRACT.search(schema + "\n" + validator)
         or "docker_engine_version" in schema
+        or semantic.returncode != 0
+        or syntax.returncode != 0
+        or help_result.returncode != 0
+        or not help_result.stdout.startswith(b"Usage:")
+        or rejected.returncode == 0
     ):
         print(json.dumps(["registered_validation"]))
         return 1

@@ -10,7 +10,9 @@ from contextlib import nullcontext
 import copy
 from dataclasses import replace
 import hashlib
+import importlib.util
 import inspect
+import io
 import json
 import os
 import stat
@@ -2506,6 +2508,88 @@ class ValidationEvidenceLossTests(TestCase):
                         main_oid, execution_root, profile
                     )
 
+    def test_registered_harness_rejects_empty_and_semantically_inert_contracts(self) -> None:
+        path = REPO_ROOT / self.loss.REGISTERED_CURRENT_SAFETY_PATH
+        spec = importlib.util.spec_from_file_location(
+            "registered_current_safety", path
+        )
+        harness = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(harness)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in harness.REQUIRED_FILES:
+                (root / relative).parent.mkdir(parents=True, exist_ok=True)
+            (root / harness.REQUIRED_FILES[0]).write_text(
+                "\n".join(harness.DOCUMENT_TERMS)
+            )
+            schema = {
+                "evidence_class": "rocky-native",
+                "const": "rocky",
+                **{term.strip('"'): True for term in (
+                    "container_policy_package", "process_mcs",
+                    "cross_boundary_access_denied", "avc_denial_observed",
+                    "persistent_labels", "privileged", "seccomp_enabled",
+                    "digest_only_images", "podman_socket_mounted",
+                    "docker_socket_mounted", "installed_nevras",
+                )},
+            }
+            (root / harness.REQUIRED_FILES[1]).write_text(
+                json.dumps(schema, indent=2)
+            )
+            validator = """
+QUALIFIED_ROCKY_MINORS = frozenset({"10.2"})
+# glibc-loader-hwcaps rocky-aarch64-native validate_selinux_facts
+class ContractViolation(Exception):
+    pass
+def validate_platform_facts(inventory, facts):
+    if (facts['hostname'] != inventory['host']['hostname'] or
+            facts['architecture'] != inventory['host']['architecture'] or
+            facts['os']['version_id'] not in QUALIFIED_ROCKY_MINORS or
+            facts['cpu']['admission_method'] != 'glibc-loader-hwcaps' or
+            facts['cpu']['x86_64_level'] != 'x86-64-v3'):
+        raise ContractViolation()
+def validate_selinux_facts(selinux):
+    workload = selinux['workload']
+    if (workload['process_mcs'] != workload['storage_mcs'] or
+            workload['cross_boundary_process_mcs'] == workload['storage_mcs']):
+        raise ContractViolation()
+if __name__ == '__main__':
+    raise SystemExit(1)
+"""
+            validator_path = root / harness.REQUIRED_FILES[2]
+            validator_path.write_text(validator)
+            qualification = """#!/usr/bin/env bash
+readonly QUALIFIED_ROCKY_MINOR="10.2"
+# SELINUX_ISOLATION_INVARIANT_OWNER QUADLET_AUTHORITY_INVARIANT_OWNER
+administrator_path_admitted() { :; }
+effective_quadlet_service_admitted() { :; }
+least_authority_process_admitted() { :; }
+printf 'Usage: fixture\\n'
+"""
+            (root / harness.REQUIRED_FILES[3]).write_text(qualification)
+            quadlet = root / "config/production/quadlet/service.container"
+            quadlet.parent.mkdir(parents=True)
+            quadlet.write_text("[Container]\nImage=example@sha256:fixture\n")
+            original = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("sys.stdout", new=io.StringIO()):
+                    self.assertEqual(harness.main([]), 0)
+                    quadlet.write_text("")
+                    self.assertEqual(harness.main([]), 1)
+                    quadlet.write_text("[Container]\n")
+                    validator_path.write_text("not valid python :")
+                    self.assertEqual(harness.main([]), 1)
+                    validator_path.write_text(
+                        validator.replace(
+                            "        raise ContractViolation()",
+                            "        pass",
+                        )
+                    )
+                    self.assertEqual(harness.main([]), 1)
+            finally:
+                os.chdir(original)
+
     def test_current_safety_profile_rejects_implementation_overlay(self) -> None:
         with self.assertRaises(authority.LifecycleAuthorityError):
             self.loss._admit_current_safety_path("scripts/secpal_pr_review/fast_path.py")
@@ -2841,6 +2925,18 @@ class ValidationEvidenceLossTests(TestCase):
             derived["historical_validation_receipt_digest"],
             document["historical_validation_receipt_digest"],
         )
+
+    def test_successor_fetch_depth_covers_every_admitted_history_commit(self) -> None:
+        record = {"admission_schema_version": self.loss.ANCESTOR_SCHEMA_VERSION}
+        commits = tuple(object() for _ in range(99))
+        self.assertEqual(self.loss._source_fetch_depth(record, commits), 100)
+        self.assertEqual(self.loss._source_fetch_depth(self.record, commits), 64)
+
+    def test_source_history_rejects_non_string_parent_as_closed_error(self) -> None:
+        document = self.successor_document()
+        document["source_history"][0]["parent_shas"] = [["3" * 40]]
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            self.loss._verify_document(self.sign(document))
 
     def test_source_history_rejects_ambiguous_unrelated_and_signature_failures(self) -> None:
         document = self.successor_document()
@@ -3923,6 +4019,7 @@ class ValidationEvidenceLossTests(TestCase):
             (4, ("sha",), "a" * 40), (4, ("commit", "tree", "sha"), "b" * 40),
             (4, ("commit", "verification", "verified"), False),
             (4, ("parents",), [{"sha": "d" * 40}]),
+            (2, (0, "parents", 0, "sha"), ["d" * 40]),
         ]
         for index, path, value in cases:
             with self.subTest(index=index, path=path):

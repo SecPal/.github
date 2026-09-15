@@ -280,6 +280,14 @@ def _validate_source_history(
         head = authority._require_oid(item["head_sha"], "loss history head")
         tree = authority._require_oid(item["tree_sha"], "loss history tree")
         parents = item["parent_shas"]
+        if not isinstance(parents, list):
+            raise authority.LifecycleAuthorityError(
+                "loss source history topology or signer is invalid"
+            )
+        normalized_parents = [
+            authority._require_oid(parent, "loss history parent")
+            for parent in parents
+        ]
         committed_at = authority._require_adoption_timestamp(
             item["committed_at"], "loss history commit time"
         )
@@ -288,11 +296,10 @@ def _validate_source_history(
         )
         if (
             head in seen
-            or not isinstance(parents, list)
-            or not 1 <= len(parents) <= 2
-            or len(parents) != len(set(parents))
-            or any(authority._require_oid(parent, "loss history parent") == head for parent in parents)
-            or (index and parents[0] != normalized[-1]["head_sha"])
+            or not 1 <= len(normalized_parents) <= 2
+            or len(normalized_parents) != len(set(normalized_parents))
+            or head in normalized_parents
+            or (index and normalized_parents[0] != normalized[-1]["head_sha"])
             or (previous_time is not None and instant < previous_time)
             or item["signer_identity"] != source_signer
         ):
@@ -304,7 +311,10 @@ def _validate_source_history(
             item["commit_signature_evidence_digest"],
             "loss history signature evidence",
         )
-        item.update(head_sha=head, tree_sha=tree, committed_at=committed_at)
+        item.update(
+            head_sha=head, tree_sha=tree, parent_shas=normalized_parents,
+            committed_at=committed_at,
+        )
         normalized.append(item)
         seen.add(head)
         previous_time = instant
@@ -833,7 +843,10 @@ def _normalize_provider_representations(
                     else None
                 ),
                 parent_shas=tuple(
-                    _provider_value(parent, ("sha",), "commit parent")
+                    authority._require_oid(
+                        _provider_value(parent, ("sha",), "commit parent"),
+                        "provider commit parent",
+                    )
                     for parent in _provider_value(item, ("parents",), "commit")
                 ),
                 committed_at=_provider_value(item, ("commit", "committer", "date"), "commit"),
@@ -903,6 +916,20 @@ def _normalize_provider_representations(
 
 def _record_version(record: Mapping[str, Any]) -> str:
     return record.get("admission_schema_version", "1.0")
+
+
+def _source_fetch_depth(
+    record: Mapping[str, Any], commits: tuple[CommitFacts, ...],
+) -> int:
+    """Cover every admitted first-parent source commit and its predecessor."""
+
+    if _record_version(record) == "1.0":
+        return 64
+    if not 2 <= len(commits) < 100:
+        raise authority.LifecycleAuthorityError(
+            "loss source history is incomplete or ambiguous"
+        )
+    return len(commits) + 1
 
 
 def _effective_source_head(
@@ -1431,7 +1458,11 @@ def _acquire(repository: str, issue: int, *, execute_validation: bool) -> dict[s
         root.chmod(0o700)
         transport._git(root, ["init", "--quiet"])
         transport._git(root, ["remote", "add", "origin", trust.publication_remote_url])
-        transport._git(root, ["fetch", "--quiet", "--no-tags", "--depth=64", "origin", record["head_sha"]])
+        fetch_depth = _source_fetch_depth(record, before_commits)
+        transport._git(root, [
+            "fetch", "--quiet", "--no-tags", f"--depth={fetch_depth}",
+            "origin", record["head_sha"],
+        ])
         if transport._git_text(root, ["rev-parse", "FETCH_HEAD"]).strip() != record["head_sha"]:
             raise authority.LifecycleAuthorityError("loss source fetch changed identity")
         transport._git(root, ["checkout", "--quiet", "--detach", record["head_sha"]])
