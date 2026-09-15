@@ -23,13 +23,25 @@ from . import lifecycle_publication as publication
 
 KIND = "SECPAL_PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_ADMISSION"
 DOMAIN = "secpal.pre-enrollment-validation-evidence-loss-admission/v1"
+ANCESTOR_SCHEMA_VERSION = "1.1"
+ANCESTOR_DOMAIN = "secpal.pre-enrollment-validation-evidence-loss-admission/v1.1"
 ROOT = Path(__file__).resolve().parents[2]
 POLICY_PATH = "policies/pre-enrollment-validation-evidence-loss.json"
 CURRENT_SAFETY_PATH = "tests/pre-enrollment-current-safety.py"
+REGISTERED_CURRENT_SAFETY_PATH = (
+    "tests/pre-enrollment-registered-repository-current-safety.py"
+)
 CURRENT_SAFETY_INVARIANTS = (
     "candidate_local_issuer_rejected", "complete_feedback", "context_binding",
     "historical_bytes_unavailable", "ordinary_prior_ready", "resolved_feedback",
     "signed_authority_required", "source_history", "wrong_signer",
+)
+REGISTERED_CURRENT_SAFETY_INVARIANTS = (
+    "current_tree_exact", "historical_bytes_unavailable",
+    "registered_validation", "source_history",
+)
+REGISTERED_CURRENT_SAFETY_POLICY = (
+    "REGISTERED_REPOSITORY_PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_CURRENT_SAFETY"
 )
 _VERIFIED = object()
 _UNSUPPLIED = object()
@@ -42,6 +54,11 @@ FIELDS = frozenset({
     "loss_proof_policy_digest", "accepted_main_sha", "current_safety",
     "observed_pre_enrollment_history", "intended_state", "adoption_timestamp",
     "admission_id", "bounded_uses", "signer_identity", "signature", "admission_digest",
+})
+ANCESTOR_FIELDS = frozenset(FIELDS | {
+    "historical_receipt_head_sha", "source_history", "source_history_digest",
+    "historical_receipt_provenance_digest",
+    "historical_provider_summary_digest",
 })
 SAFETY_FIELDS = frozenset({
     "receipt_digest", "validated_tree_sha", "validation_policy_digest",
@@ -56,6 +73,18 @@ RECORD_FIELDS = frozenset({
     "historical_package_status", "historical_final_attestation_digest",
     "historical_bytes_reconstructed", "observed_pre_enrollment_history",
     "feedback_digest", "technical_decisions",
+})
+ANCESTOR_RECORD_FIELDS = frozenset({
+    "admission_schema_version", "repository", "delivery_issue", "pull_request",
+    "head_sha", "tree_sha", "parent_sha", "source_signer_identity",
+    "historical_package_status", "historical_final_attestation_digest",
+    "historical_bytes_reconstructed", "observed_pre_enrollment_history",
+    "intended_state", "feedback_digest", "technical_decisions",
+    "historical_provider_summary_digest", "current_safety_harness_path",
+})
+SOURCE_HISTORY_FIELDS = frozenset({
+    "head_sha", "tree_sha", "parent_shas", "committed_at", "signer_identity",
+    "commit_signature_evidence_digest",
 })
 _CHRONOLOGY_PAGE_SIZE = 50
 _CHRONOLOGY_MAXIMUM_EVENTS = 100
@@ -108,8 +137,10 @@ class IssueFacts:
 @dataclass(frozen=True)
 class CommitFacts:
     head_sha: str
+    tree_sha: str
     parent_shas: tuple[str, ...]
     committed_at: str
+    signature_verified: bool
 
 
 CurrentHarnessBlobObservation = exact_source_safety.HarnessBlobObservation
@@ -123,6 +154,66 @@ class SourceCommitFacts:
     tree_sha: str
     parent_shas: tuple[str, ...]
     signature_verified: bool
+
+
+@dataclass(frozen=True)
+class HistoricalProviderBinding:
+    """Authenticate one legacy terminal provider summary through exact PR history."""
+
+    repository: str
+    pull_request: int
+    current_head_sha: str
+    provider_head_sha: str
+    summary_digest: str
+
+    def _scope(
+        self, *, repository: str, pull_request: int, current_head_sha: str,
+    ) -> None:
+        if (
+            repository != self.repository
+            or pull_request != self.pull_request
+            or current_head_sha != self.current_head_sha
+        ):
+            raise fast_path.SecurityBlocker(
+                "historical review-provider source scope changed"
+            )
+
+    def provider_head(
+        self, *, repository: str, pull_request: int, current_head_sha: str,
+    ) -> str:
+        self._scope(
+            repository=repository, pull_request=pull_request,
+            current_head_sha=current_head_sha,
+        )
+        return self.provider_head_sha
+
+    def verify_historical_provider_summary(
+        self, *, body: Any, repository: str, pull_request: int,
+        current_head_sha: str,
+    ) -> None:
+        self._scope(
+            repository=repository, pull_request=pull_request,
+            current_head_sha=current_head_sha,
+        )
+        code_rows = [
+            line for line in body.splitlines() if "**Code Review**" in line
+        ] if isinstance(body, str) else []
+        security_rows = [
+            line for line in body.splitlines() if "**Security Review**" in line
+        ] if isinstance(body, str) else []
+        if (
+            not isinstance(body, str)
+            or len(body.encode("utf-8")) > 64 * 1024
+            or fast_path.digest_text(body) != self.summary_digest
+            or body.count(fast_path.CODEX_REVIEW_SUMMARY_MARKER) != 1
+            or len(code_rows) != 1
+            or security_rows
+            or "✅ **Completed**" not in code_rows[0]
+            or f"`{self.provider_head_sha[:7]}`" not in code_rows[0]
+        ):
+            raise fast_path.SecurityBlocker(
+                "historical review-provider summary is invalid"
+            )
 
 
 @dataclass(frozen=True)
@@ -171,13 +262,82 @@ def _decisions(value: Any) -> list[dict[str, Any]]:
     return copy.deepcopy(value)
 
 
+def _validate_source_history(
+    value: Any, *, current_head: str, current_tree: str, current_parent: str,
+    source_signer: str, current_signature_digest: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or len(value) < 2 or len(value) >= 100:
+        raise authority.LifecycleAuthorityError(
+            "loss source history is incomplete or ambiguous"
+        )
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    previous_time: datetime | None = None
+    for index, raw in enumerate(value):
+        item = copy.deepcopy(
+            authority._require_closed(raw, SOURCE_HISTORY_FIELDS, "loss source history")
+        )
+        head = authority._require_oid(item["head_sha"], "loss history head")
+        tree = authority._require_oid(item["tree_sha"], "loss history tree")
+        parents = item["parent_shas"]
+        committed_at = authority._require_adoption_timestamp(
+            item["committed_at"], "loss history commit time"
+        )
+        instant = authority._parse_adoption_timestamp(
+            committed_at, "loss history commit time"
+        )
+        if (
+            head in seen
+            or not isinstance(parents, list)
+            or not 1 <= len(parents) <= 2
+            or len(parents) != len(set(parents))
+            or any(authority._require_oid(parent, "loss history parent") == head for parent in parents)
+            or (index and parents[0] != normalized[-1]["head_sha"])
+            or (previous_time is not None and instant < previous_time)
+            or item["signer_identity"] != source_signer
+        ):
+            raise authority.LifecycleAuthorityError(
+                "loss source history topology or signer is invalid"
+            )
+        authority._require_identity(item["signer_identity"], "loss history signer")
+        authority._require_digest(
+            item["commit_signature_evidence_digest"],
+            "loss history signature evidence",
+        )
+        item.update(head_sha=head, tree_sha=tree, committed_at=committed_at)
+        normalized.append(item)
+        seen.add(head)
+        previous_time = instant
+    if (
+        normalized[-1]["head_sha"] != current_head
+        or normalized[-1]["tree_sha"] != current_tree
+        or normalized[-1]["parent_shas"] != [current_parent]
+        or normalized[-1]["commit_signature_evidence_digest"]
+        != current_signature_digest
+    ):
+        raise authority.LifecycleAuthorityError("loss source history tip changed")
+    return normalized
+
+
 def _verify_document(value: Any) -> dict[str, Any]:
     """Verify immutable enrollment provenance without consulting a later CURRENT."""
 
-    doc = copy.deepcopy(authority._require_closed(value, FIELDS, "validation-evidence-loss admission"))
+    if not isinstance(value, Mapping):
+        raise authority.LifecycleAuthorityError(
+            "validation-evidence-loss admission is malformed"
+        )
+    version = value.get("schema_version")
+    fields = FIELDS if version == "1.0" else ANCESTOR_FIELDS
+    doc = copy.deepcopy(
+        authority._require_closed(value, fields, "validation-evidence-loss admission")
+    )
     if (
-        doc["schema_version"] != "1.0" or doc["kind"] != KIND or doc["domain"] != DOMAIN
-        or doc["pull_request_state"] != "OPEN" or doc["draft"] is not True
+        version not in {"1.0", ANCESTOR_SCHEMA_VERSION}
+        or doc["kind"] != KIND
+        or doc["domain"]
+        != (DOMAIN if version == "1.0" else ANCESTOR_DOMAIN)
+        or doc["pull_request_state"] != "OPEN"
+        or doc["draft"] is not (version == "1.0")
         or doc["historical_package_status"] != "UNAVAILABLE"
         or doc["historical_final_attestation_digest"] is not None
         or doc["historical_bytes_reconstructed"] is not False
@@ -198,9 +358,18 @@ def _verify_document(value: Any) -> dict[str, Any]:
         authority._require_digest(doc[field], field)
     for field in ("source_signer_identity", "signer_identity", "admission_id"):
         authority._require_identity(doc[field], field)
-    state = authority._validate_state(doc["intended_state"], allow_adopted_observations=True)
-    if state != _intended_state():
-        raise authority.LifecycleAuthorityError("loss admission must preserve exhausted Draft counters")
+    state = authority._validate_state(
+        doc["intended_state"], allow_adopted_observations=True
+    )
+    if version == "1.0":
+        if state != _intended_state():
+            raise authority.LifecycleAuthorityError(
+                "loss admission must preserve exhausted Draft counters"
+            )
+    else:
+        authority._ready_source_recovery_state(
+            state, historical_proof_mode=authority.EXACT_ADOPTION_PROOF_MODE,
+        )
     history = authority._normalize_observed_pre_enrollment_history(
         doc["observed_pre_enrollment_history"], expected_head=doc["head_sha"],
         intended_state=state, review_budget_consumption_admitted=True,
@@ -216,13 +385,60 @@ def _verify_document(value: Any) -> dict[str, Any]:
     if safety["receipt_digest"] == doc["historical_validation_receipt_digest"]:
         raise authority.LifecycleAuthorityError("loss admission requires divergent current safety evidence")
     _decisions(safety["technical_decisions"])
+    if version == ANCESTOR_SCHEMA_VERSION:
+        receipt_head = authority._require_oid(
+            doc["historical_receipt_head_sha"], "historical receipt head"
+        )
+        if receipt_head == doc["head_sha"]:
+            raise authority.LifecycleAuthorityError(
+                "ancestor receipt provenance cannot use the current head"
+            )
+        authority._require_digest(
+            doc["historical_provider_summary_digest"],
+            "historical review-provider summary",
+        )
+        source_history = _validate_source_history(
+            doc["source_history"], current_head=doc["head_sha"],
+            current_tree=doc["tree_sha"], current_parent=doc["parent_sha"],
+            source_signer=doc["source_signer_identity"],
+            current_signature_digest=doc["commit_signature_evidence_digest"],
+        )
+        if sum(item["head_sha"] == receipt_head for item in source_history) != 1:
+            raise authority.LifecycleAuthorityError(
+                "historical receipt head is outside exact delivery history"
+            )
+        source_history_digest = authority.digest_json(source_history)
+        if doc["source_history_digest"] != source_history_digest:
+            raise authority.LifecycleAuthorityError("loss source history digest changed")
+        provenance = {
+            "repository": doc["repository"],
+            "delivery_issue": doc["delivery_issue"],
+            "pull_request": doc["pull_request"],
+            "current_head_sha": doc["head_sha"],
+            "current_tree_sha": doc["tree_sha"],
+            "historical_receipt_head_sha": receipt_head,
+            "historical_validation_receipt_digest": doc[
+                "historical_validation_receipt_digest"
+            ],
+            "source_history_digest": source_history_digest,
+        }
+        if doc["historical_receipt_provenance_digest"] != authority.digest_json(
+            provenance
+        ):
+            raise authority.LifecycleAuthorityError(
+                "historical receipt provenance changed"
+            )
+        authority._require_digest(
+            doc["historical_receipt_provenance_digest"],
+            "historical receipt provenance",
+        )
     signed = {key: item for key, item in doc.items() if key != "admission_digest"}
     if authority.digest_json(signed) != doc["admission_digest"]:
         raise authority.LifecycleAuthorityError("loss admission digest changed")
     trust = authority._load_lifecycle_trust_policy(doc["repository"])
     authority._verify_signature(
         authority.canonical_json_bytes(authority._unsigned(doc, "admission_digest", "signature")),
-        doc["signature"], doc["signer_identity"], DOMAIN,
+        doc["signature"], doc["signer_identity"], doc["domain"],
         trust.legacy_adoption_signer_identities, authority._policy_signature_verifier(trust),
     )
     return doc
@@ -454,9 +670,22 @@ def _normalize_chronology(
     return tuple(events)
 
 
+def _admit_registered_repository_entry(
+    entry: Any, repository: str,
+) -> Mapping[str, Any]:
+    if (
+        not isinstance(entry, Mapping)
+        or entry.get("repository") != repository
+        or not isinstance(entry.get("lifecycle_authority_policy"), Mapping)
+    ):
+        raise authority.LifecycleAuthorityError(
+            "loss admission repository has no maintained lifecycle authority"
+        )
+    return entry
+
+
 def _accepted_policy(repository: str, issue: int) -> tuple[str, dict[str, Any], Any, Any]:
-    if repository != "SecPal/.github":
-        raise authority.LifecycleAuthorityError("loss admission repository is not maintained")
+    repository = authority._require_repository(repository)
     authority._require_positive_int(issue, "loss issue")
     branch = _gh_json("repos/SecPal/.github/branches/main")
     main = authority._require_oid(branch["commit"]["sha"], "protected main")
@@ -486,19 +715,63 @@ def _accepted_policy(repository: str, issue: int) -> tuple[str, dict[str, Any], 
         raise authority.LifecycleAuthorityError("loss policy is malformed")
     if any(not isinstance(item, dict) for item in policy["admissions"]):
         raise authority.LifecycleAuthorityError("loss policy records are malformed")
+    helper = transport._load_actions_helper()
+    try:
+        entry = helper.select_repository(helper.load_registry(), repository)
+    except (fast_path.SecurityBlocker, KeyError, TypeError, ValueError) as exc:
+        raise authority.LifecycleAuthorityError(
+            "loss admission repository is not registered"
+        ) from exc
+    entry = _admit_registered_repository_entry(entry, repository)
+    trust = authority._load_lifecycle_trust_policy(repository)
+    try:
+        publication._verify_live_protection(trust)
+    except publication.LifecyclePublicationError as exc:
+        raise authority.LifecycleAuthorityError(
+            "loss admission lifecycle publication policy is not protected"
+        ) from exc
     records = [item for item in policy["admissions"] if item.get("repository") == repository and item.get("delivery_issue") == issue]
     if len(records) != 1:
         raise authority.LifecycleAuthorityError("no unique accepted-main evidence-loss proof")
-    record = copy.deepcopy(authority._require_closed(records[0], RECORD_FIELDS, "loss proof policy"))
+    record_version = records[0].get("admission_schema_version", "1.0")
+    record_fields = (
+        RECORD_FIELDS
+        if record_version == "1.0"
+        else ANCESTOR_RECORD_FIELDS
+    )
+    record = copy.deepcopy(
+        authority._require_closed(records[0], record_fields, "loss proof policy")
+    )
+    if record_version not in {"1.0", ANCESTOR_SCHEMA_VERSION}:
+        raise authority.LifecycleAuthorityError(
+            "loss proof policy version is unknown"
+        )
+    if record_version == "1.0" and repository != "SecPal/.github":
+        raise authority.LifecycleAuthorityError(
+            "version-1.0 loss admission repository is not maintained"
+        )
     authority._require_positive_int(record["pull_request"], "loss policy pull request")
     for field in ("head_sha", "tree_sha", "parent_sha"):
         authority._require_oid(record[field], field)
-    for field in ("historical_validation_receipt_digest", "feedback_digest"):
+    digest_fields = ["feedback_digest"]
+    if record_version == "1.0":
+        digest_fields.append("historical_validation_receipt_digest")
+    else:
+        digest_fields.append("historical_provider_summary_digest")
+    for field in digest_fields:
         authority._require_digest(record[field], field)
     authority._require_identity(record["source_signer_identity"], "loss source signer")
+    intended_state = (
+        _intended_state()
+        if record_version == "1.0"
+        else authority._ready_source_recovery_state(
+            record["intended_state"],
+            historical_proof_mode=authority.EXACT_ADOPTION_PROOF_MODE,
+        )
+    )
     authority._normalize_observed_pre_enrollment_history(
         record["observed_pre_enrollment_history"], expected_head=record["head_sha"],
-        intended_state=_intended_state(), review_budget_consumption_admitted=True,
+        intended_state=intended_state, review_budget_consumption_admitted=True,
     )
     _decisions(record["technical_decisions"])
     if (
@@ -507,9 +780,13 @@ def _accepted_policy(repository: str, issue: int) -> tuple[str, dict[str, Any], 
         or record["historical_bytes_reconstructed"] is not False
     ):
         raise authority.LifecycleAuthorityError("loss proof cannot reconstruct historical artifacts")
-    helper = transport._load_actions_helper()
-    entry = helper.select_repository(helper.load_registry(), repository)
-    trust = authority._load_lifecycle_trust_policy(repository)
+    if record_version == ANCESTOR_SCHEMA_VERSION and (
+        record["current_safety_harness_path"]
+        != REGISTERED_CURRENT_SAFETY_PATH
+    ):
+        raise authority.LifecycleAuthorityError(
+            "registered loss current-safety policy is not maintained"
+        )
     return main, record, entry, trust
 
 
@@ -548,11 +825,27 @@ def _normalize_provider_representations(
         normalized_commits = tuple(
             CommitFacts(
                 head_sha=_provider_value(item, ("sha",), "commit"),
+                tree_sha=(
+                    item.get("commit", {}).get("tree", {}).get("sha")
+                    if isinstance(item, Mapping)
+                    and isinstance(item.get("commit"), Mapping)
+                    and isinstance(item["commit"].get("tree"), Mapping)
+                    else None
+                ),
                 parent_shas=tuple(
                     _provider_value(parent, ("sha",), "commit parent")
                     for parent in _provider_value(item, ("parents",), "commit")
                 ),
                 committed_at=_provider_value(item, ("commit", "committer", "date"), "commit"),
+                signature_verified=(
+                    item.get("commit", {}).get("verification", {}).get(
+                        "verified", False
+                    )
+                    if isinstance(item, Mapping)
+                    and isinstance(item.get("commit"), Mapping)
+                    and isinstance(item["commit"].get("verification"), Mapping)
+                    else False
+                ),
             )
             for item in commits
         )
@@ -608,7 +901,63 @@ def _normalize_provider_representations(
         raise authority.LifecycleAuthorityError("provider representation is malformed") from exc
 
 
-def _observe(record: Mapping[str, Any], entry: Any, trust: Any) -> tuple[SourceCommitFacts, Any]:
+def _record_version(record: Mapping[str, Any]) -> str:
+    return record.get("admission_schema_version", "1.0")
+
+
+def _effective_source_head(
+    commits: tuple[CommitFacts, ...], occurred_at: str,
+) -> str:
+    instant = authority._parse_adoption_timestamp(
+        occurred_at, "loss source event time"
+    )
+    eligible = [
+        item for item in commits
+        if authority._parse_adoption_timestamp(
+            item.committed_at, "loss history commit time"
+        ) <= instant
+    ]
+    if not eligible:
+        raise authority.LifecycleAuthorityError(
+            "loss source event predates authenticated delivery history"
+        )
+    return eligible[-1].head_sha
+
+
+def _historical_provider_binding(
+    record: Mapping[str, Any], provider: NormalizedProviderFacts,
+) -> HistoricalProviderBinding:
+    ready = [
+        item for item in provider.timeline_events
+        if item.kind == "ready_for_review"
+    ]
+    draft = [
+        item for item in provider.timeline_events
+        if item.kind == "convert_to_draft"
+    ]
+    if len(ready) != 1 or draft:
+        raise authority.LifecycleAuthorityError(
+            "loss source Ready chronology is ambiguous"
+        )
+    provider_head = _effective_source_head(
+        provider.commits, ready[0].occurred_at
+    )
+    if provider_head == record["head_sha"]:
+        raise authority.LifecycleAuthorityError(
+            "historical review-provider head is not an ancestor"
+        )
+    return HistoricalProviderBinding(
+        repository=record["repository"],
+        pull_request=record["pull_request"],
+        current_head_sha=record["head_sha"],
+        provider_head_sha=provider_head,
+        summary_digest=record["historical_provider_summary_digest"],
+    )
+
+
+def _observe(
+    record: Mapping[str, Any], entry: Any, trust: Any,
+) -> tuple[SourceCommitFacts, Any, tuple[CommitFacts, ...]]:
     repository = record["repository"]
     issue = record["delivery_issue"]
     pr = record["pull_request"]
@@ -623,18 +972,37 @@ def _observe(record: Mapping[str, Any], entry: Any, trust: Any) -> tuple[SourceC
             f"pre-feedback chronology acquisition failed: {exc}"
         ) from exc
     helper = transport._load_actions_helper()
-    reviewed = helper.FastPathGateway(ROOT, entry).capture_stable_feedback(repository, pr)
+    gateway_arguments: dict[str, Any] = {}
+    if _record_version(record) == ANCESTOR_SCHEMA_VERSION:
+        source_commit = _gh_json(
+            f"repos/{repository}/commits/{record['head_sha']}"
+        )
+        preliminary = _normalize_provider_representations(
+            target, issue_state, commits, chronology_before,
+            chronology_before, source_commit,
+        )
+        gateway_arguments["ready_source_provider_binding"] = (
+            _historical_provider_binding(record, preliminary)
+        )
+    reviewed = helper.FastPathGateway(
+        ROOT, entry, **gateway_arguments
+    ).capture_stable_feedback(repository, pr)
     try:
         chronology_after = _observe_chronology(repository, pr)
     except authority.LifecycleAuthorityError as exc:
         raise authority.LifecycleAuthorityError(
             f"post-feedback chronology acquisition failed: {exc}"
         ) from exc
-    source_commit = _gh_json(f"repos/{repository}/commits/{record['head_sha']}")
+    if _record_version(record) == "1.0":
+        source_commit = _gh_json(
+            f"repos/{repository}/commits/{record['head_sha']}"
+        )
     normalized = _normalize_provider_representations(
-        target, issue_state, commits, chronology_before, chronology_after, source_commit,
+        target, issue_state, commits, chronology_before, chronology_after,
+        source_commit,
     )
-    return _admit_observation(record, normalized, reviewed)
+    source, stable = _admit_observation(record, normalized, reviewed)
+    return source, stable, normalized.commits
 
 
 def _admit_observation(
@@ -650,8 +1018,10 @@ def _admit_observation(
     commits = provider.commits
     timeline = provider.timeline_events
     source_commit = provider.source_commit
+    version = _record_version(record)
     if (
-        target.number != pr or target.state != "OPEN" or target.draft is not True
+        target.number != pr or target.state != "OPEN"
+        or target.draft is not (version == "1.0")
         or target.merged or target.head_sha != record["head_sha"]
         or target.head_repository != repository
         or target.base_repository != repository or target.base_ref != "main"
@@ -661,18 +1031,74 @@ def _admit_observation(
     if not commits or len(commits) >= 100:
         raise authority.LifecycleAuthorityError("loss source history is incomplete")
     observations = record["observed_pre_enrollment_history"]
-    if [item.head_sha for item in commits] != [item["head_sha"] for item in observations]:
+    head_kinds = {
+        "PR_CREATED_DRAFT", "REMEDIATION_HEAD_OBSERVED",
+        "EXCEPTIONAL_RECOVERY_OBSERVED", "EXCEPTIONAL_CONTINUATION_OBSERVED",
+        "HEAD_ADVANCED_OBSERVED",
+    }
+    head_observations = [
+        item for item in observations if item["kind"] in head_kinds
+    ]
+    if [item.head_sha for item in commits] != [
+        item["head_sha"] for item in head_observations
+    ]:
         raise authority.LifecycleAuthorityError("loss source observed history changed")
     for index, item in enumerate(commits):
-        if len(item.parent_shas) != 1 or (index and item.parent_shas[0] != commits[index - 1].head_sha):
-            raise authority.LifecycleAuthorityError("loss source history parent topology changed")
+        if version == ANCESTOR_SCHEMA_VERSION:
+            authority._require_oid(item.tree_sha, "loss history tree")
+        if (
+            not 1 <= len(item.parent_shas) <= (1 if version == "1.0" else 2)
+            or len(item.parent_shas) != len(set(item.parent_shas))
+            or (index and item.parent_shas[0] != commits[index - 1].head_sha)
+            or (
+                version == ANCESTOR_SCHEMA_VERSION
+                and item.signature_verified is not True
+            )
+        ):
+            raise authority.LifecycleAuthorityError(
+                "loss source history parent topology or signature changed"
+            )
         timestamp = target.created_at if index == 0 else item.committed_at
-        if observations[index]["observed_at"] != timestamp:
+        if head_observations[index]["observed_at"] != timestamp:
             raise authority.LifecycleAuthorityError("loss source history timestamp changed")
-    if any(
-        event.kind in {"ready_for_review", "convert_to_draft"} for event in timeline
-    ):
-        raise authority.LifecycleAuthorityError("loss source has Ready history")
+    if version == "1.0":
+        if any(
+            event.kind in {"ready_for_review", "convert_to_draft"}
+            for event in timeline
+        ):
+            raise authority.LifecycleAuthorityError("loss source has Ready history")
+    else:
+        transitions = [
+            item for item in observations
+            if item["kind"] in {
+                "DRAFT_TO_READY_OBSERVED", "READY_TO_DRAFT_OBSERVED"
+            }
+        ]
+        expected_transitions = [
+            {
+                "kind": (
+                    "DRAFT_TO_READY_OBSERVED"
+                    if event.kind == "ready_for_review"
+                    else "READY_TO_DRAFT_OBSERVED"
+                ),
+                "observed_at": event.occurred_at,
+                "head_sha": _effective_source_head(
+                    commits, event.occurred_at
+                ),
+            }
+            for event in timeline
+        ]
+        if [
+            {
+                "kind": item["kind"],
+                "observed_at": item["observed_at"],
+                "head_sha": item["head_sha"],
+            }
+            for item in transitions
+        ] != expected_transitions:
+            raise authority.LifecycleAuthorityError(
+                "loss source Ready chronology changed"
+            )
     if reviewed.head_sha != record["head_sha"] or reviewed.pr_state != "OPEN" or reviewed.feedback_digest != record["feedback_digest"]:
         raise authority.LifecycleAuthorityError("loss source stable feedback changed")
     sources = fast_path._classified_feedback_sources(reviewed, include_resolved=True)
@@ -690,23 +1116,137 @@ def _admit_observation(
     return source_commit, reviewed
 
 
-def _source_signature(root: Path, record: Mapping[str, Any], trust: Any) -> str:
-    allowed = transport._allowed_signers(root, trust, record["source_signer_identity"])
+def _commit_signature(
+    root: Path, head_sha: str, signer_identity: str, trust: Any,
+) -> str:
+    head_sha = authority._require_oid(head_sha, "loss signed source head")
+    signer_identity = authority._require_identity(
+        signer_identity, "loss source signer"
+    )
+    allowed = transport._allowed_signers(root, trust, signer_identity)
     result = transport._run_bootstrap_git(root, [
-        "-c", f"gpg.ssh.allowedSignersFile={allowed}", "verify-commit", "--raw", record["head_sha"],
+        "-c", f"gpg.ssh.allowedSignersFile={allowed}", "verify-commit", "--raw", head_sha,
     ])
     output = (result.stdout + result.stderr).decode("utf-8", "replace")
     principals = re.findall(r'(?m)^Good "git" signature for ([^\r\n]+) with ', output)
-    if result.returncode != 0 or principals != [record["source_signer_identity"]]:
+    if result.returncode != 0 or principals != [signer_identity]:
         raise authority.LifecycleAuthorityError("loss source signer is not authenticated")
     evidence = {
-        "oid": record["head_sha"], "source": "USER", "signer_identity": record["source_signer_identity"],
+        "oid": head_sha, "source": "USER", "signer_identity": signer_identity,
         "local_signature": {"verified": True, "state": "valid", "format": "ssh"},
         "github_verification": {"verified": True, "reason": "valid"},
     }
     return authority.digest_json(fast_path.verify_commit_signatures(
-        [evidence], authority._load_delivery_signature_policy(record["repository"]),
+        [evidence], authority._load_delivery_signature_policy(trust.repository),
     )[0])
+
+
+def _source_signature(root: Path, record: Mapping[str, Any], trust: Any) -> str:
+    return _commit_signature(
+        root, record["head_sha"], record["source_signer_identity"], trust
+    )
+
+
+def _optional_validation_receipt_trailer(root: Path, head_sha: str) -> str | None:
+    value = transport._git_text(
+        root,
+        [
+            "show", "-s",
+            "--format=%(trailers:key=SecPal-Validation-Receipt,valueonly,separator=%x00)",
+            head_sha,
+        ],
+    ).rstrip("\n")
+    trailers = [item.strip() for item in value.split("\x00") if item.strip()]
+    if not trailers:
+        return None
+    if len(trailers) != 1:
+        raise authority.LifecycleAuthorityError(
+            "loss source commit has ambiguous validation receipt trailers"
+        )
+    return authority._require_digest(
+        trailers[0], "historical validation receipt"
+    )
+
+
+def _authenticate_source_history(
+    root: Path, record: Mapping[str, Any], commits: tuple[CommitFacts, ...],
+    trust: Any,
+) -> dict[str, Any]:
+    """Authenticate all exact PR edges and derive the sole receipt ancestor."""
+
+    if not commits or commits[-1].head_sha != record["head_sha"]:
+        raise authority.LifecycleAuthorityError(
+            "loss source history does not reach the current head"
+        )
+    history: list[dict[str, Any]] = []
+    receipt_candidates: list[tuple[str, str]] = []
+    for index, commit in enumerate(commits):
+        local_tree = transport._git_text(
+            root, ["rev-parse", f"{commit.head_sha}^{{tree}}"]
+        ).strip()
+        local_topology = transport._git_text(
+            root, ["rev-list", "--parents", "-n", "1", commit.head_sha]
+        ).split()
+        if (
+            local_tree != commit.tree_sha
+            or local_topology != [commit.head_sha, *commit.parent_shas]
+            or not 1 <= len(commit.parent_shas) <= 2
+            or (
+                index
+                and commit.parent_shas[0] != commits[index - 1].head_sha
+            )
+            or commit.signature_verified is not True
+        ):
+            raise authority.LifecycleAuthorityError(
+                "loss source history edge, tree, or provider signature changed"
+            )
+        signature_digest = _commit_signature(
+            root, commit.head_sha, record["source_signer_identity"], trust
+        )
+        trailer = _optional_validation_receipt_trailer(root, commit.head_sha)
+        if trailer is not None:
+            authority._require_digest(trailer, "historical validation receipt")
+            receipt_candidates.append((commit.head_sha, trailer))
+        history.append({
+            "head_sha": commit.head_sha,
+            "tree_sha": commit.tree_sha,
+            "parent_shas": list(commit.parent_shas),
+            "committed_at": authority._require_adoption_timestamp(
+                commit.committed_at, "loss history commit time"
+            ),
+            "signer_identity": record["source_signer_identity"],
+            "commit_signature_evidence_digest": signature_digest,
+        })
+    if len(receipt_candidates) != 1:
+        raise authority.LifecycleAuthorityError(
+            "loss source has no unique historical receipt ancestor"
+        )
+    receipt_head, receipt_digest = receipt_candidates[0]
+    if receipt_head == record["head_sha"]:
+        raise authority.LifecycleAuthorityError(
+            "successor loss source requires ancestor receipt provenance"
+        )
+    source_history_digest = authority.digest_json(history)
+    provenance = {
+        "repository": record["repository"],
+        "delivery_issue": record["delivery_issue"],
+        "pull_request": record["pull_request"],
+        "current_head_sha": record["head_sha"],
+        "current_tree_sha": record["tree_sha"],
+        "historical_receipt_head_sha": receipt_head,
+        "historical_validation_receipt_digest": receipt_digest,
+        "source_history_digest": source_history_digest,
+    }
+    return {
+        "historical_receipt_head_sha": receipt_head,
+        "historical_validation_receipt_digest": receipt_digest,
+        "source_history": history,
+        "source_history_digest": source_history_digest,
+        "historical_receipt_provenance_digest": authority.digest_json(provenance),
+        "commit_signature_evidence_digest": history[-1][
+            "commit_signature_evidence_digest"
+        ],
+    }
 
 
 def _verify_source_bytes(root: Path, tree: str, *, expected_listing: str | None = None) -> str:
@@ -732,6 +1272,32 @@ def _current_safety_profile(main: str) -> dict[str, Any]:
         harness_paths=(CURRENT_SAFETY_PATH,),
         purpose="Validate pre-enrollment evidence-loss current safety",
         required_invariants=CURRENT_SAFETY_INVARIANTS,
+    )
+
+
+def _registered_current_safety_profile(main: str) -> dict[str, Any]:
+    return exact_source_safety.build_profile(
+        ROOT, main,
+        policy=REGISTERED_CURRENT_SAFETY_POLICY,
+        harness_paths=(REGISTERED_CURRENT_SAFETY_PATH,),
+        purpose="Validate registered repository pre-enrollment current safety",
+        required_invariants=REGISTERED_CURRENT_SAFETY_INVARIANTS,
+    )
+
+
+def _current_safety_profile_for_record(
+    main: str, record: Mapping[str, Any],
+) -> dict[str, Any]:
+    if _record_version(record) == "1.0":
+        return _current_safety_profile(main)
+    if (
+        _record_version(record) == ANCESTOR_SCHEMA_VERSION
+        and record.get("current_safety_harness_path")
+        == REGISTERED_CURRENT_SAFETY_PATH
+    ):
+        return _registered_current_safety_profile(main)
+    raise authority.LifecycleAuthorityError(
+        "loss current-safety profile is not maintained"
     )
 
 
@@ -822,9 +1388,10 @@ def _current_policy_validation_root(
     source_root: Path,
     helper: Any,
     entry: Any,
+    profile: Mapping[str, Any] | None = None,
 ) -> Iterator[Path]:
     """Build a disposable target tree with only accepted-main harness bytes overlaid."""
-    profile = _current_safety_profile(main)
+    profile = _current_safety_profile(main) if profile is None else profile
     with exact_source_safety.execution_root(
         ROOT, main, source_root=source_root, profile=profile,
     ) as prepared:
@@ -841,17 +1408,23 @@ def _verify_current_safety_root(
 
 
 def _run_current_safety(main: str, root: Path, profile: Mapping[str, Any]) -> None:
+    expected = (
+        _registered_current_safety_profile(main)
+        if profile.get("policy") == REGISTERED_CURRENT_SAFETY_POLICY
+        else _current_safety_profile(main)
+    )
     exact_source_safety.run_profile(
-        root, profile, expected_profile=_current_safety_profile(main),
+        root, profile, expected_profile=expected,
     )
 
 
 def _acquire(repository: str, issue: int, *, execute_validation: bool) -> dict[str, Any]:
     main, record, entry, trust = _accepted_policy(repository, issue)
-    _, before = _observe(record, entry, trust)
+    observed_before = _observe(record, entry, trust)
+    _, before, before_commits = observed_before
     helper = transport._load_actions_helper()
     binding = helper._fast_registry_binding(entry)
-    profile = _current_safety_profile(main)
+    profile = _current_safety_profile_for_record(main, record)
     binding = {"repository_policy": binding, "current_safety_profile": profile}
     with tempfile.TemporaryDirectory(prefix="secpal-pre-enrollment-safety-") as directory:
         root = Path(directory)
@@ -866,13 +1439,27 @@ def _acquire(repository: str, issue: int, *, execute_validation: bool) -> dict[s
             raise authority.LifecycleAuthorityError("loss source tree changed")
         if transport._git_text(root, ["rev-list", "--parents", "-n", "1", "HEAD"]).split() != [record["head_sha"], record["parent_sha"]]:
             raise authority.LifecycleAuthorityError("loss source sole parent changed")
-        signature_digest = _source_signature(root, record, trust)
-        if transport._exact_trailer(root, record["head_sha"]) != record["historical_validation_receipt_digest"]:
-            raise authority.LifecycleAuthorityError("loss source historical signed receipt changed")
+        provenance = None
+        if _record_version(record) == "1.0":
+            signature_digest = _source_signature(root, record, trust)
+            if transport._exact_trailer(root, record["head_sha"]) != record["historical_validation_receipt_digest"]:
+                raise authority.LifecycleAuthorityError("loss source historical signed receipt changed")
+        else:
+            provenance = _authenticate_source_history(
+                root, record, before_commits, trust
+            )
+            signature_digest = provenance[
+                "commit_signature_evidence_digest"
+            ]
         source_listing = _verify_source_bytes(root, record["tree_sha"])
         if execute_validation:
+            validation_arguments = {
+                "source_root": root, "helper": helper, "entry": entry,
+            }
+            if _record_version(record) == ANCESTOR_SCHEMA_VERSION:
+                validation_arguments["profile"] = profile
             with _current_policy_validation_root(
-                main, source_root=root, helper=helper, entry=entry,
+                main, **validation_arguments,
             ) as validation_root:
                 _run_current_safety(main, validation_root, profile)
         _verify_source_bytes(root, record["tree_sha"], expected_listing=source_listing)
@@ -881,17 +1468,21 @@ def _acquire(repository: str, issue: int, *, execute_validation: bool) -> dict[s
             or transport._git_text(root, ["diff", "--name-only", "HEAD"])
         ):
             raise authority.LifecycleAuthorityError("validation mutated the immutable source")
-    _, after = _observe(record, entry, trust)
-    if before.state_digest != after.state_digest:
+    _, after, after_commits = _observe(record, entry, trust)
+    if before.state_digest != after.state_digest or before_commits != after_commits:
         raise authority.LifecycleAuthorityError("current safety feedback is not stable")
     if _accepted_policy(repository, issue)[0] != main:
         raise authority.LifecycleAuthorityError("accepted-main authority changed during admission")
-    return _assemble_source_facts(main, record, binding, profile["validation_command_set"], after, signature_digest)
+    return _assemble_source_facts(
+        main, record, binding, profile["validation_command_set"], after,
+        signature_digest, provenance=provenance,
+    )
 
 
 def _assemble_source_facts(
     main: str, record: Mapping[str, Any], binding: Any, commands: Any,
     reviewed: Any, signature_digest: str,
+    *, provenance: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     current_safety_identity = authority.digest_json({
         "domain": "secpal.pre-enrollment-current-safety/v1",
@@ -900,13 +1491,41 @@ def _assemble_source_facts(
         "commands": commands,
         "reviewed_state_digest": reviewed.state_digest, "successful_result": True,
     })
+    common_fields = {
+        field: copy.deepcopy(record[field])
+        for field in {
+            "repository", "delivery_issue", "pull_request", "head_sha",
+            "tree_sha", "parent_sha", "source_signer_identity",
+            "historical_package_status", "historical_final_attestation_digest",
+            "historical_bytes_reconstructed", "observed_pre_enrollment_history",
+        }
+    }
+    if _record_version(record) == "1.0":
+        common_fields["historical_validation_receipt_digest"] = record[
+            "historical_validation_receipt_digest"
+        ]
+    else:
+        if provenance is None:
+            raise authority.LifecycleAuthorityError(
+                "historical receipt provenance is unavailable"
+            )
+        common_fields.update(copy.deepcopy(dict(provenance)))
+        common_fields["historical_provider_summary_digest"] = record[
+            "historical_provider_summary_digest"
+        ]
+    intended_state = (
+        _intended_state()
+        if _record_version(record) == "1.0"
+        else copy.deepcopy(record["intended_state"])
+    )
     return {
-        **{field: copy.deepcopy(record[field]) for field in RECORD_FIELDS - {"feedback_digest", "technical_decisions"}},
-        "pull_request_state": "OPEN", "draft": True,
+        **common_fields,
+        "pull_request_state": "OPEN",
+        "draft": _record_version(record) == "1.0",
         "commit_signature_evidence_digest": signature_digest,
         "loss_proof_policy_digest": authority.digest_json(record),
         "accepted_main_sha": main,
-        "intended_state": _intended_state(),
+        "intended_state": intended_state,
         "current_safety": {
             "receipt_digest": current_safety_identity, "validated_tree_sha": record["tree_sha"],
             "validation_policy_digest": authority.digest_json(binding),
@@ -929,12 +1548,18 @@ def issue(repository: str, delivery_issue: int, *, historical_package: Any = _UN
         raise authority.LifecycleAuthorityError("supplied historical evidence cannot downgrade to loss admission")
     acquired = _acquire(repository, delivery_issue, execute_validation=True)
     identity, signer = execution._production_legacy_adoption_signer(repository)
+    version = (
+        ANCESTOR_SCHEMA_VERSION
+        if "historical_receipt_head_sha" in acquired
+        else "1.0"
+    )
+    domain = ANCESTOR_DOMAIN if version == ANCESTOR_SCHEMA_VERSION else DOMAIN
     fields = {
-        "schema_version": "1.0", "kind": KIND, "domain": DOMAIN, **acquired,
+        "schema_version": version, "kind": KIND, "domain": domain, **acquired,
         "admission_id": f"pre-enrollment-validation-loss:{authority.digest_json(acquired)}",
         "adoption_timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "bounded_uses": 1, "signer_identity": identity,
     }
-    signature = signer(authority.canonical_json_bytes(fields), DOMAIN)
+    signature = signer(authority.canonical_json_bytes(fields), domain)
     signed = {**fields, "signature": signature}
     return _verify_document({**signed, "admission_digest": authority.digest_json(signed)})

@@ -401,12 +401,16 @@ history, and every other state field remain independently observation-derived.
 
 Version 3 adds the distinct
 `SECPAL_PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_ADMISSION` source mode. It does
-not reinterpret versions 1/2. Its sole authority is adoption source truth for an
-exact signed, unenrolled OPEN Draft with unavailable commit-bound validation
-companions and successful fresh current-policy safety validation. Historical
-reviewed-state, receipt, and final-attestation bytes are never synthesized. The
-historical final-attestation identity remains unavailable; PR prose cannot supply
-it. The signed receipt trailer remains provenance, not the missing receipt.
+not reinterpret versions 1/2. Loss-admission schema 1.0 retains its exact signed,
+unenrolled OPEN Draft and same-head validation-receipt-trailer semantics.
+Successor schema 1.1 admits an exact Ready source only for a centrally registered
+repository with accepted lifecycle authority. It authenticates the complete
+delivery source history, every required edge and commit signature, and derives
+the sole historical receipt-bearing ancestor without caller selection. The
+signed successor evidence binds that ancestor and digest separately from the
+current head, which must not carry a copied receipt trailer. Historical
+reviewed-state, receipt, and final-attestation bytes are never synthesized; PR
+prose cannot supply them.
 
 The maintained issuer accepts only repository and issue selectors. Clean current
 protected main selects the exact loss acknowledgment in
@@ -415,8 +419,12 @@ and the existing migration/adoption signer role. That record becomes an
 authenticated acknowledgment only when accepted on protected main; issue prose,
 caller-reported missing files and unsigned loss flags carry no authority. It is
 exact-source policy, not an artifact store or another journal. The issuer
-authenticates the live OPEN/Draft PR, head/tree/sole parent, accepted source
-signature and exact trailer, complete stable feedback and provider chronology.
+authenticates the live source, head/tree/parent topology, accepted source
+signatures, complete stable feedback and provider chronology. Schema 1.0 remains
+restricted to `SecPal/.github`. Schema 1.1 additionally requires the exact
+central-registry entry and its protected repository-local lifecycle-publication
+policy; neither arbitrary repositories nor candidate-local registry state can
+grant admission.
 Provider reads are first converted by a pure, bounded representation-normalization
 boundary into canonical typed facts; admission consumes only those facts and does
 not repeat provider parsing.
@@ -439,8 +447,10 @@ their existing distinct bounds.
 
 The profile binds its version, harness Git blob/mode/size, command set and digest,
 120-second bound, exact successful result and required invariant inventory.
-Only `tests/pre-enrollment-current-safety.py` is projected into a disposable
-execution copy. All non-test candidate files retain their exact parked bytes;
+The selected policy projects exactly one accepted-main harness into a disposable
+execution copy: `tests/pre-enrollment-current-safety.py` for schema 1.0 or the
+registered-repository harness named by a schema-1.1 record. All non-test
+candidate files retain their exact parked bytes;
 no implementation overlay, dual-version runtime or synthetic integration is
 permitted. Historical tests do not supply assertion authority. The existing
 isolated Python runner excludes environment paths and site initialization, and
@@ -458,13 +468,19 @@ command-set digests, with `validated_tree_sha` still naming the parked tree.
 Changed policy cannot authenticate previously signed bytes as evidence for the
 new profile: live verification rederives these bindings and rejects drift.
 
-The version-1 loss admission permits only review 1, remediation 2, Ready
+The schema-1.0 loss admission permits only review 1, remediation 2, Ready
 transitions 0, Draft true, Ready false, no exceptional history and no Cycle 3.
 The existing review-budget admission remains independently required for review
 1; exactly two normalized `REMEDIATION_HEAD_OBSERVED` entries establish
 remediation 2. Ordinary verified validation and the sealed loss source are
 disjoint inputs: invalid or partially supplied historical evidence cannot
 downgrade to loss mode.
+
+Schema 1.1 binds its finite Ready chronology and already-consumed review and
+remediation budgets from authenticated observations. It grants no additional
+review, remediation, Ready transition, reset, or Cycle 3. Current-policy safety
+is fresh evidence for the exact current tree and remains distinct from the
+ancestor validation-receipt provenance.
 
 The signed admission becomes immutable provenance in the version-3 adoption
 proof and existing signed one-use adoption authorization. Enrollment rechecks

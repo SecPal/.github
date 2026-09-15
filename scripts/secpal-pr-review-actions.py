@@ -6711,9 +6711,10 @@ def _derive_exact_state_adoption_ready_prior_authority(
             "commit_signature_evidence_digest": proof[
                 "commit_signature_evidence_digest"
             ],
-            "historical_receipt_provenance_digest": proof[
-                "validation_receipt_digest"
-            ],
+            "historical_receipt_provenance_digest": loss.get(
+                "historical_receipt_provenance_digest",
+                proof["validation_receipt_digest"],
+            ),
             "current_safety_digest": proof["source_validation_evidence_digest"],
             "observed_history_digest": proof["observed_history_digest"],
             "intended_state_digest": proof["intended_state_digest"],
