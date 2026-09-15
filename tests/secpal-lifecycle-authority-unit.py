@@ -2900,7 +2900,6 @@ printf 'Usage: fixture\\n'
 
         document, record, _summary = self.accepted_successor_document()
         for changed_main, changed_record in (
-            ("d" * 40, record),
             ("c" * 40, {**record, "pull_request": record["pull_request"] + 1}),
         ):
             with self.subTest(
@@ -2912,6 +2911,87 @@ printf 'Usage: fixture\\n'
                 return_value=(changed_main, changed_record, object(), self.trust),
             ), self.assertRaises(authority.LifecycleAuthorityError):
                 self.loss.authenticate_historical_provider_binding(document)
+
+    def test_historical_provider_projection_accepts_authenticated_policy_epoch(
+        self,
+    ) -> None:
+        document, record, _summary = self.accepted_successor_document()
+        current_main = "d" * 40
+        with patch.object(
+            self.loss,
+            "_accepted_policy",
+            return_value=(current_main, record, object(), self.trust),
+        ), patch.object(
+            self.loss, "_authenticate_accepted_policy_epoch"
+        ) as authenticate_epoch:
+            binding = self.loss.authenticate_historical_provider_binding(
+                document
+            )
+
+        self.assertEqual(
+            binding.provider_head_sha,
+            document["source_history"][0]["head_sha"],
+        )
+        authenticate_epoch.assert_called_once_with(
+            document["accepted_main_sha"],
+            current_main,
+            record,
+        )
+
+    def test_historical_policy_epoch_requires_ancestry_and_exact_record(
+        self,
+    ) -> None:
+        _document, record, _summary = self.accepted_successor_document()
+        policy = authority.canonical_json_bytes({
+            "schema_version": "1.0",
+            "admissions": [record],
+        })
+        accepted_main = "c" * 40
+        current_main = "d" * 40
+        successful = (
+            subprocess.CompletedProcess([], 0, b"", b""),
+            subprocess.CompletedProcess([], 0, policy, b""),
+        )
+        with patch.object(
+            self.loss,
+            "_accepted_main_commit_metadata",
+            return_value={"sha": accepted_main, "verified": True},
+        ), patch.object(
+            self.loss.publication, "_run_git", side_effect=successful
+        ):
+            self.loss._authenticate_accepted_policy_epoch(
+                accepted_main, current_main, record
+            )
+
+        failures = (
+            (
+                subprocess.CompletedProcess([], 1, b"", b""),
+                subprocess.CompletedProcess([], 0, policy, b""),
+            ),
+            (
+                subprocess.CompletedProcess([], 0, b"", b""),
+                subprocess.CompletedProcess(
+                    [],
+                    0,
+                    authority.canonical_json_bytes({
+                        "schema_version": "1.0",
+                        "admissions": [{**record, "pull_request": 999}],
+                    }),
+                    b"",
+                ),
+            ),
+        )
+        for results in failures:
+            with self.subTest(results=results), patch.object(
+                self.loss,
+                "_accepted_main_commit_metadata",
+                return_value={"sha": accepted_main, "verified": True},
+            ), patch.object(
+                self.loss.publication, "_run_git", side_effect=results
+            ), self.assertRaises(authority.LifecycleAuthorityError):
+                self.loss._authenticate_accepted_policy_epoch(
+                    accepted_main, current_main, record
+                )
 
     def test_historical_provider_projection_rejects_ready_head_outside_history(
         self,

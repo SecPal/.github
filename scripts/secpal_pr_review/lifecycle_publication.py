@@ -2140,7 +2140,7 @@ def _derive_exact_adoption_historical_provider_binding(
         raise LifecyclePublicationError(
             "Ready-source provider exact-state adoption proof is invalid"
         ) from exc
-    if verified != current.lifecycle or not isinstance(proof, Mapping):
+    if not isinstance(proof, Mapping):
         raise LifecyclePublicationError(
             "Ready-source provider exact-state adoption differs from CURRENT"
         )
@@ -2149,13 +2149,36 @@ def _derive_exact_adoption_historical_provider_binding(
         for field, expected in (
             ("repository", current.lifecycle.repository),
             ("delivery_issue", current.lifecycle.delivery_issue),
-            ("pull_request", current.lifecycle.pull_request),
-            ("head_sha", current.lifecycle.head_sha),
             ("lifecycle_id", current.lifecycle.lifecycle_id),
         )
     ):
         raise LifecyclePublicationError(
             "Ready-source provider exact-state adoption scope changed"
+        )
+    if any(
+        getattr(verified, field) != getattr(current.lifecycle, field)
+        for field in (
+            "repository", "delivery_issue", "lifecycle_id",
+        )
+    ):
+        raise LifecyclePublicationError(
+            "Ready-source provider exact-state adoption differs from CURRENT"
+        )
+    if (
+        proof.get("pull_request") != verified.pull_request
+        or proof.get("head_sha") != verified.head_sha
+    ):
+        raise LifecyclePublicationError(
+            "Ready-source provider exact-state adoption scope changed"
+        )
+    if (
+        verified.pull_request != current.lifecycle.pull_request
+        or verified.head_sha != current.lifecycle.head_sha
+    ):
+        return None
+    if verified != current.lifecycle:
+        raise LifecyclePublicationError(
+            "Ready-source provider exact-state adoption differs from CURRENT"
         )
     loss_admission = proof.get("validation_evidence_loss_admission")
     if loss_admission is None:

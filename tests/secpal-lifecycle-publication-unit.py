@@ -895,6 +895,49 @@ class LifecyclePublicationTests(TestCase):
         ):
             publication.derive_ready_source_recovery_provider_binding(current)
 
+    def test_exact_adoption_successor_preserves_ordinary_provider_derivation(
+        self,
+    ) -> None:
+        from scripts.secpal_pr_review import validation_evidence_loss as loss
+
+        current, proof, _historical = self.exact_adoption_current(
+            ordinary_provider_head=HEADS[1]
+        )
+        proof["head_sha"] = HEADS[1]
+        proof["validation_evidence_loss_admission"]["head_sha"] = HEADS[1]
+        parsed = json.loads(current.serialized_lifecycle_evidence)
+        parsed["exact_state_adoption_proof"] = proof
+        current = replace(
+            current,
+            serialized_lifecycle_evidence=authority.canonical_json_bytes(parsed),
+        )
+        adoption = replace(
+            current.lifecycle,
+            authority_digest="f" * 64,
+            head_sha=HEADS[1],
+        )
+        with patch.object(
+            authority,
+            "_verify_lifecycle_authority_for_journal",
+            return_value=current.lifecycle,
+        ), patch.object(
+            authority,
+            "verify_exact_state_adoption_proof",
+            return_value=adoption,
+        ), patch.object(
+            loss, "authenticate_historical_provider_binding"
+        ) as verify_loss:
+            binding = publication.derive_ready_source_recovery_provider_binding(
+                current
+            )
+
+        self.assertEqual(binding.provider_head_sha, HEADS[1])
+        self.assertEqual(
+            binding.provider_binding_sources,
+            (publication.ORDINARY_REMEDIATION_SUFFIX,),
+        )
+        verify_loss.assert_not_called()
+
     def test_exact_adoption_matching_dual_derivation_is_deterministic(self) -> None:
         from scripts.secpal_pr_review import validation_evidence_loss as loss
 
