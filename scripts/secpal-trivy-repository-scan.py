@@ -92,9 +92,11 @@ def _path(value: Any) -> str:
 
 
 def _severity(value: Any) -> str:
-    normalized = str(value or "UNKNOWN").upper()
+    if not isinstance(value, str) or not value:
+        raise ContractError("finding severity must be a non-empty string")
+    normalized = value.upper()
     if normalized not in SEVERITIES:
-        return "UNKNOWN"
+        raise ContractError("finding severity is unsupported")
     return normalized
 
 
@@ -118,7 +120,9 @@ def _validate_scanner(scanner: dict[str, Any]) -> dict[str, str]:
     return {"name": "trivy", "version": version, "immutable_id": immutable_id}
 
 
-def _validate_database(database: dict[str, Any]) -> dict[str, str]:
+def _validate_database(
+    database: dict[str, Any], observed_at: datetime | None = None
+) -> dict[str, str]:
     if not isinstance(database, dict):
         raise ContractError("database identity is malformed")
     required = {"status", "identity", "updated_at", "next_update", "downloaded_at"}
@@ -136,7 +140,11 @@ def _validate_database(database: dict[str, Any]) -> dict[str, str]:
     updated = _timestamp(updated_at)
     next_time = _timestamp(next_update)
     downloaded = _timestamp(downloaded_at)
-    if updated > downloaded or updated >= next_time:
+    if (
+        updated > downloaded
+        or updated >= next_time
+        or (observed_at is not None and downloaded > observed_at)
+    ):
         raise ContractError("database freshness chronology is invalid")
     return {
         "status": status,
@@ -241,6 +249,15 @@ def _misconfiguration(target: str, native: dict[str, Any]) -> dict[str, Any]:
     return finding
 
 
+def _finding_collection(result: dict[str, Any], field: str) -> list[Any]:
+    if field not in result:
+        return []
+    value = result[field]
+    if not isinstance(value, list):
+        raise ContractError("Trivy finding collection is malformed")
+    return value
+
+
 def normalize_native(
     native: dict[str, Any],
     *,
@@ -253,11 +270,14 @@ def normalize_native(
     """Purely normalize Trivy JSON into a secret-safe observation."""
     if not isinstance(native, dict) or native.get("SchemaVersion") != 2:
         raise ContractError("Trivy output schema version is missing or unsupported")
+    if native.get("ArtifactType") != "filesystem":
+        raise ContractError("Trivy output is not a filesystem scan")
+    _string(native.get("ArtifactName"), "Trivy filesystem artifact")
     results = native.get("Results")
     if not isinstance(results, list):
         raise ContractError("Trivy Results must be an array")
     completed = _timestamp(completed_at)
-    normalized_database = _validate_database(database)
+    normalized_database = _validate_database(database, completed)
     if completed >= _timestamp(normalized_database["next_update"]):
         normalized_database["status"] = "STALE"
 
@@ -266,11 +286,9 @@ def normalize_native(
         if not isinstance(result, dict):
             raise ContractError("Trivy result entry is malformed")
         target = _path(result.get("Target"))
-        vulnerabilities = result.get("Vulnerabilities") or []
-        secrets = result.get("Secrets") or []
-        misconfigurations = result.get("Misconfigurations") or []
-        if not all(isinstance(items, list) for items in (vulnerabilities, secrets, misconfigurations)):
-            raise ContractError("Trivy finding collection is malformed")
+        vulnerabilities = _finding_collection(result, "Vulnerabilities")
+        secrets = _finding_collection(result, "Secrets")
+        misconfigurations = _finding_collection(result, "Misconfigurations")
         for vulnerability in vulnerabilities:
             if not isinstance(vulnerability, dict):
                 raise ContractError("Trivy vulnerability is malformed")
@@ -282,7 +300,10 @@ def normalize_native(
         for misconfiguration in misconfigurations:
             if not isinstance(misconfiguration, dict):
                 raise ContractError("Trivy misconfiguration is malformed")
-            if misconfiguration.get("Status", "FAIL") == "FAIL":
+            status = misconfiguration.get("Status")
+            if status not in {"FAIL", "PASS"}:
+                raise ContractError("Trivy misconfiguration status is unsupported")
+            if status == "FAIL":
                 findings.append(_misconfiguration(target, misconfiguration))
 
     findings.sort(key=lambda item: (item["fingerprint"], item["class"], item["path"]))
@@ -488,7 +509,7 @@ def database_identity(
         "next_update": earliest_next.isoformat().replace("+00:00", "Z"),
         "downloaded_at": max(downloaded_values).isoformat().replace("+00:00", "Z"),
     }
-    return _validate_database(result)
+    return _validate_database(result, observed)
 
 
 def _write(path: Path, value: Any) -> None:
@@ -517,7 +538,8 @@ def _evaluate(arguments: argparse.Namespace) -> int:
         return 1
     try:
         database = _load(arguments.database)
-    except (OSError, json.JSONDecodeError):
+        _validate_database(database, _timestamp(completed_at))
+    except (ContractError, KeyError, TypeError, OSError, json.JSONDecodeError):
         _write(
             arguments.output,
             unknown_result(

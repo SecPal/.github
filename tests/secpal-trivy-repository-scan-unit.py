@@ -31,6 +31,62 @@ def load_module():
     return module
 
 
+def valid_database() -> dict:
+    return {
+        "status": "FRESH",
+        "identity": "sha256:" + "b" * 64,
+        "updated_at": "2026-09-16T10:00:00Z",
+        "next_update": "2026-09-17T10:00:00Z",
+        "downloaded_at": "2026-09-16T10:05:00Z",
+    }
+
+
+def evaluate_fixture(native: dict, database: dict | None = None) -> dict:
+    import jsonschema
+
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        native_path = root / "native.json"
+        database_path = root / "database.json"
+        output = root / "result.json"
+        native_path.write_text(json.dumps(native), encoding="utf-8")
+        database_path.write_text(
+            json.dumps(valid_database() if database is None else database),
+            encoding="utf-8",
+        )
+        completed = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "evaluate",
+                "--native",
+                str(native_path),
+                "--database",
+                str(database_path),
+                "--policy",
+                str(POLICY),
+                "--repository",
+                "SecPal/example",
+                "--commit",
+                COMMIT,
+                "--scanner-version",
+                "0.74.0",
+                "--scanner-identity",
+                "sha256:" + "a" * 64,
+                "--completed-at",
+                "2026-09-16T10:10:00Z",
+                "--output",
+                str(output),
+            ],
+            check=False,
+        )
+        if completed.returncode == 0:
+            raise AssertionError("malformed fixture unexpectedly succeeded")
+        result = json.loads(output.read_text(encoding="utf-8"))
+        jsonschema.validate(result, json.loads(SCHEMA.read_text(encoding="utf-8")))
+        return result
+
+
 def native_result() -> dict:
     return {
         "SchemaVersion": 2,
@@ -287,6 +343,43 @@ class RepositoryScanContractTests(unittest.TestCase):
                 },
                 completed_at="2026-09-16T10:10:00Z",
             )
+
+    def test_falsy_non_array_finding_collection_fails_closed(self) -> None:
+        native = native_result()
+        native["Results"] = [{"Target": "config/example.env", "Secrets": False}]
+        result = evaluate_fixture(native)
+        self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
+        self.assertEqual(result["operation"]["failure_code"], "MALFORMED_OUTPUT")
+
+    def test_unsupported_misconfiguration_status_fails_closed(self) -> None:
+        native = native_result()
+        native["Results"] = [native["Results"][2]]
+        native["Results"][0]["Misconfigurations"][0]["Status"] = "BROKEN"
+        result = evaluate_fixture(native)
+        self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
+        self.assertEqual(result["operation"]["failure_code"], "MALFORMED_OUTPUT")
+
+    def test_non_filesystem_scanner_surface_fails_closed(self) -> None:
+        native = native_result()
+        native["ArtifactType"] = "container_image"
+        result = evaluate_fixture(native)
+        self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
+        self.assertEqual(result["operation"]["failure_code"], "MALFORMED_OUTPUT")
+
+    def test_unsupported_severity_fails_closed(self) -> None:
+        native = native_result()
+        native["Results"] = [native["Results"][0]]
+        native["Results"][0]["Vulnerabilities"][0]["Severity"] = "EXTREME"
+        result = evaluate_fixture(native)
+        self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
+        self.assertEqual(result["operation"]["failure_code"], "MALFORMED_OUTPUT")
+
+    def test_future_database_download_fails_as_database_failure(self) -> None:
+        database = valid_database()
+        database["downloaded_at"] = "2026-09-16T10:11:00Z"
+        result = evaluate_fixture(native_result(), database)
+        self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
+        self.assertEqual(result["operation"]["failure_code"], "DATABASE_FAILURE")
 
     def test_malformed_and_stale_evidence_never_becomes_clean(self) -> None:
         with self.assertRaises(self.module.ContractError):
