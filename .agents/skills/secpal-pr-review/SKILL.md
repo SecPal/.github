@@ -288,6 +288,27 @@ resolution
 must be reported as safely dispositioned/tracked, never fixed, implemented, or
 completed, with technical and mechanical blocking stated separately.
 
+When provider-owned material threads from the already-consumed assessment
+appear after its canonical Stable Feedback capture, do not request another
+review or rewrite that capture. The maintained ordinary Ready provider-growth
+verifier derives the complete additive delta from the first remediation's
+sealed reviewed state and the candidate remediation's sealed reviewed state.
+It requires protected CURRENT at Review 1/1 and Remediation 1/2, exact H0 to H1
+ordinary lineage, Ready true, Cycle 3 absent, the unique Copilot request and
+review chronology, comment-to-review identity, the first remediation's bound
+eligibility for predecessor resolutions, and complete existing ordinary
+eligibility for every added provider thread. Only
+`issue_ready_remediation_provider_growth_authorization` may turn that sealed
+authority into the existing signed `REMEDIATION_COMPLETED` scope. The path
+consumes the remaining normal remediation slot and grants no review,
+classification, resolution, recovery, continuation, or recursive-growth
+authority.
+Capture its H1 state only through the read-only
+`resolve-batch --ready-remediation-provider-binding FILE
+--capture-reviewed-state FILE` form. The command derives the reviewed provider
+head from the verifier-created ephemeral projection of protected CURRENT, and
+the authority verifier independently repeats the same capture before issuance.
+
 ## Run the finite invocation
 
 The following state machine applies only to the full feedback-remediation path.

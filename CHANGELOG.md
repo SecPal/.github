@@ -9,6 +9,33 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-16 - Authenticate Post-Capture Provider Feedback
+
+**Added:**
+
+- Derive one bounded additive provider-feedback delta when the provider review
+  belongs to the already-consumed reviewed head but appears after its canonical
+  Stable Feedback capture.
+- Authenticate the unique provider request, review chronology, parent-review
+  identity of every added thread comment, and any first-remediation thread
+  resolutions before admitting that delta.
+- Bind the complete delta to authenticated first-remediation CURRENT evidence,
+  the existing ordinary eligibility manifest, and the remaining normal
+  remediation authorization without requesting another review or adding a
+  lifecycle operation.
+
+## 2026-09-16 - Define Builder-Independent OCI Publication Evidence
+
+**Added:**
+
+- Define one shared SecPal policy for OCI runtime images, multi-platform
+  identity, source and base-image binding, OCI labels, build evidence, Syft SPDX
+  association, keyless GitHub attestations, and exact-digest smoke evidence.
+- Make `Containerfile` canonical for SecPal-owned production builds while
+  retaining Dependabot's upstream `docker` ecosystem identifier.
+- Require complete parity evidence and removal of superseded active publisher
+  paths when an existing publisher migrates away from BuildKit or Buildx.
+
 ## 2026-09-16 - Authenticate Detached Recovered-Ready Thread Authority
 
 **Fixed:**

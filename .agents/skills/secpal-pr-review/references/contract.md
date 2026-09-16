@@ -573,6 +573,36 @@ one current-head assessment and stops. The same-head transition changes no
 finite counter or Ready state, but its CURRENT predecessor binding makes replay
 stale after publication.
 
+Provider-owned feedback emitted by the already-consumed assessment after its
+canonical Stable Feedback capture has one ordinary Ready-remediation
+composition. The first remediation's verifier-sealed validation evidence
+authenticates the original reviewed state at H0. Protected CURRENT derives the
+exact Ready-preserving H0-to-H1 `REMEDIATION_COMPLETED` lineage and must show
+Review 1/1, Remediation 1/2, one Ready transition, Cycle 3 absent, and no
+Exceptional Recovery or Continuation. The candidate's verifier-sealed
+validation evidence authenticates the complete reviewed state at H1 and its
+commit-bound ordinary eligibility.
+
+The maintained verifier derives the unique Copilot request event, exactly one
+added Copilot review committed to H0, their chronology, and the complete set of
+added provider-owned threads, comment-body digests, and comment-to-review
+identities. The first remediation's authenticated eligibility derives the
+only predecessor threads allowed to become resolved, and an independent live
+capture must equal the candidate-bound H1 state. The added-thread set must
+equal the existing
+`VALID_ACTIONABLE + CORRECTED_AND_VERIFIED` eligibility set. A caller cannot
+nominate a delta or subset. Predecessor deletion or substitution, provider,
+actor, repository, PR, head, body, thread, eligibility, CURRENT, lifecycle, or
+replay drift fails closed. The exact target base ref is preserved while its tip
+may advance as accepted main receives this prerequisite; base integration
+remains a separate merge-gate responsibility. The resulting digest is carried
+only by the existing signed `REMEDIATION_COMPLETED` authorization for H1 to H2,
+and its generic issuer rejects that verifier-owned scope. This composition
+adds no provider request, lifecycle transition, counter, state, recovery,
+continuation, resolver, signer, trust root, journal, classification, or
+disposition and grants no thread-resolution authority. Feedback after that
+bounded delta is not recursively incorporated.
+
 Late feedback consumes #673's canonical classification with independent
 technical and mechanical blocker facts. P1/P2/security/authentication/integrity/
 fail-open or other material technical blockers stop merge readiness and cannot
