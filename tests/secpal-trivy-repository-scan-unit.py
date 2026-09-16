@@ -41,7 +41,11 @@ def valid_database() -> dict:
     }
 
 
-def evaluate_fixture(native: dict, database: dict | None = None) -> dict:
+def run_evaluate_fixture(
+    native: dict,
+    database: dict | None = None,
+    completed_at: str = "2026-09-16T10:10:00Z",
+) -> tuple[subprocess.CompletedProcess[bytes], dict]:
     import jsonschema
 
     with tempfile.TemporaryDirectory() as temporary:
@@ -76,17 +80,23 @@ def evaluate_fixture(native: dict, database: dict | None = None) -> dict:
                 "--scanner-identity",
                 "sha256:" + "a" * 64,
                 "--completed-at",
-                "2026-09-16T10:10:00Z",
+                completed_at,
                 "--output",
                 str(output),
             ],
             check=False,
+            capture_output=True,
         )
-        if completed.returncode == 0:
-            raise AssertionError("malformed fixture unexpectedly succeeded")
         result = json.loads(output.read_text(encoding="utf-8"))
         jsonschema.validate(result, json.loads(SCHEMA.read_text(encoding="utf-8")))
-        return result
+        return completed, result
+
+
+def evaluate_fixture(native: dict, database: dict | None = None) -> dict:
+    completed, result = run_evaluate_fixture(native, database)
+    if completed.returncode == 0:
+        raise AssertionError("malformed fixture unexpectedly succeeded")
+    return result
 
 
 def native_result() -> dict:
@@ -482,6 +492,89 @@ class RepositoryScanContractTests(unittest.TestCase):
         result = evaluate_fixture(native_result(), database)
         self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
         self.assertEqual(result["operation"]["failure_code"], "DATABASE_FAILURE")
+
+    def test_submicrosecond_future_database_download_fails_via_public_cli(self) -> None:
+        database = valid_database()
+        database["downloaded_at"] = "2026-09-16T10:10:00.000000800Z"
+        completed, result = run_evaluate_fixture(
+            {**native_result(), "Results": []},
+            database,
+            completed_at="2026-09-16T10:10:00.000000000Z",
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
+        self.assertEqual(result["operation"]["failure_code"], "DATABASE_FAILURE")
+
+    def test_equal_and_prior_nanosecond_downloads_pass_via_public_cli(self) -> None:
+        for downloaded_at in (
+            "2026-09-16T10:10:00.000000800Z",
+            "2026-09-16T10:10:00.000000799Z",
+        ):
+            with self.subTest(downloaded_at=downloaded_at):
+                database = valid_database()
+                database["downloaded_at"] = downloaded_at
+                completed, result = run_evaluate_fixture(
+                    {**native_result(), "Results": []},
+                    database,
+                    completed_at="2026-09-16T10:10:00.000000800Z",
+                )
+                self.assertEqual(completed.returncode, 0)
+                self.assertEqual(result["gate_state"], "CLEAN")
+
+    def test_invalid_database_member_cannot_be_masked_via_public_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            invalid = root / "core-metadata.json"
+            valid = root / "java-metadata.json"
+            invalid.write_text(
+                json.dumps(
+                    {
+                        "UpdatedAt": "2026-09-16T10:06:00Z",
+                        "NextUpdate": "2026-09-16T11:00:00Z",
+                        "DownloadedAt": "2026-09-16T10:05:00Z",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            valid.write_text(
+                json.dumps(
+                    {
+                        "UpdatedAt": "2026-09-16T09:00:00Z",
+                        "NextUpdate": "2026-09-16T12:00:00Z",
+                        "DownloadedAt": "2026-09-16T10:07:00Z",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            core_database = root / "trivy.db"
+            java_database = root / "trivy-java.db"
+            core_database.write_bytes(b"core")
+            java_database.write_bytes(b"java")
+            output = root / "database.json"
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "database",
+                    "--metadata",
+                    str(invalid),
+                    "--metadata",
+                    str(valid),
+                    "--database-file",
+                    str(core_database),
+                    "--database-file",
+                    str(java_database),
+                    "--observed-at",
+                    "2026-09-16T10:08:00Z",
+                    "--output",
+                    str(output),
+                ],
+                check=False,
+                capture_output=True,
+            )
+            failure_code = "DATABASE_FAILURE" if completed.returncode else ""
+            self.assertEqual(failure_code, "DATABASE_FAILURE")
+            self.assertFalse(output.exists())
 
     def test_malformed_and_stale_evidence_never_becomes_clean(self) -> None:
         with self.assertRaises(self.module.ContractError):

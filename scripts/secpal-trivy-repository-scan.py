@@ -37,6 +37,10 @@ SEVERITIES = {"UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"}
 SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
 REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+RFC3339_RE = re.compile(
+    r"(?P<second>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(?P<fraction>\d{1,9}))?Z\Z"
+)
+Timestamp = tuple[datetime, int]
 
 
 class ContractError(ValueError):
@@ -127,16 +131,20 @@ def _sha256(value: Any) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
-def _timestamp(value: str) -> datetime:
-    if not isinstance(value, str) or not value.endswith("Z"):
+def _timestamp(value: str) -> Timestamp:
+    if not isinstance(value, str):
         raise ContractError("timestamps must use UTC Z form")
+    match = RFC3339_RE.fullmatch(value)
+    if match is None:
+        raise ContractError("timestamp is malformed")
     try:
-        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+        parsed = datetime.fromisoformat(match.group("second") + "+00:00")
     except ValueError as error:
         raise ContractError("timestamp is malformed") from error
     if parsed.tzinfo != timezone.utc:
         raise ContractError("timestamps must be UTC")
-    return parsed
+    fraction = match.group("fraction") or ""
+    return parsed, int(fraction.ljust(9, "0") or "0")
 
 
 def _string(value: Any, field: str, *, allow_empty: bool = False) -> str:
@@ -199,7 +207,7 @@ def _validate_scanner(scanner: dict[str, Any]) -> dict[str, str]:
 
 
 def _validate_database(
-    database: dict[str, Any], observed_at: datetime | None = None
+    database: dict[str, Any], observed_at: Timestamp | None = None
 ) -> dict[str, str]:
     if not isinstance(database, dict):
         raise ContractError("database identity is malformed")
@@ -574,31 +582,36 @@ def database_identity(
     if not metadata_paths or not database_paths:
         raise ContractError("database metadata and files are required")
     records: list[dict[str, Any]] = []
-    updated_values: list[datetime] = []
-    next_values: list[datetime] = []
-    downloaded_values: list[datetime] = []
+    updated_values: list[tuple[Timestamp, str]] = []
+    next_values: list[tuple[Timestamp, str]] = []
+    downloaded_values: list[tuple[Timestamp, str]] = []
     for path in metadata_paths:
         metadata = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(metadata, dict):
             raise ContractError("database metadata is malformed")
-        updated = _timestamp(_string(metadata.get("UpdatedAt"), "database UpdatedAt"))
-        next_update = _timestamp(_string(metadata.get("NextUpdate"), "database NextUpdate"))
-        downloaded = _timestamp(_string(metadata.get("DownloadedAt"), "database DownloadedAt"))
-        updated_values.append(updated)
-        next_values.append(next_update)
-        downloaded_values.append(downloaded)
+        updated_at = _string(metadata.get("UpdatedAt"), "database UpdatedAt")
+        next_update_at = _string(metadata.get("NextUpdate"), "database NextUpdate")
+        downloaded_at = _string(metadata.get("DownloadedAt"), "database DownloadedAt")
+        updated = _timestamp(updated_at)
+        next_update = _timestamp(next_update_at)
+        downloaded = _timestamp(downloaded_at)
+        if updated > downloaded or updated >= next_update or downloaded > observed:
+            raise ContractError("database metadata chronology is invalid")
+        updated_values.append((updated, updated_at))
+        next_values.append((next_update, next_update_at))
+        downloaded_values.append((downloaded, downloaded_at))
         records.append({"metadata": metadata, "sha256": _sha256(path.read_bytes())})
     for path in database_paths:
         if not path.is_file():
             raise ContractError("database file is missing")
         records.append({"database_file": path.name, "sha256": _sha256(path.read_bytes())})
-    earliest_next = min(next_values)
+    earliest_next = min(next_values, key=lambda item: item[0])
     result = {
-        "status": "FRESH" if observed < earliest_next else "STALE",
+        "status": "FRESH" if observed < earliest_next[0] else "STALE",
         "identity": _sha256(records),
-        "updated_at": min(updated_values).isoformat().replace("+00:00", "Z"),
-        "next_update": earliest_next.isoformat().replace("+00:00", "Z"),
-        "downloaded_at": max(downloaded_values).isoformat().replace("+00:00", "Z"),
+        "updated_at": min(updated_values, key=lambda item: item[0])[1],
+        "next_update": earliest_next[1],
+        "downloaded_at": max(downloaded_values, key=lambda item: item[0])[1],
     }
     return _validate_database(result, observed)
 
