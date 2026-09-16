@@ -9,6 +9,20 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-16 - Recover Unenrolled Ready Lifecycle Authority
+
+**Added:**
+
+- Add one explicitly authorized `UNENROLLED_READY_DELIVERY` recovery root for
+  an authenticated open Ready delivery whose ordinary lifecycle initialization
+  and protected CURRENT never existed.
+- Preserve the observed review, remediation, and Ready-transition consumption,
+  publish forward authority through the canonical protected lifecycle journal,
+  and keep ordinary Ready integration on the existing `HEAD_ADVANCED` path.
+- Record historical Ready evidence only as authenticated observation: recovery
+  never retroactively creates initialization, transition, or prior-integration
+  authority.
+
 ## 2026-09-16 - Define Builder-Independent OCI Publication Evidence
 
 **Added:**

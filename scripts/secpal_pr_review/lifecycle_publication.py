@@ -41,6 +41,7 @@ ABSENCE_PROJECTION_PROOF_MODES = frozenset(
         authority.NATIVE_PROOF_MODE,
         authority.LEGACY_PROOF_MODE,
         "exact_state_adoption",
+        authority.UNENROLLED_READY_RECOVERY_PROOF_MODE,
     }
 )
 ADVANCE_TRANSITIONS = authority.TRANSITIONS - {"INITIALIZED_DRAFT"}
@@ -854,6 +855,7 @@ def _verify_publication_envelope(
         authority.NATIVE_PROOF_MODE,
         authority.LEGACY_PROOF_MODE,
         authority.EXACT_ADOPTION_PROOF_MODE,
+        authority.UNENROLLED_READY_RECOVERY_PROOF_MODE,
     }:
         raise LifecyclePublicationError("publication historical-proof mode is invalid")
     for field in ("journal_predecessor_oid", "predecessor_publication_oid"):
@@ -960,6 +962,17 @@ def _lifecycle_bundle(document: Mapping[str, Any]) -> Mapping[str, Any]:
             "transition_authorizations": evidence["transition_authorizations"],
             "authority_chain": evidence["authority_chain"],
         }
+    if (
+        isinstance(evidence, dict)
+        and evidence.get("kind")
+        == authority.UNENROLLED_READY_RECOVERY_EVIDENCE_KIND
+        and set(evidence)
+        == authority.UNENROLLED_READY_RECOVERY_PUBLICATION_FIELDS
+    ):
+        return {
+            "transition_authorizations": evidence["transition_authorizations"],
+            "authority_chain": evidence["authority_chain"],
+        }
     bundle = (
         evidence.get("lifecycle_evidence")
         if isinstance(evidence, dict) and evidence.get("kind") == authority.PUBLICATION_EVIDENCE_KIND
@@ -1019,6 +1032,21 @@ def _require_exact_successor(
         ):
             raise LifecyclePublicationError(
                 "exact-state adoption root changed during advancement"
+            )
+    if (
+        isinstance(old_evidence, dict)
+        and old_evidence.get("kind")
+        == authority.UNENROLLED_READY_RECOVERY_EVIDENCE_KIND
+    ):
+        if (
+            not isinstance(new_evidence, dict)
+            or new_evidence.get("kind")
+            != authority.UNENROLLED_READY_RECOVERY_EVIDENCE_KIND
+            or new_evidence.get("recovery_proof")
+            != old_evidence.get("recovery_proof")
+        ):
+            raise LifecyclePublicationError(
+                "unenrolled Ready recovery root changed during advancement"
             )
 
 
@@ -1607,7 +1635,13 @@ def enroll_existing_lifecycle(
         bundle.get("kind") == authority.EXACT_ADOPTION_EVIDENCE_KIND
         and bundle.get("enrollment_mode") == "EXACT_STATE_ADOPTION"
     )
-    is_native = not exact_adoption and not (
+    unenrolled_ready_recovery = (
+        bundle.get("kind")
+        == authority.UNENROLLED_READY_RECOVERY_EVIDENCE_KIND
+        and bundle.get("enrollment_mode")
+        == "UNENROLLED_READY_DELIVERY_RECOVERY"
+    )
+    is_native = not exact_adoption and not unenrolled_ready_recovery and not (
         bundle.get("kind") == authority.PUBLICATION_EVIDENCE_KIND
         and bundle.get("enrollment_mode") == "LEGACY_ADOPTION_CHECKPOINT"
     )
@@ -1629,6 +1663,13 @@ def enroll_existing_lifecycle(
             root, policy.publication_remote_url, policy.publication_branch,
             credential_environment=credential_environment,
         )
+        if (
+            unenrolled_ready_recovery
+            and bundle["recovery_proof"].get("journal_tip_oid") != tip
+        ):
+            raise LifecyclePublicationError(
+                "unenrolled Ready recovery journal authority drifted"
+            )
         latest: dict[
             tuple[str, int],
             tuple[str, dict[str, Any], authority.VerifiedLifecycleAuthority],
@@ -1687,8 +1728,15 @@ def advance_current_terminal(
 
     bundle, bundle_raw = _canonical_bundle(serialized_evidence)
     lifecycle_bundle = _lifecycle_bundle({"lifecycle_evidence": bundle})
-    if bundle.get("kind") == authority.EXACT_ADOPTION_EVIDENCE_KIND:
-        proof = bundle.get("exact_state_adoption_proof")
+    if bundle.get("kind") in {
+        authority.EXACT_ADOPTION_EVIDENCE_KIND,
+        authority.UNENROLLED_READY_RECOVERY_EVIDENCE_KIND,
+    }:
+        proof = bundle.get(
+            "exact_state_adoption_proof"
+            if bundle.get("kind") == authority.EXACT_ADOPTION_EVIDENCE_KIND
+            else "recovery_proof"
+        )
         if not isinstance(proof, dict):
             raise LifecyclePublicationError("exact-state adoption proof is malformed")
         repository = authority._require_repository(proof.get("repository"))

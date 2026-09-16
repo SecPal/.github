@@ -1177,6 +1177,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             "native_lifecycle",
             "legacy_migration_checkpoint",
             "exact_state_adoption",
+            "unenrolled_ready_recovery",
         }
         or lifecycle.get("draft") is not False
         or lifecycle.get("ready") is not True

@@ -177,6 +177,33 @@ attestation after the protected ref moves.
 These functions never synthesize historical bytes, create an integration
 candidate, add a lifecycle state, or mutate feedback.
 
+### Unenrolled Ready lifecycle recovery
+
+`lifecycle_authority.authenticate_unenrolled_ready_recovery_evidence` admits
+only two equal trusted observations of one open non-Draft sole-parent delivery,
+the open delivery issue, protected `main`, protected journal tip, and absence of
+both any lifecycle root and CURRENT. It reuses the closed Ready-source safety
+facts to authenticate complete current validation, stable feedback, every
+classified feedback source, material disposition, and resolved thread state.
+The signed source validation/final-attestation evidence and exact observed
+Draft/review/remediation/Ready chronology must bind the same head and tree.
+
+`create_unenrolled_ready_recovery_authorization` creates the separately signed
+one-use operator scope. `create_unenrolled_ready_recovery_proof` records
+forward-only recovery provenance; it does not represent historical
+initialization or Ready authorization. The serialized
+`UNENROLLED_READY_DELIVERY_RECOVERY` root is enrolled only with the canonical
+protected lifecycle publication writer. Existing ancestry checks reject an
+existing root/CURRENT, replay, duplicate enrollment, and later ordinary
+initialization. Operators must never treat raw arguments or matching digests as
+authorization.
+
+After protected read-back, the existing ordinary Ready prior-authority and
+`HEAD_ADVANCED` integration machinery accepts the
+`unenrolled_ready_recovery` proof mode. Recovery itself never creates the
+integration candidate, resolves conflicts, advances protected `main`, or issues
+`READY_INTEGRATION_PRIOR_AUTHORITY`.
+
 Both the validation attester and fixed-thread resolver derive registry identity
 through the same closed `fast_path` projection. An admitted pre-enrollment
 integration policy therefore participates identically in both paths, while an

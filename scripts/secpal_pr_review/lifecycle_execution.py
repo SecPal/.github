@@ -364,8 +364,16 @@ def _append_successor_evidence(
             signer=signers.transition_signer,
         )
         if (
-            parsed.get("kind") == authority.EXACT_ADOPTION_EVIDENCE_KIND
-            and set(parsed) == authority.EXACT_ADOPTION_PUBLICATION_FIELDS
+            (
+                parsed.get("kind") == authority.EXACT_ADOPTION_EVIDENCE_KIND
+                and set(parsed) == authority.EXACT_ADOPTION_PUBLICATION_FIELDS
+            )
+            or (
+                parsed.get("kind")
+                == authority.UNENROLLED_READY_RECOVERY_EVIDENCE_KIND
+                and set(parsed)
+                == authority.UNENROLLED_READY_RECOVERY_PUBLICATION_FIELDS
+            )
         ):
             snapshot = authority.issue_exact_state_adoption_successor_authority(
                 serialized_adoption_evidence=raw,
@@ -450,9 +458,10 @@ def _derive_transition_state(
     transition_kind: str,
     event_digest: str,
 ) -> dict[str, Any]:
-    adopted = (
-        lifecycle.historical_proof_mode == authority.EXACT_ADOPTION_PROOF_MODE
-    )
+    adopted = lifecycle.historical_proof_mode in {
+        authority.EXACT_ADOPTION_PROOF_MODE,
+        authority.UNENROLLED_READY_RECOVERY_PROOF_MODE,
+    }
     state = authority._validate_state(
         copy.deepcopy(lifecycle.state),
         allow_adopted_observations=adopted,

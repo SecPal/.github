@@ -324,6 +324,60 @@ Draft PR head. This makes a competing ordinary genesis inadmissible between
 the authenticated absence observation and branch push without granting the
 bootstrap executor a journal mutation or reservation operation.
 
+## Unenrolled Ready delivery recovery
+
+`UNENROLLED_READY_DELIVERY_RECOVERY` is the sole maintained root-establishment
+boundary for an ordinary delivery that is already open and Ready after exactly
+one observed Draft-to-Ready transition but has no lifecycle initialization,
+lifecycle root, or protected CURRENT anywhere in journal history. It is neither
+ordinary initialization nor Exact-State-Adoption. It does not make the earlier
+Ready transition lifecycle-authorized:
+
+```text
+authenticated historical Ready observation
+!=
+historical lifecycle authorization
+
+authenticated recovery boundary now
+->
+forward lifecycle authority
+```
+
+Admission independently binds the repository, open delivery issue, exact open
+Ready PR, sole-parent head/tree/base identity, accepted source signer and
+signature, final attestation and validation identities, complete Ready-source
+safety facts, stable feedback, complete finding dispositions, resolved thread
+state, and the exact observed Draft/review/remediation/Ready chronology. The
+chronology must contain one Draft creation, one review consumption, zero to two
+remediations, exactly one Draft-to-Ready observation, no Ready-to-Draft reset,
+and no exceptional history. Its derived lifecycle baseline copies those finite
+consumptions; recovery grants no fresh review, remediation, or Ready budget.
+
+The issuer compares two bounded trusted observations of issue, PR, head, tree,
+base, protected main, lifecycle-journal tip, root absence, and CURRENT absence.
+Caller-supplied current state is not an authority substitute. Any drift,
+existing or historical root, existing CURRENT, Draft/closed/merged state,
+rewritten topology, stale validation, incomplete feedback, unresolved material
+finding, or ambiguous history fails closed.
+
+One separately signed authorization binds the operation, repository, issue, PR,
+head, tree, accepted source signer, current protected journal identity, complete
+evidence digests, unique authorization identity, and one bounded use. The proof
+derives `lifecycle-recovery:<recovery-evidence-digest>` and records
+`historical_lifecycle_authority_existed=false` plus
+`authority_begins_at=RECOVERY_BOUNDARY`. Publication uses the existing
+`ENROLL_EXISTING_LIFECYCLE` CAS/protection/read-back boundary. Existing journal
+ancestry rejects replay, a second recovery, later ordinary initialization, or a
+second root for the delivery.
+
+Recovery does not merge protected main and does not issue
+`READY_INTEGRATION_PRIOR_AUTHORITY`. Once the recovered CURRENT exists, the
+ordinary signed prior-authority/tag and `HEAD_ADVANCED` Ready-integration path
+may consume its `unenrolled_ready_recovery` provenance while preserving every
+finite counter. Exact-State-Adoption, Exceptional Recovery, Exceptional
+Continuation, pre-enrollment Draft integration, and PR rebound/re-anchor retain
+their existing selection and authority rules.
+
 The installed repository registry is the lifecycle trust-policy source. It
 separately assigns transition and authority signer roles, accepted signature
 formats, SSH public keys, OpenPGP fingerprints, and unique initialization

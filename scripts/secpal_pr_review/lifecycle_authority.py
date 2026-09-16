@@ -85,6 +85,25 @@ CONSERVATIVE_REVIEW_BUDGET_ASSERTION = (
     "NORMAL_UNRESTRICTED_REVIEW_BUDGET_CONSERVATIVELY_CONSUMED"
 )
 EXACT_ADOPTION_PROOF_MODE = "exact_state_adoption"
+UNENROLLED_READY_RECOVERY_PROOF_MODE = "unenrolled_ready_recovery"
+UNENROLLED_READY_RECOVERY_EVIDENCE_KIND = (
+    "SECPAL_UNENROLLED_READY_DELIVERY_RECOVERY_EVIDENCE"
+)
+UNENROLLED_READY_RECOVERY_EVIDENCE_DOMAIN = (
+    "secpal.unenrolled-ready-delivery-recovery-evidence/v1"
+)
+UNENROLLED_READY_RECOVERY_AUTHORIZATION_KIND = (
+    "SECPAL_UNENROLLED_READY_DELIVERY_RECOVERY_AUTHORIZATION"
+)
+UNENROLLED_READY_RECOVERY_AUTHORIZATION_DOMAIN = (
+    "secpal.unenrolled-ready-delivery-recovery-authorization/v1"
+)
+UNENROLLED_READY_RECOVERY_PROOF_KIND = (
+    "SECPAL_UNENROLLED_READY_DELIVERY_RECOVERY_PROOF"
+)
+UNENROLLED_READY_RECOVERY_PROOF_DOMAIN = (
+    "secpal.unenrolled-ready-delivery-recovery-proof/v1"
+)
 NATIVE_PROOF_MODE = "native_lifecycle"
 PUBLICATION_EVIDENCE_KIND = "SECPAL_PUBLISHED_LIFECYCLE_EVIDENCE"
 PUBLICATION_EVIDENCE_DOMAIN = "secpal.published-lifecycle-evidence/v1"
@@ -179,6 +198,8 @@ class VerifiedLifecycleAuthority:
 
 _VERIFIED_EXACT_ADOPTION_EVIDENCE = object()
 _VERIFIED_REVIEW_BUDGET_ADMISSION = object()
+_VERIFIED_UNENROLLED_READY_RECOVERY_EVIDENCE = object()
+_VERIFIED_UNENROLLED_READY_OBSERVATION = object()
 
 
 @dataclass(frozen=True)
@@ -221,6 +242,22 @@ class VerifiedExactStateAdoptionExternalEvidence:
     review_budget_consumption_admission: dict[str, Any] | None
     _verification_seal: object
     validation_evidence_loss_admission: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class VerifiedUnenrolledReadyRecoveryEvidence:
+    """Closed authenticated facts for one forward-only Ready root recovery."""
+
+    canonical_evidence: dict[str, Any]
+    _verification_seal: object
+
+
+@dataclass(frozen=True)
+class VerifiedUnenrolledReadyObservation:
+    """One bounded GitHub/journal observation returned by maintained readers."""
+
+    canonical_observation: dict[str, Any]
+    _verification_seal: object
 
 
 @dataclass(frozen=True)
@@ -592,6 +629,54 @@ EXACT_ADOPTION_PUBLICATION_FIELDS = frozenset(
         "schema_version", "kind", "domain", "enrollment_mode",
         "exact_state_adoption_proof", "transition_authorizations",
         "authority_chain",
+    }
+)
+UNENROLLED_READY_RECOVERY_EVIDENCE_FIELDS = frozenset(
+    {
+        "schema_version", "kind", "domain", "repository", "delivery_issue",
+        "pull_request", "head_sha", "tree_sha", "parent_shas",
+        "expected_base_ref", "observed_base_sha", "observed_main_sha",
+        "pull_request_state", "pull_request_is_draft",
+        "expected_source_signer",
+        "commit_signature_evidence_digest", "validation_receipt_digest",
+        "source_validation_evidence_digest", "final_attestation_digest",
+        "recovery_safety_facts", "recovery_safety_facts_digest",
+        "stable_feedback_digest", "finding_inventory_digest",
+        "resolved_thread_state_digest", "observed_history",
+        "observed_history_digest", "intended_state", "intended_state_digest",
+        "journal_tip_oid", "journal_tip_digest", "observation_nonce",
+        "trusted_observation_digest",
+        "review_provider_identities",
+        "lifecycle_root_status", "current_publication_status",
+        "historical_lifecycle_authority_existed", "authority_begins_at",
+        "recovery_evidence_digest",
+    }
+)
+UNENROLLED_READY_RECOVERY_AUTHORIZATION_FIELDS = frozenset(
+    {
+        "schema_version", "kind", "domain", "operation", "repository",
+        "delivery_issue", "pull_request", "head_sha", "tree_sha",
+        "expected_source_signer", "journal_tip_oid", "journal_tip_digest",
+        "recovery_evidence_digest", "observed_history_digest",
+        "recovery_safety_facts_digest",
+        "validation_receipt_digest", "final_attestation_digest",
+        "stable_feedback_digest", "finding_inventory_digest",
+        "resolved_thread_state_digest", "authorization_id", "bounded_uses",
+        "signer_identity", "signature", "authorization_digest",
+    }
+)
+UNENROLLED_READY_RECOVERY_PROOF_FIELDS = frozenset(
+    (UNENROLLED_READY_RECOVERY_EVIDENCE_FIELDS - {"kind", "domain"})
+    | {
+        "kind", "domain", "historical_proof_mode", "lifecycle_id",
+        "authorization", "authorization_digest", "signer_identity",
+        "signature", "proof_digest",
+    }
+)
+UNENROLLED_READY_RECOVERY_PUBLICATION_FIELDS = frozenset(
+    {
+        "schema_version", "kind", "domain", "enrollment_mode",
+        "recovery_proof", "transition_authorizations", "authority_chain",
     }
 )
 PUBLICATION_EVIDENCE_FIELDS = frozenset(
@@ -3194,6 +3279,784 @@ def verify_pre_enrollment_validation_evidence_loss_admission(serialized: bytes |
     return validation_evidence_loss.verify(serialized)
 
 
+def _seal_unenrolled_ready_observation(
+    *,
+    repository: str,
+    delivery_issue: int,
+    delivery_issue_state: str,
+    pull_request: int,
+    pull_request_state: str,
+    pull_request_is_draft: bool,
+    head_sha: str,
+    tree_sha: str,
+    parent_shas: Sequence[str],
+    expected_base_ref: str,
+    observed_base_sha: str,
+    observed_main_sha: str,
+    journal_tip_oid: str,
+    journal_tip_digest: str,
+    observed_history: Sequence[Mapping[str, Any]],
+    review_provider_identities: Sequence[str],
+) -> VerifiedUnenrolledReadyObservation:
+    """Normalize one observation already acquired by the maintained reader."""
+
+    observation = {
+        "repository": _require_repository(repository),
+        "delivery_issue": _require_positive_int(
+            delivery_issue, "recovery delivery issue"
+        ),
+        "delivery_issue_state": delivery_issue_state,
+        "pull_request": _require_positive_int(
+            pull_request, "recovery pull request"
+        ),
+        "pull_request_state": pull_request_state,
+        "pull_request_is_draft": pull_request_is_draft,
+        "head_sha": _require_oid(head_sha, "recovery head"),
+        "tree_sha": _require_oid(tree_sha, "recovery tree"),
+        "parent_shas": [
+            _require_oid(item, "recovery parent") for item in parent_shas
+        ],
+        "expected_base_ref": _require_identity(
+            expected_base_ref, "recovery base ref"
+        ),
+        "observed_base_sha": _require_oid(
+            observed_base_sha, "observed recovery base"
+        ),
+        "observed_main_sha": _require_oid(
+            observed_main_sha, "observed protected main"
+        ),
+        "journal_tip_oid": _require_oid(journal_tip_oid, "lifecycle journal tip"),
+        "journal_tip_digest": _require_digest(
+            journal_tip_digest, "lifecycle journal tip"
+        ),
+        "lifecycle_root_status": "AUTHENTICATED_ABSENT",
+        "current_publication_status": "AUTHENTICATED_ABSENT",
+        "observed_history": copy.deepcopy(list(observed_history)),
+        "review_provider_identities": sorted(
+            {
+                _require_identity(item, "historical review provider")
+                for item in review_provider_identities
+            }
+        ),
+    }
+    if (
+        observation["delivery_issue_state"] != "OPEN"
+        or observation["pull_request_state"] != "OPEN"
+        or observation["pull_request_is_draft"] is not False
+        or len(observation["parent_shas"]) != 1
+        or observation["expected_base_ref"] != "main"
+        or observation["observed_base_sha"] != observation["observed_main_sha"]
+    ):
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery requires one stable open Ready source boundary"
+        )
+    return VerifiedUnenrolledReadyObservation(
+        canonical_observation=observation,
+        _verification_seal=_VERIFIED_UNENROLLED_READY_OBSERVATION,
+    )
+
+
+def _derive_unenrolled_ready_history(
+    value: Any, current_head: str
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Normalize bounded GitHub chronology without granting lifecycle authority."""
+
+    if not isinstance(value, dict):
+        raise LifecycleAuthorityError("trusted Ready chronology is malformed")
+    pr = value.get("data", {}).get("repository", {}).get("pullRequest")
+    if not isinstance(pr, dict):
+        raise LifecycleAuthorityError("trusted Ready chronology is unavailable")
+    timeline = pr.get("timelineItems")
+    commits = pr.get("commits")
+    reviews = pr.get("reviews")
+    connections = (timeline, commits, reviews)
+    if any(
+        not isinstance(item, dict)
+        or not isinstance(item.get("nodes"), list)
+        or not isinstance(item.get("pageInfo"), dict)
+        or item["pageInfo"].get("hasNextPage") is not False
+        for item in connections
+    ):
+        raise LifecycleAuthorityError("trusted Ready chronology is incomplete")
+    commit_facts: list[tuple[str, str]] = []
+    for node in commits["nodes"]:
+        commit = node.get("commit") if isinstance(node, dict) else None
+        if not isinstance(commit, dict):
+            raise LifecycleAuthorityError("trusted delivery commit history is malformed")
+        commit_facts.append(
+            (
+                _require_adoption_timestamp(
+                    commit.get("committedDate"), "delivery commit time"
+                ),
+                _require_oid(commit.get("oid"), "delivery commit"),
+            )
+        )
+    if (
+        not commit_facts
+        or commit_facts[-1][1] != current_head
+        or len({oid for _, oid in commit_facts}) != len(commit_facts)
+    ):
+        raise LifecycleAuthorityError("trusted delivery commit history is incomplete")
+    review_facts: list[tuple[str, str]] = []
+    reviewer_identities: set[str] = set()
+    for node in reviews["nodes"]:
+        commit = node.get("commit") if isinstance(node, dict) else None
+        if (
+            not isinstance(node, dict)
+            or node.get("state") not in {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}
+            or not isinstance(commit, dict)
+        ):
+            continue
+        review_facts.append(
+            (
+                _require_adoption_timestamp(
+                    node.get("submittedAt"), "review submission time"
+                ),
+                _require_oid(commit.get("oid"), "reviewed head"),
+            )
+        )
+        author = node.get("author")
+        if not isinstance(author, dict):
+            raise LifecycleAuthorityError("trusted review provider is unavailable")
+        reviewer_identities.add(
+            _require_identity(author.get("login"), "historical review provider")
+        )
+    reviewed_heads = {head for _, head in review_facts}
+    if len(reviewed_heads) != 1:
+        raise LifecycleAuthorityError(
+            "trusted Ready chronology does not contain one review cycle"
+        )
+    reviewed_head = next(iter(reviewed_heads))
+    commit_oids = [oid for _, oid in commit_facts]
+    if reviewed_head not in commit_oids:
+        raise LifecycleAuthorityError("trusted review head is absent from delivery history")
+    ready_events: list[str] = []
+    for node in timeline["nodes"]:
+        if not isinstance(node, dict):
+            raise LifecycleAuthorityError("trusted Ready timeline is malformed")
+        kind = node.get("__typename")
+        if kind in {"ConvertToDraftEvent", "HeadRefForcePushedEvent", "BaseRefChangedEvent"}:
+            raise LifecycleAuthorityError(
+                "trusted Ready chronology contains reset or rewritten history"
+            )
+        if kind == "ReadyForReviewEvent":
+            ready_events.append(
+                _require_adoption_timestamp(node.get("createdAt"), "Ready event time")
+            )
+    if len(ready_events) != 1:
+        raise LifecycleAuthorityError(
+            "trusted Ready chronology requires exactly one Draft-to-Ready event"
+        )
+
+    def head_at(timestamp: str) -> str:
+        candidates = [
+            oid
+            for committed_at, oid in commit_facts
+            if _parse_adoption_timestamp(committed_at, "commit time")
+            <= _parse_adoption_timestamp(timestamp, "event time")
+        ]
+        return candidates[-1] if candidates else commit_facts[0][1]
+
+    created_at = _require_adoption_timestamp(pr.get("createdAt"), "PR creation time")
+    events: list[tuple[str, str, str, str | None]] = [
+        (created_at, "PR_CREATED_DRAFT", commit_facts[0][1], None),
+        (
+            max(item[0] for item in review_facts),
+            "REVIEW_SUBMITTED",
+            reviewed_head,
+            reviewed_head,
+        ),
+        (ready_events[0], "DRAFT_TO_READY_OBSERVED", head_at(ready_events[0]), None),
+    ]
+    reviewed_index = commit_oids.index(reviewed_head)
+    for committed_at, oid in commit_facts[reviewed_index + 1 :]:
+        events.append((committed_at, "REMEDIATION_HEAD_OBSERVED", oid, None))
+    events.sort(key=lambda item: (_parse_adoption_timestamp(item[0], "event time"), item[1]))
+    history = [
+        {
+            "sequence": sequence,
+            "kind": kind,
+            "observed_at": timestamp,
+            "head_sha": head,
+            "reviewed_head_sha": reviewed,
+        }
+        for sequence, (timestamp, kind, head, reviewed) in enumerate(events, 1)
+    ]
+    return history, sorted(reviewer_identities)
+
+
+def observe_unenrolled_ready_recovery_boundary(
+    repository: str, delivery_issue: int, pull_request: int
+) -> VerifiedUnenrolledReadyObservation:
+    """Perform one bounded trusted GitHub and protected-journal observation."""
+
+    from . import bootstrap_source_admission as transport
+    from . import lifecycle_publication as publication
+
+    repository = _require_repository(repository)
+    issue = _require_positive_int(delivery_issue, "recovery delivery issue")
+    pr = _require_positive_int(pull_request, "recovery pull request")
+
+    def read_json(arguments: list[str], label: str) -> Any:
+        result = transport._run_bootstrap_gh(arguments)
+        try:
+            return json.loads(result.stdout)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise LifecycleAuthorityError(
+                f"trusted {label} observation is malformed"
+            ) from exc
+
+    issue_state = read_json(
+        ["issue", "view", str(issue), "--repo", repository, "--json", "state"],
+        "delivery issue",
+    )
+    pr_state = read_json(
+        [
+            "pr", "view", str(pr), "--repo", repository, "--json",
+            "state,isDraft,headRefOid,baseRefName,baseRefOid,closingIssuesReferences",
+        ],
+        "pull request",
+    )
+    if (
+        not isinstance(issue_state, dict)
+        or not isinstance(pr_state, dict)
+        or issue not in {
+            item.get("number")
+            for item in pr_state.get("closingIssuesReferences", [])
+            if isinstance(item, dict)
+        }
+    ):
+        raise LifecycleAuthorityError(
+            "trusted recovery issue and pull request identity do not match"
+        )
+    head = _require_oid(pr_state.get("headRefOid"), "observed recovery head")
+    commit = read_json(
+        ["api", f"repos/{repository}/git/commits/{head}"], "source commit"
+    )
+    main = read_json(
+        ["api", f"repos/{repository}/branches/main"], "protected main"
+    )
+    owner, name = repository.split("/", 1)
+    chronology_query = """
+query($owner:String!,$name:String!,$pr:Int!){
+  repository(owner:$owner,name:$name){
+    pullRequest(number:$pr){
+      createdAt
+      timelineItems(first:100,itemTypes:[READY_FOR_REVIEW_EVENT,CONVERT_TO_DRAFT_EVENT,HEAD_REF_FORCE_PUSHED_EVENT,BASE_REF_CHANGED_EVENT]){
+        nodes{__typename ... on ReadyForReviewEvent{createdAt} ... on ConvertToDraftEvent{createdAt} ... on HeadRefForcePushedEvent{createdAt} ... on BaseRefChangedEvent{createdAt}}
+        pageInfo{hasNextPage}
+      }
+      commits(first:100){nodes{commit{oid committedDate}} pageInfo{hasNextPage}}
+      reviews(first:100){nodes{state submittedAt author{login} commit{oid}} pageInfo{hasNextPage}}
+    }
+  }
+}
+""".strip()
+    chronology = read_json(
+        [
+            "api", "graphql", "-f", f"query={chronology_query}",
+            "-f", f"owner={owner}", "-f", f"name={name}",
+            "-F", f"pr={pr}",
+        ],
+        "Ready chronology",
+    )
+    if (
+        not isinstance(commit, dict)
+        or commit.get("sha") != head
+        or not isinstance(commit.get("tree"), dict)
+        or not isinstance(commit.get("parents"), list)
+        or not isinstance(main, dict)
+        or not isinstance(main.get("commit"), dict)
+        or main.get("protected") is not True
+    ):
+        raise LifecycleAuthorityError(
+            "trusted recovery source or protected-main observation is incomplete"
+        )
+    absence = publication.verify_pre_enrollment_absence(repository, issue)
+    if absence.observed_tip_oid is None:
+        raise LifecycleAuthorityError(
+            "protected lifecycle journal tip is unavailable"
+        )
+    observed_history, review_providers = _derive_unenrolled_ready_history(
+        chronology, head
+    )
+    return _seal_unenrolled_ready_observation(
+        repository=repository,
+        delivery_issue=issue,
+        delivery_issue_state=issue_state.get("state"),
+        pull_request=pr,
+        pull_request_state=pr_state.get("state"),
+        pull_request_is_draft=pr_state.get("isDraft"),
+        head_sha=head,
+        tree_sha=commit["tree"].get("sha"),
+        parent_shas=[item.get("sha") for item in commit["parents"]],
+        expected_base_ref=pr_state.get("baseRefName"),
+        observed_base_sha=pr_state.get("baseRefOid"),
+        observed_main_sha=main["commit"].get("sha"),
+        journal_tip_oid=absence.observed_tip_oid,
+        journal_tip_digest=absence.evidence_digest,
+        observed_history=observed_history,
+        review_provider_identities=review_providers,
+    )
+
+
+def authenticate_unenrolled_ready_recovery_evidence(
+    *,
+    initial_observation: VerifiedUnenrolledReadyObservation,
+    final_observation: VerifiedUnenrolledReadyObservation,
+    expected_source_signer: str,
+    commit_signature_evidence: Mapping[str, Any],
+    validation_evidence: VerifiedValidationEvidence,
+    recovery_safety_facts: Mapping[str, Any],
+    intended_state: Mapping[str, Any],
+    observation_nonce: str,
+) -> VerifiedUnenrolledReadyRecoveryEvidence:
+    """Authenticate facts for one open Ready delivery with no lifecycle root."""
+
+    if (
+        not isinstance(initial_observation, VerifiedUnenrolledReadyObservation)
+        or initial_observation._verification_seal
+        is not _VERIFIED_UNENROLLED_READY_OBSERVATION
+        or not isinstance(final_observation, VerifiedUnenrolledReadyObservation)
+        or final_observation._verification_seal
+        is not _VERIFIED_UNENROLLED_READY_OBSERVATION
+    ):
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery requires maintained trusted observations"
+        )
+    observation = copy.deepcopy(initial_observation.canonical_observation)
+    final = final_observation.canonical_observation
+    if final != observation:
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery trusted observation drifted"
+        )
+    repository = observation["repository"]
+    issue = observation["delivery_issue"]
+    pr = observation["pull_request"]
+    head = observation["head_sha"]
+    tree = observation["tree_sha"]
+    parents = observation["parent_shas"]
+    base_ref = observation["expected_base_ref"]
+    base = observation["observed_base_sha"]
+    main = observation["observed_main_sha"]
+    if (
+        not is_verified_validation_evidence(validation_evidence)
+        or validation_evidence.repository != repository
+        or validation_evidence.pull_request_number != pr
+        or (
+            validation_evidence.delivery_issue_number is not None
+            and validation_evidence.delivery_issue_number != issue
+        )
+        or validation_evidence.head_sha != head
+        or validation_evidence.tree_sha != tree
+    ):
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery validation does not bind the delivery"
+        )
+    try:
+        safety = verify_ready_source_recovery_safety_facts(
+            copy.deepcopy(dict(recovery_safety_facts))
+        )
+    except (SecurityBlocker, TypeError, ValueError) as exc:
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery feedback or current validation is incomplete"
+        ) from exc
+    if (
+        safety["repository"] != repository
+        or safety["pull_request_number"] != pr
+        or safety["head_sha"] != head
+        or safety["tree_sha"] != tree
+        or safety["parent_shas"] != parents
+        or safety["expected_base_ref"] != base_ref
+        or safety["expected_base_sha"] != base
+    ):
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery safety facts changed delivery identity"
+        )
+    commit = copy.deepcopy(dict(commit_signature_evidence))
+    try:
+        verified_commits = verify_commit_signatures(
+            [commit], _load_delivery_signature_policy(repository)
+        )
+    except SecurityBlocker as exc:
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery source signature is invalid"
+        ) from exc
+    if len(verified_commits) != 1 or verified_commits[0]["oid"] != head:
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery source signature changed identity"
+        )
+    state = _validate_state(dict(intended_state), allow_adopted_observations=True)
+    history = _normalize_observed_pre_enrollment_history(
+        observation["observed_history"], expected_head=head, intended_state=state
+    )
+    kinds = [item["kind"] for item in history]
+    if (
+        state["unrestricted_review_count"] != 1
+        or not 0 <= state["remediation_cycle_count"] <= 2
+        or state["ready_transition_count"] != 1
+        or len(state["ready_history"]) != 1
+        or state["draft"] is not False
+        or state["ready"] is not True
+        or state["cycle_3_absent"] is not True
+        or state["exceptional_recovery_count"] != 0
+        or state["exceptional_continuation_count"] != 0
+        or kinds.count("DRAFT_TO_READY_OBSERVED") != 1
+        or "READY_TO_DRAFT_OBSERVED" in kinds
+    ):
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery cannot reset or rewrite finite history"
+        )
+    signer = _require_identity(expected_source_signer, "expected recovery source signer")
+    if commit.get("signer_identity") != signer:
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery source signer is not accepted"
+        )
+    fields = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": UNENROLLED_READY_RECOVERY_EVIDENCE_KIND,
+        "domain": UNENROLLED_READY_RECOVERY_EVIDENCE_DOMAIN,
+        "repository": repository,
+        "delivery_issue": issue,
+        "pull_request": pr,
+        "head_sha": head,
+        "tree_sha": tree,
+        "parent_shas": parents,
+        "expected_base_ref": base_ref,
+        "observed_base_sha": base,
+        "observed_main_sha": main,
+        "pull_request_state": observation["pull_request_state"],
+        "pull_request_is_draft": False,
+        "expected_source_signer": signer,
+        "commit_signature_evidence_digest": digest_json(verified_commits[0]),
+        "validation_receipt_digest": validation_evidence.validation_receipt_digest,
+        "source_validation_evidence_digest": (
+            validation_evidence.source_validation_evidence_digest
+        ),
+        "final_attestation_digest": validation_evidence.final_attestation_digest,
+        "recovery_safety_facts": safety,
+        "recovery_safety_facts_digest": safety["safety_facts_digest"],
+        "stable_feedback_digest": safety["reviewed_feedback_digest"],
+        "finding_inventory_digest": safety["feedback_assessment_digest"],
+        "resolved_thread_state_digest": digest_json(
+            safety["reviewed_state"]["threads"]
+        ),
+        "observed_history": history,
+        "observed_history_digest": digest_json(history),
+        "intended_state": copy.deepcopy(state),
+        "intended_state_digest": digest_json(state),
+        "journal_tip_oid": observation["journal_tip_oid"],
+        "journal_tip_digest": observation["journal_tip_digest"],
+        "observation_nonce": _require_identity(
+            observation_nonce, "recovery observation nonce"
+        ),
+        "trusted_observation_digest": digest_json(observation),
+        "review_provider_identities": observation["review_provider_identities"],
+        "lifecycle_root_status": "AUTHENTICATED_ABSENT",
+        "current_publication_status": "AUTHENTICATED_ABSENT",
+        "historical_lifecycle_authority_existed": False,
+        "authority_begins_at": "RECOVERY_BOUNDARY",
+    }
+    fields["recovery_evidence_digest"] = digest_json(fields)
+    return VerifiedUnenrolledReadyRecoveryEvidence(
+        canonical_evidence=fields,
+        _verification_seal=_VERIFIED_UNENROLLED_READY_RECOVERY_EVIDENCE,
+    )
+
+
+def create_unenrolled_ready_recovery_authorization(
+    *,
+    verified_evidence: VerifiedUnenrolledReadyRecoveryEvidence,
+    authorization_id: str,
+    signer_identity: str,
+    signer: Signer,
+) -> dict[str, Any]:
+    """Create one exact-scope operator authorization for root recovery."""
+
+    if (
+        not isinstance(verified_evidence, VerifiedUnenrolledReadyRecoveryEvidence)
+        or verified_evidence._verification_seal
+        is not _VERIFIED_UNENROLLED_READY_RECOVERY_EVIDENCE
+    ):
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery requires verifier-derived evidence"
+        )
+    evidence = verified_evidence.canonical_evidence
+    fields = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": UNENROLLED_READY_RECOVERY_AUTHORIZATION_KIND,
+        "domain": UNENROLLED_READY_RECOVERY_AUTHORIZATION_DOMAIN,
+        "operation": "UNENROLLED_READY_DELIVERY_RECOVERY",
+        "repository": evidence["repository"],
+        "delivery_issue": evidence["delivery_issue"],
+        "pull_request": evidence["pull_request"],
+        "head_sha": evidence["head_sha"],
+        "tree_sha": evidence["tree_sha"],
+        "expected_source_signer": evidence["expected_source_signer"],
+        "journal_tip_oid": evidence["journal_tip_oid"],
+        "journal_tip_digest": evidence["journal_tip_digest"],
+        "recovery_evidence_digest": evidence["recovery_evidence_digest"],
+        "observed_history_digest": evidence["observed_history_digest"],
+        "recovery_safety_facts_digest": evidence["recovery_safety_facts_digest"],
+        "validation_receipt_digest": evidence["validation_receipt_digest"],
+        "final_attestation_digest": evidence["final_attestation_digest"],
+        "stable_feedback_digest": evidence["stable_feedback_digest"],
+        "finding_inventory_digest": evidence["finding_inventory_digest"],
+        "resolved_thread_state_digest": evidence["resolved_thread_state_digest"],
+        "authorization_id": _require_identity(
+            authorization_id, "recovery authorization identity"
+        ),
+        "bounded_uses": 1,
+        "signer_identity": _require_identity(
+            signer_identity, "recovery authorization signer"
+        ),
+    }
+    signature = _normalize_signature(
+        signer(
+            canonical_json_bytes(fields),
+            UNENROLLED_READY_RECOVERY_AUTHORIZATION_DOMAIN,
+        ),
+        fields["signer_identity"],
+    )
+    signed = {**fields, "signature": signature}
+    return {**signed, "authorization_digest": digest_json(signed)}
+
+
+def create_unenrolled_ready_recovery_proof(
+    *,
+    verified_evidence: VerifiedUnenrolledReadyRecoveryEvidence,
+    authorization: Mapping[str, Any],
+    signer_identity: str,
+    signer: Signer,
+) -> dict[str, Any]:
+    """Create a signed recovery root without claiming historical authority."""
+
+    if (
+        not isinstance(verified_evidence, VerifiedUnenrolledReadyRecoveryEvidence)
+        or verified_evidence._verification_seal
+        is not _VERIFIED_UNENROLLED_READY_RECOVERY_EVIDENCE
+    ):
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery requires verifier-derived evidence"
+        )
+    evidence = copy.deepcopy(verified_evidence.canonical_evidence)
+    authorization_item = _require_closed(
+        authorization,
+        UNENROLLED_READY_RECOVERY_AUTHORIZATION_FIELDS,
+        "unenrolled Ready recovery authorization",
+    )
+    fields = {
+        **{key: value for key, value in evidence.items() if key not in {"kind", "domain"}},
+        "kind": UNENROLLED_READY_RECOVERY_PROOF_KIND,
+        "domain": UNENROLLED_READY_RECOVERY_PROOF_DOMAIN,
+        "historical_proof_mode": UNENROLLED_READY_RECOVERY_PROOF_MODE,
+        "lifecycle_id": f"lifecycle-recovery:{evidence['recovery_evidence_digest']}",
+        "authorization": copy.deepcopy(authorization_item),
+        "authorization_digest": authorization_item["authorization_digest"],
+        "signer_identity": _require_identity(
+            signer_identity, "unenrolled Ready recovery proof signer"
+        ),
+    }
+    signature = _normalize_signature(
+        signer(canonical_json_bytes(fields), UNENROLLED_READY_RECOVERY_PROOF_DOMAIN),
+        fields["signer_identity"],
+    )
+    signed = {**fields, "signature": signature}
+    return {**signed, "proof_digest": digest_json(signed)}
+
+
+def verify_unenrolled_ready_recovery_proof(
+    proof_value: Any, expected: ExpectedLifecycle | None = None
+) -> VerifiedLifecycleAuthority:
+    """Verify one recovery root and its explicit forward-only provenance."""
+
+    proof = _require_closed(
+        proof_value,
+        UNENROLLED_READY_RECOVERY_PROOF_FIELDS,
+        "unenrolled Ready recovery proof",
+    )
+    if (
+        proof["schema_version"] != SCHEMA_VERSION
+        or proof["kind"] != UNENROLLED_READY_RECOVERY_PROOF_KIND
+        or proof["domain"] != UNENROLLED_READY_RECOVERY_PROOF_DOMAIN
+        or proof["historical_proof_mode"]
+        != UNENROLLED_READY_RECOVERY_PROOF_MODE
+        or proof["historical_lifecycle_authority_existed"] is not False
+        or proof["authority_begins_at"] != "RECOVERY_BOUNDARY"
+        or proof["lifecycle_root_status"] != "AUTHENTICATED_ABSENT"
+        or proof["current_publication_status"] != "AUTHENTICATED_ABSENT"
+    ):
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery proof semantics are unknown"
+        )
+    evidence = {
+        **{
+            key: copy.deepcopy(proof[key])
+            for key in UNENROLLED_READY_RECOVERY_EVIDENCE_FIELDS
+            if key not in {"kind", "domain"}
+        },
+        "kind": UNENROLLED_READY_RECOVERY_EVIDENCE_KIND,
+        "domain": UNENROLLED_READY_RECOVERY_EVIDENCE_DOMAIN,
+    }
+    if proof["recovery_evidence_digest"] != digest_json(
+        {key: value for key, value in evidence.items() if key != "recovery_evidence_digest"}
+    ):
+        raise LifecycleAuthorityError("unenrolled Ready recovery evidence digest mismatch")
+    try:
+        safety = verify_ready_source_recovery_safety_facts(
+            proof["recovery_safety_facts"]
+        )
+    except (SecurityBlocker, TypeError, ValueError) as exc:
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery safety facts are invalid"
+        ) from exc
+    if (
+        safety["safety_facts_digest"] != proof["recovery_safety_facts_digest"]
+        or safety["reviewed_feedback_digest"] != proof["stable_feedback_digest"]
+        or safety["feedback_assessment_digest"] != proof["finding_inventory_digest"]
+        or digest_json(safety["reviewed_state"]["threads"])
+        != proof["resolved_thread_state_digest"]
+    ):
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery safety evidence changed identity"
+        )
+    state = _validate_state(
+        copy.deepcopy(proof["intended_state"]), allow_adopted_observations=True
+    )
+    history = _normalize_observed_pre_enrollment_history(
+        copy.deepcopy(proof["observed_history"]),
+        expected_head=proof["head_sha"],
+        intended_state=state,
+    )
+    if (
+        proof["observed_history_digest"] != digest_json(history)
+        or proof["intended_state_digest"] != digest_json(state)
+    ):
+        raise LifecycleAuthorityError("unenrolled Ready recovery history changed")
+    policy = _load_lifecycle_trust_policy(proof["repository"])
+    verifier = _policy_signature_verifier(policy)
+    authorization = _require_closed(
+        proof["authorization"],
+        UNENROLLED_READY_RECOVERY_AUTHORIZATION_FIELDS,
+        "unenrolled Ready recovery authorization",
+    )
+    bound = {
+        "repository": "repository",
+        "delivery_issue": "delivery_issue",
+        "pull_request": "pull_request",
+        "head_sha": "head_sha",
+        "tree_sha": "tree_sha",
+        "expected_source_signer": "expected_source_signer",
+        "journal_tip_oid": "journal_tip_oid",
+        "journal_tip_digest": "journal_tip_digest",
+        "recovery_evidence_digest": "recovery_evidence_digest",
+        "observed_history_digest": "observed_history_digest",
+        "recovery_safety_facts_digest": "recovery_safety_facts_digest",
+        "validation_receipt_digest": "validation_receipt_digest",
+        "final_attestation_digest": "final_attestation_digest",
+        "stable_feedback_digest": "stable_feedback_digest",
+        "finding_inventory_digest": "finding_inventory_digest",
+        "resolved_thread_state_digest": "resolved_thread_state_digest",
+    }
+    if (
+        authorization["schema_version"] != SCHEMA_VERSION
+        or authorization["kind"] != UNENROLLED_READY_RECOVERY_AUTHORIZATION_KIND
+        or authorization["domain"] != UNENROLLED_READY_RECOVERY_AUTHORIZATION_DOMAIN
+        or authorization["operation"] != "UNENROLLED_READY_DELIVERY_RECOVERY"
+        or authorization["bounded_uses"] != 1
+        or isinstance(authorization["bounded_uses"], bool)
+        or any(authorization[left] != proof[right] for left, right in bound.items())
+    ):
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery authorization scope changed"
+        )
+    authorization_signer = _require_identity(
+        authorization["signer_identity"], "recovery authorization signer"
+    )
+    authorization_signed = {
+        key: copy.deepcopy(value)
+        for key, value in authorization.items()
+        if key != "authorization_digest"
+    }
+    if (
+        authorization["authorization_digest"] != digest_json(authorization_signed)
+        or proof["authorization_digest"] != authorization["authorization_digest"]
+    ):
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery authorization digest mismatch"
+        )
+    _verify_signature(
+        canonical_json_bytes(
+            _unsigned(authorization, "authorization_digest", "signature")
+        ),
+        authorization["signature"],
+        authorization_signer,
+        UNENROLLED_READY_RECOVERY_AUTHORIZATION_DOMAIN,
+        policy.transition_signer_identities,
+        verifier,
+    )
+    proof_signer = _require_identity(
+        proof["signer_identity"], "unenrolled Ready recovery proof signer"
+    )
+    proof_signed = {
+        key: copy.deepcopy(value)
+        for key, value in proof.items()
+        if key != "proof_digest"
+    }
+    if proof["proof_digest"] != digest_json(proof_signed):
+        raise LifecycleAuthorityError("unenrolled Ready recovery proof digest mismatch")
+    _verify_signature(
+        canonical_json_bytes(_unsigned(proof, "proof_digest", "signature")),
+        proof["signature"],
+        proof_signer,
+        UNENROLLED_READY_RECOVERY_PROOF_DOMAIN,
+        policy.authority_signer_identities,
+        verifier,
+    )
+    result = VerifiedLifecycleAuthority(
+        authority_digest=proof["proof_digest"],
+        repository=proof["repository"],
+        delivery_issue=proof["delivery_issue"],
+        lifecycle_id=proof["lifecycle_id"],
+        initialization_evidence_digest=proof["recovery_evidence_digest"],
+        pull_request=proof["pull_request"],
+        head_sha=proof["head_sha"],
+        state=copy.deepcopy(state),
+        authority_signer_identity=proof_signer,
+        historical_proof_mode=UNENROLLED_READY_RECOVERY_PROOF_MODE,
+        tree_sha=proof["tree_sha"],
+        validation_receipt_digest=proof["validation_receipt_digest"],
+        source_validation_evidence_digest=proof["source_validation_evidence_digest"],
+        adoption_source_evidence_digest=proof["final_attestation_digest"],
+    )
+    if expected is not None:
+        _compare_expected(result, expected)
+    return result
+
+
+def serialize_unenrolled_ready_recovery_evidence(
+    *,
+    recovery_proof: Mapping[str, Any],
+    transition_authorizations: Sequence[Mapping[str, Any]] = (),
+    authority_chain: Sequence[Mapping[str, Any]] = (),
+) -> bytes:
+    """Serialize one recovered root plus ordinary post-recovery successors."""
+
+    return canonical_json_bytes(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "kind": UNENROLLED_READY_RECOVERY_EVIDENCE_KIND,
+            "domain": UNENROLLED_READY_RECOVERY_EVIDENCE_DOMAIN,
+            "enrollment_mode": "UNENROLLED_READY_DELIVERY_RECOVERY",
+            "recovery_proof": copy.deepcopy(dict(recovery_proof)),
+            "transition_authorizations": copy.deepcopy(
+                list(transition_authorizations)
+            ),
+            "authority_chain": copy.deepcopy(list(authority_chain)),
+        }
+    )
+
+
 def issue_pre_enrollment_validation_evidence_loss_admission(
     repository: str, delivery_issue: int,
 ) -> dict[str, Any]:
@@ -3355,11 +4218,13 @@ def _ready_source_recovery_state(
         NATIVE_PROOF_MODE,
         LEGACY_PROOF_MODE,
         EXACT_ADOPTION_PROOF_MODE,
+        UNENROLLED_READY_RECOVERY_PROOF_MODE,
     }:
         raise LifecycleAuthorityError("Ready-source recovery proof mode is invalid")
     state = _validate_state(
         dict(value),
-        allow_adopted_observations=historical_proof_mode == EXACT_ADOPTION_PROOF_MODE,
+        allow_adopted_observations=historical_proof_mode
+        in {EXACT_ADOPTION_PROOF_MODE, UNENROLLED_READY_RECOVERY_PROOF_MODE},
     )
     if (
         state["unrestricted_review_count"] != 1
@@ -4285,6 +5150,144 @@ def _verify_exact_state_adoption_bundle(
     return verified
 
 
+def _verify_unenrolled_ready_recovery_bundle(
+    value: Any, expected: ExpectedLifecycle | None = None
+) -> VerifiedLifecycleAuthority:
+    """Verify the recovered root and only ordinary derived successors."""
+
+    bundle = _require_closed(
+        value,
+        UNENROLLED_READY_RECOVERY_PUBLICATION_FIELDS,
+        "unenrolled Ready recovery lifecycle evidence",
+    )
+    if (
+        bundle["schema_version"] != SCHEMA_VERSION
+        or bundle["kind"] != UNENROLLED_READY_RECOVERY_EVIDENCE_KIND
+        or bundle["domain"] != UNENROLLED_READY_RECOVERY_EVIDENCE_DOMAIN
+        or bundle["enrollment_mode"] != "UNENROLLED_READY_DELIVERY_RECOVERY"
+    ):
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery lifecycle semantics are unknown"
+        )
+    result = verify_unenrolled_ready_recovery_proof(bundle["recovery_proof"])
+    events_raw = bundle["transition_authorizations"]
+    authorities_raw = bundle["authority_chain"]
+    if (
+        not isinstance(events_raw, list)
+        or not isinstance(authorities_raw, list)
+        or len(events_raw) != len(authorities_raw)
+    ):
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery successor chain is incomplete"
+        )
+    policy = _load_lifecycle_trust_policy(result.repository)
+    verifier = _policy_signature_verifier(policy)
+    event_ids: set[str] = set()
+    event_digests: set[str] = set()
+    previous_digest = result.authority_digest
+    previous_head = result.head_sha
+    previous_pr = result.pull_request
+    state = copy.deepcopy(result.state)
+    last_signer = result.authority_signer_identity
+    current_tree = result.tree_sha
+    current_receipt = result.validation_receipt_digest
+    current_source = result.source_validation_evidence_digest
+    current_attestation = result.adoption_source_evidence_digest
+    for raw_event, raw_authority in zip(events_raw, authorities_raw):
+        event = _verify_transition_authorization(
+            raw_event,
+            accepted_signers=policy.transition_signer_identities,
+            signature_verifier=verifier,
+        )
+        snapshot = _verify_authority_shape(
+            raw_authority,
+            accepted_signers=policy.authority_signer_identities,
+            signature_verifier=verifier,
+            allow_adopted_observations=True,
+        )
+        if (
+            event["event_id"] in event_ids
+            or event["event_digest"] in event_digests
+            or event["transition_kind"] == "INITIALIZED_DRAFT"
+            or event["repository"] != result.repository
+            or event["delivery_issue"] != result.delivery_issue
+            or event["lifecycle_id"] != result.lifecycle_id
+            or event["pull_request"] != previous_pr
+            or event["predecessor_authority_digest"] != previous_digest
+            or event["predecessor_head_sha"] != previous_head
+            or event["initialization_evidence_digest"]
+            != result.initialization_evidence_digest
+        ):
+            raise LifecycleAuthorityError(
+                "unenrolled Ready recovery successor is not continuous"
+            )
+        derived = _derive_state(
+            state,
+            event["transition_kind"],
+            event["event_digest"],
+            allow_adopted_observations=True,
+        )
+        resulting_pr = (
+            event["replacement_pull_request"]
+            if event["transition_kind"] == "PR_REBOUND"
+            else event["pull_request"]
+        )
+        if (
+            snapshot["repository"] != result.repository
+            or snapshot["delivery_issue"] != result.delivery_issue
+            or snapshot["lifecycle_id"] != result.lifecycle_id
+            or snapshot["pull_request"] != resulting_pr
+            or snapshot["head_sha"] != event["resulting_head_sha"]
+            or snapshot["predecessor_authority_digest"] != previous_digest
+            or snapshot["predecessor_head_sha"] != previous_head
+            or snapshot["transition_kind"] != event["transition_kind"]
+            or snapshot["event_authorization_digest"] != event["event_digest"]
+            or snapshot["initialization_evidence_digest"]
+            != result.initialization_evidence_digest
+            or snapshot["state_before"] != state
+            or snapshot["state_after"] != derived
+        ):
+            raise LifecycleAuthorityError(
+                "unenrolled Ready recovery successor is not derived"
+            )
+        current_evidence = snapshot.get("current_head_evidence")
+        delivery_changed = (
+            event["resulting_head_sha"] != previous_head
+            or resulting_pr != previous_pr
+        )
+        if delivery_changed != (current_evidence is not None):
+            raise LifecycleAuthorityError(
+                "unenrolled Ready recovery successor evidence is incomplete"
+            )
+        if current_evidence is not None:
+            current_tree = current_evidence["tree_sha"]
+            current_receipt = current_evidence["validation_receipt_digest"]
+            current_source = current_evidence["source_validation_evidence_digest"]
+            current_attestation = current_evidence["final_attestation_digest"]
+        event_ids.add(event["event_id"])
+        event_digests.add(event["event_digest"])
+        previous_digest = snapshot["authority_digest"]
+        previous_head = snapshot["head_sha"]
+        previous_pr = snapshot["pull_request"]
+        state = derived
+        last_signer = snapshot["signer_identity"]
+    verified = replace(
+        result,
+        authority_digest=previous_digest,
+        pull_request=previous_pr,
+        head_sha=previous_head,
+        state=copy.deepcopy(state),
+        authority_signer_identity=last_signer,
+        tree_sha=current_tree,
+        validation_receipt_digest=current_receipt,
+        source_validation_evidence_digest=current_source,
+        adoption_source_evidence_digest=current_attestation,
+    )
+    if expected is not None:
+        _compare_expected(verified, expected)
+    return verified
+
+
 def issue_exact_state_adoption_successor_authority(
     *, serialized_adoption_evidence: bytes | str,
     authorization: Mapping[str, Any], signer_identity: str,
@@ -4293,14 +5296,31 @@ def issue_exact_state_adoption_successor_authority(
 ) -> dict[str, Any]:
     """Issue one ordinary successor from the authenticated adopted predecessor."""
 
-    bundle = _require_closed(
-        _load_canonical_json(
-            serialized_adoption_evidence, "exact-state adoption lifecycle evidence"
-        ),
-        EXACT_ADOPTION_PUBLICATION_FIELDS,
-        "exact-state adoption lifecycle evidence",
+    parsed = _load_canonical_json(
+        serialized_adoption_evidence, "observed-root lifecycle evidence"
     )
-    predecessor = _verify_exact_state_adoption_bundle(bundle)
+    if (
+        isinstance(parsed, dict)
+        and set(parsed) == EXACT_ADOPTION_PUBLICATION_FIELDS
+    ):
+        bundle = _require_closed(
+            parsed,
+            EXACT_ADOPTION_PUBLICATION_FIELDS,
+            "exact-state adoption lifecycle evidence",
+        )
+        predecessor = _verify_exact_state_adoption_bundle(bundle)
+    elif (
+        isinstance(parsed, dict)
+        and set(parsed) == UNENROLLED_READY_RECOVERY_PUBLICATION_FIELDS
+    ):
+        bundle = _require_closed(
+            parsed,
+            UNENROLLED_READY_RECOVERY_PUBLICATION_FIELDS,
+            "unenrolled Ready recovery lifecycle evidence",
+        )
+        predecessor = _verify_unenrolled_ready_recovery_bundle(bundle)
+    else:
+        raise LifecycleAuthorityError("observed-root lifecycle evidence is malformed")
     policy = _load_lifecycle_trust_policy(predecessor.repository)
     verifier = _policy_signature_verifier(policy)
     event = _verify_transition_authorization(
@@ -4666,6 +5686,18 @@ def verify_lifecycle_authority_for_publication(
             "publication enrollment requires canonical serialized lifecycle evidence"
         )
     parsed = _load_canonical_json(serialized_evidence, "published lifecycle evidence")
+    if (
+        isinstance(parsed, dict)
+        and set(parsed) == UNENROLLED_READY_RECOVERY_PUBLICATION_FIELDS
+    ):
+        if (
+            parsed.get("transition_authorizations") != []
+            or parsed.get("authority_chain") != []
+        ):
+            raise LifecycleAuthorityError(
+                "unenrolled Ready recovery enrollment must begin at its root"
+            )
+        return _verify_unenrolled_ready_recovery_bundle(parsed, expected)
     if isinstance(parsed, dict) and set(parsed) == EXACT_ADOPTION_PUBLICATION_FIELDS:
         if parsed.get("transition_authorizations") != [] or parsed.get("authority_chain") != []:
             raise LifecycleAuthorityError(
@@ -4717,6 +5749,11 @@ def _verify_lifecycle_authority_for_journal(
             "publication journal requires canonical serialized lifecycle evidence"
         )
     parsed = _load_canonical_json(serialized_evidence, "journal lifecycle evidence")
+    if (
+        isinstance(parsed, dict)
+        and set(parsed) == UNENROLLED_READY_RECOVERY_PUBLICATION_FIELDS
+    ):
+        return _verify_unenrolled_ready_recovery_bundle(parsed, expected)
     if isinstance(parsed, dict) and set(parsed) == EXACT_ADOPTION_PUBLICATION_FIELDS:
         return _verify_exact_state_adoption_bundle(parsed, expected)
     if isinstance(parsed, dict) and set(parsed) == PUBLICATION_EVIDENCE_FIELDS:

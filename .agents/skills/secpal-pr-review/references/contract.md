@@ -473,6 +473,24 @@ checkpoint, lifecycle identity, counters, Ready history, recovery history, and
 continuation history cannot be replaced or reset, and no second checkpoint or
 re-enrollment is permitted.
 
+One additional root provenance,
+`UNENROLLED_READY_DELIVERY_RECOVERY`, applies only when trusted live reads and
+protected journal ancestry prove an ordinary delivery is already open/Ready and
+has never had initialization, a root, or CURRENT. It requires exactly one
+observed Draft-to-Ready transition, complete authenticated validation and
+feedback/finding/thread evidence, preserved finite Review and Remediation
+consumption, and a signed one-use exact-scope authorization. Its lifecycle ID is
+derived from the signed recovery boundary. The proof must state that historical
+lifecycle authority did not exist and that authority begins at recovery.
+
+Historical Ready observation is not historical lifecycle authorization. This
+family cannot claim `INITIALIZED_DRAFT`, authorize the historical Ready event,
+self-select Exact-State-Adoption, mint `READY_INTEGRATION_PRIOR_AUTHORITY`, reset
+a counter, or consume Exceptional Recovery/Continuation. Canonical enrollment
+publishes its only root/CURRENT; journal ancestry and CAS reject replay or any
+competing root. Later current-main advancement remains the ordinary
+`HEAD_ADVANCED` Ready-integration responsibility.
+
 Dynamic publication is one global linear journal on the protected branch
 `refs/heads/secpal-lifecycle-publications`. Installed policy fixes the GitHub
 endpoint, exact branch, ruleset identity, required deletion and
