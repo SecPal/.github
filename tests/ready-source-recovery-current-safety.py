@@ -299,7 +299,12 @@ class ReadySourceRecoveryCurrentSafety(unittest.TestCase):
 
             def visit_ImportFrom(self, node):
                 for alias in node.names:
-                    self.bind(alias.asname or alias.name, node)
+                    self.bind(
+                        "issue_ready_source_recovery_authorization"
+                        if alias.name == "*"
+                        else alias.asname or alias.name,
+                        node,
+                    )
 
             def visit_ExceptHandler(self, node):
                 if node.name:
@@ -338,10 +343,14 @@ class ReadySourceRecoveryCurrentSafety(unittest.TestCase):
             )
             self.assertFalse(definition.decorator_list)
             arguments = definition.args
-            return {
-                item.arg
-                for item in [*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs]
-            }
+            parameters = [
+                *arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs,
+            ]
+            if arguments.vararg is not None:
+                parameters.append(arguments.vararg)
+            if arguments.kwarg is not None:
+                parameters.append(arguments.kwarg)
+            return {item.arg for item in parameters}
 
         accepted_actions = ROOT / "scripts/secpal-pr-review-actions.py"
         self.assertTrue(accepted_actions.is_file())

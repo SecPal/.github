@@ -1684,7 +1684,7 @@ def _reject_candidate_import_authority(
         if path == "secpal_pr_review.py"
         or path.startswith("secpal_pr_review/")
         or path == "scripts/secpal-pr-review-actions.py"
-        or path == "scripts/secpal_pr_review.py"
+        or path == "scripts/secpal-pr-review.py"
         or path.startswith("scripts/secpal_pr_review/")
     }
     if startup or (

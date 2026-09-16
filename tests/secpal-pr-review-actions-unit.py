@@ -13807,6 +13807,9 @@ class ReadySourceCurrentSafetyTests(TestCase):
             "scripts package": {
                 "scripts/secpal_pr_review/__init__.py": "shadow = True\n"
             },
+            "evidence helper": {
+                "scripts/secpal-pr-review.py": "shadow = True\n"
+            },
             "issuer actions": {"scripts/secpal-pr-review-actions.py": "shadow = True\n"},
             "site customizer": {"sitecustomize.py": "shadow = True\n"},
             "user customizer": {"usercustomize.py": "shadow = True\n"},
@@ -13853,6 +13856,58 @@ class ReadySourceCurrentSafetyTests(TestCase):
             fast_path.SecurityBlocker, "current safety failed",
         ):
             self.execute_current_safety(candidate, "SecPal/.github")
+
+    def test_github_candidate_cannot_wildcard_rebind_recovery_issuer(self) -> None:
+        candidate = self.candidate(
+            "SecPal/.github",
+            governance_checkout=True,
+            files={
+                "candidate_module.py": (
+                    "__all__ = ['issue_ready_source_recovery_authorization']\n"
+                    "def issue_ready_source_recovery_authorization("
+                    "*, _validation_runner):\n"
+                    "    return _validation_runner\n"
+                ),
+            },
+            append_files={
+                "scripts/secpal-pr-review-actions.py": (
+                    "\nfrom candidate_module import *\n"
+                ),
+            },
+        )
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "current safety failed",
+        ):
+            self.execute_current_safety(candidate, "SecPal/.github")
+
+    def test_github_candidate_cannot_use_variadic_issuer_injection_parameters(
+        self,
+    ) -> None:
+        cases = {
+            "variadic positional": (
+                "def issue_ready_source_recovery_authorization(\n"
+                "    *, repository: str, delivery_issue: int,",
+                "def issue_ready_source_recovery_authorization(\n"
+                "    *_issuer_source_verifier, repository: str, delivery_issue: int,",
+            ),
+            "variadic keyword": (
+                "    expected_commit_signer: Any, signer_identity: str, signer: Any,\n)",
+                "    expected_commit_signer: Any, signer_identity: str, signer: Any,\n"
+                "    **_validation_runner,\n)",
+            ),
+        }
+        for name, replacement in cases.items():
+            with self.subTest(name=name), self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "current safety failed",
+            ):
+                candidate = self.candidate(
+                    "SecPal/.github",
+                    governance_checkout=True,
+                    replace_files={
+                        "scripts/secpal-pr-review-actions.py": replacement,
+                    },
+                )
+                self.execute_current_safety(candidate, "SecPal/.github")
 
     def test_host_python_paths_have_no_current_safety_authority(self) -> None:
         shadow = self.root / "host-shadow"
