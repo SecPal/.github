@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-16 - Adopt Node 24 LTS Governance Baseline
+
+**Changed:**
+
+- Make Node 24 LTS the shared governance, reusable-workflow, composite-action,
+  and contributor-tooling baseline while preserving caller overrides.
+- Derive local system-requirement enforcement and structural workflow checks
+  from `.nvmrc`, with active documentation kept coherent and historical Node 22
+  evidence preserved.
+
 ## 2026-09-15 - Separate Ready Recovery Tooling And Candidate Provenance
 
 **Fixed:**

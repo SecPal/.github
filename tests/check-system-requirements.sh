@@ -28,7 +28,13 @@ mkdir -p \
 touch "$workspace/android/android/settings.gradle"
 
 cp "$REPO_ROOT/scripts/check-system-requirements.sh" "$workspace/.github/scripts/check-system-requirements.sh"
+cp "$REPO_ROOT/.nvmrc" "$workspace/.github/.nvmrc"
 chmod +x "$workspace/.github/scripts/check-system-requirements.sh"
+
+required_node_major="$(tr -d '[:space:]' <"$REPO_ROOT/.nvmrc")"
+below_node_version="v$((required_node_major - 1)).15.0"
+canonical_node_version="v${required_node_major}.0.0"
+later_patch_node_version="v${required_node_major}.99.0"
 
 cat >"$workspace/android/package.json" <<'JSON'
 {
@@ -118,7 +124,10 @@ stub_command "shellcheck" 'exit 0'
 stub_command "php" 'echo "8.4.0"'
 stub_command "composer" 'exit 0'
 # shellcheck disable=SC2016
-stub_command "node" 'echo "${TEST_NODE_VERSION:-v22.1.0}"'
+stub_command "node" '
+IFS= read -r required_node_major < .nvmrc
+echo "${TEST_NODE_VERSION:-v${required_node_major}.0.0}"
+'
 # shellcheck disable=SC2016
 stub_command "npm" '
 if [ "${1:-}" = "list" ]; then
@@ -177,7 +186,7 @@ run_check() {
       POLYSCOPE_ANDROID_SDK_ROOT="$sdk_root" \
       ANDROID_SDK_ROOT="" \
       ANDROID_HOME="" \
-      TEST_NODE_VERSION="${TEST_NODE_VERSION:-v22.1.0}" \
+      TEST_NODE_VERSION="${TEST_NODE_VERSION:-$canonical_node_version}" \
       /bin/bash ./scripts/check-system-requirements.sh "$@"
   ) >"$output_file" 2>&1
 }
@@ -363,27 +372,46 @@ grep -Fq 'Android SDK Command-Line Tools (sdkmanager)' "$broken_javac_probe_outp
 grep -Fq 'Android SDK Platform-Tools (adb)' "$broken_javac_probe_output"
 grep -Fq 'critical requirement(s) missing' "$broken_javac_probe_output"
 
-old_node_output="$sandbox/node-too-old.txt"
-if TEST_NODE_VERSION="v20.15.0" run_check "$old_node_output" --repo=android; then
-  cat "$old_node_output"
-  echo "android requirements check unexpectedly succeeded with Node.js 20" >&2
+for repo in frontend contracts android; do
+  old_node_output="$sandbox/$repo-node-too-old.txt"
+  if TEST_NODE_VERSION="$below_node_version" run_check "$old_node_output" "--repo=$repo"; then
+    cat "$old_node_output"
+    echo "$repo requirements check unexpectedly succeeded below the canonical Node baseline" >&2
+    exit 1
+  fi
+
+  grep -Fq "Node.js $below_node_version" "$old_node_output"
+  grep -Fq ">= ${required_node_major}.x required; canonical baseline: Node ${required_node_major} LTS" "$old_node_output"
+done
+
+canonical_node_output="$sandbox/node-canonical.txt"
+if ! TEST_NODE_VERSION="$canonical_node_version" run_check "$canonical_node_output" --repo=contracts; then
+  cat "$canonical_node_output"
+  echo "contracts requirements check rejected the canonical Node major" >&2
   exit 1
 fi
+grep -Fq "Node.js $canonical_node_version" "$canonical_node_output"
+grep -Fq "canonical baseline: Node ${required_node_major} LTS" "$canonical_node_output"
 
-grep -Fq 'Node.js v20.15.0' "$old_node_output"
-grep -Fq '>= 22.x required' "$old_node_output"
+later_patch_node_output="$sandbox/node-later-patch.txt"
+if ! TEST_NODE_VERSION="$later_patch_node_version" run_check "$later_patch_node_output" --repo=contracts; then
+  cat "$later_patch_node_output"
+  echo "contracts requirements check rejected a later patch in the canonical Node major" >&2
+  exit 1
+fi
+grep -Fq "Node.js $later_patch_node_version" "$later_patch_node_output"
 
 all_repos_old_node_output="$sandbox/all-repos-node-too-old.txt"
-if TEST_NODE_VERSION="v20.15.0" run_check "$all_repos_old_node_output"; then
+if TEST_NODE_VERSION="$below_node_version" run_check "$all_repos_old_node_output"; then
   cat "$all_repos_old_node_output"
-  echo "all-repositories requirements check unexpectedly succeeded with Node.js 20 and sibling android repo" >&2
+  echo "all-repositories requirements check unexpectedly succeeded below the canonical Node baseline" >&2
   exit 1
 fi
 
 grep -Fq '3. Frontend Repository (React + TypeScript + Node)' "$all_repos_old_node_output"
 grep -Fq '5. Android Repository (Capacitor + Native Android Toolchain)' "$all_repos_old_node_output"
-grep -Fq 'Node.js v20.15.0' "$all_repos_old_node_output"
-grep -Fq '>= 22.x required' "$all_repos_old_node_output"
+grep -Fq "Node.js $below_node_version" "$all_repos_old_node_output"
+grep -Fq ">= ${required_node_major}.x required; canonical baseline: Node ${required_node_major} LTS" "$all_repos_old_node_output"
 
 mv "$workspace/android" "$workspace/android-hidden"
 

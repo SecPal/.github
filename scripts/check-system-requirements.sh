@@ -25,6 +25,21 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+NODE_BASELINE_FILE="$REPO_ROOT/.nvmrc"
+
+if [ ! -f "$NODE_BASELINE_FILE" ]; then
+  echo "Missing canonical Node baseline: $NODE_BASELINE_FILE" >&2
+  exit 1
+fi
+
+IFS= read -r REQUIRED_NODE_MAJOR <"$NODE_BASELINE_FILE"
+if ! [[ "$REQUIRED_NODE_MAJOR" =~ ^[0-9]+$ ]]; then
+  echo "Invalid canonical Node major in $NODE_BASELINE_FILE" >&2
+  exit 1
+fi
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -68,6 +83,27 @@ increment_warning() {
 
 increment_critical_missing() {
   CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
+}
+
+check_node_version() {
+  if command -v node >/dev/null 2>&1; then
+    local node_version major_version
+    node_version="$(node --version | sed 's/^v//')"
+    major_version="$(echo "$node_version" | cut -d. -f1)"
+
+    if [[ "$major_version" =~ ^[0-9]+$ ]] && [ "$major_version" -ge "$REQUIRED_NODE_MAJOR" ]; then
+      echo -e "${GREEN}✓${NC} Node.js v$node_version (minimum >= ${REQUIRED_NODE_MAJOR}.x; canonical baseline: Node ${REQUIRED_NODE_MAJOR} LTS)"
+      OK_COUNT=$((OK_COUNT + 1))
+    else
+      echo -e "${RED}✗${NC} Node.js v$node_version ${RED}(>= ${REQUIRED_NODE_MAJOR}.x required; canonical baseline: Node ${REQUIRED_NODE_MAJOR} LTS)${NC}"
+      echo -e "  ${YELLOW}→${NC} Update Node.js to canonical Node ${REQUIRED_NODE_MAJOR} LTS"
+      increment_critical_missing
+    fi
+  else
+    echo -e "${RED}✗${NC} Node.js ${RED}(not found)${NC}"
+    increment_critical_missing
+  fi
+  NODE_CHECKED=true
 }
 
 resolve_java_tool() {
@@ -402,25 +438,7 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "frontend" ]; then
 
   print_section "Node.js & Package Managers"
 
-  # Check Node version
-  if command -v node >/dev/null 2>&1; then
-    node_version=$(node --version | sed 's/v//')
-    major_version=$(echo "$node_version" | cut -d. -f1)
-
-    if [ "$major_version" -ge 22 ]; then
-      echo -e "${GREEN}✓${NC} Node.js v$node_version (>= 22.x required)"
-      OK_COUNT=$((OK_COUNT + 1))
-    else
-      echo -e "${YELLOW}⚠${NC} Node.js v$node_version ${YELLOW}(>= 22.x recommended)${NC}"
-      echo -e "  ${YELLOW}→${NC} Update Node.js to 22.x LTS"
-      WARNING_COUNT=$((WARNING_COUNT + 1))
-    fi
-    NODE_CHECKED=true
-  else
-    echo -e "${RED}✗${NC} Node.js ${RED}(not found)${NC}"
-    CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
-    NODE_CHECKED=true
-  fi
+  check_node_version
 
   check_command "npm" "npm" "critical" "Comes with Node.js"
   check_command "yarn" "yarn" "optional" "Install: npm install -g yarn"
@@ -491,23 +509,7 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "contracts" ]; then
 
   # Check Node version (skip if already checked in frontend section)
   if [ "$NODE_CHECKED" = false ]; then
-    if command -v node >/dev/null 2>&1; then
-      node_version=$(node --version | sed 's/v//')
-      major_version=$(echo "$node_version" | cut -d. -f1)
-
-      if [ "$major_version" -ge 22 ]; then
-        echo -e "${GREEN}✓${NC} Node.js v$node_version (>= 22.x required)"
-        OK_COUNT=$((OK_COUNT + 1))
-      else
-        echo -e "${YELLOW}⚠${NC} Node.js v$node_version ${YELLOW}(>= 22.x recommended)${NC}"
-        echo -e "  ${YELLOW}→${NC} Update Node.js to 22.x LTS"
-        WARNING_COUNT=$((WARNING_COUNT + 1))
-      fi
-    else
-      echo -e "${RED}✗${NC} Node.js ${RED}(not found)${NC}"
-      CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
-    fi
-
+    check_node_version
     check_command "npm" "npm" "critical" "Comes with Node.js"
   fi
 
@@ -551,34 +553,8 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "android" ]; then
   print_section "Node.js & npm"
 
   if [ "$NODE_CHECKED" = false ]; then
-    if command -v node >/dev/null 2>&1; then
-      node_version=$(node --version | sed 's/v//')
-      major_version=$(echo "$node_version" | cut -d. -f1)
-
-      if [ "$major_version" -ge 22 ]; then
-        echo -e "${GREEN}✓${NC} Node.js v$node_version (>= 22.x required)"
-        OK_COUNT=$((OK_COUNT + 1))
-      else
-        echo -e "${RED}✗${NC} Node.js v$node_version ${RED}(>= 22.x required)${NC}"
-        echo -e "  ${YELLOW}→${NC} Update Node.js to 22.x LTS"
-        CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
-      fi
-    else
-      echo -e "${RED}✗${NC} Node.js ${RED}(not found)${NC}"
-      CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
-    fi
-
+    check_node_version
     check_command "npm" "npm" "critical" "Comes with Node.js"
-    NODE_CHECKED=true
-  elif command -v node >/dev/null 2>&1; then
-    node_version=$(node --version | sed 's/v//')
-    major_version=$(echo "$node_version" | cut -d. -f1)
-
-    if [ "$major_version" -lt 22 ]; then
-      echo -e "${RED}✗${NC} Node.js v$node_version ${RED}(>= 22.x required)${NC}"
-      echo -e "  ${YELLOW}→${NC} Update Node.js to 22.x LTS"
-      increment_critical_missing
-    fi
   fi
 
   print_section "Java & Android SDK"

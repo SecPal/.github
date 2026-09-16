@@ -15,7 +15,7 @@ Ensure you have the following tools installed:
 
 - **Git** with cryptographic commit signing configured (SSH is preferred for a
   new setup; OpenPGP remains supported)
-- **Node.js** (v22.x) and npm/pnpm/yarn
+- **Node.js** (v24.x LTS) and npm/pnpm/yarn
 - **PHP** 8.4 and Composer (for backend projects)
 - **Pre-commit** hooks tool (optional but recommended)
 

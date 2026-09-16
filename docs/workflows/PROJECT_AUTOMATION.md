@@ -96,7 +96,7 @@ See [ROLLOUT_GUIDE.md](./ROLLOUT_GUIDE.md) for deployment instructions.
 
 For incremental development and self-review:
 
-Run these PR-body commands from the trusted governance checkout with Node.js 22
+Run these PR-body commands from the trusted governance checkout with Node.js 24 LTS
 and `npm ci --ignore-scripts` completed. For target repositories without these
 scripts, use the canonical-source setup in [ROLLOUT_GUIDE.md](./ROLLOUT_GUIDE.md).
 

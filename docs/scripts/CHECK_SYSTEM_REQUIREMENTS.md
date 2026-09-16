@@ -81,7 +81,7 @@ If you want to run workflow linting locally outside pre-commit and CI, install `
 
 **Node.js & Package Managers:**
 
-- Node.js 22.x+ - critical
+- Node.js 24.x+ - critical; Node 24 LTS is the canonical supported baseline
 - npm - critical
 - yarn - optional
 - pnpm - optional
@@ -97,7 +97,7 @@ If you want to run workflow linting locally outside pre-commit and CI, install `
 
 **Node.js & npm:**
 
-- Node.js 22.x+ - critical
+- Node.js 24.x+ - critical; Node 24 LTS is the canonical supported baseline
 - npm - critical
 
 **Local Dependencies (contracts/node_modules):**
@@ -108,7 +108,7 @@ If you want to run workflow linting locally outside pre-commit and CI, install `
 
 **Node.js & npm:**
 
-- Node.js 22.x+ - critical
+- Node.js 24.x+ - critical; Node 24 LTS is the canonical supported baseline
 - npm - critical
 
 **Java & Android SDK:**
