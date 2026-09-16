@@ -303,7 +303,7 @@ class RepositoryScanContractTests(unittest.TestCase):
             root = Path(temporary)
             native = root / "native.json"
             output = root / "result.json"
-            native.write_bytes((FIXTURES / "malformed.json").read_bytes())
+            native.write_bytes((FIXTURES / "malformed.txt").read_bytes())
             completed = subprocess.run(
                 [
                     "python3",
