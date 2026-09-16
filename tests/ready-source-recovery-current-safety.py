@@ -4,19 +4,38 @@
 
 from __future__ import annotations
 
+import ast
 import copy
 import hashlib
-import importlib.util
 import inspect
 import io
 import json
+import os
 from pathlib import Path
+import re
 import sys
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.append(str(ROOT / "scripts"))
+CANDIDATE_ROOT = Path(
+    os.environ["SECPAL_CURRENT_SAFETY_CANDIDATE_ROOT"]
+).resolve(strict=True)
+CANDIDATE_REPOSITORY = os.environ[
+    "SECPAL_CURRENT_SAFETY_CANDIDATE_REPOSITORY"
+]
+if (
+    Path(os.environ["SECPAL_CURRENT_SAFETY_TOOLING_ROOT"]).resolve(strict=True)
+    != ROOT
+    or ROOT == CANDIDATE_ROOT
+    or ROOT in CANDIDATE_ROOT.parents
+    or CANDIDATE_ROOT in ROOT.parents
+    or re.fullmatch(
+        r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", CANDIDATE_REPOSITORY
+    )
+    is None
+):
+    raise RuntimeError("current-safety provenance roots are invalid")
 from secpal_pr_review import fast_path, lifecycle_authority as authority
 
 REPOSITORY = "example/project"
@@ -203,27 +222,148 @@ class ReadySourceRecoveryCurrentSafety(unittest.TestCase):
                 fast_path.StableFeedbackState.from_payload(changed)
 
     def test_candidate_issuer_separation(self):
-        spec = importlib.util.spec_from_file_location(
-            "ready_source_candidate_actions",
-            ROOT / "scripts/secpal-pr-review-actions.py",
-        )
-        if spec is None or spec.loader is None:
-            self.fail("candidate actions module has no executable loader")
-        actions = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = actions
-        spec.loader.exec_module(actions)
-        issuer = getattr(actions, "issue_ready_source_recovery_authorization", None)
-        if issuer is None:
-            self.assertFalse(
-                hasattr(actions, "_run_ready_source_recovery_current_safety")
-            )
-            return
-        parameters = inspect.signature(issuer).parameters
-        for forbidden in (
+        tooling_scripts = (ROOT / "scripts").resolve(strict=True)
+        for module in (fast_path, authority):
+            source = Path(module.__file__).resolve(strict=True)
+            self.assertIn(tooling_scripts, source.parents)
+            self.assertNotIn(CANDIDATE_ROOT, source.parents)
+        self.assertNotIn(str(CANDIDATE_ROOT), sys.path)
+        for module in tuple(sys.modules.values()):
+            source = getattr(module, "__file__", None)
+            if not isinstance(source, str):
+                continue
+            try:
+                resolved = Path(source).resolve(strict=True)
+            except OSError:
+                continue
+            self.assertNotIn(CANDIDATE_ROOT, resolved.parents)
+
+        forbidden = {
             "registry", "command_set", "safety_facts", "current_lifecycle",
             "_validation_runner", "_issuer_source_verifier",
-        ):
-            self.assertNotIn(forbidden, parameters)
+        }
+
+        class ModuleBindingVisitor(ast.NodeVisitor):
+            """Collect conservative bindings made while a module is loaded."""
+
+            def __init__(self):
+                self.bindings = []
+
+            def bind(self, name, node):
+                if name == "issue_ready_source_recovery_authorization":
+                    self.bindings.append(node)
+
+            def visit_Name(self, node):
+                if isinstance(node.ctx, (ast.Store, ast.Del)):
+                    self.bind(node.id, node)
+
+            def visit_FunctionDef(self, node):
+                self.bind(node.name, node)
+                for expression in [
+                    *node.decorator_list,
+                    *node.args.defaults,
+                    *(
+                        default for default in node.args.kw_defaults
+                        if default is not None
+                    ),
+                    *(argument.annotation for argument in [
+                        *node.args.posonlyargs,
+                        *node.args.args,
+                        *node.args.kwonlyargs,
+                    ] if argument.annotation is not None),
+                ]:
+                    self.visit(expression)
+                if node.args.vararg and node.args.vararg.annotation:
+                    self.visit(node.args.vararg.annotation)
+                if node.args.kwarg and node.args.kwarg.annotation:
+                    self.visit(node.args.kwarg.annotation)
+                if node.returns:
+                    self.visit(node.returns)
+
+            visit_AsyncFunctionDef = visit_FunctionDef
+
+            def visit_ClassDef(self, node):
+                self.bind(node.name, node)
+                for expression in [
+                    *node.decorator_list, *node.bases,
+                    *(keyword.value for keyword in node.keywords),
+                ]:
+                    self.visit(expression)
+
+            def visit_Lambda(self, _node):
+                return
+
+            def visit_Import(self, node):
+                for alias in node.names:
+                    self.bind(alias.asname or alias.name.split(".", 1)[0], node)
+
+            def visit_ImportFrom(self, node):
+                for alias in node.names:
+                    self.bind(
+                        "issue_ready_source_recovery_authorization"
+                        if alias.name == "*"
+                        else alias.asname or alias.name,
+                        node,
+                    )
+
+            def visit_ExceptHandler(self, node):
+                if node.name:
+                    self.bind(node.name, node)
+                if node.type:
+                    self.visit(node.type)
+                for statement in node.body:
+                    self.visit(statement)
+
+            def visit_MatchAs(self, node):
+                if node.pattern:
+                    self.visit(node.pattern)
+                if node.name:
+                    self.bind(node.name, node)
+
+            def visit_MatchStar(self, node):
+                if node.name:
+                    self.bind(node.name, node)
+
+            def visit_MatchMapping(self, node):
+                for key in node.keys:
+                    self.visit(key)
+                for pattern in node.patterns:
+                    self.visit(pattern)
+                if node.rest:
+                    self.bind(node.rest, node)
+
+        def issuer_parameters(path):
+            tree = ast.parse(path.read_bytes(), filename=str(path))
+            visitor = ModuleBindingVisitor()
+            visitor.visit(tree)
+            self.assertEqual(len(visitor.bindings), 1)
+            definition = visitor.bindings[0]
+            self.assertIsInstance(
+                definition, (ast.FunctionDef, ast.AsyncFunctionDef),
+            )
+            self.assertFalse(definition.decorator_list)
+            arguments = definition.args
+            parameters = [
+                *arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs,
+            ]
+            if arguments.vararg is not None:
+                parameters.append(arguments.vararg)
+            if arguments.kwarg is not None:
+                parameters.append(arguments.kwarg)
+            return {item.arg for item in parameters}
+
+        accepted_actions = ROOT / "scripts/secpal-pr-review-actions.py"
+        self.assertTrue(accepted_actions.is_file())
+        self.assertFalse(forbidden.intersection(issuer_parameters(accepted_actions)))
+
+        candidate_actions = CANDIDATE_ROOT / "scripts/secpal-pr-review-actions.py"
+        if CANDIDATE_REPOSITORY == "SecPal/.github":
+            self.assertTrue(candidate_actions.is_file())
+            self.assertFalse(
+                forbidden.intersection(issuer_parameters(candidate_actions))
+            )
+        else:
+            self.assertFalse(candidate_actions.exists())
 
 
 def main(arguments):

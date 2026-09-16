@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-15 - Separate Ready Recovery Tooling And Candidate Provenance
+
+**Fixed:**
+
+- Execute Ready-source recovery current safety for registered product
+  repositories with governance imports materialized exclusively from
+  authenticated protected `.github/main` Git blobs.
+- Keep immutable candidate source in a distinct non-importable root, reject
+  candidate and host Python shadow authority, and preserve the existing six
+  invariants and historical evidence semantics.
+
 ## 2026-09-15 - Bind Exact-Adoption Ready Provider Provenance
 
 **Fixed:**

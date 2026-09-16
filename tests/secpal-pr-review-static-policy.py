@@ -772,6 +772,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "verify_validation_attestation",
             "derive_ready_source_recovery_safety_facts",
             "_actual_integration_signer",
+            "READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS",
         },
         "follow_up": {
             "FollowUpError",
@@ -797,7 +798,8 @@ LOADED_MODULE_ATTRIBUTES = {
             "version_collision",
         },
         "exact_source_safety": {
-            "authority", "build_profile", "execution_root", "run_profile", "transport",
+            "authority", "build_profile", "execution_root", "run_profile",
+            "transport", "two_provenance_execution_roots",
         },
     },
     "fast_path.py": {

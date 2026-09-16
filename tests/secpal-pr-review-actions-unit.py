@@ -13,6 +13,7 @@ import importlib.util
 import inspect
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -7725,8 +7726,10 @@ class FastPathTests(TestCase):
                 return_value=profile,
             ),
             mock.patch.object(
-                actions.exact_source_safety, "execution_root",
-                return_value=nullcontext(REPO_ROOT),
+                actions.exact_source_safety, "two_provenance_execution_roots",
+                return_value=nullcontext(SimpleNamespace(
+                    tooling=REPO_ROOT, candidate=REPO_ROOT / "candidate",
+                )),
             ),
             mock.patch.object(
                 actions.exact_source_safety, "run_profile",
@@ -7737,7 +7740,7 @@ class FastPathTests(TestCase):
             self.assertRaisesRegex(fast_path.SecurityBlocker, "current safety failed"),
         ):
             actions._run_ready_source_recovery_current_safety(
-                "f" * 40, REPO_ROOT, profile,
+                "f" * 40, REPO_ROOT, profile, "SecPal/.github",
             )
 
     def test_exact_source_profile_combines_multi_command_invariants(self) -> None:
@@ -8023,7 +8026,7 @@ class FastPathTests(TestCase):
                         fast_path.SecurityBlocker
                     ):
                         actions._run_ready_source_recovery_current_safety(
-                            accepted_head, candidate, changed
+                            accepted_head, candidate, changed, "SecPal/.github"
                         )
                 current = SimpleNamespace(
                     lifecycle=object(), publication_oid="2" * 40,
@@ -8066,6 +8069,62 @@ class FastPathTests(TestCase):
                 ),
                 before,
             )
+
+    def test_ready_source_current_safety_uses_accepted_tooling_for_foreign_candidate(
+        self,
+    ) -> None:
+        """A registered product tree must not need governance implementation bytes."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            accepted = temporary / "accepted"
+            candidate = temporary / "candidate"
+            accepted.mkdir()
+            shutil.copytree(
+                REPO_ROOT / "scripts", accepted / "scripts",
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            )
+            (accepted / "tests").mkdir()
+            shutil.copy2(
+                REPO_ROOT / actions.READY_SOURCE_RECOVERY_CURRENT_SAFETY_PATH,
+                accepted / actions.READY_SOURCE_RECOVERY_CURRENT_SAFETY_PATH,
+            )
+            subprocess.run(["git", "-C", str(accepted), "init", "--quiet"], check=True)
+            subprocess.run(["git", "-C", str(accepted), "add", "-f", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(accepted), "-c", "user.name=Test", "-c",
+                 "user.email=test@example.invalid", "commit", "--quiet", "-m", "accepted"],
+                check=True,
+            )
+            accepted_head = subprocess.check_output(
+                ["git", "-C", str(accepted), "rev-parse", "HEAD"], text=True,
+            ).strip()
+            candidate.mkdir()
+            (candidate / "deployment-product.txt").write_text(
+                "immutable deployment source\n", encoding="utf-8",
+            )
+            subprocess.run(["git", "-C", str(candidate), "init", "--quiet"], check=True)
+            subprocess.run(
+                ["git", "-C", str(candidate), "remote", "add", "origin",
+                 "https://github.com/SecPal/deployment.git"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(candidate), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(candidate), "-c", "user.name=Test", "-c",
+                 "user.email=test@example.invalid", "commit", "--quiet", "-m", "candidate"],
+                check=True,
+            )
+
+            with mock.patch.object(actions, "REPOSITORY_ROOT", accepted):
+                profile = actions._ready_source_recovery_current_safety_profile(
+                    accepted_head
+                )
+                self.assertTrue(
+                    actions._run_ready_source_recovery_current_safety(
+                        accepted_head, candidate, profile, "SecPal/deployment",
+                    )
+                )
 
     def test_ready_source_recovery_safety_acquisition_owns_observation_and_execution(self) -> None:
         reviewed = fast_feedback(thread_count=0)
@@ -8154,7 +8213,10 @@ class FastPathTests(TestCase):
             {"kind": "SSH_PRINCIPAL", "identity": "reviewer"},
         )
         validation_runner.assert_called_once_with(
-            "f" * 40, REPO_ROOT, ready_source_current_safety_profile()
+            "f" * 40,
+            REPO_ROOT,
+            ready_source_current_safety_profile(),
+            reviewed.repository,
         )
 
     def test_ready_source_acquisition_accepts_derived_predecessor_provider(self) -> None:
@@ -8565,7 +8627,10 @@ class FastPathTests(TestCase):
             result["kind"], "SECPAL_READY_SOURCE_RECOVERY_AUTHORIZATION"
         )
         validation_runner.assert_called_once_with(
-            "f" * 40, REPO_ROOT, ready_source_current_safety_profile()
+            "f" * 40,
+            REPO_ROOT,
+            ready_source_current_safety_profile(),
+            reviewed.repository,
         )
         self.assertEqual(
             issuer_source_verifier.call_args_list,
@@ -8609,8 +8674,27 @@ class FastPathTests(TestCase):
             return_value=("f" * 40, " M scripts/secpal-pr-review-actions.py"),
         ), self.assertRaises(fast_path.SecurityBlocker):
             actions._verify_recovery_issuer_source("f" * 40)
-        with mock.patch.object(
-            actions, "_attestation_local_state", return_value=("f" * 40, "")
+        with (
+            mock.patch.object(
+                actions, "_attestation_local_state", return_value=("f" * 40, "")
+            ),
+            mock.patch.object(
+                actions, "_require_accepted_main_bridge_source",
+                return_value="f" * 40,
+            ),
+        ):
+            actions._verify_recovery_issuer_source("f" * 40)
+        with (
+            mock.patch.object(
+                actions, "_attestation_local_state", return_value=("f" * 40, "")
+            ),
+            mock.patch.object(
+                actions, "_require_accepted_main_bridge_source",
+                side_effect=fast_path.SecurityBlocker("unverified accepted main"),
+            ),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "unverified accepted main",
+            ),
         ):
             actions._verify_recovery_issuer_source("f" * 40)
 
@@ -13605,6 +13689,319 @@ class FastPathTests(TestCase):
         self.assertEqual(fallback["status"], "BLOCKED_REPORT_PERSISTENCE_FAILED")
         self.assertEqual(fallback["applied"], report["applied"])
         self.assertEqual(fallback["applied"], report["applied"])
+
+
+class ReadySourceCurrentSafetyTests(TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.accepted = self.root / "accepted"
+        self.accepted.mkdir()
+        accepted_paths = (
+            actions.READY_SOURCE_RECOVERY_CURRENT_SAFETY_PATH,
+            *actions.READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS,
+        )
+        for relative in accepted_paths:
+            destination = self.accepted / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPO_ROOT / relative, destination)
+        self.accepted_head = self._commit(self.accepted, "accepted tooling")
+        self.profile = None
+        with mock.patch.object(actions, "REPOSITORY_ROOT", self.accepted):
+            self.profile = actions._ready_source_recovery_current_safety_profile(
+                self.accepted_head
+            )
+        self.candidate_index = 0
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def _commit(self, root: Path, subject: str) -> str:
+        subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
+        subprocess.run(["git", "-C", str(root), "add", "-f", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "-c", "user.name=Test", "-c",
+             "user.email=test@example.invalid", "commit", "--quiet", "-m", subject],
+            check=True,
+        )
+        return subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True,
+        ).strip()
+
+    def candidate(
+        self,
+        repository: str = "SecPal/deployment",
+        *,
+        files: dict[str, str] | None = None,
+        governance_checkout: bool = False,
+        symlink: tuple[str, str] | None = None,
+        append_files: dict[str, str] | None = None,
+        replace_files: dict[str, tuple[str, str]] | None = None,
+    ) -> Path:
+        self.candidate_index += 1
+        root = self.root / f"candidate-{self.candidate_index}"
+        root.mkdir()
+        (root / "product.txt").write_text("immutable product source\n", encoding="utf-8")
+        if governance_checkout:
+            shutil.copytree(
+                REPO_ROOT / "scripts", root / "scripts",
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            )
+        for relative, value in (files or {}).items():
+            destination = root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(value, encoding="utf-8")
+        for relative, value in (append_files or {}).items():
+            with (root / relative).open("a", encoding="utf-8") as output:
+                output.write(value)
+        for relative, (old, new) in (replace_files or {}).items():
+            path = root / relative
+            contents = path.read_text(encoding="utf-8")
+            self.assertEqual(contents.count(old), 1)
+            path.write_text(contents.replace(old, new), encoding="utf-8")
+        if symlink is not None:
+            (root / symlink[0]).symlink_to(symlink[1])
+        subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "remote", "add", "origin",
+             f"https://github.com/{repository}.git"],
+            check=True,
+        )
+        subprocess.run(["git", "-C", str(root), "add", "-f", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "-c", "user.name=Test", "-c",
+             "user.email=test@example.invalid", "commit", "--quiet", "-m", "candidate"],
+            check=True,
+        )
+        return root
+
+    def execute_current_safety(
+        self, candidate: Path, repository: str = "SecPal/deployment"
+    ) -> bool:
+        with mock.patch.object(actions, "REPOSITORY_ROOT", self.accepted):
+            return actions._run_ready_source_recovery_current_safety(
+                self.accepted_head,
+                candidate,
+                copy.deepcopy(self.profile),
+                repository,
+            )
+
+    def test_github_candidate_remains_valid_with_separate_accepted_tooling(self) -> None:
+        candidate = self.candidate(
+            "SecPal/.github", governance_checkout=True,
+        )
+        before = subprocess.check_output(
+            ["git", "-C", str(candidate), "status", "--porcelain=v2"], text=True,
+        )
+        self.assertTrue(self.execute_current_safety(candidate, "SecPal/.github"))
+        self.assertEqual(
+            subprocess.check_output(
+                ["git", "-C", str(candidate), "status", "--porcelain=v2"], text=True,
+            ),
+            before,
+        )
+
+    def test_foreign_candidate_import_authority_is_rejected(self) -> None:
+        cases = {
+            "root package": {"secpal_pr_review/__init__.py": "shadow = True\n"},
+            "scripts package": {
+                "scripts/secpal_pr_review/__init__.py": "shadow = True\n"
+            },
+            "evidence helper": {
+                "scripts/secpal-pr-review.py": "shadow = True\n"
+            },
+            "issuer actions": {"scripts/secpal-pr-review-actions.py": "shadow = True\n"},
+            "site customizer": {"sitecustomize.py": "shadow = True\n"},
+            "user customizer": {"usercustomize.py": "shadow = True\n"},
+            "path file": {"candidate.pth": "./shadow\n"},
+            "bytecode cache": {"shadow.pyc": "candidate bytecode\n"},
+        }
+        for name, files in cases.items():
+            with self.subTest(name=name), self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "current safety failed",
+            ):
+                self.execute_current_safety(self.candidate(files=files))
+
+    def test_github_candidate_cannot_rebind_recovery_issuer(self) -> None:
+        candidate = self.candidate(
+            "SecPal/.github",
+            governance_checkout=True,
+            append_files={
+                "scripts/secpal-pr-review-actions.py": (
+                    "\ndef candidate_selected_issuer(*, _validation_runner):\n"
+                    "    return _validation_runner\n"
+                    "\nissue_ready_source_recovery_authorization = "
+                    "candidate_selected_issuer\n"
+                ),
+            },
+        )
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "current safety failed",
+        ):
+            self.execute_current_safety(candidate, "SecPal/.github")
+
+    def test_github_candidate_cannot_decorate_recovery_issuer(self) -> None:
+        candidate = self.candidate(
+            "SecPal/.github",
+            governance_checkout=True,
+            replace_files={
+                "scripts/secpal-pr-review-actions.py": (
+                    "\ndef issue_ready_source_recovery_authorization(\n",
+                    "\n@staticmethod\n"
+                    "def issue_ready_source_recovery_authorization(\n",
+                ),
+            },
+        )
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "current safety failed",
+        ):
+            self.execute_current_safety(candidate, "SecPal/.github")
+
+    def test_github_candidate_cannot_wildcard_rebind_recovery_issuer(self) -> None:
+        candidate = self.candidate(
+            "SecPal/.github",
+            governance_checkout=True,
+            files={
+                "candidate_module.py": (
+                    "__all__ = ['issue_ready_source_recovery_authorization']\n"
+                    "def issue_ready_source_recovery_authorization("
+                    "*, _validation_runner):\n"
+                    "    return _validation_runner\n"
+                ),
+            },
+            append_files={
+                "scripts/secpal-pr-review-actions.py": (
+                    "\nfrom candidate_module import *\n"
+                ),
+            },
+        )
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "current safety failed",
+        ):
+            self.execute_current_safety(candidate, "SecPal/.github")
+
+    def test_github_candidate_cannot_use_variadic_issuer_injection_parameters(
+        self,
+    ) -> None:
+        cases = {
+            "variadic positional": (
+                "def issue_ready_source_recovery_authorization(\n"
+                "    *, repository: str, delivery_issue: int,",
+                "def issue_ready_source_recovery_authorization(\n"
+                "    *_issuer_source_verifier, repository: str, delivery_issue: int,",
+            ),
+            "variadic keyword": (
+                "    expected_commit_signer: Any, signer_identity: str, signer: Any,\n)",
+                "    expected_commit_signer: Any, signer_identity: str, signer: Any,\n"
+                "    **_validation_runner,\n)",
+            ),
+        }
+        for name, replacement in cases.items():
+            with self.subTest(name=name), self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "current safety failed",
+            ):
+                candidate = self.candidate(
+                    "SecPal/.github",
+                    governance_checkout=True,
+                    replace_files={
+                        "scripts/secpal-pr-review-actions.py": replacement,
+                    },
+                )
+                self.execute_current_safety(candidate, "SecPal/.github")
+
+    def test_host_python_paths_have_no_current_safety_authority(self) -> None:
+        shadow = self.root / "host-shadow"
+        (shadow / "secpal_pr_review").mkdir(parents=True)
+        (shadow / "secpal_pr_review/__init__.py").write_text(
+            "raise RuntimeError('host shadow imported')\n", encoding="utf-8",
+        )
+        with mock.patch.dict(
+            os.environ,
+            {
+                "PYTHONPATH": str(shadow),
+                "PYTHONHOME": str(shadow),
+                "PYTHONUSERBASE": str(shadow),
+            },
+        ):
+            self.assertTrue(self.execute_current_safety(self.candidate()))
+
+    def test_profile_rejects_wrong_commit_and_governance_inventory_drift(self) -> None:
+        candidate = self.candidate()
+        with mock.patch.object(actions, "REPOSITORY_ROOT", self.accepted):
+            with self.assertRaises(fast_path.SecurityBlocker):
+                actions._run_ready_source_recovery_current_safety(
+                    "f" * 40,
+                    candidate,
+                    copy.deepcopy(self.profile),
+                    "SecPal/deployment",
+                )
+            substitutions = {
+                "blob": lambda profile: profile["tooling"][0].update(
+                    blob_oid="0" * 40
+                ),
+                "missing": lambda profile: profile["tooling"].pop(),
+                "undeclared": lambda profile: profile["tooling"].append(
+                    copy.deepcopy(profile["tooling"][0])
+                ),
+                "execution model": lambda profile: profile.update(
+                    execution_model="CANDIDATE_TOOLING"
+                ),
+            }
+            for name, substitute in substitutions.items():
+                changed = copy.deepcopy(self.profile)
+                substitute(changed)
+                with self.subTest(name=name), self.assertRaises(
+                    fast_path.SecurityBlocker
+                ):
+                    actions._run_ready_source_recovery_current_safety(
+                        self.accepted_head,
+                        candidate,
+                        changed,
+                        "SecPal/deployment",
+                    )
+
+    def test_root_alias_nesting_and_symlink_crossing_fail_closed(self) -> None:
+        helper = actions.exact_source_safety
+        parent = self.root / "roots"
+        child = parent / "nested"
+        child.mkdir(parents=True)
+        for tooling, candidate in ((parent, parent), (parent, child), (child, parent)):
+            with self.subTest(tooling=tooling, candidate=candidate), self.assertRaises(
+                helper.authority.LifecycleAuthorityError
+            ):
+                helper._verify_root_separation(tooling, candidate)
+        linked = self.root / "linked-root"
+        linked.symlink_to(parent, target_is_directory=True)
+        with self.assertRaises(helper.authority.LifecycleAuthorityError):
+            helper._verify_root_separation(linked, child)
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "current safety failed",
+        ):
+            self.execute_current_safety(
+                self.candidate(symlink=("crossing.py", "/tmp/outside.py"))
+            )
+
+    def test_tooling_root_rejects_extra_executable_and_preserves_six_invariants(
+        self,
+    ) -> None:
+        helper = actions.exact_source_safety
+        candidate = self.candidate()
+        self.assertEqual(
+            len(actions.READY_SOURCE_RECOVERY_CURRENT_SAFETY_INVARIANTS), 6
+        )
+        with self.assertRaisesRegex(
+            helper.authority.LifecycleAuthorityError, "undeclared files",
+        ):
+            with helper.two_provenance_execution_roots(
+                self.accepted,
+                self.accepted_head,
+                source_root=candidate,
+                candidate_repository="SecPal/deployment",
+                profile=self.profile,
+            ) as roots:
+                extra = roots.tooling / "scripts/extra-authority.py"
+                extra.write_text("authority = True\n", encoding="utf-8")
+                extra.chmod(0o755)
 
 
 class PolicyScriptTests(TestCase):

@@ -73,6 +73,14 @@ DIRECT_VALIDATION_EXECUTABLES = frozenset(
 )
 COMPOSER_VALIDATION_SCRIPTS = frozenset({"analyse", "ci:check", "test"})
 EXTERNAL_COMMAND_TIMEOUT_SECONDS = 30
+READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS = (
+    "scripts/secpal-pr-review-actions.py",
+    "scripts/secpal-pr-review.py",
+    "scripts/secpal_pr_review/fast_path.py",
+    "scripts/secpal_pr_review/follow_up.py",
+    "scripts/secpal_pr_review/lifecycle_authority.py",
+    "scripts/secpal_pr_review/pre_enrollment_integration.py",
+)
 
 
 def _load_follow_up_helper() -> Any:
@@ -6230,6 +6238,7 @@ def derive_ready_source_recovery_safety_facts(
             "validation_command_set_digest", "timeout_seconds",
             "required_invariants", "validation_results",
         }
+        extended_profile_fields = profile_fields | {"execution_model", "tooling"}
         harness = current_safety_profile.get("harness") if isinstance(
             current_safety_profile, dict
         ) else None
@@ -6242,9 +6251,20 @@ def derive_ready_source_recovery_safety_facts(
         results = current_safety_profile.get("validation_results") if isinstance(
             current_safety_profile, dict
         ) else None
+        tooling = current_safety_profile.get("tooling") if isinstance(
+            current_safety_profile, dict
+        ) else None
+        expected_tooling_paths = list(
+            READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS
+        )
+        extended_profile = (
+            isinstance(current_safety_profile, dict)
+            and set(current_safety_profile) == extended_profile_fields
+        )
         if (
             not isinstance(current_safety_profile, dict)
-            or set(current_safety_profile) != profile_fields
+            or frozenset(current_safety_profile)
+            not in {frozenset(profile_fields), frozenset(extended_profile_fields)}
             or current_safety_profile.get("schema_version") != "1.0"
             or current_safety_profile.get("policy")
             != "READY_SOURCE_RECOVERY_CURRENT_SAFETY"
@@ -6275,6 +6295,28 @@ def derive_ready_source_recovery_safety_facts(
                 "exit_status": 0,
                 "successful": True,
             }]
+            or (
+                extended_profile
+                and (
+                    current_safety_profile.get("execution_model")
+                    != "ACCEPTED_MAIN_TOOLING_WITH_EXACT_CANDIDATE"
+                    or not isinstance(tooling, list)
+                    or [item.get("path") for item in tooling if isinstance(item, dict)]
+                    != expected_tooling_paths
+                    or len(tooling) != len(expected_tooling_paths)
+                    or any(
+                        not isinstance(item, dict)
+                        or set(item) != {"path", "mode", "blob_oid", "size"}
+                        or item.get("mode") not in {"100644", "100755"}
+                        or not isinstance(item.get("blob_oid"), str)
+                        or OID.fullmatch(item["blob_oid"]) is None
+                        or not isinstance(item.get("size"), int)
+                        or isinstance(item.get("size"), bool)
+                        or item["size"] < 1
+                        for item in tooling
+                    )
+                )
+            )
             or registry.get("ready_source_recovery_current_safety")
             != current_safety_profile
             or command_set != commands
