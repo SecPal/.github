@@ -106,6 +106,49 @@ test("Node execution requires an explicit qualified setup", () => {
   );
 });
 
+test("input-driven Node commands require an explicit qualified setup", () => {
+  const workflow = reusableWorkflow();
+  workflow.on.workflow_call.inputs["install-command"] = { default: "npm ci" };
+  workflow.jobs.lint.steps = [
+    {
+      env: { INSTALL_CMD: "${{ inputs.install-command }}" },
+      run: "$INSTALL_CMD",
+    },
+  ];
+
+  assert.match(
+    validateWorkflowDocument(workflow, CANONICAL_MAJOR, "fixture.yml").join("\n"),
+    /without an explicit Node setup step/
+  );
+});
+
+test("Node setup must precede Node commands", () => {
+  const workflow = directWorkflow();
+  workflow.jobs.validate.steps.reverse();
+
+  assert.match(
+    validateWorkflowDocument(workflow, CANONICAL_MAJOR, "fixture.yml").join("\n"),
+    /before its Node tooling command/
+  );
+});
+
+test("local setup action may use its validated default selector", () => {
+  const workflow = {
+    jobs: {
+      validate: {
+        steps: [{ uses: "./.github/actions/setup-node-with-deps" }],
+      },
+    },
+  };
+
+  assert.deepEqual(
+    validateWorkflowDocument(workflow, CANONICAL_MAJOR, "fixture.yml", {
+      localSetupDefault: `${CANONICAL_MAJOR}.x`,
+    }),
+    []
+  );
+});
+
 test("composite action default agrees with the canonical major", () => {
   const action = {
     inputs: { "node-version": { default: "22.x" } },
@@ -121,6 +164,26 @@ test("composite action default agrees with the canonical major", () => {
   assert.match(
     validateCompositeDocument(action, CANONICAL_MAJOR, "action.yml").join("\n"),
     new RegExp(`default.*Node ${CANONICAL_MAJOR}`)
+  );
+});
+
+test("composite action requires setup before installing Node dependencies", () => {
+  const action = {
+    inputs: { "node-version": { default: `${CANONICAL_MAJOR}.x` } },
+    runs: { steps: [{ run: "npm ci" }] },
+  };
+  assert.match(
+    validateCompositeDocument(action, CANONICAL_MAJOR, "action.yml").join("\n"),
+    /without an explicit Node setup step/
+  );
+
+  action.runs.steps.push({
+    uses: "actions/setup-node@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    with: { "node-version": "${{ inputs.node-version }}" },
+  });
+  assert.match(
+    validateCompositeDocument(action, CANONICAL_MAJOR, "action.yml").join("\n"),
+    /before its Node tooling command/
   );
 });
 

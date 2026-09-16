@@ -34,6 +34,28 @@ function workflowCallNodeDefault(workflow) {
   return workflow?.on?.workflow_call?.inputs?.["node-version"]?.default;
 }
 
+function resolveWorkflowInputs(value, workflow) {
+  if (typeof value !== "string") return value;
+  return value.replace(/\$\{\{\s*inputs\.([A-Za-z0-9_-]+)\s*}}/g, (expression, inputName) => {
+    const defaultValue = workflow?.on?.workflow_call?.inputs?.[inputName]?.default;
+    return defaultValue === undefined ? expression : String(defaultValue);
+  });
+}
+
+function stepRunsNode(step, workflow, job) {
+  if (typeof step?.run !== "string") return false;
+  let command = resolveWorkflowInputs(step.run, workflow);
+  const environment = { ...(workflow?.env ?? {}), ...(job?.env ?? {}), ...(step?.env ?? {}) };
+  for (const [name, rawValue] of Object.entries(environment)) {
+    const value = resolveWorkflowInputs(rawValue, workflow);
+    if (typeof value !== "string") continue;
+    command = command
+      .replaceAll(`\${${name}}`, value)
+      .replace(new RegExp(`\\$${name}(?![A-Za-z0-9_])`, "g"), value);
+  }
+  return NODE_COMMAND.test(command);
+}
+
 function selectorIssue(selector, canonicalMajor, location, workflow) {
   if (selector === undefined || selector === null || selector === "") {
     return `${location} must select Node ${canonicalMajor}`;
@@ -59,7 +81,12 @@ function nodeSetupStep(step) {
   return uses.startsWith(SETUP_NODE_PREFIX) || uses === LOCAL_SETUP_ACTION;
 }
 
-export function validateWorkflowDocument(workflow, canonicalMajor, source) {
+export function validateWorkflowDocument(
+  workflow,
+  canonicalMajor,
+  source,
+  { localSetupDefault } = {}
+) {
   const errors = [];
   const reusableDefault = workflowCallNodeDefault(workflow);
   if (reusableDefault !== undefined) {
@@ -74,20 +101,29 @@ export function validateWorkflowDocument(workflow, canonicalMajor, source) {
 
   for (const [jobName, job] of Object.entries(workflow?.jobs ?? {})) {
     const steps = Array.isArray(job?.steps) ? job.steps : [];
-    const setupSteps = steps.filter(nodeSetupStep);
-    const runsNode = steps.some(
-      (step) => typeof step?.run === "string" && NODE_COMMAND.test(step.run)
+    const setupIndexes = steps.flatMap((step, index) => (nodeSetupStep(step) ? [index] : []));
+    const nodeCommandIndexes = steps.flatMap((step, index) =>
+      stepRunsNode(step, workflow, job) ? [index] : []
     );
 
-    if (runsNode && setupSteps.length === 0) {
+    if (nodeCommandIndexes.length > 0 && setupIndexes.length === 0) {
       errors.push(
         `${source} job ${jobName} executes Node tooling without an explicit Node setup step`
       );
+    } else if (
+      nodeCommandIndexes.some(
+        (commandIndex) => !setupIndexes.some((setupIndex) => setupIndex < commandIndex)
+      )
+    ) {
+      errors.push(`${source} job ${jobName} must set up Node before its Node tooling command`);
     }
 
-    for (const step of setupSteps) {
+    for (const setupIndex of setupIndexes) {
+      const step = steps[setupIndex];
+      const usesLocalDefault =
+        step.uses === LOCAL_SETUP_ACTION && step?.with?.["node-version"] === undefined;
       const issue = selectorIssue(
-        step?.with?.["node-version"],
+        usesLocalDefault ? localSetupDefault : step?.with?.["node-version"],
         canonicalMajor,
         `${source} job ${jobName} setup step`,
         workflow
@@ -109,7 +145,23 @@ export function validateCompositeDocument(action, canonicalMajor, source) {
   );
   if (defaultIssue) errors.push(defaultIssue);
 
-  for (const [index, step] of (action?.runs?.steps ?? []).entries()) {
+  const steps = action?.runs?.steps ?? [];
+  const setupIndexes = steps.flatMap((step, index) => (nodeSetupStep(step) ? [index] : []));
+  const nodeCommandIndexes = steps.flatMap((step, index) =>
+    stepRunsNode(step, action, action?.runs) ? [index] : []
+  );
+
+  if (nodeCommandIndexes.length > 0 && setupIndexes.length === 0) {
+    errors.push(`${source} executes Node tooling without an explicit Node setup step`);
+  } else if (
+    nodeCommandIndexes.some(
+      (commandIndex) => !setupIndexes.some((setupIndex) => setupIndex < commandIndex)
+    )
+  ) {
+    errors.push(`${source} must set up Node before its Node tooling command`);
+  }
+
+  for (const [index, step] of steps.entries()) {
     if (!nodeSetupStep(step)) continue;
     const selector = step?.with?.["node-version"];
     if (String(selector).trim() !== "${{ inputs.node-version }}") {
@@ -155,17 +207,19 @@ export function validateRepository(root) {
   const canonicalMajor = parseCanonicalMajor(fs.readFileSync(path.join(root, ".nvmrc"), "utf8"));
   const errors = [];
   const workflowFiles = filesUnder(root, ".github/workflows", new Set([".yml", ".yaml"]));
+  const compositePath = ".github/actions/setup-node-with-deps/action.yml";
+  const compositeAction = loadYaml(root, compositePath);
+  const localSetupDefault = compositeAction?.inputs?.["node-version"]?.default;
 
   for (const relativePath of workflowFiles) {
     errors.push(
-      ...validateWorkflowDocument(loadYaml(root, relativePath), canonicalMajor, relativePath)
+      ...validateWorkflowDocument(loadYaml(root, relativePath), canonicalMajor, relativePath, {
+        localSetupDefault,
+      })
     );
   }
 
-  const compositePath = ".github/actions/setup-node-with-deps/action.yml";
-  errors.push(
-    ...validateCompositeDocument(loadYaml(root, compositePath), canonicalMajor, compositePath)
-  );
+  errors.push(...validateCompositeDocument(compositeAction, canonicalMajor, compositePath));
 
   const documentationFiles = [
     "README.md",

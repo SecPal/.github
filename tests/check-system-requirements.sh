@@ -125,7 +125,7 @@ stub_command "php" 'echo "8.4.0"'
 stub_command "composer" 'exit 0'
 # shellcheck disable=SC2016
 stub_command "node" '
-IFS= read -r required_node_major < .nvmrc
+required_node_major="$(<.nvmrc)"
 echo "${TEST_NODE_VERSION:-v${required_node_major}.0.0}"
 '
 # shellcheck disable=SC2016
@@ -153,6 +153,7 @@ if [ "${1:-}" = "-version" ]; then
 fi
 exit 0
 '
+# shellcheck disable=SC2016
 stub_command "javac" '
 if [ -n "${TEST_JAVAC_VERSION_EXIT_CODE:-}" ]; then
   printf "%s\n" "${TEST_JAVAC_VERSION_STDERR:-broken javac runtime}" >&2
@@ -400,6 +401,25 @@ if ! TEST_NODE_VERSION="$later_patch_node_version" run_check "$later_patch_node_
   exit 1
 fi
 grep -Fq "Node.js $later_patch_node_version" "$later_patch_node_output"
+
+printf '%s' "$required_node_major" >"$workspace/.github/.nvmrc"
+no_newline_node_output="$sandbox/node-baseline-no-newline.txt"
+if ! TEST_NODE_VERSION="$canonical_node_version" run_check "$no_newline_node_output" --repo=contracts; then
+  cat "$no_newline_node_output"
+  echo "requirements check rejected a valid newline-less canonical Node baseline" >&2
+  exit 1
+fi
+
+printf '%s\n%s\n' "$required_node_major" "$((required_node_major - 1))" >"$workspace/.github/.nvmrc"
+multiline_node_output="$sandbox/node-baseline-multiline.txt"
+if TEST_NODE_VERSION="$canonical_node_version" run_check "$multiline_node_output" --repo=contracts; then
+  cat "$multiline_node_output"
+  echo "requirements check accepted a multi-line canonical Node baseline" >&2
+  exit 1
+fi
+grep -Fq 'Invalid canonical Node major' "$multiline_node_output"
+
+cp "$REPO_ROOT/.nvmrc" "$workspace/.github/.nvmrc"
 
 all_repos_old_node_output="$sandbox/all-repos-node-too-old.txt"
 if TEST_NODE_VERSION="$below_node_version" run_check "$all_repos_old_node_output"; then

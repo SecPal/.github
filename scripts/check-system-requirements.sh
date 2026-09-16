@@ -34,7 +34,7 @@ if [ ! -f "$NODE_BASELINE_FILE" ]; then
   exit 1
 fi
 
-IFS= read -r REQUIRED_NODE_MAJOR <"$NODE_BASELINE_FILE"
+REQUIRED_NODE_MAJOR="$(<"$NODE_BASELINE_FILE")"
 if ! [[ "$REQUIRED_NODE_MAJOR" =~ ^[0-9]+$ ]]; then
   echo "Invalid canonical Node major in $NODE_BASELINE_FILE" >&2
   exit 1
