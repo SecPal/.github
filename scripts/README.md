@@ -187,6 +187,11 @@ facts to authenticate complete current validation, stable feedback, every
 classified feedback source, material disposition, and resolved thread state.
 The signed source validation/final-attestation evidence and exact observed
 Draft/review/remediation/Ready chronology must bind the same head and tree.
+The caller must first obtain a sealed source identity from
+`authenticate_unenrolled_ready_source_commit`; caller-assembled signature
+flags are not evidence. Historical review providers must be maintained Codex
+or Copilot identities, dismissed review state fails closed, review must precede
+Ready, and remediation must follow the consumed review.
 
 `create_unenrolled_ready_recovery_authorization` creates the separately signed
 one-use operator scope. `create_unenrolled_ready_recovery_proof` records
@@ -195,8 +200,10 @@ initialization or Ready authorization. The serialized
 `UNENROLLED_READY_DELIVERY_RECOVERY` root is enrolled only with the canonical
 protected lifecycle publication writer. Existing ancestry checks reject an
 existing root/CURRENT, replay, duplicate enrollment, and later ordinary
-initialization. Operators must never treat raw arguments or matching digests as
-authorization.
+initialization. Immediately before its compare-and-swap, that writer repeats
+the trusted live issue/PR/head/tree/base/main/history/absence observation and
+requires byte-identical canonical facts. Operators must never treat raw
+arguments or matching digests as authorization.
 
 After protected read-back, the existing ordinary Ready prior-authority and
 `HEAD_ADVANCED` integration machinery accepts the

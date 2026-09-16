@@ -22,6 +22,10 @@ Log of notable changes to SecPal organization defaults (newest first).
 - Record historical Ready evidence only as authenticated observation: recovery
   never retroactively creates initialization, transition, or prior-integration
   authority.
+- Require verifier-sealed source commits, maintained review providers and
+  ordered finite history; recheck all proof identity bindings and the trusted
+  live boundary immediately before publication, with replay rejection in both
+  full and identity-only journal verification.
 
 ## 2026-09-16 - Define Builder-Independent OCI Publication Evidence
 

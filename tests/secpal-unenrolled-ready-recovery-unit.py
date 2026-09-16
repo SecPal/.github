@@ -10,6 +10,7 @@ from contextlib import nullcontext
 import hashlib
 from pathlib import Path
 import subprocess
+from types import SimpleNamespace
 from unittest import TestCase, main
 from unittest.mock import patch
 
@@ -160,23 +161,27 @@ def validation(
     )
 
 
-def commit() -> dict[str, object]:
-    return {
-        "oid": HEADS[2],
-        "source": "USER",
-        "signer_identity": SIGNER,
-        "local_signature": {"verified": True, "state": "valid", "format": "ssh"},
-        "github_verification": {"verified": True, "reason": "valid"},
-    }
+def commit(
+    *, signer: str = SIGNER,
+) -> authority.VerifiedUnenrolledReadySourceCommit:
+    return authority._seal_unenrolled_ready_source_commit(
+        repository=REPOSITORY,
+        head_sha=HEADS[2],
+        tree_sha=HEADS[4],
+        parent_shas=[HEADS[1]],
+        signer_identity=signer,
+        signature_format="ssh",
+        authentication_digest="9" * 64,
+    )
 
 
-def safety() -> dict[str, object]:
+def safety(*, base_sha: str = HEADS[3]) -> dict[str, object]:
     reviewed = fast_path.StableFeedbackState(
         repository=REPOSITORY,
         pull_request_number=PR,
         head_sha=HEADS[2],
         base_ref="main",
-        base_sha=HEADS[3],
+        base_sha=base_sha,
         pr_state="OPEN",
         feedback={
             "pull_request_reactions": [],
@@ -204,7 +209,7 @@ def safety() -> dict[str, object]:
         tree_sha=HEADS[4],
         parent_shas=[HEADS[1]],
         expected_base_ref="main",
-        expected_base_sha=HEADS[3],
+        expected_base_sha=base_sha,
         reviewed_state=reviewed,
         review_decision="NONE",
         feedback_findings=[],
@@ -285,7 +290,7 @@ class UnenrolledReadyRecoveryTests(TestCase):
             "initial_observation": observation(**(observation_changes or {})),
             "final_observation": observation(**(final_changes or {})),
             "expected_source_signer": SIGNER,
-            "commit_signature_evidence": commit(),
+            "verified_source_commit": commit(),
             "validation_evidence": validation(),
             "recovery_safety_facts": safety(),
             "intended_state": state(),
@@ -324,6 +329,39 @@ class UnenrolledReadyRecoveryTests(TestCase):
             ),
             proof,
         )
+
+    def signed_bundle_from_evidence(
+        self, **changes: object
+    ) -> tuple[bytes, dict[str, object]]:
+        evidence = self.evidence().canonical_evidence
+        evidence = copy.deepcopy(evidence)
+        evidence.update(changes)
+        evidence["recovery_evidence_digest"] = authority.digest_json(
+            {
+                key: value
+                for key, value in evidence.items()
+                if key != "recovery_evidence_digest"
+            }
+        )
+        sealed = authority.VerifiedUnenrolledReadyRecoveryEvidence(
+            evidence,
+            authority._VERIFIED_UNENROLLED_READY_RECOVERY_EVIDENCE,
+        )
+        authorization = authority.create_unenrolled_ready_recovery_authorization(
+            verified_evidence=sealed,
+            authorization_id="unenrolled-ready-recovery:956:tamper-test",
+            signer_identity=SIGNER,
+            signer=signer_for(),
+        )
+        proof = authority.create_unenrolled_ready_recovery_proof(
+            verified_evidence=sealed,
+            authorization=authorization,
+            signer_identity=SIGNER,
+            signer=signer_for(),
+        )
+        return authority.serialize_unenrolled_ready_recovery_evidence(
+            recovery_proof=proof
+        ), proof
 
     def test_exact_gap_establishes_one_forward_only_root(self) -> None:
         raw, proof = self.signed_bundle()
@@ -500,10 +538,8 @@ class UnenrolledReadyRecoveryTests(TestCase):
                     self.evidence(**mutation)
 
     def test_rejects_wrong_source_signer_and_validation_identity(self) -> None:
-        wrong_commit = commit()
-        wrong_commit["signer_identity"] = OTHER_SIGNER
         with self.assertRaises(authority.LifecycleAuthorityError):
-            self.evidence(commit_signature_evidence=wrong_commit)
+            self.evidence(verified_source_commit=commit(signer=OTHER_SIGNER))
         with self.assertRaises(authority.LifecycleAuthorityError):
             self.evidence(
                 observation_changes={"head_sha": HEADS[6]},
@@ -673,6 +709,184 @@ class UnenrolledReadyRecoveryTests(TestCase):
             publication.enroll_existing_lifecycle(
                 raw, signer_identity=SIGNER, signer=signer_for()
             )
+
+    def test_recovery_requires_verifier_sealed_source_commit(self) -> None:
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "verifier-authenticated"
+        ):
+            self.evidence(verified_source_commit={"head_sha": HEADS[2]})
+
+    def test_source_commit_seal_is_emitted_by_maintained_crypto_reader(self) -> None:
+        from scripts.secpal_pr_review import lifecycle_execution
+
+        authenticated = SimpleNamespace(
+            repository=REPOSITORY,
+            head_sha=HEADS[2],
+            tree_sha=HEADS[4],
+            parent_shas=(HEADS[1],),
+            signer_identity=SIGNER,
+            signer_kind="SSH_PRINCIPAL",
+            authentication_digest="9" * 64,
+        )
+        with patch.object(
+            lifecycle_execution,
+            "_authenticate_source_commit",
+            return_value=authenticated,
+        ) as reader:
+            verified = authority.authenticate_unenrolled_ready_source_commit(
+                REPOSITORY, HEADS[2], SIGNER
+            )
+        reader.assert_called_once_with(REPOSITORY, HEADS[2], SIGNER)
+        self.assertEqual(verified.tree_sha, HEADS[4])
+        self.assertEqual(verified.parent_shas, (HEADS[1],))
+
+    def test_serialized_proof_rechecks_ready_only_state_and_root_identity(self) -> None:
+        invalid_state = state(remediation_cycles=1)
+        invalid_state.update(
+            {
+                "draft": True,
+                "ready": False,
+                "ready_transition_count": 0,
+                "ready_history": [],
+            }
+        )
+        invalid_history = history()
+        invalid_history.pop(2)
+        for sequence, item in enumerate(invalid_history, 1):
+            item["sequence"] = sequence
+        raw, _ = self.signed_bundle_from_evidence(
+            intended_state=invalid_state,
+            intended_state_digest=authority.digest_json(invalid_state),
+            observed_history=invalid_history,
+            observed_history_digest=authority.digest_json(invalid_history),
+        )
+        with (
+            patch.object(authority, "_load_lifecycle_trust_policy", return_value=policy()),
+            patch.object(authority, "_policy_signature_verifier", return_value=verify_signature),
+            self.assertRaises(authority.LifecycleAuthorityError),
+        ):
+            authority.verify_lifecycle_authority_for_publication(raw)
+
+        raw, proof = self.signed_bundle()
+        proof["lifecycle_id"] = "lifecycle-recovery:" + "0" * 64
+        signed = {key: value for key, value in proof.items() if key != "proof_digest"}
+        signed["signature"] = signer_for()(
+            authority.canonical_json_bytes(
+                {key: value for key, value in signed.items() if key != "signature"}
+            ),
+            authority.UNENROLLED_READY_RECOVERY_PROOF_DOMAIN,
+        )
+        proof = {**signed, "proof_digest": authority.digest_json(signed)}
+        raw = authority.serialize_unenrolled_ready_recovery_evidence(
+            recovery_proof=proof
+        )
+        with (
+            patch.object(authority, "_load_lifecycle_trust_policy", return_value=policy()),
+            patch.object(authority, "_policy_signature_verifier", return_value=verify_signature),
+            self.assertRaisesRegex(authority.LifecycleAuthorityError, "lifecycle identity"),
+        ):
+            authority.verify_lifecycle_authority_for_publication(raw)
+
+    def test_rejects_review_after_ready_and_untrusted_or_dismissed_review(self) -> None:
+        changed = history()
+        changed[1]["observed_at"] = "2026-09-16T18:25:00Z"
+        changed[2]["observed_at"] = "2026-09-16T18:20:00Z"
+        changed[1], changed[2] = changed[2], changed[1]
+        for sequence, item in enumerate(changed, 1):
+            item["sequence"] = sequence
+        changed_state = state()
+        changed_state["ready_history"] = [
+            {
+                "sequence": 1,
+                "transition_kind": "DRAFT_TO_READY",
+                "observation_digest": authority.digest_json(changed[1]),
+            }
+        ]
+        with self.assertRaisesRegex(authority.LifecycleAuthorityError, "precede Ready"):
+            self.evidence(
+                observation_changes={"observed_history": changed},
+                final_changes={"observed_history": changed},
+                intended_state=changed_state,
+            )
+
+        for review_state, reviewer in (
+            ("COMMENTED", "untrusted-reviewer"),
+            ("DISMISSED", "copilot-pull-request-reviewer"),
+        ):
+            chronology = {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "createdAt": "2026-09-16T18:00:00Z",
+                            "timelineItems": {"nodes": [{"__typename": "ReadyForReviewEvent", "createdAt": "2026-09-16T18:20:00Z"}], "pageInfo": {"hasNextPage": False}},
+                            "commits": {"nodes": [{"commit": {"oid": HEADS[1], "committedDate": "2026-09-16T18:05:00Z"}}, {"commit": {"oid": HEADS[2], "committedDate": "2026-09-16T18:30:00Z"}}], "pageInfo": {"hasNextPage": False}},
+                            "reviews": {"nodes": [{"state": review_state, "submittedAt": "2026-09-16T18:10:00Z", "author": {"login": reviewer}, "commit": {"oid": HEADS[1]}}], "pageInfo": {"hasNextPage": False}},
+                        }
+                    }
+                }
+            }
+            with self.subTest(review_state=review_state, reviewer=reviewer), self.assertRaises(authority.LifecycleAuthorityError):
+                authority._derive_unenrolled_ready_history(chronology, HEADS[2])
+
+    def test_serialized_proof_rechecks_safety_identity(self) -> None:
+        changed_safety = safety(base_sha=HEADS[6])
+        raw, _ = self.signed_bundle_from_evidence(
+            recovery_safety_facts=changed_safety,
+            recovery_safety_facts_digest=changed_safety["safety_facts_digest"],
+        )
+        with (
+            patch.object(authority, "_load_lifecycle_trust_policy", return_value=policy()),
+            patch.object(authority, "_policy_signature_verifier", return_value=verify_signature),
+            self.assertRaisesRegex(authority.LifecycleAuthorityError, "delivery identity"),
+        ):
+            authority.verify_lifecycle_authority_for_publication(raw)
+
+    def test_publication_reobserves_live_boundary_before_cas(self) -> None:
+        raw, _ = self.signed_bundle()
+        with (
+            patch.object(authority, "_load_lifecycle_trust_policy", return_value=policy()),
+            patch.object(authority, "_policy_signature_verifier", return_value=verify_signature),
+            patch.object(publication, "_verify_live_protection"),
+            patch.object(publication, "_isolated_repository", return_value=nullcontext((Path("/tmp/unused"), {}))),
+            patch.object(publication, "_observe_remote_current_once", return_value=HEADS[5]),
+            patch.object(publication, "_walk_journal", return_value=([], {}, {})),
+            patch.object(publication, "_write_publication_object", return_value=HEADS[6]),
+            patch.object(publication, "_verify_publication_document", return_value=({}, object())),
+            patch.object(authority, "observe_unenrolled_ready_recovery_boundary", return_value=observation(head_sha=HEADS[6])) as observe,
+            patch.object(publication, "_cas_remote_ref") as cas,
+            self.assertRaisesRegex(publication.LifecyclePublicationError, "live boundary drifted"),
+        ):
+            publication.enroll_existing_lifecycle(raw, signer_identity=SIGNER, signer=signer_for())
+        observe.assert_called_once_with(REPOSITORY, ISSUE, PR)
+        cas.assert_not_called()
+
+    def test_publication_reobserves_and_establishes_exactly_one_current(self) -> None:
+        raw, _ = self.signed_bundle()
+        with (
+            patch.object(authority, "_load_lifecycle_trust_policy", return_value=policy()),
+            patch.object(authority, "_policy_signature_verifier", return_value=verify_signature),
+        ):
+            lifecycle = authority.verify_lifecycle_authority_for_publication(raw)
+        document = {"publication_digest": "7" * 64}
+        with (
+            patch.object(authority, "_load_lifecycle_trust_policy", return_value=policy()),
+            patch.object(authority, "_policy_signature_verifier", return_value=verify_signature),
+            patch.object(publication, "_verify_live_protection"),
+            patch.object(publication, "_isolated_repository", return_value=nullcontext((Path("/tmp/unused"), {}))),
+            patch.object(publication, "_observe_remote_current_once", return_value=HEADS[5]),
+            patch.object(publication, "_walk_journal", return_value=([], {}, {})),
+            patch.object(publication, "_write_publication_object", return_value=HEADS[6]),
+            patch.object(publication, "_verify_publication_document", return_value=(document, lifecycle)),
+            patch.object(authority, "observe_unenrolled_ready_recovery_boundary", return_value=observation()) as observe,
+            patch.object(publication, "_cas_remote_ref") as cas,
+        ):
+            current = publication.enroll_existing_lifecycle(
+                raw, signer_identity=SIGNER, signer=signer_for()
+            )
+        self.assertEqual(current.publication_oid, HEADS[6])
+        self.assertEqual(current.lifecycle.lifecycle_id, lifecycle.lifecycle_id)
+        observe.assert_called_once_with(REPOSITORY, ISSUE, PR)
+        cas.assert_called_once()
 
 
 if __name__ == "__main__":

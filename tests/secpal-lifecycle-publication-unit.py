@@ -1568,6 +1568,12 @@ class LifecyclePublicationTests(TestCase):
             publication._walk_journal(
                 self.probe, replay_oid, BRANCH, include_recoveries=True
             )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "replayed"
+        ):
+            publication._walk_journal_identity_projection(
+                self.probe, replay_oid, BRANCH
+            )
 
         predecessor_fields = copy.deepcopy(replay_fields)
         predecessor_fields["journal_predecessor_oid"] = enrolled.publication_oid

@@ -491,6 +491,16 @@ publishes its only root/CURRENT; journal ancestry and CAS reject replay or any
 competing root. Later current-main advancement remains the ordinary
 `HEAD_ADVANCED` Ready-integration responsibility.
 
+Recovery source signatures must arrive through the maintained cryptographic
+commit reader's sealed result, not caller-assembled signature flags. The
+authenticated review must come from a maintained Codex or Copilot provider,
+precede the sole Ready observation, and precede every remediation; dismissed
+review state is ineligible because its finite-budget effect is ambiguous. The
+public proof verifier repeats those constraints and all safety-fact identity
+bindings. The canonical writer repeats the trusted live observation immediately
+before CAS, and the identity-only journal projection enforces the same
+Ready-source recovery replay keys as the full journal verifier.
+
 Dynamic publication is one global linear journal on the protected branch
 `refs/heads/secpal-lifecycle-publications`. Installed policy fixes the GitHub
 endpoint, exact branch, ruleset identity, required deletion and

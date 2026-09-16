@@ -1839,6 +1839,22 @@ def enroll_existing_lifecycle(
             expected_branch=policy.publication_branch,
             native_genesis_admission=admission,
         )
+        if unenrolled_ready_recovery:
+            proof = bundle["recovery_proof"]
+            final_observation = (
+                authority.observe_unenrolled_ready_recovery_boundary(
+                    verified.repository,
+                    verified.delivery_issue,
+                    verified.pull_request,
+                )
+            )
+            if (
+                authority.digest_json(final_observation.canonical_observation)
+                != proof["trusted_observation_digest"]
+            ):
+                raise LifecyclePublicationError(
+                    "unenrolled Ready recovery live boundary drifted before publication"
+                )
         _cas_remote_ref(
             root, policy.publication_remote_url, policy.publication_branch,
             object_oid, tip, credential_environment=credential_environment,
@@ -2783,6 +2799,9 @@ def _walk_journal_identity_projection(
             initialization_digests.add(digest_key)
 
     publications: dict[tuple[str, int], tuple[str, dict[str, Any]]] = {}
+    recovery_keys: set[tuple[str, int]] = set()
+    recovery_authorization_ids: set[tuple[str, str]] = set()
+    recovery_authorization_digests: set[tuple[str, str]] = set()
     for position, (object_oid, raw, parent) in enumerate(chronological):
         candidate = json.loads(raw, object_pairs_hook=_reject_duplicate_pairs)
         if candidate.get("kind") == GENESIS_ADMISSION_KIND:
@@ -2807,6 +2826,28 @@ def _walk_journal_identity_projection(
                 raise LifecyclePublicationError(
                     "Ready-source recovery journal parent binding is invalid"
                 )
+            recovery_key = (
+                recovery["repository"], recovery["delivery_issue"]
+            )
+            recovery_authorization = recovery["recovery_authorization"]
+            authorization_id = (
+                recovery["repository"], recovery_authorization["authorization_id"]
+            )
+            authorization_digest = (
+                recovery["repository"],
+                recovery_authorization["authorization_digest"],
+            )
+            if (
+                recovery_key in recovery_keys
+                or authorization_id in recovery_authorization_ids
+                or authorization_digest in recovery_authorization_digests
+            ):
+                raise LifecyclePublicationError(
+                    "Ready-source recovery authorization was replayed"
+                )
+            recovery_keys.add(recovery_key)
+            recovery_authorization_ids.add(authorization_id)
+            recovery_authorization_digests.add(authorization_digest)
             continue
 
         document = _verify_publication_envelope(

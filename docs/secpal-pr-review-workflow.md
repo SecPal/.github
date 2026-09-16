@@ -352,6 +352,11 @@ chronology must contain one Draft creation, one review consumption, zero to two
 remediations, exactly one Draft-to-Ready observation, no Ready-to-Draft reset,
 and no exceptional history. Its derived lifecycle baseline copies those finite
 consumptions; recovery grants no fresh review, remediation, or Ready budget.
+Source identity comes only from the maintained cryptographic commit reader's
+sealed result, never caller-supplied verification flags. Review must precede
+the sole Ready observation, every remediation must follow that review, review
+providers must be maintained Codex or Copilot identities, and any dismissed
+review makes the historical budget ambiguous and therefore ineligible.
 
 The issuer compares two bounded trusted observations of issue, PR, head, tree,
 base, protected main, lifecycle-journal tip, root absence, and CURRENT absence.
@@ -368,7 +373,9 @@ derives `lifecycle-recovery:<recovery-evidence-digest>` and records
 `authority_begins_at=RECOVERY_BOUNDARY`. Publication uses the existing
 `ENROLL_EXISTING_LIFECYCLE` CAS/protection/read-back boundary. Existing journal
 ancestry rejects replay, a second recovery, later ordinary initialization, or a
-second root for the delivery.
+second root for the delivery. The publication writer repeats the entire trusted
+live observation immediately before CAS; issue, PR, Ready state, head, tree,
+base/main, history, journal, or absence drift rejects publication.
 
 Recovery does not merge protected main and does not issue
 `READY_INTEGRATION_PRIOR_AUTHORITY`. Once the recovered CURRENT exists, the

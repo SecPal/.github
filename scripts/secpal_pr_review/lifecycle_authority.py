@@ -28,6 +28,8 @@ import tempfile
 from typing import Any, Callable, Mapping, Sequence
 
 from .fast_path import (
+    CODEX_PROVIDER_LOGIN,
+    COPILOT_REVIEW_PROVIDER,
     SecurityBlocker,
     VerifiedValidationEvidence,
     canonical_json_bytes,
@@ -200,6 +202,7 @@ _VERIFIED_EXACT_ADOPTION_EVIDENCE = object()
 _VERIFIED_REVIEW_BUDGET_ADMISSION = object()
 _VERIFIED_UNENROLLED_READY_RECOVERY_EVIDENCE = object()
 _VERIFIED_UNENROLLED_READY_OBSERVATION = object()
+_VERIFIED_UNENROLLED_READY_SOURCE_COMMIT = object()
 
 
 @dataclass(frozen=True)
@@ -257,6 +260,20 @@ class VerifiedUnenrolledReadyObservation:
     """One bounded GitHub/journal observation returned by maintained readers."""
 
     canonical_observation: dict[str, Any]
+    _verification_seal: object
+
+
+@dataclass(frozen=True)
+class VerifiedUnenrolledReadySourceCommit:
+    """Opaque commit identity emitted by the maintained cryptographic reader."""
+
+    repository: str
+    head_sha: str
+    tree_sha: str
+    parent_shas: tuple[str, ...]
+    signer_identity: str
+    signature_format: str
+    authentication_digest: str
     _verification_seal: object
 
 
@@ -3401,6 +3418,10 @@ def _derive_unenrolled_ready_history(
     reviewer_identities: set[str] = set()
     for node in reviews["nodes"]:
         commit = node.get("commit") if isinstance(node, dict) else None
+        if isinstance(node, dict) and node.get("state") == "DISMISSED":
+            raise LifecycleAuthorityError(
+                "dismissed historical review cannot be represented without resetting budget"
+            )
         if (
             not isinstance(node, dict)
             or node.get("state") not in {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}
@@ -3420,6 +3441,14 @@ def _derive_unenrolled_ready_history(
             raise LifecycleAuthorityError("trusted review provider is unavailable")
         reviewer_identities.add(
             _require_identity(author.get("login"), "historical review provider")
+        )
+    trusted_review_providers = {
+        CODEX_PROVIDER_LOGIN,
+        COPILOT_REVIEW_PROVIDER["login"],
+    }
+    if not reviewer_identities or not reviewer_identities <= trusted_review_providers:
+        raise LifecycleAuthorityError(
+            "historical review provider is not maintained and authenticated"
         )
     reviewed_heads = {head for _, head in review_facts}
     if len(reviewed_heads) != 1:
@@ -3483,6 +3512,125 @@ def _derive_unenrolled_ready_history(
         for sequence, (timestamp, kind, head, reviewed) in enumerate(events, 1)
     ]
     return history, sorted(reviewer_identities)
+
+
+def _seal_unenrolled_ready_source_commit(
+    *,
+    repository: str,
+    head_sha: str,
+    tree_sha: str,
+    parent_shas: Sequence[str],
+    signer_identity: str,
+    signature_format: str,
+    authentication_digest: str,
+) -> VerifiedUnenrolledReadySourceCommit:
+    """Seal facts only after a maintained reader performs concrete verification."""
+
+    if signature_format not in {"ssh", "openpgp"}:
+        raise LifecycleAuthorityError("recovery source signature format is invalid")
+    return VerifiedUnenrolledReadySourceCommit(
+        repository=_require_repository(repository),
+        head_sha=_require_oid(head_sha, "recovery source head"),
+        tree_sha=_require_oid(tree_sha, "recovery source tree"),
+        parent_shas=tuple(
+            _require_oid(item, "recovery source parent") for item in parent_shas
+        ),
+        signer_identity=_require_identity(
+            signer_identity, "recovery source signer"
+        ),
+        signature_format=signature_format,
+        authentication_digest=_require_digest(
+            authentication_digest, "recovery source authentication"
+        ),
+        _verification_seal=_VERIFIED_UNENROLLED_READY_SOURCE_COMMIT,
+    )
+
+
+def authenticate_unenrolled_ready_source_commit(
+    repository: str, head_sha: str, signer_identity: str
+) -> VerifiedUnenrolledReadySourceCommit:
+    """Read and cryptographically authenticate one recovery source commit."""
+
+    # Local import avoids making the execution adapter part of authority module
+    # initialization while retaining its concrete git/GitHub verification path.
+    from . import lifecycle_execution
+
+    try:
+        authenticated = lifecycle_execution._authenticate_source_commit(
+            _require_repository(repository),
+            _require_oid(head_sha, "recovery source head"),
+            _require_identity(signer_identity, "recovery source signer"),
+        )
+    except lifecycle_execution.LifecycleExecutionError as exc:
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery source signature is invalid"
+        ) from exc
+    return _seal_unenrolled_ready_source_commit(
+        repository=authenticated.repository,
+        head_sha=authenticated.head_sha,
+        tree_sha=authenticated.tree_sha,
+        parent_shas=authenticated.parent_shas,
+        signer_identity=authenticated.signer_identity,
+        signature_format=(
+            "ssh" if authenticated.signer_kind == "SSH_PRINCIPAL" else "openpgp"
+        ),
+        authentication_digest=authenticated.authentication_digest,
+    )
+
+
+def _validate_unenrolled_ready_history(
+    history: Sequence[Mapping[str, Any]],
+    state: Mapping[str, Any],
+    review_provider_identities: Any,
+) -> None:
+    """Enforce the recovery-only finite Ready chronology at every boundary."""
+
+    kinds = [item["kind"] for item in history]
+    trusted_review_providers = {
+        CODEX_PROVIDER_LOGIN,
+        COPILOT_REVIEW_PROVIDER["login"],
+    }
+    if (
+        not isinstance(review_provider_identities, list)
+        or not review_provider_identities
+        or review_provider_identities != sorted(set(review_provider_identities))
+        or not set(review_provider_identities) <= trusted_review_providers
+    ):
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery review provider is not maintained"
+        )
+    review_positions = [
+        position for position, kind in enumerate(kinds) if kind == "REVIEW_SUBMITTED"
+    ]
+    ready_positions = [
+        position
+        for position, kind in enumerate(kinds)
+        if kind == "DRAFT_TO_READY_OBSERVED"
+    ]
+    remediation_positions = [
+        position
+        for position, kind in enumerate(kinds)
+        if kind == "REMEDIATION_HEAD_OBSERVED"
+    ]
+    if (
+        state["unrestricted_review_count"] != 1
+        or not 0 <= state["remediation_cycle_count"] <= 2
+        or state["ready_transition_count"] != 1
+        or len(state["ready_history"]) != 1
+        or state["draft"] is not False
+        or state["ready"] is not True
+        or state["cycle_3_absent"] is not True
+        or state["exceptional_recovery_count"] != 0
+        or state["exceptional_continuation_count"] != 0
+        or len(review_positions) != 1
+        or len(ready_positions) != 1
+        or review_positions[0] >= ready_positions[0]
+        or any(position <= review_positions[0] for position in remediation_positions)
+        or "READY_TO_DRAFT_OBSERVED" in kinds
+    ):
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery review must precede Ready and finite history cannot reset"
+        )
 
 
 def observe_unenrolled_ready_recovery_boundary(
@@ -3605,7 +3753,7 @@ def authenticate_unenrolled_ready_recovery_evidence(
     initial_observation: VerifiedUnenrolledReadyObservation,
     final_observation: VerifiedUnenrolledReadyObservation,
     expected_source_signer: str,
-    commit_signature_evidence: Mapping[str, Any],
+    verified_source_commit: VerifiedUnenrolledReadySourceCommit,
     validation_evidence: VerifiedValidationEvidence,
     recovery_safety_facts: Mapping[str, Any],
     intended_state: Mapping[str, Any],
@@ -3673,16 +3821,23 @@ def authenticate_unenrolled_ready_recovery_evidence(
         raise LifecycleAuthorityError(
             "unenrolled Ready recovery safety facts changed delivery identity"
         )
-    commit = copy.deepcopy(dict(commit_signature_evidence))
-    try:
-        verified_commits = verify_commit_signatures(
-            [commit], _load_delivery_signature_policy(repository)
+    if (
+        not isinstance(
+            verified_source_commit, VerifiedUnenrolledReadySourceCommit
         )
-    except SecurityBlocker as exc:
+        or verified_source_commit._verification_seal
+        is not _VERIFIED_UNENROLLED_READY_SOURCE_COMMIT
+    ):
         raise LifecycleAuthorityError(
-            "unenrolled Ready recovery source signature is invalid"
-        ) from exc
-    if len(verified_commits) != 1 or verified_commits[0]["oid"] != head:
+            "unenrolled Ready recovery requires verifier-authenticated source commit"
+        )
+    commit = verified_source_commit
+    if (
+        commit.repository != repository
+        or commit.head_sha != head
+        or commit.tree_sha != tree
+        or list(commit.parent_shas) != parents
+    ):
         raise LifecycleAuthorityError(
             "unenrolled Ready recovery source signature changed identity"
         )
@@ -3690,25 +3845,11 @@ def authenticate_unenrolled_ready_recovery_evidence(
     history = _normalize_observed_pre_enrollment_history(
         observation["observed_history"], expected_head=head, intended_state=state
     )
-    kinds = [item["kind"] for item in history]
-    if (
-        state["unrestricted_review_count"] != 1
-        or not 0 <= state["remediation_cycle_count"] <= 2
-        or state["ready_transition_count"] != 1
-        or len(state["ready_history"]) != 1
-        or state["draft"] is not False
-        or state["ready"] is not True
-        or state["cycle_3_absent"] is not True
-        or state["exceptional_recovery_count"] != 0
-        or state["exceptional_continuation_count"] != 0
-        or kinds.count("DRAFT_TO_READY_OBSERVED") != 1
-        or "READY_TO_DRAFT_OBSERVED" in kinds
-    ):
-        raise LifecycleAuthorityError(
-            "unenrolled Ready recovery cannot reset or rewrite finite history"
-        )
+    _validate_unenrolled_ready_history(
+        history, state, observation["review_provider_identities"]
+    )
     signer = _require_identity(expected_source_signer, "expected recovery source signer")
-    if commit.get("signer_identity") != signer:
+    if commit.signer_identity != signer:
         raise LifecycleAuthorityError(
             "unenrolled Ready recovery source signer is not accepted"
         )
@@ -3728,7 +3869,7 @@ def authenticate_unenrolled_ready_recovery_evidence(
         "pull_request_state": observation["pull_request_state"],
         "pull_request_is_draft": False,
         "expected_source_signer": signer,
-        "commit_signature_evidence_digest": digest_json(verified_commits[0]),
+        "commit_signature_evidence_digest": commit.authentication_digest,
         "validation_receipt_digest": validation_evidence.validation_receipt_digest,
         "source_validation_evidence_digest": (
             validation_evidence.source_validation_evidence_digest
@@ -3920,6 +4061,19 @@ def verify_unenrolled_ready_recovery_proof(
         raise LifecycleAuthorityError(
             "unenrolled Ready recovery safety evidence changed identity"
         )
+    if (
+        safety["repository"] != proof["repository"]
+        or safety["pull_request_number"] != proof["pull_request"]
+        or safety["head_sha"] != proof["head_sha"]
+        or safety["tree_sha"] != proof["tree_sha"]
+        or safety["parent_shas"] != proof["parent_shas"]
+        or safety["expected_base_ref"] != proof["expected_base_ref"]
+        or safety["expected_base_sha"] != proof["observed_base_sha"]
+        or proof["observed_base_sha"] != proof["observed_main_sha"]
+    ):
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery safety facts changed delivery identity"
+        )
     state = _validate_state(
         copy.deepcopy(proof["intended_state"]), allow_adopted_observations=True
     )
@@ -3933,6 +4087,15 @@ def verify_unenrolled_ready_recovery_proof(
         or proof["intended_state_digest"] != digest_json(state)
     ):
         raise LifecycleAuthorityError("unenrolled Ready recovery history changed")
+    _validate_unenrolled_ready_history(
+        history, state, proof["review_provider_identities"]
+    )
+    if proof["lifecycle_id"] != (
+        f"lifecycle-recovery:{proof['recovery_evidence_digest']}"
+    ):
+        raise LifecycleAuthorityError(
+            "unenrolled Ready recovery lifecycle identity changed"
+        )
     policy = _load_lifecycle_trust_policy(proof["repository"])
     verifier = _policy_signature_verifier(policy)
     authorization = _require_closed(
