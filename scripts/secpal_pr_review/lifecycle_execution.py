@@ -1008,18 +1008,16 @@ def _verify_remediation_authorization(
         verified = orchestration._verify_user_authorization(
             raw, predecessor, predecessor.lifecycle
         )
-        finding_ids = orchestration._authorized_finding_ids(verified)
         event_id = f"authorization:{verified['authorization_digest']}"
         orchestration._authorization(
             raw,
             event_id=event_id,
             operation="REMEDIATION_COMPLETED",
-            expected_scope={
-                "pull_request": predecessor.lifecycle.pull_request,
-                "predecessor_head_sha": predecessor.lifecycle.head_sha,
-                "resulting_head_sha": resulting_head,
-                "finding_ids": finding_ids,
-            },
+            expected_scope=orchestration._remediation_authorization_scope(
+                verified,
+                predecessor.lifecycle,
+                resulting_head,
+            ),
             observed=predecessor,
             lifecycle=predecessor.lifecycle,
             verifier=orchestration._verify_user_authorization,

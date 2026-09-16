@@ -169,6 +169,34 @@ blocking source must be dispositioned under the existing current-feedback
 rules. Ordinary capture and Ready integration continue to require exact-head
 provider terminality.
 
+### Post-capture provider growth for the remaining ordinary remediation
+
+One narrower composition covers provider-owned findings emitted by the already
+consumed provider assessment after its canonical Stable Feedback capture. The
+first remediation's sealed validation evidence authenticates the immutable
+original capture at H0. Protected CURRENT must independently derive exactly one
+Ready-preserving ordinary remediation from H0 to H1 and prove Review 1/1,
+Remediation 1/2, Ready true, one Ready transition, Cycle 3 absent, and no
+Exceptional Recovery or Continuation. The candidate validation evidence binds
+the complete reviewed state at H1 and its existing ordinary eligibility
+manifest.
+
+The verifier derives, rather than accepts, the feedback delta between those
+states. It requires exactly one added Copilot review committed to H0 and every
+added thread to contain one exact provider-owned top-level comment. All
+predecessor feedback is immutable apart from already-supported monotonic
+outdated-state observation. The set of added threads must equal the complete
+ordinary `VALID_ACTIONABLE + CORRECTED_AND_VERIFIED` eligibility set; deletion,
+substitution, replies, unrelated actors or sources, wrong-head feedback, and a
+caller-selected subset fail closed.
+
+The derived digest is carried by the existing signed
+`REMEDIATION_COMPLETED` authorization for H1 to H2. It can consume only the
+remaining ordinary remediation slot and adds no review, provider request,
+lifecycle operation, recovery, continuation, resolver, or thread-resolution
+authority. Stable Feedback remains immutable, and feedback arriving after this
+bounded delta is not recursively incorporated.
+
 When the current instruction authorizes full delivery and the environment can
 wait, observe only maintained review-provider status at bounded intervals of
 approximately 60 to 90 seconds for approximately 30 minutes total. This passive

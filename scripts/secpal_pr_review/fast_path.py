@@ -2615,6 +2615,24 @@ class _VerifiedFeedbackGrowth:
     predecessor_provider_growth_digest: str | None = None
 
 
+@dataclass(frozen=True)
+class VerifiedOrdinaryReadyProviderGrowth:
+    """Exact post-capture provider findings admitted for ordinary remediation."""
+
+    predecessor_state_digest: str
+    predecessor_feedback_digest: str
+    resulting_state_digest: str
+    resulting_feedback_digest: str
+    provider_head_sha: str
+    provider_review_node_id: str
+    provider_review_body_digest: str
+    thread_ids: tuple[str, ...]
+    finding_ids: tuple[str, ...]
+    source_bindings: tuple[tuple[str, str, str, str | None], ...]
+    eligibility_evidence_digest: str
+    growth_digest: str
+
+
 @dataclass(frozen=True, slots=True)
 class _VerifiedPredecessorCorrectionAuthoritySeal:
     provenance_digest: str
@@ -4608,6 +4626,200 @@ def verify_rejected_stable_feedback_successor(
     )
 
 
+def verify_ordinary_ready_remediation_provider_growth(
+    reviewed: StableFeedbackState,
+    current: StableFeedbackState,
+    *,
+    provider_head_sha: str,
+    eligibility_evidence: Any,
+) -> VerifiedOrdinaryReadyProviderGrowth:
+    """Derive one complete same-assessment provider delta for ordinary remediation.
+
+    The caller supplies no delta or finding subset.  The exact added provider
+    review and threads are derived from the two canonical Stable Feedback
+    states, while the existing eligibility boundary supplies only the ordinary
+    corrected/material decision for every derived thread.
+    """
+
+    provider_head_sha = _require_oid(provider_head_sha, "provider reviewed head")
+    if (
+        not isinstance(reviewed, StableFeedbackState)
+        or not isinstance(current, StableFeedbackState)
+        or reviewed.repository != current.repository
+        or reviewed.pull_request_number != current.pull_request_number
+        or reviewed.head_sha != provider_head_sha
+        or current.head_sha == provider_head_sha
+        or reviewed.base_ref != current.base_ref
+        or reviewed.pr_state != "OPEN"
+        or current.pr_state != "OPEN"
+    ):
+        raise SecurityBlocker(
+            "ordinary Ready provider growth does not preserve source identity"
+        )
+
+    eligibility = normalize_resolution_eligibility_evidence(
+        eligibility_evidence,
+        repository=reviewed.repository,
+        reviewed_state=current,
+    )
+    reviewed_sources = _successor_source_inventory(reviewed)
+    current_sources = _successor_source_inventory(current)
+    added_keys = set(current_sources) - set(reviewed_sources)
+    removed_keys = set(reviewed_sources) - set(current_sources)
+    if removed_keys:
+        raise SecurityBlocker(
+            "ordinary Ready provider growth removed predecessor feedback"
+        )
+
+    added_reviews = [
+        item
+        for item in current.feedback["reviews"]
+        if ("REVIEW", item["node_id"]) in added_keys
+    ]
+    if len(added_reviews) != 1:
+        raise SecurityBlocker(
+            "ordinary Ready provider review is missing or ambiguous"
+        )
+    provider_review = added_reviews[0]
+    provider_review_key = ("REVIEW", provider_review["node_id"])
+    if (
+        provider_review.get("actor") != COPILOT_REVIEW_PROVIDER
+        or provider_review.get("state") != "COMMENTED"
+        or provider_review.get("commit_oid") != provider_head_sha
+        or provider_review.get("reactions") != []
+    ):
+        raise SecurityBlocker(
+            "ordinary Ready provider review is not bound to the consumed assessment"
+        )
+
+    reviewed_thread_ids = {
+        item["node_id"] for item in reviewed.feedback["threads"]
+    }
+    added_threads = [
+        item
+        for item in current.feedback["threads"]
+        if item["node_id"] not in reviewed_thread_ids
+    ]
+    if not added_threads:
+        raise SecurityBlocker("ordinary Ready provider growth has no finding")
+
+    thread_ids: list[str] = []
+    finding_ids: list[str] = []
+    source_bindings: list[tuple[str, str, str, str | None]] = [
+        (
+            "REVIEW",
+            provider_review["node_id"],
+            provider_review["body_digest"],
+            None,
+        )
+    ]
+    admitted_additions = {provider_review_key}
+    eligible_by_thread = {
+        item["thread_id"]: item for item in eligibility["eligible_threads"]
+    }
+    if len(eligible_by_thread) != len(eligibility["eligible_threads"]):
+        raise SecurityBlocker(
+            "ordinary Ready provider growth repeats an eligible thread"
+        )
+    for thread in added_threads:
+        thread_id = thread.get("node_id")
+        comments = thread.get("comments")
+        eligible = eligible_by_thread.get(thread_id)
+        if (
+            not isinstance(thread_id, str)
+            or not re.fullmatch(r"PRRT_[A-Za-z0-9_-]+", thread_id)
+            or thread.get("is_resolved") is not False
+            or not isinstance(thread.get("is_outdated"), bool)
+            or not isinstance(comments, list)
+            or len(comments) != 1
+            or not isinstance(eligible, dict)
+            or eligible.get("classification") != "VALID_ACTIONABLE"
+            or eligible.get("disposition") != "CORRECTED_AND_VERIFIED"
+            or eligible.get("follow_up") is not None
+        ):
+            raise SecurityBlocker(
+                "ordinary Ready provider finding lacks exact material eligibility"
+            )
+        comment = comments[0]
+        comment_id = comment.get("node_id")
+        comment_digest = comment.get("body_digest")
+        comment_key = ("THREAD_COMMENT", comment_id)
+        if (
+            comment.get("actor") != COPILOT_REVIEW_PROVIDER
+            or comment.get("reply_to_id") is not None
+            or comment.get("reactions") != []
+            or not isinstance(comment_id, str)
+            or not IDENTITY.fullmatch(comment_id)
+            or not isinstance(comment_digest, str)
+            or not DIGEST.fullmatch(comment_digest)
+            or eligible.get("finding_ids") != [comment_id]
+            or comment_key not in added_keys
+        ):
+            raise SecurityBlocker(
+                "ordinary Ready provider finding is stale or substituted"
+            )
+        admitted_additions.add(comment_key)
+        thread_ids.append(thread_id)
+        finding_ids.append(comment_id)
+        source_bindings.append(
+            ("THREAD_COMMENT", comment_id, comment_digest, thread_id)
+        )
+
+    if set(eligible_by_thread) != set(thread_ids):
+        raise SecurityBlocker(
+            "ordinary Ready provider finding subset is incomplete or invented"
+        )
+    if added_keys != admitted_additions:
+        raise SecurityBlocker(
+            "ordinary Ready provider growth contains an unauthenticated addition"
+        )
+    _verify_predecessor_preservation(
+        reviewed,
+        current,
+        authorized_thread_ids=set(),
+        admitted_updates=set(),
+    )
+    if len(finding_ids) != len(set(finding_ids)):
+        raise SecurityBlocker(
+            "ordinary Ready provider finding identity is repeated"
+        )
+
+    ordered_threads = tuple(sorted(thread_ids))
+    ordered_findings = tuple(sorted(finding_ids))
+    ordered_sources = tuple(sorted(source_bindings))
+    eligibility_digest = digest_json(eligibility)
+    projection = {
+        "domain": "secpal.ordinary-ready-provider-growth/v1",
+        "repository": reviewed.repository,
+        "pull_request_number": reviewed.pull_request_number,
+        "provider_head_sha": provider_head_sha,
+        "predecessor_state_digest": reviewed.state_digest,
+        "predecessor_feedback_digest": reviewed.feedback_digest,
+        "resulting_state_digest": current.state_digest,
+        "resulting_feedback_digest": current.feedback_digest,
+        "provider_review_node_id": provider_review["node_id"],
+        "provider_review_body_digest": provider_review["body_digest"],
+        "thread_ids": list(ordered_threads),
+        "finding_ids": list(ordered_findings),
+        "source_bindings": [list(item) for item in ordered_sources],
+        "eligibility_evidence_digest": eligibility_digest,
+    }
+    return VerifiedOrdinaryReadyProviderGrowth(
+        predecessor_state_digest=reviewed.state_digest,
+        predecessor_feedback_digest=reviewed.feedback_digest,
+        resulting_state_digest=current.state_digest,
+        resulting_feedback_digest=current.feedback_digest,
+        provider_head_sha=provider_head_sha,
+        provider_review_node_id=provider_review["node_id"],
+        provider_review_body_digest=provider_review["body_digest"],
+        thread_ids=ordered_threads,
+        finding_ids=ordered_findings,
+        source_bindings=ordered_sources,
+        eligibility_evidence_digest=eligibility_digest,
+        growth_digest=digest_json(projection),
+    )
+
+
 def normalize_resolution_eligibility_evidence(
     value: Any,
     *,
@@ -5895,6 +6107,32 @@ def is_verified_validation_evidence(value: Any) -> bool:
         ValueError,
     ):
         return False
+
+
+def verified_validation_review_context(
+    value: Any,
+) -> tuple[StableFeedbackState, str | None]:
+    """Return only the reviewed state and eligibility bound by verified evidence."""
+
+    if not is_verified_validation_evidence(value):
+        raise SecurityBlocker("validation evidence is not verifier-authenticated")
+    try:
+        provenance = json.loads(value._verification_seal.provenance_json)
+        reviewed = StableFeedbackState.from_payload(provenance["reviewed_state"])
+        attestation = provenance["attestation"]
+        eligibility_digest = attestation.get("eligibility_evidence_digest")
+        if eligibility_digest is not None and (
+            not isinstance(eligibility_digest, str)
+            or not DIGEST.fullmatch(eligibility_digest)
+        ):
+            raise SecurityBlocker(
+                "validation eligibility binding is malformed"
+            )
+        return reviewed, eligibility_digest
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SecurityBlocker(
+            "validation evidence review context is malformed"
+        ) from exc
 
 
 def verify_commit_signatures(
