@@ -1,0 +1,34 @@
+{
+  "id": "secpal-trivy-repository-policy-v1",
+  "version": "1.0.0",
+  "required_scanners": ["vuln", "secret", "misconfig"],
+  "actions": {
+    "VULNERABILITY": {
+      "UNKNOWN": "REVIEW_REQUIRED",
+      "LOW": "REVIEW_REQUIRED",
+      "MEDIUM": "REVIEW_REQUIRED",
+      "HIGH": "ACTIONABLE",
+      "CRITICAL": "ACTIONABLE"
+    },
+    "SECRET": {
+      "UNKNOWN": "ACTIONABLE",
+      "LOW": "ACTIONABLE",
+      "MEDIUM": "ACTIONABLE",
+      "HIGH": "ACTIONABLE",
+      "CRITICAL": "ACTIONABLE"
+    },
+    "MISCONFIGURATION": {
+      "UNKNOWN": "REVIEW_REQUIRED",
+      "LOW": "REVIEW_REQUIRED",
+      "MEDIUM": "REVIEW_REQUIRED",
+      "HIGH": "ACTIONABLE",
+      "CRITICAL": "ACTIONABLE"
+    }
+  },
+  "exceptions": [],
+  "vex": {
+    "documents": [],
+    "accepted_statuses": ["not_affected", "fixed"],
+    "runtime_injection": false
+  }
+}

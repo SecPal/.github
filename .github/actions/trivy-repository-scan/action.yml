@@ -1,0 +1,174 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: SecPal pinned Trivy repository scan
+description: Scan the exact clean checked-out commit with reviewed SecPal policy.
+
+outputs:
+  gate-state:
+    description: CLEAN, ACTIONABLE, REVIEW_REQUIRED, or UNKNOWN_STALE.
+    value: ${{ steps.scan.outputs.gate-state }}
+  evidence-artifact:
+    description: Name of the bounded secret-safe evidence artifact.
+    value: ${{ steps.scan.outputs.evidence-artifact }}
+
+runs:
+  using: composite
+  steps:
+    - name: Scan exact checked-out commit
+      id: scan
+      shell: bash
+      env:
+        TRIVY_VERSION: 0.74.0
+        TRIVY_ARCHIVE_SHA256: 2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
+      run: |
+        set -u
+        governance_root="$(cd "$GITHUB_ACTION_PATH/../../.." && pwd)"
+        invocation_id="$(python3 -c 'import secrets; print(secrets.token_hex(8))')"
+        evidence_root="${RUNNER_TEMP}/secpal-trivy-repository-${invocation_id}"
+        tool_root="${RUNNER_TEMP}/secpal-trivy-tool-${invocation_id}"
+        cache_root="${RUNNER_TEMP}/secpal-trivy-cache-${invocation_id}"
+        artifact_name="trivy-repository-evidence-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${invocation_id}"
+        result="$evidence_root/result.json"
+        failure_code=""
+
+        install -d -m 0700 "$evidence_root" "$tool_root" "$cache_root"
+
+        write_unknown() {
+          local failure_completed_at
+          failure_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          python3 "$governance_root/scripts/secpal-trivy-repository-scan.py" unknown \
+            --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
+            --failure-code "$1" --completed-at "$failure_completed_at" --output "$result"
+        }
+
+        if ! python3 "$governance_root/scripts/secpal-trivy-repository-scan.py" verify-target \
+          --workspace "$GITHUB_WORKSPACE" --commit "$GITHUB_SHA"; then
+          failure_code="TARGET_IDENTITY_FAILURE"
+        fi
+
+        if [ -z "$failure_code" ]; then
+          if [ "$RUNNER_OS" != "Linux" ] || [ "$RUNNER_ARCH" != "X64" ]; then
+            failure_code="SCANNER_IDENTITY_FAILURE"
+          elif ! curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+            --output "$tool_root/trivy.tar.gz" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"; then
+            failure_code="NETWORK_FAILURE"
+          elif ! printf '%s  %s\n' "$TRIVY_ARCHIVE_SHA256" "$tool_root/trivy.tar.gz" \
+            | sha256sum --check --strict >/dev/null; then
+            failure_code="SCANNER_IDENTITY_FAILURE"
+          elif ! tar -xzf "$tool_root/trivy.tar.gz" -C "$tool_root" trivy; then
+            failure_code="SCANNER_IDENTITY_FAILURE"
+          else
+            chmod 0500 "$tool_root/trivy"
+            trusted_config="$tool_root/trivy.yaml"
+            printf '{}\n' > "$trusted_config"
+            chmod 0400 "$trusted_config"
+            installed_version="$(env -i HOME="$tool_root" "$tool_root/trivy" \
+              --config "$trusted_config" --version 2>/dev/null | sed -n 's/^Version: //p' | head -1)"
+            if [ "$installed_version" != "$TRIVY_VERSION" ]; then
+              failure_code="SCANNER_IDENTITY_FAILURE"
+            fi
+          fi
+        fi
+
+        if [ -z "$failure_code" ]; then
+          if ! env -i HOME="$tool_root" "$tool_root/trivy" --config "$trusted_config" image \
+            --download-db-only --cache-dir "$cache_root" --quiet; then
+            failure_code="NETWORK_FAILURE"
+          elif ! env -i HOME="$tool_root" "$tool_root/trivy" --config "$trusted_config" image \
+            --download-java-db-only --cache-dir "$cache_root" --quiet; then
+            failure_code="NETWORK_FAILURE"
+          fi
+        fi
+
+        native="$tool_root/native.json"
+        if [ -z "$failure_code" ]; then
+          if ! env -i HOME="$tool_root" "$tool_root/trivy" --config "$trusted_config" fs \
+            --scanners vuln,secret,misconfig \
+            --format json --exit-code 0 --quiet \
+            --skip-db-update --skip-java-db-update --skip-check-update \
+            --cache-dir "$cache_root" \
+            --ignorefile "$governance_root/policies/trivy-repository-scan-ignore-v1.yaml" \
+            --secret-config "$governance_root/policies/trivy-repository-secret-v1.yaml" \
+            --output "$native" "$GITHUB_WORKSPACE"; then
+            failure_code="SCANNER_FAILURE"
+          fi
+        fi
+
+        database="$tool_root/database.json"
+        if [ -z "$failure_code" ]; then
+          completed_at="$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))')"
+          if ! python3 "$governance_root/scripts/secpal-trivy-repository-scan.py" database \
+            --metadata "$cache_root/db/metadata.json" \
+            --metadata "$cache_root/java-db/metadata.json" \
+            --database-file "$cache_root/db/trivy.db" \
+            --database-file "$cache_root/java-db/trivy-java.db" \
+            --observed-at "$completed_at" --output "$database"; then
+            failure_code="DATABASE_FAILURE"
+          fi
+        fi
+
+        if [ -z "$failure_code" ]; then
+          if ! python3 "$governance_root/scripts/secpal-trivy-repository-scan.py" evaluate \
+            --native "$native" --database "$database" \
+            --policy "$governance_root/policies/trivy-repository-scan-v1.json" \
+            --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
+            --workspace "$GITHUB_WORKSPACE" \
+            --scanner-version "$TRIVY_VERSION" \
+            --scanner-identity "sha256:${TRIVY_ARCHIVE_SHA256}" \
+            --completed-at "$completed_at" --output "$result"; then
+            if [ ! -s "$result" ]; then
+              failure_code="MALFORMED_OUTPUT"
+            fi
+          fi
+        fi
+
+        rm -f -- "$native"
+        rm -rf -- "$tool_root" "$cache_root"
+        if [ -n "$failure_code" ]; then
+          write_unknown "$failure_code"
+        fi
+
+        gate_state="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["gate_state"])' "$result")"
+        printf 'gate-state=%s\n' "$gate_state" >> "$GITHUB_OUTPUT"
+        printf 'evidence-artifact=%s\n' "$artifact_name" >> "$GITHUB_OUTPUT"
+        printf 'evidence-path=%s\n' "$evidence_root" >> "$GITHUB_OUTPUT"
+
+        python3 - "$result" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+        import json
+        import sys
+
+        result = json.load(open(sys.argv[1], encoding="utf-8"))
+        summary = result["summary"]
+        print("## Trivy repository scan")
+        print()
+        print(f"Gate state: `{result['gate_state']}`")
+        print()
+        print(
+            "Findings: "
+            f"{summary['total']} total, {summary['actionable']} actionable, "
+            f"{summary['review_required']} review required, {summary['excepted']} excepted."
+        )
+        PY
+
+    - name: Upload bounded secret-safe evidence
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ steps.scan.outputs.evidence-artifact }}
+        path: ${{ steps.scan.outputs.evidence-path }}
+        if-no-files-found: error
+        retention-days: 14
+
+    - name: Fail closed when scan health is unknown or stale
+      if: always()
+      shell: bash
+      env:
+        GATE_STATE: ${{ steps.scan.outputs.gate-state }}
+      run: |
+        set -euo pipefail
+        if [ "$GATE_STATE" = "UNKNOWN_STALE" ] || [ -z "$GATE_STATE" ]; then
+          echo "Repository scan failed closed with UNKNOWN_STALE evidence." >&2
+          exit 1
+        fi

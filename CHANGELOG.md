@@ -36,6 +36,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 - Require complete parity evidence and removal of superseded active publisher
   paths when an existing publisher migrates away from BuildKit or Buildx.
 
+## 2026-09-16 - Add Pinned Pre-Build Repository Scanning
+
+**Added:**
+
+- Add the reusable pinned Trivy pre-build repository scan, central actionability
+  and exception policy, deterministic secret-safe evidence schema, and native
+  vulnerability, secret, misconfiguration, and failure-path fixtures.
+
 ## 2026-09-15 - Separate Ready Recovery Tooling And Candidate Provenance
 
 **Fixed:**
