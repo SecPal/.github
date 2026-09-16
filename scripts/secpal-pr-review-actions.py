@@ -1634,7 +1634,7 @@ query CurrentReviewFeedback(
       }
       reviews(first:100, after:$reviewsCursor) {
         nodes {
-          id databaseId body state commit { oid }
+          id databaseId body state submittedAt commit { oid }
           author {
             login
             ... on User { id databaseId }
@@ -1677,6 +1677,28 @@ query CurrentReviewFeedback(
         }
         pageInfo { hasNextPage }
       }
+      timelineItems(first:100, itemTypes:[REVIEW_REQUESTED_EVENT]) {
+        nodes {
+          ... on ReviewRequestedEvent {
+            id createdAt
+            actor {
+              login
+              ... on User { id databaseId }
+              ... on Bot { id databaseId }
+              ... on Organization { id databaseId }
+              ... on Mannequin { id databaseId }
+            }
+            requestedReviewer {
+              __typename
+              ... on User { login id databaseId }
+              ... on Bot { login id databaseId }
+              ... on Mannequin { login id databaseId }
+              ... on Team { slug organization { login } }
+            }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
       reviewThreads(first:100, after:$threadsCursor) {
         nodes {
           id isResolved isOutdated
@@ -1684,6 +1706,7 @@ query CurrentReviewFeedback(
             nodes {
               id databaseId body
               replyTo { id }
+              pullRequestReview { id }
               author {
                 login
                 ... on User { id databaseId }
@@ -2340,6 +2363,8 @@ class LiveGitHub:
                     != initial_pull_request.get("reactions")
                     or pull_request.get("reviewRequests")
                     != initial_pull_request.get("reviewRequests")
+                    or pull_request.get("timelineItems")
+                    != initial_pull_request.get("timelineItems")
                     or any(
                         pull_request.get(key) != initial_pull_request.get(key)
                         for key in connections
@@ -2370,6 +2395,28 @@ class LiveGitHub:
         reviews = connections["reviews"]
         comments = connections["comments"]
         threads = connections["reviewThreads"]
+        provider_review_requests = None
+        if "timelineItems" in pull_request:
+            request_events = _bounded_nodes(
+                pull_request.get("timelineItems"),
+                "provider review request history",
+            )
+            provider_review_requests = [
+                {
+                    "node_id": item.get("id"),
+                    "created_at": item.get("createdAt"),
+                    "actor": _actor(item.get("actor")),
+                    "requested_reviewer": _actor(
+                        item.get("requestedReviewer")
+                    ),
+                }
+                for item in request_events
+                if isinstance(item.get("requestedReviewer"), dict)
+                and _normalized_reviewer_login(
+                    item["requestedReviewer"].get("login")
+                )
+                in _COPILOT_REVIEWER_LOGINS
+            ]
         provider_state = dict(pull_request)
         provider_state["comments"] = {
             "nodes": comments,
@@ -2414,6 +2461,17 @@ class LiveGitHub:
                                 if isinstance(item.get("replyTo"), dict)
                                 else None
                             ),
+                            **(
+                                {
+                                    "review_id": item[
+                                        "pullRequestReview"
+                                    ].get("id")
+                                }
+                                if isinstance(
+                                    item.get("pullRequestReview"), dict
+                                )
+                                else {}
+                            ),
                             "reactions": _live_reactions(
                                 item.get("reactions"),
                                 f"thread comment {item.get('id')} reactions",
@@ -2441,6 +2499,7 @@ class LiveGitHub:
                             "body_digest": sha256_text(item.get("body", "")),
                             "actor": _actor(item.get("author")),
                             "state": item.get("state"),
+                            "submitted_at": item.get("submittedAt"),
                             "commit_oid": (
                                 item.get("commit", {}).get("oid")
                                 if isinstance(item.get("commit"), dict)
@@ -2473,6 +2532,16 @@ class LiveGitHub:
                 ),
                 "threads": sorted(
                     normalized_threads, key=lambda item: item["node_id"] or ""
+                ),
+                **(
+                    {
+                        "provider_review_requests": sorted(
+                            provider_review_requests,
+                            key=lambda item: item["node_id"] or "",
+                        )
+                    }
+                    if provider_review_requests is not None
+                    else {}
                 ),
             },
         }
@@ -4665,6 +4734,7 @@ def build_parser() -> argparse.ArgumentParser:
     batch_parser.add_argument("--repo-root", default=".")
     batch_parser.add_argument("--registry")
     batch_parser.add_argument("--capture-reviewed-state")
+    batch_parser.add_argument("--ready-remediation-provider-binding")
     batch_parser.add_argument("--request")
     batch_parser.add_argument("--reviewed-state")
     batch_parser.add_argument("--attestation")
@@ -8566,12 +8636,80 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
     return 0
 
 
+class _ReadyRemediationProviderBinding:
+    """Ephemeral read-only projection; the caller reauthenticates its source."""
+
+    def __init__(self, value: Any, *, repository: str, pull_request: int):
+        if (
+            not isinstance(value, dict)
+            or set(value)
+            != {
+                "repository",
+                "pull_request",
+                "current_head_sha",
+                "provider_head_sha",
+            }
+            or value.get("repository") != repository
+            or value.get("pull_request") != pull_request
+            or isinstance(value.get("pull_request"), bool)
+            or not isinstance(value.get("current_head_sha"), str)
+            or not OID_PATTERN.fullmatch(value["current_head_sha"])
+            or not isinstance(value.get("provider_head_sha"), str)
+            or not OID_PATTERN.fullmatch(value["provider_head_sha"])
+            or value["current_head_sha"] == value["provider_head_sha"]
+        ):
+            raise fast_path.SecurityBlocker(
+                "Ready-remediation provider binding is malformed"
+            )
+        self.repository = repository
+        self.pull_request = pull_request
+        self.current_head_sha = value["current_head_sha"]
+        self.provider_head_sha = value["provider_head_sha"]
+
+    def provider_head(
+        self, *, repository: str, pull_request: int, current_head_sha: str
+    ) -> str:
+        if (
+            repository != self.repository
+            or pull_request != self.pull_request
+            or current_head_sha != self.current_head_sha
+        ):
+            raise fast_path.SecurityBlocker(
+                "Ready-remediation provider binding is stale"
+            )
+        return self.provider_head_sha
+
+    @staticmethod
+    def verify_historical_provider_summary(**_kwargs: Any) -> None:
+        raise fast_path.SecurityBlocker(
+            "Ready-remediation provider summary is not historical adoption evidence"
+        )
+
+
 def _command_resolve_batch(arguments: argparse.Namespace) -> int:
     repository_root = Path(arguments.repo_root).resolve(strict=True)
     registry = load_registry(arguments.registry)
     entry = select_repository(registry, arguments.repo)
     binding = _fast_registry_binding(entry)
-    gateway = FastPathGateway(repository_root, entry)
+    ready_source_provider_binding = None
+    if arguments.ready_remediation_provider_binding is not None:
+        if not arguments.capture_reviewed_state:
+            raise fast_path.RecoverableLocalError(
+                "Ready-remediation provider binding is capture-only"
+            )
+        ready_source_provider_binding = _ReadyRemediationProviderBinding(
+            _read_json(
+                arguments.ready_remediation_provider_binding,
+                "Ready-remediation provider binding",
+            ),
+            repository=arguments.repo,
+            pull_request=arguments.pr,
+        )
+    gateway = FastPathGateway(
+        repository_root,
+        entry,
+        ready_source_provider_binding=ready_source_provider_binding,
+    )
     if arguments.capture_reviewed_state:
         if any(
             (

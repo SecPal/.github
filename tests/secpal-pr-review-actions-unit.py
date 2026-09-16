@@ -2343,6 +2343,21 @@ class MutationTests(TestCase):
                         "reviews": copy.deepcopy(empty),
                         "comments": copy.deepcopy(empty),
                         "reviewRequests": copy.deepcopy(empty),
+                        "timelineItems": {
+                            "nodes": [
+                                {
+                                    "id": "RRE_COPILOT",
+                                    "createdAt": "2026-09-16T00:00:00Z",
+                                    "actor": actor,
+                                    "requestedReviewer": {
+                                        "id": "BOT_kgDOCnlnWA",
+                                        "databaseId": 175728472,
+                                        "login": "copilot-pull-request-reviewer",
+                                    },
+                                }
+                            ],
+                            "pageInfo": {"hasNextPage": False},
+                        },
                         "reviewThreads": {
                             "nodes": [
                                 {
@@ -2356,6 +2371,9 @@ class MutationTests(TestCase):
                                                 "databaseId": 21,
                                                 "body": "Finding",
                                                 "author": actor,
+                                                "pullRequestReview": {
+                                                    "id": "PRR_COPILOT"
+                                                },
                                                 "reactions": {
                                                     "nodes": [
                                                         {
@@ -2388,6 +2406,14 @@ class MutationTests(TestCase):
                 "mutation_id"
             ],
             "REACTION_1",
+        )
+        self.assertEqual(
+            current["feedback"]["threads"][0]["comments"][0]["review_id"],
+            "PRR_COPILOT",
+        )
+        self.assertEqual(
+            current["feedback"]["provider_review_requests"][0]["node_id"],
+            "RRE_COPILOT",
         )
 
         payload["data"]["repository"]["pullRequest"]["reviewThreads"]["pageInfo"][
