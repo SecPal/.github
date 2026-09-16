@@ -156,8 +156,13 @@ while IFS= read -r matched_line; do
             secpal.lifecycleSigningCredential | secpal.pre-enrollment-current-safety)
                 # These are exact non-host configuration/protocol identifiers.
                 # Admit them only as inline code and never as URL authority.
+                unclassified_identifier_text="$source_text"
+                if [ "$token" = "secpal.pre-enrollment-current-safety" ]; then
+                    unclassified_identifier_text="${unclassified_identifier_text//\`$token\/v1\`/}"
+                fi
+                unclassified_identifier_text="${unclassified_identifier_text//\`$token\`/}"
                 if printf '%s\n' "$source_text" | grep -Eq '(^|[^[:alnum:]])(https?|wss?)://[^[:space:]]*secpal\.' \
-                    || ! printf '%s\n' "$source_text" | grep -Fq "\`$token"; then
+                    || [[ "$unclassified_identifier_text" == *"$token"* ]]; then
                     violations+="${source_path}:${source_line}:${token}"$'\n'
                 fi
                 ;;

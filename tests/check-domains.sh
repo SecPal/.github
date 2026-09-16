@@ -288,6 +288,16 @@ assert_domain_policy_case \
   "$lifecycle_config_identifier" \
   "Bad: https://$lifecycle_config_identifier"
 assert_domain_policy_case \
+  "the lifecycle config identifier after an unclosed inline-code delimiter" \
+  reject \
+  "$lifecycle_config_identifier" \
+  "Bad: \`$lifecycle_config_identifier"
+assert_domain_policy_case \
+  "a valid inline identifier followed by an unclosed occurrence" \
+  reject \
+  "$lifecycle_config_identifier" \
+  "Mixed: \`$lifecycle_config_identifier\` and \`$lifecycle_config_identifier"
+assert_domain_policy_case \
   "the pre-enrollment protocol identifier without identifier context" \
   reject \
   "$pre_enrollment_protocol_identifier" \
