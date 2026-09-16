@@ -2379,8 +2379,31 @@ def _feedback_projection(payload: dict[str, Any]) -> dict[str, Any]:
     reviews_value = source.get("reviews", [])
     comments_value = source.get("conversation_comments", [])
     threads_value = source.get("threads", [])
+    requests_present = "provider_review_requests" in source
+    requests_value = source.get("provider_review_requests", [])
     if not all(isinstance(value, list) for value in (reviews_value, comments_value, threads_value)):
         raise SecurityBlocker("stable feedback connections are malformed")
+    if requests_present and not isinstance(requests_value, list):
+        raise SecurityBlocker("provider review request history is malformed")
+
+    provider_review_requests: list[dict[str, Any]] = []
+    for item in requests_value:
+        if not isinstance(item, dict):
+            raise SecurityBlocker("provider review request is malformed")
+        provider_review_requests.append(
+            {
+                "node_id": _require_string(
+                    item.get("node_id"), "provider review request identity"
+                ),
+                "created_at": _require_string(
+                    item.get("created_at"), "provider review request chronology"
+                ),
+                "actor": _actor(item.get("actor"), "provider review request"),
+                "requested_reviewer": _actor(
+                    item.get("requested_reviewer"), "requested review provider"
+                ),
+            }
+        )
 
     reviews: list[dict[str, Any]] = []
     for item in reviews_value:
@@ -2398,6 +2421,16 @@ def _feedback_projection(payload: dict[str, Any]) -> dict[str, Any]:
                     else None
                 ),
                 "reactions": _reactions(item.get("reactions", []), "review"),
+                **(
+                    {
+                        "submitted_at": _require_string(
+                            item.get("submitted_at"),
+                            "review submission chronology",
+                        )
+                    }
+                    if item.get("submitted_at") is not None
+                    else {}
+                ),
             }
         )
 
@@ -2449,6 +2482,16 @@ def _feedback_projection(payload: dict[str, Any]) -> dict[str, Any]:
                     ),
                     "reply_to_id": reply_to_id,
                     "reactions": _reactions(item.get("reactions", []), "thread comment"),
+                    **(
+                        {
+                            "review_id": _require_string(
+                                item.get("review_id"),
+                                "thread comment review identity",
+                            )
+                        }
+                        if item.get("review_id") is not None
+                        else {}
+                    ),
                 }
             )
         comment_identities = [item["node_id"] for item in thread_comments]
@@ -2470,8 +2513,22 @@ def _feedback_projection(payload: dict[str, Any]) -> dict[str, Any]:
         "reviews": sorted(reviews, key=lambda item: item["node_id"]),
         "conversation_comments": sorted(comments, key=lambda item: item["node_id"]),
         "threads": sorted(threads, key=lambda item: item["node_id"]),
+        **(
+            {
+                "provider_review_requests": sorted(
+                    provider_review_requests,
+                    key=lambda item: item["node_id"],
+                )
+            }
+            if requests_present
+            else {}
+        ),
     }
     for label, items in (
+        (
+            "provider review requests",
+            projection.get("provider_review_requests", []),
+        ),
         ("reviews", projection["reviews"]),
         ("conversation comments", projection["conversation_comments"]),
         ("review threads", projection["threads"]),
@@ -2624,6 +2681,7 @@ class VerifiedOrdinaryReadyProviderGrowth:
     resulting_state_digest: str
     resulting_feedback_digest: str
     provider_head_sha: str
+    provider_request_node_id: str
     provider_review_node_id: str
     provider_review_body_digest: str
     thread_ids: tuple[str, ...]
@@ -3127,6 +3185,14 @@ def _successor_source_inventory(
             digest_json(reaction),
             None,
             reaction,
+        )
+    for request in state.feedback.get("provider_review_requests", []):
+        add(
+            "PROVIDER_REVIEW_REQUEST",
+            request["node_id"],
+            digest_json(request),
+            None,
+            request,
         )
     for review in state.feedback["reviews"]:
         add("REVIEW", review["node_id"], review["body_digest"], None, review)
@@ -4043,16 +4109,25 @@ def _verify_predecessor_preservation(
 ) -> None:
     for category, identity_key in (
         ("pull_request_reactions", "mutation_id"),
+        ("provider_review_requests", "node_id"),
         ("reviews", "node_id"),
         ("conversation_comments", "node_id"),
     ):
-        predecessor = {item[identity_key]: item for item in reviewed.feedback[category]}
-        successor = {item[identity_key]: item for item in current.feedback[category]}
+        predecessor = {
+            item[identity_key]: item
+            for item in reviewed.feedback.get(category, [])
+        }
+        successor = {
+            item[identity_key]: item
+            for item in current.feedback.get(category, [])
+        }
         for node_id, expected in predecessor.items():
             observed = successor.get(node_id)
             key = (
                 "PULL_REQUEST_REACTION"
                 if category == "pull_request_reactions"
+                else "PROVIDER_REVIEW_REQUEST"
+                if category == "provider_review_requests"
                 else "REVIEW"
                 if category == "reviews"
                 else "CONVERSATION_COMMENT",
@@ -4093,6 +4168,11 @@ def _verify_predecessor_preservation(
                 ):
                     raise SecurityBlocker("successor changed a predecessor reaction")
                 comparable = copy.deepcopy(observed)
+                if (
+                    category == "reviews"
+                    and "submitted_at" not in expected
+                ):
+                    comparable.pop("submitted_at", None)
                 comparable["reactions"] = expected["reactions"]
                 if comparable != expected:
                     raise SecurityBlocker(
@@ -4131,6 +4211,11 @@ def _verify_predecessor_preservation(
             ):
                 raise SecurityBlocker("successor changed a predecessor reaction")
             comparable = copy.deepcopy(observed_comment)
+            if (
+                "review_id" not in expected_comment
+                and isinstance(comparable, dict)
+            ):
+                comparable.pop("review_id", None)
             comparable["reactions"] = expected_comment["reactions"]
             if comparable != expected_comment:
                 raise SecurityBlocker("successor changed a predecessor comment")
@@ -4631,6 +4716,7 @@ def verify_ordinary_ready_remediation_provider_growth(
     current: StableFeedbackState,
     *,
     provider_head_sha: str,
+    predecessor_eligibility_evidence: Any,
     eligibility_evidence: Any,
 ) -> VerifiedOrdinaryReadyProviderGrowth:
     """Derive one complete same-assessment provider delta for ordinary remediation.
@@ -4650,6 +4736,9 @@ def verify_ordinary_ready_remediation_provider_growth(
         or reviewed.head_sha != provider_head_sha
         or current.head_sha == provider_head_sha
         or reviewed.base_ref != current.base_ref
+        # The accepted-main prerequisite necessarily advances this ref's tip.
+        # The candidate seal and independent live capture bind its new SHA;
+        # current-base integration remains the merge gate's responsibility.
         or reviewed.pr_state != "OPEN"
         or current.pr_state != "OPEN"
     ):
@@ -4657,6 +4746,11 @@ def verify_ordinary_ready_remediation_provider_growth(
             "ordinary Ready provider growth does not preserve source identity"
         )
 
+    predecessor_eligibility = normalize_resolution_eligibility_evidence(
+        predecessor_eligibility_evidence,
+        repository=reviewed.repository,
+        reviewed_state=reviewed,
+    )
     eligibility = normalize_resolution_eligibility_evidence(
         eligibility_evidence,
         repository=reviewed.repository,
@@ -4669,6 +4763,28 @@ def verify_ordinary_ready_remediation_provider_growth(
     if removed_keys:
         raise SecurityBlocker(
             "ordinary Ready provider growth removed predecessor feedback"
+        )
+
+    provider_requests = current.feedback.get("provider_review_requests", [])
+    if len(provider_requests) != 1:
+        raise SecurityBlocker(
+            "ordinary Ready provider request lineage is missing or ambiguous"
+        )
+    provider_request = provider_requests[0]
+    provider_request_key = (
+        "PROVIDER_REVIEW_REQUEST",
+        provider_request["node_id"],
+    )
+    if (
+        provider_request.get("requested_reviewer") != COPILOT_REVIEW_PROVIDER
+        or not isinstance(provider_request.get("node_id"), str)
+        or not IDENTITY.fullmatch(provider_request["node_id"])
+        or not isinstance(provider_request.get("actor"), dict)
+        or not isinstance(provider_request.get("created_at"), str)
+        or not provider_request["created_at"]
+    ):
+        raise SecurityBlocker(
+            "ordinary Ready provider request does not identify the consumed assessment"
         )
 
     added_reviews = [
@@ -4684,8 +4800,12 @@ def verify_ordinary_ready_remediation_provider_growth(
     provider_review_key = ("REVIEW", provider_review["node_id"])
     if (
         provider_review.get("actor") != COPILOT_REVIEW_PROVIDER
+        or not isinstance(provider_review.get("node_id"), str)
+        or not IDENTITY.fullmatch(provider_review["node_id"])
         or provider_review.get("state") != "COMMENTED"
         or provider_review.get("commit_oid") != provider_head_sha
+        or not isinstance(provider_review.get("submitted_at"), str)
+        or provider_request["created_at"] >= provider_review["submitted_at"]
         or provider_review.get("reactions") != []
     ):
         raise SecurityBlocker(
@@ -4707,6 +4827,12 @@ def verify_ordinary_ready_remediation_provider_growth(
     finding_ids: list[str] = []
     source_bindings: list[tuple[str, str, str, str | None]] = [
         (
+            "PROVIDER_REVIEW_REQUEST",
+            provider_request["node_id"],
+            digest_json(provider_request),
+            None,
+        ),
+        (
             "REVIEW",
             provider_review["node_id"],
             provider_review["body_digest"],
@@ -4714,6 +4840,8 @@ def verify_ordinary_ready_remediation_provider_growth(
         )
     ]
     admitted_additions = {provider_review_key}
+    if provider_request_key in added_keys:
+        admitted_additions.add(provider_request_key)
     eligible_by_thread = {
         item["thread_id"]: item for item in eligibility["eligible_threads"]
     }
@@ -4746,6 +4874,7 @@ def verify_ordinary_ready_remediation_provider_growth(
         comment_key = ("THREAD_COMMENT", comment_id)
         if (
             comment.get("actor") != COPILOT_REVIEW_PROVIDER
+            or comment.get("review_id") != provider_review["node_id"]
             or comment.get("reply_to_id") is not None
             or comment.get("reactions") != []
             or not isinstance(comment_id, str)
@@ -4776,7 +4905,10 @@ def verify_ordinary_ready_remediation_provider_growth(
     _verify_predecessor_preservation(
         reviewed,
         current,
-        authorized_thread_ids=set(),
+        authorized_thread_ids={
+            item["thread_id"]
+            for item in predecessor_eligibility["eligible_threads"]
+        },
         admitted_updates=set(),
     )
     if len(finding_ids) != len(set(finding_ids)):
@@ -4797,6 +4929,7 @@ def verify_ordinary_ready_remediation_provider_growth(
         "predecessor_feedback_digest": reviewed.feedback_digest,
         "resulting_state_digest": current.state_digest,
         "resulting_feedback_digest": current.feedback_digest,
+        "provider_request_node_id": provider_request["node_id"],
         "provider_review_node_id": provider_review["node_id"],
         "provider_review_body_digest": provider_review["body_digest"],
         "thread_ids": list(ordered_threads),
@@ -4810,6 +4943,7 @@ def verify_ordinary_ready_remediation_provider_growth(
         resulting_state_digest=current.state_digest,
         resulting_feedback_digest=current.feedback_digest,
         provider_head_sha=provider_head_sha,
+        provider_request_node_id=provider_request["node_id"],
         provider_review_node_id=provider_review["node_id"],
         provider_review_body_digest=provider_review["body_digest"],
         thread_ids=ordered_threads,
@@ -6118,8 +6252,23 @@ def verified_validation_review_context(
         raise SecurityBlocker("validation evidence is not verifier-authenticated")
     try:
         provenance = json.loads(value._verification_seal.provenance_json)
+        if provenance.get("kind") != "ORDINARY":
+            raise SecurityBlocker(
+                "ordinary remediation requires ordinary validation evidence"
+            )
         reviewed = StableFeedbackState.from_payload(provenance["reviewed_state"])
         attestation = provenance["attestation"]
+        if any(
+            field in attestation
+            for field in (
+                "integration_evidence_digest",
+                "exceptional_recovery_evidence_digest",
+                "exceptional_continuation_evidence_digest",
+            )
+        ):
+            raise SecurityBlocker(
+                "ordinary remediation validation has incompatible authority"
+            )
         eligibility_digest = attestation.get("eligibility_evidence_digest")
         if eligibility_digest is not None and (
             not isinstance(eligibility_digest, str)

@@ -583,14 +583,21 @@ Exceptional Recovery or Continuation. The candidate's verifier-sealed
 validation evidence authenticates the complete reviewed state at H1 and its
 commit-bound ordinary eligibility.
 
-The maintained verifier derives exactly one added Copilot review committed to
-H0 and the complete set of added provider-owned threads and comment-body
-digests. The added-thread set must equal the existing
+The maintained verifier derives the unique Copilot request event, exactly one
+added Copilot review committed to H0, their chronology, and the complete set of
+added provider-owned threads, comment-body digests, and comment-to-review
+identities. The first remediation's authenticated eligibility derives the
+only predecessor threads allowed to become resolved, and an independent live
+capture must equal the candidate-bound H1 state. The added-thread set must
+equal the existing
 `VALID_ACTIONABLE + CORRECTED_AND_VERIFIED` eligibility set. A caller cannot
 nominate a delta or subset. Predecessor deletion or substitution, provider,
 actor, repository, PR, head, body, thread, eligibility, CURRENT, lifecycle, or
-replay drift fails closed. The resulting digest is carried only by the existing
-signed `REMEDIATION_COMPLETED` authorization for H1 to H2. This composition
+replay drift fails closed. The exact target base ref is preserved while its tip
+may advance as accepted main receives this prerequisite; base integration
+remains a separate merge-gate responsibility. The resulting digest is carried
+only by the existing signed `REMEDIATION_COMPLETED` authorization for H1 to H2,
+and its generic issuer rejects that verifier-owned scope. This composition
 adds no provider request, lifecycle transition, counter, state, recovery,
 continuation, resolver, signer, trust root, journal, classification, or
 disposition and grants no thread-resolution authority. Feedback after that

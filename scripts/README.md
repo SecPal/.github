@@ -152,13 +152,23 @@ remediation's sealed validation evidence to authenticate that original capture,
 derives the reviewed predecessor from protected CURRENT, and compares it with
 the sealed reviewed state and eligibility for the candidate second
 remediation. It derives the one exact Copilot review and every added Copilot
-thread; callers cannot provide a delta or subset. Only complete
+thread, authenticates the unique Copilot request event and review chronology,
+and binds every top-level comment to that review; callers cannot provide a
+delta or subset. An independent maintained live capture must equal the
+candidate-bound H1 state. The capture-only
+`resolve-batch --ready-remediation-provider-binding FILE` form receives an
+ephemeral projection derived from protected CURRENT and cannot be combined
+with mutation. The
+first remediation's authenticated eligibility derives any
+permitted predecessor thread resolution. Only complete
 `VALID_ACTIONABLE + CORRECTED_AND_VERIFIED` ordinary eligibility for all added
 threads can enter the existing signed `REMEDIATION_COMPLETED` scope. This path
 requires Review 1/1, Remediation 1/2, Ready true, Cycle 3 absent, and no
 Exceptional Recovery or Continuation. It requests no provider, rewrites no
 Stable Feedback, grants no resolution authority, and creates no lifecycle
-state, transition, counter, signer, trust root, or journal.
+state, transition, counter, signer, trust root, or journal. Its verifier-owned
+seal is not reproducible from serialized fields, and the generic authorization
+issuer rejects the provider-growth digest.
 
 Applicable protected-branch
 rules independently determine whether `NONE` is admissible; `REVIEW_REQUIRED`

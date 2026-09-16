@@ -182,20 +182,39 @@ the complete reviewed state at H1 and its existing ordinary eligibility
 manifest.
 
 The verifier derives, rather than accepts, the feedback delta between those
-states. It requires exactly one added Copilot review committed to H0 and every
-added thread to contain one exact provider-owned top-level comment. All
-predecessor feedback is immutable apart from already-supported monotonic
-outdated-state observation. The set of added threads must equal the complete
-ordinary `VALID_ACTIONABLE + CORRECTED_AND_VERIFIED` eligibility set; deletion,
-substitution, replies, unrelated actors or sources, wrong-head feedback, and a
-caller-selected subset fail closed.
+states. The candidate capture authenticates exactly one Copilot request-history
+event, the later Copilot review committed to H0, their provider chronology, and
+each added top-level comment's parent-review identity. Every added thread must
+therefore belong to that one consumed assessment. The first remediation's
+commit-bound eligibility manifest derives the only predecessor threads allowed
+to have become resolved; all other predecessor feedback is immutable apart
+from already-supported monotonic outdated-state and schema-enrichment
+observation. The set of added threads must equal the complete ordinary
+`VALID_ACTIONABLE + CORRECTED_AND_VERIFIED` eligibility set; deletion,
+substitution, replies, unrelated actors or sources, wrong-head feedback, a
+second provider request, and a caller-selected subset fail closed.
+The authority verifier independently repeats the maintained live Stable
+Feedback capture at H1 and requires exact equality with the candidate-bound
+state, so candidate-local evidence cannot create provider history.
+The candidate-bound capture uses the dedicated read-only
+`resolve-batch --ready-remediation-provider-binding FILE` form. The authority
+verifier derives that ephemeral file from protected CURRENT, and the form is
+valid only with `--capture-reviewed-state`; its output alone grants no
+remediation or mutation authority.
+
+The target base ref remains exact. Its tip may advance monotonically while the
+delivery source stays unchanged because the prerequisite itself reaches
+accepted main between H0 and this bounded use; current-base integration remains
+owned by the existing merge gate and is not reinterpreted as provider feedback.
 
 The derived digest is carried by the existing signed
 `REMEDIATION_COMPLETED` authorization for H1 to H2. It can consume only the
 remaining ordinary remediation slot and adds no review, provider request,
 lifecycle operation, recovery, continuation, resolver, or thread-resolution
-authority. Stable Feedback remains immutable, and feedback arriving after this
-bounded delta is not recursively incorporated.
+authority. A module-owned verifier seal is required to issue that scope, and
+the generic authorization creator rejects its digest field. Stable Feedback
+remains immutable, and feedback arriving after this bounded delta is not
+recursively incorporated.
 
 When the current instruction authorizes full delivery and the environment can
 wait, observe only maintained review-provider status at bounded intervals of

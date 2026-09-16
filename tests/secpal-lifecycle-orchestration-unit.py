@@ -1575,6 +1575,7 @@ def ordinary_ready_provider_growth() -> tuple[
     fast_path.StableFeedbackState,
     fast_path.StableFeedbackState,
     dict[str, object],
+    dict[str, object],
 ]:
     """Reproduce post-capture Copilot growth from one consumed reviewed head."""
 
@@ -1583,17 +1584,64 @@ def ordinary_ready_provider_growth() -> tuple[
     review_id = provider_growth["provider_transport"][0]["node_id"]
     material = provider_growth["material_findings"]
     thread_ids = {item["thread_id"] for item in material}
+    predecessor_thread = {
+        "node_id": "PRRT_PREDECESSOR_FIXED",
+        "is_resolved": False,
+        "is_outdated": False,
+        "comments": [
+            {
+                "node_id": "PRRC_PREDECESSOR_FIXED",
+                "body_digest": "6" * 64,
+                "actor": {
+                    "login": "chatgpt-codex-connector",
+                    "node_id": "BOT_CODEX_REVIEW",
+                    "database_id": 2,
+                },
+                "reply_to_id": None,
+                "reactions": [],
+            }
+        ],
+    }
+    reviewed.feedback["threads"].append(predecessor_thread)
+    reviewed.refresh_digests()
     feedback = copy.deepcopy(reviewed.feedback)
+    feedback["provider_review_requests"] = [
+        {
+            "node_id": "RRE_COPILOT_CONSUMED",
+            "created_at": "2026-09-01T00:00:00Z",
+            "actor": {
+                "login": "maintainer",
+                "node_id": "USER_MAINTAINER",
+                "database_id": 1,
+            },
+            "requested_reviewer": copy.deepcopy(
+                fast_path.COPILOT_REVIEW_PROVIDER
+            ),
+        }
+    ]
     feedback["reviews"] = [
-        copy.deepcopy(item)
+        {
+            **copy.deepcopy(item),
+            "submitted_at": "2026-09-01T00:01:00Z",
+        }
         for item in observed.feedback["reviews"]
         if item["node_id"] == review_id
     ]
-    feedback["threads"] = [
-        copy.deepcopy(item)
+    feedback["threads"] = [copy.deepcopy(predecessor_thread)] + [
+        {
+            **copy.deepcopy(item),
+            "comments": [
+                {
+                    **copy.deepcopy(item["comments"][0]),
+                    "review_id": review_id,
+                }
+            ],
+        }
         for item in observed.feedback["threads"]
         if item["node_id"] in thread_ids
     ]
+    feedback["threads"][0]["is_resolved"] = True
+    feedback["threads"][0]["is_outdated"] = True
     current = fast_path.StableFeedbackState(
         repository=reviewed.repository,
         pull_request_number=reviewed.pull_request_number,
@@ -1606,6 +1654,24 @@ def ordinary_ready_provider_growth() -> tuple[
     comments = {
         thread["node_id"]: thread["comments"][0]["node_id"]
         for thread in current.feedback["threads"]
+        if thread["node_id"] in thread_ids
+    }
+    predecessor_eligibility = {
+        "schema_version": "1.1",
+        "repository": reviewed.repository,
+        "pull_request_number": reviewed.pull_request_number,
+        "reviewed_head_sha": reviewed.head_sha,
+        "reviewed_state_digest": reviewed.state_digest,
+        "eligible_threads": [
+            {
+                "thread_id": predecessor_thread["node_id"],
+                "classification": "VALID_ACTIONABLE",
+                "disposition": "CORRECTED_AND_VERIFIED",
+                "finding_ids": ["PRRC_PREDECESSOR_FIXED"],
+                "evidence_digest": "5" * 64,
+                "follow_up": None,
+            }
+        ],
     }
     eligibility = {
         "schema_version": "1.1",
@@ -1625,7 +1691,7 @@ def ordinary_ready_provider_growth() -> tuple[
             for index, thread_id in enumerate(sorted(thread_ids), 1)
         ],
     }
-    return reviewed, current, eligibility
+    return reviewed, current, predecessor_eligibility, eligibility
 
 
 def _provider_terminal_summary(head_sha: str) -> str:
@@ -1761,12 +1827,15 @@ class LifecycleOrchestrationTests(TestCase):
     def test_post_capture_provider_growth_authorizes_remaining_ordinary_remediation(
         self,
     ) -> None:
-        reviewed, current, eligibility = ordinary_ready_provider_growth()
+        reviewed, current, predecessor_eligibility, eligibility = (
+            ordinary_ready_provider_growth()
+        )
 
         verified = fast_path.verify_ordinary_ready_remediation_provider_growth(
             reviewed,
             current,
             provider_head_sha=reviewed.head_sha,
+            predecessor_eligibility_evidence=predecessor_eligibility,
             eligibility_evidence=eligibility,
         )
 
@@ -1776,11 +1845,88 @@ class LifecycleOrchestrationTests(TestCase):
         self.assertEqual(len(verified.finding_ids), 4)
         self.assertRegex(verified.growth_digest, r"^[0-9a-f]{64}$")
 
+        current.base_sha = "f" * 40
+        current.refresh_digests()
+        eligibility["reviewed_state_digest"] = current.state_digest
+        verified_after_base_advance = (
+            fast_path.verify_ordinary_ready_remediation_provider_growth(
+                reviewed,
+                current,
+                provider_head_sha=reviewed.head_sha,
+                predecessor_eligibility_evidence=predecessor_eligibility,
+                eligibility_evidence=eligibility,
+            )
+        )
+        self.assertEqual(
+            verified_after_base_advance.resulting_state_digest,
+            current.state_digest,
+        )
+
+    def test_provider_growth_rejects_integration_validation_context(self) -> None:
+        evidence = SimpleNamespace(
+            _verification_seal=SimpleNamespace(
+                provenance_json=json.dumps(
+                    {
+                        "kind": "READY_INTEGRATION",
+                        "reviewed_state": {},
+                        "attestation": {},
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+        )
+        with (
+            mock.patch.object(
+                fast_path,
+                "is_verified_validation_evidence",
+                return_value=True,
+            ),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "ordinary validation evidence",
+            ),
+        ):
+            fast_path.verified_validation_review_context(evidence)
+
+        reviewed, _current, _predecessor, _eligibility = (
+            ordinary_ready_provider_growth()
+        )
+        exceptional = SimpleNamespace(
+            _verification_seal=SimpleNamespace(
+                provenance_json=json.dumps(
+                    {
+                        "kind": "ORDINARY",
+                        "reviewed_state": reviewed.to_dict(),
+                        "attestation": {
+                            "exceptional_recovery_evidence_digest": "a" * 64,
+                        },
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+        )
+        with (
+            mock.patch.object(
+                fast_path,
+                "is_verified_validation_evidence",
+                return_value=True,
+            ),
+            self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "incompatible authority",
+            ),
+        ):
+            fast_path.verified_validation_review_context(exceptional)
+
     def test_post_capture_provider_growth_fails_closed_for_source_and_subset_drift(
         self,
     ) -> None:
         def reject(label, mutate, *, refresh=True):
-            reviewed, current, eligibility = ordinary_ready_provider_growth()
+            reviewed, current, predecessor_eligibility, eligibility = (
+                ordinary_ready_provider_growth()
+            )
             provider_head = reviewed.head_sha
             provider_head = mutate(
                 reviewed, current, eligibility, provider_head
@@ -1798,6 +1944,7 @@ class LifecycleOrchestrationTests(TestCase):
                     reviewed,
                     current,
                     provider_head_sha=provider_head,
+                    predecessor_eligibility_evidence=predecessor_eligibility,
                     eligibility_evidence=eligibility,
                 )
 
@@ -1805,7 +1952,7 @@ class LifecycleOrchestrationTests(TestCase):
             return current.feedback["reviews"][0]
 
         def added_thread(current):
-            return current.feedback["threads"][0]
+            return current.feedback["threads"][1]
 
         cases = (
             (
@@ -1823,6 +1970,25 @@ class LifecycleOrchestrationTests(TestCase):
                 lambda _r, current, _e, _h: added_review(current).update(
                     commit_oid="7" * 40
                 ),
+            ),
+            (
+                "second provider request",
+                lambda _r, current, _e, _h: current.feedback[
+                    "provider_review_requests"
+                ].append(
+                    {
+                        **copy.deepcopy(
+                            current.feedback["provider_review_requests"][0]
+                        ),
+                        "node_id": "RRE_SECOND_COPILOT_REQUEST",
+                    }
+                ),
+            ),
+            (
+                "wrong parent review",
+                lambda _r, current, _e, _h: added_thread(current)[
+                    "comments"
+                ][0].update(review_id="PRR_OTHER_ASSESSMENT"),
             ),
             (
                 "edited finding body",
@@ -1878,7 +2044,9 @@ class LifecycleOrchestrationTests(TestCase):
     def test_provider_growth_authority_composes_only_with_remaining_ready_slot(
         self,
     ) -> None:
-        reviewed, resulting, eligibility = ordinary_ready_provider_growth()
+        reviewed, resulting, predecessor_eligibility, eligibility = (
+            ordinary_ready_provider_growth()
+        )
         lifecycle = replace(
             current_lifecycle(
                 remediation_cycles=1,
@@ -1938,7 +2106,10 @@ class LifecycleOrchestrationTests(TestCase):
                 fast_path,
                 "verified_validation_review_context",
                 side_effect=[
-                    (reviewed, "a" * 64),
+                    (
+                        reviewed,
+                        fast_path.digest_json(predecessor_eligibility),
+                    ),
                     (resulting, fast_path.digest_json(eligibility)),
                 ],
             ),
@@ -1947,11 +2118,17 @@ class LifecycleOrchestrationTests(TestCase):
                 "derive_ready_source_recovery_provider_binding",
                 return_value=provider_binding,
             ),
+            mock.patch.object(
+                orchestration,
+                "_capture_current_stable_feedback",
+                return_value=resulting,
+            ),
         ):
             verified = orchestration.verify_ready_remediation_provider_growth_authority(
                 current,
                 predecessor_validation=predecessor_validation,
                 candidate_validation=candidate_validation,
+                predecessor_eligibility_evidence=predecessor_eligibility,
                 eligibility_evidence=eligibility,
             )
         scope = orchestration.ordinary_ready_remediation_authorization_scope(
@@ -1981,6 +2158,67 @@ class LifecycleOrchestrationTests(TestCase):
         forged = replace(verified, finding_ids=verified.finding_ids[:-1])
         with self.assertRaises(orchestration.LifecycleOrchestrationError):
             orchestration.ordinary_ready_remediation_authorization_scope(forged)
+        reconstructed = replace(verified, _verification_seal=object())
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            orchestration.ordinary_ready_remediation_authorization_scope(
+                reconstructed
+            )
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError,
+            "maintained issuer",
+        ):
+            orchestration.create_user_authorization(
+                authorization_id="caller-selected-provider-growth",
+                repository=REPOSITORY,
+                delivery_issue=894,
+                lifecycle=lifecycle,
+                publication_oid=current.publication_oid,
+                publication_digest=current.publication_digest,
+                operation="REMEDIATION_COMPLETED",
+                reason="Attempt to bypass provider-growth verification",
+                scope=scope,
+                signer_identity="aroviqen@secpal.app",
+                signer=lambda _payload, _domain: {
+                    "format": "ssh",
+                    "signer_identity": "aroviqen@secpal.app",
+                    "value": "fixture-signature",
+                },
+            )
+
+        live_mismatch = copy.deepcopy(resulting)
+        live_mismatch.base_sha = "0" * 40
+        live_mismatch.refresh_digests()
+        with (
+            mock.patch.object(
+                fast_path,
+                "verified_validation_review_context",
+                side_effect=[
+                    (
+                        reviewed,
+                        fast_path.digest_json(predecessor_eligibility),
+                    ),
+                    (resulting, fast_path.digest_json(eligibility)),
+                ],
+            ),
+            mock.patch.object(
+                publication,
+                "derive_ready_source_recovery_provider_binding",
+                return_value=provider_binding,
+            ),
+            mock.patch.object(
+                orchestration,
+                "_capture_current_stable_feedback",
+                return_value=live_mismatch,
+            ),
+            self.assertRaises(orchestration.LifecycleOrchestrationError),
+        ):
+            orchestration.verify_ready_remediation_provider_growth_authority(
+                current,
+                predecessor_validation=predecessor_validation,
+                candidate_validation=candidate_validation,
+                predecessor_eligibility_evidence=predecessor_eligibility,
+                eligibility_evidence=eligibility,
+            )
 
         for label, updates in (
             ("no consumed remediation", {"remediation_cycle_count": 0}),
@@ -2000,7 +2238,10 @@ class LifecycleOrchestrationTests(TestCase):
                     fast_path,
                     "verified_validation_review_context",
                     side_effect=[
-                        (reviewed, "a" * 64),
+                        (
+                            reviewed,
+                            fast_path.digest_json(predecessor_eligibility),
+                        ),
                         (resulting, fast_path.digest_json(eligibility)),
                     ],
                 ),
@@ -2009,12 +2250,18 @@ class LifecycleOrchestrationTests(TestCase):
                     "derive_ready_source_recovery_provider_binding",
                     return_value=provider_binding,
                 ),
+                mock.patch.object(
+                    orchestration,
+                    "_capture_current_stable_feedback",
+                    return_value=resulting,
+                ),
                 self.assertRaises(orchestration.LifecycleOrchestrationError),
             ):
                 orchestration.verify_ready_remediation_provider_growth_authority(
                     changed_current,
                     predecessor_validation=predecessor_validation,
                     candidate_validation=candidate_validation,
+                    predecessor_eligibility_evidence=predecessor_eligibility,
                     eligibility_evidence=eligibility,
                 )
 
@@ -5856,9 +6103,23 @@ def create_ready_integration_attestation(normalized, eligibility_bound):
     ) -> None:
         request, _authorization = continuation_inputs()
         reviewed = request["continuation_evidence"]["reviewed_state_evidence"]
+        provider_binding = SimpleNamespace(
+            repository=REPOSITORY,
+            pull_request=PR,
+            current_head_sha=reviewed["head_sha"],
+            provider_head_sha="1" * 40,
+        )
+
+        captured_provider_binding = {}
 
         def run(command, **kwargs):
             output = Path(command[command.index("--capture-reviewed-state") + 1])
+            binding_path = Path(
+                command[
+                    command.index("--ready-remediation-provider-binding") + 1
+                ]
+            )
+            captured_provider_binding.update(json.loads(binding_path.read_text()))
             output.write_bytes(authority.canonical_json_bytes(reviewed))
             return SimpleNamespace(returncode=0)
 
@@ -5868,7 +6129,9 @@ def create_ready_integration_attestation(normalized, eligibility_bound):
             side_effect=run,
         ) as call:
             captured = orchestration._capture_current_stable_feedback(
-                REPOSITORY, PR
+                REPOSITORY,
+                PR,
+                ready_remediation_provider_binding=provider_binding,
             )
 
         command = call.call_args.args[0]
@@ -5878,6 +6141,15 @@ def create_ready_integration_attestation(normalized, eligibility_bound):
         self.assertIn("-B", command)
         root = str(REPO_ROOT.resolve())
         self.assertEqual(command[command.index("--repo-root") + 1], root)
+        self.assertEqual(
+            captured_provider_binding,
+            {
+                "repository": REPOSITORY,
+                "pull_request": PR,
+                "current_head_sha": reviewed["head_sha"],
+                "provider_head_sha": "1" * 40,
+            },
+        )
         self.assertEqual(options["cwd"], REPO_ROOT.resolve())
         self.assertEqual(options["timeout"], 60)
         self.assertNotIn("PYTHONPATH", options["env"])
