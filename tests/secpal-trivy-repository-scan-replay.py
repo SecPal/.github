@@ -89,6 +89,13 @@ def main() -> int:
             ["git", "-C", str(workspace), "commit", "--quiet", "-m", "fixture"],
             check=True,
         )
+        commit = subprocess.run(
+            ["git", "-C", str(workspace), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        module.verify_target(workspace, commit)
 
         cache = root / "cache"
         native = root / "native.json"
@@ -156,6 +163,7 @@ def main() -> int:
                     "evidence_kind": "TRIVY_REPOSITORY_NATIVE_REPLAY",
                     "scanner_version": TRIVY_VERSION,
                     "scanner_identity": "sha256:" + TRIVY_ARCHIVE_SHA256,
+                    "target_identity_verified": True,
                     "database_identity": database["identity"],
                     "scanner_classes": sorted(classes),
                     "secret_capture_retained": False,

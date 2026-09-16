@@ -42,17 +42,8 @@ runs:
             --failure-code "$1" --completed-at "$failure_completed_at" --output "$result"
         }
 
-        workspace_root=""
-        checked_out_commit=""
-        workspace_status=""
-        tracked_paths=""
-        if ! workspace_root="$(git -C "$GITHUB_WORKSPACE" rev-parse --show-toplevel 2>/dev/null)" || \
-          ! checked_out_commit="$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD 2>/dev/null)" || \
-          ! workspace_status="$(git -C "$GITHUB_WORKSPACE" status --porcelain --untracked-files=all --ignored=matching 2>/dev/null)" || \
-          ! tracked_paths="$(git -C "$GITHUB_WORKSPACE" ls-files -v 2>/dev/null)" || \
-          [ "$(realpath -m "$workspace_root")" != "$(realpath -m "$GITHUB_WORKSPACE")" ] || \
-          [ "$checked_out_commit" != "$GITHUB_SHA" ] || \
-          [ -n "$workspace_status" ] || printf '%s\n' "$tracked_paths" | grep -q '^S'; then
+        if ! python3 "$governance_root/scripts/secpal-trivy-repository-scan.py" verify-target \
+          --workspace "$GITHUB_WORKSPACE" --commit "$GITHUB_SHA"; then
           failure_code="TARGET_IDENTITY_FAILURE"
         fi
 

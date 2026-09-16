@@ -172,9 +172,96 @@ class RepositoryScanContractTests(unittest.TestCase):
         self.assertIn("retention-days: 14", source)
         self.assertIn("env -i", source)
         self.assertIn('--config "$trusted_config"', source)
-        self.assertIn("git -C \"$GITHUB_WORKSPACE\" ls-files -v", source)
+        self.assertIn("verify-target", source)
+        self.assertLess(source.index("verify-target"), source.index("curl --fail"))
         self.assertIn("secrets.token_hex", source)
         self.assertIn('--workspace "$GITHUB_WORKSPACE"', source)
+
+    def _assert_index_flags_fail_target_identity(self, flags: list[str]) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary) / "workspace"
+            workspace.mkdir()
+            tracked = workspace / "tracked.txt"
+            tracked.write_text("original\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(workspace), "init", "--quiet"], check=True)
+            subprocess.run(
+                ["git", "-C", str(workspace), "config", "user.name", "SecPal Test"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(workspace), "config", "user.email", "test@secpal.app"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(workspace), "add", "tracked.txt"], check=True)
+            subprocess.run(
+                ["git", "-C", str(workspace), "commit", "--quiet", "-m", "fixture"],
+                check=True,
+            )
+            commit = subprocess.run(
+                ["git", "-C", str(workspace), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            clean = subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "verify-target",
+                    "--workspace",
+                    str(workspace),
+                    "--commit",
+                    commit,
+                ],
+                check=False,
+                capture_output=True,
+            )
+            self.assertEqual(clean.returncode, 0)
+
+            for flag in flags:
+                subprocess.run(
+                    ["git", "-C", str(workspace), "update-index", flag, "tracked.txt"],
+                    check=True,
+                )
+            tracked.write_text("modified but hidden\n", encoding="utf-8")
+            status = subprocess.run(
+                ["git", "-C", str(workspace), "status", "--porcelain"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            self.assertEqual(status, "")
+            prefix = subprocess.run(
+                ["git", "-C", str(workspace), "ls-files", "-v", "tracked.txt"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout[0]
+            self.assertTrue(prefix.islower())
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "verify-target",
+                    "--workspace",
+                    str(workspace),
+                    "--commit",
+                    commit,
+                ],
+                check=False,
+                capture_output=True,
+            )
+            failure_code = "TARGET_IDENTITY_FAILURE" if completed.returncode else ""
+            self.assertEqual(failure_code, "TARGET_IDENTITY_FAILURE")
+
+    def test_assume_unchanged_modified_bytes_fail_target_identity(self) -> None:
+        self._assert_index_flags_fail_target_identity(["--assume-unchanged"])
+
+    def test_combined_skip_worktree_and_assume_unchanged_fail_target_identity(self) -> None:
+        self._assert_index_flags_fail_target_identity(
+            ["--skip-worktree", "--assume-unchanged"]
+        )
 
     def test_normalization_redacts_secret_and_preserves_all_scanner_context(self) -> None:
         observation = self.module.normalize_native(

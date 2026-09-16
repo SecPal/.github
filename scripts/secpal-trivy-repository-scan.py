@@ -9,8 +9,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -38,6 +41,81 @@ REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 
 class ContractError(ValueError):
     """Raised when evidence does not satisfy the closed contract."""
+
+
+def _git(workspace: Path, arguments: list[str], *, index: Path | None = None) -> bytes:
+    environment = os.environ.copy()
+    for name in tuple(environment):
+        if name.startswith("GIT_"):
+            environment.pop(name)
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+    if index is not None:
+        environment["GIT_INDEX_FILE"] = str(index)
+    completed = subprocess.run(
+        [
+            "git",
+            "--no-replace-objects",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.filemode=true",
+            "-c",
+            "core.symlinks=true",
+            "-C",
+            str(workspace),
+            *arguments,
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        env=environment,
+    )
+    if completed.returncode != 0:
+        raise ContractError("Git target verification failed")
+    return completed.stdout
+
+
+def verify_target(workspace: Path, commit: str) -> None:
+    """Require the worktree's complete bytes to equal the expected commit."""
+    if not COMMIT_RE.fullmatch(commit):
+        raise ContractError("commit identity must be an exact lowercase SHA")
+    try:
+        resolved_workspace = workspace.resolve(strict=True)
+    except OSError as error:
+        raise ContractError("workspace is unavailable") from error
+    if not resolved_workspace.is_dir():
+        raise ContractError("workspace must be a directory")
+
+    top_level = Path(
+        _git(resolved_workspace, ["rev-parse", "--show-toplevel"])
+        .decode("utf-8")
+        .strip()
+    ).resolve(strict=True)
+    checked_out_commit = _git(resolved_workspace, ["rev-parse", "HEAD"]).decode("ascii").strip()
+    if top_level != resolved_workspace or checked_out_commit != commit:
+        raise ContractError("workspace does not identify the expected commit")
+
+    tracked = _git(resolved_workspace, ["ls-files", "-v", "-z"])
+    for record in tracked.split(b"\0"):
+        if record and (record[:1] == b"S" or record[:1].islower()):
+            raise ContractError("tracked paths use unsupported index flags")
+
+    with tempfile.TemporaryDirectory(prefix="secpal-trivy-target-") as temporary:
+        clean_index = Path(temporary) / "index"
+        _git(resolved_workspace, ["read-tree", commit], index=clean_index)
+        _git(resolved_workspace, ["update-index", "--refresh"], index=clean_index)
+        _git(
+            resolved_workspace,
+            ["diff-files", "--quiet", "--no-ext-diff", "--ignore-submodules=none", "--"],
+            index=clean_index,
+        )
+
+    status = _git(
+        resolved_workspace,
+        ["status", "--porcelain", "--untracked-files=all", "--ignored=matching"],
+    )
+    if status:
+        raise ContractError("workspace contains paths outside the expected commit")
 
 
 def _canonical(value: Any) -> str:
@@ -623,6 +701,10 @@ def _parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--completed-at", required=True)
     evaluate.add_argument("--output", type=Path, required=True)
 
+    target = commands.add_parser("verify-target")
+    target.add_argument("--workspace", type=Path, required=True)
+    target.add_argument("--commit", required=True)
+
     database = commands.add_parser("database")
     database.add_argument("--metadata", action="append", type=Path, required=True)
     database.add_argument("--database-file", action="append", type=Path, required=True)
@@ -643,7 +725,9 @@ def main() -> int:
     if arguments.command == "evaluate":
         return _evaluate(arguments)
     try:
-        if arguments.command == "database":
+        if arguments.command == "verify-target":
+            verify_target(arguments.workspace, arguments.commit)
+        elif arguments.command == "database":
             _write(
                 arguments.output,
                 database_identity(
