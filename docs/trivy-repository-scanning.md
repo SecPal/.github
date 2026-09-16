@@ -8,7 +8,7 @@ SPDX-License-Identifier: CC0-1.0
 The reusable `trivy-repository-scan` action scans one clean local checkout before
 build or publication. It has no inputs: the caller owns checkout and the action
 requires the workspace `HEAD` to equal the exact lowercase `github.sha`. It
-rejects a dirty workspace, never accepts a remote repository or ref, and has no
+rejects a dirty or sparse workspace, never accepts a remote repository or ref, and has no
 source-write, package-publish, deployment, issue-write, or production credential
 authority.
 
@@ -58,6 +58,11 @@ are hashed into the evidence identity. A failed download, stale database,
 scanner failure, identity mismatch, or malformed output produces
 `UNKNOWN_STALE` and a failing action.
 
+Every Trivy process receives an empty environment apart from a private `HOME`
+and an explicit action-owned empty configuration. A checked-out `trivy.yaml` or
+caller-provided `TRIVY_*` variable therefore cannot alter scanner selection,
+skip paths, database handling, or output behavior.
+
 [`trivy-repository-scan-v1.json`](../policies/trivy-repository-scan-v1.json) is
 the sole actionability and exception policy. High and critical vulnerabilities
 and misconfigurations are actionable; lower or unknown severities require
@@ -74,7 +79,8 @@ cannot suppress findings before policy admission.
 
 ## Evidence and redaction
 
-The action uploads one normalized result for 14 days. Its schema is
+Each action invocation uploads one uniquely named normalized result for 14 days.
+Its schema is
 [`secpal-trivy-repository-scan-v1.schema.json`](schemas/secpal-trivy-repository-scan-v1.schema.json).
 It records the exact repository commit, scanner version and archive identity,
 vulnerability database identity and freshness, policy identity, deterministic

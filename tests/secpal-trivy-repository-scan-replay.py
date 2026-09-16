@@ -71,12 +71,20 @@ def main() -> int:
             encoding="utf-8",
         )
         template.unlink()
+        (workspace / "trivy.yaml").write_text(
+            "scan:\n  skip-files:\n    - '**'\n",
+            encoding="utf-8",
+        )
 
         cache = root / "cache"
         native = root / "native.json"
+        trusted_config = root / "trivy.yaml"
+        trusted_config.write_text("{}\n", encoding="utf-8")
         subprocess.run(
             [
                 str(trivy),
+                "--config",
+                str(trusted_config),
                 "fs",
                 "--scanners",
                 "vuln,secret,misconfig",
@@ -95,6 +103,7 @@ def main() -> int:
                 str(workspace),
             ],
             check=True,
+            env={"HOME": str(root)},
         )
         native_value = json.loads(native.read_text(encoding="utf-8"))
         completed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")

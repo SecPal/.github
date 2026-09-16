@@ -24,10 +24,11 @@ runs:
       run: |
         set -u
         governance_root="$(cd "$GITHUB_ACTION_PATH/../../.." && pwd)"
-        evidence_root="${RUNNER_TEMP}/secpal-trivy-repository-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-        tool_root="${RUNNER_TEMP}/secpal-trivy-tool-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-        cache_root="${RUNNER_TEMP}/secpal-trivy-cache-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-        artifact_name="trivy-repository-evidence-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+        invocation_id="$(python3 -c 'import secrets; print(secrets.token_hex(8))')"
+        evidence_root="${RUNNER_TEMP}/secpal-trivy-repository-${invocation_id}"
+        tool_root="${RUNNER_TEMP}/secpal-trivy-tool-${invocation_id}"
+        cache_root="${RUNNER_TEMP}/secpal-trivy-cache-${invocation_id}"
+        artifact_name="trivy-repository-evidence-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${invocation_id}"
         result="$evidence_root/result.json"
         failure_code=""
 
@@ -41,11 +42,17 @@ runs:
             --failure-code "$1" --completed-at "$failure_completed_at" --output "$result"
         }
 
-        workspace_root="$(git -C "$GITHUB_WORKSPACE" rev-parse --show-toplevel 2>/dev/null || true)"
-        checked_out_commit="$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD 2>/dev/null || true)"
-        if [ "$(realpath -m "$workspace_root")" != "$(realpath -m "$GITHUB_WORKSPACE")" ] || \
+        workspace_root=""
+        checked_out_commit=""
+        workspace_status=""
+        tracked_paths=""
+        if ! workspace_root="$(git -C "$GITHUB_WORKSPACE" rev-parse --show-toplevel 2>/dev/null)" || \
+          ! checked_out_commit="$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD 2>/dev/null)" || \
+          ! workspace_status="$(git -C "$GITHUB_WORKSPACE" status --porcelain --untracked-files=all --ignored=matching 2>/dev/null)" || \
+          ! tracked_paths="$(git -C "$GITHUB_WORKSPACE" ls-files -v 2>/dev/null)" || \
+          [ "$(realpath -m "$workspace_root")" != "$(realpath -m "$GITHUB_WORKSPACE")" ] || \
           [ "$checked_out_commit" != "$GITHUB_SHA" ] || \
-          [ -n "$(git -C "$GITHUB_WORKSPACE" status --porcelain --untracked-files=all --ignored=matching 2>/dev/null)" ]; then
+          [ -n "$workspace_status" ] || printf '%s\n' "$tracked_paths" | grep -q '^S'; then
           failure_code="TARGET_IDENTITY_FAILURE"
         fi
 
@@ -63,7 +70,11 @@ runs:
             failure_code="SCANNER_IDENTITY_FAILURE"
           else
             chmod 0500 "$tool_root/trivy"
-            installed_version="$($tool_root/trivy --version 2>/dev/null | sed -n 's/^Version: //p' | head -1)"
+            trusted_config="$tool_root/trivy.yaml"
+            printf '{}\n' > "$trusted_config"
+            chmod 0400 "$trusted_config"
+            installed_version="$(env -i HOME="$tool_root" "$tool_root/trivy" \
+              --config "$trusted_config" --version 2>/dev/null | sed -n 's/^Version: //p' | head -1)"
             if [ "$installed_version" != "$TRIVY_VERSION" ]; then
               failure_code="SCANNER_IDENTITY_FAILURE"
             fi
@@ -71,10 +82,10 @@ runs:
         fi
 
         if [ -z "$failure_code" ]; then
-          if ! TRIVY_CACHE_DIR="$cache_root" "$tool_root/trivy" image \
+          if ! env -i HOME="$tool_root" "$tool_root/trivy" --config "$trusted_config" image \
             --download-db-only --cache-dir "$cache_root" --quiet; then
             failure_code="NETWORK_FAILURE"
-          elif ! TRIVY_CACHE_DIR="$cache_root" "$tool_root/trivy" image \
+          elif ! env -i HOME="$tool_root" "$tool_root/trivy" --config "$trusted_config" image \
             --download-java-db-only --cache-dir "$cache_root" --quiet; then
             failure_code="NETWORK_FAILURE"
           fi
@@ -82,7 +93,7 @@ runs:
 
         native="$tool_root/native.json"
         if [ -z "$failure_code" ]; then
-          if ! TRIVY_CACHE_DIR="$cache_root" "$tool_root/trivy" fs \
+          if ! env -i HOME="$tool_root" "$tool_root/trivy" --config "$trusted_config" fs \
             --scanners vuln,secret,misconfig \
             --format json --exit-code 0 --quiet \
             --skip-db-update --skip-java-db-update --skip-check-update \

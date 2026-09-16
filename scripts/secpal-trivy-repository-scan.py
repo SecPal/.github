@@ -207,8 +207,9 @@ def _secret(target: str, native: dict[str, Any]) -> dict[str, Any]:
         "path": target,
     }
     location = _location(native)
-    if location is not None:
-        finding["location"] = location
+    if location is None:
+        raise ContractError("secret location is required")
+    finding["location"] = location
     finding["fingerprint"] = _fingerprint(finding)
     return finding
 
@@ -318,6 +319,7 @@ def _validate_policy(policy: dict[str, Any], completed_at: str) -> dict[str, Any
         raise ContractError("policy exceptions must be an array")
     now = _timestamp(completed_at)
     seen: set[str] = set()
+    seen_selectors: set[tuple[str, str, str]] = set()
     for exception in exceptions:
         required = {"id", "class", "rule_id", "path", "disposition", "expires_at", "rationale"}
         if not isinstance(exception, dict) or set(exception) != required:
@@ -328,8 +330,12 @@ def _validate_policy(policy: dict[str, Any], completed_at: str) -> dict[str, Any
         seen.add(exception_id)
         if exception["class"] not in FINDING_CLASSES:
             raise ContractError("policy exception class is invalid")
-        _string(exception["rule_id"], "exception rule ID")
-        _path(exception["path"])
+        rule_id = _string(exception["rule_id"], "exception rule ID")
+        path = _path(exception["path"])
+        selector = (exception["class"], rule_id, path)
+        if selector in seen_selectors:
+            raise ContractError("policy exception selectors must be unique")
+        seen_selectors.add(selector)
         if exception["disposition"] not in {"IGNORED", "NOT_AFFECTED"}:
             raise ContractError("policy exception disposition is invalid")
         if exception["disposition"] == "NOT_AFFECTED" and exception["class"] != "VULNERABILITY":
@@ -376,7 +382,11 @@ def admit(observation: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]
     policy_identity = _validate_policy(policy, observation["completed_at"])
     if observation.get("scanners") != policy["required_scanners"]:
         raise ContractError("required scanners were not explicitly observed")
-    findings = [_apply_exception(finding, policy["exceptions"]) for finding in observation["findings"]]
+    exceptions = [
+        {**exception, "path": _path(exception["path"])}
+        for exception in policy["exceptions"]
+    ]
+    findings = [_apply_exception(finding, exceptions) for finding in observation["findings"]]
     active = [finding for finding in findings if "exception" not in finding]
     actions = [policy["actions"][finding["class"]][finding["severity"]] for finding in active]
     if observation["database"]["status"] != "FRESH":
@@ -403,6 +413,13 @@ def admit(observation: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]
         ),
         "excepted": len(findings) - len(active),
     }
+    operation = {"name": "TRIVY_REPOSITORY_SCAN", "status": "SUCCEEDED"}
+    if gate_state == "UNKNOWN_STALE":
+        operation = {
+            "name": "TRIVY_REPOSITORY_SCAN",
+            "status": "FAILED",
+            "failure_code": "DATABASE_FAILURE",
+        }
     return {
         "schema_version": SCHEMA_VERSION,
         "subject": observation["subject"],
@@ -410,7 +427,7 @@ def admit(observation: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]
         "database": observation["database"],
         "completed_at": observation["completed_at"],
         "policy": policy_identity,
-        "operation": {"name": "TRIVY_REPOSITORY_SCAN", "status": "SUCCEEDED"},
+        "operation": operation,
         "gate_state": gate_state,
         "summary": summary,
         "findings": findings,
@@ -513,6 +530,19 @@ def _evaluate(arguments: argparse.Namespace) -> int:
         return 1
     try:
         policy = _load(arguments.policy)
+        _validate_policy(policy, completed_at)
+    except (ContractError, KeyError, TypeError, json.JSONDecodeError, OSError):
+        _write(
+            arguments.output,
+            unknown_result(
+                repository=arguments.repository,
+                commit=arguments.commit,
+                failure_code="POLICY_FAILURE",
+                completed_at=completed_at,
+            ),
+        )
+        return 1
+    try:
         observation = normalize_native(
             native,
             repository=arguments.repository,

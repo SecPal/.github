@@ -112,6 +112,10 @@ class RepositoryScanContractTests(unittest.TestCase):
         self.assertNotIn("ref:", source)
         self.assertNotIn("github-token", source)
         self.assertIn("retention-days: 14", source)
+        self.assertIn("env -i", source)
+        self.assertIn('--config "$trusted_config"', source)
+        self.assertIn("git -C \"$GITHUB_WORKSPACE\" ls-files -v", source)
+        self.assertIn("secrets.token_hex", source)
 
     def test_normalization_redacts_secret_and_preserves_all_scanner_context(self) -> None:
         observation = self.module.normalize_native(
@@ -218,6 +222,72 @@ class RepositoryScanContractTests(unittest.TestCase):
         with self.assertRaises(self.module.ContractError):
             self.module.admit(observation, policy)
 
+    def test_exception_paths_are_canonical_and_selectors_are_unique(self) -> None:
+        native = native_result()
+        native["Results"] = native["Results"][:1]
+        observation = self.module.normalize_native(
+            native,
+            repository="SecPal/example",
+            commit=COMMIT,
+            scanner={
+                "name": "trivy",
+                "version": "0.74.0",
+                "immutable_id": "sha256:" + "a" * 64,
+            },
+            database={
+                "status": "FRESH",
+                "identity": "sha256:" + "b" * 64,
+                "updated_at": "2026-09-16T10:00:00Z",
+                "next_update": "2026-09-17T10:00:00Z",
+                "downloaded_at": "2026-09-16T10:05:00Z",
+            },
+            completed_at="2026-09-16T10:10:00Z",
+        )
+        policy = copy.deepcopy(self.policy)
+        exception = {
+            "id": "SEC-EXAMPLE-1",
+            "class": "VULNERABILITY",
+            "rule_id": "CVE-2021-23337",
+            "path": "./package-lock.json",
+            "disposition": "NOT_AFFECTED",
+            "expires_at": "2026-10-01T00:00:00Z",
+            "rationale": "Synthetic bounded policy fixture.",
+        }
+        policy["exceptions"] = [exception]
+        result = self.module.admit(observation, policy)
+        self.assertEqual(result["gate_state"], "CLEAN")
+
+        duplicate = copy.deepcopy(exception)
+        duplicate["id"] = "SEC-EXAMPLE-2"
+        duplicate["path"] = "package-lock.json"
+        policy["exceptions"].append(duplicate)
+        with self.assertRaisesRegex(self.module.ContractError, "selectors must be unique"):
+            self.module.admit(observation, policy)
+
+    def test_secret_without_location_is_rejected(self) -> None:
+        native = native_result()
+        del native["Results"][1]["Secrets"][0]["StartLine"]
+        del native["Results"][1]["Secrets"][0]["EndLine"]
+        with self.assertRaisesRegex(self.module.ContractError, "secret location"):
+            self.module.normalize_native(
+                native,
+                repository="SecPal/example",
+                commit=COMMIT,
+                scanner={
+                    "name": "trivy",
+                    "version": "0.74.0",
+                    "immutable_id": "sha256:" + "a" * 64,
+                },
+                database={
+                    "status": "FRESH",
+                    "identity": "sha256:" + "b" * 64,
+                    "updated_at": "2026-09-16T10:00:00Z",
+                    "next_update": "2026-09-17T10:00:00Z",
+                    "downloaded_at": "2026-09-16T10:05:00Z",
+                },
+                completed_at="2026-09-16T10:10:00Z",
+            )
+
     def test_malformed_and_stale_evidence_never_becomes_clean(self) -> None:
         with self.assertRaises(self.module.ContractError):
             self.module.normalize_native(
@@ -254,7 +324,16 @@ class RepositoryScanContractTests(unittest.TestCase):
             database=json.loads((FIXTURES / "stale-database.json").read_text(encoding="utf-8")),
             completed_at="2026-09-16T10:10:00Z",
         )
-        self.assertEqual(self.module.admit(observation, self.policy)["gate_state"], "UNKNOWN_STALE")
+        stale = self.module.admit(observation, self.policy)
+        self.assertEqual(stale["gate_state"], "UNKNOWN_STALE")
+        self.assertEqual(stale["operation"], {
+            "name": "TRIVY_REPOSITORY_SCAN",
+            "status": "FAILED",
+            "failure_code": "DATABASE_FAILURE",
+        })
+        import jsonschema
+
+        jsonschema.validate(stale, json.loads(SCHEMA.read_text(encoding="utf-8")))
 
     def test_schema_accepts_result_and_rejects_secret_capture_fields(self) -> None:
         import jsonschema
@@ -337,6 +416,43 @@ class RepositoryScanContractTests(unittest.TestCase):
             self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
             self.assertEqual(result["operation"]["failure_code"], "MALFORMED_OUTPUT")
             self.assertNotIn("{not-json", completed.stdout + completed.stderr)
+
+    def test_cli_reports_invalid_policy_as_policy_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            native = root / "native.json"
+            database = root / "database.json"
+            policy = root / "policy.json"
+            output = root / "result.json"
+            native.write_text(json.dumps(native_result()), encoding="utf-8")
+            database.write_text(
+                json.dumps(
+                    {
+                        "status": "FRESH",
+                        "identity": "sha256:" + "b" * 64,
+                        "updated_at": "2026-09-16T10:00:00Z",
+                        "next_update": "2026-09-17T10:00:00Z",
+                        "downloaded_at": "2026-09-16T10:05:00Z",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            policy.write_text("{not-json", encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    "python3", str(SCRIPT), "evaluate",
+                    "--native", str(native), "--database", str(database),
+                    "--policy", str(policy), "--repository", "SecPal/example",
+                    "--commit", COMMIT, "--scanner-version", "0.74.0",
+                    "--scanner-identity", "sha256:" + "a" * 64,
+                    "--completed-at", "2026-09-16T10:10:00Z",
+                    "--output", str(output),
+                ],
+                check=False,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            result = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(result["operation"]["failure_code"], "POLICY_FAILURE")
 
 
 if __name__ == "__main__":
