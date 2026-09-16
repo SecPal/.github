@@ -1536,6 +1536,10 @@ class LifecyclePublicationTests(TestCase):
         )
         self.assertNotIn("reviewed_state", recovery)
         self.assertNotIn("validation_receipt", recovery)
+        absence = publication.verify_pre_enrollment_absence(
+            REPOSITORY, ISSUE + 1
+        )
+        self.assertEqual(absence.observed_tip_oid, recovered.publication_oid)
 
         repeated = publication.publish_ready_source_recovery(
             recovery,
