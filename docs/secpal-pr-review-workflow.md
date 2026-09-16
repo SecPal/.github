@@ -1555,7 +1555,7 @@ one canonical detached-signed `late-classification.schema.json` artifact for
 exactly one named thread, then creates one canonical
 `late-disposition.schema.json` artifact for that same thread.
 Creation first verifies the unchanged final delivery head, tree,
-receipt trailer, attestation, typed final-eligibility boundary, origin, and
+receipt trailer, source authority, typed final-eligibility boundary, origin, and
 accepted commit signature. That boundary is either the canonical manifest or
 the maintained exact authenticated-absence record; a supplied invalid manifest
 never falls back to absence. It proves the named thread absent from final
@@ -1568,6 +1568,18 @@ delivery signer fingerprint, reads that named thread twice, and signs the
 classification with that same OS-account identity. The disposition creator
 verifies the classification signature and exact live binding and computes its
 digest internally. SSH and OpenPGP are supported.
+
+The source authority may also be a verified current Ready-source recovery for
+the exact unchanged recovered head. In that branch every consumer independently
+reauthenticates the protected recovery publication and lifecycle CURRENT,
+finite Ready history, exact repository/issue/PR/head/tree, current-safety and
+provider bindings, immutable commit signer, and the exact Stable Feedback and
+fresh receipt authenticated by recovery. The verifier derives absence of
+commit-bound final eligibility from that maintained receipt shape. A recovery
+OID alone, caller-selected origin, omitted path, or supplied incompatible
+eligibility evidence grants no classification, disposition, eligibility, or
+thread-resolution authority.
+
 The resolver independently repeats the final-delivery verification, verifies
 both canonical artifacts and detached signatures against the derived signer,
 and compares exact live head, thread, top-level comment node/database identity,

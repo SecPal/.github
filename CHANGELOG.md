@@ -9,6 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-16 - Authenticate Detached Recovered-Ready Thread Authority
+
+**Fixed:**
+
+- Allow a verified current Ready-source recovery to authenticate the unchanged
+  final source used by existing detached late classification and disposition,
+  without an artificial Ready integration.
+- Derive commit-bound eligibility absence and reviewed target origin from the
+  authenticated recovery boundary while preserving signed exact disposition,
+  fixed-thread resolver, signer, replay, and `technically_blocking=false`
+  requirements.
+
 ## 2026-09-15 - Separate Ready Recovery Tooling And Candidate Provenance
 
 **Fixed:**

@@ -208,11 +208,12 @@ trailers, reviewed state, signer, and eligibility digest before applying the
 ordinary exact-thread checks. Version-1.1 integration attestations do not carry
 this authority and are rejected for resolution.
 
-A protected pre-persistence prior-Ready recovery changes only how the existing
-integration verifier authenticates parent 1. Thread resolution still requires
-fresh integration-head evidence and the same eligibility-bound version-1.2
-integration attestation; recovery authority itself is never classification,
-disposition, eligibility, or resolution authority.
+A protected pre-persistence prior-Ready recovery can still authenticate parent
+1 of a legitimate source-changing integration. When the recovered Ready head is
+unchanged, the same verified current recovery may instead authenticate only the
+final source used by detached late classification and disposition. It does not
+make recovery classification, disposition, eligibility, or resolution
+authority, and it never justifies an empty or redundant integration.
 
 New manifests use schema version 1.1. The resolver also reads already-authenticated
 version 1.0 manifests for the legacy resolution-eligible dispositions. It
@@ -260,8 +261,9 @@ must be absent from final eligibility. Membership in authenticated final
 reviewed state derives `REVIEWED_BUT_INELIGIBLE`; absence from it derives
 `ABSENT_FROM_BOTH`.
 
-Source authentication accepts exactly ordinary final-delivery evidence or
-canonical eligibility-bound Ready-integration evidence. For the latter, pass
+Source authentication accepts exactly ordinary final-delivery evidence,
+canonical eligibility-bound Ready-integration evidence, or a verified current
+Ready-source recovery for the unchanged recovered head. For an integration, pass
 the same `--integration-evidence` artifact to classification creation,
 disposition creation, and resolution. All three boundaries use the maintained
 integration-specific verifier; the authenticated attestation shape selects the
@@ -286,6 +288,21 @@ artifact, a present or null digest, or a schema-1.2 downgrade fails closed.
 New Ready-integration validation requires authenticated eligibility and emits
 schema 1.2, so this source-only compatibility path can consume existing schema
 1.1 evidence but cannot mint more of it.
+
+For an unchanged recovered Ready head, pass the exact current publication OID
+with `--ready-source-recovery-publication` to classification creation,
+disposition creation, and resolution. Each consumer independently verifies the
+protected journal publication, its bound lifecycle CURRENT and finite Ready
+history, repository/issue/PR/head/tree, current-safety and provider bindings,
+the exact Stable Feedback carried by the recovery, the immutable source commit
+and signer, and the recovery's fresh validation receipt. The verified receipt's
+maintained shape—not omission of a caller path—derives that this source family
+has no commit-bound final eligibility. Supplied validation, integration,
+eligibility, or historical-receipt evidence is therefore incompatible and
+fails closed. Exact reviewed-state membership still derives
+`REVIEWED_BUT_INELIGIBLE` or `ABSENT_FROM_BOTH`, and both signed detached
+artifacts remain mandatory before the resolver can mutate a thread. The
+publication OID by itself grants no mutation authority.
 
 One accepted-main exact recovery record for `SecPal/.github` issue #810 and
 PR #821 permits the alternative
@@ -329,8 +346,9 @@ or caller-selected origin is accepted. Classification is independently
 established and recorded in signed exact evidence; no text heuristic exists.
 The signed artifact
 binds the repository, delivery issue, PR, unchanged final head and tree, final
-receipt/attestation and either the authenticated eligibility digest or exact
-absence-recovery digest, signer, exact thread, top-level comment
+receipt/source-evidence digest and either the authenticated eligibility digest,
+exact absence-recovery digest, or verifier-derived recovered-source absence,
+signer, exact thread, top-level comment
 node and database identities, finding-body digest, reply-state digest and
 count, resolved/outdated states, classification evidence digest, disposition,
 and exact resolution action. It never selects threads by query or pattern.
@@ -381,6 +399,14 @@ python3 scripts/secpal-create-late-disposition.py \
   --signature-output SESSION/LATE_DISPOSITION.json.sig
 ```
 
+For an unchanged Ready source authenticated by recovery, replace the
+`--final-validation-evidence`, `--final-eligibility-evidence`, and
+`--integration-evidence` lines in both commands with:
+
+```bash
+  --ready-source-recovery-publication READY_SOURCE_RECOVERY_PUBLICATION_OID
+```
+
 Resolve only the authenticated conversation:
 
 ```bash
@@ -410,6 +436,11 @@ caller input: accepted-main policy selects and verifies the recovery.
 The `--integration-evidence` lines apply only to an eligibility-bound Ready-
 integration source; omit them for ordinary final-delivery evidence and for the
 authenticated-absence recovery.
+
+For an unchanged Ready source authenticated by recovery, omit
+`--validation-evidence`, `--final-eligibility-evidence`,
+`--integration-evidence`, and `--integration-validation-receipt`, and add the
+same `--ready-source-recovery-publication` OID used by both evidence producers.
 
 Commit-bound `--eligibility-evidence` and detached
 `--late-disposition-evidence` are mutually exclusive. Missing, non-canonical,

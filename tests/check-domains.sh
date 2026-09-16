@@ -58,6 +58,8 @@ approved_public_io="${domain_namespace}.io"
 approved_reverse_identifier="io.${domain_namespace}.polyscope.preview"
 bad_reverse_identifier="dev.${domain_namespace}.polyscope.preview"
 reverse_identifier_as_host="io.${domain_namespace}.attacker.example"
+lifecycle_config_identifier="${domain_namespace}.lifecycleSigningCredential"
+pre_enrollment_protocol_identifier="${domain_namespace}.pre-enrollment-current-safety"
 
 if [ ! -f "$SCRIPT" ]; then
   echo "Missing scripts/check-domains.sh" >&2
@@ -193,6 +195,8 @@ EOF
 printf '%s\n' \
   "Owned public domain: https://$approved_public_io" \
   "Approved reverse-DNS identifier: $approved_reverse_identifier" \
+  "Global Git key: \`$lifecycle_config_identifier\`" \
+  "Current-safety execution identity: \`$pre_enrollment_protocol_identifier/v1\`" \
   >>"$workspace/guardguide.md"
 
 set +e
@@ -278,6 +282,16 @@ assert_domain_policy_case \
   reject \
   "$bad_reverse_identifier" \
   "Bad identifier: $bad_reverse_identifier"
+assert_domain_policy_case \
+  "the lifecycle config identifier used as a web host" \
+  reject \
+  "$lifecycle_config_identifier" \
+  "Bad: https://$lifecycle_config_identifier"
+assert_domain_policy_case \
+  "the pre-enrollment protocol identifier without identifier context" \
+  reject \
+  "$pre_enrollment_protocol_identifier" \
+  "Bad: $pre_enrollment_protocol_identifier"
 assert_domain_policy_case \
   "a reverse-DNS identifier used as a public URL" \
   reject \

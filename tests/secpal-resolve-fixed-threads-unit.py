@@ -17,6 +17,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Sequence
 from unittest import TestCase, main, mock
 
@@ -1418,7 +1419,638 @@ def final_eligibility_absence_fixture(
     return entry, reviewed, receipt, attestation
 
 
+def recovered_ready_source_fixture(
+    directory: str,
+    *,
+    thread_id: str = "PRRT_RECOVERED_READY_TARGET",
+    body: str = "Corrected finding.",
+) -> SimpleNamespace:
+    root = Path(directory)
+    delivery = root / "delivery"
+    output = root / "output"
+    delivery.mkdir()
+    output.mkdir()
+    reviewed = reviewed_state_payload(
+        thread_id,
+        [("PRRC_RECOVERED_READY_ROOT", body, None)],
+    )
+    reviewed["head_sha"] = "c" * 40
+    feedback = {
+        key: reviewed[key]
+        for key in (
+            "pull_request_reactions",
+            "reviews",
+            "conversation_comments",
+            "threads",
+        )
+    }
+    identity = {
+        key: reviewed[key]
+        for key in (
+            "repository",
+            "pull_request_number",
+            "head_sha",
+            "base_ref",
+            "base_sha",
+            "pr_state",
+        )
+    }
+    reviewed["state_digest"] = MODULE._digest_json(
+        {**identity, "feedback": feedback}
+    )
+    binding = MODULE._validation_registry_binding(
+        MODULE._load_repository_entry("SecPal/api")
+    )
+    stable = MODULE.fast_path.StableFeedbackState.from_payload(reviewed)
+    gates = [
+        {
+            "gate": gate,
+            "satisfied": True,
+            "evidence": f"Fixture gate {index}",
+        }
+        for index, gate in enumerate(binding["manual_gates"], start=1)
+    ]
+    receipt = MODULE.fast_path.create_validation_receipt(
+        repository="SecPal/api",
+        head_sha=reviewed["head_sha"],
+        validated_tree_sha="f" * 40,
+        registry=binding,
+        command_set=binding["validation"],
+        successful_result=True,
+        reviewed_state=stable,
+        manual_gate_evidence=gates,
+    )
+    state = {
+        "ready": True,
+        "draft": False,
+        "cycle_3_absent": True,
+        "unrestricted_review_count": 1,
+        "remediation_cycle_count": 2,
+    }
+    expected_signer = {
+        "kind": "SSH_PRINCIPAL",
+        "identity": "fixture",
+    }
+    signature_binding = (
+        MODULE.lifecycle_publication.authority
+        .ready_source_recovery_commit_signature_binding_digest(
+            head_sha=reviewed["head_sha"],
+            expected_signer=expected_signer,
+            signature_format="ssh",
+        )
+    )
+    safety = {
+        "reviewed_state": reviewed,
+        "fresh_validation_receipt": receipt,
+        "policy_binding": binding,
+    }
+    recovery = SimpleNamespace(
+        publication_oid="1" * 40,
+        publication_digest="2" * 64,
+        repository="SecPal/api",
+        delivery_issue=724,
+        pull_request=123,
+        head_sha=reviewed["head_sha"],
+        tree_sha="f" * 40,
+        parent_shas=("a" * 40,),
+        expected_commit_signer=expected_signer,
+        commit_signature_evidence_digest=signature_binding,
+        lifecycle_id="fixture-lifecycle",
+        current_authority_digest="4" * 64,
+        current_publication_oid="5" * 40,
+        current_publication_digest="6" * 64,
+        reviewed_state_digest=reviewed["state_digest"],
+        reviewed_feedback_digest=reviewed["feedback_digest"],
+        fresh_validation_receipt_digest=receipt["receipt_digest"],
+        historical_validation_receipt_digest="7" * 64,
+        lifecycle_state=state,
+        recovery_safety_facts=safety,
+    )
+    current = SimpleNamespace(
+        publication_oid=recovery.current_publication_oid,
+        publication_digest=recovery.current_publication_digest,
+        lifecycle=SimpleNamespace(
+            repository="SecPal/api",
+            delivery_issue=724,
+            pull_request=123,
+            head_sha=reviewed["head_sha"],
+            lifecycle_id=recovery.lifecycle_id,
+            authority_digest=recovery.current_authority_digest,
+            state=state,
+        ),
+    )
+    provider = mock.Mock()
+    provider.provider_head.return_value = "b" * 40
+    publication = SimpleNamespace(
+        verify_current_ready_source_recovery=mock.Mock(return_value=recovery),
+        verify_current_lifecycle_authority=mock.Mock(return_value=current),
+        derive_ready_source_recovery_provider_binding=mock.Mock(
+            return_value=provider
+        ),
+        LifecyclePublicationError=ValueError,
+        authority=MODULE.lifecycle_publication.authority,
+    )
+    authenticated_commit = MODULE.fast_path.AuthenticatedIntegrationCommit(
+        repository="SecPal/api",
+        head_sha=reviewed["head_sha"],
+        tree_sha=recovery.tree_sha,
+        parent_shas=recovery.parent_shas,
+        signer_kind="SSH_PRINCIPAL",
+        signer_identity="fixture",
+        signature_fingerprint="SHA256:fixtureDeliverySigner",
+        signature_classification="LOCAL_SSH_VERIFIED",
+        signature_policy_digest=MODULE._digest_json(
+            MODULE._load_repository_entry("SecPal/api")["signature_policy"]
+        ),
+        authentication_digest="8" * 64,
+    )
+    git = FakeGit(
+        expected_head=reviewed["head_sha"],
+        reviewed_head=recovery.parent_shas[0],
+        tree=recovery.tree_sha,
+        receipt_digest=recovery.historical_validation_receipt_digest,
+    )
+    (delivery / "reviewed.json").write_text(
+        json.dumps(reviewed), encoding="utf-8"
+    )
+    return SimpleNamespace(
+        root=root,
+        delivery=delivery,
+        output=output,
+        reviewed=reviewed,
+        binding=binding,
+        receipt=receipt,
+        recovery=recovery,
+        current=current,
+        provider=provider,
+        publication=publication,
+        authenticated_commit=authenticated_commit,
+        git=git,
+        thread_id=thread_id,
+        body=body,
+    )
+
+
 class ResolveFixedThreadsTests(TestCase):
+    def test_recovered_ready_source_derives_reviewed_ineligible_origin(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = recovered_ready_source_fixture(directory)
+            with (
+                mock.patch.object(
+                    MODULE,
+                    "lifecycle_publication",
+                    fixture.publication,
+                ),
+                mock.patch.object(
+                    MODULE.fast_path,
+                    "verify_ready_source_recovery_safety_facts",
+                    return_value=(
+                        fixture.recovery.recovery_safety_facts
+                    ),
+                ),
+                mock.patch.object(
+                    MODULE,
+                    "_immutable_delivery_registry_binding",
+                    return_value=fixture.binding,
+                ),
+            ):
+                boundary = load_final_feedback_boundary(
+                    repository_root=fixture.delivery,
+                    repository="SecPal/api",
+                    delivery_issue=724,
+                    number=123,
+                    expected_head=fixture.reviewed["head_sha"],
+                    final_reviewed_state_path=fixture.delivery
+                    / "reviewed.json",
+                    expected_final_reviewed_state_digest=fixture.reviewed[
+                        "state_digest"
+                    ],
+                    final_validation_evidence_path=None,
+                    final_eligibility_evidence_path=None,
+                    ready_source_recovery_publication_oid=(
+                        fixture.recovery.publication_oid
+                    ),
+                )
+
+        self.assertEqual(
+            boundary.eligibility_mode,
+            MODULE.FinalEligibilityMode.NO_COMMIT_BOUND_RECOVERED_READY_ELIGIBILITY,
+        )
+        self.assertEqual(
+            MODULE.derive_post_freeze_origin(boundary, fixture.thread_id),
+            MODULE.late_disposition.REVIEWED_BUT_INELIGIBLE,
+        )
+        fixture.publication.verify_current_ready_source_recovery.assert_called_once_with(
+            "SecPal/api", 724,
+        )
+        fixture.provider.provider_head.assert_called_once_with(
+            repository="SecPal/api",
+            pull_request=123,
+            current_head_sha=fixture.reviewed["head_sha"],
+        )
+
+    def test_recovered_ready_source_requires_complete_detached_authority_chain(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = recovered_ready_source_fixture(directory)
+            response = target_response(
+                fixture.thread_id,
+                head=fixture.reviewed["head_sha"],
+                comments=[
+                    (
+                        "PRRC_RECOVERED_READY_ROOT",
+                        fixture.body,
+                        None,
+                    )
+                ],
+            )
+            github = FakeGh([response, response, response, response, response])
+
+            def sign(
+                artifact: dict[str, Any],
+                artifact_output: Path,
+                signature_output: Path,
+                **_kwargs: Any,
+            ) -> None:
+                artifact_output.write_bytes(
+                    MODULE.late_disposition.canonical_json_bytes(artifact)
+                )
+                signature_output.write_text(
+                    "fixture signature", encoding="utf-8"
+                )
+
+            def verify_signature(
+                artifact_path: Path,
+                _signature_path: Path,
+                _expected_signer: Any,
+                **_kwargs: Any,
+            ) -> bytes:
+                return artifact_path.read_bytes()
+
+            with (
+                mock.patch.object(
+                    MODULE,
+                    "lifecycle_publication",
+                    fixture.publication,
+                ),
+                mock.patch.object(
+                    MODULE.fast_path,
+                    "verify_ready_source_recovery_safety_facts",
+                    return_value=fixture.recovery.recovery_safety_facts,
+                ),
+                mock.patch.object(
+                    MODULE,
+                    "_immutable_delivery_registry_binding",
+                    return_value=fixture.binding,
+                ),
+                mock.patch.object(MODULE, "_run_git", fixture.git),
+                mock.patch.object(MODULE, "_run_gh", github),
+                mock.patch.object(
+                    MODULE.fast_path,
+                    "authenticate_integration_commit",
+                    return_value=fixture.authenticated_commit,
+                ),
+                mock.patch.object(
+                    MODULE, "_late_signing_key", return_value="/fixture/key"
+                ),
+                mock.patch.object(
+                    MODULE.late_disposition,
+                    "sign_artifact",
+                    side_effect=sign,
+                ),
+                mock.patch.object(
+                    MODULE.late_disposition,
+                    "verify_detached_signature",
+                    side_effect=verify_signature,
+                ),
+            ):
+                classification = MODULE.create_late_classification_artifact(
+                    "SecPal/api",
+                    724,
+                    123,
+                    fixture.reviewed["head_sha"],
+                    repository_root=fixture.delivery,
+                    final_reviewed_state_path=fixture.delivery
+                    / "reviewed.json",
+                    expected_final_reviewed_state_digest=fixture.reviewed[
+                        "state_digest"
+                    ],
+                    final_validation_evidence_path=None,
+                    final_eligibility_evidence_path=None,
+                    thread_id=fixture.thread_id,
+                    finding_id="LF-RECOVERED-READY",
+                    finding_evidence_digest=hashlib.sha256(
+                        fixture.body.encode()
+                    ).hexdigest(),
+                    classification="VALID_ACTIONABLE",
+                    disposition="CORRECTED_AND_VERIFIED",
+                    technically_blocking=False,
+                    technical_blockers=(),
+                    output_path=fixture.output / "classification.json",
+                    signature_output_path=fixture.output
+                    / "classification.sig",
+                    ready_source_recovery_publication_oid=(
+                        fixture.recovery.publication_oid
+                    ),
+                )
+                disposition = MODULE.create_late_disposition_artifact(
+                    "SecPal/api",
+                    724,
+                    123,
+                    fixture.reviewed["head_sha"],
+                    repository_root=fixture.delivery,
+                    final_reviewed_state_path=fixture.delivery
+                    / "reviewed.json",
+                    expected_final_reviewed_state_digest=fixture.reviewed[
+                        "state_digest"
+                    ],
+                    final_validation_evidence_path=None,
+                    final_eligibility_evidence_path=None,
+                    classification_evidence_path=fixture.output
+                    / "classification.json",
+                    classification_signature_path=fixture.output
+                    / "classification.sig",
+                    output_path=fixture.output / "disposition.json",
+                    signature_output_path=fixture.output / "disposition.sig",
+                    ready_source_recovery_publication_oid=(
+                        fixture.recovery.publication_oid
+                    ),
+                )
+                result = MODULE.resolve_late_disposition_threads(
+                    "SecPal/api",
+                    724,
+                    123,
+                    fixture.reviewed["head_sha"],
+                    (fixture.thread_id,),
+                    apply=False,
+                    repository_root=fixture.delivery,
+                    final_reviewed_state_path=fixture.delivery
+                    / "reviewed.json",
+                    expected_final_reviewed_state_digest=fixture.reviewed[
+                        "state_digest"
+                    ],
+                    final_validation_evidence_path=None,
+                    final_eligibility_evidence_path=None,
+                    late_classification_evidence_path=fixture.output
+                    / "classification.json",
+                    late_classification_signature_path=fixture.output
+                    / "classification.sig",
+                    late_disposition_evidence_path=fixture.output
+                    / "disposition.json",
+                    late_disposition_signature_path=fixture.output
+                    / "disposition.sig",
+                    ready_source_recovery_publication_oid=(
+                        fixture.recovery.publication_oid
+                    ),
+                )
+
+        self.assertEqual(
+            classification["origin"],
+            MODULE.late_disposition.REVIEWED_BUT_INELIGIBLE,
+        )
+        self.assertEqual(
+            disposition["origin"],
+            MODULE.late_disposition.REVIEWED_BUT_INELIGIBLE,
+        )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["mode"], "dry-run")
+        self.assertFalse(
+            any("mutation" in " ".join(call) for call in github.calls)
+        )
+
+        with self.assertRaises(SystemExit):
+            MODULE.parse_args(
+                [
+                    "--repo",
+                    "SecPal/api",
+                    "--pr",
+                    "123",
+                    "--repo-root",
+                    directory,
+                    "--expected-head",
+                    "c" * 40,
+                    "--reviewed-state",
+                    "reviewed.json",
+                    "--expected-reviewed-state-digest",
+                    "d" * 64,
+                    "--delivery-issue",
+                    "724",
+                    "--ready-source-recovery-publication",
+                    "1" * 40,
+                    "--thread-id",
+                    fixture.thread_id,
+                ]
+            )
+
+    def test_recovered_ready_source_rejects_commit_binding_substitution(
+        self,
+    ) -> None:
+        def wrong_tree(fixture: SimpleNamespace) -> Any:
+            return replace(
+                fixture.authenticated_commit,
+                tree_sha="9" * 40,
+            )
+
+        def wrong_parents(fixture: SimpleNamespace) -> Any:
+            return replace(
+                fixture.authenticated_commit,
+                parent_shas=("9" * 40,),
+            )
+
+        def wrong_signature_binding(fixture: SimpleNamespace) -> Any:
+            fixture.recovery.commit_signature_evidence_digest = "9" * 64
+            return fixture.authenticated_commit
+
+        for label, substitute in (
+            ("tree", wrong_tree),
+            ("parents", wrong_parents),
+            ("signature binding", wrong_signature_binding),
+        ):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                fixture = recovered_ready_source_fixture(directory)
+                authenticated_commit = substitute(fixture)
+                with (
+                    mock.patch.object(
+                        MODULE,
+                        "lifecycle_publication",
+                        fixture.publication,
+                    ),
+                    mock.patch.object(
+                        MODULE.fast_path,
+                        "verify_ready_source_recovery_safety_facts",
+                        return_value=fixture.recovery.recovery_safety_facts,
+                    ),
+                    mock.patch.object(
+                        MODULE,
+                        "_immutable_delivery_registry_binding",
+                        return_value=fixture.binding,
+                    ),
+                ):
+                    boundary = load_final_feedback_boundary(
+                        repository_root=fixture.delivery,
+                        repository="SecPal/api",
+                        delivery_issue=724,
+                        number=123,
+                        expected_head=fixture.reviewed["head_sha"],
+                        final_reviewed_state_path=fixture.delivery
+                        / "reviewed.json",
+                        expected_final_reviewed_state_digest=fixture.reviewed[
+                            "state_digest"
+                        ],
+                        final_validation_evidence_path=None,
+                        final_eligibility_evidence_path=None,
+                        ready_source_recovery_publication_oid=(
+                            fixture.recovery.publication_oid
+                        ),
+                    )
+                    with (
+                        mock.patch.object(MODULE, "_run_git", fixture.git),
+                        mock.patch.object(
+                            MODULE.fast_path,
+                            "authenticate_integration_commit",
+                            return_value=authenticated_commit,
+                        ),
+                        self.assertRaisesRegex(
+                            MODULE.ResolutionError,
+                            "commit binding is invalid or stale",
+                        ),
+                    ):
+                        MODULE.verify_local_fix_commit(
+                            fixture.delivery,
+                            "SecPal/api",
+                            fixture.reviewed["head_sha"],
+                            boundary.reviewed,
+                            boundary.validation,
+                        )
+
+    def test_recovered_ready_source_substitution_matrix_fails_closed(
+        self,
+    ) -> None:
+        def wrong_publication(fixture: SimpleNamespace) -> None:
+            fixture.recovery.publication_oid = "9" * 40
+
+        def wrong_repository(fixture: SimpleNamespace) -> None:
+            fixture.recovery.repository = "SecPal/other"
+
+        def wrong_issue(fixture: SimpleNamespace) -> None:
+            fixture.recovery.delivery_issue = 725
+
+        def wrong_pr(fixture: SimpleNamespace) -> None:
+            fixture.recovery.pull_request = 124
+
+        def wrong_head(fixture: SimpleNamespace) -> None:
+            fixture.recovery.head_sha = "9" * 40
+
+        def wrong_tree(fixture: SimpleNamespace) -> None:
+            fixture.recovery.tree_sha = "9" * 40
+
+        def wrong_current(fixture: SimpleNamespace) -> None:
+            fixture.current.publication_oid = "9" * 40
+
+        def not_ready(fixture: SimpleNamespace) -> None:
+            fixture.recovery.lifecycle_state["ready"] = False
+
+        def cycle_three(fixture: SimpleNamespace) -> None:
+            fixture.recovery.lifecycle_state["cycle_3_absent"] = False
+
+        def reviewed_substitution(fixture: SimpleNamespace) -> None:
+            fixture.recovery.recovery_safety_facts["reviewed_state"] = {}
+
+        def fake_eligibility(fixture: SimpleNamespace) -> None:
+            fixture.recovery.recovery_safety_facts[
+                "fresh_validation_receipt"
+            ]["eligibility_evidence_digest"] = "9" * 64
+
+        def provider_substitution(fixture: SimpleNamespace) -> None:
+            fixture.provider.provider_head.return_value = "invalid"
+
+        cases = {
+            "wrong publication": wrong_publication,
+            "wrong repository": wrong_repository,
+            "wrong issue": wrong_issue,
+            "wrong PR": wrong_pr,
+            "wrong head": wrong_head,
+            "wrong tree": wrong_tree,
+            "wrong CURRENT": wrong_current,
+            "Ready false": not_ready,
+            "Cycle 3 present": cycle_three,
+            "reviewed state substitution": reviewed_substitution,
+            "caller-supplied fake eligibility": fake_eligibility,
+            "provider substitution": provider_substitution,
+        }
+        for label, mutate in cases.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                fixture = recovered_ready_source_fixture(directory)
+                mutate(fixture)
+                with (
+                    mock.patch.object(
+                        MODULE,
+                        "lifecycle_publication",
+                        fixture.publication,
+                    ),
+                    mock.patch.object(
+                        MODULE.fast_path,
+                        "verify_ready_source_recovery_safety_facts",
+                        return_value=(
+                            fixture.recovery.recovery_safety_facts
+                        ),
+                    ),
+                    mock.patch.object(
+                        MODULE,
+                        "_immutable_delivery_registry_binding",
+                        return_value=fixture.binding,
+                    ),
+                    self.assertRaises(MODULE.ResolutionError),
+                ):
+                    load_final_feedback_boundary(
+                        repository_root=fixture.delivery,
+                        repository="SecPal/api",
+                        delivery_issue=724,
+                        number=123,
+                        expected_head=fixture.reviewed["head_sha"],
+                        final_reviewed_state_path=fixture.delivery
+                        / "reviewed.json",
+                        expected_final_reviewed_state_digest=(
+                            fixture.reviewed["state_digest"]
+                        ),
+                        final_validation_evidence_path=None,
+                        final_eligibility_evidence_path=None,
+                        ready_source_recovery_publication_oid="1" * 40,
+                    )
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = recovered_ready_source_fixture(directory)
+            with (
+                mock.patch.object(
+                    MODULE,
+                    "lifecycle_publication",
+                    fixture.publication,
+                ),
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "rejects incompatible source evidence",
+                ),
+            ):
+                load_final_feedback_boundary(
+                    repository_root=fixture.delivery,
+                    repository="SecPal/api",
+                    delivery_issue=724,
+                    number=123,
+                    expected_head=fixture.reviewed["head_sha"],
+                    final_reviewed_state_path=fixture.delivery
+                    / "reviewed.json",
+                    expected_final_reviewed_state_digest=fixture.reviewed[
+                        "state_digest"
+                    ],
+                    final_validation_evidence_path=None,
+                    final_eligibility_evidence_path=fixture.delivery
+                    / "fake-eligibility.json",
+                    ready_source_recovery_publication_oid="1" * 40,
+                )
+
     def test_resolver_registry_projection_is_owned_by_fast_path(self) -> None:
         entry = copy.deepcopy(MODULE._load_repository_entry("SecPal/.github"))
         expected = {"canonical_projection": True}
