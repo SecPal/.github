@@ -157,6 +157,12 @@ jobs:
       - name: Run released-artifact re-evaluation contract tests
         run: python3 tests/secpal-vulnerability-reevaluation-unit.py
 
+      - name: Run pre-build repository scan contract tests
+        run: python3 -m unittest tests/secpal-trivy-repository-scan-unit.py
+
+      - name: Replay pinned pre-build repository scanners
+        run: python3 tests/secpal-trivy-repository-scan-replay.py
+
       - name: Replay pinned scanners with frozen vulnerability data
         run: python3 tests/secpal-vulnerability-scanner-replay.py
 
