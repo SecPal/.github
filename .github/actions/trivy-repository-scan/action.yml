@@ -123,6 +123,7 @@ runs:
             --native "$native" --database "$database" \
             --policy "$governance_root/policies/trivy-repository-scan-v1.json" \
             --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
+            --workspace "$GITHUB_WORKSPACE" \
             --scanner-version "$TRIVY_VERSION" \
             --scanner-identity "sha256:${TRIVY_ARCHIVE_SHA256}" \
             --completed-at "$completed_at" --output "$result"; then

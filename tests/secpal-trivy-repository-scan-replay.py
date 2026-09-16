@@ -75,6 +75,20 @@ def main() -> int:
             "scan:\n  skip-files:\n    - '**'\n",
             encoding="utf-8",
         )
+        subprocess.run(["git", "init", "--quiet", str(workspace)], check=True)
+        subprocess.run(
+            ["git", "-C", str(workspace), "config", "user.name", "SecPal Test"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(workspace), "config", "user.email", "test@secpal.app"],
+            check=True,
+        )
+        subprocess.run(["git", "-C", str(workspace), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(workspace), "commit", "--quiet", "-m", "fixture"],
+            check=True,
+        )
 
         cache = root / "cache"
         native = root / "native.json"
@@ -106,6 +120,8 @@ def main() -> int:
             env={"HOME": str(root)},
         )
         native_value = json.loads(native.read_text(encoding="utf-8"))
+        if native_value.get("ArtifactType") != "repository":
+            raise RuntimeError("pinned Trivy did not identify the Git worktree as a repository")
         completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         database = module.database_identity(
             [cache / "db" / "metadata.json"],
@@ -116,6 +132,7 @@ def main() -> int:
             native_value,
             repository="SecPal/repository-scan-fixture",
             commit="1" * 40,
+            workspace=str(workspace),
             scanner={
                 "name": "trivy",
                 "version": TRIVY_VERSION,

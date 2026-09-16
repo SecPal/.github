@@ -69,6 +69,8 @@ def evaluate_fixture(native: dict, database: dict | None = None) -> dict:
                 "SecPal/example",
                 "--commit",
                 COMMIT,
+                "--workspace",
+                ".",
                 "--scanner-version",
                 "0.74.0",
                 "--scanner-identity",
@@ -91,7 +93,7 @@ def native_result() -> dict:
     return {
         "SchemaVersion": 2,
         "ArtifactName": ".",
-        "ArtifactType": "filesystem",
+        "ArtifactType": "repository",
         "Results": [
             {
                 "Target": "package-lock.json",
@@ -172,12 +174,14 @@ class RepositoryScanContractTests(unittest.TestCase):
         self.assertIn('--config "$trusted_config"', source)
         self.assertIn("git -C \"$GITHUB_WORKSPACE\" ls-files -v", source)
         self.assertIn("secrets.token_hex", source)
+        self.assertIn('--workspace "$GITHUB_WORKSPACE"', source)
 
     def test_normalization_redacts_secret_and_preserves_all_scanner_context(self) -> None:
         observation = self.module.normalize_native(
             native_result(),
             repository="SecPal/example",
             commit=COMMIT,
+            workspace=".",
             scanner={
                 "name": "trivy",
                 "version": "0.74.0",
@@ -215,6 +219,7 @@ class RepositoryScanContractTests(unittest.TestCase):
             native_result(),
             repository="SecPal/example",
             commit=COMMIT,
+            workspace=".",
             scanner={
                 "name": "trivy",
                 "version": "0.74.0",
@@ -243,6 +248,7 @@ class RepositoryScanContractTests(unittest.TestCase):
             native,
             repository="SecPal/example",
             commit=COMMIT,
+            workspace=".",
             scanner={
                 "name": "trivy",
                 "version": "0.74.0",
@@ -285,6 +291,7 @@ class RepositoryScanContractTests(unittest.TestCase):
             native,
             repository="SecPal/example",
             commit=COMMIT,
+            workspace=".",
             scanner={
                 "name": "trivy",
                 "version": "0.74.0",
@@ -329,6 +336,7 @@ class RepositoryScanContractTests(unittest.TestCase):
                 native,
                 repository="SecPal/example",
                 commit=COMMIT,
+                workspace=".",
                 scanner={
                     "name": "trivy",
                     "version": "0.74.0",
@@ -366,6 +374,13 @@ class RepositoryScanContractTests(unittest.TestCase):
         self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
         self.assertEqual(result["operation"]["failure_code"], "MALFORMED_OUTPUT")
 
+    def test_scanner_artifact_must_match_intended_workspace(self) -> None:
+        native = native_result()
+        native["ArtifactName"] = "/tmp/different-workspace"
+        result = evaluate_fixture(native)
+        self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
+        self.assertEqual(result["operation"]["failure_code"], "MALFORMED_OUTPUT")
+
     def test_unsupported_severity_fails_closed(self) -> None:
         native = native_result()
         native["Results"] = [native["Results"][0]]
@@ -387,6 +402,7 @@ class RepositoryScanContractTests(unittest.TestCase):
                 {"SchemaVersion": 2, "Results": "invalid"},
                 repository="SecPal/example",
                 commit=COMMIT,
+                workspace=".",
                 scanner={"name": "trivy", "version": "0.74.0", "immutable_id": "sha256:" + "a" * 64},
                 database={"status": "FRESH"},
                 completed_at="2026-09-16T10:10:00Z",
@@ -413,6 +429,7 @@ class RepositoryScanContractTests(unittest.TestCase):
             clean_native,
             repository="SecPal/example",
             commit=COMMIT,
+            workspace=".",
             scanner={"name": "trivy", "version": "0.74.0", "immutable_id": "sha256:" + "a" * 64},
             database=json.loads((FIXTURES / "stale-database.json").read_text(encoding="utf-8")),
             completed_at="2026-09-16T10:10:00Z",
@@ -448,6 +465,7 @@ class RepositoryScanContractTests(unittest.TestCase):
             native_result(),
             repository="SecPal/example",
             commit=COMMIT,
+            workspace=".",
             scanner={
                 "name": "trivy",
                 "version": "0.74.0",
@@ -489,6 +507,8 @@ class RepositoryScanContractTests(unittest.TestCase):
                     "SecPal/example",
                     "--commit",
                     COMMIT,
+                    "--workspace",
+                    ".",
                     "--scanner-version",
                     "0.74.0",
                     "--scanner-identity",
@@ -537,6 +557,7 @@ class RepositoryScanContractTests(unittest.TestCase):
                     "--native", str(native), "--database", str(database),
                     "--policy", str(policy), "--repository", "SecPal/example",
                     "--commit", COMMIT, "--scanner-version", "0.74.0",
+                    "--workspace", ".",
                     "--scanner-identity", "sha256:" + "a" * 64,
                     "--completed-at", "2026-09-16T10:10:00Z",
                     "--output", str(output),

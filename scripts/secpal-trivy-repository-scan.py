@@ -258,11 +258,26 @@ def _finding_collection(result: dict[str, Any], field: str) -> list[Any]:
     return value
 
 
+def _validate_scan_surface(native: dict[str, Any], workspace: str) -> None:
+    if native.get("ArtifactType") not in {"filesystem", "repository"}:
+        raise ContractError("Trivy output is not a filesystem repository scan")
+    artifact_name = _string(native.get("ArtifactName"), "Trivy filesystem artifact")
+    intended_workspace = _string(workspace, "intended scan workspace")
+    try:
+        artifact_path = Path(artifact_name).resolve(strict=True)
+        workspace_path = Path(intended_workspace).resolve(strict=True)
+    except OSError as error:
+        raise ContractError("Trivy scan workspace cannot be resolved") from error
+    if artifact_path != workspace_path:
+        raise ContractError("Trivy scan artifact differs from the intended workspace")
+
+
 def normalize_native(
     native: dict[str, Any],
     *,
     repository: str,
     commit: str,
+    workspace: str,
     scanner: dict[str, Any],
     database: dict[str, Any],
     completed_at: str,
@@ -270,9 +285,7 @@ def normalize_native(
     """Purely normalize Trivy JSON into a secret-safe observation."""
     if not isinstance(native, dict) or native.get("SchemaVersion") != 2:
         raise ContractError("Trivy output schema version is missing or unsupported")
-    if native.get("ArtifactType") != "filesystem":
-        raise ContractError("Trivy output is not a filesystem scan")
-    _string(native.get("ArtifactName"), "Trivy filesystem artifact")
+    _validate_scan_surface(native, workspace)
     results = native.get("Results")
     if not isinstance(results, list):
         raise ContractError("Trivy Results must be an array")
@@ -569,6 +582,7 @@ def _evaluate(arguments: argparse.Namespace) -> int:
             native,
             repository=arguments.repository,
             commit=arguments.commit,
+            workspace=arguments.workspace,
             scanner={
                 "name": "trivy",
                 "version": arguments.scanner_version,
@@ -603,6 +617,7 @@ def _parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--policy", type=Path, required=True)
     evaluate.add_argument("--repository", required=True)
     evaluate.add_argument("--commit", required=True)
+    evaluate.add_argument("--workspace", required=True)
     evaluate.add_argument("--scanner-version", required=True)
     evaluate.add_argument("--scanner-identity", required=True)
     evaluate.add_argument("--completed-at", required=True)
