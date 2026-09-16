@@ -106,7 +106,7 @@ def main() -> int:
             env={"HOME": str(root)},
         )
         native_value = json.loads(native.read_text(encoding="utf-8"))
-        completed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         database = module.database_identity(
             [cache / "db" / "metadata.json"],
             [cache / "db" / "trivy.db"],

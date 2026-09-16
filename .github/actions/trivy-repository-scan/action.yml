@@ -107,7 +107,7 @@ runs:
 
         database="$tool_root/database.json"
         if [ -z "$failure_code" ]; then
-          completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          completed_at="$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))')"
           if ! python3 "$governance_root/scripts/secpal-trivy-repository-scan.py" database \
             --metadata "$cache_root/db/metadata.json" \
             --metadata "$cache_root/java-db/metadata.json" \
