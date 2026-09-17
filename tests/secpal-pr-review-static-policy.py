@@ -754,6 +754,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "execute_resolution_batch",
             "follow_up",
             "CODEX_REVIEW_SUMMARY_MARKER",
+            "COPILOT_REVIEW_PROVIDER",
             "normalize_resolution_eligibility_evidence",
             "normalize_ready_integration_evidence",
             "normalize_ready_integration_prior_authority",

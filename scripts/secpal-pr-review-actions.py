@@ -2406,8 +2406,8 @@ class LiveGitHub:
                     "node_id": item.get("id"),
                     "created_at": item.get("createdAt"),
                     "actor": _actor(item.get("actor")),
-                    "requested_reviewer": _actor(
-                        item.get("requestedReviewer")
+                    "requested_reviewer": copy.deepcopy(
+                        fast_path.COPILOT_REVIEW_PROVIDER
                     ),
                 }
                 for item in request_events
@@ -4735,6 +4735,8 @@ def build_parser() -> argparse.ArgumentParser:
     batch_parser.add_argument("--registry")
     batch_parser.add_argument("--capture-reviewed-state")
     batch_parser.add_argument("--ready-remediation-provider-binding")
+    batch_parser.add_argument("--ready-source-recovery-publication")
+    batch_parser.add_argument("--delivery-issue", type=_positive_integer)
     batch_parser.add_argument("--request")
     batch_parser.add_argument("--reviewed-state")
     batch_parser.add_argument("--attestation")
@@ -8686,12 +8688,86 @@ class _ReadyRemediationProviderBinding:
         )
 
 
+def _derive_resolve_batch_ready_source_provider_binding(
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    recovery_publication_oid: str,
+) -> Any:
+    """Reauthenticate recovery and CURRENT before exposing its provider head."""
+
+    if (
+        not isinstance(recovery_publication_oid, str)
+        or not OID_PATTERN.fullmatch(recovery_publication_oid)
+    ):
+        raise fast_path.SecurityBlocker(
+            "Ready-source recovery publication identity is malformed"
+        )
+    try:
+        _, publication = _load_lifecycle_publication_helpers()
+        recovery = publication.verify_current_ready_source_recovery(
+            repository, delivery_issue
+        )
+        current = publication.verify_current_lifecycle_authority(
+            repository, delivery_issue
+        )
+        provider = publication.derive_ready_source_recovery_provider_binding(
+            current
+        )
+        lifecycle = current.lifecycle
+    except (
+        AttributeError,
+        ImportError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        raise fast_path.SecurityBlocker(
+            "Ready-source recovery provider authority is invalid"
+        ) from exc
+    if (
+        recovery.publication_oid != recovery_publication_oid
+        or recovery.repository != repository
+        or recovery.delivery_issue != delivery_issue
+        or recovery.pull_request != pull_request
+        or lifecycle.repository != repository
+        or lifecycle.delivery_issue != delivery_issue
+        or lifecycle.pull_request != pull_request
+        or recovery.head_sha != lifecycle.head_sha
+        or recovery.lifecycle_id != lifecycle.lifecycle_id
+        or recovery.current_authority_digest != lifecycle.authority_digest
+        or recovery.current_publication_oid != current.publication_oid
+        or recovery.current_publication_digest != current.publication_digest
+        or provider.repository != repository
+        or provider.delivery_issue != delivery_issue
+        or provider.pull_request != pull_request
+        or provider.lifecycle_id != lifecycle.lifecycle_id
+        or provider.current_head_sha != lifecycle.head_sha
+        or provider.current_authority_digest != lifecycle.authority_digest
+        or provider.current_publication_oid != current.publication_oid
+        or provider.current_publication_digest != current.publication_digest
+    ):
+        raise fast_path.SecurityBlocker(
+            "Ready-source recovery provider authority is stale or substituted"
+        )
+    return provider
+
+
 def _command_resolve_batch(arguments: argparse.Namespace) -> int:
     repository_root = Path(arguments.repo_root).resolve(strict=True)
     registry = load_registry(arguments.registry)
     entry = select_repository(registry, arguments.repo)
     binding = _fast_registry_binding(entry)
     ready_source_provider_binding = None
+    if arguments.ready_remediation_provider_binding is not None and (
+        arguments.ready_source_recovery_publication is not None
+        or arguments.delivery_issue is not None
+    ):
+        raise fast_path.RecoverableLocalError(
+            "feedback capture provider authority modes are mutually exclusive"
+        )
     if arguments.ready_remediation_provider_binding is not None:
         if not arguments.capture_reviewed_state:
             raise fast_path.RecoverableLocalError(
@@ -8704,6 +8780,29 @@ def _command_resolve_batch(arguments: argparse.Namespace) -> int:
             ),
             repository=arguments.repo,
             pull_request=arguments.pr,
+        )
+    elif arguments.ready_source_recovery_publication is not None:
+        if not arguments.capture_reviewed_state:
+            raise fast_path.RecoverableLocalError(
+                "Ready-source recovery provider binding is capture-only"
+            )
+        if arguments.delivery_issue is None:
+            raise fast_path.RecoverableLocalError(
+                "Ready-source recovery provider binding requires its delivery issue"
+            )
+        ready_source_provider_binding = (
+            _derive_resolve_batch_ready_source_provider_binding(
+                repository=arguments.repo,
+                delivery_issue=arguments.delivery_issue,
+                pull_request=arguments.pr,
+                recovery_publication_oid=(
+                    arguments.ready_source_recovery_publication
+                ),
+            )
+        )
+    elif arguments.delivery_issue is not None:
+        raise fast_path.RecoverableLocalError(
+            "delivery issue requires Ready-source recovery provider binding"
         )
     gateway = FastPathGateway(
         repository_root,

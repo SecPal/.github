@@ -144,6 +144,14 @@ provider-summary head. The summary must retain terminal status and exact
 repository/PR metadata. This is an ephemeral Ready-source recovery gate, not a
 caller option or persisted evidence kind; current-head feedback completeness
 and its blocking classifications are unchanged.
+Capture that recovered Ready Stable Feedback only through
+`resolve-batch --capture-reviewed-state` with the exact `--delivery-issue` and
+`--ready-source-recovery-publication`. The command reauthenticates that
+publication and protected lifecycle `CURRENT`, then derives the provider head
+through the maintained binding. It accepts no provider-head input. The simple
+fixed-thread resolver accepts the resulting optional provider-request history
+only when the complete Stable Feedback document is canonical and its feedback
+and state digests match.
 
 Ordinary Ready remediation has one corresponding finite composition for
 provider feedback that arrived after the canonical Stable Feedback capture of

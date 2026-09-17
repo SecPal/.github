@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-17 - Accept Recovered Ready Feedback In Thread Resolution
+
+**Fixed:**
+
+- Admit the canonical Stable Feedback provider-request projection at the
+  maintained fixed-thread resolver while rejecting field, identity, ordering,
+  duplicate, and digest drift.
+- Let capture-only `resolve-batch` reauthenticate a current Ready-source
+  recovery and derive its sole provider head from protected lifecycle history,
+  without accepting a caller-selected head or adding lifecycle authority.
+
 ## 2026-09-16 - Authenticate Post-Capture Provider Feedback
 
 **Added:**

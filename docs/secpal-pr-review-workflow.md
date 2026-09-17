@@ -169,6 +169,15 @@ blocking source must be dispositioned under the existing current-feedback
 rules. Ordinary capture and Ready integration continue to require exact-head
 provider terminality.
 
+A current recovered Ready source uses the same Stable Feedback projection. Its
+capture-only invocation supplies the exact delivery issue and recovery
+publication to `resolve-batch`; the command reauthenticates both the recovery
+and protected lifecycle `CURRENT` before deriving the only admissible provider
+head through the maintained Ready-source binding. No provider head is accepted
+from the caller. The fixed-thread resolver admits the optional provider-request
+history only through canonical Stable Feedback validation, including its closed
+fields, identities, order, duplicate rules, and feedback/state digests.
+
 ### Post-capture provider growth for the remaining ordinary remediation
 
 One narrower composition covers provider-owned findings emitted by the already

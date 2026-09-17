@@ -111,6 +111,12 @@ and the terminal summary must also bind the exact repository and PR. Callers
 cannot nominate that head. Current-head feedback is still captured completely
 and remains blocking under the ordinary classification rules; every other path
 retains exact-head provider terminality.
+That recovery capture supplies the exact delivery issue and protected recovery
+publication to capture-only `resolve-batch`. The command reauthenticates the
+publication and lifecycle CURRENT before deriving the maintained provider
+binding. Its canonical Stable Feedback output may carry provider request
+history; the fixed-thread resolver accepts that optional category only after
+closed projection, identity, ordering, duplicate, and digest validation.
 
 ## Simple resolution-only path
 
