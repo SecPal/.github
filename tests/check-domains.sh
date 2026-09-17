@@ -298,6 +298,29 @@ assert_domain_policy_case \
   "$lifecycle_config_identifier" \
   "Mixed: \`$lifecycle_config_identifier\` and \`$lifecycle_config_identifier"
 assert_domain_policy_case \
+  "a complete inline identifier beside an unrelated approved URL" \
+  accept \
+  "$lifecycle_config_identifier" \
+  "Use \`$lifecycle_config_identifier\` with https://secpal.io"
+
+printf '%s\n' "credential=\`$lifecycle_config_identifier\`" \
+  >"$workspace/domain-policy-case.sh"
+rm "$workspace/domain-policy-case.md"
+set +e
+(
+  cd "$workspace"
+  bash scripts/check-domains.sh >output.txt 2>&1
+)
+non_markdown_exit_code=$?
+set -e
+if [ "$non_markdown_exit_code" -eq 0 ] \
+  || ! grep -Fq "$lifecycle_config_identifier" "$workspace/output.txt"; then
+  cat "$workspace/output.txt"
+  echo "check-domains.sh must reject inline-code syntax outside Markdown" >&2
+  domain_policy_regression_failures=$((domain_policy_regression_failures + 1))
+fi
+rm "$workspace/domain-policy-case.sh"
+assert_domain_policy_case \
   "the pre-enrollment protocol identifier without identifier context" \
   reject \
   "$pre_enrollment_protocol_identifier" \

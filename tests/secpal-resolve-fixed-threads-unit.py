@@ -1458,9 +1458,21 @@ def recovered_ready_source_fixture(
     reviewed["state_digest"] = MODULE._digest_json(
         {**identity, "feedback": feedback}
     )
-    binding = MODULE._validation_registry_binding(
+    base_binding = MODULE._validation_registry_binding(
         MODULE._load_repository_entry("SecPal/api")
     )
+    current_safety_command_set = [
+        {
+            "argv": ["python3", "tests/ready-source-recovery-current-safety.py"],
+            "working_directory": ".",
+            "purpose": "Validate Ready-source recovery current safety",
+        }
+    ]
+    current_safety = {"validation_command_set": current_safety_command_set}
+    binding = {
+        **base_binding,
+        "ready_source_recovery_current_safety": current_safety,
+    }
     stable = MODULE.fast_path.StableFeedbackState.from_payload(reviewed)
     gates = [
         {
@@ -1475,7 +1487,7 @@ def recovered_ready_source_fixture(
         head_sha=reviewed["head_sha"],
         validated_tree_sha="f" * 40,
         registry=binding,
-        command_set=binding["validation"],
+        command_set=current_safety_command_set,
         successful_result=True,
         reviewed_state=stable,
         manual_gate_evidence=gates,
@@ -1503,6 +1515,7 @@ def recovered_ready_source_fixture(
         "reviewed_state": reviewed,
         "fresh_validation_receipt": receipt,
         "policy_binding": binding,
+        "command_set": current_safety_command_set,
     }
     recovery = SimpleNamespace(
         publication_oid="1" * 40,
@@ -1578,6 +1591,7 @@ def recovered_ready_source_fixture(
         delivery=delivery,
         output=output,
         reviewed=reviewed,
+        base_binding=base_binding,
         binding=binding,
         receipt=receipt,
         recovery=recovery,
@@ -1592,6 +1606,38 @@ def recovered_ready_source_fixture(
 
 
 class ResolveFixedThreadsTests(TestCase):
+    def test_recovered_ready_source_authenticates_base_registry_separately(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = recovered_ready_source_fixture(directory)
+            with mock.patch.object(
+                MODULE.fast_path,
+                "load_immutable_delivery_registry_binding",
+                return_value=fixture.base_binding,
+            ) as load_binding:
+                binding = MODULE._immutable_delivery_registry_binding(
+                    fixture.reviewed["head_sha"],
+                    "SecPal/api",
+                    MODULE.fast_path.digest_json(fixture.binding),
+                    MODULE.fast_path.digest_json(
+                        fixture.recovery.recovery_safety_facts["command_set"]
+                    ),
+                    fixture.recovery.recovery_safety_facts,
+                )
+
+        self.assertEqual(binding, fixture.binding)
+        load_binding.assert_called_once_with(
+            repository="SecPal/api",
+            delivery_head_sha=fixture.reviewed["head_sha"],
+            expected_registry_digest=MODULE.fast_path.digest_json(
+                fixture.base_binding
+            ),
+            expected_command_set_digest=MODULE.fast_path.digest_json(
+                fixture.base_binding["validation"]
+            ),
+        )
+
     def test_recovered_ready_source_derives_reviewed_ineligible_origin(
         self,
     ) -> None:

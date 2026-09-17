@@ -594,14 +594,52 @@ def _immutable_delivery_registry_binding(
     repository: str,
     registry_digest: str,
     command_set_digest: str,
+    recovery_safety: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
-        return fast_path.load_immutable_delivery_registry_binding(
+        if recovery_safety is None:
+            return fast_path.load_immutable_delivery_registry_binding(
+                repository=repository,
+                delivery_head_sha=head_sha,
+                expected_registry_digest=registry_digest,
+                expected_command_set_digest=command_set_digest,
+            )
+        recovery_binding = recovery_safety.get("policy_binding")
+        recovery_command_set = recovery_safety.get("command_set")
+        if (
+            not isinstance(recovery_binding, dict)
+            or not isinstance(recovery_command_set, list)
+            or fast_path.digest_json(recovery_binding) != registry_digest
+            or fast_path.digest_json(recovery_command_set) != command_set_digest
+        ):
+            raise fast_path.SecurityBlocker(
+                "Ready-source recovery receipt binding is invalid"
+            )
+        base_binding = recovery_binding.copy()
+        current_safety = base_binding.pop(
+            "ready_source_recovery_current_safety", None
+        )
+        base_command_set = base_binding.get("validation")
+        if (
+            not isinstance(current_safety, dict)
+            or recovery_command_set
+            != current_safety.get("validation_command_set")
+            or not isinstance(base_command_set, list)
+        ):
+            raise fast_path.SecurityBlocker(
+                "Ready-source recovery current-safety binding is invalid"
+            )
+        authenticated = fast_path.load_immutable_delivery_registry_binding(
             repository=repository,
             delivery_head_sha=head_sha,
-            expected_registry_digest=registry_digest,
-            expected_command_set_digest=command_set_digest,
+            expected_registry_digest=fast_path.digest_json(base_binding),
+            expected_command_set_digest=fast_path.digest_json(base_command_set),
         )
+        if authenticated != base_binding:
+            raise fast_path.SecurityBlocker(
+                "Ready-source recovery base registry binding changed"
+            )
+        return recovery_binding
     except fast_path.SecurityBlocker as exc:
         raise ResolutionError(str(exc)) from exc
 
@@ -1501,6 +1539,11 @@ def verify_local_fix_commit(
             registry_digest_source.get("command_set_digest", "")
             if isinstance(registry_digest_source, dict)
             else ""
+        ),
+        (
+            validation.attestation
+            if validation.kind == "ready-source-recovery"
+            else None
         ),
     )
     if validation.registry_binding != authenticated_registry_binding:
@@ -2429,6 +2472,7 @@ def _load_recovered_ready_source_validation(
         repository,
         receipt.get("registry_digest", ""),
         receipt.get("command_set_digest", ""),
+        safety,
     )
     if registry != authenticated_registry:
         raise ResolutionError(
