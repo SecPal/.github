@@ -394,6 +394,17 @@ authority. Exact Stable Feedback derives target origin, and only the same signed
 late-classification/disposition chain can authorize the guarded resolver.
 Schema-1.2 commit-bound behavior is unchanged.
 
+An unchanged Ready source with a verified current recovery instead supplies its
+exact `--ready-source-recovery-publication` OID to both creators and the
+resolver, while omitting validation, eligibility, integration, and historical
+receipt inputs. The maintained recovery verifier authenticates the exact
+repository, issue, PR, head/tree, lifecycle CURRENT and finite histories,
+current-safety/provider binding, Stable Feedback, immutable commit signer, and
+fresh receipt. That authenticated receipt shape derives commit-bound eligibility
+absence; caller omission does not. Recovery remains source authority only, so
+the signed classification, signed disposition, `technically_blocking=false`,
+and canonical resolver are still required for every exact thread.
+
 This authenticated reviewed-state/eligibility boundary is what “post-push”
 denotes in the resolution lifecycle. It does not use or claim a cryptographic
 GitHub wall-clock push-order proof.
