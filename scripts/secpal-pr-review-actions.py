@@ -2406,8 +2406,8 @@ class LiveGitHub:
                     "node_id": item.get("id"),
                     "created_at": item.get("createdAt"),
                     "actor": _actor(item.get("actor")),
-                    "requested_reviewer": _actor(
-                        item.get("requestedReviewer")
+                    "requested_reviewer": copy.deepcopy(
+                        fast_path.COPILOT_REVIEW_PROVIDER
                     ),
                 }
                 for item in request_events

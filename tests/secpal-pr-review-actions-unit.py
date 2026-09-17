@@ -2416,6 +2416,25 @@ class MutationTests(TestCase):
             "RRE_COPILOT",
         )
 
+        alias_payload = copy.deepcopy(payload)
+        alias_payload["data"]["repository"]["pullRequest"]["timelineItems"][
+            "nodes"
+        ][0]["requestedReviewer"] = {
+            "id": "U_GITHUB_COPILOT",
+            "databaseId": 42,
+            "login": "github-copilot",
+        }
+        alias_github = actions.LiveGitHub(
+            SimpleNamespace(run=lambda _arguments: copy.deepcopy(alias_payload))
+        )
+        alias_current = alias_github.read_current_feedback(plan())
+        self.assertEqual(
+            alias_current["feedback"]["provider_review_requests"][0][
+                "requested_reviewer"
+            ],
+            fast_path.COPILOT_REVIEW_PROVIDER,
+        )
+
         payload["data"]["repository"]["pullRequest"]["reviewThreads"]["pageInfo"][
             "hasNextPage"
         ] = True
