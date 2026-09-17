@@ -76,11 +76,6 @@
           "purpose": "Run persistent lifecycle-authority unit tests"
         },
         {
-          "argv": ["python3", "-m", "unittest", "tests/secpal-unenrolled-ready-recovery-unit.py"],
-          "working_directory": ".",
-          "purpose": "Run unenrolled Ready lifecycle-recovery unit tests"
-        },
-        {
           "argv": ["python3", "-m", "unittest", "tests/secpal-bootstrap-source-admission-unit.py"],
           "working_directory": ".",
           "purpose": "Run exact bootstrap source-admission unit tests"

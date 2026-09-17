@@ -364,16 +364,8 @@ def _append_successor_evidence(
             signer=signers.transition_signer,
         )
         if (
-            (
-                parsed.get("kind") == authority.EXACT_ADOPTION_EVIDENCE_KIND
-                and set(parsed) == authority.EXACT_ADOPTION_PUBLICATION_FIELDS
-            )
-            or (
-                parsed.get("kind")
-                == authority.UNENROLLED_READY_RECOVERY_EVIDENCE_KIND
-                and set(parsed)
-                == authority.UNENROLLED_READY_RECOVERY_PUBLICATION_FIELDS
-            )
+            parsed.get("kind") == authority.EXACT_ADOPTION_EVIDENCE_KIND
+            and set(parsed) == authority.EXACT_ADOPTION_PUBLICATION_FIELDS
         ):
             snapshot = authority.issue_exact_state_adoption_successor_authority(
                 serialized_adoption_evidence=raw,
@@ -458,10 +450,9 @@ def _derive_transition_state(
     transition_kind: str,
     event_digest: str,
 ) -> dict[str, Any]:
-    adopted = lifecycle.historical_proof_mode in {
-        authority.EXACT_ADOPTION_PROOF_MODE,
-        authority.UNENROLLED_READY_RECOVERY_PROOF_MODE,
-    }
+    adopted = (
+        lifecycle.historical_proof_mode == authority.EXACT_ADOPTION_PROOF_MODE
+    )
     state = authority._validate_state(
         copy.deepcopy(lifecycle.state),
         allow_adopted_observations=adopted,
@@ -1017,18 +1008,16 @@ def _verify_remediation_authorization(
         verified = orchestration._verify_user_authorization(
             raw, predecessor, predecessor.lifecycle
         )
-        finding_ids = orchestration._authorized_finding_ids(verified)
         event_id = f"authorization:{verified['authorization_digest']}"
         orchestration._authorization(
             raw,
             event_id=event_id,
             operation="REMEDIATION_COMPLETED",
-            expected_scope={
-                "pull_request": predecessor.lifecycle.pull_request,
-                "predecessor_head_sha": predecessor.lifecycle.head_sha,
-                "resulting_head_sha": resulting_head,
-                "finding_ids": finding_ids,
-            },
+            expected_scope=orchestration._remediation_authorization_scope(
+                verified,
+                predecessor.lifecycle,
+                resulting_head,
+            ),
             observed=predecessor,
             lifecycle=predecessor.lifecycle,
             verifier=orchestration._verify_user_authorization,

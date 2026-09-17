@@ -9,23 +9,40 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
-## 2026-09-16 - Recover Unenrolled Ready Lifecycle Authority
+## 2026-09-17 - Admit Exact Ready Source With Zero Historical Receipt Package
+
+**Fixed:**
+
+- Extend Exact-State-Adoption validation-evidence-loss admission for one
+  registered Ready delivery whose complete signed source history contains no
+  validation-receipt trailer, while preserving finite review/remediation state
+  and using fresh current safety without reconstructing historical evidence.
+
+## 2026-09-17 - Accept Recovered Ready Feedback In Thread Resolution
+
+**Fixed:**
+
+- Admit the canonical Stable Feedback provider-request projection at the
+  maintained fixed-thread resolver while rejecting field, identity, ordering,
+  duplicate, and digest drift.
+- Let capture-only `resolve-batch` reauthenticate a current Ready-source
+  recovery and derive its sole provider head from protected lifecycle history,
+  without accepting a caller-selected head or adding lifecycle authority.
+
+## 2026-09-16 - Authenticate Post-Capture Provider Feedback
 
 **Added:**
 
-- Add one explicitly authorized `UNENROLLED_READY_DELIVERY` recovery root for
-  an authenticated open Ready delivery whose ordinary lifecycle initialization
-  and protected CURRENT never existed.
-- Preserve the observed review, remediation, and Ready-transition consumption,
-  publish forward authority through the canonical protected lifecycle journal,
-  and keep ordinary Ready integration on the existing `HEAD_ADVANCED` path.
-- Record historical Ready evidence only as authenticated observation: recovery
-  never retroactively creates initialization, transition, or prior-integration
-  authority.
-- Require verifier-sealed source commits, maintained review providers and
-  ordered finite history; recheck all proof identity bindings and the trusted
-  live boundary immediately before publication, with replay rejection in both
-  full and identity-only journal verification.
+- Derive one bounded additive provider-feedback delta when the provider review
+  belongs to the already-consumed reviewed head but appears after its canonical
+  Stable Feedback capture.
+- Authenticate the unique provider request, review chronology, parent-review
+  identity of every added thread comment, and any first-remediation thread
+  resolutions before admitting that delta.
+- Bind the complete delta to authenticated first-remediation CURRENT evidence,
+  the existing ordinary eligibility manifest, and the remaining normal
+  remediation authorization without requesting another review or adding a
+  lifecycle operation.
 
 ## 2026-09-16 - Define Builder-Independent OCI Publication Evidence
 
@@ -38,6 +55,18 @@ Log of notable changes to SecPal organization defaults (newest first).
   retaining Dependabot's upstream `docker` ecosystem identifier.
 - Require complete parity evidence and removal of superseded active publisher
   paths when an existing publisher migrates away from BuildKit or Buildx.
+
+## 2026-09-16 - Authenticate Detached Recovered-Ready Thread Authority
+
+**Fixed:**
+
+- Allow a verified current Ready-source recovery to authenticate the unchanged
+  final source used by existing detached late classification and disposition,
+  without an artificial Ready integration.
+- Derive commit-bound eligibility absence and reviewed target origin from the
+  authenticated recovery boundary while preserving signed exact disposition,
+  fixed-thread resolver, signer, replay, and `technically_blocking=false`
+  requirements.
 
 ## 2026-09-15 - Separate Ready Recovery Tooling And Candidate Provenance
 

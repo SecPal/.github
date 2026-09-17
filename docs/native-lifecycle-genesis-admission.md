@@ -61,22 +61,6 @@ requires that admission in its freshly observed ancestry, and
 one exact lifecycle successor. Callers cannot combine these operations or pass
 an alternate journal, trust policy, signer set, or CURRENT selector.
 
-## Recovered non-native root
-
-An `UNENROLLED_READY_DELIVERY_RECOVERY` root is not native genesis and does not
-use `ADMIT_NATIVE_GENESIS`. It is eligible only when complete protected journal
-ancestry proves that neither a root nor CURRENT has ever existed for the exact
-delivery and trusted GitHub reads prove the narrow open/Ready recovery state.
-Its signed one-use authorization and proof establish authority at the recovery
-boundary, never at the historical Draft-to-Ready observation.
-
-The same `enroll_existing_lifecycle` writer publishes the recovered root as the
-delivery's sole CURRENT. The ordinary ancestry identity index and exact CAS
-therefore reject another recovery, later native initialization, or a competing
-root. The bundle carries `unenrolled_ready_recovery` provenance and preserved
-finite history; it is not added to `delivery_initializations`, historical
-compatibility policy, or bootstrap-repair registries.
-
 ## Maintained compatibility publications
 
 The existing `delivery_initializations` entries for issues 692, 674, and 735

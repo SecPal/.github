@@ -550,6 +550,7 @@ ALLOWED_IMPORTS = {
         "from pathlib import Path",
         "from typing import Any, Callable, Sequence",
         "from secpal_pr_review import lifecycle_orchestration as module",
+        "from secpal_pr_review import lifecycle_publication as module",
     },
     "late_disposition.py": {
         "from __future__ import annotations",
@@ -754,6 +755,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "execute_resolution_batch",
             "follow_up",
             "CODEX_REVIEW_SUMMARY_MARKER",
+            "COPILOT_REVIEW_PROVIDER",
             "normalize_resolution_eligibility_evidence",
             "normalize_ready_integration_evidence",
             "normalize_ready_integration_prior_authority",
@@ -1264,6 +1266,10 @@ SAFE_GETATTR_CALLS = {
             ("_load_lifecycle_orchestration_helper",),
             "getattr(module, '__file__', None)",
         ),
+        DynamicImportCall(
+            ("_load_lifecycle_publication_helper",),
+            "getattr(module, '__file__', None)",
+        ),
     },
     "fast_path.py": {
         DynamicImportCall(
@@ -1517,6 +1523,8 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_load_late_disposition_helper",
     "_load_fast_path_helper",
     "_load_lifecycle_orchestration_helper",
+    "_load_lifecycle_publication_helper",
+    "_load_recovered_ready_source_validation",
     "_late_signing_key",
     "_markdown_parser_environment",
     "_classify_reviewed_target",

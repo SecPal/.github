@@ -280,6 +280,200 @@
       ],
       "historical_provider_summary_digest": "e6ef8dabaa85e0ddd39887647eec58a89d5572bb5b69fc28411d79f0247e670d",
       "current_safety_harness_path": "tests/pre-enrollment-registered-repository-current-safety.py"
+    },
+    {
+      "admission_schema_version": "1.2",
+      "repository": "SecPal/.github",
+      "delivery_issue": 711,
+      "pull_request": 951,
+      "head_sha": "a158d6f5755ce1eecb7fada3a1c71722a21c5988",
+      "tree_sha": "c7f5e38cb982dbd196316d0d45908de38d89854e",
+      "parent_sha": "946122e965f71d9c86433a91f2a9b8d67efd9d91",
+      "source_signer_identity": "aroviqen@secpal.app",
+      "historical_package_status": "UNAVAILABLE",
+      "historical_final_attestation_digest": null,
+      "historical_bytes_reconstructed": false,
+      "observed_pre_enrollment_history": [
+        {
+          "sequence": 1,
+          "kind": "PR_CREATED_DRAFT",
+          "observed_at": "2026-09-16T18:11:53Z",
+          "head_sha": "415fb7e8ab45cf5388898054bb00bd0ca6409c71",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 2,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-09-16T18:14:30Z",
+          "head_sha": "9c07c40951fb15a3a229c023ecf2b228b557353e",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 3,
+          "kind": "DRAFT_TO_READY_OBSERVED",
+          "observed_at": "2026-09-16T18:38:03Z",
+          "head_sha": "9c07c40951fb15a3a229c023ecf2b228b557353e",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 4,
+          "kind": "REMEDIATION_HEAD_OBSERVED",
+          "observed_at": "2026-09-16T18:56:41Z",
+          "head_sha": "255ec810b343cd85a1a4e6ada947fe8b1929a527",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 5,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-09-16T19:21:26Z",
+          "head_sha": "76b9561098ad4ae34228cd106c8bf2f083206496",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 6,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-09-16T19:26:02Z",
+          "head_sha": "13e70d6bf1593a14c0a91f73c1142e3c5f2fc261",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 7,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-09-16T19:54:33Z",
+          "head_sha": "ff7995db37f9a2f842ce3b2474ce499c481795d8",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 8,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-09-16T19:55:02Z",
+          "head_sha": "c84d8bc0c4fa78e8f4a5e88f78a640a8457109c7",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 9,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-09-16T20:26:12Z",
+          "head_sha": "4b88d585501b9f3f0cb272a200a52a75e35ef901",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 10,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-09-16T20:49:56Z",
+          "head_sha": "946122e965f71d9c86433a91f2a9b8d67efd9d91",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 11,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-09-16T20:54:27Z",
+          "head_sha": "a158d6f5755ce1eecb7fada3a1c71722a21c5988",
+          "reviewed_head_sha": null
+        }
+      ],
+      "intended_state": {
+        "unrestricted_review_count": 1,
+        "remediation_cycle_count": 1,
+        "cycle_3_absent": true,
+        "draft": false,
+        "ready": true,
+        "ready_transition_count": 1,
+        "ready_history": [
+          {
+            "sequence": 1,
+            "transition_kind": "DRAFT_TO_READY",
+            "observation_digest": "f45627109717221365c0f25d401fd6c901fdfe3646537615243d96c2068214ea"
+          }
+        ],
+        "exceptional_recovery_count": 0,
+        "exceptional_recovery_history": [],
+        "exceptional_continuation_count": 0,
+        "exceptional_continuation_history": []
+      },
+      "feedback_digest": "7907b75a1e2f0185e9dac526f1932150ad08056a25ed02f334375ec56bd0a9ed",
+      "technical_decisions": [
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDOQFR1MM8AAAABU-etiA",
+          "source_digest": "8597e0cc0bf44f984847ad293b8c8a937f448fa3ea29c7f590f6c21c6e0ecfa8",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "0f4417c3780dfd619f7040021795f1926151fa18a6881ff3c6912d8289a3b091"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDOQFR1MM8AAAABN4yY2g",
+          "source_digest": "9a68f622f3dec0babae5f334cb0251ec3b079f24c988ba11e4ef6c99512e2f73",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "6b2cf1db39a7adbb56ebedb0f67f41cf758b29529b69e4a3b65de19c52a893e1"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDOQFR1MM8AAAABN41QKg",
+          "source_digest": "1145b3b4e8ab3075f222ae613db6265e5009a7396fe9a6103144fb1b9c1db6ff",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "15bbcbb0c0da1be5b5962636246ae60c658b391d265a87b7dddd0548ac85819c"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wLpez",
+          "source_digest": "7e5a57d33c89230f4f659296489dc1e2220ac2ecfa722c31ed26a02d72acdae2",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "85abf0c61609e70755174476993d059f85608cc5fa523d9146c5e07964c71496"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wLpfk",
+          "source_digest": "9bae4e840820d05b6846f139e7ea5e98a9940bf6cf7e7a13f6c5188396d95298",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "08b3312ff86a72cb49f5ac02819628a08f1d050c986b9c5cff271a056c22701c"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wLpf4",
+          "source_digest": "826747f92fb1b5ffdf92148fadd43a8758e2f9a927071c77e073fefff512ba46",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "c3fbae825d7f2a9b9d3b7f577bb451c6c78ecbb64f7baec1967fafa9fc2b7656"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wLpgc",
+          "source_digest": "7e20e6329a7027b1293d64f9ecd4bf7efb4bfe04e2e80d8cc4169085760d4dc6",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "dffea23b4a41b3921c103cb4fd192a20d9ddad8b8248e9de8380b0cc29b7b188"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wLy8z",
+          "source_digest": "704b744dd8d6fbcc969921ca9ab181d842d0f48c6a2e11d919e9849491d3c252",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "201ae40dcdc16ddbc9edb974221af122574731a41963e00def92c99bd42206b7"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wLy8-",
+          "source_digest": "4fef7c627292f84fdfe8da5a84c0f50a5539b3adbc0bafe7c18988f83c938b44",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "43748208f0352a2866cbb13db7f8801bbdc50c3fc5d9c1221a1035bbad32687f"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wLy9C",
+          "source_digest": "bb2862bf3d8b996eb52417b17e62cfa83384fde356432658c5e4a33dae1f4295",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "c444f48712e67e60f909392d6702089ee176fa6f38187ed6585c57f8d50eb8b3"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wLy9K",
+          "source_digest": "f5c49cd0dab6661743b52ac39078ecb59f6d279f288933ef1399e24aca0b9570",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "e2bf3390b4e16ad435dbaa8f085a12ec78fd30511380d1652b98f6ef5c9da2ba"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wLy9T",
+          "source_digest": "50af516b86637b85c68875b5db90a8a041103c292fae937142f2a9aedf02d7ba",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "514ccb808b11ff481c6a1890487e63ad78b4ed17b0ab62e55ea6c5ae1710ba7a"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wLy9b",
+          "source_digest": "35e456414cc05ca7d28f4d4e7f8187ffa60f7977bf5c55593e7101c0b197f0fc",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "d94f909f1896b96b4bc0dfbb91e63ca0aec5a402250ff61ebce0c3e4b6548a5b"
+        }
+      ],
+      "historical_provider_summary_digest": "8597e0cc0bf44f984847ad293b8c8a937f448fa3ea29c7f590f6c21c6e0ecfa8",
+      "current_safety_harness_path": "tests/pre-enrollment-github-711-current-safety.py"
     }
   ]
 }

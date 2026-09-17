@@ -111,6 +111,12 @@ and the terminal summary must also bind the exact repository and PR. Callers
 cannot nominate that head. Current-head feedback is still captured completely
 and remains blocking under the ordinary classification rules; every other path
 retains exact-head provider terminality.
+That recovery capture supplies the exact delivery issue and protected recovery
+publication to capture-only `resolve-batch`. The command reauthenticates the
+publication and lifecycle CURRENT before deriving the maintained provider
+binding. Its canonical Stable Feedback output may carry provider request
+history; the fixed-thread resolver accepts that optional category only after
+closed projection, identity, ordering, duplicate, and digest validation.
 
 ## Simple resolution-only path
 
@@ -473,34 +479,6 @@ checkpoint, lifecycle identity, counters, Ready history, recovery history, and
 continuation history cannot be replaced or reset, and no second checkpoint or
 re-enrollment is permitted.
 
-One additional root provenance,
-`UNENROLLED_READY_DELIVERY_RECOVERY`, applies only when trusted live reads and
-protected journal ancestry prove an ordinary delivery is already open/Ready and
-has never had initialization, a root, or CURRENT. It requires exactly one
-observed Draft-to-Ready transition, complete authenticated validation and
-feedback/finding/thread evidence, preserved finite Review and Remediation
-consumption, and a signed one-use exact-scope authorization. Its lifecycle ID is
-derived from the signed recovery boundary. The proof must state that historical
-lifecycle authority did not exist and that authority begins at recovery.
-
-Historical Ready observation is not historical lifecycle authorization. This
-family cannot claim `INITIALIZED_DRAFT`, authorize the historical Ready event,
-self-select Exact-State-Adoption, mint `READY_INTEGRATION_PRIOR_AUTHORITY`, reset
-a counter, or consume Exceptional Recovery/Continuation. Canonical enrollment
-publishes its only root/CURRENT; journal ancestry and CAS reject replay or any
-competing root. Later current-main advancement remains the ordinary
-`HEAD_ADVANCED` Ready-integration responsibility.
-
-Recovery source signatures must arrive through the maintained cryptographic
-commit reader's sealed result, not caller-assembled signature flags. The
-authenticated review must come from a maintained Codex or Copilot provider,
-precede the sole Ready observation, and precede every remediation; dismissed
-review state is ineligible because its finite-budget effect is ambiguous. The
-public proof verifier repeats those constraints and all safety-fact identity
-bindings. The canonical writer repeats the trusted live observation immediately
-before CAS, and the identity-only journal projection enforces the same
-Ready-source recovery replay keys as the full journal verifier.
-
 Dynamic publication is one global linear journal on the protected branch
 `refs/heads/secpal-lifecycle-publications`. Installed policy fixes the GitHub
 endpoint, exact branch, ruleset identity, required deletion and
@@ -564,6 +542,10 @@ The version-3 exact-state-adoption source mode consumes the separately signed
 pre-enrollment validation-evidence-loss admission defined in
 `docs/secpal-pr-review-workflow.md`. It reuses ordinary enrollment publication;
 it adds no journal operation or authority to this review-processing skill.
+That admission's registered Ready-source successor may bind either one exact
+ancestor receipt or an exact signed source history containing zero receipt
+trailers; the latter uses fresh current safety without claiming historical
+receipt bytes.
 Review-budget consumption remains a separate authenticated admission. Lost
 historical bytes are not reconstructed, and fresh current safety is not a
 historical receipt or another unrestricted review.
@@ -600,6 +582,36 @@ review first appends `ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED`, then permits
 one current-head assessment and stops. The same-head transition changes no
 finite counter or Ready state, but its CURRENT predecessor binding makes replay
 stale after publication.
+
+Provider-owned feedback emitted by the already-consumed assessment after its
+canonical Stable Feedback capture has one ordinary Ready-remediation
+composition. The first remediation's verifier-sealed validation evidence
+authenticates the original reviewed state at H0. Protected CURRENT derives the
+exact Ready-preserving H0-to-H1 `REMEDIATION_COMPLETED` lineage and must show
+Review 1/1, Remediation 1/2, one Ready transition, Cycle 3 absent, and no
+Exceptional Recovery or Continuation. The candidate's verifier-sealed
+validation evidence authenticates the complete reviewed state at H1 and its
+commit-bound ordinary eligibility.
+
+The maintained verifier derives the unique Copilot request event, exactly one
+added Copilot review committed to H0, their chronology, and the complete set of
+added provider-owned threads, comment-body digests, and comment-to-review
+identities. The first remediation's authenticated eligibility derives the
+only predecessor threads allowed to become resolved, and an independent live
+capture must equal the candidate-bound H1 state. The added-thread set must
+equal the existing
+`VALID_ACTIONABLE + CORRECTED_AND_VERIFIED` eligibility set. A caller cannot
+nominate a delta or subset. Predecessor deletion or substitution, provider,
+actor, repository, PR, head, body, thread, eligibility, CURRENT, lifecycle, or
+replay drift fails closed. The exact target base ref is preserved while its tip
+may advance as accepted main receives this prerequisite; base integration
+remains a separate merge-gate responsibility. The resulting digest is carried
+only by the existing signed `REMEDIATION_COMPLETED` authorization for H1 to H2,
+and its generic issuer rejects that verifier-owned scope. This composition
+adds no provider request, lifecycle transition, counter, state, recovery,
+continuation, resolver, signer, trust root, journal, classification, or
+disposition and grants no thread-resolution authority. Feedback after that
+bounded delta is not recursively incorporated.
 
 Late feedback consumes #673's canonical classification with independent
 technical and mechanical blocker facts. P1/P2/security/authentication/integrity/

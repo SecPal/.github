@@ -1536,10 +1536,6 @@ class LifecyclePublicationTests(TestCase):
         )
         self.assertNotIn("reviewed_state", recovery)
         self.assertNotIn("validation_receipt", recovery)
-        absence = publication.verify_pre_enrollment_absence(
-            REPOSITORY, ISSUE + 1
-        )
-        self.assertEqual(absence.observed_tip_oid, recovered.publication_oid)
 
         repeated = publication.publish_ready_source_recovery(
             recovery,
@@ -1567,12 +1563,6 @@ class LifecyclePublicationTests(TestCase):
         ):
             publication._walk_journal(
                 self.probe, replay_oid, BRANCH, include_recoveries=True
-            )
-        with self.assertRaisesRegex(
-            publication.LifecyclePublicationError, "replayed"
-        ):
-            publication._walk_journal_identity_projection(
-                self.probe, replay_oid, BRANCH
             )
 
         predecessor_fields = copy.deepcopy(replay_fields)

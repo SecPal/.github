@@ -25,11 +25,16 @@ KIND = "SECPAL_PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_ADMISSION"
 DOMAIN = "secpal.pre-enrollment-validation-evidence-loss-admission/v1"
 ANCESTOR_SCHEMA_VERSION = "1.1"
 ANCESTOR_DOMAIN = "secpal.pre-enrollment-validation-evidence-loss-admission/v1.1"
+NO_RECEIPT_SCHEMA_VERSION = "1.2"
+NO_RECEIPT_DOMAIN = "secpal.pre-enrollment-validation-evidence-loss-admission/v1.2"
 ROOT = Path(__file__).resolve().parents[2]
 POLICY_PATH = "policies/pre-enrollment-validation-evidence-loss.json"
 CURRENT_SAFETY_PATH = "tests/pre-enrollment-current-safety.py"
 REGISTERED_CURRENT_SAFETY_PATH = (
     "tests/pre-enrollment-registered-repository-current-safety.py"
+)
+NO_RECEIPT_CURRENT_SAFETY_PATH = (
+    "tests/pre-enrollment-github-711-current-safety.py"
 )
 CURRENT_SAFETY_INVARIANTS = (
     "candidate_local_issuer_rejected", "complete_feedback", "context_binding",
@@ -42,6 +47,9 @@ REGISTERED_CURRENT_SAFETY_INVARIANTS = (
 )
 REGISTERED_CURRENT_SAFETY_POLICY = (
     "REGISTERED_REPOSITORY_PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_CURRENT_SAFETY"
+)
+NO_RECEIPT_CURRENT_SAFETY_POLICY = (
+    "EXACT_STATE_ADOPTION_ZERO_RECEIPT_CURRENT_SAFETY"
 )
 _VERIFIED = object()
 _UNSUPPLIED = object()
@@ -342,10 +350,16 @@ def _verify_document(value: Any) -> dict[str, Any]:
         authority._require_closed(value, fields, "validation-evidence-loss admission")
     )
     if (
-        version not in {"1.0", ANCESTOR_SCHEMA_VERSION}
+        version not in {
+            "1.0", ANCESTOR_SCHEMA_VERSION, NO_RECEIPT_SCHEMA_VERSION,
+        }
         or doc["kind"] != KIND
         or doc["domain"]
-        != (DOMAIN if version == "1.0" else ANCESTOR_DOMAIN)
+        != {
+            "1.0": DOMAIN,
+            ANCESTOR_SCHEMA_VERSION: ANCESTOR_DOMAIN,
+            NO_RECEIPT_SCHEMA_VERSION: NO_RECEIPT_DOMAIN,
+        }[version]
         or doc["pull_request_state"] != "OPEN"
         or doc["draft"] is not (version == "1.0")
         or doc["historical_package_status"] != "UNAVAILABLE"
@@ -362,10 +376,23 @@ def _verify_document(value: Any) -> dict[str, Any]:
     if doc["head_sha"] == doc["parent_sha"]:
         raise authority.LifecycleAuthorityError("loss admission parent topology is invalid")
     for field in (
-        "commit_signature_evidence_digest", "historical_validation_receipt_digest",
-        "loss_proof_policy_digest", "admission_digest",
+        "commit_signature_evidence_digest", "loss_proof_policy_digest",
+        "admission_digest",
     ):
         authority._require_digest(doc[field], field)
+    if version == NO_RECEIPT_SCHEMA_VERSION:
+        if (
+            doc["historical_receipt_head_sha"] is not None
+            or doc["historical_validation_receipt_digest"] is not None
+        ):
+            raise authority.LifecycleAuthorityError(
+                "zero-receipt loss provenance cannot claim a historical receipt"
+            )
+    else:
+        authority._require_digest(
+            doc["historical_validation_receipt_digest"],
+            "historical validation receipt",
+        )
     for field in ("source_signer_identity", "signer_identity", "admission_id"):
         authority._require_identity(doc[field], field)
     state = authority._validate_state(
@@ -392,17 +419,23 @@ def _verify_document(value: Any) -> dict[str, Any]:
         raise authority.LifecycleAuthorityError("loss admission requires exact successful current validation")
     for field in ("receipt_digest", "validation_policy_digest", "command_set_digest", "feedback_digest"):
         authority._require_digest(safety[field], field)
-    if safety["receipt_digest"] == doc["historical_validation_receipt_digest"]:
+    if (
+        doc["historical_validation_receipt_digest"] is not None
+        and safety["receipt_digest"]
+        == doc["historical_validation_receipt_digest"]
+    ):
         raise authority.LifecycleAuthorityError("loss admission requires divergent current safety evidence")
     _decisions(safety["technical_decisions"])
-    if version == ANCESTOR_SCHEMA_VERSION:
-        receipt_head = authority._require_oid(
-            doc["historical_receipt_head_sha"], "historical receipt head"
-        )
-        if receipt_head == doc["head_sha"]:
-            raise authority.LifecycleAuthorityError(
-                "ancestor receipt provenance cannot use the current head"
+    if version in {ANCESTOR_SCHEMA_VERSION, NO_RECEIPT_SCHEMA_VERSION}:
+        receipt_head = doc["historical_receipt_head_sha"]
+        if version == ANCESTOR_SCHEMA_VERSION:
+            receipt_head = authority._require_oid(
+                receipt_head, "historical receipt head"
             )
+            if receipt_head == doc["head_sha"]:
+                raise authority.LifecycleAuthorityError(
+                    "ancestor receipt provenance cannot use the current head"
+                )
         authority._require_digest(
             doc["historical_provider_summary_digest"],
             "historical review-provider summary",
@@ -413,7 +446,11 @@ def _verify_document(value: Any) -> dict[str, Any]:
             source_signer=doc["source_signer_identity"],
             current_signature_digest=doc["commit_signature_evidence_digest"],
         )
-        if sum(item["head_sha"] == receipt_head for item in source_history) != 1:
+        if (
+            version == ANCESTOR_SCHEMA_VERSION
+            and sum(item["head_sha"] == receipt_head for item in source_history)
+            != 1
+        ):
             raise authority.LifecycleAuthorityError(
                 "historical receipt head is outside exact delivery history"
             )
@@ -752,7 +789,9 @@ def _accepted_policy(repository: str, issue: int) -> tuple[str, dict[str, Any], 
     record = copy.deepcopy(
         authority._require_closed(records[0], record_fields, "loss proof policy")
     )
-    if record_version not in {"1.0", ANCESTOR_SCHEMA_VERSION}:
+    if record_version not in {
+        "1.0", ANCESTOR_SCHEMA_VERSION, NO_RECEIPT_SCHEMA_VERSION,
+    }:
         raise authority.LifecycleAuthorityError(
             "loss proof policy version is unknown"
         )
@@ -790,9 +829,12 @@ def _accepted_policy(repository: str, issue: int) -> tuple[str, dict[str, Any], 
         or record["historical_bytes_reconstructed"] is not False
     ):
         raise authority.LifecycleAuthorityError("loss proof cannot reconstruct historical artifacts")
-    if record_version == ANCESTOR_SCHEMA_VERSION and (
-        record["current_safety_harness_path"]
-        != REGISTERED_CURRENT_SAFETY_PATH
+    maintained_harness = {
+        ANCESTOR_SCHEMA_VERSION: REGISTERED_CURRENT_SAFETY_PATH,
+        NO_RECEIPT_SCHEMA_VERSION: NO_RECEIPT_CURRENT_SAFETY_PATH,
+    }.get(record_version)
+    if maintained_harness is not None and (
+        record["current_safety_harness_path"] != maintained_harness
     ):
         raise authority.LifecycleAuthorityError(
             "registered loss current-safety policy is not maintained"
@@ -1009,12 +1051,14 @@ def _historical_provider_binding_for_ready(
 def authenticate_historical_provider_binding(
     admission: Any,
 ) -> HistoricalProviderBinding:
-    """Project accepted v1.1 admission provenance into its maintained binding."""
+    """Project accepted Ready loss provenance into its maintained binding."""
 
     document = _verify_document(admission)
-    if document["schema_version"] != ANCESTOR_SCHEMA_VERSION:
+    if document["schema_version"] not in {
+        ANCESTOR_SCHEMA_VERSION, NO_RECEIPT_SCHEMA_VERSION,
+    }:
         raise authority.LifecycleAuthorityError(
-            "historical provider binding requires v1.1 loss provenance"
+            "historical provider binding requires v1.1 or v1.2 Ready loss provenance"
         )
     main, record, _entry, _trust = _accepted_policy(
         document["repository"], document["delivery_issue"]
@@ -1030,7 +1074,7 @@ def authenticate_historical_provider_binding(
         "intended_state", "historical_provider_summary_digest",
     )
     if (
-        _record_version(record) != ANCESTOR_SCHEMA_VERSION
+        _record_version(record) != document["schema_version"]
         or document["loss_proof_policy_digest"] != authority.digest_json(record)
         or any(document[field] != record[field] for field in record_fields)
         or document["current_safety"]["feedback_digest"]
@@ -1141,7 +1185,9 @@ def _observe(
         ) from exc
     helper = transport._load_actions_helper()
     gateway_arguments: dict[str, Any] = {}
-    if _record_version(record) == ANCESTOR_SCHEMA_VERSION:
+    if _record_version(record) in {
+        ANCESTOR_SCHEMA_VERSION, NO_RECEIPT_SCHEMA_VERSION,
+    }:
         source_commit = _gh_json(
             f"repos/{repository}/commits/{record['head_sha']}"
         )
@@ -1219,7 +1265,7 @@ def _admit_observation(
             or len(item.parent_shas) != len(set(item.parent_shas))
             or (index and item.parent_shas[0] != commits[index - 1].head_sha)
             or (
-                version == ANCESTOR_SCHEMA_VERSION
+                version in {ANCESTOR_SCHEMA_VERSION, NO_RECEIPT_SCHEMA_VERSION}
                 and item.signature_verified is not True
             )
         ):
@@ -1385,11 +1431,14 @@ def _authenticate_source_history(
             "signer_identity": record["source_signer_identity"],
             "commit_signature_evidence_digest": signature_digest,
         })
-    if len(receipt_candidates) != 1:
+    zero_receipt = _record_version(record) == NO_RECEIPT_SCHEMA_VERSION
+    if len(receipt_candidates) != (0 if zero_receipt else 1):
         raise authority.LifecycleAuthorityError(
-            "loss source has no unique historical receipt ancestor"
+            "loss source historical receipt count changed"
         )
-    receipt_head, receipt_digest = receipt_candidates[0]
+    receipt_head, receipt_digest = (
+        (None, None) if zero_receipt else receipt_candidates[0]
+    )
     if receipt_head == record["head_sha"]:
         raise authority.LifecycleAuthorityError(
             "successor loss source requires ancestor receipt provenance"
@@ -1453,17 +1502,34 @@ def _registered_current_safety_profile(main: str) -> dict[str, Any]:
     )
 
 
+def _zero_receipt_current_safety_profile(main: str) -> dict[str, Any]:
+    return exact_source_safety.build_profile(
+        ROOT, main,
+        policy=NO_RECEIPT_CURRENT_SAFETY_POLICY,
+        harness_paths=(NO_RECEIPT_CURRENT_SAFETY_PATH,),
+        purpose="Validate exact zero-receipt adoption current safety",
+        required_invariants=REGISTERED_CURRENT_SAFETY_INVARIANTS,
+    )
+
+
 def _current_safety_profile_for_record(
     main: str, record: Mapping[str, Any],
 ) -> dict[str, Any]:
     if _record_version(record) == "1.0":
         return _current_safety_profile(main)
     if (
-        _record_version(record) == ANCESTOR_SCHEMA_VERSION
-        and record.get("current_safety_harness_path")
-        == REGISTERED_CURRENT_SAFETY_PATH
+        _record_version(record) in {
+            ANCESTOR_SCHEMA_VERSION, NO_RECEIPT_SCHEMA_VERSION,
+        }
     ):
-        return _registered_current_safety_profile(main)
+        path = record.get("current_safety_harness_path")
+        if path == REGISTERED_CURRENT_SAFETY_PATH:
+            return _registered_current_safety_profile(main)
+        if (
+            _record_version(record) == NO_RECEIPT_SCHEMA_VERSION
+            and path == NO_RECEIPT_CURRENT_SAFETY_PATH
+        ):
+            return _zero_receipt_current_safety_profile(main)
     raise authority.LifecycleAuthorityError(
         "loss current-safety profile is not maintained"
     )
@@ -1576,11 +1642,12 @@ def _verify_current_safety_root(
 
 
 def _run_current_safety(main: str, root: Path, profile: Mapping[str, Any]) -> None:
-    expected = (
-        _registered_current_safety_profile(main)
-        if profile.get("policy") == REGISTERED_CURRENT_SAFETY_POLICY
-        else _current_safety_profile(main)
-    )
+    expected_profiles = {
+        REGISTERED_CURRENT_SAFETY_POLICY: _registered_current_safety_profile,
+        NO_RECEIPT_CURRENT_SAFETY_POLICY: _zero_receipt_current_safety_profile,
+    }
+    builder = expected_profiles.get(profile.get("policy"), _current_safety_profile)
+    expected = builder(main)
     exact_source_safety.run_profile(
         root, profile, expected_profile=expected,
     )
@@ -1628,7 +1695,9 @@ def _acquire(repository: str, issue: int, *, execute_validation: bool) -> dict[s
             validation_arguments = {
                 "source_root": root, "helper": helper, "entry": entry,
             }
-            if _record_version(record) == ANCESTOR_SCHEMA_VERSION:
+            if _record_version(record) in {
+                ANCESTOR_SCHEMA_VERSION, NO_RECEIPT_SCHEMA_VERSION,
+            }:
                 validation_arguments["profile"] = profile
             with _current_policy_validation_root(
                 main, **validation_arguments,
@@ -1720,12 +1789,12 @@ def issue(repository: str, delivery_issue: int, *, historical_package: Any = _UN
         raise authority.LifecycleAuthorityError("supplied historical evidence cannot downgrade to loss admission")
     acquired = _acquire(repository, delivery_issue, execute_validation=True)
     identity, signer = execution._production_legacy_adoption_signer(repository)
-    version = (
-        ANCESTOR_SCHEMA_VERSION
-        if "historical_receipt_head_sha" in acquired
-        else "1.0"
-    )
-    domain = ANCESTOR_DOMAIN if version == ANCESTOR_SCHEMA_VERSION else DOMAIN
+    if "historical_receipt_head_sha" not in acquired:
+        version, domain = "1.0", DOMAIN
+    elif acquired["historical_receipt_head_sha"] is None:
+        version, domain = NO_RECEIPT_SCHEMA_VERSION, NO_RECEIPT_DOMAIN
+    else:
+        version, domain = ANCESTOR_SCHEMA_VERSION, ANCESTOR_DOMAIN
     fields = {
         "schema_version": version, "kind": KIND, "domain": domain, **acquired,
         "admission_id": f"pre-enrollment-validation-loss:{authority.digest_json(acquired)}",

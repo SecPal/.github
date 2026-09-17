@@ -144,6 +144,40 @@ provider-summary head. The summary must retain terminal status and exact
 repository/PR metadata. This is an ephemeral Ready-source recovery gate, not a
 caller option or persisted evidence kind; current-head feedback completeness
 and its blocking classifications are unchanged.
+Capture that recovered Ready Stable Feedback only through
+`resolve-batch --capture-reviewed-state` with the exact `--delivery-issue` and
+`--ready-source-recovery-publication`. The command reauthenticates that
+publication and protected lifecycle `CURRENT`, then derives the provider head
+through the maintained binding. It accepts no provider-head input. The simple
+fixed-thread resolver accepts the resulting optional provider-request history
+only when the complete Stable Feedback document is canonical and its feedback
+and state digests match.
+
+Ordinary Ready remediation has one corresponding finite composition for
+provider feedback that arrived after the canonical Stable Feedback capture of
+the already-consumed reviewed head. The verifier reopens the first ordinary
+remediation's sealed validation evidence to authenticate that original capture,
+derives the reviewed predecessor from protected CURRENT, and compares it with
+the sealed reviewed state and eligibility for the candidate second
+remediation. It derives the one exact Copilot review and every added Copilot
+thread, authenticates the unique Copilot request event and review chronology,
+and binds every top-level comment to that review; callers cannot provide a
+delta or subset. An independent maintained live capture must equal the
+candidate-bound H1 state. The capture-only
+`resolve-batch --ready-remediation-provider-binding FILE` form receives an
+ephemeral projection derived from protected CURRENT and cannot be combined
+with mutation. The
+first remediation's authenticated eligibility derives any
+permitted predecessor thread resolution. Only complete
+`VALID_ACTIONABLE + CORRECTED_AND_VERIFIED` ordinary eligibility for all added
+threads can enter the existing signed `REMEDIATION_COMPLETED` scope. This path
+requires Review 1/1, Remediation 1/2, Ready true, Cycle 3 absent, and no
+Exceptional Recovery or Continuation. It requests no provider, rewrites no
+Stable Feedback, grants no resolution authority, and creates no lifecycle
+state, transition, counter, signer, trust root, or journal. Its verifier-owned
+seal is not reproducible from serialized fields, and the generic authorization
+issuer rejects the provider-growth digest.
+
 Applicable protected-branch
 rules independently determine whether `NONE` is admissible; `REVIEW_REQUIRED`
 always fails closed. Unsigned recovery facts and caller-selected feedback
@@ -176,40 +210,6 @@ so a caller-supplied, stale, or substituted parent 2 cannot acquire an
 attestation after the protected ref moves.
 These functions never synthesize historical bytes, create an integration
 candidate, add a lifecycle state, or mutate feedback.
-
-### Unenrolled Ready lifecycle recovery
-
-`lifecycle_authority.authenticate_unenrolled_ready_recovery_evidence` admits
-only two equal trusted observations of one open non-Draft sole-parent delivery,
-the open delivery issue, protected `main`, protected journal tip, and absence of
-both any lifecycle root and CURRENT. It reuses the closed Ready-source safety
-facts to authenticate complete current validation, stable feedback, every
-classified feedback source, material disposition, and resolved thread state.
-The signed source validation/final-attestation evidence and exact observed
-Draft/review/remediation/Ready chronology must bind the same head and tree.
-The caller must first obtain a sealed source identity from
-`authenticate_unenrolled_ready_source_commit`; caller-assembled signature
-flags are not evidence. Historical review providers must be maintained Codex
-or Copilot identities, dismissed review state fails closed, review must precede
-Ready, and remediation must follow the consumed review.
-
-`create_unenrolled_ready_recovery_authorization` creates the separately signed
-one-use operator scope. `create_unenrolled_ready_recovery_proof` records
-forward-only recovery provenance; it does not represent historical
-initialization or Ready authorization. The serialized
-`UNENROLLED_READY_DELIVERY_RECOVERY` root is enrolled only with the canonical
-protected lifecycle publication writer. Existing ancestry checks reject an
-existing root/CURRENT, replay, duplicate enrollment, and later ordinary
-initialization. Immediately before its compare-and-swap, that writer repeats
-the trusted live issue/PR/head/tree/base/main/history/absence observation and
-requires byte-identical canonical facts. Operators must never treat raw
-arguments or matching digests as authorization.
-
-After protected read-back, the existing ordinary Ready prior-authority and
-`HEAD_ADVANCED` integration machinery accepts the
-`unenrolled_ready_recovery` proof mode. Recovery itself never creates the
-integration candidate, resolves conflicts, advances protected `main`, or issues
-`READY_INTEGRATION_PRIOR_AUTHORITY`.
 
 Both the validation attester and fixed-thread resolver derive registry identity
 through the same closed `fast_path` projection. An admitted pre-enrollment
@@ -394,6 +394,17 @@ authority. Exact Stable Feedback derives target origin, and only the same signed
 late-classification/disposition chain can authorize the guarded resolver.
 Schema-1.2 commit-bound behavior is unchanged.
 
+An unchanged Ready source with a verified current recovery instead supplies its
+exact `--ready-source-recovery-publication` OID to both creators and the
+resolver, while omitting validation, eligibility, integration, and historical
+receipt inputs. The maintained recovery verifier authenticates the exact
+repository, issue, PR, head/tree, lifecycle CURRENT and finite histories,
+current-safety/provider binding, Stable Feedback, immutable commit signer, and
+fresh receipt. That authenticated receipt shape derives commit-bound eligibility
+absence; caller omission does not. Recovery remains source authority only, so
+the signed classification, signed disposition, `technically_blocking=false`,
+and canonical resolver are still required for every exact thread.
+
 This authenticated reviewed-state/eligibility boundary is what “post-push”
 denotes in the resolution lifecycle. It does not use or claim a cryptographic
 GitHub wall-clock push-order proof.
@@ -478,6 +489,10 @@ derived unique historical receipt ancestor through the complete authenticated
 delivery source history. Existing adoption versions 1/2 and ordinary commit-
 bound validation remain unchanged. Its semantic contract is the
 exact-state-adoption section of `docs/secpal-pr-review-workflow.md`.
+Schema 1.2 keeps that registered Ready-source boundary for one exact source
+history with zero validation-receipt trailers. It binds canonical `null`
+historical receipt fields and uses fresh current-safety identity only as the
+existing adoption receipt input.
 
 The maintained entry points are
 `lifecycle_authority.issue_pre_enrollment_validation_evidence_loss_admission(repository, delivery_issue)`

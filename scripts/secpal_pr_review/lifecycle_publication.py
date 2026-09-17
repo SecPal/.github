@@ -41,7 +41,6 @@ ABSENCE_PROJECTION_PROOF_MODES = frozenset(
         authority.NATIVE_PROOF_MODE,
         authority.LEGACY_PROOF_MODE,
         "exact_state_adoption",
-        authority.UNENROLLED_READY_RECOVERY_PROOF_MODE,
     }
 )
 ADVANCE_TRANSITIONS = authority.TRANSITIONS - {"INITIALIZED_DRAFT"}
@@ -155,6 +154,8 @@ class VerifiedReadySourceRecovery:
     historical_validation_receipt_digest: str
     historical_final_attestation_digest: str
     historical_evidence_loss_proof_digest: str
+    lifecycle_state: dict[str, Any]
+    recovery_safety_facts: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -855,7 +856,6 @@ def _verify_publication_envelope(
         authority.NATIVE_PROOF_MODE,
         authority.LEGACY_PROOF_MODE,
         authority.EXACT_ADOPTION_PROOF_MODE,
-        authority.UNENROLLED_READY_RECOVERY_PROOF_MODE,
     }:
         raise LifecyclePublicationError("publication historical-proof mode is invalid")
     for field in ("journal_predecessor_oid", "predecessor_publication_oid"):
@@ -962,17 +962,6 @@ def _lifecycle_bundle(document: Mapping[str, Any]) -> Mapping[str, Any]:
             "transition_authorizations": evidence["transition_authorizations"],
             "authority_chain": evidence["authority_chain"],
         }
-    if (
-        isinstance(evidence, dict)
-        and evidence.get("kind")
-        == authority.UNENROLLED_READY_RECOVERY_EVIDENCE_KIND
-        and set(evidence)
-        == authority.UNENROLLED_READY_RECOVERY_PUBLICATION_FIELDS
-    ):
-        return {
-            "transition_authorizations": evidence["transition_authorizations"],
-            "authority_chain": evidence["authority_chain"],
-        }
     bundle = (
         evidence.get("lifecycle_evidence")
         if isinstance(evidence, dict) and evidence.get("kind") == authority.PUBLICATION_EVIDENCE_KIND
@@ -1032,21 +1021,6 @@ def _require_exact_successor(
         ):
             raise LifecyclePublicationError(
                 "exact-state adoption root changed during advancement"
-            )
-    if (
-        isinstance(old_evidence, dict)
-        and old_evidence.get("kind")
-        == authority.UNENROLLED_READY_RECOVERY_EVIDENCE_KIND
-    ):
-        if (
-            not isinstance(new_evidence, dict)
-            or new_evidence.get("kind")
-            != authority.UNENROLLED_READY_RECOVERY_EVIDENCE_KIND
-            or new_evidence.get("recovery_proof")
-            != old_evidence.get("recovery_proof")
-        ):
-            raise LifecyclePublicationError(
-                "unenrolled Ready recovery root changed during advancement"
             )
 
 
@@ -1284,136 +1258,11 @@ def _verify_ready_source_recovery_document(
         historical_evidence_loss_proof_digest=authorization[
             "historical_evidence_loss_proof_digest"
         ],
+        lifecycle_state=copy.deepcopy(authorization["lifecycle_state"]),
+        recovery_safety_facts=copy.deepcopy(
+            authorization["recovery_safety_facts"]
+        ),
     )
-
-
-def _verify_ready_source_recovery_identity_envelope(
-    raw: bytes,
-    *,
-    object_oid: str,
-    expected_branch: str,
-    current_oid: str,
-    current_document: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Authenticate a recovery journal entry without interpreting its payload.
-
-    Pre-enrollment absence needs the immutable journal identity graph, not an
-    unrelated delivery's review or validation semantics.  Recovery entries are
-    ancillary to CURRENT, so authenticate both signed envelopes and their exact
-    CURRENT binding while leaving the nested safety facts opaque.
-    """
-
-    try:
-        document = json.loads(raw, object_pairs_hook=_reject_duplicate_pairs)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise LifecyclePublicationError(
-            "Ready-source recovery publication is malformed"
-        ) from exc
-    if (
-        not isinstance(document, dict)
-        or canonical_json_bytes(document) != raw
-        or frozenset(document) != READY_SOURCE_RECOVERY_FIELDS
-    ):
-        raise LifecyclePublicationError(
-            "Ready-source recovery publication has missing or unknown fields"
-        )
-    authorization = document.get("recovery_authorization")
-    if not isinstance(authorization, dict) or frozenset(authorization) != (
-        authority.READY_SOURCE_RECOVERY_AUTHORIZATION_FIELDS
-    ):
-        raise LifecyclePublicationError(
-            "Ready-source recovery authorization schema is invalid"
-        )
-    key_pairs = (
-        ("repository", "repository"),
-        ("delivery_issue", "delivery_issue"),
-        ("pull_request", "pull_request"),
-        ("head_sha", "head_sha"),
-        ("lifecycle_id", "lifecycle_id"),
-        ("current_authority_digest", "terminal_authority_digest"),
-    )
-    if (
-        document["schema_version"] != SCHEMA_VERSION
-        or document["kind"] != READY_SOURCE_RECOVERY_KIND
-        or document["domain"] != READY_SOURCE_RECOVERY_DOMAIN
-        or document["publication_branch"] != expected_branch
-        or document["current_publication_oid"] != current_oid
-        or document["current_publication_digest"]
-        != current_document["publication_digest"]
-        or any(document[left] != current_document[right] for left, right in key_pairs)
-        or any(
-            authorization[field] != document[field]
-            for field in (
-                "repository", "delivery_issue", "pull_request", "head_sha",
-                "tree_sha", "lifecycle_id", "current_authority_digest",
-                "current_publication_oid", "current_publication_digest",
-            )
-        )
-        or authorization["schema_version"] != authority.SCHEMA_VERSION
-        or authorization["kind"]
-        != authority.READY_SOURCE_RECOVERY_AUTHORIZATION_KIND
-        or authorization["domain"]
-        != authority.READY_SOURCE_RECOVERY_AUTHORIZATION_DOMAIN
-        or authorization["purpose"] != "READY_INTEGRATION_PRIOR_AUTHORITY"
-        or authorization["bounded_uses"] != 1
-        or isinstance(authorization["bounded_uses"], bool)
-        or document["recovery_authorization_digest"]
-        != authorization["authorization_digest"]
-    ):
-        raise LifecyclePublicationError(
-            "Ready-source recovery publication scope changed"
-        )
-    policy = authority._load_lifecycle_trust_policy(document["repository"])
-    if expected_branch != policy.publication_branch:
-        raise LifecyclePublicationError(
-            "Ready-source recovery publication branch binding is invalid"
-        )
-    authorization_signed = {
-        key: copy.deepcopy(value)
-        for key, value in authorization.items()
-        if key != "authorization_digest"
-    }
-    if authorization["authorization_digest"] != digest_json(authorization_signed):
-        raise LifecyclePublicationError(
-            "Ready-source recovery authorization digest mismatch"
-        )
-    document_signed = {
-        key: copy.deepcopy(value)
-        for key, value in document.items()
-        if key != "publication_digest"
-    }
-    if document["publication_digest"] != digest_json(document_signed):
-        raise LifecyclePublicationError(
-            "Ready-source recovery publication digest mismatch"
-        )
-    try:
-        authority._verify_signature(
-            canonical_json_bytes(
-                authority._unsigned(
-                    authorization, "authorization_digest", "signature"
-                )
-            ),
-            authorization["signature"],
-            authorization["signer_identity"],
-            authority.READY_SOURCE_RECOVERY_AUTHORIZATION_DOMAIN,
-            policy.transition_signer_identities,
-            authority._policy_signature_verifier(policy),
-        )
-        authority._verify_signature(
-            canonical_json_bytes(
-                authority._unsigned(document, "publication_digest", "signature")
-            ),
-            document["signature"],
-            document["signer_identity"],
-            READY_SOURCE_RECOVERY_DOMAIN,
-            policy.publication_signer_identities,
-            authority._policy_signature_verifier(policy),
-        )
-    except authority.LifecycleAuthorityError as exc:
-        raise LifecyclePublicationError(
-            f"Ready-source recovery object {object_oid} signature policy failed"
-        ) from exc
-    return copy.deepcopy(document)
 
 
 def _walk_journal(
@@ -1764,13 +1613,7 @@ def enroll_existing_lifecycle(
         bundle.get("kind") == authority.EXACT_ADOPTION_EVIDENCE_KIND
         and bundle.get("enrollment_mode") == "EXACT_STATE_ADOPTION"
     )
-    unenrolled_ready_recovery = (
-        bundle.get("kind")
-        == authority.UNENROLLED_READY_RECOVERY_EVIDENCE_KIND
-        and bundle.get("enrollment_mode")
-        == "UNENROLLED_READY_DELIVERY_RECOVERY"
-    )
-    is_native = not exact_adoption and not unenrolled_ready_recovery and not (
+    is_native = not exact_adoption and not (
         bundle.get("kind") == authority.PUBLICATION_EVIDENCE_KIND
         and bundle.get("enrollment_mode") == "LEGACY_ADOPTION_CHECKPOINT"
     )
@@ -1792,13 +1635,6 @@ def enroll_existing_lifecycle(
             root, policy.publication_remote_url, policy.publication_branch,
             credential_environment=credential_environment,
         )
-        if (
-            unenrolled_ready_recovery
-            and bundle["recovery_proof"].get("journal_tip_oid") != tip
-        ):
-            raise LifecyclePublicationError(
-                "unenrolled Ready recovery journal authority drifted"
-            )
         latest: dict[
             tuple[str, int],
             tuple[str, dict[str, Any], authority.VerifiedLifecycleAuthority],
@@ -1839,22 +1675,6 @@ def enroll_existing_lifecycle(
             expected_branch=policy.publication_branch,
             native_genesis_admission=admission,
         )
-        if unenrolled_ready_recovery:
-            proof = bundle["recovery_proof"]
-            final_observation = (
-                authority.observe_unenrolled_ready_recovery_boundary(
-                    verified.repository,
-                    verified.delivery_issue,
-                    verified.pull_request,
-                )
-            )
-            if (
-                authority.digest_json(final_observation.canonical_observation)
-                != proof["trusted_observation_digest"]
-            ):
-                raise LifecyclePublicationError(
-                    "unenrolled Ready recovery live boundary drifted before publication"
-                )
         _cas_remote_ref(
             root, policy.publication_remote_url, policy.publication_branch,
             object_oid, tip, credential_environment=credential_environment,
@@ -1873,15 +1693,8 @@ def advance_current_terminal(
 
     bundle, bundle_raw = _canonical_bundle(serialized_evidence)
     lifecycle_bundle = _lifecycle_bundle({"lifecycle_evidence": bundle})
-    if bundle.get("kind") in {
-        authority.EXACT_ADOPTION_EVIDENCE_KIND,
-        authority.UNENROLLED_READY_RECOVERY_EVIDENCE_KIND,
-    }:
-        proof = bundle.get(
-            "exact_state_adoption_proof"
-            if bundle.get("kind") == authority.EXACT_ADOPTION_EVIDENCE_KIND
-            else "recovery_proof"
-        )
+    if bundle.get("kind") == authority.EXACT_ADOPTION_EVIDENCE_KIND:
+        proof = bundle.get("exact_state_adoption_proof")
         if not isinstance(proof, dict):
             raise LifecyclePublicationError("exact-state adoption proof is malformed")
         repository = authority._require_repository(proof.get("repository"))
@@ -2799,55 +2612,9 @@ def _walk_journal_identity_projection(
             initialization_digests.add(digest_key)
 
     publications: dict[tuple[str, int], tuple[str, dict[str, Any]]] = {}
-    recovery_keys: set[tuple[str, int]] = set()
-    recovery_authorization_ids: set[tuple[str, str]] = set()
-    recovery_authorization_digests: set[tuple[str, str]] = set()
     for position, (object_oid, raw, parent) in enumerate(chronological):
         candidate = json.loads(raw, object_pairs_hook=_reject_duplicate_pairs)
         if candidate.get("kind") == GENESIS_ADMISSION_KIND:
-            continue
-
-        if candidate.get("kind") == READY_SOURCE_RECOVERY_KIND:
-            key = (candidate.get("repository"), candidate.get("delivery_issue"))
-            previous = publications.get(key)
-            if previous is None:
-                raise LifecyclePublicationError(
-                    "Ready-source recovery precedes CURRENT lifecycle publication"
-                )
-            previous_oid, previous_document = previous
-            recovery = _verify_ready_source_recovery_identity_envelope(
-                raw,
-                object_oid=object_oid,
-                expected_branch=publication_branch,
-                current_oid=previous_oid,
-                current_document=previous_document,
-            )
-            if recovery["journal_predecessor_oid"] != parent:
-                raise LifecyclePublicationError(
-                    "Ready-source recovery journal parent binding is invalid"
-                )
-            recovery_key = (
-                recovery["repository"], recovery["delivery_issue"]
-            )
-            recovery_authorization = recovery["recovery_authorization"]
-            authorization_id = (
-                recovery["repository"], recovery_authorization["authorization_id"]
-            )
-            authorization_digest = (
-                recovery["repository"],
-                recovery_authorization["authorization_digest"],
-            )
-            if (
-                recovery_key in recovery_keys
-                or authorization_id in recovery_authorization_ids
-                or authorization_digest in recovery_authorization_digests
-            ):
-                raise LifecyclePublicationError(
-                    "Ready-source recovery authorization was replayed"
-                )
-            recovery_keys.add(recovery_key)
-            recovery_authorization_ids.add(authorization_id)
-            recovery_authorization_digests.add(authorization_digest)
             continue
 
         document = _verify_publication_envelope(

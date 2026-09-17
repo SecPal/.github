@@ -296,6 +296,32 @@ def _load_lifecycle_orchestration_helper() -> Any:
 lifecycle_orchestration = _load_lifecycle_orchestration_helper()
 
 
+def _load_lifecycle_publication_helper() -> Any:
+    scripts_root_text = str(REPOSITORY_ROOT / "scripts")
+    original_sys_path = list(sys.path)
+    sys.path.insert(0, scripts_root_text)
+    try:
+        from secpal_pr_review import lifecycle_publication as module
+    finally:
+        sys.path[:] = original_sys_path
+    loaded_path = getattr(module, "__file__", None)
+    expected_path = (
+        REPOSITORY_ROOT
+        / "scripts/secpal_pr_review/lifecycle_publication.py"
+    )
+    if (
+        not isinstance(loaded_path, str)
+        or Path(loaded_path).resolve() != expected_path.resolve()
+    ):
+        raise RuntimeError(
+            "Canonical lifecycle publication module has an unexpected path"
+        )
+    return module
+
+
+lifecycle_publication = _load_lifecycle_publication_helper()
+
+
 def _resolve_trusted_markdown_node() -> str:
     """Resolve Node only for the maintained Markdown parser bridge."""
 
@@ -386,6 +412,8 @@ class ValidationEvidence:
     integration_evidence: dict[str, Any] | None = None
     final_eligibility_absence: FinalEligibilityAbsence | None = None
     registry_binding: dict[str, Any] | None = None
+    ready_source_recovery: Any | None = None
+    ready_source_recovery_verification_seal: object | None = None
 
 
 @dataclass(frozen=True)
@@ -409,9 +437,13 @@ class FinalEligibilityMode(Enum):
     NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY = (
         "NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY"
     )
+    NO_COMMIT_BOUND_RECOVERED_READY_ELIGIBILITY = (
+        "NO_COMMIT_BOUND_RECOVERED_READY_ELIGIBILITY"
+    )
 
 
 _VERIFIED_FINAL_ELIGIBILITY_ABSENCE = object()
+_VERIFIED_READY_SOURCE_RECOVERY = object()
 
 
 @dataclass(frozen=True)
@@ -562,14 +594,52 @@ def _immutable_delivery_registry_binding(
     repository: str,
     registry_digest: str,
     command_set_digest: str,
+    recovery_safety: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
-        return fast_path.load_immutable_delivery_registry_binding(
+        if recovery_safety is None:
+            return fast_path.load_immutable_delivery_registry_binding(
+                repository=repository,
+                delivery_head_sha=head_sha,
+                expected_registry_digest=registry_digest,
+                expected_command_set_digest=command_set_digest,
+            )
+        recovery_binding = recovery_safety.get("policy_binding")
+        recovery_command_set = recovery_safety.get("command_set")
+        if (
+            not isinstance(recovery_binding, dict)
+            or not isinstance(recovery_command_set, list)
+            or fast_path.digest_json(recovery_binding) != registry_digest
+            or fast_path.digest_json(recovery_command_set) != command_set_digest
+        ):
+            raise fast_path.SecurityBlocker(
+                "Ready-source recovery receipt binding is invalid"
+            )
+        base_binding = recovery_binding.copy()
+        current_safety = base_binding.pop(
+            "ready_source_recovery_current_safety", None
+        )
+        base_command_set = base_binding.get("validation")
+        if (
+            not isinstance(current_safety, dict)
+            or recovery_command_set
+            != current_safety.get("validation_command_set")
+            or not isinstance(base_command_set, list)
+        ):
+            raise fast_path.SecurityBlocker(
+                "Ready-source recovery current-safety binding is invalid"
+            )
+        authenticated = fast_path.load_immutable_delivery_registry_binding(
             repository=repository,
             delivery_head_sha=head_sha,
-            expected_registry_digest=registry_digest,
-            expected_command_set_digest=command_set_digest,
+            expected_registry_digest=fast_path.digest_json(base_binding),
+            expected_command_set_digest=fast_path.digest_json(base_command_set),
         )
+        if authenticated != base_binding:
+            raise fast_path.SecurityBlocker(
+                "Ready-source recovery base registry binding changed"
+            )
+        return recovery_binding
     except fast_path.SecurityBlocker as exc:
         raise ResolutionError(str(exc)) from exc
 
@@ -851,7 +921,10 @@ def load_reviewed_state(
         "feedback_digest",
         "state_digest",
     }
-    if not isinstance(payload, dict) or set(payload) != expected_keys:
+    if not isinstance(payload, dict) or set(payload) not in {
+        frozenset(expected_keys),
+        frozenset(expected_keys | {"provider_review_requests"}),
+    }:
         raise ResolutionError("reviewed feedback state has an unsupported shape")
     if (
         payload.get("schema_version") != "1.0"
@@ -873,6 +946,15 @@ def load_reviewed_state(
         "reviews": payload.get("reviews"),
         "conversation_comments": payload.get("conversation_comments"),
         "threads": payload.get("threads"),
+        **(
+            {
+                "provider_review_requests": payload.get(
+                    "provider_review_requests"
+                )
+            }
+            if "provider_review_requests" in payload
+            else {}
+        ),
     }
     if any(not isinstance(value, list) for value in feedback.values()):
         raise ResolutionError("reviewed feedback state is malformed")
@@ -906,6 +988,10 @@ def load_reviewed_state(
         raise ResolutionError(
             "reviewed feedback state does not match the captured digest"
         )
+    try:
+        canonical_state = fast_path.verify_reviewed_state_evidence(payload)
+    except fast_path.SecurityBlocker as exc:
+        raise ResolutionError("reviewed feedback state is malformed") from exc
 
     threads = payload["threads"]
     indexed_threads: dict[str, ExpectedThreadState] = {}
@@ -977,7 +1063,7 @@ def load_reviewed_state(
             )
         expected_targets[thread_id] = thread
     return ReviewedState(
-        head_sha=payload["head_sha"].lower(),
+        head_sha=canonical_state.head_sha,
         state_digest=state_digest,
         feedback_digest=feedback_digest,
         targets=expected_targets,
@@ -1338,6 +1424,7 @@ def verify_local_fix_commit(
             "eligibility-bound-ready-integration",
             "final-eligibility-absence-attestation",
             "ready-integration-source",
+            "ready-source-recovery",
         }
         or not isinstance(validation.evidence_digest, str)
         or not DIGEST.fullmatch(validation.evidence_digest)
@@ -1350,6 +1437,7 @@ def verify_local_fix_commit(
             in {
                 "final-eligibility-absence-attestation",
                 "ready-integration-source",
+                "ready-source-recovery",
             }
             and validation.eligibility_evidence_digest is not None
         )
@@ -1358,6 +1446,7 @@ def verify_local_fix_commit(
             not in {
                 "final-eligibility-absence-attestation",
                 "ready-integration-source",
+                "ready-source-recovery",
             }
             and (
                 not isinstance(validation.eligibility_evidence_digest, str)
@@ -1402,6 +1491,18 @@ def verify_local_fix_commit(
             raise ResolutionError(
                 "validated fix commit parent does not match reviewed head"
             )
+    elif validation.kind == "ready-source-recovery":
+        recovery = validation.ready_source_recovery
+        if (
+            recovery is None
+            or validation.ready_source_recovery_verification_seal
+            is not _VERIFIED_READY_SOURCE_RECOVERY
+            or ancestry
+            != [expected_head.lower(), *recovery.parent_shas]
+        ):
+            raise ResolutionError(
+                "recovered Ready source parents do not match recovery authority"
+            )
     else:
         integration = validation.integration_evidence
         if (
@@ -1427,22 +1528,38 @@ def verify_local_fix_commit(
         for value in trailer_output.rstrip("\n").split("\x00")
         if value.strip()
     ]
-    if trailers != [validation.validation_receipt_digest]:
+    expected_trailer_digest = (
+        validation.ready_source_recovery.historical_validation_receipt_digest
+        if validation.kind == "ready-source-recovery"
+        and validation.ready_source_recovery is not None
+        else validation.validation_receipt_digest
+    )
+    if trailers != [expected_trailer_digest]:
         raise ResolutionError(
             "fix commit validation-receipt trailer does not match evidence"
         )
+    registry_digest_source = (
+        validation.validation_receipt
+        if validation.kind == "ready-source-recovery"
+        else validation.attestation
+    )
     authenticated_registry_binding = _immutable_delivery_registry_binding(
         expected_head,
         repository,
         (
-            validation.attestation.get("registry_digest", "")
-            if isinstance(validation.attestation, dict)
+            registry_digest_source.get("registry_digest", "")
+            if isinstance(registry_digest_source, dict)
             else ""
         ),
         (
-            validation.attestation.get("command_set_digest", "")
-            if isinstance(validation.attestation, dict)
+            registry_digest_source.get("command_set_digest", "")
+            if isinstance(registry_digest_source, dict)
             else ""
+        ),
+        (
+            validation.attestation
+            if validation.kind == "ready-source-recovery"
+            else None
         ),
     )
     if validation.registry_binding != authenticated_registry_binding:
@@ -1478,7 +1595,49 @@ def verify_local_fix_commit(
     authenticated_commit: fast_path.AuthenticatedIntegrationCommit | None = None
     local_signature: dict[str, Any] | None = None
     verified_output: str | None = None
-    if validation.kind in {
+    if validation.kind == "ready-source-recovery":
+        recovery = validation.ready_source_recovery
+        if recovery is None:
+            raise ResolutionError(
+                "Ready-source recovery commit authority is unavailable"
+            )
+        try:
+            authenticated_commit = fast_path.authenticate_integration_commit(
+                repository_root=root,
+                repository=repository,
+                head_sha=expected_head.lower(),
+                expected_signer=recovery.expected_commit_signer,
+                signature_policy=signature_policy,
+            )
+            signature_format = (
+                "ssh"
+                if authenticated_commit.signer_kind == "SSH_PRINCIPAL"
+                else "openpgp"
+            )
+            signature_binding = (
+                lifecycle_publication.authority
+                .ready_source_recovery_commit_signature_binding_digest(
+                    head_sha=expected_head.lower(),
+                    expected_signer=recovery.expected_commit_signer,
+                    signature_format=signature_format,
+                )
+            )
+        except (
+            AttributeError,
+            fast_path.RecoverableLocalError,
+            fast_path.SecurityBlocker,
+            lifecycle_publication.authority.LifecycleAuthorityError,
+        ) as exc:
+            raise ResolutionError(str(exc)) from exc
+        if (
+            authenticated_commit.tree_sha != recovery.tree_sha
+            or authenticated_commit.parent_shas != recovery.parent_shas
+            or signature_binding != recovery.commit_signature_evidence_digest
+        ):
+            raise ResolutionError(
+                "Ready-source recovery commit binding is invalid or stale"
+            )
+    elif validation.kind in {
         "attestation",
         "final-eligibility-absence-attestation",
     }:
@@ -1953,6 +2112,45 @@ def _require_valid_final_feedback_boundary(
         return
 
     if boundary.eligibility_mode is (
+        FinalEligibilityMode.NO_COMMIT_BOUND_RECOVERED_READY_ELIGIBILITY
+    ):
+        recovery = boundary.validation.ready_source_recovery
+        receipt = boundary.validation.validation_receipt
+        if (
+            boundary.eligibility is not None
+            or boundary.eligibility_absence is not None
+            or boundary.validation.final_eligibility_absence is not None
+            or boundary.validation.integration_evidence is not None
+            or boundary.validation.kind != "ready-source-recovery"
+            or boundary.validation.eligibility_evidence_digest is not None
+            or boundary.validation.ready_source_recovery_verification_seal
+            is not _VERIFIED_READY_SOURCE_RECOVERY
+            or recovery is None
+            or not isinstance(receipt, dict)
+            or boundary.validation.attestation
+            != recovery.recovery_safety_facts
+            or boundary.reviewed.payload
+            != recovery.recovery_safety_facts.get("reviewed_state")
+            or boundary.validation.evidence_digest
+            != recovery.publication_digest
+            or boundary.validation.validated_tree_sha != recovery.tree_sha
+            or boundary.validation.validation_receipt_digest
+            != recovery.fresh_validation_receipt_digest
+            or receipt
+            != recovery.recovery_safety_facts.get(
+                "fresh_validation_receipt"
+            )
+            or not isinstance(recovery.publication_oid, str)
+            or not OID.fullmatch(recovery.publication_oid)
+            or "eligibility_evidence_digest" in receipt
+            or "integration_evidence_digest" in receipt
+        ):
+            raise ResolutionError(
+                "recovered Ready source eligibility absence is invalid"
+            )
+        return
+
+    if boundary.eligibility_mode is (
         FinalEligibilityMode.AUTHENTICATED_FINAL_ELIGIBILITY_ABSENCE
     ):
         absence = boundary.eligibility_absence
@@ -2185,6 +2383,133 @@ def verify_continuation_bound_source_authority(
         )
 
 
+def _load_recovered_ready_source_validation(
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    expected_head: str,
+    publication_oid: str,
+    reviewed: ReviewedState,
+) -> ValidationEvidence:
+    """Derive an ephemeral final-source boundary from authenticated recovery."""
+
+    if not isinstance(publication_oid, str) or not OID.fullmatch(
+        publication_oid
+    ):
+        raise ResolutionError(
+            "Ready-source recovery publication identity is malformed"
+        )
+    try:
+        recovery = lifecycle_publication.verify_current_ready_source_recovery(
+            repository, delivery_issue
+        )
+        current = lifecycle_publication.verify_current_lifecycle_authority(
+            repository, delivery_issue
+        )
+        provider = (
+            lifecycle_publication
+            .derive_ready_source_recovery_provider_binding(current)
+        )
+        provider_head = provider.provider_head(
+            repository=repository,
+            pull_request=pull_request,
+            current_head_sha=expected_head.lower(),
+        )
+        safety = fast_path.verify_ready_source_recovery_safety_facts(
+            recovery.recovery_safety_facts
+        )
+    except (
+        AttributeError,
+        TypeError,
+        ValueError,
+        fast_path.SecurityBlocker,
+        lifecycle_publication.LifecyclePublicationError,
+    ) as exc:
+        raise ResolutionError(
+            "Ready-source recovery authority is invalid or stale"
+        ) from exc
+
+    lifecycle = current.lifecycle
+    state = recovery.lifecycle_state
+    if (
+        recovery.publication_oid != publication_oid.lower()
+        or recovery.repository != repository
+        or recovery.delivery_issue != delivery_issue
+        or recovery.pull_request != pull_request
+        or recovery.head_sha != expected_head.lower()
+        or lifecycle.repository != repository
+        or lifecycle.delivery_issue != delivery_issue
+        or lifecycle.pull_request != pull_request
+        or lifecycle.head_sha != expected_head.lower()
+        or current.publication_oid != recovery.current_publication_oid
+        or current.publication_digest != recovery.current_publication_digest
+        or lifecycle.lifecycle_id != recovery.lifecycle_id
+        or lifecycle.authority_digest != recovery.current_authority_digest
+        or lifecycle.state != state
+        or state.get("draft") is not False
+        or state.get("ready") is not True
+        or state.get("cycle_3_absent") is not True
+        or state.get("unrestricted_review_count") != 1
+        or not isinstance(state.get("remediation_cycle_count"), int)
+        or isinstance(state.get("remediation_cycle_count"), bool)
+        or not 0 <= state["remediation_cycle_count"] <= 2
+        or not isinstance(provider_head, str)
+        or not OID.fullmatch(provider_head)
+    ):
+        raise ResolutionError(
+            "Ready-source recovery delivery scope is invalid or stale"
+        )
+
+    receipt = safety.get("fresh_validation_receipt")
+    registry = safety.get("policy_binding")
+    if (
+        reviewed.payload != safety.get("reviewed_state")
+        or reviewed.state_digest != recovery.reviewed_state_digest
+        or reviewed.feedback_digest != recovery.reviewed_feedback_digest
+        or reviewed.head_sha != recovery.head_sha
+        or not isinstance(receipt, dict)
+        or not isinstance(registry, dict)
+        or receipt.get("repository") != repository
+        or receipt.get("head_sha") != expected_head.lower()
+        or receipt.get("validated_tree_sha") != recovery.tree_sha
+        or receipt.get("reviewed_state_digest") != reviewed.state_digest
+        or receipt.get("reviewed_feedback_digest") != reviewed.feedback_digest
+        or receipt.get("receipt_digest")
+        != recovery.fresh_validation_receipt_digest
+        or "eligibility_evidence_digest" in receipt
+        or "integration_evidence_digest" in receipt
+    ):
+        raise ResolutionError(
+            "Ready-source recovery reviewed source is invalid or stale"
+        )
+    authenticated_registry = _immutable_delivery_registry_binding(
+        expected_head,
+        repository,
+        receipt.get("registry_digest", ""),
+        receipt.get("command_set_digest", ""),
+        safety,
+    )
+    if registry != authenticated_registry:
+        raise ResolutionError(
+            "Ready-source recovery registry differs from the immutable delivery"
+        )
+    return ValidationEvidence(
+        kind="ready-source-recovery",
+        evidence_digest=recovery.publication_digest,
+        validated_tree_sha=recovery.tree_sha,
+        validation_receipt_digest=recovery.fresh_validation_receipt_digest,
+        eligibility_evidence_digest=None,
+        attestation=safety,
+        validation_receipt=receipt,
+        registry_binding=authenticated_registry,
+        ready_source_recovery=recovery,
+        ready_source_recovery_verification_seal=(
+            _VERIFIED_READY_SOURCE_RECOVERY
+        ),
+    )
+
+
 def load_final_feedback_boundary(
     *,
     repository_root: Path,
@@ -2194,10 +2519,11 @@ def load_final_feedback_boundary(
     expected_head: str,
     final_reviewed_state_path: Path,
     expected_final_reviewed_state_digest: str,
-    final_validation_evidence_path: Path,
+    final_validation_evidence_path: Path | None,
     final_eligibility_evidence_path: Path | None,
     integration_evidence_path: Path | None = None,
     integration_validation_receipt_path: Path | None = None,
+    ready_source_recovery_publication_oid: str | None = None,
 ) -> FinalFeedbackBoundary:
     reviewed = load_reviewed_state(
         final_reviewed_state_path,
@@ -2206,6 +2532,35 @@ def load_final_feedback_boundary(
         expected_final_reviewed_state_digest,
         (),
     )
+    if ready_source_recovery_publication_oid is not None:
+        if (
+            final_validation_evidence_path is not None
+            or final_eligibility_evidence_path is not None
+            or integration_evidence_path is not None
+            or integration_validation_receipt_path is not None
+        ):
+            raise ResolutionError(
+                "Ready-source recovery rejects incompatible source evidence"
+            )
+        validation = _load_recovered_ready_source_validation(
+            repository=repository,
+            delivery_issue=delivery_issue,
+            pull_request=number,
+            expected_head=expected_head,
+            publication_oid=ready_source_recovery_publication_oid,
+            reviewed=reviewed,
+        )
+        boundary = FinalFeedbackBoundary(
+            reviewed,
+            validation,
+            FinalEligibilityMode.NO_COMMIT_BOUND_RECOVERED_READY_ELIGIBILITY,
+            None,
+            None,
+        )
+        _require_valid_final_feedback_boundary(boundary)
+        return boundary
+    if final_validation_evidence_path is None:
+        raise ResolutionError("final validation evidence is required")
     if final_eligibility_evidence_path is not None:
         validation = load_validation_evidence(
             final_validation_evidence_path,
@@ -2765,7 +3120,7 @@ def create_late_classification_artifact(
     repository_root: Path | str,
     final_reviewed_state_path: Path | str,
     expected_final_reviewed_state_digest: str,
-    final_validation_evidence_path: Path | str,
+    final_validation_evidence_path: Path | str | None,
     final_eligibility_evidence_path: Path | str | None,
     thread_id: str,
     finding_id: str,
@@ -2778,6 +3133,7 @@ def create_late_classification_artifact(
     signature_output_path: Path | str,
     integration_evidence_path: Path | str | None = None,
     integration_validation_receipt_path: Path | str | None = None,
+    ready_source_recovery_publication_oid: str | None = None,
 ) -> dict[str, Any]:
     if (
         not REPOSITORY.fullmatch(repository)
@@ -2823,7 +3179,11 @@ def create_late_classification_artifact(
         expected_head=expected_head,
         final_reviewed_state_path=Path(final_reviewed_state_path),
         expected_final_reviewed_state_digest=expected_final_reviewed_state_digest,
-        final_validation_evidence_path=Path(final_validation_evidence_path),
+        final_validation_evidence_path=(
+            Path(final_validation_evidence_path)
+            if final_validation_evidence_path is not None
+            else None
+        ),
         final_eligibility_evidence_path=(
             Path(final_eligibility_evidence_path)
             if final_eligibility_evidence_path is not None
@@ -2838,6 +3198,9 @@ def create_late_classification_artifact(
             Path(integration_validation_receipt_path)
             if integration_validation_receipt_path is not None
             else None
+        ),
+        ready_source_recovery_publication_oid=(
+            ready_source_recovery_publication_oid
         ),
     )
     root = Path(repository_root)
@@ -2956,7 +3319,7 @@ def create_late_disposition_artifact(
     repository_root: Path | str,
     final_reviewed_state_path: Path | str,
     expected_final_reviewed_state_digest: str,
-    final_validation_evidence_path: Path | str,
+    final_validation_evidence_path: Path | str | None,
     final_eligibility_evidence_path: Path | str | None,
     classification_evidence_path: Path | str,
     classification_signature_path: Path | str,
@@ -2964,6 +3327,7 @@ def create_late_disposition_artifact(
     signature_output_path: Path | str,
     integration_evidence_path: Path | str | None = None,
     integration_validation_receipt_path: Path | str | None = None,
+    ready_source_recovery_publication_oid: str | None = None,
 ) -> dict[str, Any]:
     if not REPOSITORY.fullmatch(repository):
         raise ResolutionError("repository must use owner/name format")
@@ -2988,7 +3352,11 @@ def create_late_disposition_artifact(
         expected_head=expected_head,
         final_reviewed_state_path=Path(final_reviewed_state_path),
         expected_final_reviewed_state_digest=expected_final_reviewed_state_digest,
-        final_validation_evidence_path=Path(final_validation_evidence_path),
+        final_validation_evidence_path=(
+            Path(final_validation_evidence_path)
+            if final_validation_evidence_path is not None
+            else None
+        ),
         final_eligibility_evidence_path=(
             Path(final_eligibility_evidence_path)
             if final_eligibility_evidence_path is not None
@@ -3003,6 +3371,9 @@ def create_late_disposition_artifact(
             Path(integration_validation_receipt_path)
             if integration_validation_receipt_path is not None
             else None
+        ),
+        ready_source_recovery_publication_oid=(
+            ready_source_recovery_publication_oid
         ),
     )
     root = Path(repository_root)
@@ -3120,6 +3491,8 @@ def create_late_disposition_artifact(
             }
             if boundary.eligibility_mode
             == FinalEligibilityMode.NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY
+            or boundary.eligibility_mode
+            == FinalEligibilityMode.NO_COMMIT_BOUND_RECOVERED_READY_ELIGIBILITY
             else {
                 "final_eligibility_evidence_digest": (
                     boundary.validation.eligibility_evidence_digest
@@ -3138,6 +3511,8 @@ def create_late_disposition_artifact(
             no_commit_bound_ready_integration_eligibility=(
                 boundary.eligibility_mode
                 == FinalEligibilityMode.NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY
+                or boundary.eligibility_mode
+                == FinalEligibilityMode.NO_COMMIT_BOUND_RECOVERED_READY_ELIGIBILITY
             ),
         ),
         "kind": late_disposition.KIND,
@@ -3205,7 +3580,7 @@ def resolve_late_disposition_threads(
     repository_root: Path | str,
     final_reviewed_state_path: Path | str,
     expected_final_reviewed_state_digest: str,
-    final_validation_evidence_path: Path | str,
+    final_validation_evidence_path: Path | str | None,
     final_eligibility_evidence_path: Path | str | None,
     late_classification_evidence_path: Path | str,
     late_classification_signature_path: Path | str,
@@ -3213,6 +3588,7 @@ def resolve_late_disposition_threads(
     late_disposition_signature_path: Path | str,
     integration_evidence_path: Path | str | None = None,
     integration_validation_receipt_path: Path | str | None = None,
+    ready_source_recovery_publication_oid: str | None = None,
 ) -> dict[str, Any]:
     """Resolve only exact late threads authenticated independently of Git history."""
 
@@ -3240,7 +3616,11 @@ def resolve_late_disposition_threads(
         expected_head=expected_head,
         final_reviewed_state_path=Path(final_reviewed_state_path),
         expected_final_reviewed_state_digest=expected_final_reviewed_state_digest,
-        final_validation_evidence_path=Path(final_validation_evidence_path),
+        final_validation_evidence_path=(
+            Path(final_validation_evidence_path)
+            if final_validation_evidence_path is not None
+            else None
+        ),
         final_eligibility_evidence_path=(
             Path(final_eligibility_evidence_path)
             if final_eligibility_evidence_path is not None
@@ -3255,6 +3635,9 @@ def resolve_late_disposition_threads(
             Path(integration_validation_receipt_path)
             if integration_validation_receipt_path is not None
             else None
+        ),
+        ready_source_recovery_publication_oid=(
+            ready_source_recovery_publication_oid
         ),
     )
     signer = verify_local_fix_commit(
@@ -3290,6 +3673,8 @@ def resolve_late_disposition_threads(
                 late_disposition.NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY
                 if boundary.eligibility_mode
                 == FinalEligibilityMode.NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY
+                or boundary.eligibility_mode
+                == FinalEligibilityMode.NO_COMMIT_BOUND_RECOVERED_READY_ELIGIBILITY
                 else None
             ),
             thread_ids=thread_ids,
@@ -3858,7 +4243,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--expected-head", required=True)
     parser.add_argument("--reviewed-state", required=True)
     parser.add_argument("--expected-reviewed-state-digest", required=True)
-    parser.add_argument("--validation-evidence", required=True)
+    parser.add_argument("--validation-evidence")
     parser.add_argument("--eligibility-evidence")
     parser.add_argument("--integration-evidence")
     parser.add_argument("--integration-validation-receipt")
@@ -3873,6 +4258,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--late-classification-evidence")
     parser.add_argument("--late-classification-signature")
     parser.add_argument("--final-eligibility-evidence")
+    parser.add_argument("--ready-source-recovery-publication")
     parser.add_argument("--thread-id", action="append", required=True)
     parser.add_argument("--apply", action="store_true")
     arguments = parser.parse_args(argv)
@@ -3917,6 +4303,20 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
                 raise ResolutionError(
                     "commit-bound and late-disposition eligibility are mutually exclusive"
                 )
+            if arguments.ready_source_recovery_publication is not None:
+                if (
+                    arguments.validation_evidence is not None
+                    or arguments.final_eligibility_evidence is not None
+                    or arguments.integration_evidence is not None
+                    or arguments.integration_validation_receipt is not None
+                ):
+                    raise ResolutionError(
+                        "Ready-source recovery rejects incompatible source evidence"
+                    )
+            elif arguments.validation_evidence is None:
+                raise ResolutionError(
+                    "late disposition requires validation evidence or Ready-source recovery"
+                )
             if (
                 arguments.integration_evidence is not None
                 and arguments.final_eligibility_evidence is None
@@ -3940,11 +4340,19 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             raise ResolutionError(
                 "historical integration receipt is valid only for late disposition"
             )
+        elif arguments.ready_source_recovery_publication is not None:
+            raise ResolutionError(
+                "Ready-source recovery is valid only for late disposition"
+            )
         elif arguments.eligibility_evidence is None:
             raise ResolutionError(
                 "commit-bound resolution requires eligibility evidence"
             )
         else:
+            if arguments.validation_evidence is None:
+                raise ResolutionError(
+                    "commit-bound resolution requires validation evidence"
+                )
             recovery_values = (
                 arguments.exceptional_recovery_evidence,
                 arguments.exceptional_recovery_authorization,
@@ -4038,6 +4446,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                         )
                     }
                     if arguments.integration_validation_receipt is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "ready_source_recovery_publication_oid": (
+                            arguments.ready_source_recovery_publication
+                        )
+                    }
+                    if arguments.ready_source_recovery_publication is not None
                     else {}
                 ),
             )

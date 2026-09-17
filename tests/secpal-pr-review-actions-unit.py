@@ -2343,6 +2343,21 @@ class MutationTests(TestCase):
                         "reviews": copy.deepcopy(empty),
                         "comments": copy.deepcopy(empty),
                         "reviewRequests": copy.deepcopy(empty),
+                        "timelineItems": {
+                            "nodes": [
+                                {
+                                    "id": "RRE_COPILOT",
+                                    "createdAt": "2026-09-16T00:00:00Z",
+                                    "actor": actor,
+                                    "requestedReviewer": {
+                                        "id": "BOT_kgDOCnlnWA",
+                                        "databaseId": 175728472,
+                                        "login": "copilot-pull-request-reviewer",
+                                    },
+                                }
+                            ],
+                            "pageInfo": {"hasNextPage": False},
+                        },
                         "reviewThreads": {
                             "nodes": [
                                 {
@@ -2356,6 +2371,9 @@ class MutationTests(TestCase):
                                                 "databaseId": 21,
                                                 "body": "Finding",
                                                 "author": actor,
+                                                "pullRequestReview": {
+                                                    "id": "PRR_COPILOT"
+                                                },
                                                 "reactions": {
                                                     "nodes": [
                                                         {
@@ -2388,6 +2406,33 @@ class MutationTests(TestCase):
                 "mutation_id"
             ],
             "REACTION_1",
+        )
+        self.assertEqual(
+            current["feedback"]["threads"][0]["comments"][0]["review_id"],
+            "PRR_COPILOT",
+        )
+        self.assertEqual(
+            current["feedback"]["provider_review_requests"][0]["node_id"],
+            "RRE_COPILOT",
+        )
+
+        alias_payload = copy.deepcopy(payload)
+        alias_payload["data"]["repository"]["pullRequest"]["timelineItems"][
+            "nodes"
+        ][0]["requestedReviewer"] = {
+            "id": "U_GITHUB_COPILOT",
+            "databaseId": 42,
+            "login": "github-copilot",
+        }
+        alias_github = actions.LiveGitHub(
+            SimpleNamespace(run=lambda _arguments: copy.deepcopy(alias_payload))
+        )
+        alias_current = alias_github.read_current_feedback(plan())
+        self.assertEqual(
+            alias_current["feedback"]["provider_review_requests"][0][
+                "requested_reviewer"
+            ],
+            fast_path.COPILOT_REVIEW_PROVIDER,
         )
 
         payload["data"]["repository"]["pullRequest"]["reviewThreads"]["pageInfo"][
@@ -12862,6 +12907,156 @@ class FastPathTests(TestCase):
                         pull_request_number=1,
                         ready_source_provider_binding=binding,
                     )
+
+    def test_resolve_batch_derives_recovered_ready_provider_binding_from_current(
+        self,
+    ) -> None:
+        binding = self._ready_source_provider_binding(
+            current_head=p21.HEAD,
+            pull_request=1,
+        )
+        current = SimpleNamespace(
+            publication_oid=binding.current_publication_oid,
+            publication_digest=binding.current_publication_digest,
+            lifecycle=SimpleNamespace(
+                repository="SecPal/.github",
+                delivery_issue=911,
+                pull_request=1,
+                lifecycle_id=binding.lifecycle_id,
+                head_sha=p21.HEAD,
+                authority_digest=binding.current_authority_digest,
+            ),
+        )
+        recovery = SimpleNamespace(
+            publication_oid="9" * 40,
+            repository="SecPal/.github",
+            delivery_issue=911,
+            pull_request=1,
+            head_sha=p21.HEAD,
+            lifecycle_id=binding.lifecycle_id,
+            current_authority_digest=binding.current_authority_digest,
+            current_publication_oid=binding.current_publication_oid,
+            current_publication_digest=binding.current_publication_digest,
+        )
+        publication = SimpleNamespace(
+            verify_current_ready_source_recovery=mock.Mock(
+                return_value=recovery
+            ),
+            verify_current_lifecycle_authority=mock.Mock(return_value=current),
+            derive_ready_source_recovery_provider_binding=mock.Mock(
+                return_value=binding
+            ),
+        )
+        with mock.patch.object(
+            actions,
+            "_load_lifecycle_publication_helpers",
+            return_value=(SimpleNamespace(), publication),
+        ):
+            observed = (
+                actions._derive_resolve_batch_ready_source_provider_binding(
+                    repository="SecPal/.github",
+                    delivery_issue=911,
+                    pull_request=1,
+                    recovery_publication_oid="9" * 40,
+                )
+            )
+        self.assertIs(observed, binding)
+        publication.verify_current_ready_source_recovery.assert_called_once_with(
+            "SecPal/.github", 911
+        )
+        publication.verify_current_lifecycle_authority.assert_called_once_with(
+            "SecPal/.github", 911
+        )
+        publication.derive_ready_source_recovery_provider_binding.assert_called_once_with(
+            current
+        )
+
+        for label, mutate in (
+            ("publication", lambda item: setattr(item, "publication_oid", "8" * 40)),
+            ("repository", lambda item: setattr(item, "repository", "SecPal/api")),
+            ("issue", lambda item: setattr(item, "delivery_issue", 912)),
+            ("PR", lambda item: setattr(item, "pull_request", 2)),
+            ("head", lambda item: setattr(item, "head_sha", "8" * 40)),
+            (
+                "CURRENT",
+                lambda item: setattr(
+                    item, "current_publication_oid", "8" * 40
+                ),
+            ),
+        ):
+            with self.subTest(label=label):
+                changed = copy.deepcopy(recovery)
+                mutate(changed)
+                publication.verify_current_ready_source_recovery.return_value = changed
+                with mock.patch.object(
+                    actions,
+                    "_load_lifecycle_publication_helpers",
+                    return_value=(SimpleNamespace(), publication),
+                ), self.assertRaises(fast_path.SecurityBlocker):
+                    actions._derive_resolve_batch_ready_source_provider_binding(
+                        repository="SecPal/.github",
+                        delivery_issue=911,
+                        pull_request=1,
+                        recovery_publication_oid="9" * 40,
+                    )
+
+    def test_resolve_batch_recovered_ready_capture_uses_only_derived_binding(
+        self,
+    ) -> None:
+        binding = self._ready_source_provider_binding()
+        reviewed = fast_feedback()
+        gateway = SimpleNamespace(
+            capture_stable_feedback=mock.Mock(return_value=reviewed)
+        )
+        arguments = SimpleNamespace(
+            repo_root=str(REPO_ROOT),
+            registry=None,
+            repo="SecPal/.github",
+            pr=1,
+            ready_remediation_provider_binding=None,
+            ready_source_recovery_publication="9" * 40,
+            delivery_issue=911,
+            capture_reviewed_state="reviewed.json",
+            apply=False,
+            request=None,
+            reviewed_state=None,
+            attestation=None,
+            output=None,
+        )
+        with (
+            mock.patch.object(actions, "load_registry", return_value={}),
+            mock.patch.object(
+                actions,
+                "select_repository",
+                return_value=registry_entry("SecPal/.github"),
+            ),
+            mock.patch.object(
+                actions,
+                "_derive_resolve_batch_ready_source_provider_binding",
+                return_value=binding,
+            ) as derive,
+            mock.patch.object(
+                actions,
+                "FastPathGateway",
+                return_value=gateway,
+            ) as gateway_factory,
+            mock.patch.object(fast_path, "atomic_write_json") as write,
+        ):
+            self.assertEqual(actions._command_resolve_batch(arguments), 0)
+        derive.assert_called_once_with(
+            repository="SecPal/.github",
+            delivery_issue=911,
+            pull_request=1,
+            recovery_publication_oid="9" * 40,
+        )
+        self.assertIs(
+            gateway_factory.call_args.kwargs["ready_source_provider_binding"],
+            binding,
+        )
+        gateway.capture_stable_feedback.assert_called_once_with(
+            "SecPal/.github", 1
+        )
+        write.assert_called_once_with(Path("reviewed.json"), reviewed.to_dict())
 
     def test_ready_source_accepts_exact_v11_historical_provider_summary(self) -> None:
         binding = replace(

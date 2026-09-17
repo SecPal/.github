@@ -169,6 +169,62 @@ blocking source must be dispositioned under the existing current-feedback
 rules. Ordinary capture and Ready integration continue to require exact-head
 provider terminality.
 
+A current recovered Ready source uses the same Stable Feedback projection. Its
+capture-only invocation supplies the exact delivery issue and recovery
+publication to `resolve-batch`; the command reauthenticates both the recovery
+and protected lifecycle `CURRENT` before deriving the only admissible provider
+head through the maintained Ready-source binding. No provider head is accepted
+from the caller. The fixed-thread resolver admits the optional provider-request
+history only through canonical Stable Feedback validation, including its closed
+fields, identities, order, duplicate rules, and feedback/state digests.
+
+### Post-capture provider growth for the remaining ordinary remediation
+
+One narrower composition covers provider-owned findings emitted by the already
+consumed provider assessment after its canonical Stable Feedback capture. The
+first remediation's sealed validation evidence authenticates the immutable
+original capture at H0. Protected CURRENT must independently derive exactly one
+Ready-preserving ordinary remediation from H0 to H1 and prove Review 1/1,
+Remediation 1/2, Ready true, one Ready transition, Cycle 3 absent, and no
+Exceptional Recovery or Continuation. The candidate validation evidence binds
+the complete reviewed state at H1 and its existing ordinary eligibility
+manifest.
+
+The verifier derives, rather than accepts, the feedback delta between those
+states. The candidate capture authenticates exactly one Copilot request-history
+event, the later Copilot review committed to H0, their provider chronology, and
+each added top-level comment's parent-review identity. Every added thread must
+therefore belong to that one consumed assessment. The first remediation's
+commit-bound eligibility manifest derives the only predecessor threads allowed
+to have become resolved; all other predecessor feedback is immutable apart
+from already-supported monotonic outdated-state and schema-enrichment
+observation. The set of added threads must equal the complete ordinary
+`VALID_ACTIONABLE + CORRECTED_AND_VERIFIED` eligibility set; deletion,
+substitution, replies, unrelated actors or sources, wrong-head feedback, a
+second provider request, and a caller-selected subset fail closed.
+The authority verifier independently repeats the maintained live Stable
+Feedback capture at H1 and requires exact equality with the candidate-bound
+state, so candidate-local evidence cannot create provider history.
+The candidate-bound capture uses the dedicated read-only
+`resolve-batch --ready-remediation-provider-binding FILE` form. The authority
+verifier derives that ephemeral file from protected CURRENT, and the form is
+valid only with `--capture-reviewed-state`; its output alone grants no
+remediation or mutation authority.
+
+The target base ref remains exact. Its tip may advance monotonically while the
+delivery source stays unchanged because the prerequisite itself reaches
+accepted main between H0 and this bounded use; current-base integration remains
+owned by the existing merge gate and is not reinterpreted as provider feedback.
+
+The derived digest is carried by the existing signed
+`REMEDIATION_COMPLETED` authorization for H1 to H2. It can consume only the
+remaining ordinary remediation slot and adds no review, provider request,
+lifecycle operation, recovery, continuation, resolver, or thread-resolution
+authority. A module-owned verifier seal is required to issue that scope, and
+the generic authorization creator rejects its digest field. Stable Feedback
+remains immutable, and feedback arriving after this bounded delta is not
+recursively incorporated.
+
 When the current instruction authorizes full delivery and the environment can
 wait, observe only maintained review-provider status at bounded intervals of
 approximately 60 to 90 seconds for approximately 30 minutes total. This passive
@@ -324,67 +380,6 @@ Draft PR head. This makes a competing ordinary genesis inadmissible between
 the authenticated absence observation and branch push without granting the
 bootstrap executor a journal mutation or reservation operation.
 
-## Unenrolled Ready delivery recovery
-
-`UNENROLLED_READY_DELIVERY_RECOVERY` is the sole maintained root-establishment
-boundary for an ordinary delivery that is already open and Ready after exactly
-one observed Draft-to-Ready transition but has no lifecycle initialization,
-lifecycle root, or protected CURRENT anywhere in journal history. It is neither
-ordinary initialization nor Exact-State-Adoption. It does not make the earlier
-Ready transition lifecycle-authorized:
-
-```text
-authenticated historical Ready observation
-!=
-historical lifecycle authorization
-
-authenticated recovery boundary now
-->
-forward lifecycle authority
-```
-
-Admission independently binds the repository, open delivery issue, exact open
-Ready PR, sole-parent head/tree/base identity, accepted source signer and
-signature, final attestation and validation identities, complete Ready-source
-safety facts, stable feedback, complete finding dispositions, resolved thread
-state, and the exact observed Draft/review/remediation/Ready chronology. The
-chronology must contain one Draft creation, one review consumption, zero to two
-remediations, exactly one Draft-to-Ready observation, no Ready-to-Draft reset,
-and no exceptional history. Its derived lifecycle baseline copies those finite
-consumptions; recovery grants no fresh review, remediation, or Ready budget.
-Source identity comes only from the maintained cryptographic commit reader's
-sealed result, never caller-supplied verification flags. Review must precede
-the sole Ready observation, every remediation must follow that review, review
-providers must be maintained Codex or Copilot identities, and any dismissed
-review makes the historical budget ambiguous and therefore ineligible.
-
-The issuer compares two bounded trusted observations of issue, PR, head, tree,
-base, protected main, lifecycle-journal tip, root absence, and CURRENT absence.
-Caller-supplied current state is not an authority substitute. Any drift,
-existing or historical root, existing CURRENT, Draft/closed/merged state,
-rewritten topology, stale validation, incomplete feedback, unresolved material
-finding, or ambiguous history fails closed.
-
-One separately signed authorization binds the operation, repository, issue, PR,
-head, tree, accepted source signer, current protected journal identity, complete
-evidence digests, unique authorization identity, and one bounded use. The proof
-derives `lifecycle-recovery:<recovery-evidence-digest>` and records
-`historical_lifecycle_authority_existed=false` plus
-`authority_begins_at=RECOVERY_BOUNDARY`. Publication uses the existing
-`ENROLL_EXISTING_LIFECYCLE` CAS/protection/read-back boundary. Existing journal
-ancestry rejects replay, a second recovery, later ordinary initialization, or a
-second root for the delivery. The publication writer repeats the entire trusted
-live observation immediately before CAS; issue, PR, Ready state, head, tree,
-base/main, history, journal, or absence drift rejects publication.
-
-Recovery does not merge protected main and does not issue
-`READY_INTEGRATION_PRIOR_AUTHORITY`. Once the recovered CURRENT exists, the
-ordinary signed prior-authority/tag and `HEAD_ADVANCED` Ready-integration path
-may consume its `unenrolled_ready_recovery` provenance while preserving every
-finite counter. Exact-State-Adoption, Exceptional Recovery, Exceptional
-Continuation, pre-enrollment Draft integration, and PR rebound/re-anchor retain
-their existing selection and authority rules.
-
 The installed repository registry is the lifecycle trust-policy source. It
 separately assigns transition and authority signer roles, accepted signature
 formats, SSH public keys, OpenPGP fingerprints, and unique initialization
@@ -473,6 +468,14 @@ current head, which must not carry a copied receipt trailer. Historical
 reviewed-state, receipt, and final-attestation bytes are never synthesized; PR
 prose cannot supply them.
 
+Successor schema 1.2 retains that registered-repository, complete-history,
+Ready-chronology, feedback, finite-state, current-safety, signer, and one-use
+admission boundary for an exact delivery whose authenticated source history has
+zero validation-receipt trailers. Both historical receipt fields are canonically
+`null`; injecting a digest or receipt head fails closed. The fresh current-safety
+receipt binds Exact-State-Adoption processing without being represented as a
+historical receipt or another review.
+
 The maintained issuer accepts only repository and issue selectors. Clean current
 protected main selects the exact loss acknowledgment in
 `policies/pre-enrollment-validation-evidence-loss.json`, the existing registry,
@@ -482,7 +485,7 @@ caller-reported missing files and unsigned loss flags carry no authority. It is
 exact-source policy, not an artifact store or another journal. The issuer
 authenticates the live source, head/tree/parent topology, accepted source
 signatures, complete stable feedback and provider chronology. Schema 1.0 remains
-restricted to `SecPal/.github`. Schema 1.1 additionally requires the exact
+restricted to `SecPal/.github`. Schemas 1.1 and 1.2 additionally require the exact
 central-registry entry and its protected repository-local lifecycle-publication
 policy; neither arbitrary repositories nor candidate-local registry state can
 grant admission.
@@ -510,7 +513,7 @@ The profile binds its version, harness Git blob/mode/size, command set and diges
 120-second bound, exact successful result and required invariant inventory.
 The selected policy projects exactly one accepted-main harness into a disposable
 execution copy: `tests/pre-enrollment-current-safety.py` for schema 1.0 or the
-registered-repository harness named by a schema-1.1 record. All non-test
+registered-repository harness named by a schema-1.1/1.2 record. All non-test
 candidate files retain their exact parked bytes;
 no implementation overlay, dual-version runtime or synthetic integration is
 permitted. Historical tests do not supply assertion authority. The existing
@@ -542,6 +545,10 @@ remediation budgets from authenticated observations. It grants no additional
 review, remediation, Ready transition, reset, or Cycle 3. Current-policy safety
 is fresh evidence for the exact current tree and remains distinct from the
 ancestor validation-receipt provenance.
+
+Schema 1.2 preserves the same finite accounting while binding the exact
+zero-receipt source history. Its fresh current-safety receipt supplies the
+existing adoption evidence field; it does not claim historical byte identity.
 
 The signed admission becomes immutable provenance in the version-3 adoption
 proof and existing signed one-use adoption authorization. Enrollment rechecks
@@ -1616,7 +1623,7 @@ one canonical detached-signed `late-classification.schema.json` artifact for
 exactly one named thread, then creates one canonical
 `late-disposition.schema.json` artifact for that same thread.
 Creation first verifies the unchanged final delivery head, tree,
-receipt trailer, attestation, typed final-eligibility boundary, origin, and
+receipt trailer, source authority, typed final-eligibility boundary, origin, and
 accepted commit signature. That boundary is either the canonical manifest or
 the maintained exact authenticated-absence record; a supplied invalid manifest
 never falls back to absence. It proves the named thread absent from final
@@ -1629,6 +1636,18 @@ delivery signer fingerprint, reads that named thread twice, and signs the
 classification with that same OS-account identity. The disposition creator
 verifies the classification signature and exact live binding and computes its
 digest internally. SSH and OpenPGP are supported.
+
+The source authority may also be a verified current Ready-source recovery for
+the exact unchanged recovered head. In that branch every consumer independently
+reauthenticates the protected recovery publication and lifecycle CURRENT,
+finite Ready history, exact repository/issue/PR/head/tree, current-safety and
+provider bindings, immutable commit signer, and the exact Stable Feedback and
+fresh receipt authenticated by recovery. The verifier derives absence of
+commit-bound final eligibility from that maintained receipt shape. A recovery
+OID alone, caller-selected origin, omitted path, or supplied incompatible
+eligibility evidence grants no classification, disposition, eligibility, or
+thread-resolution authority.
+
 The resolver independently repeats the final-delivery verification, verifies
 both canonical artifacts and detached signatures against the derived signer,
 and compares exact live head, thread, top-level comment node/database identity,
