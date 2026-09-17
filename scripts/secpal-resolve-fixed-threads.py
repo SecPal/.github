@@ -851,7 +851,10 @@ def load_reviewed_state(
         "feedback_digest",
         "state_digest",
     }
-    if not isinstance(payload, dict) or set(payload) != expected_keys:
+    if not isinstance(payload, dict) or set(payload) not in {
+        frozenset(expected_keys),
+        frozenset(expected_keys | {"provider_review_requests"}),
+    }:
         raise ResolutionError("reviewed feedback state has an unsupported shape")
     if (
         payload.get("schema_version") != "1.0"
@@ -873,6 +876,15 @@ def load_reviewed_state(
         "reviews": payload.get("reviews"),
         "conversation_comments": payload.get("conversation_comments"),
         "threads": payload.get("threads"),
+        **(
+            {
+                "provider_review_requests": payload.get(
+                    "provider_review_requests"
+                )
+            }
+            if "provider_review_requests" in payload
+            else {}
+        ),
     }
     if any(not isinstance(value, list) for value in feedback.values()):
         raise ResolutionError("reviewed feedback state is malformed")
@@ -906,6 +918,10 @@ def load_reviewed_state(
         raise ResolutionError(
             "reviewed feedback state does not match the captured digest"
         )
+    try:
+        canonical_state = fast_path.verify_reviewed_state_evidence(payload)
+    except fast_path.SecurityBlocker as exc:
+        raise ResolutionError("reviewed feedback state is malformed") from exc
 
     threads = payload["threads"]
     indexed_threads: dict[str, ExpectedThreadState] = {}
@@ -977,7 +993,7 @@ def load_reviewed_state(
             )
         expected_targets[thread_id] = thread
     return ReviewedState(
-        head_sha=payload["head_sha"].lower(),
+        head_sha=canonical_state.head_sha,
         state_digest=state_digest,
         feedback_digest=feedback_digest,
         targets=expected_targets,

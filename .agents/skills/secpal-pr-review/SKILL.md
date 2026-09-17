@@ -31,6 +31,11 @@ signed validation receipt and final attestation for the fix commit. The command
 rejects a swapped state file, a non-matching local commit,
 and stale, missing, incomplete, unauthenticated, or differently bound evidence
 before any GitHub read.
+The reviewed state may contain canonical `provider_review_requests`; the
+resolver admits that optional category only through the shared closed Stable
+Feedback verifier. Recovered Ready capture must reauthenticate protected
+`CURRENT` and derive the provider head through the maintained Ready-source
+binding; it never accepts a caller-selected provider head.
 For an eligibility-bound typed Ready integration, also supply the canonical
 integration evidence. The resolver accepts only the closed version-1.2
 integration-resolution attestation and verifies its ordered two-parent

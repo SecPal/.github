@@ -582,6 +582,40 @@ def reviewed_state_payload(
     }
 
 
+def add_provider_review_requests(
+    reviewed: dict[str, Any],
+    requests: list[dict[str, Any]],
+) -> dict[str, Any]:
+    value = copy.deepcopy(reviewed)
+    value["provider_review_requests"] = requests
+    feedback = {
+        key: value[key]
+        for key in (
+            "pull_request_reactions",
+            "provider_review_requests",
+            "reviews",
+            "conversation_comments",
+            "threads",
+        )
+    }
+    identity = {
+        key: value[key]
+        for key in (
+            "repository",
+            "pull_request_number",
+            "head_sha",
+            "base_ref",
+            "base_sha",
+            "pr_state",
+        )
+    }
+    value["feedback_digest"] = MODULE._digest_json(feedback)
+    value["state_digest"] = MODULE._digest_json(
+        {**identity, "feedback": feedback}
+    )
+    return value
+
+
 def validation_attestation_payload(
     reviewed: dict[str, Any],
     eligibility_evidence_digest: str = "e" * 64,
@@ -5266,6 +5300,99 @@ class ResolveFixedThreadsTests(TestCase):
                     reviewed["state_digest"],
                     (),
                 )
+
+    def test_reviewed_loader_accepts_only_canonical_provider_request_projection(
+        self,
+    ) -> None:
+        requests = [
+            {
+                "node_id": "PRE_requested_review_1",
+                "created_at": "2026-09-16T19:00:00Z",
+                "actor": {
+                    "login": "aroviqen",
+                    "node_id": "U_author",
+                    "database_id": 7,
+                },
+                "requested_reviewer": {
+                    "login": "copilot-pull-request-reviewer[bot]",
+                    "node_id": "BOT_copilot",
+                    "database_id": 8,
+                },
+            },
+            {
+                "node_id": "PRE_requested_review_2",
+                "created_at": "2026-09-16T19:01:00Z",
+                "actor": {
+                    "login": "aroviqen",
+                    "node_id": "U_author",
+                    "database_id": 7,
+                },
+                "requested_reviewer": {
+                    "login": "copilot-pull-request-reviewer[bot]",
+                    "node_id": "BOT_copilot",
+                    "database_id": 8,
+                },
+            },
+        ]
+        reviewed = add_provider_review_requests(
+            reviewed_state_payload("PRRT_PROVIDER_REQUEST", []), requests
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reviewed.json"
+            path.write_text(json.dumps(reviewed), encoding="utf-8")
+            loaded = MODULE.load_reviewed_state(
+                path,
+                "SecPal/api",
+                123,
+                reviewed["state_digest"],
+                ("PRRT_PROVIDER_REQUEST",),
+            )
+        self.assertEqual(
+            loaded.payload["provider_review_requests"], requests
+        )
+
+        def unknown_field(value: dict[str, Any]) -> None:
+            value["provider_review_requests"][0]["provider_head"] = "a" * 40
+
+        def duplicate(value: dict[str, Any]) -> None:
+            value["provider_review_requests"][1] = copy.deepcopy(
+                value["provider_review_requests"][0]
+            )
+
+        def reorder(value: dict[str, Any]) -> None:
+            value["provider_review_requests"].reverse()
+
+        def malformed_chronology(value: dict[str, Any]) -> None:
+            value["provider_review_requests"][0]["created_at"] = None
+
+        for label, mutate, redigest in (
+            ("unknown field", unknown_field, True),
+            ("duplicate identity", duplicate, True),
+            ("noncanonical order", reorder, True),
+            ("malformed chronology", malformed_chronology, True),
+            ("feedback digest drift", lambda value: None, False),
+        ):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                changed = copy.deepcopy(reviewed)
+                mutate(changed)
+                if redigest:
+                    changed = add_provider_review_requests(
+                        changed, changed["provider_review_requests"]
+                    )
+                else:
+                    changed["provider_review_requests"][0]["created_at"] = (
+                        "2026-09-16T19:02:00Z"
+                    )
+                path = Path(directory) / "reviewed.json"
+                path.write_text(json.dumps(changed), encoding="utf-8")
+                with self.assertRaises(MODULE.ResolutionError):
+                    MODULE.load_reviewed_state(
+                        path,
+                        "SecPal/api",
+                        123,
+                        changed["state_digest"],
+                        ("PRRT_PROVIDER_REQUEST",),
+                    )
 
     def test_cycle2_final_boundary_rejects_duplicate_eligibility_json_keys(
         self,
