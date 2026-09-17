@@ -1013,6 +1013,33 @@ def _require_string(value: Any, label: str) -> str:
     return value
 
 
+def _require_github_timestamp(value: Any, label: str) -> str:
+    matched = (
+        re.fullmatch(
+            r"([0-9]{4})-([0-9]{2})-([0-9]{2})T"
+            r"([0-9]{2}):([0-9]{2}):([0-9]{2})Z",
+            value,
+        )
+        if isinstance(value, str)
+        else None
+    )
+    if matched is None:
+        raise SecurityBlocker(f"{label} is not a canonical GitHub timestamp")
+    year, month, day, hour, minute, second = map(int, matched.groups())
+    leap_year = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    month_days = (31, 29 if leap_year else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+    if (
+        year < 1
+        or month not in range(1, 13)
+        or day not in range(1, month_days[month - 1] + 1)
+        or hour not in range(24)
+        or minute not in range(60)
+        or second not in range(60)
+    ):
+        raise SecurityBlocker(f"{label} is not a canonical GitHub timestamp")
+    return value
+
+
 def _require_oid(value: Any, label: str) -> str:
     if not isinstance(value, str) or not OID.fullmatch(value):
         raise SecurityBlocker(f"{label} is not a complete commit OID")
@@ -2342,7 +2369,11 @@ def _actor(value: Any, label: str, *, allow_deleted: bool = False) -> dict[str, 
         raise SecurityBlocker(f"{label} actor login is missing")
     if not isinstance(actor["node_id"], str) or not actor["node_id"]:
         raise SecurityBlocker(f"{label} actor node identity is missing")
-    if not isinstance(actor["database_id"], int) or actor["database_id"] < 1:
+    if (
+        isinstance(actor["database_id"], bool)
+        or not isinstance(actor["database_id"], int)
+        or actor["database_id"] < 1
+    ):
         raise SecurityBlocker(f"{label} actor database identity is missing")
     return actor
 
@@ -2390,18 +2421,23 @@ def _feedback_projection(payload: dict[str, Any]) -> dict[str, Any]:
     for item in requests_value:
         if not isinstance(item, dict):
             raise SecurityBlocker("provider review request is malformed")
+        requested_reviewer = _actor(
+            item.get("requested_reviewer"), "requested review provider"
+        )
+        if requested_reviewer != COPILOT_REVIEW_PROVIDER:
+            raise SecurityBlocker(
+                "provider review request does not identify the captured provider"
+            )
         provider_review_requests.append(
             {
                 "node_id": _require_string(
                     item.get("node_id"), "provider review request identity"
                 ),
-                "created_at": _require_string(
+                "created_at": _require_github_timestamp(
                     item.get("created_at"), "provider review request chronology"
                 ),
                 "actor": _actor(item.get("actor"), "provider review request"),
-                "requested_reviewer": _actor(
-                    item.get("requested_reviewer"), "requested review provider"
-                ),
+                "requested_reviewer": requested_reviewer,
             }
         )
 

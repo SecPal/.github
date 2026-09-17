@@ -5307,16 +5307,16 @@ class ResolveFixedThreadsTests(TestCase):
         requests = [
             {
                 "node_id": "PRE_requested_review_1",
-                "created_at": "2026-09-16T19:00:00Z",
+                "created_at": "2024-02-29T00:00:00Z",
                 "actor": {
                     "login": "aroviqen",
                     "node_id": "U_author",
-                    "database_id": 7,
+                    "database_id": 1,
                 },
                 "requested_reviewer": {
-                    "login": "copilot-pull-request-reviewer[bot]",
-                    "node_id": "BOT_copilot",
-                    "database_id": 8,
+                    "login": "copilot-pull-request-reviewer",
+                    "node_id": "BOT_kgDOCnlnWA",
+                    "database_id": 175728472,
                 },
             },
             {
@@ -5328,9 +5328,9 @@ class ResolveFixedThreadsTests(TestCase):
                     "database_id": 7,
                 },
                 "requested_reviewer": {
-                    "login": "copilot-pull-request-reviewer[bot]",
-                    "node_id": "BOT_copilot",
-                    "database_id": 8,
+                    "login": "copilot-pull-request-reviewer",
+                    "node_id": "BOT_kgDOCnlnWA",
+                    "database_id": 175728472,
                 },
             },
         ]
@@ -5365,11 +5365,23 @@ class ResolveFixedThreadsTests(TestCase):
         def malformed_chronology(value: dict[str, Any]) -> None:
             value["provider_review_requests"][0]["created_at"] = None
 
+        def substituted_reviewer(value: dict[str, Any]) -> None:
+            value["provider_review_requests"][0]["requested_reviewer"] = {
+                "login": "arbitrary-reviewer",
+                "node_id": "BOT_arbitrary",
+                "database_id": 9,
+            }
+
         for label, mutate, redigest in (
             ("unknown field", unknown_field, True),
             ("duplicate identity", duplicate, True),
             ("noncanonical order", reorder, True),
             ("malformed chronology", malformed_chronology, True),
+            (
+                "arbitrary requested reviewer",
+                substituted_reviewer,
+                True,
+            ),
             ("feedback digest drift", lambda value: None, False),
         ):
             with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
@@ -5393,6 +5405,59 @@ class ResolveFixedThreadsTests(TestCase):
                         changed["state_digest"],
                         ("PRRT_PROVIDER_REQUEST",),
                     )
+
+        for created_at in (
+            "not-a-timestamp",
+            "2026-02-29T19:00:00Z",
+            "2026-09-16T19:00:00+00:00",
+            "2026-09-16T19:00:00.000Z",
+        ):
+            with self.subTest(created_at=created_at), tempfile.TemporaryDirectory() as directory:
+                changed = copy.deepcopy(reviewed)
+                changed["provider_review_requests"][0]["created_at"] = created_at
+                changed = add_provider_review_requests(
+                    changed, changed["provider_review_requests"]
+                )
+                path = Path(directory) / "reviewed.json"
+                path.write_text(json.dumps(changed), encoding="utf-8")
+                with self.assertRaises(MODULE.ResolutionError):
+                    MODULE.load_reviewed_state(
+                        path,
+                        "SecPal/api",
+                        123,
+                        changed["state_digest"],
+                        ("PRRT_PROVIDER_REQUEST",),
+                    )
+
+        for identity_path in (
+            ("actor", "database_id"),
+            ("requested_reviewer", "database_id"),
+        ):
+            for database_id in (True, "7"):
+                with (
+                    self.subTest(
+                        identity_path=identity_path,
+                        database_id=database_id,
+                    ),
+                    tempfile.TemporaryDirectory() as directory,
+                ):
+                    changed = copy.deepcopy(reviewed)
+                    changed["provider_review_requests"][0][identity_path[0]][
+                        identity_path[1]
+                    ] = database_id
+                    changed = add_provider_review_requests(
+                        changed, changed["provider_review_requests"]
+                    )
+                    path = Path(directory) / "reviewed.json"
+                    path.write_text(json.dumps(changed), encoding="utf-8")
+                    with self.assertRaises(MODULE.ResolutionError):
+                        MODULE.load_reviewed_state(
+                            path,
+                            "SecPal/api",
+                            123,
+                            changed["state_digest"],
+                            ("PRRT_PROVIDER_REQUEST",),
+                        )
 
     def test_cycle2_final_boundary_rejects_duplicate_eligibility_json_keys(
         self,
