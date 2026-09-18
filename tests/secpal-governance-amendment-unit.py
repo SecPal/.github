@@ -882,6 +882,11 @@ class GovernanceAmendmentTests(TestCase):
                     {"context": "license/cla", "state": "success"},
                 ],
             },
+            "unexpected context": {
+                "sha": HEAD, "state": "success", "statuses": [{
+                    "context": "unbound/provider", "state": "success",
+                }],
+            },
             "pending context": {
                 "sha": HEAD, "state": "pending", "statuses": [{
                     "context": "license/cla", "state": "pending",

@@ -30,6 +30,7 @@ ACCEPTED_MAIN_REF = "refs/heads/main"
 CONSUMPTION_DOMAIN = "secpal.governance-amendment-consumption/v1"
 CONSUMPTION_KIND = "SECPAL_GOVERNANCE_AMENDMENT_CONSUMPTION"
 LIVE_OBSERVATION_VERSION = "github-git-live-observation/v1"
+EXPECTED_STATUS_CONTEXTS = frozenset({"license/cla"})
 ROOT_AUTHORIZATION_DOMAIN = "secpal.governance-amendment-root-authorization/v1"
 ROOT_AUTHORIZATION_KIND = "SECPAL_GOVERNANCE_AMENDMENT_ROOT_AUTHORIZATION"
 HUMAN_AUTHORITY_IDENTITY = "SecPal human architecture authority for issue 960"
@@ -809,6 +810,10 @@ def _live_ci(repository: str, head_sha: str) -> dict[str, Any]:
         not runs or len(runs) >= 100
         or status_head != head_sha
         or len({status["context"] for status in contexts}) != len(contexts)
+        or any(
+            status["context"] not in EXPECTED_STATUS_CONTEXTS
+            for status in contexts
+        )
         or any(
             run["head_sha"] != head_sha or run["status"] != "completed"
             or run["conclusion"] not in {"success", "skipped"}
