@@ -468,6 +468,13 @@ current head, which must not carry a copied receipt trailer. Historical
 reviewed-state, receipt, and final-attestation bytes are never synthesized; PR
 prose cannot supply them.
 
+Successor schema 1.3 retains the same registered-repository, signed-history,
+Ready-chronology, feedback, finite-state, signer, current-safety and one-use
+boundary for the exact #948 / PR #953 source. Its authenticated history must
+contain exactly one validation-receipt trailer on the current signed remediation
+head. That digest is immutable provenance; unavailable receipt and final-
+attestation package bytes remain unavailable and are never reconstructed.
+
 The maintained issuer accepts only repository and issue selectors. Clean current
 protected main selects the exact loss acknowledgment in
 `policies/pre-enrollment-validation-evidence-loss.json`, the existing registry,
@@ -477,7 +484,7 @@ caller-reported missing files and unsigned loss flags carry no authority. It is
 exact-source policy, not an artifact store or another journal. The issuer
 authenticates the live source, head/tree/parent topology, accepted source
 signatures, complete stable feedback and provider chronology. Schema 1.0 remains
-restricted to `SecPal/.github`. Schema 1.1 additionally requires the exact
+restricted to `SecPal/.github`. Schemas 1.1 and 1.3 additionally require the exact
 central-registry entry and its protected repository-local lifecycle-publication
 policy; neither arbitrary repositories nor candidate-local registry state can
 grant admission.
@@ -505,7 +512,7 @@ The profile binds its version, harness Git blob/mode/size, command set and diges
 120-second bound, exact successful result and required invariant inventory.
 The selected policy projects exactly one accepted-main harness into a disposable
 execution copy: `tests/pre-enrollment-current-safety.py` for schema 1.0 or the
-registered-repository harness named by a schema-1.1 record. All non-test
+registered-repository harness named by a schema-1.1/1.3 record. All non-test
 candidate files retain their exact parked bytes;
 no implementation overlay, dual-version runtime or synthetic integration is
 permitted. Historical tests do not supply assertion authority. The existing
@@ -537,6 +544,11 @@ remediation budgets from authenticated observations. It grants no additional
 review, remediation, Ready transition, reset, or Cycle 3. Current-policy safety
 is fresh evidence for the exact current tree and remains distinct from the
 ancestor validation-receipt provenance.
+
+Schema 1.3 preserves the same finite Ready accounting while requiring its
+unique receipt identity at the signed current head. Fresh current safety remains
+distinct from that historical digest and does not claim the missing package
+bytes or consume another review.
 
 The signed admission becomes immutable provenance in the version-3 adoption
 proof and existing signed one-use adoption authorization. Enrollment rechecks

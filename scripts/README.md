@@ -533,6 +533,9 @@ overlay is needed. Normal repository Complete Validation is unaffected.
 The target-shaped regression retains the previously observed divergent receipt
 identities; production derives its own current execution identity. No historical
 package bytes or unauthenticated final-attestation identity are reconstructed.
+The closed schema-1.3 variant admits only #948 / PR #953's authenticated
+receipt-at-current-head history and its exact accepted-main safety harness; it
+does not generalize missing-package admission or create recovery authority.
 
 The sealed source enters existing external-evidence authentication with
 `validation_evidence=None` and a separately authenticated review-budget admission.
