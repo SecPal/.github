@@ -152,6 +152,7 @@ VALIDATION_REGISTRY_ENTRY_FIELDS = frozenset(
         "required_local_validation",
         "final_eligibility_absence_recoveries",
         "qualified_remediation_successor_evidence_loss_policy",
+        "governance_amendment_policy",
         "signature_policy",
         "lifecycle_authority_policy",
         "pre_enrollment_integration_policy",

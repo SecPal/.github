@@ -415,6 +415,16 @@
             }
           }
         },
+        "governance_amendment_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "kind", "purpose"],
+          "properties": {
+            "path": { "const": "policies/governance-amendment-bootstrap.json" },
+            "kind": { "const": "SECPAL_GOVERNANCE_AMENDMENT_AUTHORIZATION" },
+            "purpose": { "const": "EXACT_ZERO_RECEIPT_PRE_ENROLLMENT_BOOTSTRAP" }
+          }
+        },
         "signature_policy": { "type": "object" },
         "lifecycle_authority_policy": {
           "$ref": "#/$defs/lifecycle_authority_policy"

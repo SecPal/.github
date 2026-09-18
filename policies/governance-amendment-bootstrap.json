@@ -1,0 +1,52 @@
+{
+  "schema_version": "1.0",
+  "amendments": [
+    {
+      "repository": "SecPal/.github",
+      "delivery_issue": 960,
+      "pull_request": 961,
+      "qualified_source": {
+        "head_sha": "1bdcdde601bf5c96c9175f5c07c48e3f30e9d37d",
+        "tree_sha": "25ae416e95fb0704f365580c917c840dcc97303d",
+        "ordered_parent_shas": ["af5aa59ebaf81e6407048b1586a521dd1cf38c0d"],
+        "verifier_conversation_id": "21427904-1d97-4c38-bda1-f6d9f8e23b7e",
+        "verifier_workspace": "github-pr961-remediation-214279041d974c38bda1f6d9f8e23b7e",
+        "result": "PASS",
+        "material_finding_ids": [],
+        "qualification_digest": "cf11784fa573fd54240386d86c66f7ae7c4d591a60b2ac169e030a53a41d8cc8"
+      },
+      "accepted_main_sha": "3887b00e1b84ef0d14ab2846507a3100512c2c28",
+      "source_signer_identity": "aroviqen@secpal.app",
+      "allowed_path_prefixes": [
+        ".agents/skills/secpal-pr-review/references",
+        "CHANGELOG.md",
+        "docs",
+        "policies",
+        "scripts/README.md",
+        "scripts/secpal_pr_review",
+        "tests"
+      ],
+      "concepts": [
+        "GOVERNANCE_AMENDMENT",
+        "ABSENT_NEVER_ISSUED",
+        "EXACT_STATE_ADOPTION"
+      ],
+      "human_authority_identity": "SecPal human architecture authority for issue 960",
+      "human_authorization_digest": "9864653c710c636cb880a9a13096ff5cda9e1060b647f9e3315f107a329416cc",
+      "authorization_id": "governance-amendment:SecPal/.github:960:961",
+      "intended_state": {
+        "unrestricted_review_count": 1,
+        "remediation_cycle_count": 1,
+        "cycle_3_absent": true,
+        "draft": true,
+        "ready": false,
+        "ready_transition_count": 0,
+        "ready_history": [],
+        "exceptional_recovery_count": 0,
+        "exceptional_recovery_history": [],
+        "exceptional_continuation_count": 0,
+        "exceptional_continuation_history": []
+      }
+    }
+  ]
+}

@@ -552,6 +552,18 @@ Review-budget consumption remains a separate authenticated admission. Lost
 historical bytes are not reconstructed, and fresh current safety is not a
 historical receipt or another unrestricted review.
 
+Version 4 retains the same Exact-State-Adoption and protected journal/CAS
+owners. Its sole registered source is the #960 / PR #961
+`GOVERNANCE_AMENDMENT`: one existing-role signature over the exact qualified
+source, final governance-only tree and topology, accepted-main boundary,
+signatures, current validation, natural CI, independent qualification, stable
+feedback, finite counters, and explicit human architecture authority. Its
+historical evidence state is `ABSENT_NEVER_ISSUED`, with canonical null receipt,
+source-validation, and final-attestation digests. Existing versions project as
+`PRESENT` or `UNAVAILABLE` without changing their bytes. No caller assertion,
+candidate-local registration, replay, second use, product change, finding,
+counter reset, Cycle 3, or fabricated digest is authority.
+
 This boundary publishes authority; it does not derive lifecycle semantics,
 implement two-parent integration, or orchestrate the full finite workflow.
 

@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-18 - Bound One Governance Amendment Bootstrap
+
+**Fixed:**
+
+- Add one registered, governance-only amendment boundary for issue #960 / PR
+  #961, using the existing Exact-State-Adoption signer and protected journal.
+- Represent historical evidence truthfully as `PRESENT`, `UNAVAILABLE`, or
+  `ABSENT_NEVER_ISSUED`; the last state carries typed nulls and cannot synthesize
+  receipt, source-validation, or final-attestation identities.
+
 ## 2026-09-18 - Admit Exact Node-24 Delivery Evidence Loss
 
 **Fixed:**

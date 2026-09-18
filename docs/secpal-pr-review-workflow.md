@@ -459,6 +459,26 @@ Version 3 adds the distinct
 `SECPAL_PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_ADMISSION` source mode. It does
 not reinterpret versions 1/2. Loss-admission schema 1.0 retains its exact signed,
 unenrolled OPEN Draft and same-head validation-receipt-trailer semantics.
+
+Version 4 adds one closed `GOVERNANCE_AMENDMENT` source mode for the registered
+issue #960 / PR #961 bootstrap only. It accepts no historical validation object:
+the typed state is `ABSENT_NEVER_ISSUED`, and validation-receipt,
+source-validation, and final-attestation digests are canonical JSON nulls.
+`PRESENT` projects the unchanged version-1/2 evidence, while `UNAVAILABLE`
+projects unchanged version-3 evidence whose receipt identity exists but whose
+package bytes are unavailable. These states are disjoint; prose, caller flags,
+synthetic digests, and candidate-local policy cannot select one.
+
+The amendment authorization is a one-use, existing-signer statement bound to
+the registered repository, delivery, exact qualified source, final signed
+head/tree/topology, accepted-main boundary, complete governance-only change
+set, natural CI, independent exact-head qualification, stable feedback, finite
+history and counters, and explicit human architecture authority. It adds no
+journal operation, signer, lifecycle state, counter, reset, or recovery path.
+Publication remains ordinary Exact-State-Adoption enrollment and journal CAS.
+Future deliveries must establish native genesis and commit-bound validation
+authority before review, remediation, or a Ready transition; this exact policy
+is not a generic grandfather or administrative override.
 Successor schema 1.1 admits an exact Ready source only for a centrally registered
 repository with accepted lifecycle authority. It authenticates the complete
 delivery source history, every required edge and commit signature, and derives

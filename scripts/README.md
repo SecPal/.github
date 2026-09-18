@@ -478,6 +478,15 @@ Mixed provider-review/admission inputs, replay into another context, resets,
 and using the admission to derive remediation or Ready state fail closed.
 The lifecycle-authority suite is an unconditional registered validation command.
 
+Exact-State-Adoption version 4 is the registered, one-delivery
+`GOVERNANCE_AMENDMENT` mode for #960 / PR #961. It represents historical
+validation as `ABSENT_NEVER_ISSUED` with typed null receipt, source-validation,
+and final-attestation fields. It consumes an independently signed exact-scope
+authorization only after current validation, natural CI, exact-head independent
+qualification, and zero material findings; it cannot issue that authorization,
+change lifecycle counters, or add a publication operation. Versions 1/2 remain
+`PRESENT`, and version 3 remains `UNAVAILABLE`, without serialization changes.
+
 ### `secpal_pr_review/validation_evidence_loss.py`
 
 Owns the versioned
