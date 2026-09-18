@@ -566,7 +566,9 @@ counter reset, Cycle 3, or fabricated digest is authority.
 
 Issuance requires an exact canonical root observation of the Ready PR with one
 authenticated `ready_for_review` event and the complete required workflow set
-registered after that event terminal and successful, signed by the existing
+registered strictly after that event terminal and successful. Canonical timestamps
+and the bounded exact run count fail closed on equal-time or truncated evidence.
+The observation is signed by the existing
 authority role and then the existing legacy-adoption signature. Execution requires a distinct
 fresh observation with identical facts. It
 uses one canonical digest for the complete ordered accepted-main-to-head source

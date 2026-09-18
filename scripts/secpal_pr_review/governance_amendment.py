@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import copy
+from datetime import datetime
 import json
 from pathlib import Path
 import re
@@ -892,7 +893,14 @@ def _live_ready_ci(
             for event in events if event.get("event") == "ready_for_review"
         ]
         raw_runs = runs_value["workflow_runs"]
-        if not isinstance(raw_runs, list) or len(raw_runs) >= 100:
+        total_count = runs_value["total_count"]
+        if (
+            not isinstance(raw_runs, list)
+            or not isinstance(total_count, int)
+            or isinstance(total_count, bool)
+            or total_count != len(raw_runs)
+            or total_count >= 100
+        ):
             raise TypeError
         runs = sorted(
             ({
@@ -921,24 +929,33 @@ def _live_ready_ci(
         or not ready[0]["created_at"]
         or not isinstance(ready[0]["actor"], str)
         or not ready[0]["actor"]
-        or any(
-            not isinstance(run["created_at"], str)
-            or not isinstance(run["run_started_at"], str)
-            for run in runs
-        )
     ):
         raise GovernanceAmendmentError(
             "live governance amendment Ready CI is not terminal and passing"
         )
-    ready_at = ready[0]["created_at"]
-    ready_runs = [run for run in runs if run["created_at"] >= ready_at]
+    try:
+        ready_at = datetime.strptime(
+            ready[0]["created_at"], "%Y-%m-%dT%H:%M:%SZ"
+        )
+        timed_runs = [(
+            run,
+            datetime.strptime(run["created_at"], "%Y-%m-%dT%H:%M:%SZ"),
+            datetime.strptime(run["run_started_at"], "%Y-%m-%dT%H:%M:%SZ"),
+        ) for run in runs]
+    except (TypeError, ValueError) as exc:
+        raise GovernanceAmendmentError(
+            "live governance amendment Ready CI has invalid timestamps"
+        ) from exc
+    ready_runs = [
+        run for run, created_at, _started_at in timed_runs
+        if created_at > ready_at
+    ]
     if (
         {run["name"] for run in ready_runs} != READY_WORKFLOW_NAMES
         or any(
             not isinstance(run["id"], int)
             or run["event"] != "pull_request_target"
             or run["head_sha"] != head_sha
-            or run["run_started_at"] < ready_at
             or run["status"] != "completed"
             or run["conclusion"] != "success"
             or len(run["pull_requests"]) != 1
@@ -948,6 +965,10 @@ def _live_ready_ci(
                 "base_sha": accepted_main_sha,
             }
             for run in ready_runs
+        )
+        or any(
+            started_at < created_at
+            for _run, created_at, started_at in timed_runs
         )
     ):
         raise GovernanceAmendmentError(

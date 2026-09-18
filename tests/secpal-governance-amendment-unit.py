@@ -535,7 +535,10 @@ class GovernanceAmendmentTests(TestCase):
                 elif "issues/961/events" in joined:
                     value = ready_events
                 elif "actions/runs" in joined:
-                    value = {"workflow_runs": ready_runs}
+                    value = {
+                        "total_count": len(ready_runs),
+                        "workflow_runs": ready_runs,
+                    }
                 elif "check-runs" in joined:
                     value = {"check_runs": checks}
                 elif "/status" in joined:
@@ -913,7 +916,10 @@ class GovernanceAmendmentTests(TestCase):
                 elif "issues/961/events" in joined:
                     value = ready_events
                 elif "actions/runs" in joined:
-                    value = {"workflow_runs": ready_runs}
+                    value = {
+                        "total_count": len(ready_runs),
+                        "workflow_runs": ready_runs,
+                    }
                 elif "check-runs" in joined:
                     value = {"check_runs": checks}
                 elif "/status" in joined:
@@ -1062,8 +1068,14 @@ class GovernanceAmendmentTests(TestCase):
         def observe(
             event_values: list[dict[str, object]],
             run_values: list[dict[str, object]],
+            *, total_count: int | None = None,
         ) -> dict[str, object]:
-            responses = iter((event_values, {"workflow_runs": run_values}))
+            responses = iter((event_values, {
+                "total_count": (
+                    len(run_values) if total_count is None else total_count
+                ),
+                "workflow_runs": run_values,
+            }))
 
             def github(arguments: list[str]):
                 return subprocess.CompletedProcess(
@@ -1115,6 +1127,17 @@ class GovernanceAmendmentTests(TestCase):
                 events,
                 [dict(runs[0], created_at="2026-09-18T11:59:59Z")] + runs[1:],
             ),
+            "equal-time workflow": (
+                events,
+                [dict(runs[0], created_at="2026-09-18T12:00:00Z")] + runs[1:],
+            ),
+            "malformed event time": (
+                [dict(events[0], created_at="z")], runs,
+            ),
+            "malformed workflow time": (
+                events,
+                [dict(runs[0], created_at="zz")] + runs[1:],
+            ),
             "pending workflow": (
                 events,
                 [dict(runs[0], status="in_progress", conclusion=None)] + runs[1:],
@@ -1140,6 +1163,9 @@ class GovernanceAmendmentTests(TestCase):
                 amendment.GovernanceAmendmentError
             ):
                 observe(event_values, run_values)
+
+        with self.assertRaises(amendment.GovernanceAmendmentError):
+            observe(events, runs, total_count=101)
 
     def test_live_feedback_uses_valid_closed_query_and_fails_closed(self) -> None:
         def observe(
