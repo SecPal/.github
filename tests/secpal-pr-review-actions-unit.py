@@ -26,7 +26,11 @@ from unittest import TestCase, main, mock
 
 import jsonschema
 
-from scripts.secpal_pr_review import lifecycle_publication
+from scripts import secpal_pr_review as review_package
+from scripts.secpal_pr_review import (
+    lifecycle_publication,
+    qualified_remediation_successor_loss,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -14197,6 +14201,187 @@ class ReadySourceCurrentSafetyTests(TestCase):
                 extra = roots.tooling / "scripts/extra-authority.py"
                 extra.write_text("authority = True\n", encoding="utf-8")
                 extra.chmod(0o755)
+
+
+class QualifiedRemediationSuccessorApplicationTests(TestCase):
+    def setUp(self) -> None:
+        self.record = qualified_remediation_successor_loss.load_accepted_admission(
+            "SecPal/.github", 956
+        )
+        self.entry = actions.select_repository(
+            actions.load_registry(), "SecPal/.github"
+        )
+        self.current = SimpleNamespace(
+            publication_oid=self.record["predecessor"]["publication_oid"],
+            publication_digest=self.record["predecessor"]["publication_digest"],
+            lifecycle=SimpleNamespace(
+                authority_digest=self.record["predecessor"][
+                    "terminal_authority_digest"
+                ],
+                pull_request=self.record["pull_request"],
+                head_sha=self.record["predecessor"]["head_sha"],
+                tree_sha=self.record["predecessor"]["tree_sha"],
+                state=copy.deepcopy(self.record["predecessor_state"]),
+            ),
+        )
+        self.evidence = SimpleNamespace(
+            head_sha=self.record["successor"]["head_sha"],
+            tree_sha=self.record["successor"]["tree_sha"],
+            validation_receipt_digest="a" * 64,
+            source_validation_evidence_digest="b" * 64,
+        )
+        self.gates = [
+            {
+                "gate": gate,
+                "satisfied": True,
+                "evidence": "verified by the hermetic regression fixture",
+            }
+            for gate in self.entry["manual_gates"]
+        ]
+
+    def _run(
+        self,
+        candidate: Path,
+        *,
+        current: Any | None = None,
+        evidence: Any | None = None,
+    ) -> tuple[dict[str, Any], mock.Mock, mock.Mock]:
+        selected_current = self.current if current is None else current
+        selected_evidence = self.evidence if evidence is None else evidence
+        published = SimpleNamespace(
+            publication_oid="c" * 40,
+            publication_digest="d" * 64,
+            lifecycle=SimpleNamespace(
+                authority_digest="e" * 64,
+                head_sha=self.record["successor"]["head_sha"],
+                state=copy.deepcopy(self.record["resulting_state"]),
+                validation_receipt_digest=(
+                    self.evidence.validation_receipt_digest
+                ),
+                source_validation_evidence_digest=(
+                    self.evidence.source_validation_evidence_digest
+                ),
+            ),
+        )
+        publication = SimpleNamespace(
+            verify_current_lifecycle_authority=mock.Mock(
+                return_value=selected_current
+            ),
+            advance_current_terminal=mock.Mock(return_value=published),
+        )
+        append = mock.Mock(return_value=b"authenticated successor")
+        signers = SimpleNamespace(
+            publication_identity=self.record["signer_identity"],
+            publication_signer=object(),
+        )
+
+        def git_result(
+            _root: Path, arguments: list[str], *, allow_failure: bool = False
+        ) -> subprocess.CompletedProcess[str]:
+            del allow_failure
+            return subprocess.CompletedProcess(
+                arguments, 0, "" if arguments[0] == "merge-base" else "\n", ""
+            )
+
+        with (
+            mock.patch.dict(sys.modules, {"secpal_pr_review": review_package}),
+            mock.patch.object(
+                actions,
+                "_load_current_recovery_policy",
+                return_value=(
+                    self.record["accepted_main_at_classification"], self.entry
+                ),
+            ),
+            mock.patch.object(actions, "_run_attestation_git", side_effect=git_result),
+            mock.patch.object(actions, "_verify_recovery_issuer_source"),
+            mock.patch.object(
+                actions,
+                "_load_lifecycle_publication_helpers",
+                return_value=(object(), publication),
+            ),
+            mock.patch.object(
+                actions,
+                "_acquire_ready_source_recovery_facts",
+                return_value=({"qualified": True}, object()),
+            ),
+            mock.patch.object(
+                fast_path,
+                "qualified_remediation_successor_loss_validation_evidence",
+                side_effect=(
+                    selected_evidence
+                    if isinstance(selected_evidence, BaseException)
+                    else None
+                ),
+                return_value=(
+                    None
+                    if isinstance(selected_evidence, BaseException)
+                    else selected_evidence
+                ),
+            ),
+            mock.patch(
+                "secpal_pr_review.lifecycle_execution._production_signing_authorities",
+                return_value=signers,
+            ),
+            mock.patch(
+                "secpal_pr_review.lifecycle_execution._append_successor_evidence",
+                append,
+            ),
+        ):
+            report = actions.advance_qualified_remediation_successor_loss(
+                repository_root=candidate,
+                manual_gate_evidence=self.gates,
+                apply=True,
+            )
+        return report, append, publication.advance_current_terminal
+
+    def test_exact_qualified_successor_uses_existing_publication_authority(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report, append, publish = self._run(Path(directory))
+
+        self.assertTrue(report["applied"])
+        self.assertEqual(report["head_sha"], self.record["successor"]["head_sha"])
+        self.assertEqual(report["resulting_state"], self.record["resulting_state"])
+        self.assertEqual(
+            append.call_args.args[1],
+            {
+                "authorization_digest": self.record["admission_digest"],
+                "operation": "REMEDIATION_COMPLETED",
+            },
+        )
+        self.assertEqual(
+            append.call_args.kwargs["resulting_head_sha"],
+            self.record["successor"]["head_sha"],
+        )
+        self.assertIs(
+            append.call_args.kwargs["current_head_evidence"], self.evidence
+        )
+        publish.assert_called_once_with(
+            b"authenticated successor",
+            signer_identity=self.record["signer_identity"],
+            signer=mock.ANY,
+        )
+
+    def test_substituted_predecessor_identity_state_and_evidence_fail_closed(
+        self,
+    ) -> None:
+        identity = copy.deepcopy(self.current)
+        identity.publication_oid = "0" * 40
+        state = copy.deepcopy(self.current)
+        state.lifecycle.state["remediation_cycle_count"] = 0
+        substitutions = {
+            "publication identity": (identity, self.evidence),
+            "lifecycle state": (state, self.evidence),
+            "current evidence": (
+                self.current,
+                fast_path.SecurityBlocker("substituted current evidence"),
+            ),
+        }
+        for label, (current, evidence) in substitutions.items():
+            with tempfile.TemporaryDirectory() as directory, self.subTest(label=label):
+                with self.assertRaises(fast_path.SecurityBlocker):
+                    self._run(Path(directory), current=current, evidence=evidence)
 
 
 class PolicyScriptTests(TestCase):

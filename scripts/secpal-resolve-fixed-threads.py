@@ -2175,6 +2175,52 @@ def _require_valid_final_feedback_boundary(
     if boundary.eligibility_mode is (
         FinalEligibilityMode.NO_COMMIT_BOUND_RECOVERED_READY_ELIGIBILITY
     ):
+        if boundary.validation.kind == "qualified-remediation-successor-loss":
+            from secpal_pr_review import (
+                qualified_remediation_successor_loss as loss,
+            )
+
+            admission = boundary.validation.qualified_remediation_admission
+            receipt = boundary.validation.validation_receipt
+            try:
+                verified_admission = loss.verify_admission(admission)
+            except loss.QualifiedRemediationSuccessorLossError as exc:
+                raise ResolutionError(
+                    "qualified remediation successor boundary is invalid"
+                ) from exc
+            if (
+                boundary.eligibility is not None
+                or boundary.eligibility_absence is not None
+                or boundary.validation.final_eligibility_absence is not None
+                or boundary.validation.integration_evidence is not None
+                or boundary.validation.eligibility_evidence_digest is not None
+                or boundary.validation.ready_source_recovery is not None
+                or boundary.validation.ready_source_recovery_verification_seal
+                is not None
+                or boundary.validation.qualified_remediation_verification_seal
+                is not _VERIFIED_QUALIFIED_REMEDIATION
+                or admission != verified_admission
+                or boundary.reviewed.payload
+                != boundary.validation.attestation.get("reviewed_state")
+                or receipt
+                != boundary.validation.attestation.get(
+                    "fresh_validation_receipt"
+                )
+                or boundary.reviewed.head_sha
+                != admission["successor"]["head_sha"]
+                or boundary.reviewed.state_digest
+                != admission["qualification"]["reviewed_state_digest"]
+                or boundary.reviewed.feedback_digest
+                != admission["qualification"]["reviewed_feedback_digest"]
+                or boundary.validation.validated_tree_sha
+                != admission["successor"]["tree_sha"]
+                or "eligibility_evidence_digest" in receipt
+                or "integration_evidence_digest" in receipt
+            ):
+                raise ResolutionError(
+                    "qualified remediation successor boundary is invalid"
+                )
+            return
         recovery = boundary.validation.ready_source_recovery
         receipt = boundary.validation.validation_receipt
         if (
