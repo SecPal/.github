@@ -16,6 +16,7 @@ import binascii
 import copy
 from dataclasses import dataclass
 import hashlib
+import json
 from pathlib import Path
 import re
 import tempfile
@@ -283,6 +284,7 @@ class VerifiedContinuationFindingAuthority:
 
 
 _ORDINARY_READY_REMEDIATION_FINDING_AUTHORITY_SEAL = object()
+_POST_READY_VALIDATION_DEFECT_AUTHORITY_SEAL = object()
 
 
 @dataclass(frozen=True)
@@ -308,6 +310,390 @@ class VerifiedOrdinaryReadyRemediationFindingAuthority:
     thread_ids: tuple[str, ...]
     finding_authority_digest: str
     _verification_seal: object
+
+
+@dataclass(frozen=True)
+class VerifiedPostReadyValidationDefectAuthority:
+    """One independently reproduced validation defect using the remaining slot."""
+
+    source_kind: str
+    classification: str
+    technically_blocking: bool
+    repository: str
+    delivery_issue: int
+    pull_request: int
+    lifecycle_id: str
+    current_publication_oid: str
+    current_publication_digest: str
+    current_authority_digest: str
+    current_head_sha: str
+    current_tree_sha: str
+    resulting_head_sha: str
+    resulting_tree_sha: str
+    failure_observation_digest: str
+    defect_proof_digest: str
+    candidate_validation_digest: str
+    correction_authentication_digest: str
+    finding_id: str
+    finding_authority_digest: str
+    _verification_seal: object
+
+
+def _post_ready_validation_defect_projection(
+    value: VerifiedPostReadyValidationDefectAuthority,
+) -> dict[str, Any]:
+    return {
+        "domain": "secpal.post-ready-validation-defect-authority/v1",
+        "source_kind": value.source_kind,
+        "classification": value.classification,
+        "technically_blocking": value.technically_blocking,
+        "repository": value.repository,
+        "delivery_issue": value.delivery_issue,
+        "pull_request": value.pull_request,
+        "lifecycle_id": value.lifecycle_id,
+        "current_publication_oid": value.current_publication_oid,
+        "current_publication_digest": value.current_publication_digest,
+        "current_authority_digest": value.current_authority_digest,
+        "current_head_sha": value.current_head_sha,
+        "current_tree_sha": value.current_tree_sha,
+        "resulting_head_sha": value.resulting_head_sha,
+        "resulting_tree_sha": value.resulting_tree_sha,
+        "failure_observation_digest": value.failure_observation_digest,
+        "defect_proof_digest": value.defect_proof_digest,
+        "candidate_validation_digest": value.candidate_validation_digest,
+        "correction_authentication_digest": value.correction_authentication_digest,
+        "finding_id": value.finding_id,
+    }
+
+
+_FAILURE_OBSERVATION_FIELDS = frozenset(
+    {
+        "repository", "pull_request", "head_sha", "pr_state", "draft",
+        "workflow_name", "check_name", "workflow_run_id", "check_run_id",
+        "status", "conclusion", "attempt",
+    }
+)
+
+
+def _read_live_post_ready_failure(repository: str, pull_request: int) -> dict[str, Any]:
+    """Read one deterministic terminal failure from the exact live PR head."""
+
+    result = publication._run_gh([
+        "pr", "view", str(pull_request), "--repo", repository,
+        "--json", "state,isDraft,headRefOid,headRepository,statusCheckRollup",
+    ])
+    if result.returncode != 0:
+        raise LifecycleOrchestrationError("live validation failure is unavailable")
+    try:
+        payload = json.loads(
+            result.stdout,
+            object_pairs_hook=publication._reject_duplicate_pairs,
+        )
+        if (
+            payload.get("state") != "OPEN"
+            or payload.get("isDraft") is not False
+            or (payload.get("headRepository") or {}).get("nameWithOwner")
+            != repository
+        ):
+            raise LifecycleOrchestrationError(
+                "live validation failure does not belong to an OPEN Ready PR"
+            )
+        failures = [
+            item for item in payload.get("statusCheckRollup", [])
+            if isinstance(item, dict)
+            and item.get("__typename") == "CheckRun"
+            and item.get("status") == "COMPLETED"
+            and item.get("conclusion") == "FAILURE"
+            and isinstance(item.get("detailsUrl"), str)
+        ]
+        failures.sort(key=lambda item: (
+            str(item.get("workflowName", "")), str(item.get("name", "")),
+            str(item.get("detailsUrl", "")),
+        ))
+        if not failures:
+            raise LifecycleOrchestrationError(
+                "exact current head has no terminal validation failure"
+            )
+        failure = failures[0]
+        match = re.fullmatch(
+            r"https://github\.com/([^/]+/[^/]+)/actions/runs/([1-9][0-9]*)/job/([1-9][0-9]*)",
+            failure["detailsUrl"],
+        )
+        if match is None or match.group(1) != repository:
+            raise LifecycleOrchestrationError(
+                "validation failure run identity is malformed or cross-repository"
+            )
+        workflow_run_id = int(match.group(2))
+        run = publication._run_gh([
+            "api", "--hostname", "github.com",
+            f"repos/{repository}/actions/runs/{workflow_run_id}",
+        ])
+        if run.returncode != 0:
+            raise LifecycleOrchestrationError(
+                "validation failure attempt identity is unavailable"
+            )
+        run_payload = json.loads(
+            run.stdout,
+            object_pairs_hook=publication._reject_duplicate_pairs,
+        )
+        if (
+            run_payload.get("id") != workflow_run_id
+            or run_payload.get("head_sha") != payload.get("headRefOid")
+            or run_payload.get("status") != "completed"
+            or run_payload.get("conclusion") != "failure"
+            or (run_payload.get("repository") or {}).get("full_name") != repository
+        ):
+            raise LifecycleOrchestrationError(
+                "validation failure attempt differs from the current PR head"
+            )
+        return {
+            "repository": repository,
+            "pull_request": pull_request,
+            "head_sha": payload["headRefOid"],
+            "pr_state": payload["state"],
+            "draft": payload["isDraft"],
+            "workflow_name": failure.get("workflowName"),
+            "check_name": failure.get("name"),
+            "workflow_run_id": workflow_run_id,
+            "check_run_id": int(match.group(3)),
+            "status": failure["status"],
+            "conclusion": failure["conclusion"],
+            "attempt": run_payload.get("run_attempt"),
+        }
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise LifecycleOrchestrationError(
+            "live validation failure evidence is malformed"
+        ) from exc
+
+
+def _validated_failure_observation(
+    value: Any, lifecycle: authority.VerifiedLifecycleAuthority,
+) -> tuple[dict[str, Any], str]:
+    if not isinstance(value, dict) or set(value) != _FAILURE_OBSERVATION_FIELDS:
+        raise LifecycleOrchestrationError("validation failure observation is not closed")
+    if (
+        value["repository"] != lifecycle.repository
+        or value["pull_request"] != lifecycle.pull_request
+        or value["head_sha"] != lifecycle.head_sha
+        or value["pr_state"] != "OPEN"
+        or value["draft"] is not False
+        or value["status"] != "COMPLETED"
+        or value["conclusion"] != "FAILURE"
+        or not isinstance(value["workflow_name"], str)
+        or not value["workflow_name"].strip()
+        or not isinstance(value["check_name"], str)
+        or not value["check_name"].strip()
+        or any(
+            not isinstance(value[field], int)
+            or isinstance(value[field], bool)
+            or value[field] <= 0
+            for field in ("workflow_run_id", "check_run_id", "attempt")
+        )
+    ):
+        raise LifecycleOrchestrationError(
+            "validation failure is stale, non-terminal, or cross-identity"
+        )
+    normalized = copy.deepcopy(value)
+    return normalized, fast_path.digest_json({
+        "domain": "secpal.post-ready-validation-failure-observation/v1",
+        **normalized,
+    })
+
+
+def _git_text(root: Path, revision: str, path: str) -> str:
+    result = publication._run_git(root, ["show", f"{revision}:{path}"])
+    if result.returncode != 0:
+        raise LifecycleOrchestrationError(
+            "candidate invariant input is unavailable from authenticated bytes"
+        )
+    try:
+        return result.stdout.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise LifecycleOrchestrationError(
+            "candidate invariant input is not UTF-8"
+        ) from exc
+
+
+def _node_version_floor(value: Any) -> tuple[int, int, int] | None:
+    if not isinstance(value, str):
+        return None
+    match = re.match(r"^\s*(?:\^|~|>=\s*)?([0-9]+)(?:\.([0-9xX*]+))?(?:\.([0-9xX*]+))?", value)
+    if match is None:
+        return None
+    parts = [match.group(1), match.group(2), match.group(3)]
+    return tuple(
+        0 if part is None or part.lower() in {"x", "*"} else int(part)
+        for part in parts
+    )
+
+
+def _setup_node_selectors(workflow: str) -> tuple[str, ...]:
+    lines = workflow.splitlines()
+    selectors: list[str] = []
+    for index, line in enumerate(lines):
+        if not re.search(r"\buses:\s*actions/setup-node@", line):
+            continue
+        indentation = len(line) - len(line.lstrip())
+        for candidate in lines[index + 1 :]:
+            candidate_indent = len(candidate) - len(candidate.lstrip())
+            if candidate.strip() and candidate_indent <= indentation:
+                break
+            match = re.match(
+                r"^\s*node-version:\s*['\"]?([^'\"#]+?)['\"]?\s*(?:#.*)?$",
+                candidate,
+            )
+            if match:
+                selectors.append(match.group(1).strip())
+                break
+    return tuple(selectors)
+
+
+def _workflow_name(workflow: str) -> str | None:
+    for line in workflow.splitlines():
+        match = re.match(r"^name:\s*['\"]?([^'\"#]+?)['\"]?\s*(?:#.*)?$", line)
+        if match:
+            return match.group(1).strip()
+    return None
+
+
+def _node_engine_contract(root: Path, revision: str) -> str:
+    try:
+        package = json.loads(
+            _git_text(root, revision, "package.json"),
+            object_pairs_hook=publication._reject_duplicate_pairs,
+        )
+        engine = package["engines"]["node"]
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise LifecycleOrchestrationError(
+            "candidate Node engine contract is unavailable or malformed"
+        ) from exc
+    if not isinstance(engine, str) or not engine.strip():
+        raise LifecycleOrchestrationError(
+            "candidate Node engine contract is unavailable or malformed"
+        )
+    return engine
+
+
+def _node_selector_violations(root: Path, revision: str) -> tuple[dict[str, Any], ...]:
+    engine = _node_engine_contract(root, revision)
+    engine_floor = _node_version_floor(engine)
+    if engine_floor is None:
+        raise LifecycleOrchestrationError(
+            "candidate Node engine floor cannot be derived deterministically"
+        )
+    listed = publication._run_git(
+        root,
+        ["ls-tree", "-r", "--name-only", revision, "--", ".github/workflows"],
+    )
+    if listed.returncode != 0:
+        raise LifecycleOrchestrationError("candidate workflow bytes are unavailable")
+    paths = sorted(
+        path for path in listed.stdout.decode("utf-8").splitlines()
+        if path.endswith((".yml", ".yaml"))
+    )
+    violations: list[dict[str, Any]] = []
+    for path in paths:
+        workflow = _git_text(root, revision, path)
+        workflow_name = _workflow_name(workflow)
+        for selector in _setup_node_selectors(workflow):
+            selector_floor = _node_version_floor(selector)
+            if (
+                selector_floor is not None
+                and selector_floor < engine_floor
+            ):
+                violations.append({
+                    "path": path,
+                    "workflow_name": workflow_name,
+                    "selector": selector,
+                    "selector_floor": ".".join(map(str, selector_floor)),
+                    "engine": engine,
+                    "engine_floor": ".".join(map(str, engine_floor)),
+                })
+    return tuple(violations)
+
+
+def _verify_node_selector_defect_correction(
+    root: Path,
+    *,
+    repository: str,
+    pull_request: int,
+    predecessor_head: str,
+    predecessor_tree: str,
+    resulting_head: str,
+    resulting_tree: str,
+    observed_workflow_name: str,
+) -> str:
+    head = publication._run_git(root, ["rev-parse", "HEAD"])
+    tree = publication._run_git(root, ["rev-parse", "HEAD^{tree}"])
+    parent = publication._run_git(root, ["rev-parse", "HEAD^"])
+    predecessor_tree_result = publication._run_git(
+        root, ["rev-parse", f"{predecessor_head}^{{tree}}"]
+    )
+    if (
+        head.returncode != 0
+        or tree.returncode != 0
+        or parent.returncode != 0
+        or predecessor_tree_result.returncode != 0
+        or head.stdout.decode().strip() != resulting_head
+        or tree.stdout.decode().strip() != resulting_tree
+        or parent.stdout.decode().strip() != predecessor_head
+        or predecessor_tree_result.stdout.decode().strip() != predecessor_tree
+    ):
+        raise LifecycleOrchestrationError(
+            "correction is not the exact sole-parent successor"
+        )
+    predecessor_violations = _node_selector_violations(root, predecessor_head)
+    resulting_violations = _node_selector_violations(root, resulting_head)
+    if (
+        _node_engine_contract(root, predecessor_head)
+        != _node_engine_contract(root, resulting_head)
+    ):
+        raise LifecycleOrchestrationError(
+            "correction changed rather than enforced the candidate engine contract"
+        )
+    observed_violations = tuple(
+        item for item in predecessor_violations
+        if item["workflow_name"] == observed_workflow_name
+    )
+    if not observed_violations or resulting_violations:
+        raise LifecycleOrchestrationError(
+            "candidate defect is not independently reproduced and corrected"
+        )
+    changed = publication._run_git(
+        root, ["diff-tree", "--no-commit-id", "--name-only", "-r", resulting_head]
+    )
+    if changed.returncode != 0:
+        raise LifecycleOrchestrationError("correction path evidence is unavailable")
+    changed_paths = sorted(filter(None, changed.stdout.decode("utf-8").splitlines()))
+    relevant_workflows = {item["path"] for item in predecessor_violations}
+    def relevant(path: str) -> bool:
+        name = Path(path).name.lower()
+        return (
+            path in relevant_workflows
+            or (
+                path.startswith(("scripts/", "tests/"))
+                and ("node" in name or "toolchain" in name)
+            )
+        )
+    if not changed_paths or any(not relevant(path) for path in changed_paths):
+        raise LifecycleOrchestrationError(
+            "correction contains changes unrelated to the reproduced defect"
+        )
+    proof = {
+        "domain": "secpal.workflow-node-selector-engine-proof/v1",
+        "repository": repository,
+        "pull_request": pull_request,
+        "predecessor_head_sha": predecessor_head,
+        "predecessor_tree_sha": predecessor_tree,
+        "resulting_head_sha": resulting_head,
+        "resulting_tree_sha": resulting_tree,
+        "classification": "IN_CONTRACT_DEFECT",
+        "technically_blocking": True,
+        "observed_workflow_name": observed_workflow_name,
+        "violations": list(observed_violations),
+        "changed_paths": changed_paths,
+    }
+    return fast_path.digest_json(proof)
 
 
 def _ordinary_ready_remediation_finding_authority_projection(
@@ -486,10 +872,30 @@ def verify_ready_remediation_provider_growth_authority(
 
 
 def ordinary_ready_remediation_authorization_scope(
-    value: VerifiedOrdinaryReadyRemediationFindingAuthority,
+    value: (
+        VerifiedOrdinaryReadyRemediationFindingAuthority
+        | VerifiedPostReadyValidationDefectAuthority
+    ),
 ) -> dict[str, Any]:
     """Derive the existing ordinary authorization scope without a caller subset."""
 
+    if isinstance(value, VerifiedPostReadyValidationDefectAuthority):
+        if (
+            value._verification_seal
+            is not _POST_READY_VALIDATION_DEFECT_AUTHORITY_SEAL
+            or value.finding_authority_digest
+            != fast_path.digest_json(_post_ready_validation_defect_projection(value))
+        ):
+            raise LifecycleOrchestrationError(
+                "post-Ready validation-defect authority is unauthenticated"
+            )
+        return {
+            "pull_request": value.pull_request,
+            "predecessor_head_sha": value.current_head_sha,
+            "resulting_head_sha": value.resulting_head_sha,
+            "finding_ids": [value.finding_id],
+            "finding_authority_digest": value.finding_authority_digest,
+        }
     if (
         not isinstance(value, VerifiedOrdinaryReadyRemediationFindingAuthority)
         or value._verification_seal
@@ -511,6 +917,187 @@ def ordinary_ready_remediation_authorization_scope(
     }
 
 
+def _verify_post_ready_validation_defect_authority(
+    current: publication.VerifiedLifecyclePublication,
+    *,
+    candidate_validation: fast_path.VerifiedValidationEvidence,
+    authenticated_commit: fast_path.AuthenticatedIntegrationCommit,
+    repository_root: Path | str,
+    failure_reader: Callable[[str, int], Any] = _read_live_post_ready_failure,
+) -> VerifiedPostReadyValidationDefectAuthority:
+    """Admit one exact validation defect into the existing remaining slot."""
+
+    if not isinstance(current, publication.VerifiedLifecyclePublication):
+        raise LifecycleOrchestrationError(
+            "post-Ready validation remediation requires authenticated CURRENT"
+        )
+    lifecycle = current.lifecycle
+    try:
+        state = authority._validate_state(copy.deepcopy(lifecycle.state))
+        root = Path(repository_root).resolve(strict=True)
+    except (authority.LifecycleAuthorityError, OSError, RuntimeError) as exc:
+        raise LifecycleOrchestrationError(
+            "post-Ready validation remediation source authority is invalid"
+        ) from exc
+    if (
+        state["unrestricted_review_count"] != authority.MAX_UNRESTRICTED_REVIEWS
+        or state["remediation_cycle_count"] != 1
+        or state["remediation_cycle_count"] >= authority.MAX_REMEDIATION_CYCLES
+        or state["cycle_3_absent"] is not True
+        or state["draft"] is not False
+        or state["ready"] is not True
+        or state["ready_transition_count"] != 1
+        or state["exceptional_recovery_count"] != 0
+        or state["exceptional_continuation_count"] != 0
+        or not isinstance(lifecycle.tree_sha, str)
+    ):
+        raise LifecycleOrchestrationError(
+            "post-Ready validation remediation requires the exact remaining-slot state"
+        )
+    observation, observation_digest = _validated_failure_observation(
+        failure_reader(lifecycle.repository, lifecycle.pull_request), lifecycle
+    )
+    if (
+        not fast_path.is_verified_validation_evidence(candidate_validation)
+        or candidate_validation.repository != lifecycle.repository
+        or candidate_validation.delivery_issue_number != lifecycle.delivery_issue
+        or candidate_validation.pull_request_number != lifecycle.pull_request
+        or candidate_validation.head_sha == lifecycle.head_sha
+        or candidate_validation.validation_receipt_digest
+        == lifecycle.validation_receipt_digest
+        or candidate_validation.final_attestation_digest
+        == lifecycle.adoption_source_evidence_digest
+        or not fast_path._authenticated_integration_commit_agrees(
+            authenticated_commit,
+            repository=lifecycle.repository,
+            head_sha=candidate_validation.head_sha,
+            tree_sha=candidate_validation.tree_sha,
+            parent_shas=[lifecycle.head_sha],
+            expected_signer={
+                "kind": authenticated_commit.signer_kind,
+                "identity": authenticated_commit.signer_identity,
+            },
+        )
+    ):
+        raise LifecycleOrchestrationError(
+            "corrected candidate validation, topology, or signer is invalid"
+        )
+    proof_digest = _verify_node_selector_defect_correction(
+        root,
+        repository=lifecycle.repository,
+        pull_request=lifecycle.pull_request,
+        predecessor_head=lifecycle.head_sha,
+        predecessor_tree=lifecycle.tree_sha,
+        resulting_head=candidate_validation.head_sha,
+        resulting_tree=candidate_validation.tree_sha,
+        observed_workflow_name=observation["workflow_name"],
+    )
+    candidate_validation_digest = fast_path.digest_json(
+        fast_path._validation_evidence_binding(candidate_validation)
+    )
+    finding_id = f"POST_READY_VALIDATION:{proof_digest[:32]}"
+    fields = {
+        "source_kind": "POST_READY_IN_CONTRACT_VALIDATION_DEFECT",
+        "classification": "IN_CONTRACT_DEFECT",
+        "technically_blocking": True,
+        "repository": lifecycle.repository,
+        "delivery_issue": lifecycle.delivery_issue,
+        "pull_request": lifecycle.pull_request,
+        "lifecycle_id": lifecycle.lifecycle_id,
+        "current_publication_oid": current.publication_oid,
+        "current_publication_digest": current.publication_digest,
+        "current_authority_digest": lifecycle.authority_digest,
+        "current_head_sha": lifecycle.head_sha,
+        "current_tree_sha": lifecycle.tree_sha,
+        "resulting_head_sha": candidate_validation.head_sha,
+        "resulting_tree_sha": candidate_validation.tree_sha,
+        "failure_observation_digest": observation_digest,
+        "defect_proof_digest": proof_digest,
+        "candidate_validation_digest": candidate_validation_digest,
+        "correction_authentication_digest": authenticated_commit.authentication_digest,
+        "finding_id": finding_id,
+    }
+    provisional = VerifiedPostReadyValidationDefectAuthority(
+        **fields,
+        finding_authority_digest="0" * 64,
+        _verification_seal=None,
+    )
+    digest = fast_path.digest_json(_post_ready_validation_defect_projection(provisional))
+    return VerifiedPostReadyValidationDefectAuthority(
+        **fields,
+        finding_authority_digest=digest,
+        _verification_seal=_POST_READY_VALIDATION_DEFECT_AUTHORITY_SEAL,
+    )
+
+
+def verify_post_ready_validation_defect_authority(
+    current: publication.VerifiedLifecyclePublication,
+    *,
+    candidate_validation: fast_path.VerifiedValidationEvidence,
+    authenticated_commit: fast_path.AuthenticatedIntegrationCommit,
+    repository_root: Path | str,
+) -> VerifiedPostReadyValidationDefectAuthority:
+    """Use only the maintained live GitHub observation boundary in production."""
+
+    return _verify_post_ready_validation_defect_authority(
+        current,
+        candidate_validation=candidate_validation,
+        authenticated_commit=authenticated_commit,
+        repository_root=repository_root,
+        failure_reader=_read_live_post_ready_failure,
+    )
+
+
+def issue_post_ready_validation_remediation_authorization(
+    *,
+    authorization_id: str,
+    reason: str,
+    current: publication.VerifiedLifecyclePublication,
+    finding_authority: VerifiedPostReadyValidationDefectAuthority,
+    signer_identity: str,
+    signer: authority.Signer,
+) -> bytes:
+    """Issue one-use ordinary remediation from the sealed defect proof."""
+
+    if not isinstance(finding_authority, VerifiedPostReadyValidationDefectAuthority):
+        raise LifecycleOrchestrationError(
+            "post-Ready validation-defect authority source is invalid"
+        )
+    scope = ordinary_ready_remediation_authorization_scope(finding_authority)
+    lifecycle = current.lifecycle if isinstance(
+        current, publication.VerifiedLifecyclePublication
+    ) else None
+    if (
+        not isinstance(lifecycle, authority.VerifiedLifecycleAuthority)
+        or finding_authority.repository != lifecycle.repository
+        or finding_authority.delivery_issue != lifecycle.delivery_issue
+        or finding_authority.pull_request != lifecycle.pull_request
+        or finding_authority.lifecycle_id != lifecycle.lifecycle_id
+        or finding_authority.current_publication_oid != current.publication_oid
+        or finding_authority.current_publication_digest != current.publication_digest
+        or finding_authority.current_authority_digest != lifecycle.authority_digest
+        or finding_authority.current_head_sha != lifecycle.head_sha
+        or finding_authority.current_tree_sha != lifecycle.tree_sha
+    ):
+        raise LifecycleOrchestrationError(
+            "post-Ready validation-defect authority is stale or substituted"
+        )
+    return _create_user_authorization(
+        authorization_id=authorization_id,
+        repository=lifecycle.repository,
+        delivery_issue=lifecycle.delivery_issue,
+        lifecycle=lifecycle,
+        publication_oid=current.publication_oid,
+        publication_digest=current.publication_digest,
+        operation="REMEDIATION_COMPLETED",
+        reason=reason,
+        scope=scope,
+        signer_identity=signer_identity,
+        signer=signer,
+        allow_finding_authority_digest=True,
+    )
+
+
 def issue_ready_remediation_provider_growth_authorization(
     *,
     authorization_id: str,
@@ -522,6 +1109,12 @@ def issue_ready_remediation_provider_growth_authorization(
 ) -> bytes:
     """Issue the existing ordinary authorization from verifier-derived findings."""
 
+    if not isinstance(
+        finding_authority, VerifiedOrdinaryReadyRemediationFindingAuthority
+    ):
+        raise LifecycleOrchestrationError(
+            "ordinary Ready provider-growth authority source is invalid"
+        )
     scope = ordinary_ready_remediation_authorization_scope(finding_authority)
     lifecycle = current.lifecycle if isinstance(
         current, publication.VerifiedLifecyclePublication

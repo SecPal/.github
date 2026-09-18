@@ -225,6 +225,62 @@ the generic authorization creator rejects its digest field. Stable Feedback
 remains immutable, and feedback arriving after this bounded delta is not
 recursively incorporated.
 
+### Post-Ready validation defects in the remaining ordinary remediation
+
+The same finite remaining slot has one explicitly separate source mode for an
+independently proven `POST_READY_IN_CONTRACT_VALIDATION_DEFECT`. This source is
+not provider feedback. It cannot supply, replace, or weaken the post-capture
+provider-growth evidence above, and provider-growth evidence cannot be
+substituted for it.
+
+The verifier first authenticates protected CURRENT at exactly Review 1/1,
+Remediation 1/2, Ready true, Draft false, one Ready transition, Cycle 3 absent,
+and no Exceptional Recovery or Continuation. A maintained GitHub boundary must
+then observe an OPEN, Ready PR at that exact repository, issue, PR and CURRENT
+head with one terminal failed check. The observation binds the workflow,
+check, run, job and attempt identities. Pending, successful, cancelled,
+stale-head and cross-identity observations grant no authority. A hosted failure
+is only a discovery signal; it is never sufficient source-change authority.
+
+Independent deterministic reproduction against the authenticated predecessor
+bytes must prove a violated current-delivery invariant and classify it as
+technically blocking `IN_CONTRACT_DEFECT`. The maintained workflow-runtime
+reproducer derives Node engine and setup-selector floors from repository-owned
+configuration rather than issue, PR, workflow, run, job or version constants.
+It proves that a workflow selector admits a runtime below the candidate's own
+engine floor. The exact signed sole-parent successor must eliminate that
+violation, contain only defect-relevant workflow, toolchain or regression
+changes, and carry a fresh ordinary validation receipt and final attestation
+for its exact resulting head and tree.
+
+The verifier seals the failure observation, independent proof, corrected
+candidate validation and authenticated signer/topology into the existing
+one-use user-authorization model. Its only operation is
+`REMEDIATION_COMPLETED`. The transition increments only Remediation 1/2 to 2/2,
+preserves Ready and Review 1/1, requests no second unrestricted review, performs
+no second Ready transition, and creates no lifecycle state, counter, review
+cycle, recovery family, signer role or journal. The maintained final-candidate
+self-review and focused remediation audit still apply.
+
+```text
+ONE REMAINING SLOT
+!=
+UNBOUNDED READY REMEDIATION
+```
+
+```text
+REMEDIATION 2/2
+→ ordinary remediation exhausted
+```
+
+`READY_TO_DRAFT` remains forbidden for remediation, CI refresh, check rerun,
+metadata repair and integration convenience. `HEAD_ADVANCED` remains typed
+integration rather than generic remediation. Exceptional Recovery remains
+available only after normal remediation is exhausted, and Exceptional
+Continuation remains its separate existing one-use family. A hosted rerun may
+occur only after the corrected head is lawfully published as CURRENT; this
+authority neither makes nor claims that any check passes.
+
 When the current instruction authorizes full delivery and the environment can
 wait, observe only maintained review-provider status at bounded intervals of
 approximately 60 to 90 seconds for approximately 30 minutes total. This passive

@@ -10716,5 +10716,460 @@ def create_ready_integration_attestation(normalized, eligibility_bound):
         self.assertTrue(decision.stop_after_bounded_pass)
 
 
+class PostReadyValidationRemediationTests(TestCase):
+    def _repository(self) -> tuple[tempfile.TemporaryDirectory[str], Path, str, str, str, str]:
+        temporary = tempfile.TemporaryDirectory(prefix="post-ready-validation-")
+        root = Path(temporary.name)
+        subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.name", "Test"], check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.invalid"], check=True)
+        (root / ".github" / "workflows").mkdir(parents=True)
+        (root / "package.json").write_text(
+            '{"engines":{"node":"^24.21.0"}}\n', encoding="utf-8"
+        )
+        workflow = root / ".github" / "workflows" / "quality.yml"
+        workflow.write_text(
+            "name: Code Quality\njobs:\n  lint:\n    steps:\n      - uses: actions/setup-node@immutable\n"
+            "        with:\n          node-version: '24'\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "--quiet", "-m", "predecessor"], check=True)
+        predecessor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        predecessor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        workflow.write_text(
+            "name: Code Quality\njobs:\n  lint:\n    steps:\n      - uses: actions/setup-node@immutable\n"
+            "        with:\n          node-version: '24.21.0'\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "--quiet", "-m", "correction"], check=True)
+        successor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        successor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        return temporary, root, predecessor, predecessor_tree, successor, successor_tree
+
+    def _inputs(self):
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = self._repository()
+        lifecycle = replace(
+            current_lifecycle(
+                remediation_cycles=1,
+                head_sha=predecessor,
+                delivery_issue=970,
+                pull_request=971,
+            ),
+            tree_sha=predecessor_tree,
+            validation_receipt_digest="1" * 64,
+            adoption_source_evidence_digest="2" * 64,
+        )
+        current = publication.VerifiedLifecyclePublication(
+            publication_oid="3" * 40,
+            publication_digest="4" * 64,
+            publication_branch="refs/heads/secpal-lifecycle-publications",
+            journal_predecessor_oid="5" * 40,
+            predecessor_publication_oid="6" * 40,
+            lifecycle=lifecycle,
+            serialized_lifecycle_evidence=b"{}",
+        )
+        validation = fast_path._unregistered_validation_evidence(
+            repository=REPOSITORY,
+            delivery_issue_number=970,
+            pull_request_number=971,
+            head_sha=successor,
+            tree_sha=successor_tree,
+            validation_receipt_digest="7" * 64,
+            final_attestation_digest="8" * 64,
+            source_validation_evidence_digest="9" * 64,
+        )
+        commit_fields = {
+            "repository": REPOSITORY,
+            "head_sha": successor,
+            "tree_sha": successor_tree,
+            "parent_shas": [predecessor],
+            "signer_kind": "SSH_PRINCIPAL",
+            "signer_identity": "aroviqen@secpal.app",
+            "signature_fingerprint": "SHA256:fixture",
+            "signature_classification": "GOODSIG",
+            "signature_policy_digest": "a" * 64,
+        }
+        commit = fast_path.AuthenticatedIntegrationCommit(
+            **{**commit_fields, "parent_shas": (predecessor,)},
+            authentication_digest=fast_path.digest_json(commit_fields),
+        )
+        observation = {
+            "repository": REPOSITORY,
+            "pull_request": 971,
+            "head_sha": predecessor,
+            "pr_state": "OPEN",
+            "draft": False,
+            "workflow_name": "Code Quality",
+            "check_name": "Validate candidate",
+            "workflow_run_id": 100,
+            "check_run_id": 200,
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "attempt": 2,
+        }
+        return temporary, root, current, validation, commit, observation
+
+    def test_exact_current_failure_and_independent_proof_use_remaining_slot(self) -> None:
+        temporary, root, current, validation, commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        with mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True):
+            verified = orchestration._verify_post_ready_validation_defect_authority(
+                current,
+                candidate_validation=validation,
+                authenticated_commit=commit,
+                repository_root=root,
+                failure_reader=lambda _repository, _pull_request: copy.deepcopy(observation),
+            )
+
+        self.assertEqual(verified.source_kind, "POST_READY_IN_CONTRACT_VALIDATION_DEFECT")
+        self.assertEqual(verified.classification, "IN_CONTRACT_DEFECT")
+        self.assertTrue(verified.technically_blocking)
+        self.assertEqual(verified.current_head_sha, current.lifecycle.head_sha)
+        self.assertEqual(verified.resulting_head_sha, validation.head_sha)
+        scope = orchestration.ordinary_ready_remediation_authorization_scope(verified)
+        self.assertEqual(scope["predecessor_head_sha"], current.lifecycle.head_sha)
+        self.assertEqual(scope["resulting_head_sha"], validation.head_sha)
+        self.assertEqual(scope["finding_ids"], [verified.finding_id])
+        self.assertEqual(scope["finding_authority_digest"], verified.finding_authority_digest)
+
+        issued = orchestration.issue_post_ready_validation_remediation_authorization(
+            authorization_id="post-ready-validation-defect-1",
+            reason="Correct the independently reproduced current-delivery invariant",
+            current=current,
+            finding_authority=verified,
+            signer_identity="aroviqen@secpal.app",
+            signer=lambda _payload, _domain: {
+                "format": "ssh",
+                "signer_identity": "aroviqen@secpal.app",
+                "value": "fixture-signature",
+            },
+        )
+        authorization = authority.loads_closed_json(issued)
+        self.assertEqual(authorization["operation"], "REMEDIATION_COMPLETED")
+        result = authority.derive_state(
+            current.lifecycle.state,
+            authorization["operation"],
+            authorization["authorization_digest"],
+        )
+        self.assertEqual(result["remediation_cycle_count"], 2)
+        self.assertEqual(result["unrestricted_review_count"], 1)
+        self.assertTrue(result["ready"])
+        self.assertFalse(result["draft"])
+        self.assertEqual(result["ready_transition_count"], 1)
+        self.assertEqual(result["exceptional_recovery_count"], 0)
+        self.assertEqual(result["exceptional_continuation_count"], 0)
+
+    def test_public_entry_uses_bounded_live_github_failure_observation(self) -> None:
+        temporary, root, current, validation, commit, _observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        failure = {
+            "state": "OPEN",
+            "isDraft": False,
+            "headRefOid": current.lifecycle.head_sha,
+            "headRepository": {"nameWithOwner": REPOSITORY},
+            "statusCheckRollup": [{
+                "__typename": "CheckRun",
+                "workflowName": "Code Quality",
+                "name": "Validate candidate",
+                "status": "COMPLETED",
+                "conclusion": "FAILURE",
+                "detailsUrl": (
+                    f"https://github.com/{REPOSITORY}/actions/runs/100/job/200"
+                ),
+            }],
+        }
+        run = {
+            "id": 100,
+            "head_sha": current.lifecycle.head_sha,
+            "status": "completed",
+            "conclusion": "failure",
+            "run_attempt": 2,
+            "repository": {"full_name": REPOSITORY},
+        }
+        responses = [
+            SimpleNamespace(returncode=0, stdout=json.dumps(failure).encode()),
+            SimpleNamespace(returncode=0, stdout=json.dumps(run).encode()),
+        ]
+        with (
+            mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+            mock.patch.object(publication, "_run_gh", side_effect=responses) as live,
+        ):
+            verified = orchestration.verify_post_ready_validation_defect_authority(
+                current,
+                candidate_validation=validation,
+                authenticated_commit=commit,
+                repository_root=root,
+            )
+        self.assertEqual(verified.current_head_sha, current.lifecycle.head_sha)
+        self.assertEqual(live.call_count, 2)
+
+    def test_rejects_every_other_lifecycle_shape(self) -> None:
+        cases = (
+            ("Draft", {"ready": False, "draft": True}),
+            ("review absent", {"unrestricted_review_count": 0}),
+            ("second review", {"unrestricted_review_count": 2}),
+            ("no consumed remediation", {"remediation_cycle_count": 0}),
+            ("ordinary remediation exhausted", {"remediation_cycle_count": 2}),
+            ("wrong Ready count", {"ready_transition_count": 2}),
+            ("Cycle 3 present", {"cycle_3_absent": False}),
+            (
+                "Recovery consumed",
+                {
+                    "exceptional_recovery_count": 1,
+                    "exceptional_recovery_history": [{
+                        "sequence": 1,
+                        "transition_kind": "EXCEPTIONAL_RECOVERY",
+                        "event_authorization_digest": "b" * 64,
+                    }],
+                },
+            ),
+            (
+                "Continuation consumed",
+                {
+                    "exceptional_continuation_count": 1,
+                    "exceptional_continuation_history": [{
+                        "sequence": 1,
+                        "transition_kind": "EXCEPTIONAL_CONTINUATION",
+                        "event_authorization_digest": "c" * 64,
+                    }],
+                },
+            ),
+        )
+        for label, updates in cases:
+            temporary, root, current, validation, commit, observation = self._inputs()
+            self.addCleanup(temporary.cleanup)
+            changed_state = copy.deepcopy(current.lifecycle.state)
+            changed_state.update(updates)
+            changed = replace(current, lifecycle=replace(current.lifecycle, state=changed_state))
+            with (
+                self.subTest(label=label),
+                mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+                self.assertRaises(orchestration.LifecycleOrchestrationError),
+            ):
+                orchestration._verify_post_ready_validation_defect_authority(
+                    changed,
+                    candidate_validation=validation,
+                    authenticated_commit=commit,
+                    repository_root=root,
+                    failure_reader=lambda _repository, _pull_request: copy.deepcopy(observation),
+                )
+
+    def test_rejects_stale_nonfailure_and_cross_identity_observations(self) -> None:
+        cases = (
+            ("wrong repository", "repository", "SecPal/other"),
+            ("wrong pull request", "pull_request", 999),
+            ("stale head", "head_sha", "f" * 40),
+            ("closed PR", "pr_state", "CLOSED"),
+            ("Draft PR", "draft", True),
+            ("pending check", "status", "IN_PROGRESS"),
+            ("successful check", "conclusion", "SUCCESS"),
+            ("cancelled infrastructure", "conclusion", "CANCELLED"),
+            ("unrelated failed workflow", "workflow_name", "Other Workflow"),
+            ("missing run", "workflow_run_id", 0),
+            ("missing job", "check_run_id", 0),
+            ("missing attempt", "attempt", 0),
+        )
+        for label, field, value in cases:
+            temporary, root, current, validation, commit, observation = self._inputs()
+            self.addCleanup(temporary.cleanup)
+            observation[field] = value
+            with (
+                self.subTest(label=label),
+                mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+                self.assertRaises(orchestration.LifecycleOrchestrationError),
+            ):
+                orchestration._verify_post_ready_validation_defect_authority(
+                    current,
+                    candidate_validation=validation,
+                    authenticated_commit=commit,
+                    repository_root=root,
+                    failure_reader=lambda _repository, _pull_request: copy.deepcopy(observation),
+                )
+
+    def test_rejects_stale_validation_wrong_topology_signer_and_unrelated_change(self) -> None:
+        cases = (
+            (
+                "stale receipt",
+                lambda current, validation, commit: (
+                    replace(
+                        validation,
+                        validation_receipt_digest=current.lifecycle.validation_receipt_digest,
+                    ),
+                    commit,
+                ),
+            ),
+            (
+                "stale attestation",
+                lambda current, validation, commit: (
+                    replace(
+                        validation,
+                        final_attestation_digest=current.lifecycle.adoption_source_evidence_digest,
+                    ),
+                    commit,
+                ),
+            ),
+            (
+                "wrong parent",
+                lambda _current, validation, commit: (
+                    validation,
+                    replace(commit, parent_shas=("f" * 40,)),
+                ),
+            ),
+            (
+                "wrong signer",
+                lambda _current, validation, commit: (
+                    validation,
+                    replace(commit, signer_identity="other@example.invalid"),
+                ),
+            ),
+        )
+        for label, mutate in cases:
+            temporary, root, current, validation, commit, observation = self._inputs()
+            self.addCleanup(temporary.cleanup)
+            changed_validation, changed_commit = mutate(current, validation, commit)
+            with (
+                self.subTest(label=label),
+                mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+                self.assertRaises(orchestration.LifecycleOrchestrationError),
+            ):
+                orchestration._verify_post_ready_validation_defect_authority(
+                    current,
+                    candidate_validation=changed_validation,
+                    authenticated_commit=changed_commit,
+                    repository_root=root,
+                    failure_reader=lambda _repository, _pull_request: copy.deepcopy(observation),
+                )
+
+        temporary, root, current, validation, _commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        (root / "README.md").write_text("unrelated\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "add", "README.md"], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "--amend", "--no-edit", "--quiet"], check=True)
+        successor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        successor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        changed_validation = replace(validation, head_sha=successor, tree_sha=successor_tree)
+        commit_fields = {
+            "repository": REPOSITORY,
+            "head_sha": successor,
+            "tree_sha": successor_tree,
+            "parent_shas": [current.lifecycle.head_sha],
+            "signer_kind": "SSH_PRINCIPAL",
+            "signer_identity": "aroviqen@secpal.app",
+            "signature_fingerprint": "SHA256:fixture",
+            "signature_classification": "GOODSIG",
+            "signature_policy_digest": "a" * 64,
+        }
+        changed_commit = fast_path.AuthenticatedIntegrationCommit(
+            **{**commit_fields, "parent_shas": (current.lifecycle.head_sha,)},
+            authentication_digest=fast_path.digest_json(commit_fields),
+        )
+        with (
+            mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+            self.assertRaisesRegex(
+                orchestration.LifecycleOrchestrationError, "unrelated"
+            ),
+        ):
+            orchestration._verify_post_ready_validation_defect_authority(
+                current,
+                candidate_validation=changed_validation,
+                authenticated_commit=changed_commit,
+                repository_root=root,
+                failure_reader=lambda _repository, _pull_request: copy.deepcopy(observation),
+            )
+
+        temporary, root, current, _validation, _commit, _observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        (root / "package.json").write_text(
+            '{"engines":{"node":"^24.0.0"}}\n', encoding="utf-8"
+        )
+        subprocess.run(["git", "-C", str(root), "add", "package.json"], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "--amend", "--no-edit", "--quiet"], check=True)
+        weakened_head = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        weakened_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "engine contract"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=current.lifecycle.pull_request,
+                predecessor_head=current.lifecycle.head_sha,
+                predecessor_tree=current.lifecycle.tree_sha,
+                resulting_head=weakened_head,
+                resulting_tree=weakened_tree,
+                observed_workflow_name="Code Quality",
+            )
+
+    def test_source_modes_are_not_substitutable_and_authorization_is_finite(self) -> None:
+        temporary, root, current, validation, commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        with mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True):
+            verified = orchestration._verify_post_ready_validation_defect_authority(
+                current,
+                candidate_validation=validation,
+                authenticated_commit=commit,
+                repository_root=root,
+                failure_reader=lambda _repository, _pull_request: copy.deepcopy(observation),
+            )
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            orchestration.issue_ready_remediation_provider_growth_authorization(
+                authorization_id="wrong-source",
+                reason="Attempt source substitution",
+                current=current,
+                finding_authority=verified,
+                signer_identity="aroviqen@secpal.app",
+                signer=lambda _payload, _domain: {
+                    "format": "ssh",
+                    "signer_identity": "aroviqen@secpal.app",
+                    "value": "fixture-signature",
+                },
+            )
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "maintained issuer"
+        ):
+            orchestration.create_user_authorization(
+                authorization_id="caller-selected-transition",
+                repository=REPOSITORY,
+                delivery_issue=current.lifecycle.delivery_issue,
+                lifecycle=current.lifecycle,
+                publication_oid=current.publication_oid,
+                publication_digest=current.publication_digest,
+                operation="HEAD_ADVANCED",
+                reason="Attempt caller-selected substitution",
+                scope=orchestration.ordinary_ready_remediation_authorization_scope(verified),
+                signer_identity="aroviqen@secpal.app",
+                signer=lambda _payload, _domain: {
+                    "format": "ssh",
+                    "signer_identity": "aroviqen@secpal.app",
+                    "value": "fixture-signature",
+                },
+            )
+        exhausted = authority.derive_state(
+            current.lifecycle.state, "REMEDIATION_COMPLETED", "d" * 64
+        )
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "budget is exhausted"
+        ):
+            authority.derive_state(exhausted, "REMEDIATION_COMPLETED", "e" * 64)
+
+
 if __name__ == "__main__":
     main()
