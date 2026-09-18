@@ -9,6 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-18 - Admit Exact Node-24 Delivery Evidence Loss
+
+**Fixed:**
+
+- Extend the existing Exact-State-Adoption validation-evidence-loss owner with
+  one exact admission for issue #948 / PR #953, binding its signed current-head
+  receipt identity, unavailable package bytes, complete Ready/review/remediation
+  history, stable feedback and accepted-main current safety.
+- Preserve Review 1/1, Remediation 1/2, one Ready transition and Cycle-3 absence
+  without adding a recovery family, lifecycle state, signer, journal or trust
+  root.
+
 ## 2026-09-17 - Accept Recovered Ready Feedback In Thread Resolution
 
 **Fixed:**
