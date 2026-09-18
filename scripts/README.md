@@ -525,8 +525,12 @@ diagnostics. The harness exercises the parked candidate's APIs, which need not
 exist in an unrelated current-main implementation.
 Historical tests are removed only in the disposable copy. Every non-test source
 file remains exact candidate content, checked before and after execution with
-no extra files or bytecode admitted. No npm installation or implementation
-overlay is needed. Normal repository Complete Validation is unaffected.
+no extra files or bytecode admitted. The exact schema-1.3 profile temporarily
+preserves only its authenticated Node baseline test, installs the locked npm
+graph without scripts in that disposable copy, executes the candidate validator
+and test, and removes `node_modules` before the projection is reverified. Other
+profiles require no npm installation or implementation overlay. Normal
+repository Complete Validation is unaffected.
 
 `current_safety.receipt_digest` is the current execution identity under
 `secpal.pre-enrollment-current-safety/v1`, **not** an ordinary validation receipt.
@@ -535,7 +539,8 @@ identities; production derives its own current execution identity. No historical
 package bytes or unauthenticated final-attestation identity are reconstructed.
 The closed schema-1.3 variant admits only #948 / PR #953's authenticated
 receipt-at-current-head history and its exact accepted-main safety harness; it
-does not generalize missing-package admission or create recovery authority.
+requires the observed trailer digest to match the accepted record, and does not
+generalize missing-package admission or create recovery authority.
 
 The sealed source enters existing external-evidence authentication with
 `validation_evidence=None` and a separately authenticated review-budget admission.

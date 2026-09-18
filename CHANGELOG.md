@@ -16,7 +16,9 @@ Log of notable changes to SecPal organization defaults (newest first).
 - Extend the existing Exact-State-Adoption validation-evidence-loss owner with
   one exact admission for issue #948 / PR #953, binding its signed current-head
   receipt identity, unavailable package bytes, complete Ready/review/remediation
-  history, stable feedback and accepted-main current safety.
+  history, stable feedback and accepted-main current safety. Require the live
+  trailer to match the accepted digest and execute both Node baseline governance
+  layers in the disposable safety projection.
 - Preserve Review 1/1, Remediation 1/2, one Ready transition and Cycle-3 absence
   without adding a recovery family, lifecycle state, signer, journal or trust
   root.

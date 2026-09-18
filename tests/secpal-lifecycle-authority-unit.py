@@ -3076,6 +3076,9 @@ printf 'Usage: fixture\\n'
             "tree_sha": document["tree_sha"],
             "parent_sha": document["parent_sha"],
             "source_signer_identity": document["source_signer_identity"],
+            "historical_validation_receipt_digest": document[
+                "historical_validation_receipt_digest"
+            ],
         }
         commits = self.successor_commits()
 
@@ -3103,6 +3106,25 @@ printf 'Usage: fixture\\n'
             document["historical_validation_receipt_digest"],
         )
 
+        mismatched = {
+            **record,
+            "historical_validation_receipt_digest": "9" * 64,
+        }
+        with patch.object(
+            self.loss.transport, "_git_text", side_effect=git_text,
+        ), patch.object(
+            self.loss, "_commit_signature", side_effect=["4" * 64, "3" * 64],
+        ), patch.object(
+            self.loss, "_optional_validation_receipt_trailer",
+            side_effect=[None, document["historical_validation_receipt_digest"]],
+        ), self.assertRaisesRegex(
+            authority.LifecycleAuthorityError,
+            "receipt digest differs from accepted policy",
+        ):
+            self.loss._authenticate_source_history(
+                REPO_ROOT, mismatched, commits, self.trust
+            )
+
         for trailers in (
             [document["historical_validation_receipt_digest"], None],
             [document["historical_validation_receipt_digest"]] * 2,
@@ -3119,6 +3141,32 @@ printf 'Usage: fixture\\n'
                 self.loss._authenticate_source_history(
                     REPO_ROOT, record, commits, self.trust
                 )
+
+    def test_github_948_harness_executes_node_validator_and_test_suite(self) -> None:
+        harness_path = REPO_ROOT / "tests/pre-enrollment-github-948-current-safety.py"
+        specification = importlib.util.spec_from_file_location(
+            "pre_enrollment_github_948_current_safety", harness_path
+        )
+        self.assertIsNotNone(specification)
+        self.assertIsNotNone(specification.loader)
+        harness = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(harness)
+        completed = subprocess.CompletedProcess([], 0, b"", b"")
+        with patch.object(
+            harness.subprocess, "run", return_value=completed
+        ) as run, patch.object(harness.shutil, "rmtree") as remove:
+            results = harness._run_node_governance()
+
+        self.assertEqual(results, (completed, completed, completed))
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            [
+                ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+                ["node", str(harness.VALIDATOR), "."],
+                ["node", "--test", "tests/node-baseline-governance.test.mjs"],
+            ],
+        )
+        remove.assert_called_once_with(Path("node_modules"), ignore_errors=True)
 
     def test_version_10_same_head_receipt_semantics_remain_unchanged(self) -> None:
         self.assertEqual(self.loss._verify_document(self.document), self.document)

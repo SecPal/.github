@@ -473,7 +473,11 @@ Ready-chronology, feedback, finite-state, signer, current-safety and one-use
 boundary for the exact #948 / PR #953 source. Its authenticated history must
 contain exactly one validation-receipt trailer on the current signed remediation
 head. That digest is immutable provenance; unavailable receipt and final-
-attestation package bytes remain unavailable and are never reconstructed.
+attestation package bytes remain unavailable and are never reconstructed. The
+derived trailer digest must equal the exact accepted-policy digest. Its bounded
+current-safety run also executes both the candidate Node baseline validator and
+its exact authenticated Node test after installing only the locked dependency
+graph in the disposable projection.
 
 The maintained issuer accepts only repository and issue selectors. Clean current
 protected main selects the exact loss acknowledgment in

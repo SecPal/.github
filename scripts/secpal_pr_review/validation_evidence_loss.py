@@ -36,6 +36,7 @@ REGISTERED_CURRENT_SAFETY_PATH = (
     "tests/pre-enrollment-registered-repository-current-safety.py"
 )
 CURRENT_RECEIPT_SAFETY_PATH = "tests/pre-enrollment-github-948-current-safety.py"
+CURRENT_RECEIPT_NODE_TEST_PATH = "tests/node-baseline-governance.test.mjs"
 CURRENT_SAFETY_INVARIANTS = (
     "candidate_local_issuer_rejected", "complete_feedback", "context_binding",
     "historical_bytes_unavailable", "ordinary_prior_ready", "resolved_feedback",
@@ -1440,6 +1441,13 @@ def _authenticate_source_history(
         raise authority.LifecycleAuthorityError(
             "loss source historical receipt placement changed"
         )
+    if (
+        current_receipt
+        and receipt_digest != record["historical_validation_receipt_digest"]
+    ):
+        raise authority.LifecycleAuthorityError(
+            "loss source receipt digest differs from accepted policy"
+        )
     source_history_digest = authority.digest_json(history)
     provenance = {
         "repository": record["repository"],
@@ -1623,7 +1631,39 @@ def _current_policy_validation_root(
     with exact_source_safety.execution_root(
         ROOT, main, source_root=source_root, profile=profile,
     ) as prepared:
-        yield prepared
+        preserved_test: Path | None = None
+        expected_test_bytes: bytes | None = None
+        if profile.get("policy") == CURRENT_RECEIPT_SAFETY_POLICY:
+            source_test = source_root / CURRENT_RECEIPT_NODE_TEST_PATH
+            preserved_test = prepared / CURRENT_RECEIPT_NODE_TEST_PATH
+            if not source_test.is_file() or preserved_test.exists():
+                raise authority.LifecycleAuthorityError(
+                    "current-receipt Node test source is unavailable"
+                )
+            try:
+                expected_test_bytes = source_test.read_bytes()
+                preserved_test.write_bytes(expected_test_bytes)
+            except OSError as exc:
+                raise authority.LifecycleAuthorityError(
+                    "current-receipt Node test source is unavailable"
+                ) from exc
+        try:
+            yield prepared
+        finally:
+            if preserved_test is not None:
+                try:
+                    if (
+                        not preserved_test.is_file()
+                        or preserved_test.read_bytes() != expected_test_bytes
+                    ):
+                        raise authority.LifecycleAuthorityError(
+                            "current-receipt Node test source changed"
+                        )
+                    preserved_test.unlink()
+                except OSError as exc:
+                    raise authority.LifecycleAuthorityError(
+                        "current-receipt Node test source changed"
+                    ) from exc
 
 
 def _verify_current_safety_root(

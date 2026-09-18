@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 
@@ -48,6 +49,30 @@ ACTIVE_DOCUMENTS = (
     Path(".github/workflows/README.md"),
 )
 NODE_22 = re.compile(r"\bNode(?:\.js)?\s+22(?:\.x)?\b|node-version:\s*[\"']?22(?:\.x)?\b", re.I)
+
+
+def _run_node_governance() -> tuple[subprocess.CompletedProcess[bytes], ...]:
+    """Install the locked runtime, then execute both candidate governance layers."""
+
+    commands = (
+        ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+        ["node", str(VALIDATOR), "."],
+        ["node", "--test", "tests/node-baseline-governance.test.mjs"],
+    )
+    try:
+        return tuple(
+            subprocess.run(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=60,
+                check=False,
+            )
+            for command in commands
+        )
+    finally:
+        shutil.rmtree(Path("node_modules"), ignore_errors=True)
 
 
 def _active_documents() -> list[Path]:
@@ -95,6 +120,7 @@ def main(arguments: list[str]) -> int:
                 check=False,
             ),
         )
+        node_governance = _run_node_governance()
     except (OSError, UnicodeError, ValueError, subprocess.SubprocessError):
         print(json.dumps(["registered_validation"]))
         return 1
@@ -110,6 +136,7 @@ def main(arguments: list[str]) -> int:
         != "node --test tests/node-baseline-governance.test.mjs"
         or NODE_22.search(workflow_text + "\n" + action + "\n" + document_text)
         or any(result.returncode != 0 for result in syntax)
+        or any(result.returncode != 0 for result in node_governance)
     ):
         print(json.dumps(["registered_validation"]))
         return 1
