@@ -469,16 +469,22 @@ projects unchanged version-3 evidence whose receipt identity exists but whose
 package bytes are unavailable. These states are disjoint; prose, caller flags,
 synthetic digests, and candidate-local policy cannot select one.
 
-The amendment authorization is a one-use, existing-signer statement bound to
+The amendment authorization contains a one-use exact-scope root authorization
+signed by an authority signer whose identity and key come from the bound
+accepted-main registry. The candidate policy and its proposed registry entry
+are prospective implementation data and have no authority before adoption.
+The outer authorization uses the existing legacy-adoption signer and is bound to
 the registered repository, delivery, exact qualified source, final signed
 head/tree/topology, accepted-main boundary, complete governance-only change
 set, natural CI, independent exact-head qualification, stable feedback, finite
 history and counters, and explicit human architecture authority. It adds no
 journal operation, signer, lifecycle state, counter, reset, or recovery path.
 The exceptional amendment itself is issued only from an exact signed root
-observation and the existing legacy-adoption signer. A separately signed,
-fresh execution observation must remain byte-identical. Consumption creates a
-signed two-parent commit with the bound candidate tree and performs one
+observation. A separately signed, fresh execution observation must remain
+byte-identical. Source and accepted merge commits are verified directly against
+the bound accepted-main signer keys; ambient Git trust and matching principal
+text are insufficient. Consumption creates a signed two-parent commit with the
+bound candidate tree and performs one
 non-force fast-forward compare-and-swap to protected main. The commit embeds
 the canonical authorization and consumption digest for immutable read-back;
 it neither creates lifecycle CURRENT nor synthesizes ordinary enrollment,

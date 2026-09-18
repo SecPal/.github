@@ -14,10 +14,11 @@ Log of notable changes to SecPal organization defaults (newest first).
 **Fixed:**
 
 - Add one registered, governance-only amendment boundary for issue #960 / PR
-  #961. Existing root and legacy-adoption signer roles bind separate exact
-  issuance and execution observations; one signed two-parent fast-forward then
-  adopts the governance-only tree on protected main with immutable authorization
-  and consumption read-back.
+  #961. The accepted-main authority signer binds the exact one-use root
+  authorization, the legacy-adoption signer wraps it, and accepted-main keys
+  authenticate source and merge commits. Candidate policy and ambient Git trust
+  cannot authorize adoption. One signed two-parent fast-forward adopts the
+  governance-only tree with immutable authorization and consumption read-back.
 - Represent historical evidence truthfully as `PRESENT`, `UNAVAILABLE`, or
   `ABSENT_NEVER_ISSUED`; the last state carries typed nulls and cannot synthesize
   receipt, source-validation, or final-attestation identities.

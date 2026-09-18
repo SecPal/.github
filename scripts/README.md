@@ -484,9 +484,13 @@ validation as `ABSENT_NEVER_ISSUED` with typed null receipt, source-validation,
 and final-attestation fields. It consumes an independently signed exact-scope
 authorization only after current validation, natural CI, exact-head independent
 qualification, and zero material findings. The maintained root boundary accepts
-separate signed issuance and execution observations, issues through the existing
-legacy-adoption signer, and consumes once by a signed two-parent, non-force
-fast-forward of the bound governance tree to protected main. The accepted merge
+separate signed issuance and execution observations, creates an exact-scope
+authorization with the existing accepted-main authority signer, wraps it with
+the existing legacy-adoption signer, and consumes once by a signed two-parent,
+non-force fast-forward of the bound governance tree to protected main. Candidate
+policy and registry additions are prospective only. Source and merge signatures
+must match keys in the bound accepted-main registry; ambient Git trust is not
+authority. The accepted merge
 commit stores the canonical authorization and consumption digest for immutable
 read-back and replay rejection. It does not create lifecycle CURRENT, Ready,
 receipt, counter, or thread authority. Versions 1/2 remain `PRESENT`, and version

@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 from typing import Any, Mapping
 
 from . import lifecycle_authority as authority
@@ -31,11 +32,28 @@ CONSUMPTION_DOMAIN = "secpal.governance-amendment-consumption/v1"
 CONSUMPTION_KIND = "SECPAL_GOVERNANCE_AMENDMENT_CONSUMPTION"
 ROOT_OBSERVATION_DOMAIN = "secpal.governance-amendment-root-observation/v1"
 ROOT_OBSERVATION_KIND = "SECPAL_GOVERNANCE_AMENDMENT_ROOT_OBSERVATION"
+ROOT_AUTHORIZATION_DOMAIN = "secpal.governance-amendment-root-authorization/v1"
+ROOT_AUTHORIZATION_KIND = "SECPAL_GOVERNANCE_AMENDMENT_ROOT_AUTHORIZATION"
+HUMAN_AUTHORITY_IDENTITY = "SecPal human architecture authority for issue 960"
+SOURCE_SIGNER_IDENTITY = "aroviqen@secpal.app"
+GOVERNANCE_PATH_PREFIXES = [
+    ".agents/skills/secpal-pr-review/references",
+    "CHANGELOG.md",
+    "docs",
+    "policies",
+    "scripts/README.md",
+    "scripts/secpal_pr_review",
+    "tests",
+]
+APPROVED_CONCEPTS = [
+    "GOVERNANCE_AMENDMENT", "ABSENT_NEVER_ISSUED", "EXACT_STATE_ADOPTION",
+]
 
 AUTHORIZATION_FIELDS = frozenset({
     "schema_version", "kind", "domain", "purpose", "repository",
     "delivery_issue", "pull_request", "pull_request_state", "qualified_source", "head_sha",
     "tree_sha", "ordered_parent_shas", "accepted_main_sha",
+    "governance_path_prefixes", "root_authorization",
     "changed_files", "change_digest", "source_signature",
     "natural_ci", "independent_qualification", "current_validation",
     "feedback", "observed_pre_enrollment_history", "intended_state",
@@ -50,6 +68,17 @@ HISTORICAL_FIELDS = frozenset({
     "final_attestation_digest", "bytes_reconstructed",
 })
 CHANGED_FILE_FIELDS = frozenset({"path", "blob_oid", "mode"})
+ROOT_AUTHORIZATION_FIELDS = frozenset({
+    "schema_version", "kind", "domain", "repository", "delivery_issue",
+    "pull_request", "head_sha", "tree_sha", "accepted_main_sha", "purpose",
+    "governance_path_prefixes", "human_authority_identity",
+    "human_authorization_digest", "authorized_facts_digest", "bounded_uses",
+    "signer_identity", "signature", "authorization_digest",
+})
+ISSUANCE_FACT_FIELDS = AUTHORIZATION_FIELDS - {
+    "root_authorization", "signer_identity", "signature",
+    "authorization_digest",
+}
 
 
 class GovernanceAmendmentError(ValueError):
@@ -97,36 +126,87 @@ def historical_evidence() -> dict[str, Any]:
     }
 
 
-def _load_policy() -> dict[str, Any]:
-    try:
-        value = json.loads((ROOT / POLICY_PATH).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise GovernanceAmendmentError("governance amendment policy is unavailable") from exc
-    records = value.get("amendments") if isinstance(value, dict) else None
-    if value.get("schema_version") != "1.0" or not isinstance(records, list) or len(records) != 1:
-        raise GovernanceAmendmentError("governance amendment policy is not singular")
-    record = copy.deepcopy(records[0])
-    try:
-        registry = json.loads((ROOT / REGISTRY_PATH).read_text(encoding="utf-8"))
-        entries = [
-            entry for entry in registry["repositories"]
-            if entry.get("repository") == record.get("repository")
-        ]
-    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
-        raise GovernanceAmendmentError("governance amendment registry is unavailable") from exc
-    expected_registration = {
-        "path": POLICY_PATH,
-        "kind": KIND,
-        "purpose": PURPOSE,
+def _authorization_facts(item: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: copy.deepcopy(value)
+        for key, value in item.items()
+        if key not in {
+            "root_authorization", "signer_identity", "signature",
+            "authorization_digest",
+        }
     }
+
+
+def _verify_root_authorization(
+    item: Mapping[str, Any], repository: str, accepted_main_sha: str,
+    *, authenticate_signature: bool,
+) -> dict[str, Any]:
+    root = authority._require_closed(
+        item.get("root_authorization"), ROOT_AUTHORIZATION_FIELDS,
+        "governance amendment root authorization",
+    )
+    signed = {
+        key: copy.deepcopy(value)
+        for key, value in root.items()
+        if key != "authorization_digest"
+    }
+    expected_human_digest = authority.digest_json({
+        "authority_identity": HUMAN_AUTHORITY_IDENTITY,
+        "repository": repository,
+        "delivery_issue": item["delivery_issue"],
+        "pull_request": item["pull_request"],
+        "purpose": PURPOSE,
+        "qualified_source_digest": item["qualified_source"][
+            "qualification_digest"
+        ],
+        "accepted_main_sha": accepted_main_sha,
+        "decision": "APPROVED",
+        "bounded_uses": 1,
+    })
     if (
-        len(entries) != 1
-        or entries[0].get("governance_amendment_policy") != expected_registration
+        root["schema_version"] != "1.0"
+        or root["kind"] != ROOT_AUTHORIZATION_KIND
+        or root["domain"] != ROOT_AUTHORIZATION_DOMAIN
+        or root["repository"] != repository
+        or root["delivery_issue"] != item["delivery_issue"]
+        or root["pull_request"] != item["pull_request"]
+        or root["head_sha"] != item["head_sha"]
+        or root["tree_sha"] != item["tree_sha"]
+        or root["accepted_main_sha"] != accepted_main_sha
+        or root["purpose"] != PURPOSE
+        or root["governance_path_prefixes"] != GOVERNANCE_PATH_PREFIXES
+        or root["human_authority_identity"] != HUMAN_AUTHORITY_IDENTITY
+        or root["human_authorization_digest"] != expected_human_digest
+        or root["authorized_facts_digest"]
+        != authority.digest_json(_authorization_facts(item))
+        or root["bounded_uses"] != 1
+        or isinstance(root["bounded_uses"], bool)
+        or root["authorization_digest"] != authority.digest_json(signed)
     ):
         raise GovernanceAmendmentError(
-            "governance amendment policy is not registered on accepted main"
+            "governance amendment root authorization scope changed"
         )
-    return record
+    signer = authority._require_identity(
+        root["signer_identity"], "governance amendment root signer"
+    )
+    if authenticate_signature:
+        trust = _accepted_trust_policy(repository, accepted_main_sha)
+        try:
+            authority._verify_signature(
+                authority.canonical_json_bytes(
+                    authority._unsigned(
+                        root, "authorization_digest", "signature"
+                    )
+                ),
+                root["signature"], signer, ROOT_AUTHORIZATION_DOMAIN,
+                trust.authority_signer_identities,
+                authority._policy_signature_verifier(trust),
+            )
+        except authority.LifecycleAuthorityError as exc:
+            raise GovernanceAmendmentError(
+                "governance amendment root authorization is untrusted"
+            ) from exc
+    return copy.deepcopy(root)
 
 
 def _changed_files(value: Any, allowed_prefixes: list[str]) -> list[dict[str, Any]]:
@@ -161,7 +241,6 @@ def _verify(
     if not isinstance(value, Mapping) or set(value) != AUTHORIZATION_FIELDS:
         raise GovernanceAmendmentError("governance amendment authorization schema is not closed")
     item = copy.deepcopy(dict(value))
-    policy = _load_policy()
     try:
         repository = authority._require_repository(item["repository"])
         issue = authority._require_positive_int(item["delivery_issue"], "delivery issue")
@@ -173,7 +252,13 @@ def _verify(
         if not isinstance(parents, list) or not 1 <= len(parents) <= 2:
             raise GovernanceAmendmentError("governance amendment topology is invalid")
         parents = [authority._require_oid(parent, "amendment parent") for parent in parents]
-        changed = _changed_files(item["changed_files"], policy["allowed_path_prefixes"])
+        root_authorization = _verify_root_authorization(
+            item, repository, main,
+            authenticate_signature=authenticate_signature,
+        )
+        changed = _changed_files(
+            item["changed_files"], item["governance_path_prefixes"]
+        )
         historical = authority._require_closed(
             item["historical_evidence"], HISTORICAL_FIELDS,
             "governance amendment historical evidence",
@@ -280,7 +365,7 @@ def _verify(
         "accepted_main_sha": main, "changed_files": changed,
     })
     expected_human_authorization_digest = authority.digest_json({
-        "authority_identity": policy["human_authority_identity"],
+        "authority_identity": HUMAN_AUTHORITY_IDENTITY,
         "repository": repository,
         "delivery_issue": issue,
         "pull_request": pr,
@@ -294,16 +379,13 @@ def _verify(
         item["schema_version"] != "1.0" or item["kind"] != KIND
         or item["domain"] != DOMAIN or item["purpose"] != PURPOSE
         or item["pull_request_state"] != "OPEN"
-        or {"repository": repository, "delivery_issue": issue, "pull_request": pr}
-        != {key: policy[key] for key in ("repository", "delivery_issue", "pull_request")}
-        or qualified != policy["qualified_source"]
         or qualified["qualification_digest"] != authority.digest_json(
             qualified_identity
         )
         or qualified_head == head
-        or main != policy["accepted_main_sha"]
+        or item["governance_path_prefixes"] != GOVERNANCE_PATH_PREFIXES
         or item["change_digest"] != expected_change_digest
-        or signature["signer_identity"] != policy["source_signer_identity"]
+        or signature["signer_identity"] != SOURCE_SIGNER_IDENTITY
         or signature["verified"] is not True
         or ci["head_sha"] != head or ci["result"] != "PASS"
         or not isinstance(ci["workflow_identity"], str) or not ci["workflow_identity"]
@@ -319,16 +401,16 @@ def _verify(
         or necessity["existing_authority_result"] != "INSUFFICIENT"
         or necessity["smaller_nonrecursive_extension"] != "NONE"
         or necessity["recursive_self_bootstrap"] != "PROVEN"
-        or state != policy["intended_state"]
         or history != item["observed_pre_enrollment_history"]
-        or item["concepts"] != policy["concepts"]
-        or item["human_authority_identity"] != policy["human_authority_identity"]
-        or item["human_authorization_digest"]
-        != policy["human_authorization_digest"]
+        or item["concepts"] != APPROVED_CONCEPTS
+        or item["human_authority_identity"] != HUMAN_AUTHORITY_IDENTITY
         or item["human_authorization_digest"]
         != expected_human_authorization_digest
-        or item["authorization_id"] != policy["authorization_id"]
+        or item["authorization_id"]
+        != f"governance-amendment:{repository}:{issue}:{pr}"
         or item["bounded_uses"] != 1 or isinstance(item["bounded_uses"], bool)
+        or root_authorization["authorized_facts_digest"]
+        != authority.digest_json(_authorization_facts(item))
     ):
         raise GovernanceAmendmentError("governance amendment authorization scope changed")
     signer = authority._require_identity(item["signer_identity"], "amendment signer")
@@ -378,25 +460,8 @@ def authenticate_issuance(
     supplied = copy.deepcopy(dict(observed)) if isinstance(observed, Mapping) else None
     if supplied is None or actual != supplied:
         raise GovernanceAmendmentError("amendment issuance facts are not authenticated")
-    unsigned_fields = AUTHORIZATION_FIELDS - {
-        "signer_identity", "signature", "authorization_digest"
-    }
-    if set(actual) != unsigned_fields:
+    if set(actual) != ISSUANCE_FACT_FIELDS:
         raise GovernanceAmendmentError("amendment issuance facts are not closed")
-    # Verification before signing proves every closed semantic binding except
-    # the root signature. A deterministic fixture signature is replaced below.
-    probe = {
-        **actual,
-        "signer_identity": "lifecycle-legacy-adoption@secpal.app",
-        "signature": {
-            "format": "ssh",
-            "signer_identity": "lifecycle-legacy-adoption@secpal.app",
-            "value": "probe",
-        },
-    }
-    probe["authorization_digest"] = authority.digest_json(probe)
-    # Do not call verify(probe): signature verification belongs after issuance.
-    _validate_unsigned_scope(probe)
     return VerifiedGovernanceAmendmentIssuance(actual, _ISSUANCE_VERIFIED)
 
 
@@ -415,13 +480,81 @@ def issue(value: VerifiedGovernanceAmendmentIssuance) -> dict[str, Any]:
             "amendment issuance facts changed before signing"
         )
     trust = _accepted_trust_policy(repository, facts["accepted_main_sha"])
+    root_identity, root_signer = execution._policy_role_signer(
+        trust,
+        trust.authority_signer_identities,
+        "authority signer role",
+        allow_routine_default=False,
+    )
     identity, signer = execution._policy_role_signer(
         trust,
         trust.legacy_adoption_signer_identities,
         "legacy-adoption signer role",
         allow_routine_default=False,
     )
-    fields = {**facts, "signer_identity": identity}
+    root_fields = {
+        "schema_version": "1.0",
+        "kind": ROOT_AUTHORIZATION_KIND,
+        "domain": ROOT_AUTHORIZATION_DOMAIN,
+        "repository": facts["repository"],
+        "delivery_issue": facts["delivery_issue"],
+        "pull_request": facts["pull_request"],
+        "head_sha": facts["head_sha"],
+        "tree_sha": facts["tree_sha"],
+        "accepted_main_sha": facts["accepted_main_sha"],
+        "purpose": facts["purpose"],
+        "governance_path_prefixes": copy.deepcopy(
+            facts["governance_path_prefixes"]
+        ),
+        "human_authority_identity": facts["human_authority_identity"],
+        "human_authorization_digest": facts["human_authorization_digest"],
+        "authorized_facts_digest": authority.digest_json(facts),
+        "bounded_uses": 1,
+        "signer_identity": root_identity,
+    }
+    probe_root_signed = {
+        **root_fields,
+        "signature": {
+            "format": "ssh", "signer_identity": root_identity,
+            "value": "scope-validation-probe",
+        },
+    }
+    probe_root = {
+        **probe_root_signed,
+        "authorization_digest": authority.digest_json(probe_root_signed),
+    }
+    probe_fields = {
+        **facts,
+        "root_authorization": probe_root,
+        "signer_identity": identity,
+    }
+    probe_signed = {
+        **probe_fields,
+        "signature": {
+            "format": "ssh", "signer_identity": identity,
+            "value": "scope-validation-probe",
+        },
+    }
+    _validate_unsigned_scope({
+        **probe_signed,
+        "authorization_digest": authority.digest_json(probe_signed),
+    })
+    root_signed = {
+        **root_fields,
+        "signature": root_signer(
+            authority.canonical_json_bytes(root_fields),
+            ROOT_AUTHORIZATION_DOMAIN,
+        ),
+    }
+    root_authorization = {
+        **root_signed,
+        "authorization_digest": authority.digest_json(root_signed),
+    }
+    fields = {
+        **facts,
+        "root_authorization": root_authorization,
+        "signer_identity": identity,
+    }
     signature = signer(authority.canonical_json_bytes(fields), DOMAIN)
     signed = {**fields, "signature": signature}
     document = {**signed, "authorization_digest": authority.digest_json(signed)}
@@ -564,6 +697,45 @@ def _git_oid(root: Path, expression: str) -> str:
         raise GovernanceAmendmentError("amendment Git identity is unavailable") from exc
 
 
+def _verify_commit_against_accepted_trust(
+    root: Path, commit_oid: str, signer_identity: str,
+    trust: authority.LifecycleTrustPolicy,
+) -> None:
+    oid = authority._require_oid(commit_oid, "amendment signed commit")
+    identity = authority._require_identity(
+        signer_identity, "amendment commit signer"
+    )
+    signer = trust.signers.get(identity)
+    if signer is None or not signer.ssh_public_keys:
+        raise GovernanceAmendmentError(
+            "amendment signer has no accepted-main SSH key"
+        )
+    with tempfile.TemporaryDirectory(
+        prefix="secpal-governance-amendment-signers-"
+    ) as directory:
+        allowed = Path(directory) / "allowed-signers"
+        allowed.write_text(
+            "".join(f"{identity} {key}\n" for key in signer.ssh_public_keys),
+            encoding="utf-8",
+        )
+        allowed.chmod(0o600)
+        result = _run_git(
+            root,
+            [
+                "-c", f"gpg.ssh.allowedSignersFile={allowed}",
+                "verify-commit", "--raw", oid,
+            ],
+        )
+    output = (result.stdout + result.stderr).decode("utf-8", "replace")
+    principals = re.findall(
+        r'(?m)^Good "git" signature for ([^\r\n]+) with ', output
+    )
+    if result.returncode != 0 or principals != [identity]:
+        raise GovernanceAmendmentError(
+            "amendment commit is not signed by an accepted-main key"
+        )
+
+
 def _remote_url(repository: str, accepted_main_sha: str) -> str:
     trust = _accepted_trust_policy(repository, accepted_main_sha)
     value = trust.publication_remote_url
@@ -671,18 +843,13 @@ def _authenticate_execution(
     )
     if observed_parents != item["ordered_parent_shas"]:
         raise GovernanceAmendmentError("amendment parents changed")
-    source_signature = _run_git(root, ["verify-commit", item["head_sha"]])
-    signature_output = (source_signature.stdout + source_signature.stderr).decode(
-        "utf-8", "replace"
+    trust = _accepted_trust_policy(
+        item["repository"], item["accepted_main_sha"]
     )
-    principals = re.findall(
-        r'(?m)^Good "git" signature for ([^\r\n]+) with ', signature_output
+    _verify_commit_against_accepted_trust(
+        root, item["head_sha"],
+        item["source_signature"]["signer_identity"], trust,
     )
-    if (
-        source_signature.returncode != 0
-        or principals != [item["source_signature"]["signer_identity"]]
-    ):
-        raise GovernanceAmendmentError("amendment source signature changed")
     changed = _run_git(
         root,
         [
@@ -747,13 +914,11 @@ def execute(
     fetched = _run_git(root, ["fetch", "--quiet", "--no-tags", remote, merge_oid])
     if fetched.returncode != 0:
         raise GovernanceAmendmentError("accepted amendment cannot be read back")
-    accepted_signature = _run_git(root, ["verify-commit", merge_oid])
-    accepted_signature_output = (
-        accepted_signature.stdout + accepted_signature.stderr
-    ).decode("utf-8", "replace")
-    accepted_principals = re.findall(
-        r'(?m)^Good "git" signature for ([^\r\n]+) with ',
-        accepted_signature_output,
+    trust = _accepted_trust_policy(
+        item["repository"], item["accepted_main_sha"]
+    )
+    _verify_commit_against_accepted_trust(
+        root, merge_oid, item["source_signature"]["signer_identity"], trust,
     )
     if (
         _git_oid(root, merge_oid + "^{tree}") != item["tree_sha"]
@@ -764,9 +929,6 @@ def execute(
         or _run_git(
             root, ["show", "-s", "--format=%B", merge_oid]
         ).stdout.rstrip(b"\n") + b"\n" != message
-        or accepted_signature.returncode != 0
-        or accepted_principals
-        != [item["source_signature"]["signer_identity"]]
     ):
         raise GovernanceAmendmentError("accepted amendment immutable read-back failed")
     return {

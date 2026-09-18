@@ -7,6 +7,7 @@ from __future__ import annotations
 import copy
 from contextlib import nullcontext
 import hashlib
+import json
 import subprocess
 import tempfile
 from pathlib import Path
@@ -50,6 +51,14 @@ def root_verifier(payload: bytes, signature: dict[str, str], identity: str, doma
     return authority.VerifiedSignature(identity, "ssh")
 
 
+def signature_verifier(
+    payload: bytes, signature: dict[str, str], identity: str, domain: str
+) -> authority.VerifiedSignature:
+    if identity == ROOT_SIGNER:
+        return root_verifier(payload, signature, identity, domain)
+    return verifier(payload, signature, identity, domain)
+
+
 def state() -> dict[str, object]:
     value = authority.initial_state()
     value.update(unrestricted_review_count=1, remediation_cycle_count=1)
@@ -63,13 +72,19 @@ def history() -> list[dict[str, object]]:
     ]
 
 
+def proposed_policy() -> dict[str, object]:
+    return json.loads(
+        (Path(__file__).parents[1] / amendment.POLICY_PATH).read_text()
+    )["amendments"][0]
+
+
 def authorization(
     *, head: str = HEAD, tree: str = TREE, parent: str = PARENT,
     accepted_main: str = "3887b00e1b84ef0d14ab2846507a3100512c2c28",
     changed: list[dict[str, str]] | None = None,
     policy: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    policy = policy or amendment._load_policy()
+    policy = policy or proposed_policy()
     qualified = policy["qualified_source"]
     changed = changed or [
         {"path": "policies/governance-amendment-bootstrap.json", "blob_oid": "d" * 40, "mode": "100644"},
@@ -83,6 +98,7 @@ def authorization(
         "ordered_parent_shas": [parent],
         "accepted_main_sha": accepted_main,
         "changed_files": changed, "change_digest": "",
+        "governance_path_prefixes": policy["allowed_path_prefixes"],
         "source_signature": {
             "signer_identity": SOURCE,
             "signature_evidence_digest": authority.digest_json({
@@ -117,7 +133,8 @@ def authorization(
         "human_authority_identity": policy["human_authority_identity"],
         "human_authorization_digest": policy["human_authorization_digest"],
         "authorization_id": policy["authorization_id"],
-        "bounded_uses": 1, "signer_identity": SIGNER, "signature": {},
+        "bounded_uses": 1, "root_authorization": {},
+        "signer_identity": SIGNER, "signature": {},
         "authorization_digest": "",
     }
     return reseal(value)
@@ -131,6 +148,42 @@ def reseal(value: dict[str, object]) -> dict[str, object]:
             "ordered_parent_shas", "accepted_main_sha", "changed_files",
         )
     })
+    facts = {
+        key: copy.deepcopy(item) for key, item in value.items()
+        if key not in {
+            "root_authorization", "signer_identity", "signature",
+            "authorization_digest",
+        }
+    }
+    root_fields = {
+        "schema_version": "1.0",
+        "kind": amendment.ROOT_AUTHORIZATION_KIND,
+        "domain": amendment.ROOT_AUTHORIZATION_DOMAIN,
+        "repository": value["repository"],
+        "delivery_issue": value["delivery_issue"],
+        "pull_request": value["pull_request"],
+        "accepted_main_sha": value["accepted_main_sha"],
+        "head_sha": value["head_sha"],
+        "tree_sha": value["tree_sha"],
+        "purpose": value["purpose"],
+        "governance_path_prefixes": value["governance_path_prefixes"],
+        "human_authority_identity": value["human_authority_identity"],
+        "human_authorization_digest": value["human_authorization_digest"],
+        "authorized_facts_digest": authority.digest_json(facts),
+        "bounded_uses": 1,
+        "signer_identity": ROOT_SIGNER,
+    }
+    root_signed = {
+        **root_fields,
+        "signature": root_signer(
+            authority.canonical_json_bytes(root_fields),
+            amendment.ROOT_AUTHORIZATION_DOMAIN,
+        ),
+    }
+    value["root_authorization"] = {
+        **root_signed,
+        "authorization_digest": authority.digest_json(root_signed),
+    }
     unsigned = {key: copy.deepcopy(item) for key, item in value.items() if key not in {"authorization_digest", "signature"}}
     value["signature"] = signer(authority.canonical_json_bytes(unsigned), amendment.DOMAIN)
     signed = {key: copy.deepcopy(item) for key, item in value.items() if key != "authorization_digest"}
@@ -139,16 +192,21 @@ def reseal(value: dict[str, object]) -> dict[str, object]:
 
 
 class GovernanceAmendmentTests(TestCase):
-    def patches(self):
+    def patches(self, trust: object | None = None):
+        trust = trust or SimpleNamespace(
+            authority_signer_identities=frozenset({ROOT_SIGNER}),
+            legacy_adoption_signer_identities=frozenset({SIGNER}),
+            signers={},
+        )
         return (
             mock.patch.object(
                 amendment, "_accepted_trust_policy",
-                return_value=SimpleNamespace(
-                    authority_signer_identities=frozenset({ROOT_SIGNER}),
-                    legacy_adoption_signer_identities=frozenset({SIGNER}),
-                ),
+                return_value=trust,
             ),
-            mock.patch.object(authority, "_policy_signature_verifier", return_value=verifier),
+            mock.patch.object(
+                authority, "_policy_signature_verifier",
+                return_value=signature_verifier,
+            ),
         )
 
     def test_canonical_issue_consume_and_protected_main_read_back(self) -> None:
@@ -174,7 +232,7 @@ class GovernanceAmendmentTests(TestCase):
             git("commit", "-S", "-am", "amendment")
             head, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
             blob = git("rev-parse", f"HEAD:{path.relative_to(root)}")
-            policy = copy.deepcopy(amendment._load_policy())
+            policy = copy.deepcopy(proposed_policy())
             policy["accepted_main_sha"] = base
             policy["human_authorization_digest"] = authority.digest_json({
                 "authority_identity": policy["human_authority_identity"],
@@ -188,12 +246,41 @@ class GovernanceAmendmentTests(TestCase):
                 changed=[{"path": str(path.relative_to(root)), "blob_oid": blob, "mode": "100644"}],
                 policy=policy,
             )
-            unsigned = {k: copy.deepcopy(v) for k, v in raw.items() if k not in {"signer_identity", "signature", "authorization_digest"}}
-            first, second = self.patches()
-            with mock.patch.object(amendment, "ROOT", root), mock.patch.object(amendment, "_remote_url", return_value=str(remote)), mock.patch.object(amendment, "_push_credentials", return_value=nullcontext((root, None))), mock.patch.object(amendment, "_acquire_issuance_facts", return_value=unsigned), mock.patch.object(amendment, "_acquire_execution_facts", return_value=unsigned), mock.patch.object(amendment, "_load_policy", return_value=policy), first, second, mock.patch.object(amendment.execution, "_policy_role_signer", return_value=(SIGNER, signer)):
-                authenticated = authority.authenticate_governance_amendment_issuance("SecPal/.github", 960, unsigned)
+            issuance_facts = {
+                k: copy.deepcopy(v) for k, v in raw.items()
+                if k not in {
+                    "root_authorization", "signer_identity", "signature",
+                    "authorization_digest",
+                }
+            }
+            trusted_signer = authority.TrustedSigner(
+                SOURCE,
+                (key.with_suffix(".pub").read_text().strip(),),
+                (),
+            )
+            trust = SimpleNamespace(
+                authority_signer_identities=frozenset({ROOT_SIGNER}),
+                legacy_adoption_signer_identities=frozenset({SIGNER}),
+                signers={SOURCE: trusted_signer},
+            )
+            first, second = self.patches(trust)
+            def role_signer(_trust, identities, _label, **_kwargs):
+                if identities == trust.authority_signer_identities:
+                    return ROOT_SIGNER, root_signer
+                return SIGNER, signer
+
+            with mock.patch.object(amendment, "ROOT", root), mock.patch.object(amendment, "_remote_url", return_value=str(remote)), mock.patch.object(amendment, "_push_credentials", return_value=nullcontext((root, None))), mock.patch.object(amendment, "_acquire_issuance_facts", return_value=issuance_facts), first, second, mock.patch.object(amendment.execution, "_policy_role_signer", side_effect=role_signer):
+                authenticated = authority.authenticate_governance_amendment_issuance("SecPal/.github", 960, issuance_facts)
                 issued = authority.issue_governance_amendment_authorization(authenticated)
-                result = authority.execute_governance_amendment(issued)
+                execution_facts = {
+                    k: copy.deepcopy(v) for k, v in issued.items()
+                    if k not in {"signer_identity", "signature", "authorization_digest"}
+                }
+                with mock.patch.object(
+                    amendment, "_acquire_execution_facts",
+                    return_value=execution_facts,
+                ):
+                    result = authority.execute_governance_amendment(issued)
                 self.assertEqual(result["status"], "CONSUMED")
                 self.assertEqual(git("ls-remote", str(remote), "refs/heads/main").split()[0], result["merge_commit_sha"])
                 self.assertEqual(git("show", "-s", "--format=%P", result["merge_commit_sha"]).split(), [base, head])
@@ -201,14 +288,23 @@ class GovernanceAmendmentTests(TestCase):
                 self.assertIn(issued["authorization_digest"], accepted_message)
                 for fabricated in ("lifecycle CURRENT", "Ready transition", "validation receipt"):
                     self.assertNotIn(fabricated, accepted_message)
-                with self.assertRaisesRegex(amendment.GovernanceAmendmentError, "protected main changed"):
+                with mock.patch.object(
+                    amendment, "_acquire_execution_facts",
+                    return_value=execution_facts,
+                ), self.assertRaisesRegex(
+                    amendment.GovernanceAmendmentError,
+                    "protected main changed",
+                ):
                     authority.execute_governance_amendment(issued)
 
     def test_issuer_requires_exact_root_observation_and_sealed_input(self) -> None:
         value = authorization()
         unsigned = {
             key: copy.deepcopy(item) for key, item in value.items()
-            if key not in {"signer_identity", "signature", "authorization_digest"}
+            if key not in {
+                "root_authorization", "signer_identity", "signature",
+                "authorization_digest",
+            }
         }
         changed = copy.deepcopy(unsigned)
         changed["head_sha"] = "9" * 40
@@ -223,6 +319,40 @@ class GovernanceAmendmentTests(TestCase):
             amendment.GovernanceAmendmentError, "canonical authenticated"
         ):
             authority.issue_governance_amendment_authorization(unsigned)
+
+        invalid = copy.deepcopy(unsigned)
+        invalid["changed_files"].append({
+            "path": "src/runtime.py", "blob_oid": "f" * 40,
+            "mode": "100644",
+        })
+        root_signature = mock.Mock(side_effect=root_signer)
+        legacy_signature = mock.Mock(side_effect=signer)
+        trust = SimpleNamespace(
+            authority_signer_identities=frozenset({ROOT_SIGNER}),
+            legacy_adoption_signer_identities=frozenset({SIGNER}),
+        )
+
+        def role_signer(_trust, identities, _label, **_kwargs):
+            if identities == trust.authority_signer_identities:
+                return ROOT_SIGNER, root_signature
+            return SIGNER, legacy_signature
+
+        with mock.patch.object(
+            amendment, "_acquire_issuance_facts", return_value=invalid
+        ), mock.patch.object(
+            amendment, "_accepted_trust_policy", return_value=trust
+        ), mock.patch.object(
+            amendment.execution, "_policy_role_signer", side_effect=role_signer
+        ):
+            authenticated = authority.authenticate_governance_amendment_issuance(
+                "SecPal/.github", 960, invalid
+            )
+            with self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError, "non-governance source"
+            ):
+                authority.issue_governance_amendment_authorization(authenticated)
+        root_signature.assert_not_called()
+        legacy_signature.assert_not_called()
 
     def test_root_observations_are_signed_canonical_and_phase_bound(self) -> None:
         facts = {
@@ -366,22 +496,91 @@ class GovernanceAmendmentTests(TestCase):
             with self.subTest(label=label), first, second, self.assertRaises((amendment.GovernanceAmendmentError, authority.LifecycleAuthorityError)):
                 amendment.verify(changed)
 
-    def test_policy_requires_the_accepted_registry_entry(self) -> None:
+    def test_candidate_policy_and_registry_are_not_authority(self) -> None:
         value = authorization()
         first, second = self.patches()
-        real_loads = amendment.json.loads
+        with first, second, mock.patch.object(
+            amendment.Path, "read_text",
+            side_effect=AssertionError("candidate policy was consulted"),
+        ):
+            self.assertTrue(amendment.is_verified(amendment.verify(value)))
 
-        def unregistered(raw: str):
-            parsed = real_loads(raw)
-            if isinstance(parsed, dict) and "repositories" in parsed:
-                parsed["repositories"][0].pop("governance_amendment_policy")
-            return parsed
+        changed = copy.deepcopy(value)
+        changed["governance_path_prefixes"] = ["src"]
+        unsigned = {
+            key: copy.deepcopy(item) for key, item in changed.items()
+            if key not in {"authorization_digest", "signature"}
+        }
+        changed["signature"] = signer(
+            authority.canonical_json_bytes(unsigned), amendment.DOMAIN
+        )
+        signed = {
+            key: copy.deepcopy(item) for key, item in changed.items()
+            if key != "authorization_digest"
+        }
+        changed["authorization_digest"] = authority.digest_json(signed)
+        first, second = self.patches()
+        with first, second, self.assertRaisesRegex(
+            amendment.GovernanceAmendmentError, "root authorization scope changed"
+        ):
+            amendment.verify(changed)
 
-        with first, second, mock.patch.object(amendment.json, "loads", side_effect=unregistered):
-            with self.assertRaisesRegex(
-                amendment.GovernanceAmendmentError, "not registered"
+    def test_ambient_accepted_principal_with_arbitrary_key_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repository"
+            subprocess.run(
+                ["git", "init", "--quiet", "-b", "main", str(root)],
+                check=True,
+            )
+            trusted = Path(directory) / "trusted"
+            attacker = Path(directory) / "attacker"
+            for key in (trusted, attacker):
+                subprocess.run(
+                    ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+                    check=True,
+                )
+            ambient = Path(directory) / "ambient-allowed-signers"
+            ambient.write_text(
+                f"{SOURCE} {attacker.with_suffix('.pub').read_text()}",
+                encoding="utf-8",
+            )
+            for key, value in (
+                ("user.name", "SecPal Test"),
+                ("user.email", "test@secpal.invalid"),
+                ("gpg.format", "ssh"),
+                ("user.signingkey", str(attacker)),
+                ("gpg.ssh.allowedSignersFile", str(ambient)),
+                ("commit.gpgsign", "true"),
             ):
-                amendment.verify(value)
+                subprocess.run(
+                    ["git", "-C", str(root), "config", key, value], check=True
+                )
+            (root / "governance.txt").write_text("candidate\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "commit", "-S", "-m", "candidate"],
+                check=True,
+            )
+            head = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                check=True, stdout=subprocess.PIPE, text=True,
+            ).stdout.strip()
+            subprocess.run(
+                ["git", "-C", str(root), "verify-commit", head], check=True
+            )
+            trust = SimpleNamespace(signers={
+                SOURCE: authority.TrustedSigner(
+                    SOURCE,
+                    (trusted.with_suffix(".pub").read_text().strip(),),
+                    (),
+                )
+            })
+            with self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError, "accepted-main key"
+            ):
+                amendment._verify_commit_against_accepted_trust(
+                    root, head, SOURCE, trust
+                )
 
     def test_candidate_local_and_mixed_historical_authority_fail_closed(self) -> None:
         value = authorization()
