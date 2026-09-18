@@ -467,7 +467,7 @@ class GovernanceAmendmentTests(TestCase):
                 "author": {"login": "review-bot"},
             }]
             pull = {
-                "number": 961, "state": "open", "draft": True,
+                "number": 961, "state": "open", "draft": False,
                 "merged": False,
                 "head": {"sha": head, "repo": {"full_name": "SecPal/.github"}},
                 "base": {"sha": base, "ref": "main", "repo": {"full_name": "SecPal/.github"}},
@@ -538,6 +538,15 @@ class GovernanceAmendmentTests(TestCase):
             }
             with mock.patch.object(amendment, "ROOT", root), mock.patch.object(amendment.publication, "_run_gh", side_effect=github), mock.patch.object(authority, "_load_delivery_signature_policy", return_value=signature_policy), first, second, mock.patch.object(amendment.execution, "_policy_role_signer", signer_factory):
                 inputs = observation_inputs(raw)
+                pull["draft"] = True
+                with self.assertRaisesRegex(
+                    amendment.GovernanceAmendmentError,
+                    "delivery identity or state changed",
+                ):
+                    authority.authenticate_governance_amendment_issuance(
+                        "SecPal/.github", 960, inputs
+                    )
+                pull["draft"] = False
                 authenticated = authority.authenticate_governance_amendment_issuance("SecPal/.github", 960, inputs)
                 observed = authenticated.facts
                 self.assertEqual(
@@ -620,7 +629,6 @@ class GovernanceAmendmentTests(TestCase):
                     authority.exact_state_adoption_historical_evidence(adoption),
                     amendment.historical_evidence(),
                 )
-                pull["draft"] = False
                 result = authority.execute_governance_amendment(issued)
                 self.assertEqual(result["status"], "CONSUMED")
                 self.assertEqual(git("ls-remote", str(remote), "refs/heads/main").split()[0], result["merge_commit_sha"])
@@ -821,7 +829,7 @@ class GovernanceAmendmentTests(TestCase):
                 publication_remote_url=str(repo["remote"]),
             )
             pull = {
-                "number": 961, "state": "open", "draft": True,
+                "number": 961, "state": "open", "draft": False,
                 "merged": False,
                 "head": {"sha": repo["head"], "repo": {"full_name": "SecPal/.github"}},
                 "base": {"sha": repo["base"], "ref": "main", "repo": {"full_name": "SecPal/.github"}},

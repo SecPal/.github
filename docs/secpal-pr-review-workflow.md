@@ -483,11 +483,12 @@ The maintained observation producer accepts only the closed external human,
 qualification, validation, history, and absence inputs that it cannot originate;
 it does not accept a preassembled or presigned live-facts descriptor. It
 independently reacquires the live
-issue, Draft PR at issuance, protected main, complete source range and signatures, exact
+issue, Ready PR at issuance, protected main, complete source range and signatures, exact
 tree/topology/path/blob/mode scope, terminal CI, stable feedback, threads, and
-qualification binding before either signer runs. Execution reacquires the same
-facts after the separately authorized normal Draft-to-Ready transition and must
-yield byte-identical authorization facts. Every adopted source commit is
+qualification binding before either signer runs. Issuance occurs only after the
+separately authorized normal Draft-to-Ready transition and its triggered checks
+reach terminal acceptance; execution then reacquires byte-identical facts.
+Every adopted source commit is
 verified directly against the bound accepted-main signer keys; ambient Git trust
 and matching principal text are insufficient. The governance-only scope admits the two maintained command
 entry points, `scripts/secpal-pr-review-actions.py` and

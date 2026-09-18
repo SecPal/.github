@@ -1125,7 +1125,6 @@ def _git_changed_files(
 
 def produce_observation(
     repository: str, delivery_issue: int, authenticated_inputs: Mapping[str, Any],
-    *, _expected_draft: bool = True,
 ) -> dict[str, Any]:
     """Independently rebuild every live fact before maintained signing."""
 
@@ -1155,7 +1154,7 @@ def produce_observation(
     issue = _live_issue(repository, delivery_issue)
     if (
         pull != {
-            "number": pull_request, "state": "open", "draft": _expected_draft,
+            "number": pull_request, "state": "open", "draft": False,
             "merged": False,
             "head_sha": inputs["independent_qualification"]["head_sha"],
             "head_repository": repository, "base_sha": accepted_main,
@@ -1465,7 +1464,7 @@ def _authenticate_execution(
     }
     current_facts = produce_observation(
         item["repository"], item["delivery_issue"],
-        _observation_inputs(item), _expected_draft=False,
+        _observation_inputs(item),
     )
     if current_facts != expected_facts:
         raise GovernanceAmendmentError(
