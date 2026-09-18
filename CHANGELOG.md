@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-18 - Enable Contracts Lifecycle Enrollment
+
+**Changed:**
+
+- Register `SecPal/contracts` for the maintained native delivery lifecycle,
+  binding its repository-local protected publication boundary and the canonical
+  SecPal lifecycle signer roles.
+- Start with no historical, bootstrap, adoption or initialization records so
+  the first contracts delivery enters through ordinary admission-first native
+  enrollment without changing validation or review commands.
+
 ## 2026-09-18 - Protect Contracts Lifecycle Publications
 
 **Changed:**
