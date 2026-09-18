@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-18 - Authenticate Recovery In Pre-Enrollment Projection
+
+**Fixed:**
+
+- Classify Ready-source recovery publications under their existing protected-
+  journal schema when proving pre-enrollment absence, while preserving their
+  ancillary role and excluding them from lifecycle and genesis identity.
+- Require the projection to authenticate the recovery's preceding `CURRENT`,
+  authorization, signature, parent binding and one-use identity before
+  continuing journal ancestry.
+
 ## 2026-09-18 - Bound One Governance Amendment Bootstrap
 
 **Fixed:**
