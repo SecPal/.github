@@ -26,11 +26,7 @@
         "scripts/secpal_pr_review",
         "tests"
       ],
-      "concepts": [
-        "GOVERNANCE_AMENDMENT",
-        "ABSENT_NEVER_ISSUED",
-        "EXACT_STATE_ADOPTION"
-      ],
+      "concepts": ["GOVERNANCE_AMENDMENT", "ABSENT_NEVER_ISSUED", "EXACT_STATE_ADOPTION"],
       "human_authority_identity": "SecPal human architecture authority for issue 960",
       "human_authorization_digest": "9864653c710c636cb880a9a13096ff5cda9e1060b647f9e3315f107a329416cc",
       "authorization_id": "governance-amendment:SecPal/.github:960:961",
