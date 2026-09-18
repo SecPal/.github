@@ -3228,6 +3228,34 @@ def issue_pre_enrollment_validation_evidence_loss_admission(
     return validation_evidence_loss.issue(repository, delivery_issue)
 
 
+def authenticate_governance_amendment_issuance(
+    repository: str, delivery_issue: int, observed: Mapping[str, Any]
+) -> Any:
+    """Authenticate exact amendment facts at the maintained root boundary."""
+
+    from . import governance_amendment
+
+    return governance_amendment.authenticate_issuance(
+        repository, delivery_issue, observed
+    )
+
+
+def issue_governance_amendment_authorization(authenticated: Any) -> dict[str, Any]:
+    """Issue one existing-role authorization from sealed root observations."""
+
+    from . import governance_amendment
+
+    return governance_amendment.issue(authenticated)
+
+
+def execute_governance_amendment(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Consume one amendment through protected-main compare-and-swap."""
+
+    from . import governance_amendment
+
+    return governance_amendment.execute(value)
+
+
 def authenticate_exact_state_adoption_external_evidence(
     *,
     repository: str,

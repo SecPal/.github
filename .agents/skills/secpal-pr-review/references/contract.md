@@ -564,8 +564,15 @@ source-validation, and final-attestation digests. Existing versions project as
 candidate-local registration, replay, second use, product change, finding,
 counter reset, Cycle 3, or fabricated digest is authority.
 
-This boundary publishes authority; it does not derive lifecycle semantics,
-implement two-parent integration, or orchestrate the full finite workflow.
+Issuance requires an exact canonical root observation signed by the existing
+authority role and then the existing legacy-adoption signature. Execution
+requires a distinct fresh signed root observation with identical facts. It
+creates one signed two-parent commit containing the bound candidate tree and
+updates protected main only by a non-force fast-forward compare-and-swap. The
+accepted commit embeds the canonical authorization and consumption digest for
+immutable read-back and replay rejection. This path does not publish lifecycle
+CURRENT, derive lifecycle semantics, synthesize enrollment or Ready evidence,
+or grant authority over another pull request.
 
 ## Finite lifecycle-orchestration boundary
 

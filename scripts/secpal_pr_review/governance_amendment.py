@@ -4,12 +4,18 @@
 
 from __future__ import annotations
 
+import base64
 import copy
 import json
+import os
 from pathlib import Path
+import re
+import subprocess
 from typing import Any, Mapping
 
 from . import lifecycle_authority as authority
+from . import lifecycle_execution as execution
+from . import lifecycle_publication as publication
 
 ROOT = Path(__file__).resolve().parents[2]
 POLICY_PATH = "policies/governance-amendment-bootstrap.json"
@@ -19,6 +25,12 @@ DOMAIN = "secpal.governance-amendment-authorization/v1"
 PURPOSE = "EXACT_ZERO_RECEIPT_PRE_ENROLLMENT_BOOTSTRAP"
 EVIDENCE_STATE = "ABSENT_NEVER_ISSUED"
 _VERIFIED = object()
+_ISSUANCE_VERIFIED = object()
+ACCEPTED_MAIN_REF = "refs/heads/main"
+CONSUMPTION_DOMAIN = "secpal.governance-amendment-consumption/v1"
+CONSUMPTION_KIND = "SECPAL_GOVERNANCE_AMENDMENT_CONSUMPTION"
+ROOT_OBSERVATION_DOMAIN = "secpal.governance-amendment-root-observation/v1"
+ROOT_OBSERVATION_KIND = "SECPAL_GOVERNANCE_AMENDMENT_ROOT_OBSERVATION"
 
 AUTHORIZATION_FIELDS = frozenset({
     "schema_version", "kind", "domain", "purpose", "repository",
@@ -45,13 +57,30 @@ class GovernanceAmendmentError(ValueError):
 
 
 class VerifiedGovernanceAmendment:
-    """Opaque verified authority consumable only by Exact-State-Adoption v4."""
+    """Opaque exact amendment authority."""
 
     __slots__ = ("authorization", "_seal")
 
     def __init__(self, authorization: dict[str, Any], seal: object) -> None:
         self.authorization = authorization
         self._seal = seal
+
+
+class VerifiedGovernanceAmendmentIssuance:
+    """Facts independently authenticated by the maintained root boundary."""
+
+    __slots__ = ("facts", "_seal")
+
+    def __init__(self, facts: dict[str, Any], seal: object) -> None:
+        self.facts = facts
+        self._seal = seal
+
+
+def is_verified_issuance(value: Any) -> bool:
+    return (
+        isinstance(value, VerifiedGovernanceAmendmentIssuance)
+        and value._seal is _ISSUANCE_VERIFIED
+    )
 
 
 def is_verified(value: Any) -> bool:
@@ -125,8 +154,9 @@ def _changed_files(value: Any, allowed_prefixes: list[str]) -> list[dict[str, An
     return result
 
 
-def verify(value: Any) -> VerifiedGovernanceAmendment:
-    """Verify one signed exact-scope authorization; perform no publication or write."""
+def _verify(
+    value: Any, *, authenticate_signature: bool
+) -> VerifiedGovernanceAmendment:
 
     if not isinstance(value, Mapping) or set(value) != AUTHORIZATION_FIELDS:
         raise GovernanceAmendmentError("governance amendment authorization schema is not closed")
@@ -302,17 +332,451 @@ def verify(value: Any) -> VerifiedGovernanceAmendment:
     ):
         raise GovernanceAmendmentError("governance amendment authorization scope changed")
     signer = authority._require_identity(item["signer_identity"], "amendment signer")
-    signed = {key: copy.deepcopy(entry) for key, entry in item.items() if key != "authorization_digest"}
+    signed = {
+        key: copy.deepcopy(entry)
+        for key, entry in item.items()
+        if key != "authorization_digest"
+    }
     digest = authority._require_digest(item["authorization_digest"], "amendment authorization")
     if digest != authority.digest_json(signed):
         raise GovernanceAmendmentError("governance amendment authorization digest mismatch")
-    trust = authority._load_lifecycle_trust_policy(repository)
+    if authenticate_signature:
+        trust = _accepted_trust_policy(repository, main)
+        try:
+            authority._verify_signature(
+                authority.canonical_json_bytes(
+                    authority._unsigned(
+                        item, "authorization_digest", "signature"
+                    )
+                ),
+                item["signature"], signer, DOMAIN, trust.legacy_adoption_signer_identities,
+                authority._policy_signature_verifier(trust),
+            )
+        except authority.LifecycleAuthorityError as exc:
+            raise GovernanceAmendmentError("governance amendment signature is invalid") from exc
+    return VerifiedGovernanceAmendment(item, _VERIFIED)
+
+
+def verify(value: Any) -> VerifiedGovernanceAmendment:
+    """Verify one signed exact-scope authorization; perform no publication or write."""
+
+    return _verify(value, authenticate_signature=True)
+
+
+def authenticate_issuance(
+    repository: str,
+    delivery_issue: int,
+    observed: Mapping[str, Any],
+) -> VerifiedGovernanceAmendmentIssuance:
+    """Bind supplied verifier evidence to independently observed root facts.
+
+    The maintained root descriptor is independently read and compared byte for
+    byte; callers cannot substitute an observer or signing function.
+    """
+
+    actual = copy.deepcopy(dict(_acquire_issuance_facts(repository, delivery_issue)))
+    supplied = copy.deepcopy(dict(observed)) if isinstance(observed, Mapping) else None
+    if supplied is None or actual != supplied:
+        raise GovernanceAmendmentError("amendment issuance facts are not authenticated")
+    unsigned_fields = AUTHORIZATION_FIELDS - {
+        "signer_identity", "signature", "authorization_digest"
+    }
+    if set(actual) != unsigned_fields:
+        raise GovernanceAmendmentError("amendment issuance facts are not closed")
+    # Verification before signing proves every closed semantic binding except
+    # the root signature. A deterministic fixture signature is replaced below.
+    probe = {
+        **actual,
+        "signer_identity": "lifecycle-legacy-adoption@secpal.app",
+        "signature": {
+            "format": "ssh",
+            "signer_identity": "lifecycle-legacy-adoption@secpal.app",
+            "value": "probe",
+        },
+    }
+    probe["authorization_digest"] = authority.digest_json(probe)
+    # Do not call verify(probe): signature verification belongs after issuance.
+    _validate_unsigned_scope(probe)
+    return VerifiedGovernanceAmendmentIssuance(actual, _ISSUANCE_VERIFIED)
+
+
+def issue(value: VerifiedGovernanceAmendmentIssuance) -> dict[str, Any]:
+    """Issue exactly one root-signed authorization from authenticated facts."""
+
+    if not is_verified_issuance(value):
+        raise GovernanceAmendmentError("canonical authenticated issuance is required")
+    facts = copy.deepcopy(value.facts)
+    repository = authority._require_repository(facts["repository"])
+    current = copy.deepcopy(dict(_acquire_issuance_facts(
+        repository, facts["delivery_issue"]
+    )))
+    if current != facts:
+        raise GovernanceAmendmentError(
+            "amendment issuance facts changed before signing"
+        )
+    trust = _accepted_trust_policy(repository, facts["accepted_main_sha"])
+    identity, signer = execution._policy_role_signer(
+        trust,
+        trust.legacy_adoption_signer_identities,
+        "legacy-adoption signer role",
+        allow_routine_default=False,
+    )
+    fields = {**facts, "signer_identity": identity}
+    signature = signer(authority.canonical_json_bytes(fields), DOMAIN)
+    signed = {**fields, "signature": signature}
+    document = {**signed, "authorization_digest": authority.digest_json(signed)}
+    return verify(document).authorization
+
+
+def _validate_unsigned_scope(item: Mapping[str, Any]) -> None:
+    """Run the closed verifier up to its root-signature boundary."""
+
+    _verify(item, authenticate_signature=False)
+
+
+def _acquire_issuance_facts(
+    repository: str, delivery_issue: int
+) -> Mapping[str, Any]:
+    """Acquire the canonical root-owned issuance record.
+
+    The record is deliberately supplied through a protected root descriptor,
+    rather than read from the candidate checkout. The accepted launcher writes
+    it only after completing GitHub, Git, CI, qualification, feedback, policy,
+    and historical-artifact authentication.
+    """
+
+    return _read_root_observation(
+        "SECPAL_GOVERNANCE_AMENDMENT_ISSUANCE", "ISSUANCE",
+        repository, delivery_issue,
+    )
+
+
+def _acquire_execution_facts(
+    repository: str, delivery_issue: int
+) -> Mapping[str, Any]:
+    return _read_root_observation(
+        "SECPAL_GOVERNANCE_AMENDMENT_EXECUTION", "EXECUTION",
+        repository, delivery_issue,
+    )
+
+
+def _read_root_observation(
+    environment_name: str, phase: str, repository: str, delivery_issue: int
+) -> Mapping[str, Any]:
+    descriptor = os.environ.get(environment_name)
+    if not descriptor:
+        raise GovernanceAmendmentError("maintained root issuance is unavailable")
+    path = Path(descriptor)
+    try:
+        if not path.is_absolute() or path.is_symlink() or path.stat().st_mode & 0o077:
+            raise GovernanceAmendmentError("maintained root issuance is not protected")
+        raw = path.read_bytes()
+        envelope = json.loads(raw, object_pairs_hook=publication._reject_duplicate_pairs)
+    except (OSError, json.JSONDecodeError, publication.LifecyclePublicationError) as exc:
+        raise GovernanceAmendmentError("maintained root issuance is unavailable") from exc
+    fields = frozenset({
+        "schema_version", "kind", "domain", "phase", "facts", "signer_identity",
+        "signature", "observation_digest",
+    })
+    if not isinstance(envelope, dict) or set(envelope) != fields:
+        raise GovernanceAmendmentError("maintained root issuance is not canonical")
+    signed = {
+        key: copy.deepcopy(value)
+        for key, value in envelope.items()
+        if key != "observation_digest"
+    }
+    if (
+        envelope["schema_version"] != "1.0"
+        or envelope["kind"] != ROOT_OBSERVATION_KIND
+        or envelope["domain"] != ROOT_OBSERVATION_DOMAIN
+        or envelope["phase"] != phase
+        or raw != authority.canonical_json_bytes(envelope)
+        or envelope["observation_digest"] != authority.digest_json(signed)
+    ):
+        raise GovernanceAmendmentError("maintained root issuance is not canonical")
+    item = envelope["facts"]
+    if (
+        not isinstance(item, dict)
+        or item.get("repository") != repository
+        or item.get("delivery_issue") != delivery_issue
+    ):
+        raise GovernanceAmendmentError("maintained root issuance changed identity")
+    trust = _accepted_trust_policy(repository, item["accepted_main_sha"])
     try:
         authority._verify_signature(
-            authority.canonical_json_bytes(authority._unsigned(item, "authorization_digest", "signature")),
-            item["signature"], signer, DOMAIN, trust.legacy_adoption_signer_identities,
+            authority.canonical_json_bytes(
+                authority._unsigned(envelope, "observation_digest", "signature")
+            ),
+            envelope["signature"],
+            envelope["signer_identity"],
+            ROOT_OBSERVATION_DOMAIN,
+            trust.authority_signer_identities,
             authority._policy_signature_verifier(trust),
         )
+    except (authority.LifecycleAuthorityError, KeyError, TypeError) as exc:
+        raise GovernanceAmendmentError(
+            "maintained root issuance signature is invalid"
+        ) from exc
+    return copy.deepcopy(item)
+
+
+def _run_git(
+    root: Path,
+    arguments: list[str],
+    *,
+    input_bytes: bytes | None = None,
+    extra_environment: Mapping[str, str] | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    try:
+        return publication._run_git(
+            root,
+            arguments,
+            input_bytes=input_bytes,
+            extra_environment=extra_environment,
+        )
+    except publication.LifecyclePublicationError as exc:
+        raise GovernanceAmendmentError(
+            "trusted amendment Git operation failed"
+        ) from exc
+
+
+def _accepted_trust_policy(repository: str, accepted_main_sha: str):
+    main = authority._require_oid(accepted_main_sha, "accepted main")
+    result = _run_git(ROOT.resolve(), ["show", f"{main}:{REGISTRY_PATH}"])
+    if result.returncode != 0:
+        raise GovernanceAmendmentError(
+            "accepted-main lifecycle trust policy is unavailable"
+        )
+    try:
+        return authority._parse_lifecycle_trust_policy(result.stdout, repository)
     except authority.LifecycleAuthorityError as exc:
-        raise GovernanceAmendmentError("governance amendment signature is invalid") from exc
-    return VerifiedGovernanceAmendment(item, _VERIFIED)
+        raise GovernanceAmendmentError(
+            "accepted-main lifecycle trust policy is invalid"
+        ) from exc
+
+
+def _git_oid(root: Path, expression: str) -> str:
+    result = _run_git(root, ["rev-parse", "--verify", expression])
+    value = result.stdout.decode("ascii", "strict").strip() if result.returncode == 0 else ""
+    try:
+        return authority._require_oid(value, "amendment Git identity")
+    except authority.LifecycleAuthorityError as exc:
+        raise GovernanceAmendmentError("amendment Git identity is unavailable") from exc
+
+
+def _remote_url(repository: str, accepted_main_sha: str) -> str:
+    trust = _accepted_trust_policy(repository, accepted_main_sha)
+    value = trust.publication_remote_url
+    if not isinstance(value, str) or not value:
+        raise GovernanceAmendmentError("maintained repository remote is unavailable")
+    return value
+
+
+def _push_credentials(repository: str, accepted_main_sha: str):
+    policy = _accepted_trust_policy(repository, accepted_main_sha)
+    return publication._isolated_repository(policy, write=True)
+
+
+def _push_protected_main(
+    root: Path, remote: str, merge_oid: str, repository: str,
+    accepted_main_sha: str,
+) -> None:
+    with _push_credentials(
+        repository, accepted_main_sha
+    ) as (_, credential_environment):
+        pushed = _run_git(
+            root,
+            ["push", "--porcelain", remote, f"{merge_oid}:{ACCEPTED_MAIN_REF}"],
+            extra_environment=credential_environment,
+        )
+    if pushed.returncode != 0:
+        raise GovernanceAmendmentError(
+            "protected main changed during amendment compare-and-swap"
+        )
+
+
+def _observe_remote_main(root: Path, remote: str) -> str:
+    result = _run_git(root, ["ls-remote", remote, ACCEPTED_MAIN_REF])
+    fields = (
+        result.stdout.decode("ascii", "strict").strip().split()
+        if result.returncode == 0
+        else []
+    )
+    if len(fields) != 2 or fields[1] != ACCEPTED_MAIN_REF:
+        raise GovernanceAmendmentError("protected main cannot be authenticated")
+    return authority._require_oid(fields[0], "protected main")
+
+
+def _consumption_record(authorization: Mapping[str, Any]) -> dict[str, Any]:
+    fields = {
+        "schema_version": "1.0",
+        "kind": CONSUMPTION_KIND,
+        "domain": CONSUMPTION_DOMAIN,
+        "repository": authorization["repository"],
+        "delivery_issue": authorization["delivery_issue"],
+        "pull_request": authorization["pull_request"],
+        "authorization_id": authorization["authorization_id"],
+        "authorization_digest": authorization["authorization_digest"],
+        "accepted_main_sha": authorization["accepted_main_sha"],
+        "head_sha": authorization["head_sha"],
+        "tree_sha": authorization["tree_sha"],
+        "ordered_parent_shas": copy.deepcopy(authorization["ordered_parent_shas"]),
+        "change_digest": authorization["change_digest"],
+        "operation": "EXACT_PROTECTED_MAIN_GOVERNANCE_AMENDMENT",
+        "bounded_uses": 1,
+    }
+    return {**fields, "consumption_digest": authority.digest_json(fields)}
+
+
+def _merge_message(authorization: Mapping[str, Any], consumption: Mapping[str, Any]) -> bytes:
+    encoded = base64.b64encode(authority.canonical_json_bytes(authorization)).decode("ascii")
+    encoded_consumption = base64.b64encode(
+        authority.canonical_json_bytes(consumption)
+    ).decode("ascii")
+    return (
+        "Governance amendment for "
+        f"#{authorization['delivery_issue']} (#{authorization['pull_request']})\n\n"
+        f"SecPal-Governance-Amendment-Authorization: {encoded}\n"
+        f"SecPal-Governance-Amendment-Digest: {authorization['authorization_digest']}\n"
+        f"SecPal-Governance-Amendment-Consumption: {encoded_consumption}\n"
+        f"SecPal-Governance-Amendment-Consumption-Digest: {consumption['consumption_digest']}\n"
+    ).encode("utf-8")
+
+
+def _authenticate_execution(
+    verified: VerifiedGovernanceAmendment, root: Path, remote: str
+) -> None:
+    item = verified.authorization
+    expected_facts = {
+        key: copy.deepcopy(value)
+        for key, value in item.items()
+        if key not in {"signer_identity", "signature", "authorization_digest"}
+    }
+    current_facts = copy.deepcopy(dict(_acquire_execution_facts(
+        item["repository"], item["delivery_issue"]
+    )))
+    if current_facts != expected_facts:
+        raise GovernanceAmendmentError(
+            "live amendment prerequisites changed before consumption"
+        )
+    if _observe_remote_main(root, remote) != item["accepted_main_sha"]:
+        raise GovernanceAmendmentError("protected main changed before amendment consumption")
+    if _git_oid(root, item["head_sha"] + "^{tree}") != item["tree_sha"]:
+        raise GovernanceAmendmentError("amendment tree changed")
+    parents = _run_git(root, ["show", "-s", "--format=%P", item["head_sha"]])
+    observed_parents = (
+        parents.stdout.decode("ascii", "strict").strip().split()
+        if parents.returncode == 0
+        else []
+    )
+    if observed_parents != item["ordered_parent_shas"]:
+        raise GovernanceAmendmentError("amendment parents changed")
+    source_signature = _run_git(root, ["verify-commit", item["head_sha"]])
+    signature_output = (source_signature.stdout + source_signature.stderr).decode(
+        "utf-8", "replace"
+    )
+    principals = re.findall(
+        r'(?m)^Good "git" signature for ([^\r\n]+) with ', signature_output
+    )
+    if (
+        source_signature.returncode != 0
+        or principals != [item["source_signature"]["signer_identity"]]
+    ):
+        raise GovernanceAmendmentError("amendment source signature changed")
+    changed = _run_git(
+        root,
+        [
+            "diff-tree", "--no-commit-id", "--name-only", "-r",
+            item["accepted_main_sha"], item["head_sha"],
+        ],
+    )
+    paths = (
+        sorted(changed.stdout.decode("utf-8", "strict").splitlines())
+        if changed.returncode == 0
+        else []
+    )
+    if paths != [entry["path"] for entry in item["changed_files"]]:
+        raise GovernanceAmendmentError("amendment path set changed")
+    for entry in item["changed_files"]:
+        listing = _run_git(
+            root, ["ls-tree", item["head_sha"], "--", entry["path"]]
+        )
+        expected = (
+            f"{entry['mode']} blob {entry['blob_oid']}\t{entry['path']}\n"
+        ).encode("utf-8")
+        if listing.returncode != 0 or listing.stdout != expected:
+            raise GovernanceAmendmentError("amendment changed-file identity changed")
+    # A prior accepted-main occurrence is the immutable replay ledger.
+    log = _run_git(root, ["log", "--format=%B%x00", item["accepted_main_sha"]])
+    if item["authorization_digest"].encode("ascii") in log.stdout:
+        raise GovernanceAmendmentError("governance amendment authorization was already consumed")
+
+
+def execute(
+    value: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Consume once by a signed, two-parent, fast-forward main adoption."""
+
+    verified = verify(value)
+    item = verified.authorization
+    root = ROOT.resolve()
+    remote = _remote_url(item["repository"], item["accepted_main_sha"])
+    _authenticate_execution(verified, root, remote)
+    consumption = _consumption_record(item)
+    message = _merge_message(item, consumption)
+    commit = _run_git(
+        root,
+        [
+            "commit-tree", "-S", item["tree_sha"],
+            "-p", item["accepted_main_sha"], "-p", item["head_sha"],
+        ],
+        input_bytes=message,
+    )
+    merge_oid = commit.stdout.decode("ascii", "strict").strip() if commit.returncode == 0 else ""
+    try:
+        authority._require_oid(merge_oid, "amendment merge commit")
+    except authority.LifecycleAuthorityError as exc:
+        raise GovernanceAmendmentError(
+            "signed amendment merge commit could not be created"
+        ) from exc
+    _push_protected_main(
+        root, remote, merge_oid, item["repository"], item["accepted_main_sha"]
+    )
+    if _observe_remote_main(root, remote) != merge_oid:
+        raise GovernanceAmendmentError("accepted amendment read-back changed identity")
+    fetched = _run_git(root, ["fetch", "--quiet", "--no-tags", remote, merge_oid])
+    if fetched.returncode != 0:
+        raise GovernanceAmendmentError("accepted amendment cannot be read back")
+    accepted_signature = _run_git(root, ["verify-commit", merge_oid])
+    accepted_signature_output = (
+        accepted_signature.stdout + accepted_signature.stderr
+    ).decode("utf-8", "replace")
+    accepted_principals = re.findall(
+        r'(?m)^Good "git" signature for ([^\r\n]+) with ',
+        accepted_signature_output,
+    )
+    if (
+        _git_oid(root, merge_oid + "^{tree}") != item["tree_sha"]
+        or _run_git(
+            root, ["show", "-s", "--format=%P", merge_oid]
+        ).stdout.decode("ascii", "strict").strip().split()
+        != [item["accepted_main_sha"], item["head_sha"]]
+        or _run_git(
+            root, ["show", "-s", "--format=%B", merge_oid]
+        ).stdout.rstrip(b"\n") + b"\n" != message
+        or accepted_signature.returncode != 0
+        or accepted_principals
+        != [item["source_signature"]["signer_identity"]]
+    ):
+        raise GovernanceAmendmentError("accepted amendment immutable read-back failed")
+    return {
+        "status": "CONSUMED",
+        "authorization_id": item["authorization_id"],
+        "authorization_digest": item["authorization_digest"],
+        "consumption_digest": consumption["consumption_digest"],
+        "merge_commit_sha": merge_oid,
+        "accepted_main_sha": merge_oid,
+        "head_sha": item["head_sha"],
+        "tree_sha": item["tree_sha"],
+        "bounded_uses_consumed": 1,
+    }

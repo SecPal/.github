@@ -475,7 +475,14 @@ head/tree/topology, accepted-main boundary, complete governance-only change
 set, natural CI, independent exact-head qualification, stable feedback, finite
 history and counters, and explicit human architecture authority. It adds no
 journal operation, signer, lifecycle state, counter, reset, or recovery path.
-Publication remains ordinary Exact-State-Adoption enrollment and journal CAS.
+The exceptional amendment itself is issued only from an exact signed root
+observation and the existing legacy-adoption signer. A separately signed,
+fresh execution observation must remain byte-identical. Consumption creates a
+signed two-parent commit with the bound candidate tree and performs one
+non-force fast-forward compare-and-swap to protected main. The commit embeds
+the canonical authorization and consumption digest for immutable read-back;
+it neither creates lifecycle CURRENT nor synthesizes ordinary enrollment,
+Ready, receipt, counter, or thread state.
 Future deliveries must establish native genesis and commit-bound validation
 authority before review, remediation, or a Ready transition; this exact policy
 is not a generic grandfather or administrative override.

@@ -483,9 +483,14 @@ Exact-State-Adoption version 4 is the registered, one-delivery
 validation as `ABSENT_NEVER_ISSUED` with typed null receipt, source-validation,
 and final-attestation fields. It consumes an independently signed exact-scope
 authorization only after current validation, natural CI, exact-head independent
-qualification, and zero material findings; it cannot issue that authorization,
-change lifecycle counters, or add a publication operation. Versions 1/2 remain
-`PRESENT`, and version 3 remains `UNAVAILABLE`, without serialization changes.
+qualification, and zero material findings. The maintained root boundary accepts
+separate signed issuance and execution observations, issues through the existing
+legacy-adoption signer, and consumes once by a signed two-parent, non-force
+fast-forward of the bound governance tree to protected main. The accepted merge
+commit stores the canonical authorization and consumption digest for immutable
+read-back and replay rejection. It does not create lifecycle CURRENT, Ready,
+receipt, counter, or thread authority. Versions 1/2 remain `PRESENT`, and version
+3 remains `UNAVAILABLE`, without serialization changes.
 
 ### `secpal_pr_review/validation_evidence_loss.py`
 
