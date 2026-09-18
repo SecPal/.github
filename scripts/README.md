@@ -486,8 +486,9 @@ authorization only after current validation, natural CI, exact-head independent
 qualification, and zero material findings. Its public producer accepts only the
 closed external human/verifier inputs that cannot be observed from providers,
 then independently rebuilds the live GitHub, Git, CI, feedback, thread,
-source-range and exact change-set facts from the Ready PR, after its transition-
-triggered checks are terminal, before signing. A preassembled or
+source-range and exact change-set facts from the Ready PR. Before signing it
+requires one authenticated `ready_for_review` event and the complete required
+workflow set registered after that event to be terminal and successful. A preassembled or
 presigned live-facts descriptor cannot replace that observation. It creates an
 exact-scope authorization with the existing accepted-main authority signer, wraps it with
 the existing legacy-adoption signer, and consumes once through the repository's

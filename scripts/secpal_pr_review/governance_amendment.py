@@ -30,8 +30,15 @@ ACCEPTED_MAIN_REF = "refs/heads/main"
 CONSUMPTION_DOMAIN = "secpal.governance-amendment-consumption/v2"
 CONSUMPTION_KIND = "SECPAL_GOVERNANCE_AMENDMENT_CONSUMPTION"
 CONSUMPTION_METHOD = "SQUASH"
-LIVE_OBSERVATION_VERSION = "github-git-live-observation/v1"
+SOURCE_CI_VERSION = "github-git-live-observation/v1"
+LIVE_OBSERVATION_VERSION = "github-git-live-observation/v2"
 EXPECTED_STATUS_CONTEXTS = frozenset({"license/cla"})
+READY_WORKFLOW_NAMES = frozenset({
+    "Pull Request Evidence",
+    "Pull Request English Communication",
+    "Pull Request Commit Signatures",
+    "PR Governance Gate",
+})
 ROOT_AUTHORIZATION_DOMAIN = "secpal.governance-amendment-root-authorization/v1"
 ROOT_AUTHORIZATION_KIND = "SECPAL_GOVERNANCE_AMENDMENT_ROOT_AUTHORIZATION"
 HUMAN_AUTHORITY_IDENTITY = "SecPal human architecture authority for issue 960"
@@ -849,6 +856,109 @@ def _live_ci(repository: str, head_sha: str) -> dict[str, Any]:
     evidence = {"checks": runs, "statuses": contexts}
     return {
         "head_sha": head_sha,
+        "workflow_identity": SOURCE_CI_VERSION,
+        "result": "PASS",
+        "evidence_digest": authority.digest_json(evidence),
+    }
+
+
+def _live_ready_ci(
+    repository: str, pull_request: int, head_sha: str, accepted_main_sha: str,
+    source_ci: Mapping[str, Any],
+) -> dict[str, Any]:
+    events = _github_json(
+        [
+            "api", "--hostname", "github.com",
+            f"repos/{repository}/issues/{pull_request}/events?per_page=100",
+        ],
+        "governance amendment Ready history",
+    )
+    runs_value = _github_json(
+        [
+            "api", "--hostname", "github.com",
+            f"repos/{repository}/actions/runs?event=pull_request_target&head_sha={head_sha}&per_page=100",
+        ],
+        "governance amendment Ready checks",
+    )
+    try:
+        if not isinstance(events, list) or len(events) >= 100:
+            raise TypeError
+        ready = [
+            {
+                "id": event["id"], "event": event["event"],
+                "created_at": event["created_at"],
+                "actor": event["actor"]["login"],
+            }
+            for event in events if event.get("event") == "ready_for_review"
+        ]
+        raw_runs = runs_value["workflow_runs"]
+        if not isinstance(raw_runs, list) or len(raw_runs) >= 100:
+            raise TypeError
+        runs = sorted(
+            ({
+                "id": run["id"], "name": run["name"],
+                "event": run["event"], "status": run["status"],
+                "conclusion": run["conclusion"],
+                "head_sha": run["head_sha"],
+                "created_at": run["created_at"],
+                "run_started_at": run["run_started_at"],
+                "pull_requests": [{
+                    "number": item["number"],
+                    "head_sha": item["head"]["sha"],
+                    "base_sha": item["base"]["sha"],
+                } for item in run["pull_requests"]],
+            } for run in raw_runs if run.get("name") in READY_WORKFLOW_NAMES),
+            key=lambda run: (run["name"], run["created_at"], run["id"]),
+        )
+    except (KeyError, TypeError) as exc:
+        raise GovernanceAmendmentError(
+            "live governance amendment Ready CI is incomplete"
+        ) from exc
+    if (
+        len(ready) != 1
+        or not isinstance(ready[0]["id"], int)
+        or not isinstance(ready[0]["created_at"], str)
+        or not ready[0]["created_at"]
+        or not isinstance(ready[0]["actor"], str)
+        or not ready[0]["actor"]
+        or any(
+            not isinstance(run["created_at"], str)
+            or not isinstance(run["run_started_at"], str)
+            for run in runs
+        )
+    ):
+        raise GovernanceAmendmentError(
+            "live governance amendment Ready CI is not terminal and passing"
+        )
+    ready_at = ready[0]["created_at"]
+    ready_runs = [run for run in runs if run["created_at"] >= ready_at]
+    if (
+        {run["name"] for run in ready_runs} != READY_WORKFLOW_NAMES
+        or any(
+            not isinstance(run["id"], int)
+            or run["event"] != "pull_request_target"
+            or run["head_sha"] != head_sha
+            or run["run_started_at"] < ready_at
+            or run["status"] != "completed"
+            or run["conclusion"] != "success"
+            or len(run["pull_requests"]) != 1
+            or run["pull_requests"][0] != {
+                "number": pull_request,
+                "head_sha": head_sha,
+                "base_sha": accepted_main_sha,
+            }
+            for run in ready_runs
+        )
+    ):
+        raise GovernanceAmendmentError(
+            "live governance amendment Ready CI is not terminal and passing"
+        )
+    evidence = {
+        "source_ci_evidence_digest": source_ci["evidence_digest"],
+        "ready_event": ready[0], "ready_workflow_runs": ready_runs,
+    }
+    return {
+        "head_sha": head_sha,
         "workflow_identity": LIVE_OBSERVATION_VERSION,
         "result": "PASS",
         "evidence_digest": authority.digest_json(evidence),
@@ -1228,7 +1338,10 @@ def produce_observation(
             "verified": True,
         },
         "source_commits": source_commits,
-        "natural_ci": _live_ci(repository, head),
+        "natural_ci": _live_ready_ci(
+            repository, pull_request, head, accepted_main,
+            _live_ci(repository, head),
+        ),
         "independent_qualification": qualification,
         "current_validation": copy.deepcopy(inputs["current_validation"]),
         "feedback": _live_feedback(repository, pull_request, head),

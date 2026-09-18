@@ -48,6 +48,28 @@ FULL_CANDIDATE_PATHS = [
 ]
 
 
+def ready_ci_fixtures(
+    head: str, base: str,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    ready_at = "2026-09-18T12:00:00Z"
+    events = [{
+        "id": 9601, "event": "ready_for_review", "created_at": ready_at,
+        "actor": {"login": "aroviqen"},
+    }]
+    runs = [{
+        "id": 9700 + index, "name": name, "event": "pull_request_target",
+        "status": "completed", "conclusion": "success", "head_sha": head,
+        "created_at": "2026-09-18T12:00:01Z",
+        "run_started_at": "2026-09-18T12:00:02Z",
+        "pull_requests": [{
+            "number": 961,
+            "head": {"sha": head},
+            "base": {"sha": base},
+        }],
+    } for index, name in enumerate(sorted(amendment.READY_WORKFLOW_NAMES))]
+    return events, runs
+
+
 def feedback_response(
     arguments: list[str], head: str, threads: list[dict[str, object]],
     reviews: list[dict[str, object]], comments: list[dict[str, object]] | None = None,
@@ -460,6 +482,7 @@ class GovernanceAmendmentTests(TestCase):
                 "conclusion": "success", "head_sha": head,
             }]
             statuses: list[dict[str, object]] = []
+            ready_events, ready_runs = ready_ci_fixtures(head, base)
             threads: list[dict[str, object]] = []
             reviews = [{
                 "id": "R_fixture", "body": "",
@@ -509,6 +532,10 @@ class GovernanceAmendmentTests(TestCase):
                     value = pull
                 elif "issues/960" in joined:
                     value = {"number": 960, "state": "open"}
+                elif "issues/961/events" in joined:
+                    value = ready_events
+                elif "actions/runs" in joined:
+                    value = {"workflow_runs": ready_runs}
                 elif "check-runs" in joined:
                     value = {"check_runs": checks}
                 elif "/status" in joined:
@@ -547,6 +574,16 @@ class GovernanceAmendmentTests(TestCase):
                         "SecPal/.github", 960, inputs
                     )
                 pull["draft"] = False
+                saved_ready_runs = list(ready_runs)
+                ready_runs.clear()
+                with self.assertRaisesRegex(
+                    amendment.GovernanceAmendmentError,
+                    "Ready CI is not terminal and passing",
+                ):
+                    authority.authenticate_governance_amendment_issuance(
+                        "SecPal/.github", 960, inputs
+                    )
+                ready_runs.extend(saved_ready_runs)
                 authenticated = authority.authenticate_governance_amendment_issuance("SecPal/.github", 960, inputs)
                 observed = authenticated.facts
                 self.assertEqual(
@@ -782,12 +819,44 @@ class GovernanceAmendmentTests(TestCase):
                 "conclusion": "success", "head_sha": repo["head"],
             }]
             statuses: list[dict[str, object]] = []
+            ready_events, ready_runs = ready_ci_fixtures(
+                repo["head"], repo["base"]
+            )
+            source_ci = {
+                "head_sha": repo["head"],
+                "workflow_identity": amendment.SOURCE_CI_VERSION,
+                "result": "PASS",
+                "evidence_digest": authority.digest_json({
+                    "checks": checks, "statuses": statuses,
+                }),
+            }
             facts["natural_ci"] = {
                 "head_sha": repo["head"],
                 "workflow_identity": amendment.LIVE_OBSERVATION_VERSION,
                 "result": "PASS",
                 "evidence_digest": authority.digest_json({
-                    "checks": checks, "statuses": statuses,
+                    "source_ci_evidence_digest": source_ci["evidence_digest"],
+                    "ready_event": {
+                        "id": ready_events[0]["id"],
+                        "event": ready_events[0]["event"],
+                        "created_at": ready_events[0]["created_at"],
+                        "actor": ready_events[0]["actor"]["login"],
+                    },
+                    "ready_workflow_runs": sorted(
+                        [{
+                            key: run[key] for key in (
+                                "id", "name", "event", "status", "conclusion",
+                                "head_sha", "created_at", "run_started_at",
+                            )
+                        } | {"pull_requests": [{
+                            "number": run["pull_requests"][0]["number"],
+                            "head_sha": run["pull_requests"][0]["head"]["sha"],
+                            "base_sha": run["pull_requests"][0]["base"]["sha"],
+                        }]} for run in ready_runs],
+                        key=lambda run: (
+                            run["name"], run["created_at"], run["id"]
+                        ),
+                    ),
                 }),
             }
             threads: list[dict[str, object]] = []
@@ -841,6 +910,10 @@ class GovernanceAmendmentTests(TestCase):
                     value = pull
                 elif "issues/960" in joined:
                     value = issue
+                elif "issues/961/events" in joined:
+                    value = ready_events
+                elif "actions/runs" in joined:
+                    value = {"workflow_runs": ready_runs}
                 elif "check-runs" in joined:
                     value = {"check_runs": checks}
                 elif "/status" in joined:
@@ -922,7 +995,7 @@ class GovernanceAmendmentTests(TestCase):
         }]
         self.assertEqual(observed, {
             "head_sha": HEAD,
-            "workflow_identity": amendment.LIVE_OBSERVATION_VERSION,
+            "workflow_identity": amendment.SOURCE_CI_VERSION,
             "result": "PASS",
             "evidence_digest": authority.digest_json({
                 "checks": checks, "statuses": normalized,
@@ -976,6 +1049,97 @@ class GovernanceAmendmentTests(TestCase):
                 amendment.GovernanceAmendmentError
             ):
                 observe(value)
+
+    def test_live_ready_ci_binds_transition_triggered_workflows(self) -> None:
+        source_ci = {
+            "head_sha": HEAD,
+            "workflow_identity": amendment.SOURCE_CI_VERSION,
+            "result": "PASS",
+            "evidence_digest": "1" * 64,
+        }
+        events, runs = ready_ci_fixtures(HEAD, PARENT)
+
+        def observe(
+            event_values: list[dict[str, object]],
+            run_values: list[dict[str, object]],
+        ) -> dict[str, object]:
+            responses = iter((event_values, {"workflow_runs": run_values}))
+
+            def github(arguments: list[str]):
+                return subprocess.CompletedProcess(
+                    arguments, 0,
+                    json.dumps(next(responses)).encode(), b"",
+                )
+
+            with mock.patch.object(
+                amendment.publication, "_run_gh", side_effect=github
+            ):
+                return amendment._live_ready_ci(
+                    "SecPal/.github", 961, HEAD, PARENT, source_ci
+                )
+
+        observed = observe(events, runs)
+        normalized_event = {
+            "id": events[0]["id"], "event": events[0]["event"],
+            "created_at": events[0]["created_at"],
+            "actor": events[0]["actor"]["login"],
+        }
+        self.assertEqual(observed, {
+            "head_sha": HEAD,
+            "workflow_identity": amendment.LIVE_OBSERVATION_VERSION,
+            "result": "PASS",
+            "evidence_digest": authority.digest_json({
+                "source_ci_evidence_digest": source_ci["evidence_digest"],
+                "ready_event": normalized_event,
+                "ready_workflow_runs": sorted(
+                    [{
+                        key: run[key] for key in (
+                            "id", "name", "event", "status", "conclusion",
+                            "head_sha", "created_at", "run_started_at",
+                        )
+                    } | {"pull_requests": [{
+                        "number": run["pull_requests"][0]["number"],
+                        "head_sha": run["pull_requests"][0]["head"]["sha"],
+                        "base_sha": run["pull_requests"][0]["base"]["sha"],
+                    }]} for run in runs],
+                    key=lambda run: (run["name"], run["created_at"], run["id"]),
+                ),
+            }),
+        })
+
+        invalid = {
+            "missing Ready event": ([], runs),
+            "duplicate Ready event": (events + copy.deepcopy(events), runs),
+            "missing workflow": (events, runs[:-1]),
+            "pre-Ready workflow": (
+                events,
+                [dict(runs[0], created_at="2026-09-18T11:59:59Z")] + runs[1:],
+            ),
+            "pending workflow": (
+                events,
+                [dict(runs[0], status="in_progress", conclusion=None)] + runs[1:],
+            ),
+            "wrong-head workflow": (
+                events,
+                [dict(runs[0], head_sha="9" * 40)] + runs[1:],
+            ),
+            "wrong-PR workflow": (
+                events,
+                [dict(
+                    runs[0],
+                    pull_requests=[{
+                        "number": 962,
+                        "head": {"sha": HEAD},
+                        "base": {"sha": PARENT},
+                    }],
+                )] + runs[1:],
+            ),
+        }
+        for label, (event_values, run_values) in invalid.items():
+            with self.subTest(label=label), self.assertRaises(
+                amendment.GovernanceAmendmentError
+            ):
+                observe(event_values, run_values)
 
     def test_live_feedback_uses_valid_closed_query_and_fails_closed(self) -> None:
         def observe(

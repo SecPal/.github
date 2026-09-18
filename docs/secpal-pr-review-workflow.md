@@ -486,8 +486,9 @@ independently reacquires the live
 issue, Ready PR at issuance, protected main, complete source range and signatures, exact
 tree/topology/path/blob/mode scope, terminal CI, stable feedback, threads, and
 qualification binding before either signer runs. Issuance occurs only after the
-separately authorized normal Draft-to-Ready transition and its triggered checks
-reach terminal acceptance; execution then reacquires byte-identical facts.
+separately authorized normal Draft-to-Ready transition, exactly one authenticated
+`ready_for_review` event, and the complete required workflow set registered after
+that event reach terminal acceptance; execution then reacquires byte-identical facts.
 Every adopted source commit is
 verified directly against the bound accepted-main signer keys; ambient Git trust
 and matching principal text are insufficient. The governance-only scope admits the two maintained command
