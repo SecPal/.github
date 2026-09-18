@@ -1561,6 +1561,48 @@ for repository_specific_field in (
     assert deployment_lifecycle[repository_specific_field] == [], (
         f"SecPal/deployment lifecycle {repository_specific_field} must start empty"
     )
+
+contracts = next(
+    item for item in registry["repositories"]
+    if item["repository"] == "SecPal/contracts"
+)
+contracts_lifecycle = contracts.get("lifecycle_authority_policy")
+assert isinstance(contracts_lifecycle, dict), (
+    "SecPal/contracts must adopt maintained lifecycle authority"
+)
+for shared_field in (
+    "schema_version", "accepted_formats", "signers",
+    "transition_signer_identities", "authority_signer_identities",
+    "publication_signer_identities", "genesis_admission_signer_identities",
+    "legacy_adoption_signer_identities", "publication_branch",
+    "publication_required_rules",
+):
+    assert contracts_lifecycle[shared_field] == canonical_lifecycle[shared_field], (
+        f"SecPal/contracts lifecycle {shared_field} must reuse canonical trust"
+    )
+assert contracts_lifecycle["publication_remote_url"] == (
+    "https://github.com/SecPal/contracts.git"
+), "SecPal/contracts lifecycle publication must remain repository-local"
+assert contracts_lifecycle["publication_ruleset_id"] == 23668089, (
+    "SecPal/contracts lifecycle publication must use its exact protected ruleset"
+)
+for repository_specific_field in (
+    "bootstrap_genesis_repairs", "bootstrap_source_admissions",
+    "historical_compatibility_publications", "delivery_initializations",
+):
+    assert contracts_lifecycle[repository_specific_field] == [], (
+        f"SecPal/contracts lifecycle {repository_specific_field} must start empty"
+    )
+assert contracts["focused_validation"] == [{
+    "argv": ["node", "--test"],
+    "working_directory": ".",
+    "purpose": "Run Node contract-tooling tests",
+}], "SecPal/contracts focused validation must remain unchanged"
+assert contracts["required_local_validation"] == [{
+    "argv": ["npm", "run", "validate"],
+    "working_directory": ".",
+    "purpose": "Run documented contract lint and formatting validation",
+}], "SecPal/contracts required validation must remain unchanged"
 assert deployment["unsupported_operations"] == [
     "REVIEW_REQUEST", "READY_TRANSITION", "LABEL", "ISSUE",
     "REVIEW_SUBMISSION", "MERGE", "AUTO_MERGE", "COMMENT_DELETE",
