@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import copy
-from contextlib import nullcontext
 import hashlib
 import json
 import subprocess
@@ -265,6 +264,21 @@ def observation_inputs(value: dict[str, object]) -> dict[str, object]:
 
 
 class GovernanceAmendmentTests(TestCase):
+    def test_consumption_planner_has_one_safe_path_without_new_decision(self) -> None:
+        self.assertEqual(
+            amendment.consumption_plan(),
+            {
+                "schema_version": "1.0",
+                "operation": "GOVERNANCE_AMENDMENT_CONSUMPTION",
+                "merge_method": "SQUASH",
+                "protected_ref_write": "GITHUB_PULL_REQUEST_MERGE",
+                "direct_push": False,
+                "force": False,
+                "branch_protection_bypass": False,
+                "decision_required": False,
+            },
+        )
+
     def patches(self, trust: object | None = None):
         trust = trust or SimpleNamespace(
             authority_signer_identities=frozenset({ROOT_SIGNER}),
@@ -458,9 +472,40 @@ class GovernanceAmendmentTests(TestCase):
                 "head": {"sha": head, "repo": {"full_name": "SecPal/.github"}},
                 "base": {"sha": base, "ref": "main", "repo": {"full_name": "SecPal/.github"}},
             }
+            squash: dict[str, str] = {}
             def github(arguments: list[str]):
                 joined = " ".join(arguments)
-                if "pulls/961" in joined:
+                if "pulls/961/merge" in joined:
+                    fields = {
+                        item.split("=", 1)[0]: item.split("=", 1)[1]
+                        for item in arguments if "=" in item
+                    }
+                    self.assertEqual(fields["sha"], head)
+                    self.assertEqual(fields["merge_method"], "squash")
+                    self.assertNotIn("force", joined)
+                    rendered = (
+                        fields["commit_title"] + "\n\n"
+                        + fields["commit_message"]
+                    )
+                    created = subprocess.run(
+                        ["git", "-C", str(root), "commit-tree", tree, "-p", base],
+                        input=rendered + "\n", text=True,
+                        check=True, stdout=subprocess.PIPE,
+                    ).stdout.strip()
+                    git("push", "origin", f"{created}:main")
+                    squash.update(oid=created, message=rendered)
+                    value = {"merged": True, "sha": created}
+                elif squash and f"commits/{squash['oid']}" in joined:
+                    value = {
+                        "sha": squash["oid"],
+                        "parents": [{"sha": base}],
+                        "commit": {
+                            "tree": {"sha": tree},
+                            "message": squash["message"],
+                            "verification": {"verified": True, "reason": "valid"},
+                        },
+                    }
+                elif "pulls/961" in joined:
                     value = pull
                 elif "issues/960" in joined:
                     value = {"number": 960, "state": "open"}
@@ -491,7 +536,7 @@ class GovernanceAmendmentTests(TestCase):
                 "accepted_formats": ["ssh"],
                 "require_github_verified": True,
             }
-            with mock.patch.object(amendment, "ROOT", root), mock.patch.object(amendment, "_push_credentials", return_value=nullcontext((root, None))), mock.patch.object(amendment.publication, "_run_gh", side_effect=github), mock.patch.object(authority, "_load_delivery_signature_policy", return_value=signature_policy), first, second, mock.patch.object(amendment.execution, "_policy_role_signer", signer_factory):
+            with mock.patch.object(amendment, "ROOT", root), mock.patch.object(amendment.publication, "_run_gh", side_effect=github), mock.patch.object(authority, "_load_delivery_signature_policy", return_value=signature_policy), first, second, mock.patch.object(amendment.execution, "_policy_role_signer", signer_factory):
                 inputs = observation_inputs(raw)
                 authenticated = authority.authenticate_governance_amendment_issuance("SecPal/.github", 960, inputs)
                 observed = authenticated.facts
@@ -575,12 +620,15 @@ class GovernanceAmendmentTests(TestCase):
                     authority.exact_state_adoption_historical_evidence(adoption),
                     amendment.historical_evidence(),
                 )
+                pull["draft"] = False
                 result = authority.execute_governance_amendment(issued)
                 self.assertEqual(result["status"], "CONSUMED")
                 self.assertEqual(git("ls-remote", str(remote), "refs/heads/main").split()[0], result["merge_commit_sha"])
-                self.assertEqual(git("show", "-s", "--format=%P", result["merge_commit_sha"]).split(), [base, head])
+                self.assertEqual(git("show", "-s", "--format=%P", result["merge_commit_sha"]).split(), [base])
+                self.assertEqual(git("rev-parse", f"{result['merge_commit_sha']}^{{tree}}"), tree)
                 accepted_message = git("show", "-s", "--format=%B", result["merge_commit_sha"])
                 self.assertIn(issued["authorization_digest"], accepted_message)
+                self.assertEqual(result["merge_method"], "SQUASH")
                 for fabricated in ("lifecycle CURRENT", "Ready transition", "validation receipt"):
                     self.assertNotIn(fabricated, accepted_message)
                 with self.assertRaisesRegex(
@@ -1058,31 +1106,62 @@ class GovernanceAmendmentTests(TestCase):
                 authority.execute_governance_amendment(value)
         run_git.assert_not_called()
 
-    def test_concurrent_main_change_rejects_without_force_or_rewrite(self) -> None:
-        attempted: list[str] = []
-
-        def reject_push(
-            _root: Path, arguments: list[str], **_kwargs: object
-        ) -> subprocess.CompletedProcess[bytes]:
-            attempted.extend(arguments)
-            return subprocess.CompletedProcess(arguments, 1, b"", b"rejected")
-
-        with mock.patch.object(
-            amendment, "_push_credentials",
-            return_value=nullcontext((Path("."), None)),
-        ), mock.patch.object(amendment, "_run_git", side_effect=reject_push):
-            with self.assertRaisesRegex(
-                amendment.GovernanceAmendmentError, "compare-and-swap"
-            ):
-                amendment._push_protected_main(
-                    Path("."), "origin", "f" * 40, "SecPal/.github",
-                    "e" * 40,
-                )
-        self.assertEqual(
-            attempted,
-            ["push", "--porcelain", "origin", f"{'f' * 40}:refs/heads/main"],
+    def test_squash_transport_rejects_incompatible_read_back(self) -> None:
+        message = b"record\n"
+        exact = {
+            "oid": "d" * 40, "parent_shas": ["a" * 40],
+            "tree_sha": "b" * 40, "message": "record",
+            "verification": {"verified": True, "reason": "valid"},
+        }
+        amendment._verify_squash_read_back(
+            exact, oid="d" * 40, parent_sha="a" * 40,
+            tree_sha="b" * 40, message=message,
         )
-        self.assertFalse(any("force" in argument for argument in attempted))
+        mutations = {
+            "two-parent": lambda value: value.update(
+                parent_shas=["a" * 40, "c" * 40]
+            ),
+            "wrong parent": lambda value: value.update(parent_shas=["c" * 40]),
+            "wrong tree": lambda value: value.update(tree_sha="c" * 40),
+            "non-squash message": lambda value: value.update(message="other"),
+            "unverified": lambda value: value["verification"].update(
+                verified=False
+            ),
+            "bad verification": lambda value: value["verification"].update(
+                reason="unsigned"
+            ),
+        }
+        for label, mutate in mutations.items():
+            changed = copy.deepcopy(exact)
+            mutate(changed)
+            with self.subTest(label=label), self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError, "immutable read-back"
+            ):
+                amendment._verify_squash_read_back(
+                    changed, oid="d" * 40, parent_sha="a" * 40,
+                    tree_sha="b" * 40, message=message,
+                )
+
+    def test_squash_transport_uses_normal_pr_merge_without_direct_push(self) -> None:
+        calls: list[list[str]] = []
+        def github(arguments: list[str]):
+            calls.append(arguments)
+            return subprocess.CompletedProcess(
+                arguments, 0,
+                json.dumps({"merged": True, "sha": "d" * 40}).encode(), b"",
+            )
+        with mock.patch.object(amendment.publication, "_run_gh", side_effect=github):
+            self.assertEqual(
+                amendment._merge_pull_request(
+                    "SecPal/.github", 961, "a" * 40,
+                    b"Governance amendment\n\nrecord\n",
+                ),
+                "d" * 40,
+            )
+        flattened = " ".join(calls[0])
+        self.assertIn("merge_method=squash", flattened)
+        self.assertNotIn("push", flattened)
+        self.assertNotIn("force", flattened)
 
     def test_scope_and_absence_substitutions_fail_closed(self) -> None:
         mutations = {
@@ -1214,64 +1293,23 @@ class GovernanceAmendmentTests(TestCase):
                 repo["base"],
             )
 
-    def test_wrong_key_merge_fails_before_remote_mutation(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            repo = self.hermetic_repository(
-                directory, attacker_intermediate=False
-            )
-            policy = copy.deepcopy(proposed_policy())
-            policy["accepted_main_sha"] = repo["base"]
-            policy["human_authorization_digest"] = authority.digest_json({
-                "authority_identity": policy["human_authority_identity"],
-                "repository": "SecPal/.github", "delivery_issue": 960,
-                "pull_request": 961, "purpose": amendment.PURPOSE,
-                "qualified_source_digest": policy["qualified_source"]["qualification_digest"],
-                "accepted_main_sha": repo["base"], "decision": "APPROVED",
-                "bounded_uses": 1,
-            })
-            raw = authorization(
-                head=repo["head"], tree=repo["tree"], parent=repo["base"],
-                accepted_main=repo["base"], changed=[{
-                    "path": str(repo["path"].relative_to(repo["root"])),
-                    "blob_oid": repo["blob"], "mode": "100644",
-                }], source_oids=repo["source_oids"], policy=policy,
-            )
-            execution_facts = {
-                key: copy.deepcopy(item) for key, item in raw.items()
-                if key not in {
-                    "root_authorization", "signer_identity", "signature",
-                    "authorization_digest",
-                }
-            }
-            trust = SimpleNamespace(
-                authority_signer_identities=frozenset({ROOT_SIGNER}),
-                legacy_adoption_signer_identities=frozenset({SIGNER}),
-                signers={SOURCE: authority.TrustedSigner(
-                    SOURCE,
-                    (repo["trusted"].with_suffix(".pub").read_text().strip(),),
-                    (),
-                )},
-            )
-            repo["git"]("config", "user.signingkey", str(repo["attacker"]))
-            first, second = self.patches(trust)
-            with mock.patch.object(
-                amendment, "ROOT", repo["root"]
-            ), mock.patch.object(
-                amendment, "_remote_url", return_value=str(repo["remote"])
-            ), mock.patch.object(
-                amendment, "_push_credentials",
-                return_value=nullcontext((repo["root"], None)),
-            ), mock.patch.object(
-                amendment, "produce_observation",
-                return_value=execution_facts,
-            ), first, second, self.assertRaisesRegex(
-                amendment.GovernanceAmendmentError, "accepted-main key"
-            ):
-                authority.execute_governance_amendment(raw)
-            self.assertEqual(
-                repo["git"]("ls-remote", str(repo["remote"]), "refs/heads/main").split()[0],
-                repo["base"],
-            )
+    def test_wrong_or_missing_legacy_signature_fails_before_merge(self) -> None:
+        for label, mutate in {
+            "missing": lambda value: value.update(signature={}),
+            "altered": lambda value: value["signature"].update(value="altered"),
+            "wrong signer": lambda value: value.update(signer_identity=SOURCE),
+        }.items():
+            value = authorization()
+            mutate(value)
+            first, second = self.patches()
+            with self.subTest(label=label), first, second, mock.patch.object(
+                amendment, "_merge_pull_request"
+            ) as merge, self.assertRaises((
+                amendment.GovernanceAmendmentError,
+                authority.LifecycleAuthorityError,
+            )):
+                authority.execute_governance_amendment(value)
+            merge.assert_not_called()
 
     def test_ambient_accepted_principal_with_arbitrary_key_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

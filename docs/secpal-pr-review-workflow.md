@@ -483,13 +483,13 @@ The maintained observation producer accepts only the closed external human,
 qualification, validation, history, and absence inputs that it cannot originate;
 it does not accept a preassembled or presigned live-facts descriptor. It
 independently reacquires the live
-issue, Draft PR, protected main, complete source range and signatures, exact
+issue, Draft PR at issuance, protected main, complete source range and signatures, exact
 tree/topology/path/blob/mode scope, terminal CI, stable feedback, threads, and
-qualification binding before either signer runs. Execution reruns the same
-producer and must yield byte-identical facts. Every adopted source commit
-and the locally constructed merge commit are verified directly against the
-bound accepted-main signer keys; ambient Git trust and matching principal text
-are insufficient. The governance-only scope admits the two maintained command
+qualification binding before either signer runs. Execution reacquires the same
+facts after the separately authorized normal Draft-to-Ready transition and must
+yield byte-identical authorization facts. Every adopted source commit is
+verified directly against the bound accepted-main signer keys; ambient Git trust
+and matching principal text are insufficient. The governance-only scope admits the two maintained command
 entry points, `scripts/secpal-pr-review-actions.py` and
 `scripts/secpal-resolve-fixed-threads.py`, as exact files; it does not admit
 nearby or arbitrary `scripts/` paths. The canonical change digest is derived only from the exact
@@ -498,10 +498,13 @@ canonical JSON. One shared range-signature binding digests the complete ordered
 accepted-main-to-head commit evidence plus the accepted-main identity. The
 Exact-State-Adoption boundary keeps its independently normalized head-commit
 evidence under the distinct `commit_signature_evidence_digest`; it never
-compares that head-only digest to the range digest. Consumption creates a signed two-parent commit with the
-bound candidate tree and performs one
-non-force fast-forward compare-and-swap to protected main. The commit embeds
-the canonical authorization and consumption digest for immutable read-back;
+compares that head-only digest to the range digest. Consumption uses only the
+canonical GitHub squash method. The GitHub-verified protected-main commit must
+have the authorized predecessor as its sole parent and the exact qualified
+tree. Its message embeds the complete legacy-adoption-signed authorization and
+closed consumption record, including the expected method, parent, tree, CI,
+qualification, feedback, zero-findings and one-use identity. Direct push,
+two-parent merge, rebase, force, and bypass forms fail closed;
 it neither creates lifecycle CURRENT nor synthesizes ordinary enrollment,
 Ready, receipt, counter, or thread state.
 Future deliveries must establish native genesis and commit-bound validation

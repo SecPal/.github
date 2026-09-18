@@ -51,8 +51,10 @@ Log of notable changes to SecPal organization defaults (newest first).
   #961. The accepted-main authority signer binds the exact one-use root
   authorization, the legacy-adoption signer wraps it, and accepted-main keys
   authenticate source and merge commits. Candidate policy and ambient Git trust
-  cannot authorize adoption. One signed two-parent fast-forward adopts the
-  governance-only tree with immutable authorization and consumption read-back.
+  cannot authorize adoption. The canonical GitHub squash path adopts the
+  governance-only tree only when its verified commit has the authorized sole
+  parent and exact qualified tree, with immutable authorization and consumption
+  read-back.
 - Derive the exact change digest through the maintained canonical JSON encoder,
   verify every adopted source commit, verify the constructed merge before any
   push, and independently rebuild live GitHub/Git/CI/feedback facts before the

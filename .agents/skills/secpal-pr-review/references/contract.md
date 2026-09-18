@@ -570,10 +570,13 @@ requires a distinct fresh signed root observation with identical facts. It
 uses one canonical digest for the complete ordered accepted-main-to-head source
 signature range. Exact-State-Adoption retains its distinct normalized
 head-commit evidence digest and must not conflate it with that range binding. It
-creates one signed two-parent commit containing the bound candidate tree and
-updates protected main only by a non-force fast-forward compare-and-swap. The
-accepted commit embeds the canonical authorization and consumption digest for
-immutable read-back and replay rejection. This path does not publish lifecycle
+consumes only through the repository's canonical GitHub squash merge. The
+GitHub-verified, single-parent protected-main commit must have the authorized
+predecessor and exact qualified tree. Its closed message embeds the legacy-
+adoption-signed authorization and the canonical consumption record for
+immutable read-back and replay rejection. The squash transport grants no
+authority of its own, and direct push, merge-commit, force, rebase, or branch-
+protection bypass forms fail closed. This path does not publish lifecycle
 CURRENT, derive lifecycle semantics, synthesize enrollment or Ready evidence,
 or grant authority over another pull request.
 

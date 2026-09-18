@@ -489,16 +489,17 @@ then independently rebuilds the live GitHub, Git, CI, feedback, thread,
 source-range and exact change-set facts before signing. A preassembled or
 presigned live-facts descriptor cannot replace that observation. It creates an
 exact-scope authorization with the existing accepted-main authority signer, wraps it with
-the existing legacy-adoption signer, and consumes once by a signed two-parent,
-non-force fast-forward of the bound governance tree to protected main. Candidate
-policy and registry additions are prospective only. Source and merge signatures
-must match keys in the bound accepted-main registry for every adopted source
-commit. Its two top-level command entry points are admitted as exact files;
-other paths under `scripts/` remain outside this authority. The final merge
-signature and immutable content are verified locally
-before the non-force CAS push; ambient Git trust is not authority. The change
+the existing legacy-adoption signer, and consumes once through the repository's
+canonical GitHub squash merge. Candidate
+policy and registry additions are prospective only. Every adopted source commit
+must match a key in the bound accepted-main registry. The resulting GitHub-
+verified protected-main commit must have exactly the authorized predecessor and
+qualified tree. Its two top-level command entry points are admitted as exact files;
+other paths under `scripts/` remain outside this authority. Direct push, merge-
+commit, rebase, force, and branch-protection bypass forms are rejected; ambient
+Git trust is not authority. The change
 digest uses the maintained newline-terminated canonical JSON encoder over one
-closed base/head/tree/topology/path/blob/mode object. The accepted merge
+closed base/head/tree/topology/path/blob/mode object. The accepted squash
 commit stores the canonical authorization and consumption digest for immutable
 read-back and replay rejection. A separate canonical range-signature digest
 binds every ordered accepted-main-to-head commit, while the existing adoption

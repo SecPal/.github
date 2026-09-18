@@ -27,8 +27,9 @@ EVIDENCE_STATE = "ABSENT_NEVER_ISSUED"
 _VERIFIED = object()
 _ISSUANCE_VERIFIED = object()
 ACCEPTED_MAIN_REF = "refs/heads/main"
-CONSUMPTION_DOMAIN = "secpal.governance-amendment-consumption/v1"
+CONSUMPTION_DOMAIN = "secpal.governance-amendment-consumption/v2"
 CONSUMPTION_KIND = "SECPAL_GOVERNANCE_AMENDMENT_CONSUMPTION"
+CONSUMPTION_METHOD = "SQUASH"
 LIVE_OBSERVATION_VERSION = "github-git-live-observation/v1"
 EXPECTED_STATUS_CONTEXTS = frozenset({"license/cla"})
 ROOT_AUTHORIZATION_DOMAIN = "secpal.governance-amendment-root-authorization/v1"
@@ -122,6 +123,21 @@ class VerifiedGovernanceAmendmentIssuance:
         self.facts = facts
         self.inputs = inputs
         self._seal = seal
+
+
+def consumption_plan() -> dict[str, Any]:
+    """Expose the sole compliant transport without granting execution authority."""
+
+    return {
+        "schema_version": "1.0",
+        "operation": "GOVERNANCE_AMENDMENT_CONSUMPTION",
+        "merge_method": CONSUMPTION_METHOD,
+        "protected_ref_write": "GITHUB_PULL_REQUEST_MERGE",
+        "direct_push": False,
+        "force": False,
+        "branch_protection_bypass": False,
+        "decision_required": False,
+    }
 
 
 def is_verified_issuance(value: Any) -> bool:
@@ -1109,6 +1125,7 @@ def _git_changed_files(
 
 def produce_observation(
     repository: str, delivery_issue: int, authenticated_inputs: Mapping[str, Any],
+    *, _expected_draft: bool = True,
 ) -> dict[str, Any]:
     """Independently rebuild every live fact before maintained signing."""
 
@@ -1138,7 +1155,7 @@ def produce_observation(
     issue = _live_issue(repository, delivery_issue)
     if (
         pull != {
-            "number": pull_request, "state": "open", "draft": True,
+            "number": pull_request, "state": "open", "draft": _expected_draft,
             "merged": False,
             "head_sha": inputs["independent_qualification"]["head_sha"],
             "head_repository": repository, "base_sha": accepted_main,
@@ -1283,29 +1300,6 @@ def _remote_url(repository: str, accepted_main_sha: str) -> str:
     return value
 
 
-def _push_credentials(repository: str, accepted_main_sha: str):
-    policy = _accepted_trust_policy(repository, accepted_main_sha)
-    return publication._isolated_repository(policy, write=True)
-
-
-def _push_protected_main(
-    root: Path, remote: str, merge_oid: str, repository: str,
-    accepted_main_sha: str,
-) -> None:
-    with _push_credentials(
-        repository, accepted_main_sha
-    ) as (_, credential_environment):
-        pushed = _run_git(
-            root,
-            ["push", "--porcelain", remote, f"{merge_oid}:{ACCEPTED_MAIN_REF}"],
-            extra_environment=credential_environment,
-        )
-    if pushed.returncode != 0:
-        raise GovernanceAmendmentError(
-            "protected main changed during amendment compare-and-swap"
-        )
-
-
 def _observe_remote_main(root: Path, remote: str) -> str:
     result = _run_git(root, ["ls-remote", remote, ACCEPTED_MAIN_REF])
     fields = (
@@ -1333,7 +1327,24 @@ def _consumption_record(authorization: Mapping[str, Any]) -> dict[str, Any]:
         "tree_sha": authorization["tree_sha"],
         "ordered_parent_shas": copy.deepcopy(authorization["ordered_parent_shas"]),
         "change_digest": authorization["change_digest"],
-        "operation": "EXACT_PROTECTED_MAIN_GOVERNANCE_AMENDMENT",
+        "purpose": authorization["purpose"],
+        "natural_ci": copy.deepcopy(authorization["natural_ci"]),
+        "independent_qualification": copy.deepcopy(
+            authorization["independent_qualification"]
+        ),
+        "feedback": copy.deepcopy(authorization["feedback"]),
+        "legacy_authorization_signer_identity": authorization[
+            "signer_identity"
+        ],
+        "legacy_authorization_signature": copy.deepcopy(
+            authorization["signature"]
+        ),
+        "operation": "EXACT_PROTECTED_MAIN_GOVERNANCE_AMENDMENT_SQUASH",
+        "merge_method": CONSUMPTION_METHOD,
+        "resulting_parent_sha": authorization["accepted_main_sha"],
+        "resulting_tree_sha": authorization["tree_sha"],
+        "github_commit_verification_required": True,
+        "one_use_identity": authorization["authorization_digest"],
         "bounded_uses": 1,
     }
     return {**fields, "consumption_digest": authority.digest_json(fields)}
@@ -1352,6 +1363,86 @@ def _merge_message(authorization: Mapping[str, Any], consumption: Mapping[str, A
         f"SecPal-Governance-Amendment-Consumption: {encoded_consumption}\n"
         f"SecPal-Governance-Amendment-Consumption-Digest: {consumption['consumption_digest']}\n"
     ).encode("utf-8")
+
+
+def _merge_pull_request(
+    repository: str, pull_request: int, head_sha: str, message: bytes,
+) -> str:
+    try:
+        rendered = message.decode("utf-8", "strict").rstrip("\n")
+        title, separator, body = rendered.partition("\n\n")
+    except UnicodeDecodeError as exc:
+        raise GovernanceAmendmentError(
+            "amendment squash message is invalid"
+        ) from exc
+    if not separator or not title or not body:
+        raise GovernanceAmendmentError("amendment squash message is invalid")
+    value = _github_json(
+        [
+            "api", "--hostname", "github.com", "--method", "PUT",
+            f"repos/{repository}/pulls/{pull_request}/merge",
+            "-f", f"sha={head_sha}", "-f", "merge_method=squash",
+            "-f", f"commit_title={title}",
+            "-f", f"commit_message={body}",
+        ],
+        "governance amendment squash merge",
+    )
+    try:
+        merged = value["merged"]
+        oid = authority._require_oid(value["sha"], "amendment squash commit")
+    except (KeyError, TypeError, authority.LifecycleAuthorityError) as exc:
+        raise GovernanceAmendmentError(
+            "governance amendment squash result is malformed"
+        ) from exc
+    if merged is not True:
+        raise GovernanceAmendmentError("governance amendment squash was rejected")
+    return oid
+
+
+def _read_squash_commit(repository: str, oid: str) -> dict[str, Any]:
+    value = _github_json(
+        [
+            "api", "--hostname", "github.com",
+            f"repos/{repository}/commits/{oid}",
+        ],
+        "governance amendment accepted squash commit",
+    )
+    try:
+        return {
+            "oid": authority._require_oid(value["sha"], "accepted squash commit"),
+            "tree_sha": authority._require_oid(
+                value["commit"]["tree"]["sha"], "accepted squash tree"
+            ),
+            "parent_shas": [
+                authority._require_oid(parent["sha"], "accepted squash parent")
+                for parent in value["parents"]
+            ],
+            "message": value["commit"]["message"],
+            "verification": copy.deepcopy(value["commit"]["verification"]),
+        }
+    except (KeyError, TypeError, authority.LifecycleAuthorityError) as exc:
+        raise GovernanceAmendmentError(
+            "accepted amendment squash commit is malformed"
+        ) from exc
+
+
+def _verify_squash_read_back(
+    observed: Mapping[str, Any], *, oid: str, parent_sha: str,
+    tree_sha: str, message: bytes,
+) -> None:
+    verification = observed.get("verification")
+    if (
+        observed.get("oid") != oid
+        or observed.get("parent_shas") != [parent_sha]
+        or observed.get("tree_sha") != tree_sha
+        or observed.get("message") != message.decode("utf-8").rstrip("\n")
+        or not isinstance(verification, Mapping)
+        or verification.get("verified") is not True
+        or verification.get("reason") != "valid"
+    ):
+        raise GovernanceAmendmentError(
+            "accepted amendment squash immutable read-back failed"
+        )
 
 
 def _observation_inputs(item: Mapping[str, Any]) -> dict[str, Any]:
@@ -1374,7 +1465,7 @@ def _authenticate_execution(
     }
     current_facts = produce_observation(
         item["repository"], item["delivery_issue"],
-        _observation_inputs(item),
+        _observation_inputs(item), _expected_draft=False,
     )
     if current_facts != expected_facts:
         raise GovernanceAmendmentError(
@@ -1436,7 +1527,7 @@ def _authenticate_execution(
 def execute(
     value: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Consume once by a signed, two-parent, fast-forward main adoption."""
+    """Consume once through the canonical verified GitHub squash boundary."""
 
     verified = verify(value)
     item = verified.authorization
@@ -1445,64 +1536,24 @@ def execute(
     _authenticate_execution(verified, root, remote)
     consumption = _consumption_record(item)
     message = _merge_message(item, consumption)
-    commit = _run_git(
-        root,
-        [
-            "commit-tree", "-S", item["tree_sha"],
-            "-p", item["accepted_main_sha"], "-p", item["head_sha"],
-        ],
-        input_bytes=message,
+    squash_oid = _merge_pull_request(
+        item["repository"], item["pull_request"], item["head_sha"], message
     )
-    merge_oid = commit.stdout.decode("ascii", "strict").strip() if commit.returncode == 0 else ""
-    try:
-        authority._require_oid(merge_oid, "amendment merge commit")
-    except authority.LifecycleAuthorityError as exc:
-        raise GovernanceAmendmentError(
-            "signed amendment merge commit could not be created"
-        ) from exc
-    trust = _accepted_trust_policy(
-        item["repository"], item["accepted_main_sha"]
-    )
-    _verify_commit_against_accepted_trust(
-        root, merge_oid, item["source_signature"]["signer_identity"], trust,
-    )
-    if (
-        _git_oid(root, merge_oid + "^{tree}") != item["tree_sha"]
-        or _run_git(
-            root, ["show", "-s", "--format=%P", merge_oid]
-        ).stdout.decode("ascii", "strict").strip().split()
-        != [item["accepted_main_sha"], item["head_sha"]]
-        or _run_git(
-            root, ["show", "-s", "--format=%B", merge_oid]
-        ).stdout.rstrip(b"\n") + b"\n" != message
-    ):
-        raise GovernanceAmendmentError("local amendment commit verification failed")
-    _push_protected_main(
-        root, remote, merge_oid, item["repository"], item["accepted_main_sha"]
-    )
-    if _observe_remote_main(root, remote) != merge_oid:
+    if _observe_remote_main(root, remote) != squash_oid:
         raise GovernanceAmendmentError("accepted amendment read-back changed identity")
-    fetched = _run_git(root, ["fetch", "--quiet", "--no-tags", remote, merge_oid])
-    if fetched.returncode != 0:
-        raise GovernanceAmendmentError("accepted amendment cannot be read back")
-    if (
-        _git_oid(root, merge_oid + "^{tree}") != item["tree_sha"]
-        or _run_git(
-            root, ["show", "-s", "--format=%P", merge_oid]
-        ).stdout.decode("ascii", "strict").strip().split()
-        != [item["accepted_main_sha"], item["head_sha"]]
-        or _run_git(
-            root, ["show", "-s", "--format=%B", merge_oid]
-        ).stdout.rstrip(b"\n") + b"\n" != message
-    ):
-        raise GovernanceAmendmentError("accepted amendment immutable read-back failed")
+    _verify_squash_read_back(
+        _read_squash_commit(item["repository"], squash_oid),
+        oid=squash_oid, parent_sha=item["accepted_main_sha"],
+        tree_sha=item["tree_sha"], message=message,
+    )
     return {
         "status": "CONSUMED",
         "authorization_id": item["authorization_id"],
         "authorization_digest": item["authorization_digest"],
         "consumption_digest": consumption["consumption_digest"],
-        "merge_commit_sha": merge_oid,
-        "accepted_main_sha": merge_oid,
+        "merge_method": CONSUMPTION_METHOD,
+        "merge_commit_sha": squash_oid,
+        "accepted_main_sha": squash_oid,
         "head_sha": item["head_sha"],
         "tree_sha": item["tree_sha"],
         "bounded_uses_consumed": 1,
