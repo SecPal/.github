@@ -9,6 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-18 - Protect Contracts Lifecycle Publications
+
+**Changed:**
+
+- Provision repository-local prospective protection in `SecPal/contracts` for
+  the exact `refs/heads/secpal-lifecycle-publications` ref through active
+  ruleset `23668089`, requiring deletion and non-fast-forward protection with no
+  bypass actors.
+- Keep that ref absent as the empty contracts lifecycle journal until its first
+  lawful native publication, without creating lifecycle authority or the
+  contracts policy owned by the subsequent enrollment delivery.
+
 ## 2026-09-18 - Authenticate Recovery In Pre-Enrollment Projection
 
 **Fixed:**
