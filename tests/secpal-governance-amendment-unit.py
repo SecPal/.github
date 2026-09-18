@@ -82,6 +82,7 @@ def authorization(
     *, head: str = HEAD, tree: str = TREE, parent: str = PARENT,
     accepted_main: str = "3887b00e1b84ef0d14ab2846507a3100512c2c28",
     changed: list[dict[str, str]] | None = None,
+    source_oids: list[str] | None = None,
     policy: dict[str, object] | None = None,
 ) -> dict[str, object]:
     policy = policy or proposed_policy()
@@ -99,16 +100,21 @@ def authorization(
         "accepted_main_sha": accepted_main,
         "changed_files": changed, "change_digest": "",
         "governance_path_prefixes": policy["allowed_path_prefixes"],
-        "source_signature": {
-            "signer_identity": SOURCE,
-            "signature_evidence_digest": authority.digest_json({
-            "oid": head, "source": "USER", "signer_identity": SOURCE,
-                "classification": "LOCAL_SSH_VERIFIED",
-            }),
-            "verified": True,
-        },
+        "source_commits": [
+            amendment.source_commit_evidence(oid, SOURCE, accepted_main)
+            for oid in (source_oids or [head])
+        ],
         "natural_ci": {"head_sha": head, "workflow_identity": "pull-request-ci", "result": "PASS", "evidence_digest": "2" * 64},
-        "independent_qualification": {"verifier_identity": "verifier", "conversation_id": "new-verifier", "head_sha": head, "tree_sha": tree, "result": "PASS", "qualification_digest": "3" * 64},
+        "independent_qualification": {
+            "verifier_identity": "verifier",
+            "conversation_id": "new-verifier",
+            "head_sha": head, "tree_sha": tree, "result": "PASS",
+            "qualification_digest": authority.digest_json({
+                "verifier_identity": "verifier",
+                "conversation_id": "new-verifier",
+                "head_sha": head, "tree_sha": tree, "result": "PASS",
+            }),
+        },
         "current_validation": {"accepted_main_sha": accepted_main, "policy_digest": "4" * 64, "command_set_digest": "5" * 64, "result": "PASS"},
         "feedback": {"state_digest": "6" * 64, "feedback_digest": "7" * 64, "thread_inventory_digest": "8" * 64, "material_finding_ids": []},
         "observed_pre_enrollment_history": [
@@ -137,17 +143,29 @@ def authorization(
         "signer_identity": SIGNER, "signature": {},
         "authorization_digest": "",
     }
+    value["source_signature"] = {
+        "signer_identity": SOURCE,
+        "signature_evidence_digest": authority.digest_json({
+            "source_commits": value["source_commits"],
+            "accepted_main_sha": accepted_main,
+        }),
+        "verified": True,
+    }
     return reseal(value)
 
 
 def reseal(value: dict[str, object]) -> dict[str, object]:
     value = copy.deepcopy(value)
-    value["change_digest"] = authority.digest_json({
-        key: value[key] for key in (
-            "repository", "delivery_issue", "pull_request", "head_sha", "tree_sha",
-            "ordered_parent_shas", "accepted_main_sha", "changed_files",
-        )
-    })
+    value["change_digest"] = amendment.change_digest(
+        repository=value["repository"],
+        delivery_issue=value["delivery_issue"],
+        pull_request=value["pull_request"],
+        head_sha=value["head_sha"],
+        tree_sha=value["tree_sha"],
+        ordered_parent_shas=value["ordered_parent_shas"],
+        accepted_main_sha=value["accepted_main_sha"],
+        changed_files=value["changed_files"],
+    )
     facts = {
         key: copy.deepcopy(item) for key, item in value.items()
         if key not in {
@@ -191,6 +209,13 @@ def reseal(value: dict[str, object]) -> dict[str, object]:
     return value
 
 
+def observation_inputs(value: dict[str, object]) -> dict[str, object]:
+    return {
+        key: copy.deepcopy(value[key])
+        for key in amendment.OBSERVATION_INPUT_FIELDS
+    }
+
+
 class GovernanceAmendmentTests(TestCase):
     def patches(self, trust: object | None = None):
         trust = trust or SimpleNamespace(
@@ -207,6 +232,97 @@ class GovernanceAmendmentTests(TestCase):
                 authority, "_policy_signature_verifier",
                 return_value=signature_verifier,
             ),
+        )
+
+    def hermetic_repository(
+        self, directory: str, *, attacker_intermediate: bool,
+    ) -> dict[str, object]:
+        root, remote = Path(directory) / "work", Path(directory) / "remote.git"
+        subprocess.run(["git", "init", "--bare", "--quiet", str(remote)], check=True)
+        subprocess.run(["git", "init", "--quiet", "-b", "main", str(root)], check=True)
+
+        def git(*args: str) -> str:
+            return subprocess.run(
+                ["git", "-C", str(root), *args], check=True,
+                stdout=subprocess.PIPE, text=True,
+            ).stdout.strip()
+
+        git("config", "user.name", "SecPal Test")
+        git("config", "user.email", "test@secpal.invalid")
+        trusted, attacker = Path(directory) / "trusted", Path(directory) / "attacker"
+        for key in (trusted, attacker):
+            subprocess.run(
+                ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+                check=True,
+            )
+        allowed = Path(directory) / "allowed-signers"
+        allowed.write_text(
+            "".join(
+                f"{SOURCE} {key.with_suffix('.pub').read_text()}"
+                for key in (trusted, attacker)
+            ),
+            encoding="utf-8",
+        )
+        git("config", "gpg.format", "ssh")
+        git("config", "user.signingkey", str(trusted))
+        git("config", "gpg.ssh.allowedSignersFile", str(allowed))
+        git("config", "commit.gpgsign", "true")
+        path = root / "scripts" / "secpal_pr_review" / "governance_amendment.py"
+        path.parent.mkdir(parents=True)
+        path.write_text("base\n", encoding="utf-8")
+        git("add", ".")
+        git("commit", "-S", "-m", "base")
+        base = git("rev-parse", "HEAD")
+        git("remote", "add", "origin", str(remote))
+        git("push", "origin", "HEAD:main")
+        git("switch", "-c", "candidate")
+        source_oids: list[str] = []
+        if attacker_intermediate:
+            git("config", "user.signingkey", str(attacker))
+            path.write_text("attacker intermediate\n", encoding="utf-8")
+            git("commit", "-S", "-am", "attacker intermediate")
+            source_oids.append(git("rev-parse", "HEAD"))
+            git("config", "user.signingkey", str(trusted))
+        path.write_text("trusted tip\n", encoding="utf-8")
+        git("commit", "-S", "-am", "trusted tip")
+        head = git("rev-parse", "HEAD")
+        source_oids.append(head)
+        return {
+            "root": root, "remote": remote, "git": git,
+            "path": path, "base": base, "head": head,
+            "tree": git("rev-parse", "HEAD^{tree}"),
+            "blob": git("rev-parse", f"HEAD:{path.relative_to(root)}"),
+            "trusted": trusted, "attacker": attacker,
+            "source_oids": source_oids,
+        }
+
+    def test_change_digest_matches_independent_canonical_oracle(self) -> None:
+        value = authorization()
+        facts = {
+            key: value[key] for key in (
+                "repository", "delivery_issue", "pull_request", "head_sha",
+                "tree_sha", "ordered_parent_shas", "accepted_main_sha",
+                "changed_files",
+            )
+        }
+        oracle = hashlib.sha256(
+            json.dumps(
+                facts, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"), allow_nan=False,
+            ).encode("utf-8") + b"\n"
+        ).hexdigest()
+        self.assertEqual(value["change_digest"], oracle)
+        without_newline = hashlib.sha256(
+            json.dumps(
+                facts, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"), allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        self.assertNotEqual(value["change_digest"], without_newline)
+        reordered = copy.deepcopy(facts)
+        reordered["changed_files"].reverse()
+        self.assertNotEqual(
+            amendment.change_digest(**reordered), value["change_digest"]
         )
 
     def test_canonical_issue_consume_and_protected_main_read_back(self) -> None:
@@ -269,18 +385,10 @@ class GovernanceAmendmentTests(TestCase):
                     return ROOT_SIGNER, root_signer
                 return SIGNER, signer
 
-            with mock.patch.object(amendment, "ROOT", root), mock.patch.object(amendment, "_remote_url", return_value=str(remote)), mock.patch.object(amendment, "_push_credentials", return_value=nullcontext((root, None))), mock.patch.object(amendment, "_acquire_issuance_facts", return_value=issuance_facts), first, second, mock.patch.object(amendment.execution, "_policy_role_signer", side_effect=role_signer):
-                authenticated = authority.authenticate_governance_amendment_issuance("SecPal/.github", 960, issuance_facts)
+            with mock.patch.object(amendment, "ROOT", root), mock.patch.object(amendment, "_remote_url", return_value=str(remote)), mock.patch.object(amendment, "_push_credentials", return_value=nullcontext((root, None))), mock.patch.object(amendment, "produce_observation", return_value=issuance_facts), first, second, mock.patch.object(amendment.execution, "_policy_role_signer", side_effect=role_signer):
+                authenticated = authority.authenticate_governance_amendment_issuance("SecPal/.github", 960, observation_inputs(raw))
                 issued = authority.issue_governance_amendment_authorization(authenticated)
-                execution_facts = {
-                    k: copy.deepcopy(v) for k, v in issued.items()
-                    if k not in {"signer_identity", "signature", "authorization_digest"}
-                }
-                with mock.patch.object(
-                    amendment, "_acquire_execution_facts",
-                    return_value=execution_facts,
-                ):
-                    result = authority.execute_governance_amendment(issued)
+                result = authority.execute_governance_amendment(issued)
                 self.assertEqual(result["status"], "CONSUMED")
                 self.assertEqual(git("ls-remote", str(remote), "refs/heads/main").split()[0], result["merge_commit_sha"])
                 self.assertEqual(git("show", "-s", "--format=%P", result["merge_commit_sha"]).split(), [base, head])
@@ -288,10 +396,7 @@ class GovernanceAmendmentTests(TestCase):
                 self.assertIn(issued["authorization_digest"], accepted_message)
                 for fabricated in ("lifecycle CURRENT", "Ready transition", "validation receipt"):
                     self.assertNotIn(fabricated, accepted_message)
-                with mock.patch.object(
-                    amendment, "_acquire_execution_facts",
-                    return_value=execution_facts,
-                ), self.assertRaisesRegex(
+                with self.assertRaisesRegex(
                     amendment.GovernanceAmendmentError,
                     "protected main changed",
                 ):
@@ -306,15 +411,16 @@ class GovernanceAmendmentTests(TestCase):
                 "authorization_digest",
             }
         }
-        changed = copy.deepcopy(unsigned)
-        changed["head_sha"] = "9" * 40
-        with mock.patch.object(amendment, "_acquire_issuance_facts", return_value=changed):
+        inputs = observation_inputs(value)
+        unclosed = {**inputs, "caller_asserted_live_head": "9" * 40}
+        with mock.patch.object(amendment, "produce_observation") as producer:
             with self.assertRaisesRegex(
-                amendment.GovernanceAmendmentError, "not authenticated"
+                amendment.GovernanceAmendmentError, "not closed"
             ):
                 authority.authenticate_governance_amendment_issuance(
-                    "SecPal/.github", 960, unsigned
+                    "SecPal/.github", 960, unclosed
                 )
+        producer.assert_not_called()
         with self.assertRaisesRegex(
             amendment.GovernanceAmendmentError, "canonical authenticated"
         ):
@@ -338,14 +444,14 @@ class GovernanceAmendmentTests(TestCase):
             return SIGNER, legacy_signature
 
         with mock.patch.object(
-            amendment, "_acquire_issuance_facts", return_value=invalid
+            amendment, "produce_observation", return_value=invalid
         ), mock.patch.object(
             amendment, "_accepted_trust_policy", return_value=trust
         ), mock.patch.object(
             amendment.execution, "_policy_role_signer", side_effect=role_signer
         ):
             authenticated = authority.authenticate_governance_amendment_issuance(
-                "SecPal/.github", 960, invalid
+                "SecPal/.github", 960, inputs
             )
             with self.assertRaisesRegex(
                 amendment.GovernanceAmendmentError, "non-governance source"
@@ -354,78 +460,165 @@ class GovernanceAmendmentTests(TestCase):
         root_signature.assert_not_called()
         legacy_signature.assert_not_called()
 
-    def test_root_observations_are_signed_canonical_and_phase_bound(self) -> None:
-        facts = {
-            key: copy.deepcopy(item) for key, item in authorization().items()
-            if key not in {"signer_identity", "signature", "authorization_digest"}
-        }
-        fields = {
-            "schema_version": "1.0",
-            "kind": amendment.ROOT_OBSERVATION_KIND,
-            "domain": amendment.ROOT_OBSERVATION_DOMAIN,
-            "phase": "ISSUANCE",
-            "facts": facts,
-            "signer_identity": ROOT_SIGNER,
-        }
-        signed = {
-            **fields,
-            "signature": root_signer(
-                authority.canonical_json_bytes(fields),
-                amendment.ROOT_OBSERVATION_DOMAIN,
-            ),
-        }
-        envelope = {
-            **signed,
-            "observation_digest": authority.digest_json(signed),
-        }
-        trust = SimpleNamespace(
-            authority_signer_identities=frozenset({ROOT_SIGNER})
-        )
+    def test_public_observation_producer_rebuilds_live_facts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "observation.json"
-            path.write_bytes(authority.canonical_json_bytes(envelope))
-            path.chmod(0o600)
-            with mock.patch.dict(
-                "os.environ",
-                {"SECPAL_GOVERNANCE_AMENDMENT_ISSUANCE": str(path)},
-            ), mock.patch.object(
-                amendment, "_accepted_trust_policy", return_value=trust
-            ), mock.patch.object(
-                authority, "_policy_signature_verifier", return_value=root_verifier
-            ):
-                self.assertEqual(
-                    amendment._acquire_issuance_facts("SecPal/.github", 960),
-                    facts,
+            repo = self.hermetic_repository(
+                directory, attacker_intermediate=False
+            )
+            policy = copy.deepcopy(proposed_policy())
+            policy["accepted_main_sha"] = repo["base"]
+            policy["human_authorization_digest"] = authority.digest_json({
+                "authority_identity": policy["human_authority_identity"],
+                "repository": "SecPal/.github", "delivery_issue": 960,
+                "pull_request": 961, "purpose": amendment.PURPOSE,
+                "qualified_source_digest": policy["qualified_source"]["qualification_digest"],
+                "accepted_main_sha": repo["base"], "decision": "APPROVED",
+                "bounded_uses": 1,
+            })
+            raw = authorization(
+                head=repo["head"], tree=repo["tree"], parent=repo["base"],
+                accepted_main=repo["base"], changed=[{
+                    "path": str(repo["path"].relative_to(repo["root"])),
+                    "blob_oid": repo["blob"], "mode": "100644",
+                }], source_oids=repo["source_oids"], policy=policy,
+            )
+            inputs = observation_inputs(raw)
+            facts = {
+                key: copy.deepcopy(item) for key, item in raw.items()
+                if key not in {
+                    "root_authorization", "signer_identity", "signature",
+                    "authorization_digest",
+                }
+            }
+            checks = [{
+                "name": "governance", "status": "completed",
+                "conclusion": "success", "head_sha": repo["head"],
+            }]
+            statuses = [{
+                "context": "license/cla", "state": "success",
+                "sha": repo["head"],
+            }]
+            facts["natural_ci"] = {
+                "head_sha": repo["head"],
+                "workflow_identity": amendment.LIVE_OBSERVATION_VERSION,
+                "result": "PASS",
+                "evidence_digest": authority.digest_json({
+                    "checks": checks, "statuses": statuses,
+                }),
+            }
+            threads: list[dict[str, object]] = []
+            reviews = [{
+                "state": "COMMENTED", "commit": {"oid": repo["head"]},
+                "author": {"login": "review-bot"},
+            }]
+            facts["feedback"] = {
+                "state_digest": authority.digest_json({
+                    "head_sha": repo["head"], "pull_request": 961,
+                }),
+                "feedback_digest": authority.digest_json({
+                    "threads": threads, "reviews": reviews,
+                }),
+                "thread_inventory_digest": authority.digest_json({
+                    "threads": threads,
+                }),
+                "material_finding_ids": [],
+            }
+            facts["source_signature"] = {
+                "signer_identity": SOURCE,
+                "signature_evidence_digest": authority.digest_json({
+                    "source_commits": facts["source_commits"],
+                    "accepted_main_sha": repo["base"],
+                }),
+                "verified": True,
+            }
+            trusted_signer = authority.TrustedSigner(
+                SOURCE,
+                (repo["trusted"].with_suffix(".pub").read_text().strip(),),
+                (),
+            )
+            trust = SimpleNamespace(
+                authority_signer_identities=frozenset({ROOT_SIGNER}),
+                legacy_adoption_signer_identities=frozenset({SIGNER}),
+                signers={SOURCE: trusted_signer},
+                publication_remote_url=str(repo["remote"]),
+            )
+            pull = {
+                "number": 961, "state": "open", "draft": True,
+                "merged": False,
+                "head": {"sha": repo["head"], "repo": {"full_name": "SecPal/.github"}},
+                "base": {"sha": repo["base"], "ref": "main", "repo": {"full_name": "SecPal/.github"}},
+            }
+            issue = {"number": 960, "state": "open"}
+            feedback = {"data": {"repository": {"pullRequest": {
+                "reviewThreads": {"nodes": threads, "pageInfo": {"hasNextPage": False}},
+                "reviews": {"nodes": reviews, "pageInfo": {"hasNextPage": False}},
+            }}}}
+
+            def github(arguments: list[str]):
+                joined = " ".join(arguments)
+                if "pulls/961" in joined:
+                    value = pull
+                elif "issues/960" in joined:
+                    value = issue
+                elif "check-runs" in joined:
+                    value = {"check_runs": checks}
+                elif "/status" in joined:
+                    value = {"state": "success", "statuses": statuses}
+                elif "graphql" in arguments:
+                    value = feedback
+                else:
+                    raise AssertionError(arguments)
+                return subprocess.CompletedProcess(
+                    arguments, 0, json.dumps(value).encode(), b""
                 )
-                with self.assertRaisesRegex(
-                    amendment.GovernanceAmendmentError, "not canonical"
-                ):
-                    amendment._read_root_observation(
-                        "SECPAL_GOVERNANCE_AMENDMENT_ISSUANCE",
-                        "EXECUTION", "SecPal/.github", 960,
-                    )
-            path.write_bytes(authority.canonical_json_bytes(envelope) + b"\n")
-            with mock.patch.dict(
-                "os.environ",
-                {"SECPAL_GOVERNANCE_AMENDMENT_ISSUANCE": str(path)},
-            ):
-                with self.assertRaisesRegex(
-                    amendment.GovernanceAmendmentError, "not canonical"
-                ):
-                    amendment._acquire_issuance_facts("SecPal/.github", 960)
+
+            signer_factory = mock.Mock()
+            first, second = self.patches(trust)
+            with mock.patch.object(
+                amendment, "ROOT", repo["root"]
+            ), mock.patch.object(
+                amendment.publication, "_run_gh", side_effect=github
+            ), mock.patch.object(
+                amendment.execution, "_policy_role_signer", signer_factory
+            ), first, second:
+                observed = authority.observe_governance_amendment_issuance(
+                    "SecPal/.github", 960, inputs
+                )
+                self.assertEqual(observed, facts)
+                mutations = {
+                    "stale head": lambda value: value[
+                        "independent_qualification"
+                    ].update(head_sha="9" * 40),
+                    "stale main": lambda value: value.update(
+                        accepted_main_sha="9" * 40
+                    ),
+                }
+                for label, mutate in mutations.items():
+                    stale = copy.deepcopy(inputs)
+                    mutate(stale)
+                    with self.subTest(label=label), self.assertRaises(
+                        amendment.GovernanceAmendmentError
+                    ):
+                        authority.observe_governance_amendment_issuance(
+                            "SecPal/.github", 960, stale
+                        )
+            signer_factory.assert_not_called()
 
     def test_executor_reauthenticates_all_facts_before_any_git_mutation(self) -> None:
         value = authorization()
         current = {
             key: copy.deepcopy(item) for key, item in value.items()
-            if key not in {"signer_identity", "signature", "authorization_digest"}
+            if key not in {
+                    "root_authorization", "signer_identity", "signature",
+                    "authorization_digest",
+                }
         }
         current["feedback"]["material_finding_ids"] = ["blocking"]
         first, second = self.patches()
         with first, second, mock.patch.object(
             amendment, "_remote_url", return_value="unused"
         ), mock.patch.object(
-            amendment, "_acquire_execution_facts", return_value=current
+            amendment, "produce_observation", return_value=current
         ), mock.patch.object(amendment, "_run_git") as run_git:
             with self.assertRaisesRegex(
                 amendment.GovernanceAmendmentError, "prerequisites changed"
@@ -524,6 +717,122 @@ class GovernanceAmendmentTests(TestCase):
             amendment.GovernanceAmendmentError, "root authorization scope changed"
         ):
             amendment.verify(changed)
+
+    def test_trusted_tip_over_attacker_intermediate_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = self.hermetic_repository(
+                directory, attacker_intermediate=True
+            )
+            policy = copy.deepcopy(proposed_policy())
+            policy["accepted_main_sha"] = repo["base"]
+            policy["human_authorization_digest"] = authority.digest_json({
+                "authority_identity": policy["human_authority_identity"],
+                "repository": "SecPal/.github", "delivery_issue": 960,
+                "pull_request": 961, "purpose": amendment.PURPOSE,
+                "qualified_source_digest": policy["qualified_source"]["qualification_digest"],
+                "accepted_main_sha": repo["base"], "decision": "APPROVED",
+                "bounded_uses": 1,
+            })
+            raw = authorization(
+                head=repo["head"], tree=repo["tree"],
+                parent=repo["source_oids"][-2], accepted_main=repo["base"],
+                changed=[{
+                    "path": str(repo["path"].relative_to(repo["root"])),
+                    "blob_oid": repo["blob"], "mode": "100644",
+                }],
+                source_oids=repo["source_oids"], policy=policy,
+            )
+            execution_facts = {
+                key: copy.deepcopy(item) for key, item in raw.items()
+                if key not in {
+                    "root_authorization", "signer_identity", "signature",
+                    "authorization_digest",
+                }
+            }
+            trust = SimpleNamespace(
+                authority_signer_identities=frozenset({ROOT_SIGNER}),
+                legacy_adoption_signer_identities=frozenset({SIGNER}),
+                signers={SOURCE: authority.TrustedSigner(
+                    SOURCE,
+                    (repo["trusted"].with_suffix(".pub").read_text().strip(),),
+                    (),
+                )},
+            )
+            first, second = self.patches(trust)
+            with mock.patch.object(
+                amendment, "ROOT", repo["root"]
+            ), mock.patch.object(
+                amendment, "_remote_url", return_value=str(repo["remote"])
+            ), mock.patch.object(
+                amendment, "produce_observation",
+                return_value=execution_facts,
+            ), first, second, self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError, "accepted-main key"
+            ):
+                authority.execute_governance_amendment(raw)
+            self.assertEqual(
+                repo["git"]("ls-remote", str(repo["remote"]), "refs/heads/main").split()[0],
+                repo["base"],
+            )
+
+    def test_wrong_key_merge_fails_before_remote_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = self.hermetic_repository(
+                directory, attacker_intermediate=False
+            )
+            policy = copy.deepcopy(proposed_policy())
+            policy["accepted_main_sha"] = repo["base"]
+            policy["human_authorization_digest"] = authority.digest_json({
+                "authority_identity": policy["human_authority_identity"],
+                "repository": "SecPal/.github", "delivery_issue": 960,
+                "pull_request": 961, "purpose": amendment.PURPOSE,
+                "qualified_source_digest": policy["qualified_source"]["qualification_digest"],
+                "accepted_main_sha": repo["base"], "decision": "APPROVED",
+                "bounded_uses": 1,
+            })
+            raw = authorization(
+                head=repo["head"], tree=repo["tree"], parent=repo["base"],
+                accepted_main=repo["base"], changed=[{
+                    "path": str(repo["path"].relative_to(repo["root"])),
+                    "blob_oid": repo["blob"], "mode": "100644",
+                }], source_oids=repo["source_oids"], policy=policy,
+            )
+            execution_facts = {
+                key: copy.deepcopy(item) for key, item in raw.items()
+                if key not in {
+                    "root_authorization", "signer_identity", "signature",
+                    "authorization_digest",
+                }
+            }
+            trust = SimpleNamespace(
+                authority_signer_identities=frozenset({ROOT_SIGNER}),
+                legacy_adoption_signer_identities=frozenset({SIGNER}),
+                signers={SOURCE: authority.TrustedSigner(
+                    SOURCE,
+                    (repo["trusted"].with_suffix(".pub").read_text().strip(),),
+                    (),
+                )},
+            )
+            repo["git"]("config", "user.signingkey", str(repo["attacker"]))
+            first, second = self.patches(trust)
+            with mock.patch.object(
+                amendment, "ROOT", repo["root"]
+            ), mock.patch.object(
+                amendment, "_remote_url", return_value=str(repo["remote"])
+            ), mock.patch.object(
+                amendment, "_push_credentials",
+                return_value=nullcontext((repo["root"], None)),
+            ), mock.patch.object(
+                amendment, "produce_observation",
+                return_value=execution_facts,
+            ), first, second, self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError, "accepted-main key"
+            ):
+                authority.execute_governance_amendment(raw)
+            self.assertEqual(
+                repo["git"]("ls-remote", str(repo["remote"]), "refs/heads/main").split()[0],
+                repo["base"],
+            )
 
     def test_ambient_accepted_principal_with_arbitrary_key_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

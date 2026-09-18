@@ -19,6 +19,10 @@ Log of notable changes to SecPal organization defaults (newest first).
   authenticate source and merge commits. Candidate policy and ambient Git trust
   cannot authorize adoption. One signed two-parent fast-forward adopts the
   governance-only tree with immutable authorization and consumption read-back.
+- Derive the exact change digest through the maintained canonical JSON encoder,
+  verify every adopted source commit, verify the constructed merge before any
+  push, and independently rebuild live GitHub/Git/CI/feedback facts before the
+  accepted-main authority or adoption signer can sign.
 - Represent historical evidence truthfully as `PRESENT`, `UNAVAILABLE`, or
   `ABSENT_NEVER_ISSUED`; the last state carries typed nulls and cannot synthesize
   receipt, source-validation, or final-attestation identities.

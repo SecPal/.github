@@ -479,11 +479,19 @@ head/tree/topology, accepted-main boundary, complete governance-only change
 set, natural CI, independent exact-head qualification, stable feedback, finite
 history and counters, and explicit human architecture authority. It adds no
 journal operation, signer, lifecycle state, counter, reset, or recovery path.
-The exceptional amendment itself is issued only from an exact signed root
-observation. A separately signed, fresh execution observation must remain
-byte-identical. Source and accepted merge commits are verified directly against
-the bound accepted-main signer keys; ambient Git trust and matching principal
-text are insufficient. Consumption creates a signed two-parent commit with the
+The maintained observation producer accepts only the closed external human,
+qualification, validation, history, and absence inputs that it cannot originate;
+it does not accept a preassembled or presigned live-facts descriptor. It
+independently reacquires the live
+issue, Draft PR, protected main, complete source range and signatures, exact
+tree/topology/path/blob/mode scope, terminal CI, stable feedback, threads, and
+qualification binding before either signer runs. Execution reruns the same
+producer and must yield byte-identical facts. Every adopted source commit
+and the locally constructed merge commit are verified directly against the
+bound accepted-main signer keys; ambient Git trust and matching principal text
+are insufficient. The canonical change digest is derived only from the exact
+repository/delivery/source/base/change-set object using newline-terminated
+canonical JSON. Consumption creates a signed two-parent commit with the
 bound candidate tree and performs one
 non-force fast-forward compare-and-swap to protected main. The commit embeds
 the canonical authorization and consumption digest for immutable read-back;

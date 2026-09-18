@@ -3229,14 +3229,26 @@ def issue_pre_enrollment_validation_evidence_loss_admission(
 
 
 def authenticate_governance_amendment_issuance(
-    repository: str, delivery_issue: int, observed: Mapping[str, Any]
+    repository: str, delivery_issue: int, inputs: Mapping[str, Any]
 ) -> Any:
     """Authenticate exact amendment facts at the maintained root boundary."""
 
     from . import governance_amendment
 
     return governance_amendment.authenticate_issuance(
-        repository, delivery_issue, observed
+        repository, delivery_issue, inputs
+    )
+
+
+def observe_governance_amendment_issuance(
+    repository: str, delivery_issue: int, inputs: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Produce exact live facts from root inputs and maintained providers."""
+
+    from . import governance_amendment
+
+    return governance_amendment.produce_observation(
+        repository, delivery_issue, inputs
     )
 
 

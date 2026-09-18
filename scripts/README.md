@@ -483,14 +483,20 @@ Exact-State-Adoption version 4 is the registered, one-delivery
 validation as `ABSENT_NEVER_ISSUED` with typed null receipt, source-validation,
 and final-attestation fields. It consumes an independently signed exact-scope
 authorization only after current validation, natural CI, exact-head independent
-qualification, and zero material findings. The maintained root boundary accepts
-separate signed issuance and execution observations, creates an exact-scope
-authorization with the existing accepted-main authority signer, wraps it with
+qualification, and zero material findings. Its public producer accepts only the
+closed external human/verifier inputs that cannot be observed from providers,
+then independently rebuilds the live GitHub, Git, CI, feedback, thread,
+source-range and exact change-set facts before signing. A preassembled or
+presigned live-facts descriptor cannot replace that observation. It creates an
+exact-scope authorization with the existing accepted-main authority signer, wraps it with
 the existing legacy-adoption signer, and consumes once by a signed two-parent,
 non-force fast-forward of the bound governance tree to protected main. Candidate
 policy and registry additions are prospective only. Source and merge signatures
-must match keys in the bound accepted-main registry; ambient Git trust is not
-authority. The accepted merge
+must match keys in the bound accepted-main registry for every adopted source
+commit. The final merge signature and immutable content are verified locally
+before the non-force CAS push; ambient Git trust is not authority. The change
+digest uses the maintained newline-terminated canonical JSON encoder over one
+closed base/head/tree/topology/path/blob/mode object. The accepted merge
 commit stores the canonical authorization and consumption digest for immutable
 read-back and replay rejection. It does not create lifecycle CURRENT, Ready,
 receipt, counter, or thread authority. Versions 1/2 remain `PRESENT`, and version
