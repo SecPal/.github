@@ -784,6 +784,7 @@ def _live_ci(repository: str, head_sha: str) -> dict[str, Any]:
         "governance amendment statuses",
     )
     try:
+        status_head = statuses["sha"]
         runs = sorted(
             ({
                 "name": item["name"], "status": item["status"],
@@ -793,19 +794,21 @@ def _live_ci(repository: str, head_sha: str) -> dict[str, Any]:
                 item["name"], item["status"], str(item["conclusion"])
             ),
         )
-        contexts = sorted(
-            ({
+        contexts = []
+        for item in statuses["statuses"]:
+            contexts.append({
                 "context": item["context"], "state": item["state"],
-                "sha": item["sha"],
-            } for item in statuses["statuses"]),
-            key=lambda item: item["context"],
-        )
+                "sha": item["sha"] if "sha" in item else status_head,
+            })
+        contexts.sort(key=lambda item: item["context"])
     except (KeyError, TypeError) as exc:
         raise GovernanceAmendmentError(
             "live governance amendment CI is incomplete"
         ) from exc
     if (
         not runs or len(runs) >= 100
+        or status_head != head_sha
+        or len({status["context"] for status in contexts}) != len(contexts)
         or any(
             run["head_sha"] != head_sha or run["status"] != "completed"
             or run["conclusion"] not in {"success", "skipped"}
@@ -815,7 +818,7 @@ def _live_ci(repository: str, head_sha: str) -> dict[str, Any]:
         or (statuses.get("state") == "pending" and contexts)
         or any(
             status["state"] != "success"
-            or status["sha"] not in {None, head_sha}
+            or status["sha"] != head_sha
             for status in contexts
         )
     ):

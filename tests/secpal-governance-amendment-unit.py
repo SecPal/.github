@@ -448,7 +448,10 @@ class GovernanceAmendmentTests(TestCase):
                 elif "check-runs" in joined:
                     value = {"check_runs": checks}
                 elif "/status" in joined:
-                    value = {"state": "pending", "statuses": statuses}
+                    value = {
+                        "sha": head, "state": "pending",
+                        "statuses": statuses,
+                    }
                 elif "graphql" in arguments:
                     value = feedback
                 else:
@@ -770,7 +773,10 @@ class GovernanceAmendmentTests(TestCase):
                 elif "check-runs" in joined:
                     value = {"check_runs": checks}
                 elif "/status" in joined:
-                    value = {"state": "pending", "statuses": statuses}
+                    value = {
+                        "sha": repo["head"], "state": "pending",
+                        "statuses": statuses,
+                    }
                 elif "graphql" in arguments:
                     value = feedback
                 else:
@@ -810,6 +816,88 @@ class GovernanceAmendmentTests(TestCase):
                             "SecPal/.github", 960, stale
                         )
             signer_factory.assert_not_called()
+
+    def test_live_ci_authenticates_and_inherits_combined_status_head(self) -> None:
+        checks = [{
+            "name": "governance", "status": "completed",
+            "conclusion": "success", "head_sha": HEAD,
+        }]
+        status = {
+            "sha": HEAD, "state": "success",
+            "statuses": [{"context": "license/cla", "state": "success"}],
+        }
+
+        def observe(value: dict[str, object]) -> dict[str, object]:
+            responses = iter((
+                {"check_runs": checks}, value,
+            ))
+
+            def github(arguments: list[str]):
+                return subprocess.CompletedProcess(
+                    arguments, 0,
+                    json.dumps(next(responses)).encode(), b"",
+                )
+
+            with mock.patch.object(
+                amendment.publication, "_run_gh", side_effect=github
+            ):
+                return amendment._live_ci("SecPal/.github", HEAD)
+
+        observed = observe(status)
+        normalized = [{
+            "context": "license/cla", "state": "success", "sha": HEAD,
+        }]
+        self.assertEqual(observed, {
+            "head_sha": HEAD,
+            "workflow_identity": amendment.LIVE_OBSERVATION_VERSION,
+            "result": "PASS",
+            "evidence_digest": authority.digest_json({
+                "checks": checks, "statuses": normalized,
+            }),
+        })
+
+        invalid = {
+            "missing envelope head": {
+                "state": "success", "statuses": status["statuses"],
+            },
+            "wrong envelope head": {
+                "sha": "9" * 40, "state": "success",
+                "statuses": status["statuses"],
+            },
+            "wrong explicit context head": {
+                "sha": HEAD, "state": "success", "statuses": [{
+                    "context": "license/cla", "state": "success",
+                    "sha": "9" * 40,
+                }],
+            },
+            "null explicit context head": {
+                "sha": HEAD, "state": "success", "statuses": [{
+                    "context": "license/cla", "state": "success",
+                    "sha": None,
+                }],
+            },
+            "duplicate context": {
+                "sha": HEAD, "state": "success", "statuses": [
+                    {"context": "license/cla", "state": "success"},
+                    {"context": "license/cla", "state": "success"},
+                ],
+            },
+            "pending context": {
+                "sha": HEAD, "state": "pending", "statuses": [{
+                    "context": "license/cla", "state": "pending",
+                }],
+            },
+            "failed context": {
+                "sha": HEAD, "state": "failure", "statuses": [{
+                    "context": "license/cla", "state": "failure",
+                }],
+            },
+        }
+        for label, value in invalid.items():
+            with self.subTest(label=label), self.assertRaises(
+                amendment.GovernanceAmendmentError
+            ):
+                observe(value)
 
     def test_executor_reauthenticates_all_facts_before_any_git_mutation(self) -> None:
         value = authorization()
