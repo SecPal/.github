@@ -9,6 +9,19 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-18 - Authenticate Post-Ready Validation Remediation
+
+**Added:**
+
+- Admit one independently reproduced, technically blocking in-contract
+  validation defect into the remaining ordinary Ready remediation slot while
+  preserving Review 1/1, Ready, one Ready transition and the existing
+  `REMEDIATION_COMPLETED` transition.
+- Bind the exact current-head hosted failure, deterministic candidate-byte
+  proof, signed sole-parent correction and fresh validation evidence through a
+  one-use authorization, while keeping provider growth, Ready/Draft,
+  Exceptional Recovery and Exceptional Continuation semantics unchanged.
+
 ## 2026-09-18 - Enable Contracts Lifecycle Enrollment
 
 **Changed:**

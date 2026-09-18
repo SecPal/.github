@@ -178,6 +178,20 @@ state, transition, counter, signer, trust root, or journal. Its verifier-owned
 seal is not reproducible from serialized fields, and the generic authorization
 issuer rejects the provider-growth digest.
 
+A sibling ordinary Ready-remediation admission handles a terminal hosted
+failure only when protected CURRENT is exactly Ready Review 1/1 and Remediation
+1/2, the live OPEN PR remains on that exact head, and an independent
+repository-byte reproduction proves a technically blocking
+`IN_CONTRACT_DEFECT`. The maintained runtime-selector proof derives workflow
+and engine floors from candidate configuration, requires the exact signed
+sole-parent correction to remove the violation, rejects unrelated changes, and
+requires fresh resulting-head validation and attestation. It seals a distinct
+`POST_READY_IN_CONTRACT_VALIDATION_DEFECT` source digest into the same one-use
+`REMEDIATION_COMPLETED` authorization. Provider-growth and validation-defect
+sources cannot substitute for one another and compete for the same final
+ordinary slot; neither adds a review, Ready transition, state, counter,
+recovery family, signer or journal.
+
 Applicable protected-branch
 rules independently determine whether `NONE` is admissible; `REVIEW_REQUIRED`
 always fails closed. Unsigned recovery facts and caller-selected feedback
