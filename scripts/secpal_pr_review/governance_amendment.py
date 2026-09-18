@@ -28,6 +28,7 @@ AUTHORIZATION_FIELDS = frozenset({
     "natural_ci", "independent_qualification", "current_validation",
     "feedback", "observed_pre_enrollment_history", "intended_state",
     "historical_evidence", "historical_absence_proof", "concepts",
+    "architecture_necessity",
     "human_authority_identity", "human_authorization_digest",
     "authorization_id", "bounded_uses", "signer_identity", "signature",
     "authorization_digest",
@@ -172,6 +173,14 @@ def verify(value: Any) -> VerifiedGovernanceAmendment:
             }),
             "governance amendment historical absence proof",
         )
+        necessity = authority._require_closed(
+            item["architecture_necessity"],
+            frozenset({
+                "existing_authority_result", "smaller_nonrecursive_extension",
+                "recursive_self_bootstrap", "evidence_digest",
+            }),
+            "governance amendment architecture necessity",
+        )
         qualification = authority._require_closed(
             item["independent_qualification"],
             frozenset({"verifier_identity", "conversation_id", "head_sha", "tree_sha", "result", "qualification_digest"}),
@@ -230,6 +239,9 @@ def verify(value: Any) -> VerifiedGovernanceAmendment:
                 authority._require_digest(source[field], field)
         for field in ("history_digest", "artifact_audit_digest"):
             authority._require_digest(absence[field], field)
+        authority._require_digest(
+            necessity["evidence_digest"], "architecture necessity evidence"
+        )
     except (authority.LifecycleAuthorityError, KeyError, TypeError) as exc:
         raise GovernanceAmendmentError("governance amendment authorization is malformed") from exc
     expected_change_digest = authority.digest_json({
@@ -258,6 +270,7 @@ def verify(value: Any) -> VerifiedGovernanceAmendment:
         or qualified["qualification_digest"] != authority.digest_json(
             qualified_identity
         )
+        or qualified_head == head
         or main != policy["accepted_main_sha"]
         or item["change_digest"] != expected_change_digest
         or signature["signer_identity"] != policy["source_signer_identity"]
@@ -273,6 +286,9 @@ def verify(value: Any) -> VerifiedGovernanceAmendment:
         or absence["verification_authority"]
         != "PROTECTED_DELIVERY_HISTORY_AND_ARTIFACT_AUDIT"
         or absence["result"] != "NO_HISTORICAL_RECEIPT_ISSUED"
+        or necessity["existing_authority_result"] != "INSUFFICIENT"
+        or necessity["smaller_nonrecursive_extension"] != "NONE"
+        or necessity["recursive_self_bootstrap"] != "PROVEN"
         or state != policy["intended_state"]
         or history != item["observed_pre_enrollment_history"]
         or item["concepts"] != policy["concepts"]
