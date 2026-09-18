@@ -492,6 +492,8 @@ ALLOWED_IMPORTS = {
         "from pathlib import Path",
         "from typing import Any, Iterable",
         "from urllib.parse import quote",
+        "from secpal_pr_review import lifecycle_execution, qualified_remediation_successor_loss as successor_loss",
+        "from secpal_pr_review import qualified_remediation_successor_loss",
     },
     "fast_path.py": {
         "from __future__ import annotations",
@@ -507,6 +509,7 @@ ALLOWED_IMPORTS = {
         "from dataclasses import dataclass, field",
         "from pathlib import Path",
         "from typing import Any, Callable, TypeVar",
+        "from . import qualified_remediation_successor_loss as successor_loss",
     },
     "exact_source_safety.py": {
         "from __future__ import annotations",
@@ -551,6 +554,7 @@ ALLOWED_IMPORTS = {
         "from typing import Any, Callable, Sequence",
         "from secpal_pr_review import lifecycle_orchestration as module",
         "from secpal_pr_review import lifecycle_publication as module",
+        "from secpal_pr_review import qualified_remediation_successor_loss as loss",
     },
     "late_disposition.py": {
         "from __future__ import annotations",
@@ -773,6 +777,8 @@ LOADED_MODULE_ATTRIBUTES = {
             "verify_codex_provider_summary",
             "verify_validation_attestation",
             "derive_ready_source_recovery_safety_facts",
+            "qualified_remediation_successor_loss_validation_evidence",
+            "_classified_feedback_sources",
             "_actual_integration_signer",
             "READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS",
         },
@@ -1525,6 +1531,7 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_load_lifecycle_orchestration_helper",
     "_load_lifecycle_publication_helper",
     "_load_recovered_ready_source_validation",
+    "_load_qualified_remediation_successor_validation",
     "_late_signing_key",
     "_markdown_parser_environment",
     "_classify_reviewed_target",
@@ -1689,6 +1696,11 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
     ),
 }
 RESOLVER_LOOP_SITES = {
+    LoopSite(
+        "comprehension",
+        ("_load_qualified_remediation_successor_validation",),
+        "record['resulting_state']",
+    ),
     LoopSite("for", ("_load_final_eligibility_absence",), "records"),
     LoopSite(
         "comprehension",
