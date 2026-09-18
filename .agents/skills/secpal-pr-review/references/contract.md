@@ -567,6 +567,9 @@ counter reset, Cycle 3, or fabricated digest is authority.
 Issuance requires an exact canonical root observation signed by the existing
 authority role and then the existing legacy-adoption signature. Execution
 requires a distinct fresh signed root observation with identical facts. It
+uses one canonical digest for the complete ordered accepted-main-to-head source
+signature range. Exact-State-Adoption retains its distinct normalized
+head-commit evidence digest and must not conflate it with that range binding. It
 creates one signed two-parent commit containing the bound candidate tree and
 updates protected main only by a non-force fast-forward compare-and-swap. The
 accepted commit embeds the canonical authorization and consumption digest for

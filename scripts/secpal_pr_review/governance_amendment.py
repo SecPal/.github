@@ -185,6 +185,19 @@ def source_commit_evidence(
     }
 
 
+def source_signature_binding_digest(
+    source_commits: list[dict[str, str]], accepted_main_sha: str,
+) -> str:
+    """Bind the complete accepted-main-to-head signed source range."""
+
+    return authority.digest_json({
+        "source_commits": copy.deepcopy(source_commits),
+        "accepted_main_sha": authority._require_oid(
+            accepted_main_sha, "source signature accepted main"
+        ),
+    })
+
+
 def _authorization_facts(item: Mapping[str, Any]) -> dict[str, Any]:
     return {
         key: copy.deepcopy(value)
@@ -338,7 +351,10 @@ def _verify(
         )
         signature = authority._require_closed(
             item["source_signature"],
-            frozenset({"signer_identity", "signature_evidence_digest", "verified"}),
+            frozenset({
+                "signer_identity", "range_signature_evidence_digest",
+                "verified",
+            }),
             "governance amendment source signature",
         )
         raw_source_commits = item["source_commits"]
@@ -434,7 +450,7 @@ def _verify(
             or not qualified["verifier_workspace"]
         ):
             raise GovernanceAmendmentError("qualified source is not exact and passing")
-        for field in ("signature_evidence_digest",):
+        for field in ("range_signature_evidence_digest",):
             authority._require_digest(signature[field], field)
         for source, fields in ((ci, ("evidence_digest",)), (qualification, ("qualification_digest",)), (validation, ("policy_digest", "command_set_digest")), (feedback, ("state_digest", "feedback_digest", "thread_inventory_digest")), (qualified, ("qualification_digest",))):
             for field in fields:
@@ -474,10 +490,8 @@ def _verify(
         or item["change_digest"] != expected_change_digest
         or signature["signer_identity"] != SOURCE_SIGNER_IDENTITY
         or signature["verified"] is not True
-        or signature["signature_evidence_digest"] != authority.digest_json({
-            "source_commits": source_commits,
-            "accepted_main_sha": main,
-        })
+        or signature["range_signature_evidence_digest"]
+        != source_signature_binding_digest(source_commits, main)
         or source_commits[-1]["oid"] != head
         or any(
             entry["signer_identity"] != SOURCE_SIGNER_IDENTITY
@@ -1066,10 +1080,9 @@ def produce_observation(
         ),
         "source_signature": {
             "signer_identity": SOURCE_SIGNER_IDENTITY,
-            "signature_evidence_digest": authority.digest_json({
-                "source_commits": source_commits,
-                "accepted_main_sha": accepted_main,
-            }),
+            "range_signature_evidence_digest": (
+                source_signature_binding_digest(source_commits, accepted_main)
+            ),
             "verified": True,
         },
         "source_commits": source_commits,

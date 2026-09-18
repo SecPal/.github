@@ -500,7 +500,9 @@ before the non-force CAS push; ambient Git trust is not authority. The change
 digest uses the maintained newline-terminated canonical JSON encoder over one
 closed base/head/tree/topology/path/blob/mode object. The accepted merge
 commit stores the canonical authorization and consumption digest for immutable
-read-back and replay rejection. It does not create lifecycle CURRENT, Ready,
+read-back and replay rejection. A separate canonical range-signature digest
+binds every ordered accepted-main-to-head commit, while the existing adoption
+field retains only independently normalized head-commit evidence. It does not create lifecycle CURRENT, Ready,
 receipt, counter, or thread authority. Versions 1/2 remain `PRESENT`, and version
 3 remains `UNAVAILABLE`, without serialization changes.
 

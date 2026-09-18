@@ -169,10 +169,11 @@ def authorization(
     }
     value["source_signature"] = {
         "signer_identity": SOURCE,
-        "signature_evidence_digest": authority.digest_json({
-            "source_commits": value["source_commits"],
-            "accepted_main_sha": accepted_main,
-        }),
+        "range_signature_evidence_digest": (
+            amendment.source_signature_binding_digest(
+                value["source_commits"], accepted_main
+            )
+        ),
         "verified": True,
     }
     return reseal(value)
@@ -464,7 +465,11 @@ class GovernanceAmendmentTests(TestCase):
                 return SIGNER, signer
             signer_factory.side_effect = role_signer
 
-            with mock.patch.object(amendment, "ROOT", root), mock.patch.object(amendment, "_push_credentials", return_value=nullcontext((root, None))), mock.patch.object(amendment.publication, "_run_gh", side_effect=github), first, second, mock.patch.object(amendment.execution, "_policy_role_signer", signer_factory):
+            signature_policy = {
+                "accepted_formats": ["ssh"],
+                "require_github_verified": True,
+            }
+            with mock.patch.object(amendment, "ROOT", root), mock.patch.object(amendment, "_push_credentials", return_value=nullcontext((root, None))), mock.patch.object(amendment.publication, "_run_gh", side_effect=github), mock.patch.object(authority, "_load_delivery_signature_policy", return_value=signature_policy), first, second, mock.patch.object(amendment.execution, "_policy_role_signer", signer_factory):
                 inputs = observation_inputs(raw)
                 authenticated = authority.authenticate_governance_amendment_issuance("SecPal/.github", 960, inputs)
                 observed = authenticated.facts
@@ -490,7 +495,64 @@ class GovernanceAmendmentTests(TestCase):
                     [item["oid"] for item in observed["source_commits"]],
                     source_oids,
                 )
+                self.assertEqual(
+                    observed["source_signature"][
+                        "range_signature_evidence_digest"
+                    ],
+                    amendment.source_signature_binding_digest(
+                        observed["source_commits"], base
+                    ),
+                )
                 issued = authority.issue_governance_amendment_authorization(authenticated)
+                amendment.verify(issued)
+                head_evidence = {
+                    "oid": head, "source": "USER",
+                    "local_signature": {
+                        "verified": True, "state": "valid", "format": "ssh",
+                    },
+                    "github_verification": {
+                        "verified": True, "reason": "valid",
+                    },
+                }
+                changed_head = copy.deepcopy(head_evidence)
+                changed_head["oid"] = source_oids[-2]
+                with self.assertRaisesRegex(
+                    authority.LifecycleAuthorityError,
+                    "changed identity",
+                ):
+                    authority.authenticate_exact_state_adoption_external_evidence(
+                        repository="SecPal/.github", delivery_issue=960,
+                        pull_request=961, head_sha=head, tree_sha=tree,
+                        pull_request_state="OPEN",
+                        commit_signature_evidence=changed_head,
+                        validation_evidence=None,
+                        observed_pre_enrollment_history=raw[
+                            "observed_pre_enrollment_history"
+                        ],
+                        intended_state=raw["intended_state"],
+                        governance_amendment_authorization=issued,
+                    )
+                external = authority.authenticate_exact_state_adoption_external_evidence(
+                    repository="SecPal/.github", delivery_issue=960,
+                    pull_request=961, head_sha=head, tree_sha=tree,
+                    pull_request_state="OPEN",
+                    commit_signature_evidence=head_evidence,
+                    validation_evidence=None,
+                    observed_pre_enrollment_history=raw[
+                        "observed_pre_enrollment_history"
+                    ],
+                    intended_state=raw["intended_state"],
+                    governance_amendment_authorization=issued,
+                )
+                adoption = authority.create_exact_state_adoption_evidence(
+                    verified_external_evidence=external,
+                    adoption_timestamp="2026-09-18T12:00:00Z",
+                )
+                self.assertEqual(adoption["proof_version"], "4.0")
+                self.assertEqual(
+                    authority.exact_state_adoption_historical_evidence(adoption),
+                    amendment.historical_evidence(),
+                )
                 result = authority.execute_governance_amendment(issued)
                 self.assertEqual(result["status"], "CONSUMED")
                 self.assertEqual(git("ls-remote", str(remote), "refs/heads/main").split()[0], result["merge_commit_sha"])
@@ -533,6 +595,21 @@ class GovernanceAmendmentTests(TestCase):
                     [{"path": path, "blob_oid": "c" * 40, "mode": "100644"}],
                     amendment.GOVERNANCE_PATH_PREFIXES,
                 )
+
+    def test_source_range_rejects_intermediate_signature_substitution(self) -> None:
+        value = authorization(source_oids=["7" * 40, HEAD])
+        value["source_commits"][0]["signature_evidence_digest"] = "0" * 64
+        value["source_signature"]["range_signature_evidence_digest"] = (
+            amendment.source_signature_binding_digest(
+                value["source_commits"], value["accepted_main_sha"]
+            )
+        )
+        value = reseal(value)
+        first, second = self.patches()
+        with first, second, self.assertRaises(
+            amendment.GovernanceAmendmentError
+        ):
+            amendment.verify(value)
 
     def test_issuer_requires_exact_root_observation_and_sealed_input(self) -> None:
         value = authorization()
@@ -654,10 +731,11 @@ class GovernanceAmendmentTests(TestCase):
             }
             facts["source_signature"] = {
                 "signer_identity": SOURCE,
-                "signature_evidence_digest": authority.digest_json({
-                    "source_commits": facts["source_commits"],
-                    "accepted_main_sha": repo["base"],
-                }),
+                "range_signature_evidence_digest": (
+                    amendment.source_signature_binding_digest(
+                        facts["source_commits"], repo["base"]
+                    )
+                ),
                 "verified": True,
             }
             trusted_signer = authority.TrustedSigner(
@@ -790,6 +868,13 @@ class GovernanceAmendmentTests(TestCase):
             "tree": lambda v: v.update(tree_sha="9" * 40),
             "parents": lambda v: v.update(ordered_parent_shas=["9" * 40]),
             "source signer": lambda v: v["source_signature"].update(signer_identity="other"),
+            "range digest": lambda v: v["source_signature"].update(
+                range_signature_evidence_digest="0" * 64
+            ),
+            "intermediate signature": lambda v: v.update(source_commits=[
+                amendment.source_commit_evidence("8" * 40, SOURCE, v["accepted_main_sha"]),
+                *v["source_commits"],
+            ]),
             "stale main": lambda v: v.update(accepted_main_sha="9" * 40),
             "caller absence": lambda v: v["historical_evidence"].update(state="UNAVAILABLE"),
             "absence receipt": lambda v: v["historical_evidence"].update(validation_receipt_digest="9" * 64),

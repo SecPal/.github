@@ -34,6 +34,9 @@ Log of notable changes to SecPal organization defaults (newest first).
   verify every adopted source commit, verify the constructed merge before any
   push, and independently rebuild live GitHub/Git/CI/feedback facts before the
   accepted-main authority or adoption signer can sign.
+- Bind the complete accepted-main-to-head signature range through one shared
+  canonical digest while retaining the Exact-State-Adoption consumer's distinct
+  normalized head-commit evidence.
 - Represent historical evidence truthfully as `PRESENT`, `UNAVAILABLE`, or
   `ABSENT_NEVER_ISSUED`; the last state carries typed nulls and cannot synthesize
   receipt, source-validation, or final-attestation identities.

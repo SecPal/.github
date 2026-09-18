@@ -3374,13 +3374,22 @@ def authenticate_exact_state_adoption_external_evidence(
         raise LifecycleAuthorityError(
             "adoption commit signature evidence changed identity"
         )
-    signature_evidence_digest = digest_json(verified_commits[0])
-    if amendment is not None and (
-        amendment["source_signature"]["signature_evidence_digest"]
-        != signature_evidence_digest
-    ):
-        raise LifecycleAuthorityError("governance amendment source signature changed")
-    if loss is not None and signature_evidence_digest != loss["commit_signature_evidence_digest"]:
+    head_signature_evidence_digest = digest_json(verified_commits[0])
+    if amendment is not None:
+        expected_range_digest = (
+            governance_amendment.source_signature_binding_digest(
+                amendment["source_commits"], amendment["accepted_main_sha"]
+            )
+        )
+        if (
+            amendment["source_signature"][
+                "range_signature_evidence_digest"
+            ] != expected_range_digest
+        ):
+            raise LifecycleAuthorityError(
+                "governance amendment source signature range changed"
+            )
+    if loss is not None and head_signature_evidence_digest != loss["commit_signature_evidence_digest"]:
         raise LifecycleAuthorityError("loss admission source signature changed")
     state = _validate_state(
         dict(intended_state), allow_adopted_observations=True
@@ -3405,7 +3414,7 @@ def authenticate_exact_state_adoption_external_evidence(
                 head_sha=head,
                 tree_sha=tree,
                 pull_request_state=pull_request_state,
-                commit_signature_evidence_digest=signature_evidence_digest,
+                commit_signature_evidence_digest=head_signature_evidence_digest,
                 validation_receipt_digest=receipt_digest,
                 source_validation_evidence_digest=source_digest,
                 adoption_source_evidence_digest=adoption_digest,
@@ -3418,7 +3427,7 @@ def authenticate_exact_state_adoption_external_evidence(
         )
     supporting_digests = tuple(sorted({
         *(value for value in (receipt_digest, source_digest, adoption_digest) if value is not None),
-        signature_evidence_digest,
+        head_signature_evidence_digest,
         digest_json(history),
         *(
             ()
@@ -3433,7 +3442,7 @@ def authenticate_exact_state_adoption_external_evidence(
         head_sha=head,
         tree_sha=tree,
         pull_request_state=pull_request_state,
-        commit_signature_evidence_digest=signature_evidence_digest,
+        commit_signature_evidence_digest=head_signature_evidence_digest,
         validation_receipt_digest=receipt_digest,
         source_validation_evidence_digest=source_digest,
         adoption_source_evidence_digest=adoption_digest,
