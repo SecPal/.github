@@ -29,6 +29,9 @@ GENESIS_ADMISSION_KIND = "SECPAL_NATIVE_LIFECYCLE_GENESIS_ADMISSION"
 GENESIS_ADMISSION_DOMAIN = "secpal.native-lifecycle-genesis-admission/v1"
 READY_SOURCE_RECOVERY_KIND = "SECPAL_READY_SOURCE_RECOVERY_PUBLICATION"
 READY_SOURCE_RECOVERY_DOMAIN = "secpal.ready-source-recovery-publication/v1"
+JOURNAL_KINDS = frozenset(
+    {PUBLICATION_KIND, GENESIS_ADMISSION_KIND, READY_SOURCE_RECOVERY_KIND}
+)
 ORDINARY_REMEDIATION_SUFFIX = "ORDINARY_REMEDIATION_SUFFIX"
 EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING = (
     "EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING"
@@ -90,6 +93,21 @@ _AUTHOR_ENVIRONMENT = frozenset(
 
 class LifecyclePublicationError(ValueError):
     """Publication is absent, stale, ambiguous, malformed, or unauthorized."""
+
+
+def _classify_journal_document(raw: bytes) -> tuple[str, dict[str, Any]]:
+    """Parse one journal object and select its maintained closed-kind verifier."""
+
+    try:
+        candidate = json.loads(raw, object_pairs_hook=_reject_duplicate_pairs)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LifecyclePublicationError("journal document is malformed") from exc
+    if not isinstance(candidate, dict):
+        raise LifecyclePublicationError("journal document is malformed")
+    kind = candidate.get("kind")
+    if kind not in JOURNAL_KINDS:
+        raise LifecyclePublicationError("journal document kind is unknown")
+    return kind, candidate
 
 
 @dataclass(frozen=True)
@@ -1285,13 +1303,8 @@ def _walk_journal(
     admission_positions: dict[tuple[str, int], int] = {}
     initialization_digests: set[tuple[str, str]] = set()
     for position, (oid, raw, parent) in enumerate(chronological):
-        try:
-            candidate = json.loads(raw, object_pairs_hook=_reject_duplicate_pairs)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise LifecyclePublicationError("journal document is malformed") from exc
-        if not isinstance(candidate, dict):
-            raise LifecyclePublicationError("journal document is malformed")
-        if candidate.get("kind") != GENESIS_ADMISSION_KIND:
+        kind, _ = _classify_journal_document(raw)
+        if kind != GENESIS_ADMISSION_KIND:
             continue
         _, admission = _verify_genesis_admission_document(
             raw, object_oid=oid, expected_branch=publication_branch
@@ -1317,13 +1330,10 @@ def _walk_journal(
     recovery_authorization_digests: set[tuple[str, str]] = set()
     seen_bootstrap_targets: set[str] = set()
     for position, (oid, raw, parent) in enumerate(chronological):
-        try:
-            candidate = json.loads(raw, object_pairs_hook=_reject_duplicate_pairs)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise LifecyclePublicationError("journal document is malformed") from exc
-        if isinstance(candidate, dict) and candidate.get("kind") == GENESIS_ADMISSION_KIND:
+        kind, candidate = _classify_journal_document(raw)
+        if kind == GENESIS_ADMISSION_KIND:
             continue
-        if isinstance(candidate, dict) and candidate.get("kind") == READY_SOURCE_RECOVERY_KIND:
+        if kind == READY_SOURCE_RECOVERY_KIND:
             candidate_repository = candidate.get("repository")
             candidate_issue = candidate.get("delivery_issue")
             previous = latest.get((candidate_repository, candidate_issue))
@@ -2585,13 +2595,8 @@ def _walk_journal_identity_projection(
     admission_positions: dict[tuple[str, int], int] = {}
     initialization_digests: set[tuple[str, str]] = set()
     for position, (object_oid, raw, parent) in enumerate(chronological):
-        try:
-            candidate = json.loads(raw, object_pairs_hook=_reject_duplicate_pairs)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise LifecyclePublicationError("journal document is malformed") from exc
-        if not isinstance(candidate, dict):
-            raise LifecyclePublicationError("journal document is malformed")
-        if candidate.get("kind") == GENESIS_ADMISSION_KIND:
+        kind, _ = _classify_journal_document(raw)
+        if kind == GENESIS_ADMISSION_KIND:
             _, admission = _verify_genesis_admission_document(
                 raw,
                 object_oid=object_oid,
@@ -2611,10 +2616,58 @@ def _walk_journal_identity_projection(
             admission_positions[key] = position
             initialization_digests.add(digest_key)
 
-    publications: dict[tuple[str, int], tuple[str, dict[str, Any]]] = {}
+    publications: dict[
+        tuple[str, int], tuple[str, dict[str, Any], bytes]
+    ] = {}
+    recovery_keys: set[tuple[str, int]] = set()
+    recovery_authorization_ids: set[tuple[str, str]] = set()
+    recovery_authorization_digests: set[tuple[str, str]] = set()
     for position, (object_oid, raw, parent) in enumerate(chronological):
-        candidate = json.loads(raw, object_pairs_hook=_reject_duplicate_pairs)
-        if candidate.get("kind") == GENESIS_ADMISSION_KIND:
+        kind, candidate = _classify_journal_document(raw)
+        if kind == GENESIS_ADMISSION_KIND:
+            continue
+        if kind == READY_SOURCE_RECOVERY_KIND:
+            key = (candidate.get("repository"), candidate.get("delivery_issue"))
+            previous = publications.get(key)
+            if previous is None:
+                raise LifecyclePublicationError(
+                    "Ready-source recovery precedes CURRENT lifecycle publication"
+                )
+            current_oid, current_document, current_raw = previous
+            _, current_lifecycle = _verify_publication_document(
+                current_raw,
+                object_oid=current_oid,
+                expected_branch=publication_branch,
+                native_genesis_admission=admissions.get(key),
+            )
+            document, recovery = _verify_ready_source_recovery_document(
+                raw,
+                object_oid=object_oid,
+                expected_branch=publication_branch,
+                current_oid=current_oid,
+                current_document=current_document,
+                current_lifecycle=current_lifecycle,
+            )
+            if document["journal_predecessor_oid"] != parent:
+                raise LifecyclePublicationError(
+                    "Ready-source recovery journal parent binding is invalid"
+                )
+            authorization_id = (recovery.repository, recovery.authorization_id)
+            authorization_digest = (
+                recovery.repository,
+                recovery.authorization_digest,
+            )
+            if (
+                key in recovery_keys
+                or authorization_id in recovery_authorization_ids
+                or authorization_digest in recovery_authorization_digests
+            ):
+                raise LifecyclePublicationError(
+                    "Ready-source recovery authorization was replayed"
+                )
+            recovery_keys.add(key)
+            recovery_authorization_ids.add(authorization_id)
+            recovery_authorization_digests.add(authorization_digest)
             continue
 
         document = _verify_publication_envelope(
@@ -2695,7 +2748,7 @@ def _walk_journal_identity_projection(
                 raise LifecyclePublicationError(
                     "publication journal is truncated before enrollment"
                 )
-            previous_oid, previous_document = previous
+            previous_oid, previous_document, _ = previous
             if (
                 document["predecessor_publication_oid"] != previous_oid
                 or document["predecessor_publication_digest"]
@@ -2711,6 +2764,6 @@ def _walk_journal_identity_projection(
                 raise LifecyclePublicationError(
                     "publication predecessor binding is invalid"
                 )
-        publications[key] = (object_oid, document)
+        publications[key] = (object_oid, document, raw)
 
     return set(publications), set(admissions)
