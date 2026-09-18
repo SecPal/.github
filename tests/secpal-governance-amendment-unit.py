@@ -494,10 +494,7 @@ class GovernanceAmendmentTests(TestCase):
                 "name": "governance", "status": "completed",
                 "conclusion": "success", "head_sha": repo["head"],
             }]
-            statuses = [{
-                "context": "license/cla", "state": "success",
-                "sha": repo["head"],
-            }]
+            statuses: list[dict[str, object]] = []
             facts["natural_ci"] = {
                 "head_sha": repo["head"],
                 "workflow_identity": amendment.LIVE_OBSERVATION_VERSION,
@@ -563,7 +560,7 @@ class GovernanceAmendmentTests(TestCase):
                 elif "check-runs" in joined:
                     value = {"check_runs": checks}
                 elif "/status" in joined:
-                    value = {"state": "success", "statuses": statuses}
+                    value = {"state": "pending", "statuses": statuses}
                 elif "graphql" in arguments:
                     value = feedback
                 else:

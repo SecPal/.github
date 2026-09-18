@@ -784,7 +784,8 @@ def _live_ci(repository: str, head_sha: str) -> dict[str, Any]:
             or run["conclusion"] not in {"success", "skipped"}
             for run in runs
         )
-        or statuses.get("state") != "success"
+        or statuses.get("state") not in {"success", "pending"}
+        or (statuses.get("state") == "pending" and contexts)
         or any(
             status["state"] != "success"
             or status["sha"] not in {None, head_sha}
