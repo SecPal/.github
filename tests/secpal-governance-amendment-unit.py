@@ -49,6 +49,29 @@ FULL_CANDIDATE_PATHS = [
 ]
 
 
+def feedback_response(
+    arguments: list[str], head: str, threads: list[dict[str, object]],
+    reviews: list[dict[str, object]], comments: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    query = next(item[6:] for item in arguments if item.startswith("query="))
+    page = {"hasNextPage": False, "endCursor": None}
+    pull: dict[str, object] = {"headRefOid": head}
+    value: dict[str, object] = {
+        "data": {"repository": {"pullRequest": pull}},
+    }
+    if "reviewThreads(first:" in query:
+        pull["reviewThreads"] = {"nodes": threads, "pageInfo": page}
+    elif "reviews(first:" in query:
+        pull["reviews"] = {"nodes": reviews, "pageInfo": page}
+    elif "comments(first:" in query and "node(id:$thread)" not in query:
+        pull["comments"] = {"nodes": comments or [], "pageInfo": page}
+    elif "node(id:$thread)" in query:
+        value["data"]["node"] = {"comments": {"nodes": [], "pageInfo": page}}
+    else:
+        raise AssertionError(query)
+    return value
+
+
 def signer(payload: bytes, domain: str) -> dict[str, str]:
     return {
         "format": "ssh", "signer_identity": SIGNER,
@@ -425,6 +448,7 @@ class GovernanceAmendmentTests(TestCase):
             statuses: list[dict[str, object]] = []
             threads: list[dict[str, object]] = []
             reviews = [{
+                "id": "R_fixture", "body": "",
                 "state": "COMMENTED", "commit": {"oid": head},
                 "author": {"login": "review-bot"},
             }]
@@ -434,11 +458,6 @@ class GovernanceAmendmentTests(TestCase):
                 "head": {"sha": head, "repo": {"full_name": "SecPal/.github"}},
                 "base": {"sha": base, "ref": "main", "repo": {"full_name": "SecPal/.github"}},
             }
-            feedback = {"data": {"repository": {"pullRequest": {
-                "reviewThreads": {"nodes": threads, "pageInfo": {"hasNextPage": False}},
-                "reviews": {"nodes": reviews, "pageInfo": {"hasNextPage": False}},
-            }}}}
-
             def github(arguments: list[str]):
                 joined = " ".join(arguments)
                 if "pulls/961" in joined:
@@ -453,7 +472,7 @@ class GovernanceAmendmentTests(TestCase):
                         "statuses": statuses,
                     }
                 elif "graphql" in arguments:
-                    value = feedback
+                    value = feedback_response(arguments, head, threads, reviews)
                 else:
                     raise AssertionError(arguments)
                 return subprocess.CompletedProcess(
@@ -717,6 +736,7 @@ class GovernanceAmendmentTests(TestCase):
             }
             threads: list[dict[str, object]] = []
             reviews = [{
+                "id": "R_fixture", "body": "",
                 "state": "COMMENTED", "commit": {"oid": repo["head"]},
                 "author": {"login": "review-bot"},
             }]
@@ -725,7 +745,7 @@ class GovernanceAmendmentTests(TestCase):
                     "head_sha": repo["head"], "pull_request": 961,
                 }),
                 "feedback_digest": authority.digest_json({
-                    "threads": threads, "reviews": reviews,
+                    "threads": threads, "comments": [], "reviews": reviews,
                 }),
                 "thread_inventory_digest": authority.digest_json({
                     "threads": threads,
@@ -759,11 +779,6 @@ class GovernanceAmendmentTests(TestCase):
                 "base": {"sha": repo["base"], "ref": "main", "repo": {"full_name": "SecPal/.github"}},
             }
             issue = {"number": 960, "state": "open"}
-            feedback = {"data": {"repository": {"pullRequest": {
-                "reviewThreads": {"nodes": threads, "pageInfo": {"hasNextPage": False}},
-                "reviews": {"nodes": reviews, "pageInfo": {"hasNextPage": False}},
-            }}}}
-
             def github(arguments: list[str]):
                 joined = " ".join(arguments)
                 if "pulls/961" in joined:
@@ -778,7 +793,9 @@ class GovernanceAmendmentTests(TestCase):
                         "statuses": statuses,
                     }
                 elif "graphql" in arguments:
-                    value = feedback
+                    value = feedback_response(
+                        arguments, repo["head"], threads, reviews
+                    )
                 else:
                     raise AssertionError(arguments)
                 return subprocess.CompletedProcess(
@@ -905,30 +922,61 @@ class GovernanceAmendmentTests(TestCase):
                 observe(value)
 
     def test_live_feedback_uses_valid_closed_query_and_fails_closed(self) -> None:
-        query = (
-            "query($owner:String!,$name:String!,$number:Int!){"
-            "repository(owner:$owner,name:$name){pullRequest(number:$number){"
-            "reviewThreads(first:100){nodes{id isResolved isOutdated comments(first:100)"
-            "{nodes{body path author{login}} pageInfo{hasNextPage}}} pageInfo{hasNextPage}}"
-            "reviews(first:100){nodes{state commit{oid} author{login}} pageInfo{hasNextPage}}"
-            "}}}"
-        )
-        response = {"data": {"repository": {"pullRequest": {
-            "reviewThreads": {
-                "nodes": [], "pageInfo": {"hasNextPage": False},
-            },
-            "reviews": {
-                "nodes": [], "pageInfo": {"hasNextPage": False},
-            },
-        }}}}
-
-        def observe(value: dict[str, object]) -> dict[str, object]:
+        def observe(
+            *, live_head: str = HEAD, comment_body: str = "",
+            review_body: str = "", incomplete: bool = False,
+        ) -> dict[str, object]:
             def github(arguments: list[str]):
-                self.assertEqual(arguments, [
-                    "api", "--hostname", "github.com", "graphql",
-                    "-f", f"query={query}", "-f", "owner=SecPal",
-                    "-f", "name=.github", "-F", "number=961",
-                ])
+                query = next(
+                    item[6:] for item in arguments if item.startswith("query=")
+                )
+                self.assertEqual(query.count("{"), query.count("}"))
+                self.assertIn("headRefOid", query)
+                cursor = next(
+                    (item[7:] for item in arguments if item.startswith("cursor=")),
+                    None,
+                )
+                page = {"hasNextPage": False, "endCursor": None}
+                pull: dict[str, object] = {"headRefOid": live_head}
+                value: dict[str, object] = {
+                    "data": {"repository": {"pullRequest": pull}},
+                }
+                if "reviewThreads(first:" in query:
+                    if incomplete:
+                        page = {"hasNextPage": True, "endCursor": None}
+                    elif cursor is None:
+                        page = {"hasNextPage": True, "endCursor": "threads-2"}
+                    pull["reviewThreads"] = {
+                        "nodes": [{
+                            "id": "T1", "isResolved": True,
+                            "isOutdated": False,
+                        }],
+                        "pageInfo": page,
+                    }
+                elif "node(id:$thread)" in query:
+                    self.assertIn("thread=T1", arguments)
+                    value["data"]["node"] = {
+                        "comments": {"nodes": [], "pageInfo": page},
+                    }
+                elif "reviews(first:" in query:
+                    pull["reviews"] = {
+                        "nodes": [{
+                            "id": "R1", "state": "COMMENTED",
+                            "body": review_body, "commit": {"oid": HEAD},
+                            "author": {"login": "review-bot"},
+                        }],
+                        "pageInfo": page,
+                    }
+                elif "comments(first:" in query:
+                    pull["comments"] = {
+                        "nodes": [{
+                            "id": "C1", "body": comment_body,
+                            "author": {"login": "review-bot"},
+                        }],
+                        "pageInfo": page,
+                    }
+                else:
+                    raise AssertionError(query)
                 return subprocess.CompletedProcess(
                     arguments, 0, json.dumps(value).encode(), b"",
                 )
@@ -938,17 +986,55 @@ class GovernanceAmendmentTests(TestCase):
             ):
                 return amendment._live_feedback("SecPal/.github", 961, HEAD)
 
-        observed = observe(response)
+        observed = observe()
         self.assertEqual(observed["material_finding_ids"], [])
-        incomplete = copy.deepcopy(response)
-        incomplete["data"]["repository"]["pullRequest"]["reviewThreads"][
-            "pageInfo"
-        ]["hasNextPage"] = True
+        self.assertEqual(observed, observe())
+        self.assertEqual(
+            observe(comment_body="blocking")["material_finding_ids"],
+            ["comment:C1"],
+        )
+        self.assertEqual(
+            observe(review_body="blocking")["material_finding_ids"],
+            ["review:R1"],
+        )
         with self.assertRaisesRegex(
             amendment.GovernanceAmendmentError,
-            "live governance amendment feedback is incomplete",
+            "live governance amendment feedback head changed",
         ):
-            observe(incomplete)
+            observe(live_head="9" * 40)
+        with self.assertRaisesRegex(
+            amendment.GovernanceAmendmentError,
+            "live governance amendment feedback pagination is incomplete",
+        ):
+            observe(incomplete=True)
+
+    def test_signed_delivery_scope_cannot_change_without_new_root_signature(self) -> None:
+        value = authorization()
+        for field, replacement in (("delivery_issue", 962), ("pull_request", 962)):
+            changed = copy.deepcopy(value)
+            changed[field] = replacement
+            changed["authorization_id"] = (
+                "governance-amendment:SecPal/.github:"
+                f"{changed['delivery_issue']}:{changed['pull_request']}"
+            )
+            unsigned = {
+                key: copy.deepcopy(item) for key, item in changed.items()
+                if key not in {"authorization_digest", "signature"}
+            }
+            changed["signature"] = signer(
+                authority.canonical_json_bytes(unsigned), amendment.DOMAIN
+            )
+            signed = {
+                key: copy.deepcopy(item) for key, item in changed.items()
+                if key != "authorization_digest"
+            }
+            changed["authorization_digest"] = authority.digest_json(signed)
+            first, second = self.patches()
+            with self.subTest(field=field), first, second, self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError,
+                "root authorization scope changed",
+            ):
+                amendment.verify(changed)
 
     def test_executor_reauthenticates_all_facts_before_any_git_mutation(self) -> None:
         value = authorization()

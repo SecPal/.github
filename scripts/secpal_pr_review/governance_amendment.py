@@ -839,55 +839,173 @@ def _live_ci(repository: str, head_sha: str) -> dict[str, Any]:
     }
 
 
-def _live_feedback(repository: str, pull_request: int, head_sha: str) -> dict[str, Any]:
+def _feedback_page(
+    repository: str, pull_request: int, head_sha: str, query: str,
+    *, cursor: str | None = None, thread_id: str | None = None,
+) -> dict[str, Any]:
     owner, name = repository.split("/", 1)
-    query = (
-        "query($owner:String!,$name:String!,$number:Int!){"
-        "repository(owner:$owner,name:$name){pullRequest(number:$number){"
-        "reviewThreads(first:100){nodes{id isResolved isOutdated comments(first:100)"
-        "{nodes{body path author{login}} pageInfo{hasNextPage}}} pageInfo{hasNextPage}}"
-        "reviews(first:100){nodes{state commit{oid} author{login}} pageInfo{hasNextPage}}"
-        "}}}"
-    )
-    value = _github_json(
-        [
-            "api", "--hostname", "github.com", "graphql",
-            "-f", f"query={query}", "-f", f"owner={owner}",
-            "-f", f"name={name}", "-F", f"number={pull_request}",
-        ],
-        "governance amendment feedback",
-    )
+    arguments = [
+        "api", "--hostname", "github.com", "graphql",
+        "-f", f"query={query}", "-f", f"owner={owner}",
+        "-f", f"name={name}", "-F", f"number={pull_request}",
+    ]
+    if cursor is not None:
+        arguments.extend(("-f", f"cursor={cursor}"))
+    if thread_id is not None:
+        arguments.extend(("-f", f"thread={thread_id}"))
+    value = _github_json(arguments, "governance amendment feedback")
     try:
-        observed = value["data"]["repository"]["pullRequest"]
-        threads = observed["reviewThreads"]
-        reviews = observed["reviews"]
-        if (
-            value.get("errors") or threads["pageInfo"]["hasNextPage"]
-            or reviews["pageInfo"]["hasNextPage"]
-            or any(
-                item["comments"]["pageInfo"]["hasNextPage"]
-                for item in threads["nodes"]
+        pull = value["data"]["repository"]["pullRequest"]
+        if value.get("errors") or pull["headRefOid"] != head_sha:
+            raise GovernanceAmendmentError(
+                "live governance amendment feedback head changed"
             )
+        return value
+    except (KeyError, TypeError) as exc:
+        raise GovernanceAmendmentError(
+            "live governance amendment feedback is malformed"
+        ) from exc
+
+
+def _feedback_connection(
+    repository: str, pull_request: int, head_sha: str, query: str,
+    select: Any, *, thread_id: str | None = None,
+) -> list[dict[str, Any]]:
+    cursor = None
+    seen_cursors: set[str] = set()
+    nodes: list[dict[str, Any]] = []
+    for _ in range(100):
+        value = _feedback_page(
+            repository, pull_request, head_sha, query,
+            cursor=cursor, thread_id=thread_id,
+        )
+        try:
+            connection = select(value)
+            page = connection["pageInfo"]
+            batch = connection["nodes"]
+            has_next = page["hasNextPage"]
+            end_cursor = page["endCursor"]
+            if (
+                not isinstance(batch, list)
+                or not isinstance(has_next, bool)
+                or (end_cursor is not None and not isinstance(end_cursor, str))
+            ):
+                raise TypeError
+        except (KeyError, TypeError) as exc:
+            raise GovernanceAmendmentError(
+                "live governance amendment feedback is malformed"
+            ) from exc
+        nodes.extend(batch)
+        if not has_next:
+            return nodes
+        if not end_cursor or end_cursor in seen_cursors:
+            raise GovernanceAmendmentError(
+                "live governance amendment feedback pagination is incomplete"
+            )
+        seen_cursors.add(end_cursor)
+        cursor = end_cursor
+    raise GovernanceAmendmentError(
+        "live governance amendment feedback pagination is incomplete"
+    )
+
+
+def _deduplicate_feedback_nodes(
+    nodes: list[dict[str, Any]], label: str,
+) -> list[dict[str, Any]]:
+    unique: dict[str, dict[str, Any]] = {}
+    for node in nodes:
+        if not isinstance(node, dict) or not isinstance(node.get("id"), str):
+            raise GovernanceAmendmentError(
+                f"live governance amendment {label} is malformed"
+            )
+        identifier = node["id"]
+        if not identifier or (identifier in unique and unique[identifier] != node):
+            raise GovernanceAmendmentError(
+                f"live governance amendment {label} is ambiguous"
+            )
+        unique[identifier] = copy.deepcopy(node)
+    return [unique[identifier] for identifier in sorted(unique)]
+
+
+def _live_feedback(repository: str, pull_request: int, head_sha: str) -> dict[str, Any]:
+    threads_query = (
+        "query($owner:String!,$name:String!,$number:Int!,$cursor:String){"
+        "repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid "
+        "reviewThreads(first:100,after:$cursor){nodes{id isResolved isOutdated}"
+        "pageInfo{hasNextPage endCursor}}}}}"
+    )
+    comments_query = (
+        "query($owner:String!,$name:String!,$number:Int!,$cursor:String){"
+        "repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid "
+        "comments(first:100,after:$cursor){nodes{id body author{login}}"
+        "pageInfo{hasNextPage endCursor}}}}}"
+    )
+    reviews_query = (
+        "query($owner:String!,$name:String!,$number:Int!,$cursor:String){"
+        "repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid "
+        "reviews(first:100,after:$cursor){nodes{id state body commit{oid} author{login}}"
+        "pageInfo{hasNextPage endCursor}}}}}"
+    )
+    thread_comments_query = (
+        "query($owner:String!,$name:String!,$number:Int!,$thread:ID!,$cursor:String){"
+        "repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid}}"
+        "node(id:$thread){... on PullRequestReviewThread{comments(first:100,after:$cursor)"
+        "{nodes{id body path author{login}} pageInfo{hasNextPage endCursor}}}}}"
+    )
+    raw_threads = _feedback_connection(
+        repository, pull_request, head_sha, threads_query,
+        lambda value: value["data"]["repository"]["pullRequest"]["reviewThreads"],
+    )
+    thread_nodes = _deduplicate_feedback_nodes(raw_threads, "threads")
+    for thread in thread_nodes:
+        if not isinstance(thread.get("isResolved"), bool) or not isinstance(
+            thread.get("isOutdated"), bool
         ):
             raise GovernanceAmendmentError(
-                "live governance amendment feedback is incomplete"
+                "live governance amendment threads are malformed"
             )
-        thread_nodes = sorted(threads["nodes"], key=lambda item: item["id"])
-        review_nodes = sorted(
-            reviews["nodes"],
-            key=lambda item: (
-                (item.get("author") or {}).get("login") or "",
-                item["state"], (item.get("commit") or {}).get("oid") or "",
-            ),
+        comments = _feedback_connection(
+            repository, pull_request, head_sha, thread_comments_query,
+            lambda value: value["data"]["node"]["comments"],
+            thread_id=thread["id"],
         )
+        thread["comments"] = _deduplicate_feedback_nodes(
+            comments, "thread comments"
+        )
+    comment_nodes = _deduplicate_feedback_nodes(
+        _feedback_connection(
+            repository, pull_request, head_sha, comments_query,
+            lambda value: value["data"]["repository"]["pullRequest"]["comments"],
+        ),
+        "top-level comments",
+    )
+    review_nodes = _deduplicate_feedback_nodes(
+        _feedback_connection(
+            repository, pull_request, head_sha, reviews_query,
+            lambda value: value["data"]["repository"]["pullRequest"]["reviews"],
+        ),
+        "reviews",
+    )
+    try:
+        if any(not isinstance(item["body"], str) for item in comment_nodes):
+            raise TypeError
+        if any(
+            not isinstance(item["body"], str)
+            or not isinstance(item["state"], str)
+            for item in review_nodes
+        ):
+            raise TypeError
     except (KeyError, TypeError) as exc:
         raise GovernanceAmendmentError(
             "live governance amendment feedback is malformed"
         ) from exc
     material = [item["id"] for item in thread_nodes if not item["isResolved"]]
     material.extend(
-        "review:" + authority.digest_json(item)
-        for item in review_nodes if item["state"] == "CHANGES_REQUESTED"
+        f"comment:{item['id']}" for item in comment_nodes if item["body"].strip()
+    )
+    material.extend(
+        f"review:{item['id']}" for item in review_nodes
+        if item["state"] == "CHANGES_REQUESTED" or item["body"].strip()
     )
     inventory = {"threads": thread_nodes}
     return {
@@ -895,7 +1013,7 @@ def _live_feedback(repository: str, pull_request: int, head_sha: str) -> dict[st
             "head_sha": head_sha, "pull_request": pull_request,
         }),
         "feedback_digest": authority.digest_json({
-            **inventory, "reviews": review_nodes,
+            **inventory, "comments": comment_nodes, "reviews": review_nodes,
         }),
         "thread_inventory_digest": authority.digest_json(inventory),
         "material_finding_ids": material,
