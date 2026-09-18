@@ -631,6 +631,39 @@
           "purpose": "Run documented contract lint and formatting validation"
         }
       ],
+      "lifecycle_authority_policy": {
+        "schema_version": "1.0",
+        "accepted_formats": ["ssh", "openpgp"],
+        "signers": [
+          {
+            "identity": "aroviqen@secpal.app",
+            "ssh_public_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDDKiPWdlHKFaHJL+GQ3EQRs9St95lITw217D17rZ2qB"
+            ],
+            "openpgp_fingerprints": []
+          },
+          {
+            "identity": "lifecycle-legacy-adoption@secpal.app",
+            "ssh_public_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH2v+HkwUVduXOuLQONPPHAfEUT+NmEVMtp7JZMrnzrn"
+            ],
+            "openpgp_fingerprints": []
+          }
+        ],
+        "transition_signer_identities": ["aroviqen@secpal.app"],
+        "authority_signer_identities": ["aroviqen@secpal.app"],
+        "publication_signer_identities": ["aroviqen@secpal.app"],
+        "genesis_admission_signer_identities": ["aroviqen@secpal.app"],
+        "legacy_adoption_signer_identities": ["lifecycle-legacy-adoption@secpal.app"],
+        "publication_branch": "refs/heads/secpal-lifecycle-publications",
+        "publication_remote_url": "https://github.com/SecPal/contracts.git",
+        "publication_ruleset_id": 23668089,
+        "publication_required_rules": ["deletion", "non_fast_forward"],
+        "bootstrap_genesis_repairs": [],
+        "bootstrap_source_admissions": [],
+        "historical_compatibility_publications": [],
+        "delivery_initializations": []
+      },
       "signature_policy": {
         "require_github_verified": true,
         "require_local_verified": true,

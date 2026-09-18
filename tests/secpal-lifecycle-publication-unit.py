@@ -37,6 +37,7 @@ def load_actions() -> Any:
     return module
 
 REPOSITORY = "SecPal/.github"
+CONTRACTS_REPOSITORY = "SecPal/contracts"
 ISSUE = 752
 PR = 753
 SIGNER = "aroviqen@secpal.app"
@@ -99,10 +100,17 @@ def verify_signature(payload: bytes, signature: dict[str, Any], expected_signer:
 
 
 class Chain:
-    def __init__(self, issue: int = ISSUE) -> None:
+    def __init__(
+        self,
+        issue: int = ISSUE,
+        *,
+        repository: str = REPOSITORY,
+        pull_request: int = PR,
+    ) -> None:
         self.issue = issue
+        self.repository = repository
         self.initialization = authority.create_delivery_initialization(
-            repository=REPOSITORY, delivery_issue=issue, pull_request=PR,
+            repository=repository, delivery_issue=issue, pull_request=pull_request,
             initial_head_sha=HEADS[0], validation_receipt_digest="1" * 64,
             final_attestation_digest="2" * 64, signer_identity=SIGNER,
             signer=signer_for(),
@@ -112,7 +120,7 @@ class Chain:
         )
         self.authorities: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
-        self.pull_request = PR
+        self.pull_request = pull_request
         self.head = HEADS[0]
         self.checkpoint: dict[str, Any] | None = None
 
@@ -122,7 +130,7 @@ class Chain:
         event = authority.create_transition_authorization(
             event_id=(f"genesis:{self.initialization['initialization_digest']}"
                       if not self.events else f"event-{len(self.events) + 1}"),
-            repository=REPOSITORY, delivery_issue=self.issue,
+            repository=self.repository, delivery_issue=self.issue,
             lifecycle_id=self.lifecycle_id, pull_request=self.pull_request,
             predecessor_authority_digest=(None if not self.authorities
                                           else self.authorities[-1]["authority_digest"]),
@@ -3244,6 +3252,207 @@ class LifecyclePublicationTests(TestCase):
     def test_zero_enrollment_remains_valid_but_required_publication_fails(self) -> None:
         with self.assertRaisesRegex(publication.LifecyclePublicationError, "unavailable"):
             publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE)
+
+
+class ContractsLifecyclePolicyTests(TestCase):
+    """Compose the accepted contracts policy through the generic lifecycle."""
+
+    SYNTHETIC_ISSUE = 900001
+    SYNTHETIC_PR = 900002
+
+    def setUp(self) -> None:
+        registry_path = (
+            Path(__file__).resolve().parents[1]
+            / ".agents/skills/secpal-pr-review/references/repositories.json"
+        )
+        self.registry = registry_path.read_bytes()
+        self.accepted_policy = authority._parse_lifecycle_trust_policy(
+            self.registry, CONTRACTS_REPOSITORY
+        )
+        self.directory = tempfile.TemporaryDirectory(
+            prefix="contracts-lifecycle-publication-"
+        )
+        base = Path(self.directory.name)
+        self.remote = base / "publication.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(self.remote)], check=True)
+        subprocess.run(
+            [
+                "git", "--git-dir", str(self.remote), "config",
+                "receive.denyNonFastForwards", "true",
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git", "--git-dir", str(self.remote), "config",
+                "receive.denyDeletes", "true",
+            ],
+            check=True,
+        )
+        self.policy = replace(
+            self.accepted_policy, publication_remote_url=str(self.remote)
+        )
+        self.policy_patch = patch.object(
+            authority, "_load_lifecycle_trust_policy", return_value=self.policy
+        )
+        self.verifier_patch = patch.object(
+            authority, "_policy_signature_verifier", return_value=verify_signature
+        )
+        self.protection_patch = patch.object(
+            publication,
+            "_verify_live_protection",
+            return_value=self.policy.publication_ruleset_id,
+        )
+        self.policy_patch.start()
+        self.verifier_patch.start()
+        self.protection_patch.start()
+
+    def tearDown(self) -> None:
+        self.protection_patch.stop()
+        self.verifier_patch.stop()
+        self.policy_patch.stop()
+        self.directory.cleanup()
+
+    def chain(self) -> Chain:
+        return Chain(
+            self.SYNTHETIC_ISSUE,
+            repository=CONTRACTS_REPOSITORY,
+            pull_request=self.SYNTHETIC_PR,
+        )
+
+    def test_contracts_policy_composes_first_publication_current_and_ready(self) -> None:
+        absence = publication.verify_pre_enrollment_absence(
+            CONTRACTS_REPOSITORY, self.SYNTHETIC_ISSUE
+        )
+        publication.require_unenrolled_delivery(
+            CONTRACTS_REPOSITORY, self.SYNTHETIC_ISSUE
+        )
+        self.assertEqual(absence.repository, CONTRACTS_REPOSITORY)
+        self.assertIsNone(absence.observed_tip_oid)
+
+        chain = self.chain()
+        chain.append("INITIALIZED_DRAFT")
+        admission = publication.admit_native_genesis(
+            chain.raw(), signer_identity=SIGNER, signer=signer_for()
+        )
+        enrolled = publication.enroll_existing_lifecycle(
+            chain.raw(), signer_identity=SIGNER, signer=signer_for()
+        )
+        current = publication.verify_current_lifecycle_authority(
+            CONTRACTS_REPOSITORY, self.SYNTHETIC_ISSUE
+        )
+        self.assertEqual(admission.repository, CONTRACTS_REPOSITORY)
+        self.assertEqual(enrolled.journal_predecessor_oid, admission.admission_oid)
+        self.assertEqual(current.publication_oid, enrolled.publication_oid)
+        self.assertTrue(current.lifecycle.state["draft"])
+        self.assertFalse(current.lifecycle.state["ready"])
+
+        predecessor = enrolled
+        for transition, head in (
+            ("UNRESTRICTED_REVIEW_CONSUMED", None),
+            ("REMEDIATION_COMPLETED", HEADS[1]),
+            ("REMEDIATION_COMPLETED", HEADS[2]),
+            ("DRAFT_TO_READY", None),
+        ):
+            chain.append(transition, head=head)
+            ready = publication.advance_current_terminal(
+                chain.raw(), signer_identity=SIGNER, signer=signer_for()
+            )
+            self.assertEqual(
+                ready.predecessor_publication_oid, predecessor.publication_oid
+            )
+            predecessor = ready
+        current = publication.verify_current_lifecycle_authority(
+            CONTRACTS_REPOSITORY, self.SYNTHETIC_ISSUE
+        )
+        self.assertEqual(current.publication_oid, ready.publication_oid)
+        self.assertFalse(current.lifecycle.state["draft"])
+        self.assertTrue(current.lifecycle.state["ready"])
+        self.assertEqual(current.lifecycle.state["ready_transition_count"], 1)
+        self.assertTrue(current.lifecycle.state["cycle_3_absent"])
+
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError,
+            "already has native genesis or CURRENT",
+        ):
+            publication.verify_pre_enrollment_absence(
+                CONTRACTS_REPOSITORY, self.SYNTHETIC_ISSUE
+            )
+
+    def test_contracts_policy_rejects_duplicate_genesis_and_wrong_signer(self) -> None:
+        chain = self.chain()
+        chain.append("INITIALIZED_DRAFT")
+        with self.assertRaises(
+            (publication.LifecyclePublicationError, authority.LifecycleAuthorityError)
+        ):
+            publication.admit_native_genesis(
+                chain.raw(),
+                signer_identity=OTHER_SIGNER,
+                signer=signer_for(OTHER_SIGNER),
+            )
+        publication.admit_native_genesis(
+            chain.raw(), signer_identity=SIGNER, signer=signer_for()
+        )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError,
+            "already admitted or enrolled",
+        ):
+            publication.admit_native_genesis(
+                chain.raw(), signer_identity=SIGNER, signer=signer_for()
+            )
+
+        competing = Chain(
+            self.SYNTHETIC_ISSUE,
+            repository=CONTRACTS_REPOSITORY,
+            pull_request=self.SYNTHETIC_PR + 1,
+        )
+        competing.append("INITIALIZED_DRAFT")
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError,
+            "already admitted or enrolled",
+        ):
+            publication.admit_native_genesis(
+                competing.raw(), signer_identity=SIGNER, signer=signer_for()
+            )
+
+    def test_contracts_policy_rejects_repository_and_remote_substitution(self) -> None:
+        for substituted_remote in (
+            "https://github.com/SecPal/.github.git",
+            "https://github.com/SecPal/deployment.git",
+        ):
+            with self.subTest(remote=substituted_remote):
+                registry = json.loads(self.registry)
+                contracts = next(
+                    item
+                    for item in registry["repositories"]
+                    if item["repository"] == CONTRACTS_REPOSITORY
+                )
+                contracts["lifecycle_authority_policy"][
+                    "publication_remote_url"
+                ] = substituted_remote
+                with self.assertRaisesRegex(
+                    authority.LifecycleAuthorityError,
+                    "publication remote does not match repository",
+                ):
+                    authority._parse_lifecycle_trust_policy(
+                        authority.canonical_json_bytes(registry),
+                        CONTRACTS_REPOSITORY,
+                    )
+
+        registry = json.loads(self.registry)
+        contracts = next(
+            item
+            for item in registry["repositories"]
+            if item["repository"] == CONTRACTS_REPOSITORY
+        )
+        contracts["repository"] = "SecPal/other"
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError,
+            "no unique maintained trust policy",
+        ):
+            authority._parse_lifecycle_trust_policy(
+                authority.canonical_json_bytes(registry), CONTRACTS_REPOSITORY
+            )
 
 
 if __name__ == "__main__":
