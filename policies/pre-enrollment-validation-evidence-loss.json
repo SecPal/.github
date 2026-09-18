@@ -280,6 +280,109 @@
       ],
       "historical_provider_summary_digest": "e6ef8dabaa85e0ddd39887647eec58a89d5572bb5b69fc28411d79f0247e670d",
       "current_safety_harness_path": "tests/pre-enrollment-registered-repository-current-safety.py"
+    },
+    {
+      "admission_schema_version": "1.3",
+      "repository": "SecPal/.github",
+      "delivery_issue": 948,
+      "pull_request": 953,
+      "head_sha": "fbe21a7889f0083275d1556846db5b79724aad5e",
+      "tree_sha": "8355355fa83f053db049e79998ec8aa93cf9758a",
+      "parent_sha": "97ec1ce4c4ddb68706dd1fe55707261ecdd1f79a",
+      "source_signer_identity": "aroviqen@secpal.app",
+      "historical_validation_receipt_digest": "e689d85694e2cd3bc75e7384da811984f867bd550290da2ebfa158e70cbe3928",
+      "historical_package_status": "UNAVAILABLE",
+      "historical_final_attestation_digest": null,
+      "historical_bytes_reconstructed": false,
+      "observed_pre_enrollment_history": [
+        {
+          "sequence": 1,
+          "kind": "PR_CREATED_DRAFT",
+          "observed_at": "2026-09-16T19:12:53Z",
+          "head_sha": "97ec1ce4c4ddb68706dd1fe55707261ecdd1f79a",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 2,
+          "kind": "DRAFT_TO_READY_OBSERVED",
+          "observed_at": "2026-09-16T19:17:21Z",
+          "head_sha": "97ec1ce4c4ddb68706dd1fe55707261ecdd1f79a",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 3,
+          "kind": "REMEDIATION_HEAD_OBSERVED",
+          "observed_at": "2026-09-16T19:36:37Z",
+          "head_sha": "fbe21a7889f0083275d1556846db5b79724aad5e",
+          "reviewed_head_sha": null
+        }
+      ],
+      "intended_state": {
+        "unrestricted_review_count": 1,
+        "remediation_cycle_count": 1,
+        "cycle_3_absent": true,
+        "draft": false,
+        "ready": true,
+        "ready_transition_count": 1,
+        "ready_history": [
+          {
+            "sequence": 1,
+            "transition_kind": "DRAFT_TO_READY",
+            "observation_digest": "4fbd0b466b876e3f76b10026385480702c47cffae3c150077918ad705fcece53"
+          }
+        ],
+        "exceptional_recovery_count": 0,
+        "exceptional_recovery_history": [],
+        "exceptional_continuation_count": 0,
+        "exceptional_continuation_history": []
+      },
+      "feedback_digest": "0111c6795ce12c8c5dca0eeb38c24aadf41843b3941884f4ff6bd1d1bf875df2",
+      "technical_decisions": [
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDOQFR1MM8AAAABU--NwA",
+          "source_digest": "92c541b3bc02521624f9576ea3f501b291046646e1547e900b38bf99875f8210",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "37aa493d187d708a4480ef68b130d76377135563277e139f2f2952d8a6f2c182"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDOQFR1MM8AAAABN5K8bg",
+          "source_digest": "16cd0d2f85dcac2d097a0dc0cdf664348a65d081e75db7e2047cda7c13f2f737",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "7d338559c6bf47ec75f1a22421d29c14119d89c262ccae7c4ca88fca0d5b1dfc"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDOQFR1MM8AAAABN5KbNw",
+          "source_digest": "768e991216f1772279da9e41a610123db06db8968139c9431f3ca45ab8c78588",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "91a3663385fb9b049bd19ed6d3ea660f6945687739346568422f43ead3b4a2dc"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wM6qV",
+          "source_digest": "2ea700647dfcc9e94556344353f3b44529be4bb7c28d945d3b1fac971f53539d",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "2a7dba28aeae6ddc710cd501f62445bc99dad08c667dbf56766f642f693a5aa8"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wM6qg",
+          "source_digest": "0fa7bacf6e2ee0cb67ece656a1ed1d5ad373a451cde32a4edf488824fca0b7d1",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "92f9faceb085a2754f5fa75c3bf75400ce392ec5d194a7357ce4b5baf81028aa"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wM6ql",
+          "source_digest": "23dcafba0d0eaf8eb5131a7653e34582ea21a0b0e4e4ea4a256e480b9fe95e1e",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "6ca22a52280047f3b5822444691573a53c90bc71d2947ee0b779409b82fdd89f"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wM8od",
+          "source_digest": "c6b1eb08821efc67d04cbc1eeee82c0e2e8725af8e873a6bf0961b174bf94061",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "d51fbedf24f27785c4ef628c440b8169ca0dbc490d871750ff2673afa463ad45"
+        }
+      ],
+      "historical_provider_summary_digest": "92c541b3bc02521624f9576ea3f501b291046646e1547e900b38bf99875f8210",
+      "current_safety_harness_path": "tests/pre-enrollment-github-948-current-safety.py"
     }
   ]
 }
