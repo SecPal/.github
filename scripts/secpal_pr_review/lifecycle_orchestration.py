@@ -282,6 +282,281 @@ class VerifiedContinuationFindingAuthority:
     predecessor_provider_growth_digest: str | None = None
 
 
+_ORDINARY_READY_REMEDIATION_FINDING_AUTHORITY_SEAL = object()
+
+
+@dataclass(frozen=True)
+class VerifiedOrdinaryReadyRemediationFindingAuthority:
+    """Provider-growth findings bound to the remaining ordinary Ready slot."""
+
+    repository: str
+    delivery_issue: int
+    pull_request: int
+    lifecycle_id: str
+    current_publication_oid: str
+    current_publication_digest: str
+    current_authority_digest: str
+    provider_head_sha: str
+    current_head_sha: str
+    resulting_head_sha: str
+    predecessor_state_digest: str
+    resulting_state_digest: str
+    provider_growth_digest: str
+    predecessor_eligibility_evidence_digest: str
+    eligibility_evidence_digest: str
+    finding_ids: tuple[str, ...]
+    thread_ids: tuple[str, ...]
+    finding_authority_digest: str
+    _verification_seal: object
+
+
+def _ordinary_ready_remediation_finding_authority_projection(
+    value: VerifiedOrdinaryReadyRemediationFindingAuthority,
+) -> dict[str, Any]:
+    return {
+        "domain": "secpal.ordinary-ready-remediation-finding-authority/v1",
+        "repository": value.repository,
+        "delivery_issue": value.delivery_issue,
+        "pull_request": value.pull_request,
+        "lifecycle_id": value.lifecycle_id,
+        "current_publication_oid": value.current_publication_oid,
+        "current_publication_digest": value.current_publication_digest,
+        "current_authority_digest": value.current_authority_digest,
+        "provider_head_sha": value.provider_head_sha,
+        "current_head_sha": value.current_head_sha,
+        "resulting_head_sha": value.resulting_head_sha,
+        "predecessor_state_digest": value.predecessor_state_digest,
+        "resulting_state_digest": value.resulting_state_digest,
+        "provider_growth_digest": value.provider_growth_digest,
+        "predecessor_eligibility_evidence_digest": (
+            value.predecessor_eligibility_evidence_digest
+        ),
+        "eligibility_evidence_digest": value.eligibility_evidence_digest,
+        "finding_ids": list(value.finding_ids),
+        "thread_ids": list(value.thread_ids),
+    }
+
+
+def verify_ready_remediation_provider_growth_authority(
+    current: publication.VerifiedLifecyclePublication,
+    *,
+    predecessor_validation: fast_path.VerifiedValidationEvidence,
+    candidate_validation: fast_path.VerifiedValidationEvidence,
+    predecessor_eligibility_evidence: Any,
+    eligibility_evidence: Any,
+) -> VerifiedOrdinaryReadyRemediationFindingAuthority:
+    """Compose existing CURRENT, validation, feedback, and eligibility authority."""
+
+    if not isinstance(current, publication.VerifiedLifecyclePublication):
+        raise LifecycleOrchestrationError(
+            "ordinary Ready provider growth requires authenticated CURRENT"
+        )
+    lifecycle = current.lifecycle
+    try:
+        state = authority._validate_state(copy.deepcopy(lifecycle.state))
+        reviewed, predecessor_eligibility = (
+            fast_path.verified_validation_review_context(predecessor_validation)
+        )
+        resulting, candidate_eligibility = (
+            fast_path.verified_validation_review_context(candidate_validation)
+        )
+        eligibility = fast_path.normalize_resolution_eligibility_evidence(
+            eligibility_evidence,
+            repository=lifecycle.repository,
+            reviewed_state=resulting,
+        )
+        predecessor_eligibility_document = (
+            fast_path.normalize_resolution_eligibility_evidence(
+                predecessor_eligibility_evidence,
+                repository=lifecycle.repository,
+                reviewed_state=reviewed,
+            )
+        )
+        provider = publication.derive_ready_source_recovery_provider_binding(
+            current
+        )
+        live_resulting = _capture_current_stable_feedback(
+            lifecycle.repository,
+            lifecycle.pull_request,
+            ready_remediation_provider_binding=provider,
+        )
+    except (
+        authority.LifecycleAuthorityError,
+        fast_path.SecurityBlocker,
+        publication.LifecyclePublicationError,
+    ) as exc:
+        raise LifecycleOrchestrationError(
+            "ordinary Ready provider growth source authority is invalid"
+        ) from exc
+
+    if (
+        state["unrestricted_review_count"] != authority.MAX_UNRESTRICTED_REVIEWS
+        or state["remediation_cycle_count"] != 1
+        or state["remediation_cycle_count"] >= authority.MAX_REMEDIATION_CYCLES
+        or state["cycle_3_absent"] is not True
+        or state["draft"] is not False
+        or state["ready"] is not True
+        or state["ready_transition_count"] != 1
+        or state["exceptional_recovery_count"] != 0
+        or state["exceptional_continuation_count"] != 0
+        or predecessor_eligibility is None
+        or predecessor_validation.repository != lifecycle.repository
+        or predecessor_validation.delivery_issue_number != lifecycle.delivery_issue
+        or predecessor_validation.pull_request_number != lifecycle.pull_request
+        or predecessor_validation.head_sha != lifecycle.head_sha
+        or predecessor_validation.tree_sha != lifecycle.tree_sha
+        or predecessor_validation.validation_receipt_digest
+        != lifecycle.validation_receipt_digest
+        or predecessor_validation.final_attestation_digest
+        != lifecycle.adoption_source_evidence_digest
+        or candidate_validation.repository != lifecycle.repository
+        or candidate_validation.delivery_issue_number != lifecycle.delivery_issue
+        or candidate_validation.pull_request_number != lifecycle.pull_request
+        or candidate_validation.head_sha == lifecycle.head_sha
+        or resulting.repository != lifecycle.repository
+        or resulting.pull_request_number != lifecycle.pull_request
+        or resulting.head_sha != lifecycle.head_sha
+        or live_resulting.to_dict() != resulting.to_dict()
+        or reviewed.repository != lifecycle.repository
+        or reviewed.pull_request_number != lifecycle.pull_request
+        or provider.repository != lifecycle.repository
+        or provider.delivery_issue != lifecycle.delivery_issue
+        or provider.pull_request != lifecycle.pull_request
+        or provider.lifecycle_id != lifecycle.lifecycle_id
+        or provider.current_head_sha != lifecycle.head_sha
+        or provider.current_authority_digest != lifecycle.authority_digest
+        or provider.current_publication_oid != current.publication_oid
+        or provider.current_publication_digest != current.publication_digest
+        or publication.ORDINARY_REMEDIATION_SUFFIX
+        not in provider.provider_binding_sources
+        or len(provider.remediation_event_digests) != 1
+        or reviewed.head_sha != provider.provider_head_sha
+        or predecessor_eligibility
+        != fast_path.digest_json(predecessor_eligibility_document)
+        or candidate_eligibility != fast_path.digest_json(eligibility)
+    ):
+        raise LifecycleOrchestrationError(
+            "ordinary Ready provider growth differs from the remaining remediation slot"
+        )
+
+    try:
+        growth = fast_path.verify_ordinary_ready_remediation_provider_growth(
+            reviewed,
+            resulting,
+            provider_head_sha=provider.provider_head_sha,
+            predecessor_eligibility_evidence=predecessor_eligibility_document,
+            eligibility_evidence=eligibility,
+        )
+    except fast_path.SecurityBlocker as exc:
+        raise LifecycleOrchestrationError(
+            "ordinary Ready provider growth is incomplete or unauthenticated"
+        ) from exc
+    fields = {
+        "repository": lifecycle.repository,
+        "delivery_issue": lifecycle.delivery_issue,
+        "pull_request": lifecycle.pull_request,
+        "lifecycle_id": lifecycle.lifecycle_id,
+        "current_publication_oid": current.publication_oid,
+        "current_publication_digest": current.publication_digest,
+        "current_authority_digest": lifecycle.authority_digest,
+        "provider_head_sha": provider.provider_head_sha,
+        "current_head_sha": lifecycle.head_sha,
+        "resulting_head_sha": candidate_validation.head_sha,
+        "predecessor_state_digest": growth.predecessor_state_digest,
+        "resulting_state_digest": growth.resulting_state_digest,
+        "provider_growth_digest": growth.growth_digest,
+        "predecessor_eligibility_evidence_digest": predecessor_eligibility,
+        "eligibility_evidence_digest": growth.eligibility_evidence_digest,
+        "finding_ids": growth.finding_ids,
+        "thread_ids": growth.thread_ids,
+    }
+    provisional = VerifiedOrdinaryReadyRemediationFindingAuthority(
+        **fields,
+        finding_authority_digest="0" * 64,
+        _verification_seal=None,
+    )
+    digest = fast_path.digest_json(
+        _ordinary_ready_remediation_finding_authority_projection(provisional)
+    )
+    return VerifiedOrdinaryReadyRemediationFindingAuthority(
+        **fields,
+        finding_authority_digest=digest,
+        _verification_seal=_ORDINARY_READY_REMEDIATION_FINDING_AUTHORITY_SEAL,
+    )
+
+
+def ordinary_ready_remediation_authorization_scope(
+    value: VerifiedOrdinaryReadyRemediationFindingAuthority,
+) -> dict[str, Any]:
+    """Derive the existing ordinary authorization scope without a caller subset."""
+
+    if (
+        not isinstance(value, VerifiedOrdinaryReadyRemediationFindingAuthority)
+        or value._verification_seal
+        is not _ORDINARY_READY_REMEDIATION_FINDING_AUTHORITY_SEAL
+        or value.finding_authority_digest
+        != fast_path.digest_json(
+            _ordinary_ready_remediation_finding_authority_projection(value)
+        )
+    ):
+        raise LifecycleOrchestrationError(
+            "ordinary Ready remediation finding authority is unauthenticated"
+        )
+    return {
+        "pull_request": value.pull_request,
+        "predecessor_head_sha": value.current_head_sha,
+        "resulting_head_sha": value.resulting_head_sha,
+        "finding_ids": list(value.finding_ids),
+        "finding_authority_digest": value.finding_authority_digest,
+    }
+
+
+def issue_ready_remediation_provider_growth_authorization(
+    *,
+    authorization_id: str,
+    reason: str,
+    current: publication.VerifiedLifecyclePublication,
+    finding_authority: VerifiedOrdinaryReadyRemediationFindingAuthority,
+    signer_identity: str,
+    signer: authority.Signer,
+) -> bytes:
+    """Issue the existing ordinary authorization from verifier-derived findings."""
+
+    scope = ordinary_ready_remediation_authorization_scope(finding_authority)
+    lifecycle = current.lifecycle if isinstance(
+        current, publication.VerifiedLifecyclePublication
+    ) else None
+    if (
+        not isinstance(lifecycle, authority.VerifiedLifecycleAuthority)
+        or finding_authority.repository != lifecycle.repository
+        or finding_authority.delivery_issue != lifecycle.delivery_issue
+        or finding_authority.pull_request != lifecycle.pull_request
+        or finding_authority.lifecycle_id != lifecycle.lifecycle_id
+        or finding_authority.current_publication_oid != current.publication_oid
+        or finding_authority.current_publication_digest
+        != current.publication_digest
+        or finding_authority.current_authority_digest != lifecycle.authority_digest
+        or finding_authority.current_head_sha != lifecycle.head_sha
+    ):
+        raise LifecycleOrchestrationError(
+            "ordinary Ready remediation finding authority is stale or substituted"
+        )
+    return _create_user_authorization(
+        authorization_id=authorization_id,
+        repository=lifecycle.repository,
+        delivery_issue=lifecycle.delivery_issue,
+        lifecycle=lifecycle,
+        publication_oid=current.publication_oid,
+        publication_digest=current.publication_digest,
+        operation="REMEDIATION_COMPLETED",
+        reason=reason,
+        scope=scope,
+        signer_identity=signer_identity,
+        signer=signer,
+        allow_finding_authority_digest=True,
+    )
+
+
 @dataclass(frozen=True)
 class VerifiedRejectedContinuationReanchor:
     """Closed diagnostic authority for one rejected unpublished candidate."""
@@ -371,7 +646,12 @@ def _continuation_authorization_scope(
 
 
 def _capture_current_stable_feedback(
-    repository: str, pull_request: int
+    repository: str,
+    pull_request: int,
+    *,
+    ready_remediation_provider_binding: (
+        publication.VerifiedReadySourceRecoveryProviderBinding | None
+    ) = None,
 ) -> fast_path.StableFeedbackState:
     """Reuse the maintained bounded provider capture without duplicating it."""
 
@@ -385,22 +665,41 @@ def _capture_current_stable_feedback(
             prefix="secpal-continuation-feedback-"
         ) as directory:
             output = Path(directory) / "reviewed-state.json"
+            provider_binding = Path(directory) / "provider-binding.json"
+            arguments = [
+                bootstrap_source_admission._trusted_python(),
+                "-I",
+                "-B",
+                str(action),
+                "resolve-batch",
+                "--repo",
+                repository,
+                "--pr",
+                str(pull_request),
+                "--repo-root",
+                str(repository_root),
+                "--capture-reviewed-state",
+                str(output),
+            ]
+            if ready_remediation_provider_binding is not None:
+                binding = ready_remediation_provider_binding
+                fast_path.atomic_write_json(
+                    provider_binding,
+                    {
+                        "repository": binding.repository,
+                        "pull_request": binding.pull_request,
+                        "current_head_sha": binding.current_head_sha,
+                        "provider_head_sha": binding.provider_head_sha,
+                    },
+                )
+                arguments.extend(
+                    [
+                        "--ready-remediation-provider-binding",
+                        str(provider_binding),
+                    ]
+                )
             result = bootstrap_source_admission._run_isolated_python(
-                [
-                    bootstrap_source_admission._trusted_python(),
-                    "-I",
-                    "-B",
-                    str(action),
-                    "resolve-batch",
-                    "--repo",
-                    repository,
-                    "--pr",
-                    str(pull_request),
-                    "--repo-root",
-                    str(repository_root),
-                    "--capture-reviewed-state",
-                    str(output),
-                ],
+                arguments,
                 cwd=repository_root,
                 timeout=60,
                 env=environment,
@@ -951,7 +1250,7 @@ def _oid(value: Any, label: str) -> str:
         raise LifecycleOrchestrationError(str(exc)) from exc
 
 
-def create_user_authorization(
+def _create_user_authorization(
     *,
     authorization_id: str,
     repository: str,
@@ -964,11 +1263,20 @@ def create_user_authorization(
     scope: Mapping[str, Any],
     signer_identity: str,
     signer: authority.Signer,
+    allow_finding_authority_digest: bool,
 ) -> bytes:
     """Create signed authority for one exact CURRENT orchestration decision."""
 
     if not isinstance(reason, str) or not reason.strip() or len(reason) > 512:
         raise LifecycleOrchestrationError("user authorization reason is invalid")
+    if (
+        isinstance(scope, Mapping)
+        and "finding_authority_digest" in scope
+        and not allow_finding_authority_digest
+    ):
+        raise LifecycleOrchestrationError(
+            "ordinary Ready finding authority requires its maintained issuer"
+        )
     try:
         fields = {
             "schema_version": AUTHORIZATION_SCHEMA_VERSION,
@@ -1006,6 +1314,38 @@ def create_user_authorization(
     signed = {**fields, "signature": signature}
     artifact = {**signed, "authorization_digest": authority.digest_json(signed)}
     return authority.canonical_json_bytes(artifact)
+
+
+def create_user_authorization(
+    *,
+    authorization_id: str,
+    repository: str,
+    delivery_issue: int,
+    lifecycle: authority.VerifiedLifecycleAuthority,
+    publication_oid: str,
+    publication_digest: str,
+    operation: str,
+    reason: str,
+    scope: Mapping[str, Any],
+    signer_identity: str,
+    signer: authority.Signer,
+) -> bytes:
+    """Create ordinary signed authority without verifier-owned growth scope."""
+
+    return _create_user_authorization(
+        authorization_id=authorization_id,
+        repository=repository,
+        delivery_issue=delivery_issue,
+        lifecycle=lifecycle,
+        publication_oid=publication_oid,
+        publication_digest=publication_digest,
+        operation=operation,
+        reason=reason,
+        scope=scope,
+        signer_identity=signer_identity,
+        signer=signer,
+        allow_finding_authority_digest=False,
+    )
 
 
 def _verify_signed_user_authorization(
@@ -3344,6 +3684,37 @@ def _authorized_finding_ids(value: Any) -> list[str]:
     return finding_ids
 
 
+def _remediation_authorization_scope(
+    value: Mapping[str, Any],
+    lifecycle: authority.VerifiedLifecycleAuthority,
+    resulting_head_sha: str,
+) -> dict[str, Any]:
+    """Preserve ordinary scope and its optional verified growth binding."""
+
+    finding_ids = _authorized_finding_ids(value)
+    scope = {
+        "pull_request": lifecycle.pull_request,
+        "predecessor_head_sha": lifecycle.head_sha,
+        "resulting_head_sha": resulting_head_sha,
+        "finding_ids": finding_ids,
+    }
+    supplied = value.get("scope")
+    finding_authority_digest = (
+        supplied.get("finding_authority_digest")
+        if isinstance(supplied, Mapping)
+        else None
+    )
+    if finding_authority_digest is not None:
+        try:
+            scope["finding_authority_digest"] = authority._require_digest(
+                finding_authority_digest,
+                "ordinary remediation finding authority",
+            )
+        except authority.LifecycleAuthorityError as exc:
+            raise LifecycleOrchestrationError(str(exc)) from exc
+    return scope
+
+
 def _authenticated_current(
     repository: str,
     delivery_issue: int,
@@ -3539,17 +3910,16 @@ def _orchestrate_event(
         verified_authorization = authorization_verifier(
             authorization_value, observed, lifecycle
         )
-        finding_ids = _authorized_finding_ids(verified_authorization)
+        expected_scope = _remediation_authorization_scope(
+            verified_authorization,
+            lifecycle,
+            request_head,
+        )
         authorization = _authorization(
             authorization_value,
             event_id=event_id,
             operation="REMEDIATION_COMPLETED",
-            expected_scope={
-                "pull_request": lifecycle.pull_request,
-                "predecessor_head_sha": lifecycle.head_sha,
-                "resulting_head_sha": request_head,
-                "finding_ids": finding_ids,
-            },
+            expected_scope=expected_scope,
             observed=observed,
             lifecycle=lifecycle,
             verifier=authorization_verifier,

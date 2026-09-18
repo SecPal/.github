@@ -1013,6 +1013,33 @@ def _require_string(value: Any, label: str) -> str:
     return value
 
 
+def _require_github_timestamp(value: Any, label: str) -> str:
+    matched = (
+        re.fullmatch(
+            r"([0-9]{4})-([0-9]{2})-([0-9]{2})T"
+            r"([0-9]{2}):([0-9]{2}):([0-9]{2})Z",
+            value,
+        )
+        if isinstance(value, str)
+        else None
+    )
+    if matched is None:
+        raise SecurityBlocker(f"{label} is not a canonical GitHub timestamp")
+    year, month, day, hour, minute, second = map(int, matched.groups())
+    leap_year = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    month_days = (31, 29 if leap_year else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+    if (
+        year < 1
+        or month not in range(1, 13)
+        or day not in range(1, month_days[month - 1] + 1)
+        or hour not in range(24)
+        or minute not in range(60)
+        or second not in range(60)
+    ):
+        raise SecurityBlocker(f"{label} is not a canonical GitHub timestamp")
+    return value
+
+
 def _require_oid(value: Any, label: str) -> str:
     if not isinstance(value, str) or not OID.fullmatch(value):
         raise SecurityBlocker(f"{label} is not a complete commit OID")
@@ -2342,7 +2369,11 @@ def _actor(value: Any, label: str, *, allow_deleted: bool = False) -> dict[str, 
         raise SecurityBlocker(f"{label} actor login is missing")
     if not isinstance(actor["node_id"], str) or not actor["node_id"]:
         raise SecurityBlocker(f"{label} actor node identity is missing")
-    if not isinstance(actor["database_id"], int) or actor["database_id"] < 1:
+    if (
+        isinstance(actor["database_id"], bool)
+        or not isinstance(actor["database_id"], int)
+        or actor["database_id"] < 1
+    ):
         raise SecurityBlocker(f"{label} actor database identity is missing")
     return actor
 
@@ -2379,8 +2410,36 @@ def _feedback_projection(payload: dict[str, Any]) -> dict[str, Any]:
     reviews_value = source.get("reviews", [])
     comments_value = source.get("conversation_comments", [])
     threads_value = source.get("threads", [])
+    requests_present = "provider_review_requests" in source
+    requests_value = source.get("provider_review_requests", [])
     if not all(isinstance(value, list) for value in (reviews_value, comments_value, threads_value)):
         raise SecurityBlocker("stable feedback connections are malformed")
+    if requests_present and not isinstance(requests_value, list):
+        raise SecurityBlocker("provider review request history is malformed")
+
+    provider_review_requests: list[dict[str, Any]] = []
+    for item in requests_value:
+        if not isinstance(item, dict):
+            raise SecurityBlocker("provider review request is malformed")
+        requested_reviewer = _actor(
+            item.get("requested_reviewer"), "requested review provider"
+        )
+        if requested_reviewer != COPILOT_REVIEW_PROVIDER:
+            raise SecurityBlocker(
+                "provider review request does not identify the captured provider"
+            )
+        provider_review_requests.append(
+            {
+                "node_id": _require_string(
+                    item.get("node_id"), "provider review request identity"
+                ),
+                "created_at": _require_github_timestamp(
+                    item.get("created_at"), "provider review request chronology"
+                ),
+                "actor": _actor(item.get("actor"), "provider review request"),
+                "requested_reviewer": requested_reviewer,
+            }
+        )
 
     reviews: list[dict[str, Any]] = []
     for item in reviews_value:
@@ -2398,6 +2457,16 @@ def _feedback_projection(payload: dict[str, Any]) -> dict[str, Any]:
                     else None
                 ),
                 "reactions": _reactions(item.get("reactions", []), "review"),
+                **(
+                    {
+                        "submitted_at": _require_string(
+                            item.get("submitted_at"),
+                            "review submission chronology",
+                        )
+                    }
+                    if item.get("submitted_at") is not None
+                    else {}
+                ),
             }
         )
 
@@ -2449,6 +2518,16 @@ def _feedback_projection(payload: dict[str, Any]) -> dict[str, Any]:
                     ),
                     "reply_to_id": reply_to_id,
                     "reactions": _reactions(item.get("reactions", []), "thread comment"),
+                    **(
+                        {
+                            "review_id": _require_string(
+                                item.get("review_id"),
+                                "thread comment review identity",
+                            )
+                        }
+                        if item.get("review_id") is not None
+                        else {}
+                    ),
                 }
             )
         comment_identities = [item["node_id"] for item in thread_comments]
@@ -2470,8 +2549,22 @@ def _feedback_projection(payload: dict[str, Any]) -> dict[str, Any]:
         "reviews": sorted(reviews, key=lambda item: item["node_id"]),
         "conversation_comments": sorted(comments, key=lambda item: item["node_id"]),
         "threads": sorted(threads, key=lambda item: item["node_id"]),
+        **(
+            {
+                "provider_review_requests": sorted(
+                    provider_review_requests,
+                    key=lambda item: item["node_id"],
+                )
+            }
+            if requests_present
+            else {}
+        ),
     }
     for label, items in (
+        (
+            "provider review requests",
+            projection.get("provider_review_requests", []),
+        ),
         ("reviews", projection["reviews"]),
         ("conversation comments", projection["conversation_comments"]),
         ("review threads", projection["threads"]),
@@ -2613,6 +2706,25 @@ class _VerifiedFeedbackGrowth:
 
     provider_reaction_replacement_digest: str | None = None
     predecessor_provider_growth_digest: str | None = None
+
+
+@dataclass(frozen=True)
+class VerifiedOrdinaryReadyProviderGrowth:
+    """Exact post-capture provider findings admitted for ordinary remediation."""
+
+    predecessor_state_digest: str
+    predecessor_feedback_digest: str
+    resulting_state_digest: str
+    resulting_feedback_digest: str
+    provider_head_sha: str
+    provider_request_node_id: str
+    provider_review_node_id: str
+    provider_review_body_digest: str
+    thread_ids: tuple[str, ...]
+    finding_ids: tuple[str, ...]
+    source_bindings: tuple[tuple[str, str, str, str | None], ...]
+    eligibility_evidence_digest: str
+    growth_digest: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -3109,6 +3221,14 @@ def _successor_source_inventory(
             digest_json(reaction),
             None,
             reaction,
+        )
+    for request in state.feedback.get("provider_review_requests", []):
+        add(
+            "PROVIDER_REVIEW_REQUEST",
+            request["node_id"],
+            digest_json(request),
+            None,
+            request,
         )
     for review in state.feedback["reviews"]:
         add("REVIEW", review["node_id"], review["body_digest"], None, review)
@@ -4025,16 +4145,25 @@ def _verify_predecessor_preservation(
 ) -> None:
     for category, identity_key in (
         ("pull_request_reactions", "mutation_id"),
+        ("provider_review_requests", "node_id"),
         ("reviews", "node_id"),
         ("conversation_comments", "node_id"),
     ):
-        predecessor = {item[identity_key]: item for item in reviewed.feedback[category]}
-        successor = {item[identity_key]: item for item in current.feedback[category]}
+        predecessor = {
+            item[identity_key]: item
+            for item in reviewed.feedback.get(category, [])
+        }
+        successor = {
+            item[identity_key]: item
+            for item in current.feedback.get(category, [])
+        }
         for node_id, expected in predecessor.items():
             observed = successor.get(node_id)
             key = (
                 "PULL_REQUEST_REACTION"
                 if category == "pull_request_reactions"
+                else "PROVIDER_REVIEW_REQUEST"
+                if category == "provider_review_requests"
                 else "REVIEW"
                 if category == "reviews"
                 else "CONVERSATION_COMMENT",
@@ -4075,6 +4204,11 @@ def _verify_predecessor_preservation(
                 ):
                     raise SecurityBlocker("successor changed a predecessor reaction")
                 comparable = copy.deepcopy(observed)
+                if (
+                    category == "reviews"
+                    and "submitted_at" not in expected
+                ):
+                    comparable.pop("submitted_at", None)
                 comparable["reactions"] = expected["reactions"]
                 if comparable != expected:
                     raise SecurityBlocker(
@@ -4113,6 +4247,11 @@ def _verify_predecessor_preservation(
             ):
                 raise SecurityBlocker("successor changed a predecessor reaction")
             comparable = copy.deepcopy(observed_comment)
+            if (
+                "review_id" not in expected_comment
+                and isinstance(comparable, dict)
+            ):
+                comparable.pop("review_id", None)
             comparable["reactions"] = expected_comment["reactions"]
             if comparable != expected_comment:
                 raise SecurityBlocker("successor changed a predecessor comment")
@@ -4605,6 +4744,249 @@ def verify_rejected_stable_feedback_successor(
         provider_reaction_replacement_digest=(
             growth.provider_reaction_replacement_digest
         ),
+    )
+
+
+def verify_ordinary_ready_remediation_provider_growth(
+    reviewed: StableFeedbackState,
+    current: StableFeedbackState,
+    *,
+    provider_head_sha: str,
+    predecessor_eligibility_evidence: Any,
+    eligibility_evidence: Any,
+) -> VerifiedOrdinaryReadyProviderGrowth:
+    """Derive one complete same-assessment provider delta for ordinary remediation.
+
+    The caller supplies no delta or finding subset.  The exact added provider
+    review and threads are derived from the two canonical Stable Feedback
+    states, while the existing eligibility boundary supplies only the ordinary
+    corrected/material decision for every derived thread.
+    """
+
+    provider_head_sha = _require_oid(provider_head_sha, "provider reviewed head")
+    if (
+        not isinstance(reviewed, StableFeedbackState)
+        or not isinstance(current, StableFeedbackState)
+        or reviewed.repository != current.repository
+        or reviewed.pull_request_number != current.pull_request_number
+        or reviewed.head_sha != provider_head_sha
+        or current.head_sha == provider_head_sha
+        or reviewed.base_ref != current.base_ref
+        # The accepted-main prerequisite necessarily advances this ref's tip.
+        # The candidate seal and independent live capture bind its new SHA;
+        # current-base integration remains the merge gate's responsibility.
+        or reviewed.pr_state != "OPEN"
+        or current.pr_state != "OPEN"
+    ):
+        raise SecurityBlocker(
+            "ordinary Ready provider growth does not preserve source identity"
+        )
+
+    predecessor_eligibility = normalize_resolution_eligibility_evidence(
+        predecessor_eligibility_evidence,
+        repository=reviewed.repository,
+        reviewed_state=reviewed,
+    )
+    eligibility = normalize_resolution_eligibility_evidence(
+        eligibility_evidence,
+        repository=reviewed.repository,
+        reviewed_state=current,
+    )
+    reviewed_sources = _successor_source_inventory(reviewed)
+    current_sources = _successor_source_inventory(current)
+    added_keys = set(current_sources) - set(reviewed_sources)
+    removed_keys = set(reviewed_sources) - set(current_sources)
+    if removed_keys:
+        raise SecurityBlocker(
+            "ordinary Ready provider growth removed predecessor feedback"
+        )
+
+    provider_requests = current.feedback.get("provider_review_requests", [])
+    if len(provider_requests) != 1:
+        raise SecurityBlocker(
+            "ordinary Ready provider request lineage is missing or ambiguous"
+        )
+    provider_request = provider_requests[0]
+    provider_request_key = (
+        "PROVIDER_REVIEW_REQUEST",
+        provider_request["node_id"],
+    )
+    if (
+        provider_request.get("requested_reviewer") != COPILOT_REVIEW_PROVIDER
+        or not isinstance(provider_request.get("node_id"), str)
+        or not IDENTITY.fullmatch(provider_request["node_id"])
+        or not isinstance(provider_request.get("actor"), dict)
+        or not isinstance(provider_request.get("created_at"), str)
+        or not provider_request["created_at"]
+    ):
+        raise SecurityBlocker(
+            "ordinary Ready provider request does not identify the consumed assessment"
+        )
+
+    added_reviews = [
+        item
+        for item in current.feedback["reviews"]
+        if ("REVIEW", item["node_id"]) in added_keys
+    ]
+    if len(added_reviews) != 1:
+        raise SecurityBlocker(
+            "ordinary Ready provider review is missing or ambiguous"
+        )
+    provider_review = added_reviews[0]
+    provider_review_key = ("REVIEW", provider_review["node_id"])
+    if (
+        provider_review.get("actor") != COPILOT_REVIEW_PROVIDER
+        or not isinstance(provider_review.get("node_id"), str)
+        or not IDENTITY.fullmatch(provider_review["node_id"])
+        or provider_review.get("state") != "COMMENTED"
+        or provider_review.get("commit_oid") != provider_head_sha
+        or not isinstance(provider_review.get("submitted_at"), str)
+        or provider_request["created_at"] >= provider_review["submitted_at"]
+        or provider_review.get("reactions") != []
+    ):
+        raise SecurityBlocker(
+            "ordinary Ready provider review is not bound to the consumed assessment"
+        )
+
+    reviewed_thread_ids = {
+        item["node_id"] for item in reviewed.feedback["threads"]
+    }
+    added_threads = [
+        item
+        for item in current.feedback["threads"]
+        if item["node_id"] not in reviewed_thread_ids
+    ]
+    if not added_threads:
+        raise SecurityBlocker("ordinary Ready provider growth has no finding")
+
+    thread_ids: list[str] = []
+    finding_ids: list[str] = []
+    source_bindings: list[tuple[str, str, str, str | None]] = [
+        (
+            "PROVIDER_REVIEW_REQUEST",
+            provider_request["node_id"],
+            digest_json(provider_request),
+            None,
+        ),
+        (
+            "REVIEW",
+            provider_review["node_id"],
+            provider_review["body_digest"],
+            None,
+        )
+    ]
+    admitted_additions = {provider_review_key}
+    if provider_request_key in added_keys:
+        admitted_additions.add(provider_request_key)
+    eligible_by_thread = {
+        item["thread_id"]: item for item in eligibility["eligible_threads"]
+    }
+    if len(eligible_by_thread) != len(eligibility["eligible_threads"]):
+        raise SecurityBlocker(
+            "ordinary Ready provider growth repeats an eligible thread"
+        )
+    for thread in added_threads:
+        thread_id = thread.get("node_id")
+        comments = thread.get("comments")
+        eligible = eligible_by_thread.get(thread_id)
+        if (
+            not isinstance(thread_id, str)
+            or not re.fullmatch(r"PRRT_[A-Za-z0-9_-]+", thread_id)
+            or thread.get("is_resolved") is not False
+            or not isinstance(thread.get("is_outdated"), bool)
+            or not isinstance(comments, list)
+            or len(comments) != 1
+            or not isinstance(eligible, dict)
+            or eligible.get("classification") != "VALID_ACTIONABLE"
+            or eligible.get("disposition") != "CORRECTED_AND_VERIFIED"
+            or eligible.get("follow_up") is not None
+        ):
+            raise SecurityBlocker(
+                "ordinary Ready provider finding lacks exact material eligibility"
+            )
+        comment = comments[0]
+        comment_id = comment.get("node_id")
+        comment_digest = comment.get("body_digest")
+        comment_key = ("THREAD_COMMENT", comment_id)
+        if (
+            comment.get("actor") != COPILOT_REVIEW_PROVIDER
+            or comment.get("review_id") != provider_review["node_id"]
+            or comment.get("reply_to_id") is not None
+            or comment.get("reactions") != []
+            or not isinstance(comment_id, str)
+            or not IDENTITY.fullmatch(comment_id)
+            or not isinstance(comment_digest, str)
+            or not DIGEST.fullmatch(comment_digest)
+            or eligible.get("finding_ids") != [comment_id]
+            or comment_key not in added_keys
+        ):
+            raise SecurityBlocker(
+                "ordinary Ready provider finding is stale or substituted"
+            )
+        admitted_additions.add(comment_key)
+        thread_ids.append(thread_id)
+        finding_ids.append(comment_id)
+        source_bindings.append(
+            ("THREAD_COMMENT", comment_id, comment_digest, thread_id)
+        )
+
+    if set(eligible_by_thread) != set(thread_ids):
+        raise SecurityBlocker(
+            "ordinary Ready provider finding subset is incomplete or invented"
+        )
+    if added_keys != admitted_additions:
+        raise SecurityBlocker(
+            "ordinary Ready provider growth contains an unauthenticated addition"
+        )
+    _verify_predecessor_preservation(
+        reviewed,
+        current,
+        authorized_thread_ids={
+            item["thread_id"]
+            for item in predecessor_eligibility["eligible_threads"]
+        },
+        admitted_updates=set(),
+    )
+    if len(finding_ids) != len(set(finding_ids)):
+        raise SecurityBlocker(
+            "ordinary Ready provider finding identity is repeated"
+        )
+
+    ordered_threads = tuple(sorted(thread_ids))
+    ordered_findings = tuple(sorted(finding_ids))
+    ordered_sources = tuple(sorted(source_bindings))
+    eligibility_digest = digest_json(eligibility)
+    projection = {
+        "domain": "secpal.ordinary-ready-provider-growth/v1",
+        "repository": reviewed.repository,
+        "pull_request_number": reviewed.pull_request_number,
+        "provider_head_sha": provider_head_sha,
+        "predecessor_state_digest": reviewed.state_digest,
+        "predecessor_feedback_digest": reviewed.feedback_digest,
+        "resulting_state_digest": current.state_digest,
+        "resulting_feedback_digest": current.feedback_digest,
+        "provider_request_node_id": provider_request["node_id"],
+        "provider_review_node_id": provider_review["node_id"],
+        "provider_review_body_digest": provider_review["body_digest"],
+        "thread_ids": list(ordered_threads),
+        "finding_ids": list(ordered_findings),
+        "source_bindings": [list(item) for item in ordered_sources],
+        "eligibility_evidence_digest": eligibility_digest,
+    }
+    return VerifiedOrdinaryReadyProviderGrowth(
+        predecessor_state_digest=reviewed.state_digest,
+        predecessor_feedback_digest=reviewed.feedback_digest,
+        resulting_state_digest=current.state_digest,
+        resulting_feedback_digest=current.feedback_digest,
+        provider_head_sha=provider_head_sha,
+        provider_request_node_id=provider_request["node_id"],
+        provider_review_node_id=provider_review["node_id"],
+        provider_review_body_digest=provider_review["body_digest"],
+        thread_ids=ordered_threads,
+        finding_ids=ordered_findings,
+        source_bindings=ordered_sources,
+        eligibility_evidence_digest=eligibility_digest,
+        growth_digest=digest_json(projection),
     )
 
 
@@ -5895,6 +6277,47 @@ def is_verified_validation_evidence(value: Any) -> bool:
         ValueError,
     ):
         return False
+
+
+def verified_validation_review_context(
+    value: Any,
+) -> tuple[StableFeedbackState, str | None]:
+    """Return only the reviewed state and eligibility bound by verified evidence."""
+
+    if not is_verified_validation_evidence(value):
+        raise SecurityBlocker("validation evidence is not verifier-authenticated")
+    try:
+        provenance = json.loads(value._verification_seal.provenance_json)
+        if provenance.get("kind") != "ORDINARY":
+            raise SecurityBlocker(
+                "ordinary remediation requires ordinary validation evidence"
+            )
+        reviewed = StableFeedbackState.from_payload(provenance["reviewed_state"])
+        attestation = provenance["attestation"]
+        if any(
+            field in attestation
+            for field in (
+                "integration_evidence_digest",
+                "exceptional_recovery_evidence_digest",
+                "exceptional_continuation_evidence_digest",
+            )
+        ):
+            raise SecurityBlocker(
+                "ordinary remediation validation has incompatible authority"
+            )
+        eligibility_digest = attestation.get("eligibility_evidence_digest")
+        if eligibility_digest is not None and (
+            not isinstance(eligibility_digest, str)
+            or not DIGEST.fullmatch(eligibility_digest)
+        ):
+            raise SecurityBlocker(
+                "validation eligibility binding is malformed"
+            )
+        return reviewed, eligibility_digest
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SecurityBlocker(
+            "validation evidence review context is malformed"
+        ) from exc
 
 
 def verify_commit_signatures(

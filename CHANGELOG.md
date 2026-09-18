@@ -9,6 +9,46 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-18 - Admit Exact Node-24 Delivery Evidence Loss
+
+**Fixed:**
+
+- Extend the existing Exact-State-Adoption validation-evidence-loss owner with
+  one exact admission for issue #948 / PR #953, binding its signed current-head
+  receipt identity, unavailable package bytes, complete Ready/review/remediation
+  history, stable feedback and accepted-main current safety. Require the live
+  trailer to match the accepted digest and execute both Node baseline governance
+  layers in the disposable safety projection.
+- Preserve Review 1/1, Remediation 1/2, one Ready transition and Cycle-3 absence
+  without adding a recovery family, lifecycle state, signer, journal or trust
+  root.
+
+## 2026-09-17 - Accept Recovered Ready Feedback In Thread Resolution
+
+**Fixed:**
+
+- Admit the canonical Stable Feedback provider-request projection at the
+  maintained fixed-thread resolver while rejecting field, identity, ordering,
+  duplicate, and digest drift.
+- Let capture-only `resolve-batch` reauthenticate a current Ready-source
+  recovery and derive its sole provider head from protected lifecycle history,
+  without accepting a caller-selected head or adding lifecycle authority.
+
+## 2026-09-16 - Authenticate Post-Capture Provider Feedback
+
+**Added:**
+
+- Derive one bounded additive provider-feedback delta when the provider review
+  belongs to the already-consumed reviewed head but appears after its canonical
+  Stable Feedback capture.
+- Authenticate the unique provider request, review chronology, parent-review
+  identity of every added thread comment, and any first-remediation thread
+  resolutions before admitting that delta.
+- Bind the complete delta to authenticated first-remediation CURRENT evidence,
+  the existing ordinary eligibility manifest, and the remaining normal
+  remediation authorization without requesting another review or adding a
+  lifecycle operation.
+
 ## 2026-09-16 - Adopt Node 24 LTS Governance Baseline
 
 **Changed:**
@@ -18,6 +58,30 @@ Log of notable changes to SecPal organization defaults (newest first).
 - Derive local system-requirement enforcement and structural workflow checks
   from `.nvmrc`, with active documentation kept coherent and historical Node 22
   evidence preserved.
+
+## 2026-09-16 - Define Builder-Independent OCI Publication Evidence
+
+**Added:**
+
+- Define one shared SecPal policy for OCI runtime images, multi-platform
+  identity, source and base-image binding, OCI labels, build evidence, Syft SPDX
+  association, keyless GitHub attestations, and exact-digest smoke evidence.
+- Make `Containerfile` canonical for SecPal-owned production builds while
+  retaining Dependabot's upstream `docker` ecosystem identifier.
+- Require complete parity evidence and removal of superseded active publisher
+  paths when an existing publisher migrates away from BuildKit or Buildx.
+
+## 2026-09-16 - Authenticate Detached Recovered-Ready Thread Authority
+
+**Fixed:**
+
+- Allow a verified current Ready-source recovery to authenticate the unchanged
+  final source used by existing detached late classification and disposition,
+  without an artificial Ready integration.
+- Derive commit-bound eligibility absence and reviewed target origin from the
+  authenticated recovery boundary while preserving signed exact disposition,
+  fixed-thread resolver, signer, replay, and `technically_blocking=false`
+  requirements.
 
 ## 2026-09-15 - Separate Ready Recovery Tooling And Candidate Provenance
 

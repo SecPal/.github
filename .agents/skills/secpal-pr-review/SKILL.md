@@ -31,6 +31,11 @@ signed validation receipt and final attestation for the fix commit. The command
 rejects a swapped state file, a non-matching local commit,
 and stale, missing, incomplete, unauthenticated, or differently bound evidence
 before any GitHub read.
+The reviewed state may contain canonical `provider_review_requests`; the
+resolver admits that optional category only through the shared closed Stable
+Feedback verifier. Recovered Ready capture must reauthenticate protected
+`CURRENT` and derive the provider head through the maintained Ready-source
+binding; it never accepts a caller-selected provider head.
 For an eligibility-bound typed Ready integration, also supply the canonical
 integration evidence. The resolver accepts only the closed version-1.2
 integration-resolution attestation and verifies its ordered two-parent
@@ -287,6 +292,27 @@ user decision for any remaining bounded recovery authority. A tracked-follow-up
 resolution
 must be reported as safely dispositioned/tracked, never fixed, implemented, or
 completed, with technical and mechanical blocking stated separately.
+
+When provider-owned material threads from the already-consumed assessment
+appear after its canonical Stable Feedback capture, do not request another
+review or rewrite that capture. The maintained ordinary Ready provider-growth
+verifier derives the complete additive delta from the first remediation's
+sealed reviewed state and the candidate remediation's sealed reviewed state.
+It requires protected CURRENT at Review 1/1 and Remediation 1/2, exact H0 to H1
+ordinary lineage, Ready true, Cycle 3 absent, the unique Copilot request and
+review chronology, comment-to-review identity, the first remediation's bound
+eligibility for predecessor resolutions, and complete existing ordinary
+eligibility for every added provider thread. Only
+`issue_ready_remediation_provider_growth_authorization` may turn that sealed
+authority into the existing signed `REMEDIATION_COMPLETED` scope. The path
+consumes the remaining normal remediation slot and grants no review,
+classification, resolution, recovery, continuation, or recursive-growth
+authority.
+Capture its H1 state only through the read-only
+`resolve-batch --ready-remediation-provider-binding FILE
+--capture-reviewed-state FILE` form. The command derives the reviewed provider
+head from the verifier-created ephemeral projection of protected CURRENT, and
+the authority verifier independently repeats the same capture before issuance.
 
 ## Run the finite invocation
 

@@ -154,6 +154,8 @@ class VerifiedReadySourceRecovery:
     historical_validation_receipt_digest: str
     historical_final_attestation_digest: str
     historical_evidence_loss_proof_digest: str
+    lifecycle_state: dict[str, Any]
+    recovery_safety_facts: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -1256,6 +1258,10 @@ def _verify_ready_source_recovery_document(
         historical_evidence_loss_proof_digest=authorization[
             "historical_evidence_loss_proof_digest"
         ],
+        lifecycle_state=copy.deepcopy(authorization["lifecycle_state"]),
+        recovery_safety_facts=copy.deepcopy(
+            authorization["recovery_safety_facts"]
+        ),
     )
 
 

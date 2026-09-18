@@ -144,6 +144,40 @@ provider-summary head. The summary must retain terminal status and exact
 repository/PR metadata. This is an ephemeral Ready-source recovery gate, not a
 caller option or persisted evidence kind; current-head feedback completeness
 and its blocking classifications are unchanged.
+Capture that recovered Ready Stable Feedback only through
+`resolve-batch --capture-reviewed-state` with the exact `--delivery-issue` and
+`--ready-source-recovery-publication`. The command reauthenticates that
+publication and protected lifecycle `CURRENT`, then derives the provider head
+through the maintained binding. It accepts no provider-head input. The simple
+fixed-thread resolver accepts the resulting optional provider-request history
+only when the complete Stable Feedback document is canonical and its feedback
+and state digests match.
+
+Ordinary Ready remediation has one corresponding finite composition for
+provider feedback that arrived after the canonical Stable Feedback capture of
+the already-consumed reviewed head. The verifier reopens the first ordinary
+remediation's sealed validation evidence to authenticate that original capture,
+derives the reviewed predecessor from protected CURRENT, and compares it with
+the sealed reviewed state and eligibility for the candidate second
+remediation. It derives the one exact Copilot review and every added Copilot
+thread, authenticates the unique Copilot request event and review chronology,
+and binds every top-level comment to that review; callers cannot provide a
+delta or subset. An independent maintained live capture must equal the
+candidate-bound H1 state. The capture-only
+`resolve-batch --ready-remediation-provider-binding FILE` form receives an
+ephemeral projection derived from protected CURRENT and cannot be combined
+with mutation. The
+first remediation's authenticated eligibility derives any
+permitted predecessor thread resolution. Only complete
+`VALID_ACTIONABLE + CORRECTED_AND_VERIFIED` ordinary eligibility for all added
+threads can enter the existing signed `REMEDIATION_COMPLETED` scope. This path
+requires Review 1/1, Remediation 1/2, Ready true, Cycle 3 absent, and no
+Exceptional Recovery or Continuation. It requests no provider, rewrites no
+Stable Feedback, grants no resolution authority, and creates no lifecycle
+state, transition, counter, signer, trust root, or journal. Its verifier-owned
+seal is not reproducible from serialized fields, and the generic authorization
+issuer rejects the provider-growth digest.
+
 Applicable protected-branch
 rules independently determine whether `NONE` is admissible; `REVIEW_REQUIRED`
 always fails closed. Unsigned recovery facts and caller-selected feedback
@@ -360,6 +394,17 @@ authority. Exact Stable Feedback derives target origin, and only the same signed
 late-classification/disposition chain can authorize the guarded resolver.
 Schema-1.2 commit-bound behavior is unchanged.
 
+An unchanged Ready source with a verified current recovery instead supplies its
+exact `--ready-source-recovery-publication` OID to both creators and the
+resolver, while omitting validation, eligibility, integration, and historical
+receipt inputs. The maintained recovery verifier authenticates the exact
+repository, issue, PR, head/tree, lifecycle CURRENT and finite histories,
+current-safety/provider binding, Stable Feedback, immutable commit signer, and
+fresh receipt. That authenticated receipt shape derives commit-bound eligibility
+absence; caller omission does not. Recovery remains source authority only, so
+the signed classification, signed disposition, `technically_blocking=false`,
+and canonical resolver are still required for every exact thread.
+
 This authenticated reviewed-state/eligibility boundary is what “post-push”
 denotes in the resolution lifecycle. It does not use or claim a cryptographic
 GitHub wall-clock push-order proof.
@@ -480,14 +525,22 @@ diagnostics. The harness exercises the parked candidate's APIs, which need not
 exist in an unrelated current-main implementation.
 Historical tests are removed only in the disposable copy. Every non-test source
 file remains exact candidate content, checked before and after execution with
-no extra files or bytecode admitted. No npm installation or implementation
-overlay is needed. Normal repository Complete Validation is unaffected.
+no extra files or bytecode admitted. The exact schema-1.3 profile temporarily
+preserves only its authenticated Node baseline test, installs the locked npm
+graph without scripts in that disposable copy, executes the candidate validator
+and test, and removes `node_modules` before the projection is reverified. Other
+profiles require no npm installation or implementation overlay. Normal
+repository Complete Validation is unaffected.
 
 `current_safety.receipt_digest` is the current execution identity under
 `secpal.pre-enrollment-current-safety/v1`, **not** an ordinary validation receipt.
 The target-shaped regression retains the previously observed divergent receipt
 identities; production derives its own current execution identity. No historical
 package bytes or unauthenticated final-attestation identity are reconstructed.
+The closed schema-1.3 variant admits only #948 / PR #953's authenticated
+receipt-at-current-head history and its exact accepted-main safety harness; it
+requires the observed trailer digest to match the accepted record, and does not
+generalize missing-package admission or create recovery authority.
 
 The sealed source enters existing external-evidence authentication with
 `validation_evidence=None` and a separately authenticated review-budget admission.
