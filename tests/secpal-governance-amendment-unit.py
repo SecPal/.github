@@ -13,7 +13,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import TestCase, main, mock
 
-from scripts.secpal_pr_review import fast_path
 from scripts.secpal_pr_review import governance_amendment as amendment
 from scripts.secpal_pr_review import lifecycle_authority as authority
 from scripts.secpal_pr_review import lifecycle_publication as publication
