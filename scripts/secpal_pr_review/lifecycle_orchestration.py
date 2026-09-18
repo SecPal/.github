@@ -369,7 +369,7 @@ def _post_ready_validation_defect_projection(
 _FAILURE_OBSERVATION_FIELDS = frozenset(
     {
         "repository", "pull_request", "head_sha", "pr_state", "draft",
-        "workflow_name", "check_name", "workflow_run_id", "check_run_id",
+        "workflow_name", "workflow_path", "check_name", "workflow_run_id", "check_run_id",
         "status", "conclusion", "attempt",
     }
 )
@@ -410,9 +410,9 @@ def _read_live_post_ready_failure(repository: str, pull_request: int) -> dict[st
             str(item.get("workflowName", "")), str(item.get("name", "")),
             str(item.get("detailsUrl", "")),
         ))
-        if not failures:
+        if len(failures) != 1:
             raise LifecycleOrchestrationError(
-                "exact current head has no terminal validation failure"
+                "exact current head must have one unique terminal validation failure"
             )
         failure = failures[0]
         match = re.fullmatch(
@@ -442,9 +442,34 @@ def _read_live_post_ready_failure(repository: str, pull_request: int) -> dict[st
             or run_payload.get("status") != "completed"
             or run_payload.get("conclusion") != "failure"
             or (run_payload.get("repository") or {}).get("full_name") != repository
+            or not isinstance(run_payload.get("path"), str)
+            or not run_payload["path"].startswith(".github/workflows/")
         ):
             raise LifecycleOrchestrationError(
                 "validation failure attempt differs from the current PR head"
+            )
+        job = publication._run_gh([
+            "api", "--hostname", "github.com",
+            f"repos/{repository}/actions/jobs/{match.group(3)}",
+        ])
+        if job.returncode != 0:
+            raise LifecycleOrchestrationError(
+                "validation failure job identity is unavailable"
+            )
+        job_payload = json.loads(
+            job.stdout,
+            object_pairs_hook=publication._reject_duplicate_pairs,
+        )
+        if (
+            job_payload.get("id") != int(match.group(3))
+            or job_payload.get("run_id") != workflow_run_id
+            or job_payload.get("head_sha") != payload.get("headRefOid")
+            or job_payload.get("status") != "completed"
+            or job_payload.get("conclusion") != "failure"
+            or job_payload.get("name") != failure.get("name")
+        ):
+            raise LifecycleOrchestrationError(
+                "validation failure job differs from the selected failed check"
             )
         return {
             "repository": repository,
@@ -453,6 +478,7 @@ def _read_live_post_ready_failure(repository: str, pull_request: int) -> dict[st
             "pr_state": payload["state"],
             "draft": payload["isDraft"],
             "workflow_name": failure.get("workflowName"),
+            "workflow_path": run_payload["path"],
             "check_name": failure.get("name"),
             "workflow_run_id": workflow_run_id,
             "check_run_id": int(match.group(3)),
@@ -460,6 +486,8 @@ def _read_live_post_ready_failure(repository: str, pull_request: int) -> dict[st
             "conclusion": failure["conclusion"],
             "attempt": run_payload.get("run_attempt"),
         }
+    except LifecycleOrchestrationError:
+        raise
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise LifecycleOrchestrationError(
             "live validation failure evidence is malformed"
@@ -481,6 +509,8 @@ def _validated_failure_observation(
         or value["conclusion"] != "FAILURE"
         or not isinstance(value["workflow_name"], str)
         or not value["workflow_name"].strip()
+        or not isinstance(value["workflow_path"], str)
+        or not re.fullmatch(r"\.github/workflows/[^/]+\.ya?ml", value["workflow_path"])
         or not isinstance(value["check_name"], str)
         or not value["check_name"].strip()
         or any(
@@ -533,10 +563,37 @@ def _setup_node_selectors(workflow: str) -> tuple[str, ...]:
     for index, line in enumerate(lines):
         if not re.search(r"\buses:\s*actions/setup-node@", line):
             continue
-        indentation = len(line) - len(line.lstrip())
+        uses_indentation = len(line) - len(line.lstrip())
+        uses_key_indentation = uses_indentation + (
+            2 if re.match(r"^\s*-\s+uses:", line) else 0
+        )
+        step_indentation = uses_indentation
+        if not re.match(r"^\s*-\s+uses:", line):
+            for predecessor in reversed(lines[:index]):
+                if not predecessor.strip():
+                    continue
+                predecessor_indent = len(predecessor) - len(predecessor.lstrip())
+                if predecessor_indent < uses_indentation:
+                    if re.match(r"^\s*-\s+", predecessor):
+                        step_indentation = predecessor_indent
+                    break
+        with_indentation: int | None = None
         for candidate in lines[index + 1 :]:
             candidate_indent = len(candidate) - len(candidate.lstrip())
-            if candidate.strip() and candidate_indent <= indentation:
+            if (
+                candidate.strip()
+                and candidate_indent <= step_indentation
+                and re.match(r"^\s*-\s+", candidate)
+            ):
+                break
+            if re.match(r"^\s*with:\s*(?:#.*)?$", candidate):
+                if candidate_indent != uses_key_indentation:
+                    break
+                with_indentation = candidate_indent
+                continue
+            if with_indentation is None:
+                continue
+            if candidate.strip() and candidate_indent <= with_indentation:
                 break
             match = re.match(
                 r"^\s*node-version:\s*['\"]?([^'\"#]+?)['\"]?\s*(?:#.*)?$",
@@ -612,6 +669,57 @@ def _node_selector_violations(root: Path, revision: str) -> tuple[dict[str, Any]
     return tuple(violations)
 
 
+def _require_corrected_selector_contract(
+    root: Path,
+    revision: str,
+    paths: set[str],
+    engine_floor: tuple[int, int, int],
+) -> None:
+    """Require every corrected setup-node step to retain one parseable safe selector."""
+
+    for path in sorted(paths):
+        workflow = _git_text(root, revision, path)
+        setup_count = len(re.findall(r"\buses:\s*actions/setup-node@", workflow))
+        selectors = _setup_node_selectors(workflow)
+        floors = tuple(_node_version_floor(selector) for selector in selectors)
+        if (
+            setup_count == 0
+            or len(selectors) != setup_count
+            or any(floor is None or floor < engine_floor for floor in floors)
+        ):
+            raise LifecycleOrchestrationError(
+                "corrected workflow selector is missing, unparseable, or below the engine floor"
+            )
+
+
+def _content_owned_toolchain_guard(
+    root: Path, predecessor_head: str, resulting_head: str, path: str
+) -> bool:
+    """Admit an existing guard only when its changed hunk proves toolchain ownership."""
+
+    try:
+        before = _git_text(root, predecessor_head, path)
+        after = _git_text(root, resulting_head, path)
+    except LifecycleOrchestrationError:
+        return False
+    ownership_terms = ("actions/setup-node", "node-version", "engines.node")
+    if any(term not in before or term not in after for term in ownership_terms):
+        return False
+    diff = publication._run_git(
+        root,
+        ["diff", "--unified=12", predecessor_head, resulting_head, "--", path],
+    )
+    if diff.returncode != 0:
+        return False
+    hunks = re.split(r"(?=^@@ )", diff.stdout.decode("utf-8"), flags=re.MULTILINE)[1:]
+    return bool(hunks) and all(
+        "actions/setup-node" in hunk
+        and "node-version" in hunk
+        and "engines.node" in hunk
+        for hunk in hunks
+    )
+
+
 def _verify_node_selector_defect_correction(
     root: Path,
     *,
@@ -622,6 +730,7 @@ def _verify_node_selector_defect_correction(
     resulting_head: str,
     resulting_tree: str,
     observed_workflow_name: str,
+    observed_workflow_path: str,
 ) -> str:
     head = publication._run_git(root, ["rev-parse", "HEAD"])
     tree = publication._run_git(root, ["rev-parse", "HEAD^{tree}"])
@@ -653,7 +762,10 @@ def _verify_node_selector_defect_correction(
         )
     observed_violations = tuple(
         item for item in predecessor_violations
-        if item["workflow_name"] == observed_workflow_name
+        if (
+            item["workflow_name"] == observed_workflow_name
+            and item["path"] == observed_workflow_path
+        )
     )
     if not observed_violations or resulting_violations:
         raise LifecycleOrchestrationError(
@@ -666,13 +778,19 @@ def _verify_node_selector_defect_correction(
         raise LifecycleOrchestrationError("correction path evidence is unavailable")
     changed_paths = sorted(filter(None, changed.stdout.decode("utf-8").splitlines()))
     relevant_workflows = {item["path"] for item in predecessor_violations}
+    engine_floor = _node_version_floor(_node_engine_contract(root, resulting_head))
+    if engine_floor is None:
+        raise LifecycleOrchestrationError(
+            "corrected Node engine floor cannot be derived deterministically"
+        )
+    _require_corrected_selector_contract(
+        root, resulting_head, relevant_workflows, engine_floor
+    )
     def relevant(path: str) -> bool:
-        name = Path(path).name.lower()
         return (
             path in relevant_workflows
-            or (
-                path.startswith(("scripts/", "tests/"))
-                and ("node" in name or "toolchain" in name)
+            or _content_owned_toolchain_guard(
+                root, predecessor_head, resulting_head, path
             )
         )
     if not changed_paths or any(not relevant(path) for path in changed_paths):
@@ -690,6 +808,7 @@ def _verify_node_selector_defect_correction(
         "classification": "IN_CONTRACT_DEFECT",
         "technically_blocking": True,
         "observed_workflow_name": observed_workflow_name,
+        "observed_workflow_path": observed_workflow_path,
         "violations": list(observed_violations),
         "changed_paths": changed_paths,
     }
@@ -957,6 +1076,22 @@ def _verify_post_ready_validation_defect_authority(
     observation, observation_digest = _validated_failure_observation(
         failure_reader(lifecycle.repository, lifecycle.pull_request), lifecycle
     )
+    try:
+        reviewed_state, _eligibility_digest = (
+            fast_path.verified_validation_review_context(candidate_validation)
+        )
+    except fast_path.SecurityBlocker as exc:
+        raise LifecycleOrchestrationError(
+            "corrected candidate reviewed-head authority is invalid"
+        ) from exc
+    if (
+        reviewed_state.repository != lifecycle.repository
+        or reviewed_state.pull_request_number != lifecycle.pull_request
+        or reviewed_state.head_sha != lifecycle.head_sha
+    ):
+        raise LifecycleOrchestrationError(
+            "corrected candidate validation is not bound to the CURRENT reviewed head"
+        )
     if (
         not fast_path.is_verified_validation_evidence(candidate_validation)
         or candidate_validation.repository != lifecycle.repository
@@ -991,6 +1126,7 @@ def _verify_post_ready_validation_defect_authority(
         resulting_head=candidate_validation.head_sha,
         resulting_tree=candidate_validation.tree_sha,
         observed_workflow_name=observation["workflow_name"],
+        observed_workflow_path=observation["workflow_path"],
     )
     candidate_validation_digest = fast_path.digest_json(
         fast_path._validation_evidence_binding(candidate_validation)
@@ -1030,15 +1166,54 @@ def _verify_post_ready_validation_defect_authority(
     )
 
 
+def _authenticate_maintained_correction_commit(
+    repository_root: Path | str,
+    repository: str,
+    head_sha: str,
+) -> fast_path.AuthenticatedIntegrationCommit:
+    """Authenticate the correction from Git and live GitHub under maintained trust."""
+
+    from . import lifecycle_execution
+
+    try:
+        policy = authority._load_lifecycle_trust_policy(repository)
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecycleOrchestrationError(
+            "correction signer policy is unavailable"
+        ) from exc
+    authenticated: list[fast_path.AuthenticatedIntegrationCommit] = []
+    for identity in sorted(policy.transition_signer_identities):
+        try:
+            authenticated.append(
+                lifecycle_execution._authenticate_source_commit(
+                    repository,
+                    head_sha,
+                    identity,
+                    repository_root=repository_root,
+                )
+            )
+        except lifecycle_execution.LifecycleExecutionError:
+            continue
+    if len(authenticated) != 1:
+        raise LifecycleOrchestrationError(
+            "correction signer is invalid or ambiguous under maintained trust"
+        )
+    return authenticated[0]
+
+
 def verify_post_ready_validation_defect_authority(
     current: publication.VerifiedLifecyclePublication,
     *,
     candidate_validation: fast_path.VerifiedValidationEvidence,
-    authenticated_commit: fast_path.AuthenticatedIntegrationCommit,
     repository_root: Path | str,
 ) -> VerifiedPostReadyValidationDefectAuthority:
     """Use only the maintained live GitHub observation boundary in production."""
 
+    authenticated_commit = _authenticate_maintained_correction_commit(
+        repository_root,
+        current.lifecycle.repository,
+        candidate_validation.head_sha,
+    )
     return _verify_post_ready_validation_defect_authority(
         current,
         candidate_validation=candidate_validation,

@@ -10717,6 +10717,16 @@ def create_ready_integration_attestation(normalized, eligibility_bound):
 
 
 class PostReadyValidationRemediationTests(TestCase):
+    def setUp(self) -> None:
+        self._reviewed_head = "f" * 40
+        patcher = mock.patch.object(
+            fast_path,
+            "verified_validation_review_context",
+            side_effect=lambda _validation: self._review_context(self._reviewed_head),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def _repository(self) -> tuple[tempfile.TemporaryDirectory[str], Path, str, str, str, str]:
         temporary = tempfile.TemporaryDirectory(prefix="post-ready-validation-")
         root = Path(temporary.name)
@@ -10729,8 +10739,9 @@ class PostReadyValidationRemediationTests(TestCase):
         )
         workflow = root / ".github" / "workflows" / "quality.yml"
         workflow.write_text(
-            "name: Code Quality\njobs:\n  lint:\n    steps:\n      - uses: actions/setup-node@immutable\n"
-            "        with:\n          node-version: '24'\n",
+            "name: Code Quality\njobs:\n  lint:\n    steps:\n      - name: Setup Node.js\n"
+            "        uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n",
             encoding="utf-8",
         )
         subprocess.run(["git", "-C", str(root), "add", "."], check=True)
@@ -10742,8 +10753,9 @@ class PostReadyValidationRemediationTests(TestCase):
             ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
         ).strip()
         workflow.write_text(
-            "name: Code Quality\njobs:\n  lint:\n    steps:\n      - uses: actions/setup-node@immutable\n"
-            "        with:\n          node-version: '24.21.0'\n",
+            "name: Code Quality\njobs:\n  lint:\n    steps:\n      - name: Setup Node.js\n"
+            "        uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24.21.0'\n",
             encoding="utf-8",
         )
         subprocess.run(["git", "-C", str(root), "add", "."], check=True)
@@ -10769,6 +10781,7 @@ class PostReadyValidationRemediationTests(TestCase):
             validation_receipt_digest="1" * 64,
             adoption_source_evidence_digest="2" * 64,
         )
+        self._reviewed_head = predecessor
         current = publication.VerifiedLifecyclePublication(
             publication_oid="3" * 40,
             publication_digest="4" * 64,
@@ -10810,6 +10823,7 @@ class PostReadyValidationRemediationTests(TestCase):
             "pr_state": "OPEN",
             "draft": False,
             "workflow_name": "Code Quality",
+            "workflow_path": ".github/workflows/quality.yml",
             "check_name": "Validate candidate",
             "workflow_run_id": 100,
             "check_run_id": 200,
@@ -10819,10 +10833,41 @@ class PostReadyValidationRemediationTests(TestCase):
         }
         return temporary, root, current, validation, commit, observation
 
+    @staticmethod
+    def _review_context(head_sha):
+        return SimpleNamespace(
+            repository=REPOSITORY,
+            pull_request_number=971,
+            head_sha=head_sha,
+        ), None
+
+    def test_setup_node_parser_accepts_named_and_shorthand_steps(self) -> None:
+        named = (
+            "steps:\n  - name: Setup Node.js\n    uses: actions/setup-node@immutable\n"
+            "    with:\n      node-version: '24.21.0'\n"
+        )
+        shorthand = (
+            "steps:\n  - uses: actions/setup-node@immutable\n"
+            "    with:\n      node-version: '24.21.0'\n"
+        )
+        self.assertEqual(
+            orchestration._setup_node_selectors(named), ("24.21.0",)
+        )
+        self.assertEqual(
+            orchestration._setup_node_selectors(shorthand), ("24.21.0",)
+        )
+
     def test_exact_current_failure_and_independent_proof_use_remaining_slot(self) -> None:
         temporary, root, current, validation, commit, observation = self._inputs()
         self.addCleanup(temporary.cleanup)
-        with mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True):
+        with (
+            mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+            mock.patch.object(
+                fast_path,
+                "verified_validation_review_context",
+                return_value=self._review_context(current.lifecycle.head_sha),
+            ),
+        ):
             verified = orchestration._verify_post_ready_validation_defect_authority(
                 current,
                 candidate_validation=validation,
@@ -10895,23 +10940,198 @@ class PostReadyValidationRemediationTests(TestCase):
             "conclusion": "failure",
             "run_attempt": 2,
             "repository": {"full_name": REPOSITORY},
+            "path": ".github/workflows/quality.yml",
+        }
+        job = {
+            "id": 200,
+            "run_id": 100,
+            "head_sha": current.lifecycle.head_sha,
+            "status": "completed",
+            "conclusion": "failure",
+            "name": "Validate candidate",
         }
         responses = [
             SimpleNamespace(returncode=0, stdout=json.dumps(failure).encode()),
             SimpleNamespace(returncode=0, stdout=json.dumps(run).encode()),
+            SimpleNamespace(returncode=0, stdout=json.dumps(job).encode()),
         ]
         with (
             mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+            mock.patch.object(
+                fast_path,
+                "verified_validation_review_context",
+                return_value=self._review_context(current.lifecycle.head_sha),
+            ),
+            mock.patch.object(
+                orchestration,
+                "_authenticate_maintained_correction_commit",
+                return_value=commit,
+            ) as authenticate,
             mock.patch.object(publication, "_run_gh", side_effect=responses) as live,
         ):
             verified = orchestration.verify_post_ready_validation_defect_authority(
                 current,
                 candidate_validation=validation,
-                authenticated_commit=commit,
                 repository_root=root,
             )
         self.assertEqual(verified.current_head_sha, current.lifecycle.head_sha)
-        self.assertEqual(live.call_count, 2)
+        authenticate.assert_called_once_with(
+            root, REPOSITORY, validation.head_sha
+        )
+        self.assertEqual(live.call_count, 3)
+
+    def test_live_reader_rejects_ambiguous_failed_check_selection(self) -> None:
+        temporary, _root, current, _validation, _commit, _observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        failure = {
+            "state": "OPEN",
+            "isDraft": False,
+            "headRefOid": current.lifecycle.head_sha,
+            "headRepository": {"nameWithOwner": REPOSITORY},
+            "statusCheckRollup": [
+                {
+                    "__typename": "CheckRun",
+                    "workflowName": "Code Quality",
+                    "name": name,
+                    "status": "COMPLETED",
+                    "conclusion": "FAILURE",
+                    "detailsUrl": (
+                        f"https://github.com/{REPOSITORY}/actions/runs/{run}/job/{job}"
+                    ),
+                }
+                for name, run, job in (
+                    ("Unrelated", 99, 199),
+                    ("Validate candidate", 100, 200),
+                )
+            ],
+        }
+        with (
+            mock.patch.object(
+                publication,
+                "_run_gh",
+                return_value=SimpleNamespace(
+                    returncode=0, stdout=json.dumps(failure).encode()
+                ),
+            ) as live,
+            self.assertRaisesRegex(
+                orchestration.LifecycleOrchestrationError, "unique"
+            ),
+        ):
+            orchestration._read_live_post_ready_failure(REPOSITORY, 971)
+        self.assertEqual(live.call_count, 1)
+
+    def test_rejects_stale_validation_review_context(self) -> None:
+        temporary, root, current, validation, commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        with (
+            mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+            mock.patch.object(
+                fast_path,
+                "verified_validation_review_context",
+                return_value=self._review_context("f" * 40),
+            ),
+            self.assertRaisesRegex(
+                orchestration.LifecycleOrchestrationError, "reviewed head"
+            ),
+        ):
+            orchestration._verify_post_ready_validation_defect_authority(
+                current,
+                candidate_validation=validation,
+                authenticated_commit=commit,
+                repository_root=root,
+                failure_reader=lambda _repository, _pull_request: copy.deepcopy(observation),
+            )
+
+    def test_rejects_same_name_workflow_from_another_path(self) -> None:
+        temporary, root, current, validation, _commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        observation["workflow_path"] = ".github/workflows/other.yml"
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "reproduced"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=current.lifecycle.pull_request,
+                predecessor_head=current.lifecycle.head_sha,
+                predecessor_tree=current.lifecycle.tree_sha,
+                resulting_head=validation.head_sha,
+                resulting_tree=validation.tree_sha,
+                observed_workflow_name=observation["workflow_name"],
+                observed_workflow_path=observation["workflow_path"],
+            )
+
+    def test_rejects_missing_or_unparseable_successor_selector(self) -> None:
+        for selector in (None, "${{ matrix.node }}"):
+            temporary, root, current, _validation, _commit, _observation = self._inputs()
+            self.addCleanup(temporary.cleanup)
+            workflow = root / ".github" / "workflows" / "quality.yml"
+            suffix = "" if selector is None else f"          node-version: '{selector}'\n"
+            workflow.write_text(
+                "name: Code Quality\njobs:\n  lint:\n    steps:\n"
+                "      - uses: actions/setup-node@immutable\n        with:\n" + suffix,
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "commit", "--amend", "--no-edit", "--quiet"],
+                check=True,
+            )
+            successor = subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+            ).strip()
+            successor_tree = subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+            ).strip()
+            with (
+                self.subTest(selector=selector),
+                self.assertRaisesRegex(
+                    orchestration.LifecycleOrchestrationError, "selector"
+                ),
+            ):
+                orchestration._verify_node_selector_defect_correction(
+                    root,
+                    repository=REPOSITORY,
+                    pull_request=current.lifecycle.pull_request,
+                    predecessor_head=current.lifecycle.head_sha,
+                    predecessor_tree=current.lifecycle.tree_sha,
+                    resulting_head=successor,
+                    resulting_tree=successor_tree,
+                    observed_workflow_name="Code Quality",
+                    observed_workflow_path=".github/workflows/quality.yml",
+                )
+
+    def test_rejects_filename_only_toolchain_change(self) -> None:
+        temporary, root, current, _validation, _commit, _observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        payload = root / "scripts" / "node-backdoor.py"
+        payload.parent.mkdir(exist_ok=True)
+        payload.write_text("print('unrelated')\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "--amend", "--no-edit", "--quiet"],
+            check=True,
+        )
+        successor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        successor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "unrelated"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=current.lifecycle.pull_request,
+                predecessor_head=current.lifecycle.head_sha,
+                predecessor_tree=current.lifecycle.tree_sha,
+                resulting_head=successor,
+                resulting_tree=successor_tree,
+                observed_workflow_name="Code Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+            )
 
     def test_rejects_every_other_lifecycle_shape(self) -> None:
         cases = (
@@ -11116,6 +11336,7 @@ class PostReadyValidationRemediationTests(TestCase):
                 resulting_head=weakened_head,
                 resulting_tree=weakened_tree,
                 observed_workflow_name="Code Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
             )
 
     def test_source_modes_are_not_substitutable_and_authorization_is_finite(self) -> None:
