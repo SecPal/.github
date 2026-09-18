@@ -105,7 +105,7 @@ def _classify_journal_document(raw: bytes) -> tuple[str, dict[str, Any]]:
     if not isinstance(candidate, dict):
         raise LifecyclePublicationError("journal document is malformed")
     kind = candidate.get("kind")
-    if kind not in JOURNAL_KINDS:
+    if not isinstance(kind, str) or kind not in JOURNAL_KINDS:
         raise LifecyclePublicationError("journal document kind is unknown")
     return kind, candidate
 
@@ -1146,7 +1146,7 @@ def _verify_ready_source_recovery_document(
     expected_branch: str,
     current_oid: str,
     current_document: Mapping[str, Any],
-    current_lifecycle: authority.VerifiedLifecycleAuthority,
+    current_lifecycle: authority.VerifiedLifecycleAuthority | None,
 ) -> tuple[dict[str, Any], VerifiedReadySourceRecovery]:
     try:
         document = json.loads(raw, object_pairs_hook=_reject_duplicate_pairs)
@@ -1161,6 +1161,40 @@ def _verify_ready_source_recovery_document(
     if frozenset(document) != READY_SOURCE_RECOVERY_FIELDS:
         raise LifecyclePublicationError(
             "Ready-source recovery publication has missing or unknown fields"
+        )
+    if current_lifecycle is None:
+        recovery_authorization = document["recovery_authorization"]
+        if not isinstance(recovery_authorization, dict):
+            raise LifecyclePublicationError(
+                "Ready-source recovery authorization is invalid"
+            )
+        try:
+            projected_state = authority._ready_source_recovery_state(
+                recovery_authorization.get("lifecycle_state"),
+                historical_proof_mode=current_document[
+                    "historical_proof_mode"
+                ],
+            )
+        except (authority.LifecycleAuthorityError, TypeError, ValueError) as exc:
+            raise LifecyclePublicationError(
+                "Ready-source recovery authorization is invalid"
+            ) from exc
+        current_lifecycle = authority.VerifiedLifecycleAuthority(
+            authority_digest=current_document["terminal_authority_digest"],
+            repository=current_document["repository"],
+            delivery_issue=current_document["delivery_issue"],
+            lifecycle_id=current_document["lifecycle_id"],
+            initialization_evidence_digest=current_document[
+                "initialization_evidence_digest"
+            ],
+            pull_request=current_document["pull_request"],
+            head_sha=current_document["head_sha"],
+            state=projected_state,
+            authority_signer_identity=current_document["signer_identity"],
+            historical_proof_mode=current_document["historical_proof_mode"],
+            legacy_adoption_checkpoint_digest=current_document[
+                "legacy_adoption_checkpoint_digest"
+            ],
         )
     if (
         document["schema_version"] != SCHEMA_VERSION
@@ -2627,26 +2661,30 @@ def _walk_journal_identity_projection(
         if kind == GENESIS_ADMISSION_KIND:
             continue
         if kind == READY_SOURCE_RECOVERY_KIND:
-            key = (candidate.get("repository"), candidate.get("delivery_issue"))
+            try:
+                key = (
+                    authority._require_repository(candidate.get("repository")),
+                    authority._require_positive_int(
+                        candidate.get("delivery_issue"), "delivery issue"
+                    ),
+                )
+            except authority.LifecycleAuthorityError as exc:
+                raise LifecyclePublicationError(
+                    "Ready-source recovery identity is invalid"
+                ) from exc
             previous = publications.get(key)
             if previous is None:
                 raise LifecyclePublicationError(
                     "Ready-source recovery precedes CURRENT lifecycle publication"
                 )
-            current_oid, current_document, current_raw = previous
-            _, current_lifecycle = _verify_publication_document(
-                current_raw,
-                object_oid=current_oid,
-                expected_branch=publication_branch,
-                native_genesis_admission=admissions.get(key),
-            )
+            current_oid, current_document, _ = previous
             document, recovery = _verify_ready_source_recovery_document(
                 raw,
                 object_oid=object_oid,
                 expected_branch=publication_branch,
                 current_oid=current_oid,
                 current_document=current_document,
-                current_lifecycle=current_lifecycle,
+                current_lifecycle=None,
             )
             if document["journal_predecessor_oid"] != parent:
                 raise LifecyclePublicationError(

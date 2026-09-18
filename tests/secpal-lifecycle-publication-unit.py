@@ -1577,6 +1577,22 @@ class LifecyclePublicationTests(TestCase):
                     self.probe, object_oid, BRANCH
                 )
 
+        malformed_kind = copy.deepcopy(base_recovery_fields)
+        malformed_kind["kind"] = []
+        malformed_kind_oid = publication._write_publication_object(
+            self.probe,
+            authority.canonical_json_bytes(malformed_kind),
+            enrolled.publication_oid,
+        )
+        for walker in (
+            publication._walk_journal,
+            publication._walk_journal_identity_projection,
+        ):
+            with self.assertRaises(publication.LifecyclePublicationError):
+                walker(
+                    self.probe, malformed_kind_oid, BRANCH
+                )
+
         field_mutations = {
             "wrong domain": ("domain", "secpal.lifecycle-authority-publication/v1"),
             "wrong branch": ("publication_branch", "refs/heads/other"),
@@ -1597,6 +1613,95 @@ class LifecyclePublicationTests(TestCase):
                     ),
                     enrolled.publication_oid,
                 )
+
+        for field in ("repository", "delivery_issue"):
+            with self.subTest(recovery_projection=f"unhashable {field}"):
+                changed = copy.deepcopy(base_recovery_fields)
+                changed[field] = []
+                with self.assertRaises(publication.LifecyclePublicationError):
+                    publication._walk_journal_identity_projection(
+                        self.probe,
+                        publication._write_publication_object(
+                            self.probe,
+                            publication._sign_ready_source_recovery(
+                                changed, signer_for()
+                            ),
+                            enrolled.publication_oid,
+                        ),
+                        BRANCH,
+                    )
+
+        current_raw, current_parent = publication._read_publication_object(
+            self.probe, enrolled.publication_oid
+        )
+        future_current_fields = json.loads(current_raw)
+        future_current_fields["lifecycle_evidence"]["proof_version"] = "999.0"
+        future_current_fields["lifecycle_evidence_digest"] = hashlib.sha256(
+            authority.canonical_json_bytes(
+                future_current_fields["lifecycle_evidence"]
+            )
+        ).hexdigest()
+        future_current_fields = {
+            key: value for key, value in future_current_fields.items()
+            if key not in {"signature", "publication_digest"}
+        }
+        future_current_raw = publication._sign_publication(
+            future_current_fields, signer_for()
+        )
+        future_current_oid = publication._write_publication_object(
+            self.probe, future_current_raw, current_parent
+        )
+        future_current_document = json.loads(future_current_raw)
+        future_authorization_fields = {
+            key: copy.deepcopy(value) for key, value in recovery.items()
+            if key not in {"signature", "authorization_digest"}
+        }
+        future_authorization_fields["current_publication_oid"] = (
+            future_current_oid
+        )
+        future_authorization_fields["current_publication_digest"] = (
+            future_current_document["publication_digest"]
+        )
+        future_authorization_signature = authority._normalize_signature(
+            signer_for()(
+                authority.canonical_json_bytes(future_authorization_fields),
+                authority.READY_SOURCE_RECOVERY_AUTHORIZATION_DOMAIN,
+            ),
+            SIGNER,
+        )
+        future_authorization_signed = {
+            **future_authorization_fields,
+            "signature": future_authorization_signature,
+        }
+        future_authorization = {
+            **future_authorization_signed,
+            "authorization_digest": authority.digest_json(
+                future_authorization_signed
+            ),
+        }
+        future_recovery_fields = publication._ready_source_recovery_fields(
+            future_authorization,
+            publication_branch=BRANCH,
+            journal_predecessor_oid=future_current_oid,
+            signer_identity=SIGNER,
+        )
+        future_recovery_raw = publication._sign_ready_source_recovery(
+            future_recovery_fields, signer_for()
+        )
+        future_recovery_oid = publication._write_publication_object(
+            self.probe, future_recovery_raw, future_current_oid
+        )
+        with self.assertRaises((
+            authority.LifecycleAuthorityError,
+            publication.LifecyclePublicationError,
+        )):
+            publication._walk_journal(
+                self.probe, future_recovery_oid, BRANCH, include_recoveries=True
+            )
+        projected, _ = publication._walk_journal_identity_projection(
+            self.probe, future_recovery_oid, BRANCH
+        )
+        self.assertEqual(projected, {(REPOSITORY, ISSUE)})
 
         valid_raw = publication._sign_ready_source_recovery(
             base_recovery_fields, signer_for()
