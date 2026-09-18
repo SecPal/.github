@@ -847,7 +847,7 @@ def _live_feedback(repository: str, pull_request: int, head_sha: str) -> dict[st
         "reviewThreads(first:100){nodes{id isResolved isOutdated comments(first:100)"
         "{nodes{body path author{login}} pageInfo{hasNextPage}}} pageInfo{hasNextPage}}"
         "reviews(first:100){nodes{state commit{oid} author{login}} pageInfo{hasNextPage}}"
-        "}}}}"
+        "}}}"
     )
     value = _github_json(
         [

@@ -904,6 +904,52 @@ class GovernanceAmendmentTests(TestCase):
             ):
                 observe(value)
 
+    def test_live_feedback_uses_valid_closed_query_and_fails_closed(self) -> None:
+        query = (
+            "query($owner:String!,$name:String!,$number:Int!){"
+            "repository(owner:$owner,name:$name){pullRequest(number:$number){"
+            "reviewThreads(first:100){nodes{id isResolved isOutdated comments(first:100)"
+            "{nodes{body path author{login}} pageInfo{hasNextPage}}} pageInfo{hasNextPage}}"
+            "reviews(first:100){nodes{state commit{oid} author{login}} pageInfo{hasNextPage}}"
+            "}}}"
+        )
+        response = {"data": {"repository": {"pullRequest": {
+            "reviewThreads": {
+                "nodes": [], "pageInfo": {"hasNextPage": False},
+            },
+            "reviews": {
+                "nodes": [], "pageInfo": {"hasNextPage": False},
+            },
+        }}}}
+
+        def observe(value: dict[str, object]) -> dict[str, object]:
+            def github(arguments: list[str]):
+                self.assertEqual(arguments, [
+                    "api", "--hostname", "github.com", "graphql",
+                    "-f", f"query={query}", "-f", "owner=SecPal",
+                    "-f", "name=.github", "-F", "number=961",
+                ])
+                return subprocess.CompletedProcess(
+                    arguments, 0, json.dumps(value).encode(), b"",
+                )
+
+            with mock.patch.object(
+                amendment.publication, "_run_gh", side_effect=github,
+            ):
+                return amendment._live_feedback("SecPal/.github", 961, HEAD)
+
+        observed = observe(response)
+        self.assertEqual(observed["material_finding_ids"], [])
+        incomplete = copy.deepcopy(response)
+        incomplete["data"]["repository"]["pullRequest"]["reviewThreads"][
+            "pageInfo"
+        ]["hasNextPage"] = True
+        with self.assertRaisesRegex(
+            amendment.GovernanceAmendmentError,
+            "live governance amendment feedback is incomplete",
+        ):
+            observe(incomplete)
+
     def test_executor_reauthenticates_all_facts_before_any_git_mutation(self) -> None:
         value = authorization()
         current = {
