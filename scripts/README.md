@@ -493,7 +493,9 @@ the existing legacy-adoption signer, and consumes once by a signed two-parent,
 non-force fast-forward of the bound governance tree to protected main. Candidate
 policy and registry additions are prospective only. Source and merge signatures
 must match keys in the bound accepted-main registry for every adopted source
-commit. The final merge signature and immutable content are verified locally
+commit. Its two top-level command entry points are admitted as exact files;
+other paths under `scripts/` remain outside this authority. The final merge
+signature and immutable content are verified locally
 before the non-force CAS push; ambient Git trust is not authority. The change
 digest uses the maintained newline-terminated canonical JSON encoder over one
 closed base/head/tree/topology/path/blob/mode object. The accepted merge

@@ -23,6 +23,8 @@
         "docs",
         "policies",
         "scripts/README.md",
+        "scripts/secpal-pr-review-actions.py",
+        "scripts/secpal-resolve-fixed-threads.py",
         "scripts/secpal_pr_review",
         "tests"
       ],

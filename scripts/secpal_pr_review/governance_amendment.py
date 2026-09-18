@@ -34,12 +34,18 @@ ROOT_AUTHORIZATION_DOMAIN = "secpal.governance-amendment-root-authorization/v1"
 ROOT_AUTHORIZATION_KIND = "SECPAL_GOVERNANCE_AMENDMENT_ROOT_AUTHORIZATION"
 HUMAN_AUTHORITY_IDENTITY = "SecPal human architecture authority for issue 960"
 SOURCE_SIGNER_IDENTITY = "aroviqen@secpal.app"
+GOVERNANCE_EXACT_PATHS = frozenset({
+    "scripts/secpal-pr-review-actions.py",
+    "scripts/secpal-resolve-fixed-threads.py",
+})
 GOVERNANCE_PATH_PREFIXES = [
     ".agents/skills/secpal-pr-review/references",
     "CHANGELOG.md",
     "docs",
     "policies",
     "scripts/README.md",
+    "scripts/secpal-pr-review-actions.py",
+    "scripts/secpal-resolve-fixed-threads.py",
     "scripts/secpal_pr_review",
     "tests",
 ]
@@ -274,7 +280,14 @@ def _changed_files(value: Any, allowed_prefixes: list[str]) -> list[dict[str, An
         if (
             not isinstance(path, str) or not path or path.startswith(("/", ".git/"))
             or ".." in Path(path).parts
-            or not any(path == prefix or path.startswith(f"{prefix}/") for prefix in allowed_prefixes)
+            or not any(
+                path == prefix
+                or (
+                    prefix not in GOVERNANCE_EXACT_PATHS
+                    and path.startswith(f"{prefix}/")
+                )
+                for prefix in allowed_prefixes
+            )
         ):
             raise GovernanceAmendmentError("governance amendment contains non-governance source")
         authority._require_oid(raw.get("blob_oid"), "governance amendment blob")

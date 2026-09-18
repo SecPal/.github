@@ -489,7 +489,10 @@ qualification binding before either signer runs. Execution reruns the same
 producer and must yield byte-identical facts. Every adopted source commit
 and the locally constructed merge commit are verified directly against the
 bound accepted-main signer keys; ambient Git trust and matching principal text
-are insufficient. The canonical change digest is derived only from the exact
+are insufficient. The governance-only scope admits the two maintained command
+entry points, `scripts/secpal-pr-review-actions.py` and
+`scripts/secpal-resolve-fixed-threads.py`, as exact files; it does not admit
+nearby or arbitrary `scripts/` paths. The canonical change digest is derived only from the exact
 repository/delivery/source/base/change-set object using newline-terminated
 canonical JSON. Consumption creates a signed two-parent commit with the
 bound candidate tree and performs one

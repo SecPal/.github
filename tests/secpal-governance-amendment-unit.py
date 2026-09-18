@@ -23,6 +23,30 @@ ROOT_SIGNER = SOURCE
 HEAD = "a" * 40
 TREE = "b" * 40
 PARENT = "c" * 40
+FULL_CANDIDATE_PATHS = [
+    ".agents/skills/secpal-pr-review/references/contract.md",
+    ".agents/skills/secpal-pr-review/references/repositories.json",
+    ".agents/skills/secpal-pr-review/references/repositories.schema.json",
+    "CHANGELOG.md",
+    "docs/secpal-pr-review-workflow.md",
+    "policies/governance-amendment-bootstrap.json",
+    "policies/governance-amendment-bootstrap.json.license",
+    "policies/qualified-remediation-successor-evidence-loss.json",
+    "policies/qualified-remediation-successor-evidence-loss.json.license",
+    "scripts/README.md",
+    "scripts/secpal-pr-review-actions.py",
+    "scripts/secpal-resolve-fixed-threads.py",
+    "scripts/secpal_pr_review/fast_path.py",
+    "scripts/secpal_pr_review/governance_amendment.py",
+    "scripts/secpal_pr_review/lifecycle_authority.py",
+    "scripts/secpal_pr_review/qualified_remediation_successor_loss.py",
+    "tests/secpal-governance-amendment-unit.py",
+    "tests/secpal-lifecycle-authority-unit.py",
+    "tests/secpal-pr-review-actions-unit.py",
+    "tests/secpal-pr-review-static-policy.py",
+    "tests/secpal-qualified-remediation-successor-loss-unit.py",
+    "tests/secpal-resolve-fixed-threads-unit.py",
+]
 
 
 def signer(payload: bytes, domain: str) -> dict[str, str]:
@@ -339,15 +363,35 @@ class GovernanceAmendmentTests(TestCase):
             allowed = Path(directory) / "allowed-signers"
             allowed.write_text(f"{SOURCE} {key.with_suffix('.pub').read_text()}")
             git("config", "gpg.format", "ssh"); git("config", "user.signingkey", str(key)); git("config", "gpg.ssh.allowedSignersFile", str(allowed)); git("config", "commit.gpgsign", "true")
-            path = root / "scripts" / "secpal_pr_review" / "governance_amendment.py"
-            path.parent.mkdir(parents=True); path.write_text("base\n")
+            path = root / "base.txt"
+            path.write_text("accepted base\n")
             git("add", "."); git("commit", "-S", "-m", "base")
             base = git("rev-parse", "HEAD")
             git("remote", "add", "origin", str(remote)); git("push", "origin", "HEAD:main")
-            git("switch", "-c", "candidate"); path.write_text("amendment\n")
-            git("commit", "-S", "-am", "amendment")
+            git("switch", "-c", "candidate")
+            midpoint = len(FULL_CANDIDATE_PATHS) // 2
+            for sequence, paths in enumerate(
+                (FULL_CANDIDATE_PATHS[:midpoint], FULL_CANDIDATE_PATHS[midpoint:]),
+                start=1,
+            ):
+                for relative in paths:
+                    candidate = root / relative
+                    candidate.parent.mkdir(parents=True, exist_ok=True)
+                    candidate.write_text(f"candidate {relative}\n", encoding="utf-8")
+                git("add", ".")
+                git("commit", "-S", "-m", f"amendment part {sequence}")
             head, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
-            blob = git("rev-parse", f"HEAD:{path.relative_to(root)}")
+            source_oids = git(
+                "rev-list", "--reverse", "--topo-order", f"{base}..{head}"
+            ).splitlines()
+            changed = []
+            for relative in sorted(FULL_CANDIDATE_PATHS):
+                mode, kind, blob = git("ls-tree", head, "--", relative).split(None, 2)[0:3]
+                self.assertEqual(kind, "blob")
+                changed.append({
+                    "path": relative, "blob_oid": blob.split("\t", 1)[0],
+                    "mode": mode,
+                })
             policy = copy.deepcopy(proposed_policy())
             policy["accepted_main_sha"] = base
             policy["human_authorization_digest"] = authority.digest_json({
@@ -358,17 +402,10 @@ class GovernanceAmendmentTests(TestCase):
                 "accepted_main_sha": base, "decision": "APPROVED", "bounded_uses": 1,
             })
             raw = authorization(
-                head=head, tree=tree, parent=base, accepted_main=base,
-                changed=[{"path": str(path.relative_to(root)), "blob_oid": blob, "mode": "100644"}],
-                policy=policy,
+                head=head, tree=tree, parent=source_oids[-2],
+                accepted_main=base, changed=changed,
+                source_oids=source_oids, policy=policy,
             )
-            issuance_facts = {
-                k: copy.deepcopy(v) for k, v in raw.items()
-                if k not in {
-                    "root_authorization", "signer_identity", "signature",
-                    "authorization_digest",
-                }
-            }
             trusted_signer = authority.TrustedSigner(
                 SOURCE,
                 (key.with_suffix(".pub").read_text().strip(),),
@@ -378,15 +415,81 @@ class GovernanceAmendmentTests(TestCase):
                 authority_signer_identities=frozenset({ROOT_SIGNER}),
                 legacy_adoption_signer_identities=frozenset({SIGNER}),
                 signers={SOURCE: trusted_signer},
+                publication_remote_url=str(remote),
             )
+            checks = [{
+                "name": "governance", "status": "completed",
+                "conclusion": "success", "head_sha": head,
+            }]
+            statuses: list[dict[str, object]] = []
+            threads: list[dict[str, object]] = []
+            reviews = [{
+                "state": "COMMENTED", "commit": {"oid": head},
+                "author": {"login": "review-bot"},
+            }]
+            pull = {
+                "number": 961, "state": "open", "draft": True,
+                "merged": False,
+                "head": {"sha": head, "repo": {"full_name": "SecPal/.github"}},
+                "base": {"sha": base, "ref": "main", "repo": {"full_name": "SecPal/.github"}},
+            }
+            feedback = {"data": {"repository": {"pullRequest": {
+                "reviewThreads": {"nodes": threads, "pageInfo": {"hasNextPage": False}},
+                "reviews": {"nodes": reviews, "pageInfo": {"hasNextPage": False}},
+            }}}}
+
+            def github(arguments: list[str]):
+                joined = " ".join(arguments)
+                if "pulls/961" in joined:
+                    value = pull
+                elif "issues/960" in joined:
+                    value = {"number": 960, "state": "open"}
+                elif "check-runs" in joined:
+                    value = {"check_runs": checks}
+                elif "/status" in joined:
+                    value = {"state": "pending", "statuses": statuses}
+                elif "graphql" in arguments:
+                    value = feedback
+                else:
+                    raise AssertionError(arguments)
+                return subprocess.CompletedProcess(
+                    arguments, 0, json.dumps(value).encode(), b""
+                )
+
             first, second = self.patches(trust)
+            signer_factory = mock.Mock()
             def role_signer(_trust, identities, _label, **_kwargs):
                 if identities == trust.authority_signer_identities:
                     return ROOT_SIGNER, root_signer
                 return SIGNER, signer
+            signer_factory.side_effect = role_signer
 
-            with mock.patch.object(amendment, "ROOT", root), mock.patch.object(amendment, "_remote_url", return_value=str(remote)), mock.patch.object(amendment, "_push_credentials", return_value=nullcontext((root, None))), mock.patch.object(amendment, "produce_observation", return_value=issuance_facts), first, second, mock.patch.object(amendment.execution, "_policy_role_signer", side_effect=role_signer):
-                authenticated = authority.authenticate_governance_amendment_issuance("SecPal/.github", 960, observation_inputs(raw))
+            with mock.patch.object(amendment, "ROOT", root), mock.patch.object(amendment, "_push_credentials", return_value=nullcontext((root, None))), mock.patch.object(amendment.publication, "_run_gh", side_effect=github), first, second, mock.patch.object(amendment.execution, "_policy_role_signer", signer_factory):
+                inputs = observation_inputs(raw)
+                authenticated = authority.authenticate_governance_amendment_issuance("SecPal/.github", 960, inputs)
+                observed = authenticated.facts
+                self.assertEqual(
+                    [item["path"] for item in observed["changed_files"]],
+                    sorted(FULL_CANDIDATE_PATHS),
+                )
+                oracle_facts = {
+                    key: observed[key] for key in (
+                        "repository", "delivery_issue", "pull_request",
+                        "head_sha", "tree_sha", "ordered_parent_shas",
+                        "accepted_main_sha", "changed_files",
+                    )
+                }
+                oracle = hashlib.sha256(
+                    json.dumps(
+                        oracle_facts, ensure_ascii=False, sort_keys=True,
+                        separators=(",", ":"), allow_nan=False,
+                    ).encode("utf-8") + b"\n"
+                ).hexdigest()
+                self.assertEqual(observed["change_digest"], oracle)
+                self.assertEqual(
+                    [item["oid"] for item in observed["source_commits"]],
+                    source_oids,
+                )
                 issued = authority.issue_governance_amendment_authorization(authenticated)
                 result = authority.execute_governance_amendment(issued)
                 self.assertEqual(result["status"], "CONSUMED")
@@ -401,6 +504,35 @@ class GovernanceAmendmentTests(TestCase):
                     "protected main changed",
                 ):
                     authority.execute_governance_amendment(issued)
+            self.assertEqual(signer_factory.call_count, 2)
+
+    def test_exact_governance_tools_do_not_admit_nearby_scripts(self) -> None:
+        exact = [
+            {
+                "path": "scripts/secpal-pr-review-actions.py",
+                "blob_oid": "a" * 40, "mode": "100755",
+            },
+            {
+                "path": "scripts/secpal-resolve-fixed-threads.py",
+                "blob_oid": "b" * 40, "mode": "100755",
+            },
+        ]
+        self.assertEqual(
+            amendment._changed_files(exact, amendment.GOVERNANCE_PATH_PREFIXES),
+            exact,
+        )
+        for path in (
+            "scripts/secpal-pr-review-actions-helper.py",
+            "scripts/secpal-resolve-fixed-threads.py/child",
+            "scripts/unrelated-governance.py",
+        ):
+            with self.subTest(path=path), self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError, "non-governance source"
+            ):
+                amendment._changed_files(
+                    [{"path": path, "blob_oid": "c" * 40, "mode": "100644"}],
+                    amendment.GOVERNANCE_PATH_PREFIXES,
+                )
 
     def test_issuer_requires_exact_root_observation_and_sealed_input(self) -> None:
         value = authorization()
