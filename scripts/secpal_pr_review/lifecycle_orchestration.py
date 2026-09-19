@@ -605,6 +605,39 @@ def _setup_node_selectors(workflow: str) -> tuple[str, ...]:
     return tuple(selectors)
 
 
+def _setup_node_selectors_by_job(
+    workflow: str,
+) -> tuple[tuple[str | None, str], ...]:
+    """Bind each selector to its exact top-level workflow job when available."""
+
+    lines = workflow.splitlines()
+    jobs_indexes = [
+        index for index, line in enumerate(lines)
+        if re.fullmatch(r"jobs:\s*(?:#.*)?", line)
+    ]
+    if len(jobs_indexes) != 1:
+        return tuple((None, selector) for selector in _setup_node_selectors(workflow))
+    sections: list[tuple[str, list[str]]] = []
+    current: tuple[str, list[str]] | None = None
+    for line in lines[jobs_indexes[0] + 1 :]:
+        if line.strip() and len(line) - len(line.lstrip()) == 0:
+            break
+        job_match = re.fullmatch(r"  ([A-Za-z0-9_-]+):\s*(?:#.*)?", line)
+        if job_match:
+            current = (job_match.group(1), [line])
+            sections.append(current)
+        elif current is not None:
+            current[1].append(line)
+    bound = tuple(
+        (job_id, selector)
+        for job_id, section in sections
+        for selector in _setup_node_selectors("\n".join(section))
+    )
+    return bound or tuple(
+        (None, selector) for selector in _setup_node_selectors(workflow)
+    )
+
+
 def _workflow_name(workflow: str) -> str | None:
     for line in workflow.splitlines():
         match = re.match(r"^name:\s*['\"]?([^'\"#]+?)['\"]?\s*(?:#.*)?$", line)
@@ -706,8 +739,10 @@ def _authenticated_selector_source_paths(
             "observed workflow identity is not authenticated by candidate bytes"
         )
     violating_paths = {item["path"] for item in violations}
-    if observed_workflow_path in violating_paths:
-        return "DIRECT_WORKFLOW", (observed_workflow_path,)
+    callers = _workflow_job_calls(top_level)
+    reusable_callers = tuple(caller for caller in callers if "uses" in caller)
+    if observed_workflow_path in violating_paths and not reusable_callers:
+        return "DIRECT_WORKFLOW", tuple(sorted(violating_paths))
     if not isinstance(observed_check_name, str) or not observed_check_name.strip():
         raise LifecycleOrchestrationError(
             "local reusable workflow check identity is unavailable"
@@ -715,14 +750,13 @@ def _authenticated_selector_source_paths(
 
     mappings: list[tuple[str, str, str, str]] = []
     reachable_violations: set[str] = set()
-    for caller in _workflow_job_calls(top_level):
+    for caller in reusable_callers:
         uses = caller.get("uses")
-        if uses is None:
-            continue
+        assert uses is not None
         if "${{" in uses or "}}" in uses:
             raise LifecycleOrchestrationError("dynamic reusable workflow calls are unsupported")
         if not uses.startswith("./"):
-            continue
+            raise LifecycleOrchestrationError("remote reusable workflows are unsupported")
         if not re.fullmatch(r"\./\.github/workflows/[^/]+\.ya?ml", uses):
             raise LifecycleOrchestrationError("local reusable workflow path is invalid")
         caller_name = caller.get("name")
@@ -745,7 +779,13 @@ def _authenticated_selector_source_paths(
                 mappings.append(
                     (caller["job_id"], caller_name, called_path, called_job["job_id"])
                 )
-    if len(mappings) != 1 or mappings[0][2] not in violating_paths:
+    matched_job_violations = {
+        (item["path"], item["job_id"]) for item in violations
+    }
+    if (
+        len(mappings) != 1
+        or (mappings[0][2], mappings[0][3]) not in matched_job_violations
+    ):
         raise LifecycleOrchestrationError(
             "failed check does not resolve to one authenticated violating local workflow"
         )
@@ -791,7 +831,7 @@ def _node_selector_violations(root: Path, revision: str) -> tuple[dict[str, Any]
     for path in paths:
         workflow = _git_text(root, revision, path)
         workflow_name = _workflow_name(workflow)
-        for selector in _setup_node_selectors(workflow):
+        for job_id, selector in _setup_node_selectors_by_job(workflow):
             selector_floor = _node_version_floor(selector)
             if (
                 selector_floor is not None
@@ -800,6 +840,7 @@ def _node_selector_violations(root: Path, revision: str) -> tuple[dict[str, Any]
                 violations.append({
                     "path": path,
                     "workflow_name": workflow_name,
+                    "job_id": job_id,
                     "selector": selector,
                     "selector_floor": ".".join(map(str, selector_floor)),
                     "engine": engine,
