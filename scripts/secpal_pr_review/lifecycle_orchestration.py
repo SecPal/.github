@@ -540,7 +540,9 @@ def _read_post_ready_failure(
             continue
         run_id, job_id = map(int, match.groups())
         run = admissible_runs.get(run_id)
-        if run is None or check.get("id") != job_id:
+        # Check-run and Actions job IDs are distinct identities; the
+        # authenticated details URL is the maintained join between them.
+        if run is None:
             continue
         if run_id not in jobs_by_run:
             jobs_by_run[run_id] = _github_paginated_collection(

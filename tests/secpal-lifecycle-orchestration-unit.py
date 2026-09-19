@@ -10905,10 +10905,11 @@ class PostReadyValidationRemediationTests(TestCase):
         run_updates=None,
         failure_count=1,
         check_total=None,
+        check_id_delta=0,
     ):
         checks = [
             {
-                "id": 200 + index,
+                "id": 200 + index + check_id_delta,
                 "name": f"Validate candidate{index or ''}",
                 "status": "completed",
                 "conclusion": "failure",
@@ -10966,6 +10967,21 @@ class PostReadyValidationRemediationTests(TestCase):
             SimpleNamespace(returncode=0, stdout=json.dumps(payload).encode())
             for payload in payloads
         ]
+
+    def test_exact_current_failure_reader_keeps_check_and_job_ids_distinct(self) -> None:
+        temporary, _root, current, validation, _commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        responses = self._historical_failure_api_responses(
+            current,
+            validation,
+            check_id_delta=1000,
+        )
+        with mock.patch.object(publication, "_run_gh", side_effect=responses):
+            observed = orchestration._read_post_ready_failure(
+                REPOSITORY, 971, current.lifecycle.head_sha
+            )
+
+        self.assertEqual(observed, observation)
 
     def test_setup_node_parser_accepts_named_and_shorthand_steps(self) -> None:
         named = (
