@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-19 - Correct Mixed Reusable-Workflow Source Resolution
+
+**Fixed:**
+
+- Normalize legal trailing comments on the closed workflow metadata scalar
+  subset while preserving hashes inside plain and quoted scalar values.
+- Ignore unrelated external reusable siblings when an observed failed check
+  resolves uniquely to an authenticated local reusable workflow, while keeping
+  observed external, dynamic, invalid and ambiguous sources fail-closed.
+
 ## 2026-09-19 - Authenticate Local Reusable-Workflow Failure Sources
 
 **Changed:**

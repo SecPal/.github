@@ -187,8 +187,11 @@ and engine floors from candidate configuration. Direct workflows retain their
 existing source binding; local reusable calls additionally require one exact
 candidate-byte caller/callee mapping under `.github/workflows`, a declared
 `workflow_call`, and the observed caller/called-job display-name composition.
-Dynamic, traversing, remote, missing and ambiguous sources fail closed. The
-proof requires the exact signed sole-parent correction to remove the
+Its closed scalar parser supports plain or quoted names and sources plus legal
+whitespace-delimited trailing comments while preserving embedded hashes.
+Unrelated remote reusable jobs are ignored for source authority; an observed
+remote source, and dynamic, traversing, missing or ambiguous sources, fail
+closed. The proof requires the exact signed sole-parent correction to remove the
 authenticated violation set, rejects unrelated changes, and requires fresh
 resulting-head validation and attestation. It seals a distinct
 `POST_READY_IN_CONTRACT_VALIDATION_DEFECT` source digest into the same one-use
