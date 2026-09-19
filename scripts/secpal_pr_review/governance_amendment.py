@@ -867,6 +867,16 @@ def _live_ready_ci(
     repository: str, pull_request: int, head_sha: str, accepted_main_sha: str,
     source_ci: Mapping[str, Any],
 ) -> dict[str, Any]:
+    def canonical_timestamp(value: Any) -> datetime:
+        if not isinstance(value, str) or not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value
+        ):
+            raise ValueError
+        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+        if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != value:
+            raise ValueError
+        return parsed
+
     events = _github_json(
         [
             "api", "--hostname", "github.com",
@@ -934,13 +944,11 @@ def _live_ready_ci(
             "live governance amendment Ready CI is not terminal and passing"
         )
     try:
-        ready_at = datetime.strptime(
-            ready[0]["created_at"], "%Y-%m-%dT%H:%M:%SZ"
-        )
+        ready_at = canonical_timestamp(ready[0]["created_at"])
         timed_runs = [(
             run,
-            datetime.strptime(run["created_at"], "%Y-%m-%dT%H:%M:%SZ"),
-            datetime.strptime(run["run_started_at"], "%Y-%m-%dT%H:%M:%SZ"),
+            canonical_timestamp(run["created_at"]),
+            canonical_timestamp(run["run_started_at"]),
         ) for run in runs]
     except (TypeError, ValueError) as exc:
         raise GovernanceAmendmentError(

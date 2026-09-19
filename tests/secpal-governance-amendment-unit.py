@@ -1138,6 +1138,14 @@ class GovernanceAmendmentTests(TestCase):
                 events,
                 [dict(runs[0], created_at="zz")] + runs[1:],
             ),
+            "noncanonical workflow time": (
+                events,
+                [dict(runs[0], created_at="2026-9-18T12:00:01Z")] + runs[1:],
+            ),
+            "impossible workflow time": (
+                events,
+                [dict(runs[0], created_at="2026-09-31T12:00:01Z")] + runs[1:],
+            ),
             "pending workflow": (
                 events,
                 [dict(runs[0], status="in_progress", conclusion=None)] + runs[1:],
