@@ -19,6 +19,8 @@ from unittest import TestCase, main, mock
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
 from scripts.secpal_pr_review import legacy_enrolled_package_loss as legacy_loss
 from scripts.secpal_pr_review import lifecycle_authority as canonical_lifecycle_authority
 
@@ -34,6 +36,7 @@ fast_path = actions.fast_path
 lifecycle_authority, lifecycle_publication = (
     actions._load_lifecycle_publication_helpers()
 )
+from secpal_pr_review import qualified_remediation_successor_loss
 
 REPOSITORY = "SecPal/.github"
 ISSUE = 827
@@ -58,6 +61,16 @@ ENROLLMENT_OID = "37ffb1110e5f95829bcc3612ede8ac48092744fa"
 ENROLLMENT_DIGEST = "aa4b1f7598e8bc4e3c044f698c1d79f9b6725b5ecdc11195ff510844b4e57d7f"
 CURRENT_OID = "7f2390b9a98650a833f21c765b02f7af89814aa0"
 CURRENT_DIGEST = "1cbd45b2c6498cb4cb7a28fc3afe8066fc981cc9b727b56de08e2f53f16422a7"
+REBOUND_PR = PR + 1
+LOSS_PUBLICATION_OID = "4" * 40
+LOSS_PUBLICATION_DIGEST = "5" * 64
+LOSS_AUTHORITY = "6" * 64
+REBOUND_PUBLICATION_OID = "7" * 40
+REBOUND_PUBLICATION_DIGEST = "8" * 64
+REBOUND_AUTHORITY = "9" * 64
+REBOUND_EVENT = "a" * 64
+QUALIFIED_LOSS = "b" * 64
+QUALIFICATION_ID = "qualified-remediation-successor-loss-fixture"
 READY_AUTHORIZATION = "authorization:1a6ec11a0232ef467c41236e4349a942872bc7346748b637c35c43f45e3a2c2c"
 READY_EVENT = "a92ef35d8471ff3ed5913e07c8498d3565afb0232633901eb3ae3dba67588ca5"
 LEGACY_ISSUE = 792
@@ -357,6 +370,97 @@ def legacy_loss_authentication() -> dict[str, object]:
         "recovery_consumed": False,
         "authentication_digest": "f" * 64,
     }
+
+
+def qualified_loss_record() -> dict[str, object]:
+    return {
+        "repository": REPOSITORY,
+        "delivery_issue": ISSUE,
+        "pull_request": PR,
+        "successor": {
+            "head_sha": HEAD,
+            "tree_sha": TREE,
+            "ordered_parent_shas": [PARENT, "3" * 40],
+        },
+        "resulting_state": {
+            "unrestricted_review_count": 1,
+            "remediation_cycle_count": 2,
+            "cycle_3_absent": True,
+            "draft": False,
+            "ready": True,
+            "ready_transition_count": 1,
+            "exceptional_recovery_count": 0,
+            "exceptional_continuation_count": 0,
+        },
+        "qualification": {"id": QUALIFICATION_ID},
+        "historical_package_status": "UNAVAILABLE",
+        "historical_integration_evidence_digest": None,
+        "historical_validation_receipt_digest": None,
+        "historical_bytes_reconstructed": False,
+        "signer_identity": SIGNER,
+        "admission_digest": QUALIFIED_LOSS,
+    }
+
+
+def rebound_publications() -> tuple[SimpleNamespace, SimpleNamespace, SimpleNamespace]:
+    predecessor_lifecycle = SimpleNamespace(
+        repository=REPOSITORY,
+        delivery_issue=ISSUE,
+        pull_request=PR,
+        head_sha=HEAD,
+        tree_sha=TREE,
+        lifecycle_id="lifecycle-native:" + "c" * 64,
+        authority_digest=LOSS_AUTHORITY,
+        historical_proof_mode="native_lifecycle",
+        state=state(),
+        validation_receipt_digest="d" * 64,
+        source_validation_evidence_digest="e" * 64,
+        adoption_source_evidence_digest=QUALIFIED_LOSS,
+    )
+    successor_lifecycle = SimpleNamespace(
+        repository=REPOSITORY,
+        delivery_issue=ISSUE,
+        pull_request=REBOUND_PR,
+        head_sha=HEAD,
+        tree_sha=None,
+        lifecycle_id=predecessor_lifecycle.lifecycle_id,
+        authority_digest=REBOUND_AUTHORITY,
+        historical_proof_mode="native_lifecycle",
+        state=state(),
+        validation_receipt_digest=None,
+        source_validation_evidence_digest=None,
+        adoption_source_evidence_digest=None,
+    )
+    predecessor = SimpleNamespace(
+        publication_oid=LOSS_PUBLICATION_OID,
+        publication_digest=LOSS_PUBLICATION_DIGEST,
+        predecessor_publication_oid="3" * 40,
+        lifecycle=predecessor_lifecycle,
+        serialized_lifecycle_evidence=b"{}\n",
+    )
+    successor = SimpleNamespace(
+        publication_oid=REBOUND_PUBLICATION_OID,
+        publication_digest=REBOUND_PUBLICATION_DIGEST,
+        predecessor_publication_oid=LOSS_PUBLICATION_OID,
+        lifecycle=successor_lifecycle,
+        serialized_lifecycle_evidence=b"{}\n",
+    )
+    rebound = SimpleNamespace(
+        predecessor=predecessor,
+        successor=successor,
+        event_id="authorization:rebound-fixture",
+        event_digest=REBOUND_EVENT,
+        transition_kind="PR_REBOUND",
+        event_signer_identity=SIGNER,
+        pull_request=PR,
+        predecessor_authority_digest=LOSS_AUTHORITY,
+        predecessor_head_sha=HEAD,
+        resulting_head_sha=HEAD,
+        initialization_evidence_digest="f" * 64,
+    )
+    return predecessor, successor, rebound
+
+
 class AdoptedReadyPriorAuthorityTests(TestCase):
     def test_authority_imports_ignore_repository_bytecode_caches(self) -> None:
         cache_root = Path(actions.sys.pycache_prefix).resolve(strict=True)
@@ -389,6 +493,7 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
                 "_verified_prior_delivery_commit",
                 return_value={
                     "parent_sha": PARENT,
+                    "parent_shas": [PARENT, "3" * 40],
                     "tree_sha": TREE,
                     "signer": {"kind": "SSH_PRINCIPAL", "identity": SIGNER},
                 },
@@ -471,6 +576,184 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
                 reviewed_state_digest=reviewed_state_digest,
                 reviewed_feedback_digest=reviewed_feedback_digest,
             )
+
+    def derive_rebound(
+        self,
+        *,
+        current: SimpleNamespace | None = None,
+        rebound: SimpleNamespace | None = None,
+        record: dict[str, object] | None = None,
+        reviewed_state_digest: str | None = None,
+        reviewed_feedback_digest: str | None = None,
+    ) -> dict[str, object]:
+        _predecessor, default_current, default_rebound = rebound_publications()
+        selected_current = current or default_current
+        selected_rebound = rebound or default_rebound
+        selected_record = record or qualified_loss_record()
+        with (
+            mock.patch.object(
+                actions,
+                "_load_lifecycle_publication_helpers",
+                return_value=(lifecycle_authority, lifecycle_publication),
+            ),
+            mock.patch.object(
+                actions, "_require_accepted_main_bridge_source", return_value="2" * 40
+            ),
+            mock.patch.object(
+                lifecycle_publication,
+                "verify_current_lifecycle_authority",
+                return_value=selected_current,
+            ),
+            mock.patch.object(
+                lifecycle_publication,
+                "_verify_historical_lifecycle_transition",
+                return_value=selected_rebound,
+            ),
+            mock.patch.object(
+                qualified_remediation_successor_loss,
+                "load_accepted_admission",
+                return_value=copy.deepcopy(selected_record),
+            ),
+            mock.patch.object(
+                qualified_remediation_successor_loss,
+                "verify_admission",
+                return_value=copy.deepcopy(selected_record),
+            ),
+            mock.patch.object(
+                actions,
+                "_verified_prior_delivery_commit",
+                return_value={
+                    "parent_sha": PARENT,
+                    "parent_shas": [PARENT, "3" * 40],
+                    "tree_sha": TREE,
+                    "signer": {"kind": "SSH_PRINCIPAL", "identity": SIGNER},
+                },
+            ),
+        ):
+            return actions._derive_exact_state_adoption_ready_prior_authority(
+                repository_root=ROOT.parent,
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                pull_request=REBOUND_PR,
+                binding={"signature_policy": {"accepted_formats": ["ssh"]}},
+                reviewed_state_digest=reviewed_state_digest,
+                reviewed_feedback_digest=reviewed_feedback_digest,
+            )
+
+    def test_same_head_rebound_preserves_qualified_loss_ready_prior_authority(
+        self,
+    ) -> None:
+        manifest = self.derive_rebound()
+        self.assertEqual(manifest["schema_version"], "1.2")
+        self.assertEqual(
+            manifest["source_authority_mode"], "EXISTING_AUTHORITY_COMPOSITION"
+        )
+        self.assertEqual(manifest["pull_request_number"], REBOUND_PR)
+        self.assertEqual(manifest["prior_delivery_head_sha"], HEAD)
+        self.assertEqual(manifest["prior_delivery_tree_sha"], TREE)
+        self.assertIsNone(manifest["prior_validation_receipt_digest"])
+        self.assertIsNone(manifest["prior_final_attestation_digest"])
+        self.assertEqual(
+            manifest["source_authority"]["qualified_loss_admission_digest"],
+            QUALIFIED_LOSS,
+        )
+        self.assertEqual(
+            manifest["source_authority"]["historical_evidence"],
+            {
+                "state": "ABSENT_NEVER_ISSUED",
+                "validation_receipt_digest": None,
+                "source_validation_evidence_digest": None,
+                "final_attestation_digest": None,
+                "bytes_reconstructed": False,
+            },
+        )
+        self.assertEqual(
+            canonical_lifecycle_authority.normalize_exact_state_adoption_historical_evidence(
+                manifest["source_authority"]["historical_evidence"]
+            )["validation_receipt_digest"],
+            manifest["prior_validation_receipt_digest"],
+        )
+        self.assertEqual(
+            fast_path.normalize_ready_integration_prior_authority(manifest), manifest
+        )
+
+    def test_same_head_rebound_composition_rejects_authority_drift(self) -> None:
+        labels = (
+            "head",
+            "lifecycle",
+            "counters",
+            "Ready",
+            "delivery",
+            "unrelated replacement",
+            "stale rebound",
+        )
+        for label in labels:
+            _predecessor, current, rebound = rebound_publications()
+            if label == "stale rebound":
+                current = copy.deepcopy(current)
+            mutate = {
+                "head": lambda: setattr(rebound, "resulting_head_sha", "0" * 40),
+                "lifecycle": lambda: setattr(
+                    rebound.successor.lifecycle,
+                    "lifecycle_id",
+                    "lifecycle-native:changed",
+                ),
+                "counters": lambda: rebound.successor.lifecycle.state.update(
+                    remediation_cycle_count=1
+                ),
+                "Ready": lambda: rebound.successor.lifecycle.state.update(
+                    ready=False
+                ),
+                "delivery": lambda: setattr(
+                    rebound.successor.lifecycle, "delivery_issue", ISSUE + 1
+                ),
+                "unrelated replacement": lambda: setattr(
+                    rebound.successor.lifecycle, "pull_request", REBOUND_PR + 1
+                ),
+                "stale rebound": lambda: setattr(
+                    current, "publication_oid", "0" * 40
+                ),
+            }[label]
+            mutate()
+            with self.subTest(label=label), self.assertRaises(fast_path.SecurityBlocker):
+                self.derive_rebound(current=current, rebound=rebound)
+
+        changed_loss = qualified_loss_record()
+        changed_loss["historical_validation_receipt_digest"] = "1" * 64
+        with self.assertRaises(fast_path.SecurityBlocker):
+            self.derive_rebound(record=changed_loss)
+
+    def test_same_head_rebound_consumer_rejects_receipt_and_provider_substitution(
+        self,
+    ) -> None:
+        manifest = self.derive_rebound()
+        mutations = {
+            "fabricated historical receipt": lambda value: value[
+                "source_authority"
+            ]["historical_evidence"].update(
+                validation_receipt_digest="1" * 64
+            ),
+            "fresh evidence substituted as historical": lambda value: value.update(
+                prior_validation_receipt_digest=value["source_authority"][
+                    "qualified_loss_head_evidence"
+                ]["validation_receipt_digest"]
+            ),
+            "caller-selected provider head": lambda value: value[
+                "source_authority"
+            ].update(provider_head_sha=HEAD),
+            "unauthenticated successor publication": lambda value: value[
+                "source_authority"
+            ]["rebound"]["successor_publication"].update(
+                object_oid="0" * 40
+            ),
+        }
+        for label, mutate in mutations.items():
+            changed = copy.deepcopy(manifest)
+            mutate(changed)
+            with self.subTest(label=label), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                fast_path.normalize_ready_integration_prior_authority(changed)
 
     def test_target_827_shape_derives_v3_ready_prior_authority(self) -> None:
         manifest = self.derive()
@@ -1532,6 +1815,65 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             prior_authority_tag_ref=(
                 f"refs/tags/secpal-ready-integration-prior-authority-"
                 f"{ISSUE}-{PR}-{HEAD}"
+            ),
+            expected_prior_authority_signer=SIGNER,
+            prior_reviewed_state=None,
+            prior_receipt=None,
+            prior_attestation=None,
+        )
+        with (
+            mock.patch.object(actions, "_read_json", return_value=manifest),
+            mock.patch.object(
+                actions,
+                "_derive_exact_state_adoption_ready_prior_authority",
+                return_value=manifest,
+            ),
+            mock.patch.object(actions, "_verify_prior_authority_tag") as tag,
+        ):
+            self.assertEqual(
+                actions._verify_ready_integration_prior_authority(
+                    arguments=arguments,
+                    repository_root=ROOT,
+                    binding={"signature_policy": {"accepted_formats": ["ssh"]}},
+                    integration_evidence=integration,
+                    live_observation=None,
+                ),
+                manifest,
+            )
+        tag.assert_called_once()
+
+    def test_rebound_composition_normalizes_into_the_integration_verifier(self) -> None:
+        manifest = self.derive_rebound()
+        integration = {
+            "pull_request_number": REBOUND_PR,
+            "prior_delivery_head_sha": HEAD,
+            "prior_authority_digest": fast_path.digest_json(manifest),
+            "prior_authority_tag_object_sha": "9" * 40,
+            "reviewed_state_digest": REVIEWED_STATE,
+            "reviewed_feedback_digest": REVIEWED_FEEDBACK,
+            "eligibility": {
+                "lifecycle_identity": manifest["lifecycle"]["identity"],
+                "unrestricted_reviews_before": 1,
+                "unrestricted_reviews_after": 1,
+                "remediation_cycles_before": 2,
+                "remediation_cycles_after": 2,
+                "exceptional_recoveries_before": 0,
+                "exceptional_recoveries_after": 0,
+                "exceptional_continuations_before": 0,
+                "exceptional_continuations_after": 0,
+                "draft_before": False,
+                "ready_before": True,
+                "ready_transition": False,
+                "cycle_3": False,
+            },
+        }
+        arguments = SimpleNamespace(
+            repo=REPOSITORY,
+            delivery_issue=ISSUE,
+            prior_authority="authority.json",
+            prior_authority_tag_ref=(
+                f"refs/tags/secpal-ready-integration-prior-authority-"
+                f"{ISSUE}-{REBOUND_PR}-{HEAD}"
             ),
             expected_prior_authority_signer=SIGNER,
             prior_reviewed_state=None,

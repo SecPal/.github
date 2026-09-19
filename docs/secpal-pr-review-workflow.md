@@ -1430,6 +1430,16 @@ verifies that head's ordinary receipt, final attestation, tree, signature, and
 accepted signer. It also verifies the maintained #750/#752 protected-journal
 CURRENT publication and binds its lifecycle authority digest, proof mode,
 publication identity, and exact exceptional recovery and continuation history.
+When an authenticated `PR_REBOUND` changes only the pull-request identity for a
+same-repository, same-delivery, same-lifecycle CURRENT head, the manifest may
+compose that rebound with the accepted qualified-remediation-successor-loss and
+existing Ready prior authorities. The composition preserves the loss record's
+identity and provenance, projects the tree from the authenticated predecessor,
+and retains typed `ABSENT_NEVER_ISSUED` historical-receipt identity. Fresh
+current-safety evidence remains separate and cannot be substituted for a
+historical receipt. Any change to the head, tree, lifecycle state or counters,
+Ready state, delivery, loss admission, or authenticated successor publication
+fails closed.
 Ordinary typed integration is the canonical `HEAD_ADVANCED`
 transition: it preserves the exact authenticated exceptional-recovery and
 exceptional-continuation history and consumes neither budget. A later
