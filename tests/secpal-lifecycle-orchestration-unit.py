@@ -10833,6 +10833,62 @@ class PostReadyValidationRemediationTests(TestCase):
         }
         return temporary, root, current, validation, commit, observation
 
+    def _reusable_repository(
+        self,
+        caller: str,
+        called: dict[str, str],
+        *,
+        correction_paths: tuple[str, ...] | None = None,
+    ) -> tuple[tempfile.TemporaryDirectory[str], Path, str, str, str, str]:
+        temporary = tempfile.TemporaryDirectory(prefix="post-ready-call-graph-")
+        root = Path(temporary.name)
+        subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.name", "Test"], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "config", "user.email", "test@example.invalid"],
+            check=True,
+        )
+        workflows = root / ".github" / "workflows"
+        workflows.mkdir(parents=True)
+        (root / "package.json").write_text(
+            '{"engines":{"node":"^24.21.0"}}\n', encoding="utf-8"
+        )
+        (workflows / "quality.yml").write_text(caller, encoding="utf-8")
+        for name, content in called.items():
+            (workflows / name).write_text(content, encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "--quiet", "-m", "predecessor"],
+            check=True,
+        )
+        predecessor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        predecessor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        selected = correction_paths if correction_paths is not None else tuple(called)
+        for name in selected:
+            path = workflows / name
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "node-version: '24'", "node-version: '24.21.0'"
+                ),
+                encoding="utf-8",
+            )
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "--quiet", "--allow-empty", "-m", "correction"],
+            check=True,
+        )
+        successor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        successor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        return temporary, root, predecessor, predecessor_tree, successor, successor_tree
+
     @staticmethod
     def _review_context(head_sha):
         return SimpleNamespace(
@@ -10856,6 +10912,314 @@ class PostReadyValidationRemediationTests(TestCase):
         self.assertEqual(
             orchestration._setup_node_selectors(shorthand), ("24.21.0",)
         )
+
+    def test_authenticates_selector_defect_in_local_reusable_workflow(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n  schema:\n"
+            "    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Check generated schema\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, {"schema.yml": called})
+        )
+        self.addCleanup(temporary.cleanup)
+
+        proof = orchestration._verify_node_selector_defect_correction(
+            root,
+            repository=REPOSITORY,
+            pull_request=971,
+            predecessor_head=predecessor,
+            predecessor_tree=predecessor_tree,
+            resulting_head=successor,
+            resulting_tree=successor_tree,
+            observed_workflow_name="Quality",
+            observed_workflow_path=".github/workflows/quality.yml",
+            observed_check_name="Reusable validation / Check generated schema",
+        )
+
+        self.assertRegex(proof, r"^[0-9a-f]{64}$")
+
+    def test_authenticates_complete_reachable_reusable_violation_set(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n"
+            "  schema:\n    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+            "  format:\n    name: Reusable formatting\n"
+            "    uses: ./.github/workflows/format.yml\n"
+        )
+        called = {
+            name: (
+                f"name: {display}\non:\n  workflow_call:\njobs:\n  check:\n"
+                f"    name: {job}\n    runs-on: ubuntu-latest\n    steps:\n"
+                "      - uses: actions/setup-node@immutable\n        with:\n"
+                "          node-version: '24'\n"
+            )
+            for name, display, job in (
+                ("schema.yml", "Schema checks", "Check generated schema"),
+                ("format.yml", "Formatting checks", "Check formatting"),
+            )
+        }
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, called)
+        )
+        self.addCleanup(temporary.cleanup)
+
+        proof = orchestration._verify_node_selector_defect_correction(
+            root,
+            repository=REPOSITORY,
+            pull_request=971,
+            predecessor_head=predecessor,
+            predecessor_tree=predecessor_tree,
+            resulting_head=successor,
+            resulting_tree=successor_tree,
+            observed_workflow_name="Quality",
+            observed_workflow_path=".github/workflows/quality.yml",
+            observed_check_name="Reusable validation / Check generated schema",
+        )
+
+        self.assertRegex(proof, r"^[0-9a-f]{64}$")
+
+    def test_rejects_wrong_or_ambiguous_reusable_check_identity(self) -> None:
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Check generated schema\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        cases = (
+            (
+                "wrong caller name",
+                "  schema:\n    name: Reusable validation\n"
+                "    uses: ./.github/workflows/schema.yml\n",
+                "Other caller / Check generated schema",
+            ),
+            (
+                "wrong called name",
+                "  schema:\n    name: Reusable validation\n"
+                "    uses: ./.github/workflows/schema.yml\n",
+                "Reusable validation / Other check",
+            ),
+            (
+                "ambiguous caller mapping",
+                "  schema_one:\n    name: Reusable validation\n"
+                "    uses: ./.github/workflows/schema.yml\n"
+                "  schema_two:\n    name: Reusable validation\n"
+                "    uses: ./.github/workflows/schema.yml\n",
+                "Reusable validation / Check generated schema",
+            ),
+        )
+        for label, jobs, check_name in cases:
+            caller = "name: Quality\non:\n  pull_request:\njobs:\n" + jobs
+            temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+                self._reusable_repository(caller, {"schema.yml": called})
+            )
+            self.addCleanup(temporary.cleanup)
+            with (
+                self.subTest(label=label),
+                self.assertRaisesRegex(
+                    orchestration.LifecycleOrchestrationError, "one authenticated"
+                ),
+            ):
+                orchestration._verify_node_selector_defect_correction(
+                    root,
+                    repository=REPOSITORY,
+                    pull_request=971,
+                    predecessor_head=predecessor,
+                    predecessor_tree=predecessor_tree,
+                    resulting_head=successor,
+                    resulting_tree=successor_tree,
+                    observed_workflow_name="Quality",
+                    observed_workflow_path=".github/workflows/quality.yml",
+                    observed_check_name=check_name,
+                )
+
+    def test_rejects_unsupported_reusable_call_sources(self) -> None:
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Check generated schema\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        cases = (
+            ("path traversal", "./.github/workflows/../schema.yml", "invalid"),
+            ("outside workflows", "./scripts/schema.yml", "invalid"),
+            ("dynamic", "${{ inputs.workflow }}", "dynamic"),
+            ("remote", "other/repository/.github/workflows/schema.yml@main", "one authenticated"),
+        )
+        for label, uses, message in cases:
+            caller = (
+                "name: Quality\non:\n  pull_request:\njobs:\n  schema:\n"
+                f"    name: Reusable validation\n    uses: {uses}\n"
+            )
+            temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+                self._reusable_repository(caller, {"schema.yml": called})
+            )
+            self.addCleanup(temporary.cleanup)
+            with (
+                self.subTest(label=label),
+                self.assertRaisesRegex(orchestration.LifecycleOrchestrationError, message),
+            ):
+                orchestration._verify_node_selector_defect_correction(
+                    root,
+                    repository=REPOSITORY,
+                    pull_request=971,
+                    predecessor_head=predecessor,
+                    predecessor_tree=predecessor_tree,
+                    resulting_head=successor,
+                    resulting_tree=successor_tree,
+                    observed_workflow_name="Quality",
+                    observed_workflow_path=".github/workflows/quality.yml",
+                    observed_check_name="Reusable validation / Check generated schema",
+                )
+
+    def test_rejects_missing_workflow_call_and_ambiguous_called_job(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n  schema:\n"
+            "    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        cases = (
+            (
+                "missing workflow_call",
+                "name: Schema checks\non:\n  push:\njobs:\n  validate:\n"
+                "    name: Check generated schema\n    steps:\n"
+                "      - uses: actions/setup-node@immutable\n        with:\n"
+                "          node-version: '24'\n",
+                "workflow_call",
+            ),
+            (
+                "ambiguous called jobs",
+                "name: Schema checks\non:\n  workflow_call:\njobs:\n"
+                "  first:\n    name: Check generated schema\n    steps:\n"
+                "      - uses: actions/setup-node@immutable\n        with:\n"
+                "          node-version: '24'\n"
+                "  second:\n    name: Check generated schema\n    steps:\n"
+                "      - uses: actions/setup-node@immutable\n        with:\n"
+                "          node-version: '24'\n",
+                "one authenticated",
+            ),
+        )
+        for label, called, message in cases:
+            temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+                self._reusable_repository(caller, {"schema.yml": called})
+            )
+            self.addCleanup(temporary.cleanup)
+            with (
+                self.subTest(label=label),
+                self.assertRaisesRegex(orchestration.LifecycleOrchestrationError, message),
+            ):
+                orchestration._verify_node_selector_defect_correction(
+                    root,
+                    repository=REPOSITORY,
+                    pull_request=971,
+                    predecessor_head=predecessor,
+                    predecessor_tree=predecessor_tree,
+                    resulting_head=successor,
+                    resulting_tree=successor_tree,
+                    observed_workflow_name="Quality",
+                    observed_workflow_path=".github/workflows/quality.yml",
+                    observed_check_name="Reusable validation / Check generated schema",
+                )
+
+    def test_rejects_correction_of_unrelated_workflow(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n  schema:\n"
+            "    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        called = {
+            name: (
+                f"name: {name}\non:\n  workflow_call:\njobs:\n  check:\n"
+                "    name: Check generated schema\n    steps:\n"
+                "      - uses: actions/setup-node@immutable\n        with:\n"
+                "          node-version: '24'\n"
+            )
+            for name in ("schema.yml", "unrelated.yml")
+        }
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, called)
+        )
+        self.addCleanup(temporary.cleanup)
+
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "unrelated"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=971,
+                predecessor_head=predecessor,
+                predecessor_tree=predecessor_tree,
+                resulting_head=successor,
+                resulting_tree=successor_tree,
+                observed_workflow_name="Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+                observed_check_name="Reusable validation / Check generated schema",
+            )
+
+    def test_rejects_callee_bytes_available_only_from_resulting_head(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n  schema:\n"
+            "    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        temporary, root, predecessor, predecessor_tree, _successor, _tree = (
+            self._reusable_repository(caller, {}, correction_paths=())
+        )
+        self.addCleanup(temporary.cleanup)
+        called = root / ".github" / "workflows" / "schema.yml"
+        called.write_text(
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Check generated schema\n    steps:\n"
+            "      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24.21.0'\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "--amend", "--quiet", "--no-edit"],
+            check=True,
+        )
+        successor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        successor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "authenticated bytes"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=971,
+                predecessor_head=predecessor,
+                predecessor_tree=predecessor_tree,
+                resulting_head=successor,
+                resulting_tree=successor_tree,
+                observed_workflow_name="Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+                observed_check_name="Reusable validation / Check generated schema",
+            )
+
+    def test_reusable_source_resolver_accepts_no_caller_mapping_artifact(self) -> None:
+        with self.assertRaisesRegex(TypeError, "unexpected keyword"):
+            orchestration._authenticated_selector_source_paths(
+                Path("."),
+                "f" * 40,
+                observed_workflow_name="Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+                observed_check_name="Reusable validation / Check generated schema",
+                violations=(),
+                called_workflow_path=".github/workflows/schema.yml",
+            )
 
     def test_exact_current_failure_and_independent_proof_use_remaining_slot(self) -> None:
         temporary, root, current, validation, commit, observation = self._inputs()

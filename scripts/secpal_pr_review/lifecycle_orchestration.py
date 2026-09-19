@@ -613,6 +613,145 @@ def _workflow_name(workflow: str) -> str | None:
     return None
 
 
+def _workflow_job_calls(workflow: str) -> tuple[dict[str, str], ...]:
+    """Parse the maintained, closed subset of GitHub workflow job metadata."""
+
+    lines = workflow.splitlines()
+    if any("\t" in line[: len(line) - len(line.lstrip())] for line in lines):
+        raise LifecycleOrchestrationError("workflow call graph is malformed")
+    jobs_indexes = [
+        index for index, line in enumerate(lines)
+        if re.fullmatch(r"jobs:\s*(?:#.*)?", line)
+    ]
+    if len(jobs_indexes) != 1:
+        raise LifecycleOrchestrationError("workflow call graph is malformed")
+
+    def scalar(raw: str) -> str:
+        value = raw.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        elif not value or value[0] in "[{&*!|>" or " #" in value:
+            raise LifecycleOrchestrationError("workflow call graph is malformed")
+        if not value.strip():
+            raise LifecycleOrchestrationError("workflow call graph is malformed")
+        return value
+
+    jobs: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+    current: dict[str, str] | None = None
+    for line in lines[jobs_indexes[0] + 1 :]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indentation = len(line) - len(line.lstrip())
+        if indentation == 0:
+            break
+        job_match = re.fullmatch(r"  ([A-Za-z0-9_-]+):\s*(?:#.*)?", line)
+        if job_match:
+            job_id = job_match.group(1)
+            if job_id in seen_ids:
+                raise LifecycleOrchestrationError("workflow call graph is ambiguous")
+            seen_ids.add(job_id)
+            current = {"job_id": job_id}
+            jobs.append(current)
+            continue
+        if current is None or indentation < 4:
+            raise LifecycleOrchestrationError("workflow call graph is malformed")
+        field = re.fullmatch(r"    (name|uses):\s*(.+?)\s*", line)
+        if field:
+            key = field.group(1)
+            if key in current:
+                raise LifecycleOrchestrationError("workflow call graph is ambiguous")
+            current[key] = scalar(field.group(2))
+    return tuple(jobs)
+
+
+def _declares_workflow_call(workflow: str) -> bool:
+    lines = workflow.splitlines()
+    on_indexes = [
+        index for index, line in enumerate(lines)
+        if re.fullmatch(r"(?:on|'on'|\"on\"):\s*(?:#.*)?", line)
+    ]
+    if len(on_indexes) != 1:
+        return False
+    for line in lines[on_indexes[0] + 1 :]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indentation = len(line) - len(line.lstrip())
+        if indentation == 0:
+            break
+        if re.fullmatch(r"  workflow_call:\s*(?:#.*)?", line):
+            return True
+    return False
+
+
+def _authenticated_selector_source_paths(
+    root: Path,
+    revision: str,
+    *,
+    observed_workflow_name: str,
+    observed_workflow_path: str,
+    observed_check_name: str | None,
+    violations: tuple[dict[str, Any], ...],
+) -> tuple[str, tuple[str, ...]]:
+    """Resolve one hosted failure to repository bytes without caller mappings."""
+
+    try:
+        top_level = _git_text(root, revision, observed_workflow_path)
+    except LifecycleOrchestrationError as exc:
+        raise LifecycleOrchestrationError(
+            "candidate defect is not independently reproduced and corrected"
+        ) from exc
+    if _workflow_name(top_level) != observed_workflow_name:
+        raise LifecycleOrchestrationError(
+            "observed workflow identity is not authenticated by candidate bytes"
+        )
+    violating_paths = {item["path"] for item in violations}
+    if observed_workflow_path in violating_paths:
+        return "DIRECT_WORKFLOW", (observed_workflow_path,)
+    if not isinstance(observed_check_name, str) or not observed_check_name.strip():
+        raise LifecycleOrchestrationError(
+            "local reusable workflow check identity is unavailable"
+        )
+
+    mappings: list[tuple[str, str, str, str]] = []
+    reachable_violations: set[str] = set()
+    for caller in _workflow_job_calls(top_level):
+        uses = caller.get("uses")
+        if uses is None:
+            continue
+        if "${{" in uses or "}}" in uses:
+            raise LifecycleOrchestrationError("dynamic reusable workflow calls are unsupported")
+        if not uses.startswith("./"):
+            continue
+        if not re.fullmatch(r"\./\.github/workflows/[^/]+\.ya?ml", uses):
+            raise LifecycleOrchestrationError("local reusable workflow path is invalid")
+        caller_name = caller.get("name")
+        if caller_name is None:
+            raise LifecycleOrchestrationError("local reusable workflow caller is unnamed")
+        called_path = uses[2:]
+        called = _git_text(root, revision, called_path)
+        if not _declares_workflow_call(called):
+            raise LifecycleOrchestrationError(
+                "called local workflow does not declare workflow_call"
+            )
+        called_jobs = _workflow_job_calls(called)
+        if called_path in violating_paths:
+            reachable_violations.add(called_path)
+        for called_job in called_jobs:
+            called_name = called_job.get("name")
+            if called_name is None:
+                continue
+            if f"{caller_name} / {called_name}" == observed_check_name:
+                mappings.append(
+                    (caller["job_id"], caller_name, called_path, called_job["job_id"])
+                )
+    if len(mappings) != 1 or mappings[0][2] not in violating_paths:
+        raise LifecycleOrchestrationError(
+            "failed check does not resolve to one authenticated violating local workflow"
+        )
+    return "LOCAL_REUSABLE_WORKFLOW", tuple(sorted(reachable_violations))
+
+
 def _node_engine_contract(root: Path, revision: str) -> str:
     try:
         package = json.loads(
@@ -731,6 +870,7 @@ def _verify_node_selector_defect_correction(
     resulting_tree: str,
     observed_workflow_name: str,
     observed_workflow_path: str,
+    observed_check_name: str | None = None,
 ) -> str:
     head = publication._run_git(root, ["rev-parse", "HEAD"])
     tree = publication._run_git(root, ["rev-parse", "HEAD^{tree}"])
@@ -760,14 +900,21 @@ def _verify_node_selector_defect_correction(
         raise LifecycleOrchestrationError(
             "correction changed rather than enforced the candidate engine contract"
         )
-    observed_violations = tuple(
-        item for item in predecessor_violations
-        if (
-            item["workflow_name"] == observed_workflow_name
-            and item["path"] == observed_workflow_path
-        )
+    source_kind, source_paths = _authenticated_selector_source_paths(
+        root,
+        predecessor_head,
+        observed_workflow_name=observed_workflow_name,
+        observed_workflow_path=observed_workflow_path,
+        observed_check_name=observed_check_name,
+        violations=predecessor_violations,
     )
-    if not observed_violations or resulting_violations:
+    observed_violations = tuple(
+        item for item in predecessor_violations if item["path"] in source_paths
+    )
+    remaining_source_violations = tuple(
+        item for item in resulting_violations if item["path"] in source_paths
+    )
+    if not observed_violations or remaining_source_violations:
         raise LifecycleOrchestrationError(
             "candidate defect is not independently reproduced and corrected"
         )
@@ -777,7 +924,7 @@ def _verify_node_selector_defect_correction(
     if changed.returncode != 0:
         raise LifecycleOrchestrationError("correction path evidence is unavailable")
     changed_paths = sorted(filter(None, changed.stdout.decode("utf-8").splitlines()))
-    relevant_workflows = {item["path"] for item in predecessor_violations}
+    relevant_workflows = {item["path"] for item in observed_violations}
     engine_floor = _node_version_floor(_node_engine_contract(root, resulting_head))
     if engine_floor is None:
         raise LifecycleOrchestrationError(
@@ -807,8 +954,11 @@ def _verify_node_selector_defect_correction(
         "resulting_tree_sha": resulting_tree,
         "classification": "IN_CONTRACT_DEFECT",
         "technically_blocking": True,
+        "source_kind": source_kind,
         "observed_workflow_name": observed_workflow_name,
         "observed_workflow_path": observed_workflow_path,
+        "observed_check_name": observed_check_name,
+        "authenticated_source_paths": list(source_paths),
         "violations": list(observed_violations),
         "changed_paths": changed_paths,
     }
@@ -1127,6 +1277,7 @@ def _verify_post_ready_validation_defect_authority(
         resulting_tree=candidate_validation.tree_sha,
         observed_workflow_name=observation["workflow_name"],
         observed_workflow_path=observation["workflow_path"],
+        observed_check_name=observation["check_name"],
     )
     candidate_validation_digest = fast_path.digest_json(
         fast_path._validation_evidence_binding(candidate_validation)

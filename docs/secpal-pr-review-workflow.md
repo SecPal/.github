@@ -247,8 +247,19 @@ bytes must prove a violated current-delivery invariant and classify it as
 technically blocking `IN_CONTRACT_DEFECT`. The maintained workflow-runtime
 reproducer derives Node engine and setup-selector floors from repository-owned
 configuration rather than issue, PR, workflow, run, job or version constants.
-It proves that a workflow selector admits a runtime below the candidate's own
-engine floor. The exact signed sole-parent successor must eliminate that
+For a direct workflow, the observed run path remains the selector source. For a
+local reusable-workflow job, the verifier instead reads the observed top-level
+workflow and literal `./.github/workflows/...` target from the same predecessor,
+requires `workflow_call`, and resolves exactly one named caller/called-job pair
+whose display names form the observed check identity. Zero or ambiguous
+mappings, traversal, dynamic or remote calls, missing exact-head files and
+mixed-source bytes fail closed. Independently reproduced selector violations in
+the authenticated local call graph may be corrected together; unrelated
+workflows remain outside the correction scope.
+
+The proof establishes that an authenticated source workflow selector admits a
+runtime below the candidate's own engine floor. The exact signed sole-parent
+successor must eliminate that
 violation, contain only defect-relevant workflow, toolchain or regression
 changes, and carry a fresh ordinary validation receipt and final attestation
 for its exact resulting head and tree.
