@@ -15,7 +15,7 @@
         "material_finding_ids": [],
         "qualification_digest": "cf11784fa573fd54240386d86c66f7ae7c4d591a60b2ac169e030a53a41d8cc8"
       },
-      "accepted_main_sha": "3887b00e1b84ef0d14ab2846507a3100512c2c28",
+      "accepted_main_sha": "073617e8b135bd22be3a8489bcc6857502ba7d2b",
       "source_signer_identity": "aroviqen@secpal.app",
       "allowed_path_prefixes": [
         ".agents/skills/secpal-pr-review/references",
@@ -25,12 +25,13 @@
         "scripts/README.md",
         "scripts/secpal-pr-review-actions.py",
         "scripts/secpal-resolve-fixed-threads.py",
+        "scripts/sync-required-checks.sh",
         "scripts/secpal_pr_review",
         "tests"
       ],
       "concepts": ["GOVERNANCE_AMENDMENT", "ABSENT_NEVER_ISSUED", "EXACT_STATE_ADOPTION"],
       "human_authority_identity": "SecPal human architecture authority for issue 960",
-      "human_authorization_digest": "9864653c710c636cb880a9a13096ff5cda9e1060b647f9e3315f107a329416cc",
+      "human_authorization_digest": "e96ebfa167deb14d8c08b967eb56bb96076474ce560de02e464aded0651d778a",
       "authorization_id": "governance-amendment:SecPal/.github:960:961",
       "intended_state": {
         "unrestricted_review_count": 1,

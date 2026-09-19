@@ -622,7 +622,7 @@ def _immutable_delivery_registry_binding(
         current_safety = base_binding.pop(
             "ready_source_recovery_current_safety", None
         )
-        base_binding.pop(
+        qualified_admission = base_binding.pop(
             "qualified_remediation_successor_evidence_loss", None
         )
         base_command_set = base_binding.get("validation")
@@ -645,6 +645,23 @@ def _immutable_delivery_registry_binding(
             raise fast_path.SecurityBlocker(
                 "Ready-source recovery base registry binding changed"
             )
+        if qualified_admission is not None:
+            from secpal_pr_review import qualified_remediation_successor_loss as loss
+
+            accepted = loss.load_accepted_admission(repository, 956)
+            registration = _load_repository_entry(repository).get(
+                "qualified_remediation_successor_evidence_loss_policy"
+            )
+            if (
+                loss.verify_admission(qualified_admission) != accepted
+                or registration != {
+                    "path": accepted["policy_path"],
+                    "admission_digest": accepted["admission_digest"],
+                }
+            ):
+                raise fast_path.SecurityBlocker(
+                    "qualified remediation accepted registration changed"
+                )
         return recovery_binding
     except fast_path.SecurityBlocker as exc:
         raise ResolutionError(str(exc)) from exc
@@ -1643,7 +1660,10 @@ def verify_local_fix_commit(
                 repository_root=root,
                 repository=repository,
                 head_sha=expected_head.lower(),
-                expected_signer={"kind": "SSH_PRINCIPAL", "identity": "aroviqen"},
+                expected_signer={
+                    "kind": "SSH_PRINCIPAL",
+                    "identity": admission["signer_identity"],
+                },
                 signature_policy=signature_policy,
             )
         except (fast_path.RecoverableLocalError, fast_path.SecurityBlocker) as exc:

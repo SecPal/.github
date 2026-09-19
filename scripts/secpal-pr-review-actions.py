@@ -5345,6 +5345,7 @@ def advance_qualified_remediation_successor_loss(
     repository_root: Path,
     manual_gate_evidence: Any,
     apply: bool,
+    report_output: str | None = None,
 ) -> dict[str, Any]:
     """Advance the one accepted #956/#957 loss case through existing authority."""
 
@@ -5435,7 +5436,9 @@ def advance_qualified_remediation_successor_loss(
         repository_root=candidate_root,
         feedback_findings=None,
         manual_gate_evidence=gates,
-        expected_commit_signer={"kind": "SSH_PRINCIPAL", "identity": "aroviqen"},
+        expected_commit_signer={
+            "kind": "SSH_PRINCIPAL", "identity": record["signer_identity"],
+        },
         _policy_loader=accepted_policy,
         _gateway_factory=FastPathGateway,
         _validation_runner=_run_ready_source_recovery_current_safety,
@@ -5479,6 +5482,24 @@ def advance_qualified_remediation_successor_loss(
     }
     if not apply:
         return report
+    if not report_output:
+        raise fast_path.SecurityBlocker(
+            "qualified remediation apply requires durable safety report output"
+        )
+    prepared_report = {**report, "publication_status": "PREPARED"}
+    try:
+        _write_fast_report(report_output, prepared_report)
+        persisted = _read_json_value(
+            report_output, "qualified remediation persisted safety report"
+        )
+    except (OSError, ValueError) as exc:
+        raise fast_path.SecurityBlocker(
+            "qualified remediation safety report persistence failed"
+        ) from exc
+    if persisted != prepared_report:
+        raise fast_path.SecurityBlocker(
+            "qualified remediation safety report read-back changed"
+        )
     signers = lifecycle_execution._production_signing_authorities(
         record["repository"], record["signer_identity"]
     )
@@ -9409,8 +9430,16 @@ def main(argv: list[str] | None = None) -> int:
                     arguments.manual_gate_evidence, "manual-gate evidence"
                 ),
                 apply=arguments.apply,
+                report_output=arguments.output,
             )
-            _write_fast_report(arguments.output, report)
+            if not arguments.apply:
+                _write_fast_report(arguments.output, report)
+            elif arguments.output is None:
+                raise fast_path.SecurityBlocker(
+                    "qualified remediation apply requires durable safety report output"
+                )
+            else:
+                _write_fast_report(arguments.output, report)
             return 0
         return _command_mutation(arguments)
     except fast_path.RecoverableLocalError as exc:

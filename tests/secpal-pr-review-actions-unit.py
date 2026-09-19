@@ -14331,6 +14331,7 @@ class QualifiedRemediationSuccessorApplicationTests(TestCase):
                 repository_root=candidate,
                 manual_gate_evidence=self.gates,
                 apply=True,
+                report_output=str(candidate / "qualified-safety.json"),
             )
         return report, append, publication.advance_current_terminal
 
@@ -14362,6 +14363,16 @@ class QualifiedRemediationSuccessorApplicationTests(TestCase):
             signer_identity=self.record["signer_identity"],
             signer=mock.ANY,
         )
+
+    def test_apply_requires_durable_safety_report_before_signing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory)
+            with mock.patch.object(
+                actions, "_write_fast_report", side_effect=OSError("read only")
+            ), self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "safety report persistence failed"
+            ):
+                self._run(candidate)
 
     def test_substituted_predecessor_identity_state_and_evidence_fail_closed(
         self,

@@ -60,6 +60,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 **Fixed:**
 
+- Preserve provider-enforced strict up-to-date checks for `SecPal/.github`
+  while keeping every other managed repository's existing non-strict baseline.
+  Governance-amendment observation now binds the complete required-check
+  inventory, registered bootstrap scope, authorized Ready actor, and strict
+  base policy before canonical squash consumption.
+- Bind the qualified-remediation signer and exact twelve-thread inventory to
+  accepted registration, and persist its safety report before the one-use
+  lifecycle publication can be signed or advanced.
 - Add one registered, governance-only amendment boundary for issue #960 / PR
   #961. The accepted-main authority signer binds the exact one-use root
   authorization, the legacy-adoption signer wraps it, and accepted-main keys

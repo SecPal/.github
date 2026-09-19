@@ -35,6 +35,7 @@ FULL_CANDIDATE_PATHS = [
     "scripts/README.md",
     "scripts/secpal-pr-review-actions.py",
     "scripts/secpal-resolve-fixed-threads.py",
+    "scripts/sync-required-checks.sh",
     "scripts/secpal_pr_review/fast_path.py",
     "scripts/secpal_pr_review/governance_amendment.py",
     "scripts/secpal_pr_review/lifecycle_authority.py",
@@ -148,12 +149,13 @@ def proposed_policy() -> dict[str, object]:
 
 def authorization(
     *, head: str = HEAD, tree: str = TREE, parent: str = PARENT,
-    accepted_main: str = "3887b00e1b84ef0d14ab2846507a3100512c2c28",
+    accepted_main: str | None = None,
     changed: list[dict[str, str]] | None = None,
     source_oids: list[str] | None = None,
     policy: dict[str, object] | None = None,
 ) -> dict[str, object]:
     policy = policy or proposed_policy()
+    accepted_main = accepted_main or str(policy["accepted_main_sha"])
     qualified = policy["qualified_source"]
     changed = changed or [
         {"path": "policies/governance-amendment-bootstrap.json", "blob_oid": "d" * 40, "mode": "100644"},
@@ -294,6 +296,9 @@ class GovernanceAmendmentTests(TestCase):
                 "operation": "GOVERNANCE_AMENDMENT_CONSUMPTION",
                 "merge_method": "SQUASH",
                 "protected_ref_write": "GITHUB_PULL_REQUEST_MERGE",
+                "provider_atomic_base_precondition": (
+                    "STRICT_REQUIRED_STATUS_CHECKS"
+                ),
                 "direct_push": False,
                 "force": False,
                 "branch_protection_bypass": False,
@@ -429,6 +434,15 @@ class GovernanceAmendmentTests(TestCase):
             base = git("rev-parse", "HEAD")
             git("remote", "add", "origin", str(remote)); git("push", "origin", "HEAD:main")
             git("switch", "-c", "candidate")
+            policy = copy.deepcopy(proposed_policy())
+            policy["accepted_main_sha"] = base
+            policy["human_authorization_digest"] = authority.digest_json({
+                "authority_identity": policy["human_authority_identity"],
+                "repository": "SecPal/.github", "delivery_issue": 960,
+                "pull_request": 961, "purpose": amendment.PURPOSE,
+                "qualified_source_digest": policy["qualified_source"]["qualification_digest"],
+                "accepted_main_sha": base, "decision": "APPROVED", "bounded_uses": 1,
+            })
             midpoint = len(FULL_CANDIDATE_PATHS) // 2
             for sequence, paths in enumerate(
                 (FULL_CANDIDATE_PATHS[:midpoint], FULL_CANDIDATE_PATHS[midpoint:]),
@@ -437,7 +451,24 @@ class GovernanceAmendmentTests(TestCase):
                 for relative in paths:
                     candidate = root / relative
                     candidate.parent.mkdir(parents=True, exist_ok=True)
-                    candidate.write_text(f"candidate {relative}\n", encoding="utf-8")
+                    if relative == amendment.POLICY_PATH:
+                        candidate.write_text(json.dumps({
+                            "schema_version": "1.0", "amendments": [policy],
+                        }), encoding="utf-8")
+                    elif relative == amendment.REGISTRY_PATH:
+                        candidate.write_text(json.dumps({
+                            "schema_version": "1.0",
+                            "repositories": [{
+                                "repository": "SecPal/.github",
+                                "governance_amendment_policy": {
+                                    "path": amendment.POLICY_PATH,
+                                    "kind": amendment.KIND,
+                                    "purpose": amendment.PURPOSE,
+                                },
+                            }],
+                        }), encoding="utf-8")
+                    else:
+                        candidate.write_text(f"candidate {relative}\n", encoding="utf-8")
                 git("add", ".")
                 git("commit", "-S", "-m", f"amendment part {sequence}")
             head, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
@@ -452,15 +483,6 @@ class GovernanceAmendmentTests(TestCase):
                     "path": relative, "blob_oid": blob.split("\t", 1)[0],
                     "mode": mode,
                 })
-            policy = copy.deepcopy(proposed_policy())
-            policy["accepted_main_sha"] = base
-            policy["human_authorization_digest"] = authority.digest_json({
-                "authority_identity": policy["human_authority_identity"],
-                "repository": "SecPal/.github", "delivery_issue": 960,
-                "pull_request": 961, "purpose": amendment.PURPOSE,
-                "qualified_source_digest": policy["qualified_source"]["qualification_digest"],
-                "accepted_main_sha": base, "decision": "APPROVED", "bounded_uses": 1,
-            })
             raw = authorization(
                 head=head, tree=tree, parent=source_oids[-2],
                 accepted_main=base, changed=changed,
@@ -491,7 +513,8 @@ class GovernanceAmendmentTests(TestCase):
             }]
             pull = {
                 "number": 961, "state": "open", "draft": False,
-                "merged": False,
+                "merged": False, "mergeable": True,
+                "mergeable_state": "clean",
                 "head": {"sha": head, "repo": {"full_name": "SecPal/.github"}},
                 "base": {"sha": base, "ref": "main", "repo": {"full_name": "SecPal/.github"}},
             }
@@ -540,10 +563,10 @@ class GovernanceAmendmentTests(TestCase):
                         "workflow_runs": ready_runs,
                     }
                 elif "check-runs" in joined:
-                    value = {"check_runs": checks}
+                    value = {"total_count": len(checks), "check_runs": checks}
                 elif "/status" in joined:
                     value = {
-                        "sha": head, "state": "pending",
+                        "sha": head, "state": "success",
                         "statuses": statuses,
                     }
                 elif "graphql" in arguments:
@@ -566,7 +589,11 @@ class GovernanceAmendmentTests(TestCase):
                 "accepted_formats": ["ssh"],
                 "require_github_verified": True,
             }
-            with mock.patch.object(amendment, "ROOT", root), mock.patch.object(amendment.publication, "_run_gh", side_effect=github), mock.patch.object(authority, "_load_delivery_signature_policy", return_value=signature_policy), first, second, mock.patch.object(amendment.execution, "_policy_role_signer", signer_factory):
+            required_policy = {
+                "strict": True,
+                "checks": [{"context": "governance", "app_id": None}],
+            }
+            with mock.patch.object(amendment, "ROOT", root), mock.patch.object(amendment.publication, "_run_gh", side_effect=github), mock.patch.object(authority, "_load_delivery_signature_policy", return_value=signature_policy), first, second, mock.patch.object(amendment.execution, "_policy_role_signer", signer_factory), mock.patch.object(amendment, "_live_required_check_policy", return_value=required_policy):
                 inputs = observation_inputs(raw)
                 pull["draft"] = True
                 with self.assertRaisesRegex(
@@ -695,6 +722,10 @@ class GovernanceAmendmentTests(TestCase):
             {
                 "path": "scripts/secpal-resolve-fixed-threads.py",
                 "blob_oid": "b" * 40, "mode": "100755",
+            },
+            {
+                "path": "scripts/sync-required-checks.sh",
+                "blob_oid": "c" * 40, "mode": "100755",
             },
         ]
         self.assertEqual(
@@ -831,7 +862,18 @@ class GovernanceAmendmentTests(TestCase):
                 "result": "PASS",
                 "evidence_digest": authority.digest_json({
                     "checks": checks, "statuses": statuses,
+                    "required_check_policy": {
+                        "strict": True,
+                        "checks": [{"context": "governance", "app_id": None}],
+                    },
                 }),
+            }
+            ready_authority = {
+                "operation": "DRAFT_TO_READY", "actor": "aroviqen",
+                "event_id": ready_events[0]["id"],
+                "head_sha": repo["head"],
+                "accepted_main_sha": repo["base"],
+                "source_ci_evidence_digest": source_ci["evidence_digest"],
             }
             facts["natural_ci"] = {
                 "head_sha": repo["head"],
@@ -860,6 +902,12 @@ class GovernanceAmendmentTests(TestCase):
                             run["name"], run["created_at"], run["id"]
                         ),
                     ),
+                    "ready_transition_authority": {
+                        **ready_authority,
+                        "authorization_digest": authority.digest_json(
+                            ready_authority
+                        ),
+                    },
                 }),
             }
             threads: list[dict[str, object]] = []
@@ -921,10 +969,10 @@ class GovernanceAmendmentTests(TestCase):
                         "workflow_runs": ready_runs,
                     }
                 elif "check-runs" in joined:
-                    value = {"check_runs": checks}
+                    value = {"total_count": len(checks), "check_runs": checks}
                 elif "/status" in joined:
                     value = {
-                        "sha": repo["head"], "state": "pending",
+                        "sha": repo["head"], "state": "success",
                         "statuses": statuses,
                     }
                 elif "graphql" in arguments:
@@ -945,6 +993,15 @@ class GovernanceAmendmentTests(TestCase):
                 amendment.publication, "_run_gh", side_effect=github
             ), mock.patch.object(
                 amendment.execution, "_policy_role_signer", signer_factory
+            ), mock.patch.object(
+                amendment, "_registered_bootstrap_policy",
+                return_value=policy,
+            ), mock.patch.object(
+                amendment, "_live_required_check_policy",
+                return_value={
+                    "strict": True,
+                    "checks": [{"context": "governance", "app_id": None}],
+                },
             ), first, second:
                 observed = authority.observe_governance_amendment_issuance(
                     "SecPal/.github", 960, inputs
@@ -957,6 +1014,9 @@ class GovernanceAmendmentTests(TestCase):
                     "stale main": lambda value: value.update(
                         accepted_main_sha="9" * 40
                     ),
+                    "caller-selected bootstrap source": lambda value: value[
+                        "qualified_source"
+                    ].update(head_sha="9" * 40),
                 }
                 for label, mutate in mutations.items():
                     stale = copy.deepcopy(inputs)
@@ -978,10 +1038,14 @@ class GovernanceAmendmentTests(TestCase):
             "sha": HEAD, "state": "success",
             "statuses": [{"context": "license/cla", "state": "success"}],
         }
+        required_policy = {
+            "strict": True,
+            "checks": [{"context": "governance", "app_id": None}],
+        }
 
         def observe(value: dict[str, object]) -> dict[str, object]:
             responses = iter((
-                {"check_runs": checks}, value,
+                {"total_count": len(checks), "check_runs": checks}, value,
             ))
 
             def github(arguments: list[str]):
@@ -992,6 +1056,9 @@ class GovernanceAmendmentTests(TestCase):
 
             with mock.patch.object(
                 amendment.publication, "_run_gh", side_effect=github
+            ), mock.patch.object(
+                amendment, "_live_required_check_policy",
+                return_value=required_policy,
             ):
                 return amendment._live_ci("SecPal/.github", HEAD)
 
@@ -1005,6 +1072,7 @@ class GovernanceAmendmentTests(TestCase):
             "result": "PASS",
             "evidence_digest": authority.digest_json({
                 "checks": checks, "statuses": normalized,
+                "required_check_policy": required_policy,
             }),
         })
 
@@ -1056,6 +1124,36 @@ class GovernanceAmendmentTests(TestCase):
             ):
                 observe(value)
 
+        with mock.patch.object(
+            amendment, "_live_required_check_policy",
+            return_value=required_policy,
+        ):
+            for label, check_value in {
+                "truncated inventory": {
+                    "total_count": 2, "check_runs": checks,
+                },
+                "arbitrary skipped check": {
+                    "total_count": 2,
+                    "check_runs": checks + [{
+                        "name": "unregistered optional", "status": "completed",
+                        "conclusion": "skipped", "head_sha": HEAD,
+                    }],
+                },
+                "required check skipped": {
+                    "total_count": 1,
+                    "check_runs": [{**checks[0], "conclusion": "skipped"}],
+                },
+            }.items():
+                responses = iter((check_value, status))
+                def github(arguments: list[str]):
+                    return subprocess.CompletedProcess(
+                        arguments, 0, json.dumps(next(responses)).encode(), b""
+                    )
+                with self.subTest(label=label), mock.patch.object(
+                    amendment.publication, "_run_gh", side_effect=github
+                ), self.assertRaises(amendment.GovernanceAmendmentError):
+                    amendment._live_ci("SecPal/.github", HEAD)
+
     def test_live_ready_ci_binds_transition_triggered_workflows(self) -> None:
         source_ci = {
             "head_sha": HEAD,
@@ -1096,6 +1194,12 @@ class GovernanceAmendmentTests(TestCase):
             "created_at": events[0]["created_at"],
             "actor": events[0]["actor"]["login"],
         }
+        ready_authority = {
+            "operation": "DRAFT_TO_READY",
+            "actor": "aroviqen", "event_id": events[0]["id"],
+            "head_sha": HEAD, "accepted_main_sha": PARENT,
+            "source_ci_evidence_digest": source_ci["evidence_digest"],
+        }
         self.assertEqual(observed, {
             "head_sha": HEAD,
             "workflow_identity": amendment.LIVE_OBSERVATION_VERSION,
@@ -1116,6 +1220,12 @@ class GovernanceAmendmentTests(TestCase):
                     }]} for run in runs],
                     key=lambda run: (run["name"], run["created_at"], run["id"]),
                 ),
+                "ready_transition_authority": {
+                    **ready_authority,
+                    "authorization_digest": authority.digest_json(
+                        ready_authority
+                    ),
+                },
             }),
         })
 
@@ -1164,6 +1274,9 @@ class GovernanceAmendmentTests(TestCase):
                         "base": {"sha": PARENT},
                     }],
                 )] + runs[1:],
+            ),
+            "unauthorized Ready actor": (
+                [{**events[0], "actor": {"login": "attacker"}}], runs,
             ),
         }
         for label, (event_values, run_values) in invalid.items():
@@ -1261,6 +1374,52 @@ class GovernanceAmendmentTests(TestCase):
             "live governance amendment feedback pagination is incomplete",
         ):
             observe(incomplete=True)
+
+        self.assertTrue(amendment._provider_summary_is_nonmaterial({
+            "author": {"login": "chatgpt-codex-connector"},
+            "body": '<!-- codex-pull-request-review-summary -->\n'
+                    '<!-- codex-security-review:v1 {"status":"completed"} -->',
+        }, review=False))
+        self.assertTrue(amendment._provider_summary_is_nonmaterial({
+            "author": {"login": "copilot-pull-request-reviewer"},
+            "body": "<!-- ccr-overview-v2 -->\nsummary",
+        }, review=True))
+
+    def test_strict_provider_merge_gate_binds_base_head_and_clean_state(self) -> None:
+        item = authorization()
+        pull = {
+            "state": "open", "draft": False, "merged": False,
+            "head": {"sha": item["head_sha"]},
+            "base": {"sha": item["accepted_main_sha"], "ref": "main"},
+            "mergeable": True, "mergeable_state": "clean",
+        }
+        with mock.patch.object(
+            amendment, "_live_required_check_policy",
+            return_value={"strict": True, "checks": [{"context": "x", "app_id": None}]},
+        ), mock.patch.object(
+            amendment, "_github_json", return_value=pull,
+        ):
+            amendment._authenticate_provider_merge_gate(item)
+        for label, mutate in {
+            "base advance": lambda value: value["base"].update(sha="9" * 40),
+            "head change": lambda value: value["head"].update(sha="8" * 40),
+            "behind": lambda value: value.update(mergeable_state="behind"),
+        }.items():
+            changed = copy.deepcopy(pull); mutate(changed)
+            with self.subTest(label=label), mock.patch.object(
+                amendment, "_live_required_check_policy",
+                return_value={"strict": True, "checks": [{"context": "x", "app_id": None}]},
+            ), mock.patch.object(
+                amendment, "_github_json", return_value=changed,
+            ), self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError, "strict provider merge gate"
+            ):
+                amendment._authenticate_provider_merge_gate(item)
+        with mock.patch.object(
+            amendment, "_live_required_check_policy",
+            side_effect=amendment.GovernanceAmendmentError("not strict"),
+        ), self.assertRaises(amendment.GovernanceAmendmentError):
+            amendment._authenticate_provider_merge_gate(item)
 
     def test_signed_delivery_scope_cannot_change_without_new_root_signature(self) -> None:
         value = authorization()
@@ -1413,13 +1572,10 @@ class GovernanceAmendmentTests(TestCase):
             with self.subTest(label=label), first, second, self.assertRaises((amendment.GovernanceAmendmentError, authority.LifecycleAuthorityError)):
                 amendment.verify(changed)
 
-    def test_candidate_policy_and_registry_are_not_authority(self) -> None:
+    def test_root_signature_remains_authority_after_registered_scope_binding(self) -> None:
         value = authorization()
         first, second = self.patches()
-        with first, second, mock.patch.object(
-            amendment.Path, "read_text",
-            side_effect=AssertionError("candidate policy was consulted"),
-        ):
+        with first, second:
             self.assertTrue(amendment.is_verified(amendment.verify(value)))
 
         changed = copy.deepcopy(value)

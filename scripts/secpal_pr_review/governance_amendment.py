@@ -34,12 +34,19 @@ CONSUMPTION_METHOD = "SQUASH"
 SOURCE_CI_VERSION = "github-git-live-observation/v1"
 LIVE_OBSERVATION_VERSION = "github-git-live-observation/v2"
 EXPECTED_STATUS_CONTEXTS = frozenset({"license/cla"})
+ALLOWED_SKIPPED_CHECKS = frozenset({
+    "Export Copilot review memory",
+    "Project automation / Handle issue lifecycle events",
+    "Project automation / Handle pull request review events",
+    "auto-merge",
+})
 READY_WORKFLOW_NAMES = frozenset({
     "Pull Request Evidence",
     "Pull Request English Communication",
     "Pull Request Commit Signatures",
     "PR Governance Gate",
 })
+READY_AUTHORIZED_ACTOR = "aroviqen"
 ROOT_AUTHORIZATION_DOMAIN = "secpal.governance-amendment-root-authorization/v1"
 ROOT_AUTHORIZATION_KIND = "SECPAL_GOVERNANCE_AMENDMENT_ROOT_AUTHORIZATION"
 HUMAN_AUTHORITY_IDENTITY = "SecPal human architecture authority for issue 960"
@@ -47,6 +54,7 @@ SOURCE_SIGNER_IDENTITY = "aroviqen@secpal.app"
 GOVERNANCE_EXACT_PATHS = frozenset({
     "scripts/secpal-pr-review-actions.py",
     "scripts/secpal-resolve-fixed-threads.py",
+    "scripts/sync-required-checks.sh",
 })
 GOVERNANCE_PATH_PREFIXES = [
     ".agents/skills/secpal-pr-review/references",
@@ -56,12 +64,22 @@ GOVERNANCE_PATH_PREFIXES = [
     "scripts/README.md",
     "scripts/secpal-pr-review-actions.py",
     "scripts/secpal-resolve-fixed-threads.py",
+    "scripts/sync-required-checks.sh",
     "scripts/secpal_pr_review",
     "tests",
 ]
 APPROVED_CONCEPTS = [
     "GOVERNANCE_AMENDMENT", "ABSENT_NEVER_ISSUED", "EXACT_STATE_ADOPTION",
 ]
+BOOTSTRAP_QUALIFIED_SOURCE = {
+    "head_sha": "1bdcdde601bf5c96c9175f5c07c48e3f30e9d37d",
+    "tree_sha": "25ae416e95fb0704f365580c917c840dcc97303d",
+    "ordered_parent_shas": ["af5aa59ebaf81e6407048b1586a521dd1cf38c0d"],
+    "verifier_conversation_id": "21427904-1d97-4c38-bda1-f6d9f8e23b7e",
+    "verifier_workspace": "github-pr961-remediation-214279041d974c38bda1f6d9f8e23b7e",
+    "result": "PASS", "material_finding_ids": [],
+    "qualification_digest": "cf11784fa573fd54240386d86c66f7ae7c4d591a60b2ac169e030a53a41d8cc8",
+}
 
 AUTHORIZATION_FIELDS = frozenset({
     "schema_version", "kind", "domain", "purpose", "repository",
@@ -141,6 +159,7 @@ def consumption_plan() -> dict[str, Any]:
         "operation": "GOVERNANCE_AMENDMENT_CONSUMPTION",
         "merge_method": CONSUMPTION_METHOD,
         "protected_ref_write": "GITHUB_PULL_REQUEST_MERGE",
+        "provider_atomic_base_precondition": "STRICT_REQUIRED_STATUS_CHECKS",
         "direct_push": False,
         "force": False,
         "branch_protection_bypass": False,
@@ -794,13 +813,49 @@ def _live_issue(repository: str, delivery_issue: int) -> dict[str, Any]:
 
 
 def _live_ci(repository: str, head_sha: str) -> dict[str, Any]:
-    checks = _github_json(
-        [
-            "api", "--hostname", "github.com",
-            f"repos/{repository}/commits/{head_sha}/check-runs?per_page=100",
-        ],
-        "governance amendment checks",
-    )
+    protection = _live_required_check_policy(repository)
+    runs: list[dict[str, Any]] = []
+    total_count: int | None = None
+    for page in range(1, 11):
+        checks = _github_json(
+            [
+                "api", "--hostname", "github.com",
+                f"repos/{repository}/commits/{head_sha}/check-runs?per_page=100&page={page}",
+            ],
+            "governance amendment checks",
+        )
+        try:
+            observed_total = checks["total_count"]
+            page_runs = checks["check_runs"]
+            if (
+                not isinstance(observed_total, int)
+                or isinstance(observed_total, bool)
+                or observed_total < 1
+                or observed_total > 1000
+                or not isinstance(page_runs, list)
+                or (total_count is not None and observed_total != total_count)
+            ):
+                raise TypeError
+        except (KeyError, TypeError) as exc:
+            raise GovernanceAmendmentError(
+                "live governance amendment check inventory is incomplete"
+            ) from exc
+        total_count = observed_total
+        runs.extend(page_runs)
+        if len(runs) >= total_count:
+            if len(runs) != total_count:
+                raise GovernanceAmendmentError(
+                    "live governance amendment check inventory is ambiguous"
+                )
+            break
+        if len(page_runs) != 100:
+            raise GovernanceAmendmentError(
+                "live governance amendment check inventory is truncated"
+            )
+    else:
+        raise GovernanceAmendmentError(
+            "live governance amendment check inventory exceeds its bound"
+        )
     statuses = _github_json(
         [
             "api", "--hostname", "github.com",
@@ -810,11 +865,11 @@ def _live_ci(repository: str, head_sha: str) -> dict[str, Any]:
     )
     try:
         status_head = statuses["sha"]
-        runs = sorted(
+        normalized_runs = sorted(
             ({
                 "name": item["name"], "status": item["status"],
                 "conclusion": item["conclusion"], "head_sha": item["head_sha"],
-            } for item in checks["check_runs"]),
+            } for item in runs),
             key=lambda item: (
                 item["name"], item["status"], str(item["conclusion"])
             ),
@@ -831,7 +886,7 @@ def _live_ci(repository: str, head_sha: str) -> dict[str, Any]:
             "live governance amendment CI is incomplete"
         ) from exc
     if (
-        not runs or len(runs) >= 100
+        not normalized_runs
         or status_head != head_sha
         or len({status["context"] for status in contexts}) != len(contexts)
         or any(
@@ -841,10 +896,9 @@ def _live_ci(repository: str, head_sha: str) -> dict[str, Any]:
         or any(
             run["head_sha"] != head_sha or run["status"] != "completed"
             or run["conclusion"] not in {"success", "skipped"}
-            for run in runs
+            for run in normalized_runs
         )
-        or statuses.get("state") not in {"success", "pending"}
-        or (statuses.get("state") == "pending" and contexts)
+        or statuses.get("state") != "success"
         or any(
             status["state"] != "success"
             or status["sha"] != head_sha
@@ -854,13 +908,77 @@ def _live_ci(repository: str, head_sha: str) -> dict[str, Any]:
         raise GovernanceAmendmentError(
             "live governance amendment CI is not terminal and passing"
         )
-    evidence = {"checks": runs, "statuses": contexts}
+    required = {item["context"] for item in protection["checks"]}
+    observed_names = {run["name"] for run in normalized_runs}
+    if (
+        not required.issubset(observed_names)
+        or any(
+            run["name"] in required and run["conclusion"] != "success"
+            for run in normalized_runs
+        )
+        or any(
+            run["conclusion"] == "skipped"
+            and run["name"] not in ALLOWED_SKIPPED_CHECKS
+            for run in normalized_runs
+        )
+    ):
+        raise GovernanceAmendmentError(
+            "live governance amendment required check inventory changed"
+        )
+    evidence = {
+        "checks": normalized_runs, "statuses": contexts,
+        "required_check_policy": protection,
+    }
     return {
         "head_sha": head_sha,
         "workflow_identity": SOURCE_CI_VERSION,
         "result": "PASS",
         "evidence_digest": authority.digest_json(evidence),
     }
+
+
+def _live_required_check_policy(repository: str) -> dict[str, Any]:
+    if repository != "SecPal/.github":
+        raise GovernanceAmendmentError(
+            "governance amendment repository is outside bootstrap scope"
+        )
+    value = _github_json(
+        [
+            "api", "--hostname", "github.com",
+            f"repos/{repository}/branches/main/protection/required_status_checks",
+        ],
+        "governance amendment protected-main check policy",
+    )
+    try:
+        strict = value["strict"]
+        raw_checks = value["checks"]
+        checks = sorted(
+            ({"context": item["context"], "app_id": item["app_id"]}
+             for item in raw_checks),
+            key=lambda item: (item["context"], str(item["app_id"])),
+        )
+    except (KeyError, TypeError) as exc:
+        raise GovernanceAmendmentError(
+            "protected-main required check policy is incomplete"
+        ) from exc
+    if (
+        strict is not True
+        or not checks
+        or len({item["context"] for item in checks}) != len(checks)
+        or any(
+            not isinstance(item["context"], str)
+            or not item["context"]
+            or not (
+                item["app_id"] is None
+                or (isinstance(item["app_id"], int) and not isinstance(item["app_id"], bool))
+            )
+            for item in checks
+        )
+    ):
+        raise GovernanceAmendmentError(
+            "protected-main required check policy is not strict and canonical"
+        )
+    return {"strict": True, "checks": checks}
 
 
 def _live_ready_ci(
@@ -938,7 +1056,7 @@ def _live_ready_ci(
         or not isinstance(ready[0]["created_at"], str)
         or not ready[0]["created_at"]
         or not isinstance(ready[0]["actor"], str)
-        or not ready[0]["actor"]
+        or ready[0]["actor"] != READY_AUTHORIZED_ACTOR
     ):
         raise GovernanceAmendmentError(
             "live governance amendment Ready CI is not terminal and passing"
@@ -982,9 +1100,21 @@ def _live_ready_ci(
         raise GovernanceAmendmentError(
             "live governance amendment Ready CI is not terminal and passing"
         )
+    ready_authority = {
+        "operation": "DRAFT_TO_READY",
+        "actor": ready[0]["actor"],
+        "event_id": ready[0]["id"],
+        "head_sha": head_sha,
+        "accepted_main_sha": accepted_main_sha,
+        "source_ci_evidence_digest": source_ci["evidence_digest"],
+    }
     evidence = {
         "source_ci_evidence_digest": source_ci["evidence_digest"],
         "ready_event": ready[0], "ready_workflow_runs": ready_runs,
+        "ready_transition_authority": {
+            **ready_authority,
+            "authorization_digest": authority.digest_json(ready_authority),
+        },
     }
     return {
         "head_sha": head_sha,
@@ -1082,6 +1212,26 @@ def _deduplicate_feedback_nodes(
     return [unique[identifier] for identifier in sorted(unique)]
 
 
+def _provider_summary_is_nonmaterial(item: Mapping[str, Any], *, review: bool) -> bool:
+    author = item.get("author")
+    login = author.get("login") if isinstance(author, Mapping) else None
+    body = item.get("body")
+    if not isinstance(body, str):
+        return False
+    if login == "chatgpt-codex-connector":
+        if review:
+            return body.lstrip().startswith("### 💡 Codex Review")
+        return (
+            body.startswith("<!-- codex-pull-request-review-summary -->")
+            and '"status":"completed"' in body
+        )
+    return (
+        review
+        and login == "copilot-pull-request-reviewer"
+        and body.startswith("<!-- ccr-overview-v2 -->")
+    )
+
+
 def _live_feedback(repository: str, pull_request: int, head_sha: str) -> dict[str, Any]:
     threads_query = (
         "query($owner:String!,$name:String!,$number:Int!,$cursor:String){"
@@ -1156,11 +1306,17 @@ def _live_feedback(repository: str, pull_request: int, head_sha: str) -> dict[st
         ) from exc
     material = [item["id"] for item in thread_nodes if not item["isResolved"]]
     material.extend(
-        f"comment:{item['id']}" for item in comment_nodes if item["body"].strip()
+        f"comment:{item['id']}" for item in comment_nodes
+        if item["body"].strip()
+        and not _provider_summary_is_nonmaterial(item, review=False)
     )
     material.extend(
         f"review:{item['id']}" for item in review_nodes
-        if item["state"] == "CHANGES_REQUESTED" or item["body"].strip()
+        if item["state"] == "CHANGES_REQUESTED"
+        or (
+            item["body"].strip()
+            and not _provider_summary_is_nonmaterial(item, review=True)
+        )
     )
     inventory = {"threads": thread_nodes}
     return {
@@ -1262,6 +1418,85 @@ def _git_changed_files(
     return _changed_files(changed, GOVERNANCE_PATH_PREFIXES)
 
 
+def _registered_bootstrap_policy(
+    root: Path, head_sha: str, repository: str, delivery_issue: int,
+    pull_request: int, accepted_main_sha: str,
+) -> dict[str, Any]:
+    def document(path: str, label: str) -> dict[str, Any]:
+        result = _run_git(root, ["show", f"{head_sha}:{path}"])
+        try:
+            value = json.loads(result.stdout)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise GovernanceAmendmentError(
+                f"registered governance amendment {label} is unavailable"
+            ) from exc
+        if result.returncode != 0 or not isinstance(value, dict):
+            raise GovernanceAmendmentError(
+                f"registered governance amendment {label} is unavailable"
+            )
+        return value
+
+    registry = document(REGISTRY_PATH, "registry")
+    policy = document(POLICY_PATH, "policy")
+    entries = registry.get("repositories")
+    matches = [
+        entry for entry in entries or []
+        if isinstance(entry, dict) and entry.get("repository") == repository
+    ]
+    registration = matches[0].get("governance_amendment_policy") if len(matches) == 1 else None
+    records = policy.get("amendments")
+    candidates = [
+        record for record in records or []
+        if isinstance(record, dict)
+        and record.get("repository") == repository
+        and record.get("delivery_issue") == delivery_issue
+        and record.get("pull_request") == pull_request
+    ]
+    if (
+        registry.get("schema_version") != "1.0"
+        or registration != {
+            "path": POLICY_PATH, "kind": KIND, "purpose": PURPOSE,
+        }
+        or policy.get("schema_version") != "1.0"
+        or len(candidates) != 1
+    ):
+        raise GovernanceAmendmentError(
+            "registered governance amendment bootstrap scope is unavailable"
+        )
+    record = copy.deepcopy(candidates[0])
+    expected_human_digest = authority.digest_json({
+        "authority_identity": HUMAN_AUTHORITY_IDENTITY,
+        "repository": repository, "delivery_issue": delivery_issue,
+        "pull_request": pull_request, "purpose": PURPOSE,
+        "qualified_source_digest": BOOTSTRAP_QUALIFIED_SOURCE[
+            "qualification_digest"
+        ],
+        "accepted_main_sha": accepted_main_sha,
+        "decision": "APPROVED", "bounded_uses": 1,
+    })
+    if (
+        set(record) != {
+            "repository", "delivery_issue", "pull_request",
+            "qualified_source", "accepted_main_sha", "source_signer_identity",
+            "allowed_path_prefixes", "concepts", "human_authority_identity",
+            "human_authorization_digest", "authorization_id", "intended_state",
+        }
+        or record.get("qualified_source") != BOOTSTRAP_QUALIFIED_SOURCE
+        or record.get("accepted_main_sha") != accepted_main_sha
+        or record.get("source_signer_identity") != SOURCE_SIGNER_IDENTITY
+        or record.get("allowed_path_prefixes") != GOVERNANCE_PATH_PREFIXES
+        or record.get("concepts") != APPROVED_CONCEPTS
+        or record.get("human_authority_identity") != HUMAN_AUTHORITY_IDENTITY
+        or record.get("human_authorization_digest") != expected_human_digest
+        or record.get("authorization_id")
+        != f"governance-amendment:{repository}:{delivery_issue}:{pull_request}"
+    ):
+        raise GovernanceAmendmentError(
+            "registered governance amendment bootstrap scope changed"
+        )
+    return record
+
+
 def produce_observation(
     repository: str, delivery_issue: int, authenticated_inputs: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -1272,6 +1507,10 @@ def produce_observation(
             "governance amendment root inputs are missing"
         )
     inputs = copy.deepcopy(dict(authenticated_inputs))
+    if repository != "SecPal/.github" or delivery_issue != 960:
+        raise GovernanceAmendmentError(
+            "governance amendment delivery is outside registered bootstrap scope"
+        )
     if set(inputs) != OBSERVATION_INPUT_FIELDS:
         raise GovernanceAmendmentError(
             "governance amendment root inputs are not closed"
@@ -1305,6 +1544,21 @@ def produce_observation(
             "live governance amendment delivery identity or state changed"
         )
     head = authority._require_oid(pull["head_sha"], "amendment head")
+    registered = _registered_bootstrap_policy(
+        root, head, repository, delivery_issue, pull_request, accepted_main
+    )
+    if (
+        inputs["qualified_source"] != registered.get("qualified_source")
+        or inputs["intended_state"] != registered.get("intended_state")
+        or inputs["human_authority_identity"]
+        != registered.get("human_authority_identity")
+        or inputs["human_authorization_digest"]
+        != registered.get("human_authorization_digest")
+        or inputs["authorization_id"] != registered.get("authorization_id")
+    ):
+        raise GovernanceAmendmentError(
+            "governance amendment inputs differ from registered bootstrap scope"
+        )
     tree = _git_oid(root, head + "^{tree}")
     parents_result = _run_git(root, ["show", "-s", "--format=%P", head])
     parents = (
@@ -1665,6 +1919,42 @@ def _authenticate_execution(
         raise GovernanceAmendmentError("governance amendment authorization was already consumed")
 
 
+def _authenticate_provider_merge_gate(item: Mapping[str, Any]) -> None:
+    policy = _live_required_check_policy(item["repository"])
+    pull = _github_json(
+        [
+            "api", "--hostname", "github.com",
+            f"repos/{item['repository']}/pulls/{item['pull_request']}",
+        ],
+        "governance amendment provider merge gate",
+    )
+    try:
+        observed = {
+            "state": pull["state"], "draft": pull["draft"],
+            "merged": pull["merged"], "head_sha": pull["head"]["sha"],
+            "base_sha": pull["base"]["sha"],
+            "base_ref": pull["base"]["ref"],
+            "mergeable": pull["mergeable"],
+            "mergeable_state": pull["mergeable_state"],
+        }
+    except (KeyError, TypeError) as exc:
+        raise GovernanceAmendmentError(
+            "provider merge gate is incomplete"
+        ) from exc
+    if (
+        policy.get("strict") is not True
+        or observed != {
+            "state": "open", "draft": False, "merged": False,
+            "head_sha": item["head_sha"],
+            "base_sha": item["accepted_main_sha"], "base_ref": "main",
+            "mergeable": True, "mergeable_state": "clean",
+        }
+    ):
+        raise GovernanceAmendmentError(
+            "strict provider merge gate is not exact and current"
+        )
+
+
 def execute(
     value: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -1675,6 +1965,7 @@ def execute(
     root = ROOT.resolve()
     remote = _remote_url(item["repository"], item["accepted_main_sha"])
     _authenticate_execution(verified, root, remote)
+    _authenticate_provider_merge_gate(item)
     consumption = _consumption_record(item)
     message = _merge_message(item, consumption)
     squash_oid = _merge_pull_request(

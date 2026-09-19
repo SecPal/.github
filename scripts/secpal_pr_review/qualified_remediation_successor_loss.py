@@ -18,6 +18,14 @@ POLICY_PATH = "policies/qualified-remediation-successor-evidence-loss.json"
 KIND = "QUALIFIED_TWO_PARENT_REMEDIATION_SUCCESSOR_WITH_MISSING_COMMIT_BOUND_EVIDENCE"
 _OID = re.compile(r"[0-9a-f]{40}")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
+EXPECTED_THREAD_IDS = (
+    "PRRT_kwDOQFR1MM6jHjKn", "PRRT_kwDOQFR1MM6jHjKu",
+    "PRRT_kwDOQFR1MM6jHjK0", "PRRT_kwDOQFR1MM6jHjK4",
+    "PRRT_kwDOQFR1MM6jHjK6", "PRRT_kwDOQFR1MM6jHjK_",
+    "PRRT_kwDOQFR1MM6jHjLD", "PRRT_kwDOQFR1MM6jHjLI",
+    "PRRT_kwDOQFR1MM6jHjLO", "PRRT_kwDOQFR1MM6jHmaj",
+    "PRRT_kwDOQFR1MM6jHmbU", "PRRT_kwDOQFR1MM6jHmb3",
+)
 _RECORD_FIELDS = frozenset(
     {
         "schema_version", "kind", "repository", "delivery_issue",
@@ -165,6 +173,10 @@ def verify_admission(value: Any) -> dict[str, Any]:
     if (
         not isinstance(inventory, list)
         or len(inventory) != 12
+        or tuple(
+            entry.get("thread_id") for entry in inventory
+            if isinstance(entry, dict)
+        ) != EXPECTED_THREAD_IDS
         or len({entry.get("thread_id") for entry in inventory if isinstance(entry, dict)}) != 12
         or any(
             not isinstance(entry, dict)

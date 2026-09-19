@@ -503,13 +503,17 @@ then independently rebuilds the live GitHub, Git, CI, feedback, thread,
 source-range and exact change-set facts from the Ready PR. Before signing it
 requires one authenticated `ready_for_review` event and the complete required
 workflow set registered strictly after that event to be terminal and successful.
-The bounded run inventory, canonical GitHub timestamps, and exact returned count
-are authenticated fail closed. A preassembled or
-presigned live-facts descriptor cannot replace that observation. It creates an
+The bounded run inventory, canonical GitHub timestamps, exact returned count,
+registered bootstrap scope, authorized Ready actor, and live strict required-
+check policy are authenticated fail closed. A preassembled or presigned live-
+facts descriptor cannot replace that observation. Provider-enforced strict
+up-to-date checks ensure a base advance rejects the normal squash before main
+changes. It creates an
 exact-scope authorization with the existing accepted-main authority signer, wraps it with
 the existing legacy-adoption signer, and consumes once through the repository's
-canonical GitHub squash merge. Candidate
-policy and registry additions are prospective only. Every adopted source commit
+canonical GitHub squash merge. Candidate policy and registry additions are
+prospective only; their exact bootstrap scope is compared before root signing
+but cannot authorize itself. Every adopted source commit
 must match a key in the bound accepted-main registry. The resulting GitHub-
 verified protected-main commit must have exactly the authorized predecessor and
 qualified tree. Its two top-level command entry points are admitted as exact files;
@@ -1361,6 +1365,11 @@ bash scripts/sync-required-checks.sh --apply
 2. Builds the exact JSON payload GitHub expects for branch protection updates
 3. Applies the payload through `gh api` using `--input` so booleans and arrays stay typed correctly
 4. Keeps the live branch-protection baseline repeatable after workflow or context drift
+5. Emits `strict: true` only for `SecPal/.github`; all other managed
+   repositories retain `strict: false`. Live-preserving apply mode keeps the
+   same canonical check inventory and app bindings, so a later sync cannot
+   undo the provider-enforced exact-base merge precondition or duplicate a
+   check identity.
 
 **Exit Codes:**
 

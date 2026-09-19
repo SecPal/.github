@@ -544,9 +544,12 @@ tree/topology/path/blob/mode scope, terminal CI, stable feedback, threads, and
 qualification binding before either signer runs. Issuance occurs only after the
 separately authorized normal Draft-to-Ready transition, exactly one authenticated
 `ready_for_review` event, and the complete required workflow set registered after
-that event reach terminal acceptance. Canonical timestamps and the bounded exact
-run count prevent equal-time or truncated inventories from claiming that order;
-execution then reacquires byte-identical facts.
+that event reach terminal acceptance. The event actor must be the registered
+operator, and the root-signed facts include the exact `DRAFT_TO_READY` authority
+binding. Canonical timestamps, complete pagination, the bounded exact run count,
+the registered bootstrap record, and the closed allowed-skip set prevent stale,
+truncated, or caller-selected evidence from claiming that order; execution then
+reacquires byte-identical facts.
 Every adopted source commit is
 verified directly against the bound accepted-main signer keys; ambient Git trust
 and matching principal text are insufficient. The governance-only scope admits the two maintained command
@@ -565,6 +568,8 @@ tree. Its message embeds the complete legacy-adoption-signed authorization and
 closed consumption record, including the expected method, parent, tree, CI,
 qualification, feedback, zero-findings and one-use identity. Direct push,
 two-parent merge, rebase, force, and bypass forms fail closed;
+`SecPal/.github` protected main must retain strict up-to-date required checks,
+so a concurrent base advance is rejected by GitHub before squash mutation;
 it neither creates lifecycle CURRENT nor synthesizes ordinary enrollment,
 Ready, receipt, counter, or thread state.
 Future deliveries must establish native genesis and commit-bound validation

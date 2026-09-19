@@ -88,6 +88,15 @@ class QualifiedRemediationSuccessorLossTests(unittest.TestCase):
                 with self.assertRaises(loss.QualifiedRemediationSuccessorLossError):
                     loss.verify_admission(changed)
 
+        resealed = copy.deepcopy(record)
+        resealed["stable_thread_inventory"][0]["thread_id"] = "PRRT_substituted"
+        resealed["admission_digest"] = loss._digest({
+            key: value for key, value in resealed.items()
+            if key != "admission_digest"
+        })
+        with self.assertRaises(loss.QualifiedRemediationSuccessorLossError):
+            loss.verify_admission(resealed)
+
     def test_safety_binding_requires_exact_threads_and_zero_material_findings(self) -> None:
         record = loss.load_accepted_admission("SecPal/.github", 956)
         safety = {
