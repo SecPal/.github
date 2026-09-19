@@ -3228,6 +3228,20 @@ def issue_pre_enrollment_validation_evidence_loss_admission(
     return validation_evidence_loss.issue(repository, delivery_issue)
 
 
+def _exact_adoption_loss_receipt_digest(loss: Mapping[str, Any]) -> str:
+    historical = loss.get("historical_validation_receipt_digest")
+    if historical is not None:
+        return _require_digest(historical, "historical validation receipt")
+    safety = loss.get("current_safety")
+    if not isinstance(safety, Mapping):
+        raise LifecycleAuthorityError(
+            "zero-receipt adoption requires current safety evidence"
+        )
+    return _require_digest(
+        safety.get("receipt_digest"), "current safety validation receipt"
+    )
+
+
 def authenticate_governance_amendment_issuance(
     repository: str, delivery_issue: int, inputs: Mapping[str, Any]
 ) -> Any:
@@ -3341,7 +3355,7 @@ def authenticate_exact_state_adoption_external_evidence(
             }.items()
         ):
             raise LifecycleAuthorityError("loss admission scope or independent review budget is missing")
-        receipt_digest = loss["historical_validation_receipt_digest"]
+        receipt_digest = _exact_adoption_loss_receipt_digest(loss)
         source_digest = digest_json(loss["current_safety"])
         adoption_digest = loss["admission_digest"]
     elif not is_verified_validation_evidence(validation_evidence) or (
@@ -3881,16 +3895,20 @@ def _assemble_exact_state_adoption_evidence(
         from . import validation_evidence_loss
 
         loss = validation_evidence_loss._verify_document(validation_evidence_loss_admission)
+        loss_receipt_digest = _exact_adoption_loss_receipt_digest(loss)
         if verified_review_budget_admission is None or any(
             loss[field] != expected for field, expected in {
                 "repository": repository, "delivery_issue": issue, "pull_request": pr,
                 "head_sha": head, "tree_sha": tree, "pull_request_state": pull_request_state,
                 "commit_signature_evidence_digest": commit_signature_evidence_digest,
-                "historical_validation_receipt_digest": validation_receipt_digest,
                 "observed_pre_enrollment_history": history, "intended_state": state,
                 "adoption_timestamp": timestamp, "admission_digest": adoption_source_evidence_digest,
             }.items()
-        ) or digest_json(loss["current_safety"]) != source_validation_evidence_digest:
+        ) or (
+            loss_receipt_digest != validation_receipt_digest
+            or digest_json(loss["current_safety"])
+            != source_validation_evidence_digest
+        ):
             raise LifecycleAuthorityError("loss admission does not bind exact adoption evidence")
         if loss["admission_digest"] not in supporting:
             raise LifecycleAuthorityError("loss admission is missing from supporting evidence")

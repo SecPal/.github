@@ -139,6 +139,15 @@ Log of notable changes to SecPal organization defaults (newest first).
   without adding a recovery family, lifecycle state, signer, journal or trust
   root.
 
+## 2026-09-17 - Admit Exact Ready Source With Zero Historical Receipt Package
+
+**Fixed:**
+
+- Extend Exact-State-Adoption validation-evidence-loss admission for one
+  registered Ready delivery whose complete signed source history contains no
+  validation-receipt trailer, while preserving finite review/remediation state
+  and using fresh current safety without reconstructing historical evidence.
+
 ## 2026-09-17 - Accept Recovered Ready Feedback In Thread Resolution
 
 **Fixed:**

@@ -3042,6 +3042,27 @@ printf 'Usage: fixture\\n'
         document["accepted_main_sha"] = "c" * 40
         return self.sign(document), record, summary
 
+    def zero_receipt_document(self) -> dict[str, Any]:
+        document = self.successor_document()
+        document["schema_version"] = self.loss.NO_RECEIPT_SCHEMA_VERSION
+        document["domain"] = self.loss.NO_RECEIPT_DOMAIN
+        document["historical_receipt_head_sha"] = None
+        document["historical_validation_receipt_digest"] = None
+        provenance = {
+            "repository": document["repository"],
+            "delivery_issue": document["delivery_issue"],
+            "pull_request": document["pull_request"],
+            "current_head_sha": document["head_sha"],
+            "current_tree_sha": document["tree_sha"],
+            "historical_receipt_head_sha": None,
+            "historical_validation_receipt_digest": None,
+            "source_history_digest": document["source_history_digest"],
+        }
+        document["historical_receipt_provenance_digest"] = (
+            authority.digest_json(provenance)
+        )
+        return self.sign(document)
+
     def test_accepted_v11_projects_existing_historical_provider_binding(self) -> None:
         document, record, summary = self.accepted_successor_document()
         with patch.object(
@@ -3216,6 +3237,32 @@ printf 'Usage: fixture\\n'
             self.loss._verify_document(successor), successor,
             "registered Ready deliveries need a distinct immutable successor schema",
         )
+
+    def test_zero_receipt_successor_authenticates_exact_signed_ready_history(self) -> None:
+        document = self.zero_receipt_document()
+        self.assertEqual(self.loss._verify_document(document), document)
+        self.assertIsNone(document["historical_receipt_head_sha"])
+        self.assertIsNone(document["historical_validation_receipt_digest"])
+        self.assertEqual(
+            authority._exact_adoption_loss_receipt_digest(document),
+            document["current_safety"]["receipt_digest"],
+        )
+
+        for field, replacement in (
+            ("historical_receipt_head_sha", "1" * 40),
+            ("historical_validation_receipt_digest", "2" * 64),
+            ("historical_receipt_provenance_digest", "3" * 64),
+        ):
+            with self.subTest(field=field):
+                changed = copy.deepcopy(document)
+                changed[field] = replacement
+                with self.assertRaises(authority.LifecycleAuthorityError):
+                    self.loss._verify_document(self.sign(changed))
+
+        missing_safety = copy.deepcopy(document)
+        missing_safety["current_safety"] = None
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            authority._exact_adoption_loss_receipt_digest(missing_safety)
 
     def test_current_receipt_successor_authenticates_exact_signed_ready_history(self) -> None:
         document = self.current_receipt_document()
@@ -3445,6 +3492,45 @@ printf 'Usage: fixture\\n'
             document["historical_validation_receipt_digest"],
         )
 
+    def test_zero_receipt_history_is_derived_only_for_closed_successor_version(self) -> None:
+        document = self.zero_receipt_document()
+        record = {
+            "admission_schema_version": self.loss.NO_RECEIPT_SCHEMA_VERSION,
+            "repository": document["repository"],
+            "delivery_issue": document["delivery_issue"],
+            "pull_request": document["pull_request"],
+            "head_sha": document["head_sha"],
+            "tree_sha": document["tree_sha"],
+            "parent_sha": document["parent_sha"],
+            "source_signer_identity": document["source_signer_identity"],
+        }
+        commits = self.successor_commits()
+
+        def git_text(root: Path, arguments: list[str]) -> str:
+            commit = next(item for item in commits if item.head_sha in arguments[-1])
+            if arguments[0] == "rev-parse":
+                return commit.tree_sha
+            return " ".join((commit.head_sha, *commit.parent_shas))
+
+        with patch.object(
+            self.loss.transport, "_git_text", side_effect=git_text,
+        ), patch.object(
+            self.loss, "_commit_signature", side_effect=["4" * 64, "3" * 64],
+        ), patch.object(
+            self.loss, "_optional_validation_receipt_trailer",
+            side_effect=[None, None],
+        ):
+            derived = self.loss._authenticate_source_history(
+                REPO_ROOT, record, commits, self.trust
+            )
+
+        self.assertIsNone(derived["historical_receipt_head_sha"])
+        self.assertIsNone(derived["historical_validation_receipt_digest"])
+        self.assertEqual(
+            derived["historical_receipt_provenance_digest"],
+            document["historical_receipt_provenance_digest"],
+        )
+
     def test_successor_fetch_depth_covers_every_admitted_history_commit(self) -> None:
         record = {"admission_schema_version": self.loss.ANCESTOR_SCHEMA_VERSION}
         commits = tuple(object() for _ in range(99))
@@ -3551,6 +3637,40 @@ printf 'Usage: fixture\\n'
         self.assertTrue(record["intended_state"]["cycle_3_absent"])
         self.assertNotIn("historical_receipt_head_sha", record)
         self.assertNotIn("historical_validation_receipt_digest", record)
+
+    def test_github_711_policy_is_exact_ready_and_zero_receipt(self) -> None:
+        records = json.loads(
+            (REPO_ROOT / self.loss.POLICY_PATH).read_text()
+        )["admissions"]
+        record = next(
+            item for item in records
+            if item["repository"] == REPOSITORY
+            and item["delivery_issue"] == 711
+        )
+        self.assertEqual(
+            record["admission_schema_version"],
+            self.loss.NO_RECEIPT_SCHEMA_VERSION,
+        )
+        self.assertEqual(record["pull_request"], 951)
+        self.assertEqual(
+            record["head_sha"],
+            "a158d6f5755ce1eecb7fada3a1c71722a21c5988",
+        )
+        self.assertEqual(
+            record["tree_sha"],
+            "c7f5e38cb982dbd196316d0d45908de38d89854e",
+        )
+        self.assertEqual(record["intended_state"]["unrestricted_review_count"], 1)
+        self.assertEqual(record["intended_state"]["remediation_cycle_count"], 1)
+        self.assertTrue(record["intended_state"]["ready"])
+        self.assertTrue(record["intended_state"]["cycle_3_absent"])
+        self.assertEqual(
+            len([
+                item for item in record["technical_decisions"]
+                if item["source_id"].startswith("THREAD_COMMENT:")
+            ]),
+            10,
+        )
 
     def test_github_948_policy_is_exact_ready_and_current_receipt(self) -> None:
         records = json.loads(
