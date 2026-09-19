@@ -85,8 +85,11 @@ Log of notable changes to SecPal organization defaults (newest first).
   Governance-amendment observation now derives the exact thirteen-check
   inventory from the bound accepted-main synchronizer, admits combined-status
   contexts only from that inventory plus the maintained external CLA context,
-  and binds the registered bootstrap scope, authorized Ready actor, and strict
-  base policy before canonical squash consumption.
+  authenticates the complete paginated combined-status inventory, and binds
+  the registered bootstrap scope, authorized Ready actor, and strict base
+  policy before canonical squash consumption. Repeated post-Ready workflow
+  identities retain their full history while only the uniquely identified
+  newest run supplies the terminal result.
 - Bind the qualified-remediation signer and exact twelve-thread inventory to
   accepted registration, and persist its safety report before the one-use
   lifecycle publication can be signed or advanced.

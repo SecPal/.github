@@ -567,6 +567,7 @@ class GovernanceAmendmentTests(TestCase):
                 elif "/status" in joined:
                     value = {
                         "sha": head, "state": "success",
+                        "total_count": len(statuses),
                         "statuses": statuses,
                     }
                 elif "graphql" in arguments:
@@ -887,6 +888,21 @@ class GovernanceAmendmentTests(TestCase):
                         "created_at": ready_events[0]["created_at"],
                         "actor": ready_events[0]["actor"]["login"],
                     },
+                    "ready_workflow_run_history": sorted(
+                        [{
+                            key: run[key] for key in (
+                                "id", "name", "event", "status", "conclusion",
+                                "head_sha", "created_at", "run_started_at",
+                            )
+                        } | {"pull_requests": [{
+                            "number": run["pull_requests"][0]["number"],
+                            "head_sha": run["pull_requests"][0]["head"]["sha"],
+                            "base_sha": run["pull_requests"][0]["base"]["sha"],
+                        }]} for run in ready_runs],
+                        key=lambda run: (
+                            run["name"], run["created_at"], run["id"]
+                        ),
+                    ),
                     "ready_workflow_runs": sorted(
                         [{
                             key: run[key] for key in (
@@ -973,6 +989,7 @@ class GovernanceAmendmentTests(TestCase):
                 elif "/status" in joined:
                     value = {
                         "sha": repo["head"], "state": "success",
+                        "total_count": len(statuses),
                         "statuses": statuses,
                     }
                 elif "graphql" in arguments:
@@ -1050,7 +1067,7 @@ class GovernanceAmendmentTests(TestCase):
             "conclusion": "success", "head_sha": HEAD,
         }]
         status = {
-            "sha": HEAD, "state": "success",
+            "sha": HEAD, "state": "success", "total_count": 2,
             "statuses": [
                 {"context": "license/cla", "state": "success"},
                 {"context": "governance", "state": "success"},
@@ -1062,6 +1079,8 @@ class GovernanceAmendmentTests(TestCase):
         }
 
         def observe(value: dict[str, object]) -> dict[str, object]:
+            if "statuses" in value and "total_count" not in value:
+                value = {**value, "total_count": len(value["statuses"])}
             responses = iter((
                 {"total_count": len(checks), "check_runs": checks}, value,
             ))
@@ -1192,6 +1211,11 @@ class GovernanceAmendmentTests(TestCase):
                 amendment.GovernanceAmendmentError
             ):
                 observe(value)
+
+        with self.assertRaisesRegex(
+            amendment.GovernanceAmendmentError, "status inventory is truncated"
+        ):
+            observe({**status, "total_count": 31})
 
         with mock.patch.object(
             amendment, "_live_required_check_policy",
@@ -1485,6 +1509,19 @@ class GovernanceAmendmentTests(TestCase):
             "evidence_digest": authority.digest_json({
                 "source_ci_evidence_digest": source_ci["evidence_digest"],
                 "ready_event": normalized_event,
+                "ready_workflow_run_history": sorted(
+                    [{
+                        key: run[key] for key in (
+                            "id", "name", "event", "status", "conclusion",
+                            "head_sha", "created_at", "run_started_at",
+                        )
+                    } | {"pull_requests": [{
+                        "number": run["pull_requests"][0]["number"],
+                        "head_sha": run["pull_requests"][0]["head"]["sha"],
+                        "base_sha": run["pull_requests"][0]["base"]["sha"],
+                    }]} for run in runs],
+                    key=lambda run: (run["name"], run["created_at"], run["id"]),
+                ),
                 "ready_workflow_runs": sorted(
                     [{
                         key: run[key] for key in (
@@ -1506,6 +1543,16 @@ class GovernanceAmendmentTests(TestCase):
                 },
             }),
         })
+
+        superseded = dict(
+            runs[0], id=runs[0]["id"] - 100, conclusion="cancelled"
+        )
+        self.assertEqual(observe(events, runs + [superseded])["result"], "PASS")
+        newest_cancelled = dict(
+            runs[0], id=runs[0]["id"] + 100, conclusion="cancelled"
+        )
+        with self.assertRaises(amendment.GovernanceAmendmentError):
+            observe(events, runs + [newest_cancelled])
 
         invalid = {
             "missing Ready event": ([], runs),
@@ -1555,6 +1602,13 @@ class GovernanceAmendmentTests(TestCase):
             ),
             "unauthorized Ready actor": (
                 [{**events[0], "actor": {"login": "attacker"}}], runs,
+            ),
+            "missing workflow ID": (
+                events, [{**runs[0], "id": None}] + runs[1:],
+            ),
+            "duplicate workflow ID": (
+                events, [runs[0], {**runs[1], "id": runs[0]["id"]}]
+                + runs[2:],
             ),
         }
         for label, (event_values, run_values) in invalid.items():

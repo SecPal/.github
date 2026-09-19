@@ -946,15 +946,58 @@ def _live_ci(
         raise GovernanceAmendmentError(
             "live governance amendment check inventory exceeds its bound"
         )
-    statuses = _github_json(
-        [
-            "api", "--hostname", "github.com",
-            f"repos/{repository}/commits/{head_sha}/status",
-        ],
-        "governance amendment statuses",
-    )
+    status_items: list[dict[str, Any]] = []
+    status_total: int | None = None
+    status_head: str | None = None
+    status_state: str | None = None
+    for page in range(1, 11):
+        statuses = _github_json(
+            [
+                "api", "--hostname", "github.com",
+                f"repos/{repository}/commits/{head_sha}/status"
+                f"?per_page=100&page={page}",
+            ],
+            "governance amendment statuses",
+        )
+        try:
+            observed_total = statuses["total_count"]
+            observed_head = statuses["sha"]
+            observed_state = statuses["state"]
+            page_statuses = statuses["statuses"]
+            if (
+                not isinstance(observed_total, int)
+                or isinstance(observed_total, bool)
+                or observed_total < 0
+                or observed_total > 1000
+                or not isinstance(page_statuses, list)
+                or (status_total is not None and observed_total != status_total)
+                or (status_head is not None and observed_head != status_head)
+                or (status_state is not None and observed_state != status_state)
+            ):
+                raise TypeError
+        except (KeyError, TypeError) as exc:
+            raise GovernanceAmendmentError(
+                "live governance amendment status inventory is incomplete"
+            ) from exc
+        status_total = observed_total
+        status_head = observed_head
+        status_state = observed_state
+        status_items.extend(page_statuses)
+        if len(status_items) >= status_total:
+            if len(status_items) != status_total:
+                raise GovernanceAmendmentError(
+                    "live governance amendment status inventory is ambiguous"
+                )
+            break
+        if len(page_statuses) != 100:
+            raise GovernanceAmendmentError(
+                "live governance amendment status inventory is truncated"
+            )
+    else:
+        raise GovernanceAmendmentError(
+            "live governance amendment status inventory exceeds its bound"
+        )
     try:
-        status_head = statuses["sha"]
         normalized_runs = []
         for item in runs:
             run = {
@@ -969,7 +1012,7 @@ def _live_ci(
             str(item["conclusion"]),
         ))
         contexts = []
-        for item in statuses["statuses"]:
+        for item in status_items:
             contexts.append({
                 "context": item["context"], "state": item["state"],
                 "sha": item["sha"] if "sha" in item else status_head,
@@ -1018,7 +1061,7 @@ def _live_ci(
             run["conclusion"] not in {"success", "skipped"}
             for run in effective_runs
         )
-        or statuses.get("state") != "success"
+        or status_state != "success"
         or any(
             status["state"] != "success"
             or status["sha"] != head_sha
@@ -1128,13 +1171,49 @@ def _live_ready_ci(
         ],
         "governance amendment Ready history",
     )
-    runs_value = _github_json(
-        [
-            "api", "--hostname", "github.com",
-            f"repos/{repository}/actions/runs?event=pull_request_target&head_sha={head_sha}&per_page=100",
-        ],
-        "governance amendment Ready checks",
-    )
+    raw_runs: list[dict[str, Any]] = []
+    run_total: int | None = None
+    for page in range(1, 11):
+        runs_value = _github_json(
+            [
+                "api", "--hostname", "github.com",
+                f"repos/{repository}/actions/runs?event=pull_request_target"
+                f"&head_sha={head_sha}&per_page=100&page={page}",
+            ],
+            "governance amendment Ready checks",
+        )
+        try:
+            page_runs = runs_value["workflow_runs"]
+            observed_total = runs_value["total_count"]
+            if (
+                not isinstance(page_runs, list)
+                or not isinstance(observed_total, int)
+                or isinstance(observed_total, bool)
+                or observed_total < 0
+                or observed_total > 1000
+                or (run_total is not None and observed_total != run_total)
+            ):
+                raise TypeError
+        except (KeyError, TypeError) as exc:
+            raise GovernanceAmendmentError(
+                "live governance amendment Ready CI is incomplete"
+            ) from exc
+        run_total = observed_total
+        raw_runs.extend(page_runs)
+        if len(raw_runs) >= run_total:
+            if len(raw_runs) != run_total:
+                raise GovernanceAmendmentError(
+                    "live governance amendment Ready CI is ambiguous"
+                )
+            break
+        if len(page_runs) != 100:
+            raise GovernanceAmendmentError(
+                "live governance amendment Ready CI is truncated"
+            )
+    else:
+        raise GovernanceAmendmentError(
+            "live governance amendment Ready CI exceeds its bound"
+        )
     try:
         if not isinstance(events, list) or len(events) >= 100:
             raise TypeError
@@ -1146,16 +1225,6 @@ def _live_ready_ci(
             }
             for event in events if event.get("event") == "ready_for_review"
         ]
-        raw_runs = runs_value["workflow_runs"]
-        total_count = runs_value["total_count"]
-        if (
-            not isinstance(raw_runs, list)
-            or not isinstance(total_count, int)
-            or isinstance(total_count, bool)
-            or total_count != len(raw_runs)
-            or total_count >= 100
-        ):
-            raise TypeError
         runs = sorted(
             ({
                 "id": run["id"], "name": run["name"],
@@ -1202,14 +1271,37 @@ def _live_ready_ci(
         run for run, created_at, _started_at in timed_runs
         if created_at > ready_at
     ]
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for run in ready_runs:
+        groups.setdefault(run["name"], []).append(run)
+    run_ids = [run["id"] for run in ready_runs]
     if (
-        {run["name"] for run in ready_runs} != READY_WORKFLOW_NAMES
+        any(
+            not isinstance(identifier, int)
+            or isinstance(identifier, bool)
+            or identifier < 1
+            for identifier in run_ids
+        )
+        or len(set(run_ids)) != len(run_ids)
+    ):
+        raise GovernanceAmendmentError(
+            "live governance amendment Ready CI has ambiguous run identity"
+        )
+    effective_ready_runs = [
+        max(group, key=lambda run: run["id"])
+        for group in groups.values()
+    ]
+    terminal_conclusions = {
+        "success", "cancelled", "failure", "timed_out", "action_required",
+        "neutral", "skipped", "stale", "startup_failure",
+    }
+    if (
+        {run["name"] for run in effective_ready_runs} != READY_WORKFLOW_NAMES
         or any(
-            not isinstance(run["id"], int)
-            or run["event"] != "pull_request_target"
+            run["event"] != "pull_request_target"
             or run["head_sha"] != head_sha
             or run["status"] != "completed"
-            or run["conclusion"] != "success"
+            or run["conclusion"] not in terminal_conclusions
             or len(run["pull_requests"]) != 1
             or run["pull_requests"][0] != {
                 "number": pull_request,
@@ -1217,6 +1309,10 @@ def _live_ready_ci(
                 "base_sha": accepted_main_sha,
             }
             for run in ready_runs
+        )
+        or any(
+            run["conclusion"] != "success"
+            for run in effective_ready_runs
         )
         or any(
             started_at < created_at
@@ -1236,7 +1332,11 @@ def _live_ready_ci(
     }
     evidence = {
         "source_ci_evidence_digest": source_ci["evidence_digest"],
-        "ready_event": ready[0], "ready_workflow_runs": ready_runs,
+        "ready_event": ready[0],
+        "ready_workflow_run_history": ready_runs,
+        "ready_workflow_runs": sorted(
+            effective_ready_runs, key=lambda run: run["name"]
+        ),
         "ready_transition_authority": {
             **ready_authority,
             "authorization_digest": authority.digest_json(ready_authority),
