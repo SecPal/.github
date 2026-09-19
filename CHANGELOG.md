@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-19 - Authenticate Local Reusable-Workflow Failure Sources
+
+**Changed:**
+
+- Resolve post-Ready hosted failures through exact candidate-byte local
+  reusable-workflow call graphs while preserving direct-workflow behavior and
+  the existing finite remediation authority.
+- Reject ambiguous, dynamic, traversing, remote, mixed-head and unrelated
+  workflow sources before selector-defect correction authority is issued.
+
 ## 2026-09-18 - Authenticate Post-Ready Validation Remediation
 
 **Added:**
