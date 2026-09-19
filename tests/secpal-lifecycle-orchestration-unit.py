@@ -10924,6 +10924,8 @@ class PostReadyValidationRemediationTests(TestCase):
             "    uses: \"./.github/workflows/double.yml\"\n"
             "  embedded:\n    name: abc#def\n"
             "    uses: owner/repository/.github/workflows/reuse.yml@immutable\n"
+            "  quotes:\n    name: Guard's \"quoted\" validation\n"
+            "    uses: ./.github/workflows/quotes.yml\n"
         )
 
         self.assertEqual(
@@ -10948,6 +10950,11 @@ class PostReadyValidationRemediationTests(TestCase):
                     "job_id": "embedded",
                     "name": "abc#def",
                     "uses": "owner/repository/.github/workflows/reuse.yml@immutable",
+                },
+                {
+                    "job_id": "quotes",
+                    "name": "Guard's \"quoted\" validation",
+                    "uses": "./.github/workflows/quotes.yml",
                 },
             ),
         )
@@ -11018,11 +11025,11 @@ class PostReadyValidationRemediationTests(TestCase):
         caller = (
             "name: Code Quality\non:\n  pull_request:\njobs:\n"
             "  reuse:\n    name: REUSE Compliance\n"
-            "    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@"
-            "14c5bcf19eaa9e144af5e9afa05f12f2c08648dc # main\n"
+            "    uses: owner/governance/.github/workflows/reusable-reuse.yml@"
+            "1111111111111111111111111111111111111111 # main\n"
             "  license:\n    name: License Compatibility\n"
-            "    uses: SecPal/.github/.github/workflows/reusable-license.yml@"
-            "14c5bcf19eaa9e144af5e9afa05f12f2c08648dc # main\n"
+            "    uses: owner/governance/.github/workflows/reusable-license.yml@"
+            "2222222222222222222222222222222222222222 # main\n"
             "  openapi:\n    name: OpenAPI Lint\n"
             "    uses: ./.github/workflows/local-openapi-lint.yml\n"
         )
@@ -11088,6 +11095,41 @@ class PostReadyValidationRemediationTests(TestCase):
                 observed_workflow_name="Quality",
                 observed_workflow_path=".github/workflows/quality.yml",
                 observed_check_name="Reusable validation / Validate schema",
+            )
+
+    def test_rejects_observed_unnamed_external_reusable_failure(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n"
+            "  schema:\n"
+            "    uses: owner/repository/.github/workflows/schema.yml@immutable\n"
+            "  local:\n    name: schema\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Check generated schema\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, {"schema.yml": called})
+        )
+        self.addCleanup(temporary.cleanup)
+
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "remote"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=971,
+                predecessor_head=predecessor,
+                predecessor_tree=predecessor_tree,
+                resulting_head=successor,
+                resulting_tree=successor_tree,
+                observed_workflow_name="Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+                observed_check_name="schema / Check generated schema",
             )
 
     def test_authenticates_complete_reachable_reusable_violation_set(self) -> None:

@@ -660,8 +660,6 @@ def _workflow_scalar(raw: str) -> str:
         if (
             not normalized
             or normalized[0] in "#[{&*!|>"
-            or "'" in normalized
-            or '"' in normalized
         ):
             raise LifecycleOrchestrationError("workflow call graph is malformed")
     if not normalized.strip():
@@ -778,9 +776,9 @@ def _authenticated_selector_source_paths(
             raise LifecycleOrchestrationError("dynamic reusable workflow calls are unsupported")
         caller_name = caller.get("name")
         if not uses.startswith("./"):
+            external_display_name = caller_name or caller["job_id"]
             if (
-                caller_name is not None
-                and observed_check_name.startswith(f"{caller_name} / ")
+                observed_check_name.startswith(f"{external_display_name} / ")
             ):
                 raise LifecycleOrchestrationError(
                     "remote reusable workflows are unsupported"
