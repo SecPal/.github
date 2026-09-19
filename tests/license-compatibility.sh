@@ -226,79 +226,77 @@ missing_guidance_files_case() {
 # ---------------------------------------------------------------------------
 custom_license_ref_guard_case() {
   local label="$1"
-  local workflow
   local workflow_path
   local workflow_label
 
   for workflow_path in "$REUSABLE_WORKFLOW" "$LOCAL_WORKFLOW"; do
-    workflow="$(cat "$workflow_path")"
     workflow_label="$(basename "$workflow_path")"
 
-    if ! printf '%s' "$workflow" | grep -qF "$TAILWIND_PLUS_SHA256"; then
+    if ! grep -qF -- "$TAILWIND_PLUS_SHA256" "$workflow_path"; then
       failures+=("FAIL [$label]: $workflow_label does not pin the approved Tailwind Plus license text hash")
     fi
 
-    if ! printf '%s' "$workflow" | grep -qF 'LICENSES/LicenseRef-TailwindPlus.txt'; then
+    if ! grep -qF -- 'LICENSES/LicenseRef-TailwindPlus.txt' "$workflow_path"; then
       failures+=("FAIL [$label]: $workflow_label does not require the Tailwind Plus license file")
     fi
 
     # shellcheck disable=SC2016
-    if ! printf '%s' "$workflow" | grep -qF 'must use the approved $reference_label text'; then
+    if ! grep -qF -- 'must use the approved $reference_label text' "$workflow_path"; then
       failures+=("FAIL [$label]: $workflow_label does not reject mismatched custom-license text")
     fi
 
     # shellcheck disable=SC2016
-    if ! printf '%s' "$workflow" | grep -qF 'reference_label="$5"'; then
+    if ! grep -qF -- 'reference_label="$5"' "$workflow_path"; then
       failures+=("FAIL [$label]: $workflow_label does not reject mismatched Tailwind Plus text")
     fi
 
-    if ! printf '%s' "$workflow" | grep -qF 'must appear in tracked REUSE metadata'; then
+    if ! grep -qF -- 'must appear in tracked REUSE metadata' "$workflow_path"; then
       failures+=("FAIL [$label]: $workflow_label does not require tracked REUSE metadata for custom license references")
     fi
 
     # shellcheck disable=SC2016
-    if ! printf '%s' "$workflow" | grep -qF 'is only allowed with $required_license' \
-      || ! printf '%s' "$workflow" | grep -qF 'in the same SPDX-License-Identifier expression:'; then
+    if ! grep -qF -- 'is only allowed with $required_license' "$workflow_path" \
+      || ! grep -qF -- 'in the same SPDX-License-Identifier expression:' "$workflow_path"; then
       failures+=("FAIL [$label]: $workflow_label does not reject OR-paired or non-AGPL custom license expressions")
     fi
 
     # shellcheck disable=SC2016
-    if ! printf '%s' "$workflow" | grep -qF 'spdx_identifier_prefix="SPDX-License"' \
-      || ! printf '%s' "$workflow" | grep -qF 'spdx_identifier_prefix="${spdx_identifier_prefix}-Identifier:"'; then
+    if ! grep -qF -- 'spdx_identifier_prefix="SPDX-License"' "$workflow_path" \
+      || ! grep -qF -- 'spdx_identifier_prefix="${spdx_identifier_prefix}-Identifier:"' "$workflow_path"; then
       failures+=("FAIL [$label]: $workflow_label does not search real SPDX-License-Identifier headers")
     fi
 
     # shellcheck disable=SC2016
-    if ! printf '%s' "$workflow" | grep -qF 'git grep -h "$spdx_identifier_prefix.*$ref"'; then
+    if ! grep -qF -- 'git grep -h "$spdx_identifier_prefix.*$ref"' "$workflow_path"; then
       failures+=("FAIL [$label]: $workflow_label does not extract SPDX header expressions without git grep path prefixes")
     fi
 
-    if ! printf '%s' "$workflow" | grep -qF 'tomllib'; then
+    if ! grep -qF -- 'tomllib' "$workflow_path"; then
       failures+=("FAIL [$label]: $workflow_label does not inspect REUSE.toml expressions for custom license references")
     fi
 
-    if ! printf '%s' "$workflow" | grep -qF "python - \"\$ref\" <<'PY'"; then
+    if ! grep -qF -- "python - \"\$ref\" <<'PY'" "$workflow_path"; then
       failures+=("FAIL [$label]: $workflow_label does not feed the REUSE.toml Python check through a heredoc")
     fi
 
-    if printf '%s' "$workflow" | grep -qF "python -c '"; then
+    if grep -qF -- "python -c '" "$workflow_path"; then
       failures+=("FAIL [$label]: $workflow_label still embeds the REUSE.toml Python check in an indented python -c string")
     fi
 
-    if ! printf '%s' "$workflow" | grep -qF 'spdx_license_identifier = "SPDX-License" + "-Identifier"'; then
+    if ! grep -qF -- 'spdx_license_identifier = "SPDX-License" + "-Identifier"' "$workflow_path"; then
       failures+=("FAIL [$label]: $workflow_label does not inspect REUSE.toml with the SPDX key reconstructed safely")
     fi
 
     # shellcheck disable=SC2016
-    if ! printf '%s' "$workflow" | grep -qF '$1 == "License" && index($2, ref)'; then
+    if ! grep -qF -- '$1 == "License" && index($2, ref)' "$workflow_path"; then
       failures+=("FAIL [$label]: $workflow_label does not inspect DEP5 license expressions for custom license references")
     fi
 
-    if ! printf '%s' "$workflow" | grep -Fq 'expression ~ /(^|[[:space:]\(\)])OR([[:space:]\(\)]|$)/'; then
+    if ! grep -Fq -- 'expression ~ /(^|[[:space:]\(\)])OR([[:space:]\(\)]|$)/' "$workflow_path"; then
       failures+=("FAIL [$label]: $workflow_label does not reject parenthesized or whitespace-variant OR expressions")
     fi
 
-    if ! printf '%s' "$workflow" | grep -qF 'has_ref && !has_required'; then
+    if ! grep -qF -- 'has_ref && !has_required' "$workflow_path"; then
       failures+=("FAIL [$label]: $workflow_label does not reject REUSE file blocks that pair the custom license reference without AGPL")
     fi
   done

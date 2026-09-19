@@ -10716,5 +10716,1648 @@ def create_ready_integration_attestation(normalized, eligibility_bound):
         self.assertTrue(decision.stop_after_bounded_pass)
 
 
+class PostReadyValidationRemediationTests(TestCase):
+    def setUp(self) -> None:
+        self._reviewed_head = "f" * 40
+        patcher = mock.patch.object(
+            fast_path,
+            "verified_validation_review_context",
+            side_effect=lambda _validation: self._review_context(self._reviewed_head),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _repository(self) -> tuple[tempfile.TemporaryDirectory[str], Path, str, str, str, str]:
+        temporary = tempfile.TemporaryDirectory(prefix="post-ready-validation-")
+        root = Path(temporary.name)
+        subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.name", "Test"], check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.invalid"], check=True)
+        (root / ".github" / "workflows").mkdir(parents=True)
+        (root / "package.json").write_text(
+            '{"engines":{"node":"^24.21.0"}}\n', encoding="utf-8"
+        )
+        workflow = root / ".github" / "workflows" / "quality.yml"
+        workflow.write_text(
+            "name: Code Quality\njobs:\n  lint:\n    steps:\n      - name: Setup Node.js\n"
+            "        uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "--quiet", "-m", "predecessor"], check=True)
+        predecessor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        predecessor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        workflow.write_text(
+            "name: Code Quality\njobs:\n  lint:\n    steps:\n      - name: Setup Node.js\n"
+            "        uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24.21.0'\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "--quiet", "-m", "correction"], check=True)
+        successor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        successor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        return temporary, root, predecessor, predecessor_tree, successor, successor_tree
+
+    def _inputs(self):
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = self._repository()
+        lifecycle = replace(
+            current_lifecycle(
+                remediation_cycles=1,
+                head_sha=predecessor,
+                delivery_issue=970,
+                pull_request=971,
+            ),
+            tree_sha=predecessor_tree,
+            validation_receipt_digest="1" * 64,
+            adoption_source_evidence_digest="2" * 64,
+        )
+        self._reviewed_head = predecessor
+        current = publication.VerifiedLifecyclePublication(
+            publication_oid="3" * 40,
+            publication_digest="4" * 64,
+            publication_branch="refs/heads/secpal-lifecycle-publications",
+            journal_predecessor_oid="5" * 40,
+            predecessor_publication_oid="6" * 40,
+            lifecycle=lifecycle,
+            serialized_lifecycle_evidence=b"{}",
+        )
+        validation = fast_path._unregistered_validation_evidence(
+            repository=REPOSITORY,
+            delivery_issue_number=970,
+            pull_request_number=971,
+            head_sha=successor,
+            tree_sha=successor_tree,
+            validation_receipt_digest="7" * 64,
+            final_attestation_digest="8" * 64,
+            source_validation_evidence_digest="9" * 64,
+        )
+        commit_fields = {
+            "repository": REPOSITORY,
+            "head_sha": successor,
+            "tree_sha": successor_tree,
+            "parent_shas": [predecessor],
+            "signer_kind": "SSH_PRINCIPAL",
+            "signer_identity": "aroviqen@secpal.app",
+            "signature_fingerprint": "SHA256:fixture",
+            "signature_classification": "GOODSIG",
+            "signature_policy_digest": "a" * 64,
+        }
+        commit = fast_path.AuthenticatedIntegrationCommit(
+            **{**commit_fields, "parent_shas": (predecessor,)},
+            authentication_digest=fast_path.digest_json(commit_fields),
+        )
+        observation = {
+            "repository": REPOSITORY,
+            "pull_request": 971,
+            "head_sha": predecessor,
+            "pr_state": "OPEN",
+            "draft": False,
+            "workflow_name": "Code Quality",
+            "workflow_path": ".github/workflows/quality.yml",
+            "check_name": "Validate candidate",
+            "workflow_run_id": 100,
+            "check_run_id": 200,
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "attempt": 2,
+        }
+        return temporary, root, current, validation, commit, observation
+
+    def _reusable_repository(
+        self,
+        caller: str,
+        called: dict[str, str],
+        *,
+        correction_paths: tuple[str, ...] | None = None,
+    ) -> tuple[tempfile.TemporaryDirectory[str], Path, str, str, str, str]:
+        temporary = tempfile.TemporaryDirectory(prefix="post-ready-call-graph-")
+        root = Path(temporary.name)
+        subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.name", "Test"], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "config", "user.email", "test@example.invalid"],
+            check=True,
+        )
+        workflows = root / ".github" / "workflows"
+        workflows.mkdir(parents=True)
+        (root / "package.json").write_text(
+            '{"engines":{"node":"^24.21.0"}}\n', encoding="utf-8"
+        )
+        (workflows / "quality.yml").write_text(caller, encoding="utf-8")
+        for name, content in called.items():
+            (workflows / name).write_text(content, encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "--quiet", "-m", "predecessor"],
+            check=True,
+        )
+        predecessor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        predecessor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        selected = correction_paths if correction_paths is not None else tuple(called)
+        for name in selected:
+            path = workflows / name
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "node-version: '24'", "node-version: '24.21.0'"
+                ),
+                encoding="utf-8",
+            )
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "--quiet", "--allow-empty", "-m", "correction"],
+            check=True,
+        )
+        successor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        successor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        return temporary, root, predecessor, predecessor_tree, successor, successor_tree
+
+    @staticmethod
+    def _review_context(head_sha):
+        return SimpleNamespace(
+            repository=REPOSITORY,
+            pull_request_number=971,
+            head_sha=head_sha,
+        ), None
+
+    @staticmethod
+    def _historical_failure_api_responses(
+        current,
+        validation,
+        *,
+        run_updates=None,
+        failure_count=1,
+        check_total=None,
+        check_id_delta=0,
+    ):
+        checks = [
+            {
+                "id": 200 + index + check_id_delta,
+                "name": f"Validate candidate{index or ''}",
+                "status": "completed",
+                "conclusion": "failure",
+                "details_url": (
+                    f"https://github.com/{REPOSITORY}/actions/runs/100/job/"
+                    f"{200 + index}"
+                ),
+                "app": {"slug": "github-actions"},
+            }
+            for index in range(failure_count)
+        ]
+        run = {
+            "id": 100,
+            "name": "Code Quality",
+            "path": ".github/workflows/quality.yml",
+            "event": "pull_request",
+            "head_sha": current.lifecycle.head_sha,
+            "status": "completed",
+            "conclusion": "failure",
+            "run_attempt": 2,
+            "repository": {"full_name": REPOSITORY},
+            "head_repository": {"full_name": REPOSITORY},
+            "pull_requests": [{
+                "number": 971,
+                "url": f"https://api.github.com/repos/{REPOSITORY}/pulls/971",
+            }],
+        }
+        run.update(run_updates or {})
+        jobs = [
+            {
+                "id": 200 + index,
+                "run_id": 100,
+                "head_sha": current.lifecycle.head_sha,
+                "status": "completed",
+                "conclusion": "failure",
+                "name": f"Validate candidate{index or ''}",
+            }
+            for index in range(failure_count)
+        ]
+        payloads = (
+            {
+                "state": "OPEN",
+                "isDraft": False,
+                "headRefOid": validation.head_sha,
+                "headRepository": {"nameWithOwner": REPOSITORY},
+            },
+            [{
+                "total_count": len(checks) if check_total is None else check_total,
+                "check_runs": checks,
+            }],
+            [{"total_count": 1, "workflow_runs": [run]}],
+            [{"total_count": len(jobs), "jobs": jobs}],
+        )
+        return [
+            SimpleNamespace(returncode=0, stdout=json.dumps(payload).encode())
+            for payload in payloads
+        ]
+
+    def test_exact_current_failure_reader_keeps_check_and_job_ids_distinct(self) -> None:
+        temporary, _root, current, validation, _commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        responses = self._historical_failure_api_responses(
+            current,
+            validation,
+            check_id_delta=1000,
+        )
+        with mock.patch.object(publication, "_run_gh", side_effect=responses):
+            observed = orchestration._read_post_ready_failure(
+                REPOSITORY, 971, current.lifecycle.head_sha
+            )
+
+        self.assertEqual(observed, observation)
+
+    def test_setup_node_parser_accepts_named_and_shorthand_steps(self) -> None:
+        named = (
+            "steps:\n  - name: Setup Node.js\n    uses: actions/setup-node@immutable\n"
+            "    with:\n      node-version: '24.21.0'\n"
+        )
+        shorthand = (
+            "steps:\n  - uses: actions/setup-node@immutable\n"
+            "    with:\n      node-version: '24.21.0'\n"
+        )
+        self.assertEqual(
+            orchestration._setup_node_selectors(named), ("24.21.0",)
+        )
+        self.assertEqual(
+            orchestration._setup_node_selectors(shorthand), ("24.21.0",)
+        )
+
+    def test_workflow_call_parser_normalizes_supported_scalar_comments(self) -> None:
+        workflow = (
+            "name: Quality\non:\n  pull_request:\njobs:\n"
+            "  external:\n    name: REUSE Compliance # displayed caller\n"
+            "    uses: owner/repository/.github/workflows/reuse.yml@immutable # main\n"
+            "  single:\n    name: 'Single # hash' # trailing comment\n"
+            "    uses: './.github/workflows/single.yml' # local\n"
+            "  double:\n    name: \"Foo # Bar\" # trailing comment\n"
+            "    uses: \"./.github/workflows/double.yml\"\n"
+            "  embedded:\n    name: abc#def\n"
+            "    uses: owner/repository/.github/workflows/reuse.yml@immutable\n"
+            "  quotes:\n    name: Guard's \"quoted\" validation\n"
+            "    uses: ./.github/workflows/quotes.yml\n"
+        )
+
+        self.assertEqual(
+            orchestration._workflow_job_calls(workflow),
+            (
+                {
+                    "job_id": "external",
+                    "name": "REUSE Compliance",
+                    "uses": "owner/repository/.github/workflows/reuse.yml@immutable",
+                },
+                {
+                    "job_id": "single",
+                    "name": "Single # hash",
+                    "uses": "./.github/workflows/single.yml",
+                },
+                {
+                    "job_id": "double",
+                    "name": "Foo # Bar",
+                    "uses": "./.github/workflows/double.yml",
+                },
+                {
+                    "job_id": "embedded",
+                    "name": "abc#def",
+                    "uses": "owner/repository/.github/workflows/reuse.yml@immutable",
+                },
+                {
+                    "job_id": "quotes",
+                    "name": "Guard's \"quoted\" validation",
+                    "uses": "./.github/workflows/quotes.yml",
+                },
+            ),
+        )
+        self.assertEqual(
+            orchestration._workflow_name('name: "Foo # Bar" # trailing comment\n'),
+            "Foo # Bar",
+        )
+        self.assertEqual(
+            orchestration._workflow_name("name: OpenAPI Lint # trailing comment\n"),
+            "OpenAPI Lint",
+        )
+
+    def test_workflow_call_parser_rejects_unsupported_complex_scalars(self) -> None:
+        for label, value in (
+            ("anchor", "&source local.yml"),
+            ("alias", "*source"),
+            ("tag", "!source local.yml"),
+            ("literal block", "|"),
+            ("folded block", ">"),
+            ("unterminated quote", '"Foo # Bar'),
+            ("quoted suffix without comment", '"Foo" suffix'),
+        ):
+            workflow = (
+                "name: Quality\non:\n  pull_request:\njobs:\n  check:\n"
+                f"    name: {value}\n    uses: ./.github/workflows/check.yml\n"
+            )
+            with (
+                self.subTest(label=label),
+                self.assertRaisesRegex(
+                    orchestration.LifecycleOrchestrationError, "malformed"
+                ),
+            ):
+                orchestration._workflow_job_calls(workflow)
+
+    def test_authenticates_selector_defect_in_local_reusable_workflow(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n  schema:\n"
+            "    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Check generated schema\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, {"schema.yml": called})
+        )
+        self.addCleanup(temporary.cleanup)
+
+        proof = orchestration._verify_node_selector_defect_correction(
+            root,
+            repository=REPOSITORY,
+            pull_request=971,
+            predecessor_head=predecessor,
+            predecessor_tree=predecessor_tree,
+            resulting_head=successor,
+            resulting_tree=successor_tree,
+            observed_workflow_name="Quality",
+            observed_workflow_path=".github/workflows/quality.yml",
+            observed_check_name="Reusable validation / Check generated schema",
+        )
+
+        self.assertRegex(proof, r"^[0-9a-f]{64}$")
+
+    def test_ignores_commented_external_siblings_for_local_reusable_failure(self) -> None:
+        caller = (
+            "name: Code Quality\non:\n  pull_request:\njobs:\n"
+            "  reuse:\n    name: REUSE Compliance\n"
+            "    uses: owner/governance/.github/workflows/reusable-reuse.yml@"
+            "1111111111111111111111111111111111111111 # main\n"
+            "  license:\n    name: License Compatibility\n"
+            "    uses: owner/governance/.github/workflows/reusable-license.yml@"
+            "2222222222222222222222222222222222222222 # main\n"
+            "  openapi:\n    name: OpenAPI Lint\n"
+            "    uses: ./.github/workflows/local-openapi-lint.yml\n"
+        )
+        called = (
+            "name: Local OpenAPI Lint\non:\n  workflow_call:\njobs:\n"
+            "  openapi-lint:\n    name: Validate OpenAPI Specification\n"
+            "    runs-on: ubuntu-latest\n    steps:\n"
+            "      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(
+                caller, {"local-openapi-lint.yml": called}
+            )
+        )
+        self.addCleanup(temporary.cleanup)
+
+        proof = orchestration._verify_node_selector_defect_correction(
+            root,
+            repository=REPOSITORY,
+            pull_request=971,
+            predecessor_head=predecessor,
+            predecessor_tree=predecessor_tree,
+            resulting_head=successor,
+            resulting_tree=successor_tree,
+            observed_workflow_name="Code Quality",
+            observed_workflow_path=".github/workflows/quality.yml",
+            observed_check_name="OpenAPI Lint / Validate OpenAPI Specification",
+        )
+
+        self.assertRegex(proof, r"^[0-9a-f]{64}$")
+
+    def test_rejects_observed_external_reusable_failure(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n"
+            "  external:\n    name: Reusable validation\n"
+            "    uses: owner/repository/.github/workflows/schema.yml@immutable # main\n"
+            "  local:\n    name: Other validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Other check\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, {"schema.yml": called})
+        )
+        self.addCleanup(temporary.cleanup)
+
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "remote"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=971,
+                predecessor_head=predecessor,
+                predecessor_tree=predecessor_tree,
+                resulting_head=successor,
+                resulting_tree=successor_tree,
+                observed_workflow_name="Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+                observed_check_name="Reusable validation / Validate schema",
+            )
+
+    def test_rejects_observed_unnamed_external_reusable_failure(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n"
+            "  schema:\n"
+            "    uses: owner/repository/.github/workflows/schema.yml@immutable\n"
+            "  local:\n    name: schema\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Check generated schema\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, {"schema.yml": called})
+        )
+        self.addCleanup(temporary.cleanup)
+
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "remote"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=971,
+                predecessor_head=predecessor,
+                predecessor_tree=predecessor_tree,
+                resulting_head=successor,
+                resulting_tree=successor_tree,
+                observed_workflow_name="Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+                observed_check_name="schema / Check generated schema",
+            )
+
+    def test_authenticates_complete_reachable_reusable_violation_set(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n"
+            "  schema:\n    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+            "  format:\n    name: Reusable formatting\n"
+            "    uses: ./.github/workflows/format.yml\n"
+        )
+        called = {
+            name: (
+                f"name: {display}\non:\n  workflow_call:\njobs:\n  check:\n"
+                f"    name: {job}\n    runs-on: ubuntu-latest\n    steps:\n"
+                "      - uses: actions/setup-node@immutable\n        with:\n"
+                "          node-version: '24'\n"
+            )
+            for name, display, job in (
+                ("schema.yml", "Schema checks", "Check generated schema"),
+                ("format.yml", "Formatting checks", "Check formatting"),
+            )
+        }
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, called)
+        )
+        self.addCleanup(temporary.cleanup)
+
+        proof = orchestration._verify_node_selector_defect_correction(
+            root,
+            repository=REPOSITORY,
+            pull_request=971,
+            predecessor_head=predecessor,
+            predecessor_tree=predecessor_tree,
+            resulting_head=successor,
+            resulting_tree=successor_tree,
+            observed_workflow_name="Quality",
+            observed_workflow_path=".github/workflows/quality.yml",
+            observed_check_name="Reusable validation / Check generated schema",
+        )
+
+        self.assertRegex(proof, r"^[0-9a-f]{64}$")
+
+    def test_mixed_workflow_resolves_reusable_failure_before_direct_violation(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n"
+            "  direct:\n    name: Direct check\n    steps:\n"
+            "      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+            "  schema:\n    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Check generated schema\n    steps:\n"
+            "      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, {"schema.yml": called})
+        )
+        self.addCleanup(temporary.cleanup)
+
+        proof = orchestration._verify_node_selector_defect_correction(
+            root,
+            repository=REPOSITORY,
+            pull_request=971,
+            predecessor_head=predecessor,
+            predecessor_tree=predecessor_tree,
+            resulting_head=successor,
+            resulting_tree=successor_tree,
+            observed_workflow_name="Quality",
+            observed_workflow_path=".github/workflows/quality.yml",
+            observed_check_name="Reusable validation / Check generated schema",
+        )
+
+        self.assertRegex(proof, r"^[0-9a-f]{64}$")
+
+    def test_rejects_remote_mapping_even_when_local_name_composition_matches(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n"
+            "  remote:\n    name: Reusable validation\n"
+            "    uses: other/repository/.github/workflows/schema.yml@main\n"
+            "  local:\n    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Check generated schema\n    steps:\n"
+            "      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, {"schema.yml": called})
+        )
+        self.addCleanup(temporary.cleanup)
+
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "remote"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=971,
+                predecessor_head=predecessor,
+                predecessor_tree=predecessor_tree,
+                resulting_head=successor,
+                resulting_tree=successor_tree,
+                observed_workflow_name="Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+                observed_check_name="Reusable validation / Check generated schema",
+            )
+
+    def test_rejects_selector_violation_in_different_called_job(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n  schema:\n"
+            "    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n"
+            "  tests:\n    name: Run tests\n    steps:\n      - run: npm test\n"
+            "  baseline:\n    name: Node baseline\n    steps:\n"
+            "      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, {"schema.yml": called})
+        )
+        self.addCleanup(temporary.cleanup)
+
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "violating local workflow"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=971,
+                predecessor_head=predecessor,
+                predecessor_tree=predecessor_tree,
+                resulting_head=successor,
+                resulting_tree=successor_tree,
+                observed_workflow_name="Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+                observed_check_name="Reusable validation / Run tests",
+            )
+
+    def test_direct_failure_preserves_complete_repository_violation_set(self) -> None:
+        direct = (
+            "name: Quality\non:\n  pull_request:\njobs:\n  check:\n"
+            "    name: Check quality\n    steps:\n"
+            "      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        other = direct.replace("name: Quality", "name: Other quality")
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(direct, {"other.yml": other})
+        )
+        self.addCleanup(temporary.cleanup)
+        quality = root / ".github" / "workflows" / "quality.yml"
+        quality.write_text(
+            quality.read_text(encoding="utf-8").replace(
+                "node-version: '24'", "node-version: '24.21.0'"
+            ),
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "--amend", "--quiet", "--no-edit"],
+            check=True,
+        )
+        successor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        successor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+
+        proof = orchestration._verify_node_selector_defect_correction(
+            root,
+            repository=REPOSITORY,
+            pull_request=971,
+            predecessor_head=predecessor,
+            predecessor_tree=predecessor_tree,
+            resulting_head=successor,
+            resulting_tree=successor_tree,
+            observed_workflow_name="Quality",
+            observed_workflow_path=".github/workflows/quality.yml",
+            observed_check_name="Check quality",
+        )
+
+        self.assertRegex(proof, r"^[0-9a-f]{64}$")
+
+    def test_rejects_wrong_or_ambiguous_reusable_check_identity(self) -> None:
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Check generated schema\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        cases = (
+            (
+                "wrong caller name",
+                "  schema:\n    name: Reusable validation\n"
+                "    uses: ./.github/workflows/schema.yml\n",
+                "Other caller / Check generated schema",
+            ),
+            (
+                "wrong called name",
+                "  schema:\n    name: Reusable validation\n"
+                "    uses: ./.github/workflows/schema.yml\n",
+                "Reusable validation / Other check",
+            ),
+            (
+                "ambiguous caller mapping",
+                "  schema_one:\n    name: Reusable validation\n"
+                "    uses: ./.github/workflows/schema.yml\n"
+                "  schema_two:\n    name: Reusable validation\n"
+                "    uses: ./.github/workflows/schema.yml\n",
+                "Reusable validation / Check generated schema",
+            ),
+        )
+        for label, jobs, check_name in cases:
+            caller = "name: Quality\non:\n  pull_request:\njobs:\n" + jobs
+            temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+                self._reusable_repository(caller, {"schema.yml": called})
+            )
+            self.addCleanup(temporary.cleanup)
+            with (
+                self.subTest(label=label),
+                self.assertRaisesRegex(
+                    orchestration.LifecycleOrchestrationError, "one authenticated"
+                ),
+            ):
+                orchestration._verify_node_selector_defect_correction(
+                    root,
+                    repository=REPOSITORY,
+                    pull_request=971,
+                    predecessor_head=predecessor,
+                    predecessor_tree=predecessor_tree,
+                    resulting_head=successor,
+                    resulting_tree=successor_tree,
+                    observed_workflow_name="Quality",
+                    observed_workflow_path=".github/workflows/quality.yml",
+                    observed_check_name=check_name,
+                )
+
+    def test_rejects_unsupported_reusable_call_sources(self) -> None:
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Check generated schema\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        cases = (
+            ("path traversal", "./.github/workflows/../schema.yml", "invalid"),
+            ("outside workflows", "./scripts/schema.yml", "invalid"),
+            (
+                "quoted hash changes source identity",
+                '"./.github/workflows/schema.yml # main"',
+                "invalid",
+            ),
+            ("dynamic", "${{ inputs.workflow }}", "dynamic"),
+            ("remote", "other/repository/.github/workflows/schema.yml@main", "remote"),
+        )
+        for label, uses, message in cases:
+            caller = (
+                "name: Quality\non:\n  pull_request:\njobs:\n  schema:\n"
+                f"    name: Reusable validation\n    uses: {uses}\n"
+            )
+            temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+                self._reusable_repository(caller, {"schema.yml": called})
+            )
+            self.addCleanup(temporary.cleanup)
+            with (
+                self.subTest(label=label),
+                self.assertRaisesRegex(orchestration.LifecycleOrchestrationError, message),
+            ):
+                orchestration._verify_node_selector_defect_correction(
+                    root,
+                    repository=REPOSITORY,
+                    pull_request=971,
+                    predecessor_head=predecessor,
+                    predecessor_tree=predecessor_tree,
+                    resulting_head=successor,
+                    resulting_tree=successor_tree,
+                    observed_workflow_name="Quality",
+                    observed_workflow_path=".github/workflows/quality.yml",
+                    observed_check_name="Reusable validation / Check generated schema",
+                )
+
+    def test_rejects_missing_workflow_call_and_ambiguous_called_job(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n  schema:\n"
+            "    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        cases = (
+            (
+                "missing workflow_call",
+                "name: Schema checks\non:\n  push:\njobs:\n  validate:\n"
+                "    name: Check generated schema\n    steps:\n"
+                "      - uses: actions/setup-node@immutable\n        with:\n"
+                "          node-version: '24'\n",
+                "workflow_call",
+            ),
+            (
+                "ambiguous called jobs",
+                "name: Schema checks\non:\n  workflow_call:\njobs:\n"
+                "  first:\n    name: Check generated schema\n    steps:\n"
+                "      - uses: actions/setup-node@immutable\n        with:\n"
+                "          node-version: '24'\n"
+                "  second:\n    name: Check generated schema\n    steps:\n"
+                "      - uses: actions/setup-node@immutable\n        with:\n"
+                "          node-version: '24'\n",
+                "one authenticated",
+            ),
+        )
+        for label, called, message in cases:
+            temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+                self._reusable_repository(caller, {"schema.yml": called})
+            )
+            self.addCleanup(temporary.cleanup)
+            with (
+                self.subTest(label=label),
+                self.assertRaisesRegex(orchestration.LifecycleOrchestrationError, message),
+            ):
+                orchestration._verify_node_selector_defect_correction(
+                    root,
+                    repository=REPOSITORY,
+                    pull_request=971,
+                    predecessor_head=predecessor,
+                    predecessor_tree=predecessor_tree,
+                    resulting_head=successor,
+                    resulting_tree=successor_tree,
+                    observed_workflow_name="Quality",
+                    observed_workflow_path=".github/workflows/quality.yml",
+                    observed_check_name="Reusable validation / Check generated schema",
+                )
+
+    def test_rejects_correction_of_unrelated_workflow(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n  schema:\n"
+            "    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        called = {
+            name: (
+                f"name: {name}\non:\n  workflow_call:\njobs:\n  check:\n"
+                "    name: Check generated schema\n    steps:\n"
+                "      - uses: actions/setup-node@immutable\n        with:\n"
+                "          node-version: '24'\n"
+            )
+            for name in ("schema.yml", "unrelated.yml")
+        }
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, called)
+        )
+        self.addCleanup(temporary.cleanup)
+
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "unrelated"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=971,
+                predecessor_head=predecessor,
+                predecessor_tree=predecessor_tree,
+                resulting_head=successor,
+                resulting_tree=successor_tree,
+                observed_workflow_name="Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+                observed_check_name="Reusable validation / Check generated schema",
+            )
+
+    def test_rejects_callee_bytes_available_only_from_resulting_head(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n  schema:\n"
+            "    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        temporary, root, predecessor, predecessor_tree, _successor, _tree = (
+            self._reusable_repository(caller, {}, correction_paths=())
+        )
+        self.addCleanup(temporary.cleanup)
+        called = root / ".github" / "workflows" / "schema.yml"
+        called.write_text(
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Check generated schema\n    steps:\n"
+            "      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24.21.0'\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "--amend", "--quiet", "--no-edit"],
+            check=True,
+        )
+        successor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        successor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "authenticated bytes"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=971,
+                predecessor_head=predecessor,
+                predecessor_tree=predecessor_tree,
+                resulting_head=successor,
+                resulting_tree=successor_tree,
+                observed_workflow_name="Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+                observed_check_name="Reusable validation / Check generated schema",
+            )
+
+    def test_reusable_source_resolver_accepts_no_caller_mapping_artifact(self) -> None:
+        with self.assertRaisesRegex(TypeError, "unexpected keyword"):
+            orchestration._authenticated_selector_source_paths(
+                Path("."),
+                "f" * 40,
+                observed_workflow_name="Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+                observed_check_name="Reusable validation / Check generated schema",
+                violations=(),
+                called_workflow_path=".github/workflows/schema.yml",
+            )
+
+    def test_exact_current_failure_and_independent_proof_use_remaining_slot(self) -> None:
+        temporary, root, current, validation, commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        with (
+            mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+            mock.patch.object(
+                fast_path,
+                "verified_validation_review_context",
+                return_value=self._review_context(current.lifecycle.head_sha),
+            ),
+        ):
+            verified = orchestration._verify_post_ready_validation_defect_authority(
+                current,
+                candidate_validation=validation,
+                authenticated_commit=commit,
+                repository_root=root,
+                failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
+            )
+
+        self.assertEqual(verified.source_kind, "POST_READY_IN_CONTRACT_VALIDATION_DEFECT")
+        self.assertEqual(verified.classification, "IN_CONTRACT_DEFECT")
+        self.assertTrue(verified.technically_blocking)
+        self.assertEqual(verified.current_head_sha, current.lifecycle.head_sha)
+        self.assertEqual(verified.resulting_head_sha, validation.head_sha)
+        scope = orchestration.ordinary_ready_remediation_authorization_scope(verified)
+        self.assertEqual(scope["predecessor_head_sha"], current.lifecycle.head_sha)
+        self.assertEqual(scope["resulting_head_sha"], validation.head_sha)
+        self.assertEqual(scope["finding_ids"], [verified.finding_id])
+        self.assertEqual(scope["finding_authority_digest"], verified.finding_authority_digest)
+
+        live_correction = {
+            "repository": REPOSITORY,
+            "pull_request": 971,
+            "head_sha": validation.head_sha,
+            "pr_state": "OPEN",
+            "draft": False,
+        }
+        with (
+            mock.patch.object(
+                publication, "verify_current_lifecycle_authority", return_value=current
+            ) as reread_current,
+            mock.patch.object(
+                orchestration, "_read_live_post_ready_pr", return_value=live_correction
+            ) as reread_live,
+        ):
+            issued = orchestration.issue_post_ready_validation_remediation_authorization(
+                authorization_id="post-ready-validation-defect-1",
+                reason="Correct the independently reproduced current-delivery invariant",
+                current=current,
+                finding_authority=verified,
+                signer_identity="aroviqen@secpal.app",
+                signer=lambda _payload, _domain: {
+                    "format": "ssh",
+                    "signer_identity": "aroviqen@secpal.app",
+                    "value": "fixture-signature",
+                },
+            )
+        reread_current.assert_called_once_with(REPOSITORY, 970)
+        reread_live.assert_called_once_with(REPOSITORY, 971)
+        authorization = authority.loads_closed_json(issued)
+        self.assertEqual(authorization["operation"], "REMEDIATION_COMPLETED")
+        result = authority.derive_state(
+            current.lifecycle.state,
+            authorization["operation"],
+            authorization["authorization_digest"],
+        )
+        self.assertEqual(result["remediation_cycle_count"], 2)
+        self.assertEqual(result["unrestricted_review_count"], 1)
+        self.assertTrue(result["ready"])
+        self.assertFalse(result["draft"])
+        self.assertEqual(result["ready_transition_count"], 1)
+        self.assertEqual(result["exceptional_recovery_count"], 0)
+        self.assertEqual(result["exceptional_continuation_count"], 0)
+
+        for label, reread, reread_head in (
+            ("CURRENT moved", replace(current, publication_oid="e" * 40), validation.head_sha),
+            ("live PR moved", current, "e" * 40),
+        ):
+            changed_live = {**live_correction, "head_sha": reread_head}
+            with (
+                self.subTest(label=label),
+                mock.patch.object(
+                    publication,
+                    "verify_current_lifecycle_authority",
+                    return_value=reread,
+                ),
+                mock.patch.object(
+                    orchestration,
+                    "_read_live_post_ready_pr",
+                    return_value=changed_live,
+                ),
+                self.assertRaisesRegex(
+                    orchestration.LifecycleOrchestrationError,
+                    "changed before remediation authorization",
+                ),
+            ):
+                orchestration.issue_post_ready_validation_remediation_authorization(
+                    authorization_id="stale-post-ready-validation-defect",
+                    reason="Attempt stale authorization",
+                    current=current,
+                    finding_authority=verified,
+                    signer_identity="aroviqen@secpal.app",
+                    signer=lambda _payload, _domain: {
+                        "format": "ssh",
+                        "signer_identity": "aroviqen@secpal.app",
+                        "value": "fixture-signature",
+                    },
+                )
+
+    def test_public_entry_uses_bounded_live_github_failure_observation(self) -> None:
+        temporary, root, current, validation, commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        live_correction = {
+            "repository": REPOSITORY,
+            "pull_request": 971,
+            "head_sha": validation.head_sha,
+            "pr_state": "OPEN",
+            "draft": False,
+        }
+        with (
+            mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+            mock.patch.object(
+                fast_path,
+                "verified_validation_review_context",
+                return_value=self._review_context(current.lifecycle.head_sha),
+            ),
+            mock.patch.object(
+                orchestration,
+                "_authenticate_maintained_correction_commit",
+                return_value=commit,
+            ) as authenticate,
+            mock.patch.object(
+                orchestration,
+                "_read_post_ready_failure",
+                return_value=observation,
+            ) as failure_reader,
+            mock.patch.object(
+                orchestration,
+                "_read_live_post_ready_pr",
+                return_value=live_correction,
+            ) as live,
+            mock.patch.object(
+                publication,
+                "verify_current_lifecycle_authority",
+                return_value=current,
+            ) as current_reader,
+        ):
+            verified = orchestration.verify_post_ready_validation_defect_authority(
+                current,
+                candidate_validation=validation,
+                repository_root=root,
+            )
+        self.assertEqual(verified.current_head_sha, current.lifecycle.head_sha)
+        authenticate.assert_called_once_with(
+            root, REPOSITORY, validation.head_sha
+        )
+        failure_reader.assert_called_once_with(
+            REPOSITORY, 971, current.lifecycle.head_sha
+        )
+        self.assertEqual(live.call_count, 2)
+        current_reader.assert_called_once_with(REPOSITORY, 970)
+
+    def test_exact_current_failure_reader_survives_live_pr_advancement(self) -> None:
+        temporary, _root, current, validation, _commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        check_pages = [{
+            "total_count": 1,
+            "check_runs": [{
+                "id": 200,
+                "name": "Validate candidate",
+                "status": "completed",
+                "conclusion": "failure",
+                "details_url": (
+                    f"https://github.com/{REPOSITORY}/actions/runs/100/job/200"
+                ),
+                "app": {"slug": "github-actions"},
+            }],
+        }]
+        run_pages = [{
+            "total_count": 1,
+            "workflow_runs": [{
+                "id": 100,
+                "name": "Code Quality",
+                "path": ".github/workflows/quality.yml",
+                "event": "pull_request",
+                "head_sha": current.lifecycle.head_sha,
+                "status": "completed",
+                "conclusion": "failure",
+                "run_attempt": 2,
+                "repository": {"full_name": REPOSITORY},
+                "head_repository": {"full_name": REPOSITORY},
+                "pull_requests": [{
+                    "number": 971,
+                    "url": f"https://api.github.com/repos/{REPOSITORY}/pulls/971",
+                    "head": {"sha": validation.head_sha},
+                }],
+            }],
+        }]
+        job_pages = [{
+            "total_count": 1,
+            "jobs": [{
+                "id": 200,
+                "run_id": 100,
+                "head_sha": current.lifecycle.head_sha,
+                "status": "completed",
+                "conclusion": "failure",
+                "name": "Validate candidate",
+            }],
+        }]
+        for label, live_head in (
+            ("direct current-head case", current.lifecycle.head_sha),
+            ("post-push correction case", validation.head_sha),
+        ):
+            responses = [
+                SimpleNamespace(returncode=0, stdout=json.dumps({
+                    "state": "OPEN",
+                    "isDraft": False,
+                    "headRefOid": live_head,
+                    "headRepository": {"nameWithOwner": REPOSITORY},
+                }).encode()),
+                SimpleNamespace(returncode=0, stdout=json.dumps(check_pages).encode()),
+                SimpleNamespace(returncode=0, stdout=json.dumps(run_pages).encode()),
+                SimpleNamespace(returncode=0, stdout=json.dumps(job_pages).encode()),
+            ]
+            with (
+                self.subTest(label=label),
+                mock.patch.object(
+                    publication, "_run_gh", side_effect=responses
+                ) as github,
+            ):
+                observed = orchestration._read_post_ready_failure(
+                    REPOSITORY, 971, current.lifecycle.head_sha
+                )
+
+            self.assertEqual(observed, observation)
+            self.assertEqual(github.call_count, 4)
+
+    def test_exact_current_failure_reader_rejects_substitution_and_ambiguity(self) -> None:
+        cases = (
+            ("wrong head", {"head_sha": "f" * 40}, 1, None),
+            ("push event", {"event": "push"}, 1, None),
+            (
+                "foreign PR",
+                {"pull_requests": [{
+                    "number": 972,
+                    "url": f"https://api.github.com/repos/{REPOSITORY}/pulls/972",
+                }]},
+                1,
+                None,
+            ),
+            ("ambiguous failures", {}, 2, None),
+            ("incomplete check pagination", {}, 1, 2),
+            ("no failed validation", {}, 0, None),
+        )
+        for label, run_updates, failure_count, check_total in cases:
+            temporary, _root, current, validation, _commit, _observation = self._inputs()
+            self.addCleanup(temporary.cleanup)
+            responses = self._historical_failure_api_responses(
+                current,
+                validation,
+                run_updates=run_updates,
+                failure_count=failure_count,
+                check_total=check_total,
+            )
+            with (
+                self.subTest(label=label),
+                mock.patch.object(publication, "_run_gh", side_effect=responses),
+                self.assertRaises(orchestration.LifecycleOrchestrationError),
+            ):
+                orchestration._read_post_ready_failure(
+                    REPOSITORY, 971, current.lifecycle.head_sha
+                )
+
+    def test_failure_reader_accepts_no_caller_selected_run_or_job(self) -> None:
+        with self.assertRaisesRegex(TypeError, "unexpected keyword"):
+            orchestration._read_post_ready_failure(
+                REPOSITORY,
+                971,
+                "f" * 40,
+                workflow_run_id=100,
+                check_run_id=200,
+            )
+
+    def test_public_entry_rejects_live_head_or_current_movement(self) -> None:
+        cases = (
+            ("live predecessor", "live", None),
+            ("live second successor", "live", "e" * 40),
+            ("CURRENT moved", "current", None),
+        )
+        for label, movement, moved_head in cases:
+            temporary, root, current, validation, commit, observation = self._inputs()
+            self.addCleanup(temporary.cleanup)
+            live_head = (
+                current.lifecycle.head_sha
+                if movement == "live" and moved_head is None
+                else moved_head or validation.head_sha
+            )
+            live = {
+                "repository": REPOSITORY,
+                "pull_request": 971,
+                "head_sha": live_head,
+                "pr_state": "OPEN",
+                "draft": False,
+            }
+            reread = current
+            if movement == "current":
+                reread = replace(current, publication_oid="e" * 40)
+            with (
+                self.subTest(label=label),
+                mock.patch.object(
+                    fast_path, "is_verified_validation_evidence", return_value=True
+                ),
+                mock.patch.object(
+                    orchestration,
+                    "_read_post_ready_failure",
+                    return_value=observation,
+                ),
+                mock.patch.object(
+                    orchestration,
+                    "_authenticate_maintained_correction_commit",
+                    return_value=commit,
+                ),
+                mock.patch.object(
+                    orchestration, "_read_live_post_ready_pr", return_value=live
+                ),
+                mock.patch.object(
+                    publication,
+                    "verify_current_lifecycle_authority",
+                    return_value=reread,
+                ),
+                self.assertRaises(orchestration.LifecycleOrchestrationError),
+            ):
+                orchestration.verify_post_ready_validation_defect_authority(
+                    current,
+                    candidate_validation=validation,
+                    repository_root=root,
+                )
+
+    def test_rejects_stale_validation_review_context(self) -> None:
+        temporary, root, current, validation, commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        with (
+            mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+            mock.patch.object(
+                fast_path,
+                "verified_validation_review_context",
+                return_value=self._review_context("f" * 40),
+            ),
+            self.assertRaisesRegex(
+                orchestration.LifecycleOrchestrationError, "reviewed head"
+            ),
+        ):
+            orchestration._verify_post_ready_validation_defect_authority(
+                current,
+                candidate_validation=validation,
+                authenticated_commit=commit,
+                repository_root=root,
+                failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
+            )
+
+    def test_rejects_same_name_workflow_from_another_path(self) -> None:
+        temporary, root, current, validation, _commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        observation["workflow_path"] = ".github/workflows/other.yml"
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "reproduced"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=current.lifecycle.pull_request,
+                predecessor_head=current.lifecycle.head_sha,
+                predecessor_tree=current.lifecycle.tree_sha,
+                resulting_head=validation.head_sha,
+                resulting_tree=validation.tree_sha,
+                observed_workflow_name=observation["workflow_name"],
+                observed_workflow_path=observation["workflow_path"],
+            )
+
+    def test_rejects_missing_or_unparseable_successor_selector(self) -> None:
+        for selector in (None, "${{ matrix.node }}"):
+            temporary, root, current, _validation, _commit, _observation = self._inputs()
+            self.addCleanup(temporary.cleanup)
+            workflow = root / ".github" / "workflows" / "quality.yml"
+            suffix = "" if selector is None else f"          node-version: '{selector}'\n"
+            workflow.write_text(
+                "name: Code Quality\njobs:\n  lint:\n    steps:\n"
+                "      - uses: actions/setup-node@immutable\n        with:\n" + suffix,
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "commit", "--amend", "--no-edit", "--quiet"],
+                check=True,
+            )
+            successor = subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+            ).strip()
+            successor_tree = subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+            ).strip()
+            with (
+                self.subTest(selector=selector),
+                self.assertRaisesRegex(
+                    orchestration.LifecycleOrchestrationError, "selector"
+                ),
+            ):
+                orchestration._verify_node_selector_defect_correction(
+                    root,
+                    repository=REPOSITORY,
+                    pull_request=current.lifecycle.pull_request,
+                    predecessor_head=current.lifecycle.head_sha,
+                    predecessor_tree=current.lifecycle.tree_sha,
+                    resulting_head=successor,
+                    resulting_tree=successor_tree,
+                    observed_workflow_name="Code Quality",
+                    observed_workflow_path=".github/workflows/quality.yml",
+                )
+
+    def test_rejects_filename_only_toolchain_change(self) -> None:
+        temporary, root, current, _validation, _commit, _observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        payload = root / "scripts" / "node-backdoor.py"
+        payload.parent.mkdir(exist_ok=True)
+        payload.write_text("print('unrelated')\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "--amend", "--no-edit", "--quiet"],
+            check=True,
+        )
+        successor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        successor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "unrelated"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=current.lifecycle.pull_request,
+                predecessor_head=current.lifecycle.head_sha,
+                predecessor_tree=current.lifecycle.tree_sha,
+                resulting_head=successor,
+                resulting_tree=successor_tree,
+                observed_workflow_name="Code Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+            )
+
+    def test_rejects_every_other_lifecycle_shape(self) -> None:
+        cases = (
+            ("Draft", {"ready": False, "draft": True}),
+            ("review absent", {"unrestricted_review_count": 0}),
+            ("second review", {"unrestricted_review_count": 2}),
+            ("no consumed remediation", {"remediation_cycle_count": 0}),
+            ("ordinary remediation exhausted", {"remediation_cycle_count": 2}),
+            ("wrong Ready count", {"ready_transition_count": 2}),
+            ("Cycle 3 present", {"cycle_3_absent": False}),
+            (
+                "Recovery consumed",
+                {
+                    "exceptional_recovery_count": 1,
+                    "exceptional_recovery_history": [{
+                        "sequence": 1,
+                        "transition_kind": "EXCEPTIONAL_RECOVERY",
+                        "event_authorization_digest": "b" * 64,
+                    }],
+                },
+            ),
+            (
+                "Continuation consumed",
+                {
+                    "exceptional_continuation_count": 1,
+                    "exceptional_continuation_history": [{
+                        "sequence": 1,
+                        "transition_kind": "EXCEPTIONAL_CONTINUATION",
+                        "event_authorization_digest": "c" * 64,
+                    }],
+                },
+            ),
+        )
+        for label, updates in cases:
+            temporary, root, current, validation, commit, observation = self._inputs()
+            self.addCleanup(temporary.cleanup)
+            changed_state = copy.deepcopy(current.lifecycle.state)
+            changed_state.update(updates)
+            changed = replace(current, lifecycle=replace(current.lifecycle, state=changed_state))
+            with (
+                self.subTest(label=label),
+                mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+                self.assertRaises(orchestration.LifecycleOrchestrationError),
+            ):
+                orchestration._verify_post_ready_validation_defect_authority(
+                    changed,
+                    candidate_validation=validation,
+                    authenticated_commit=commit,
+                    repository_root=root,
+                    failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
+                )
+
+    def test_rejects_stale_nonfailure_and_cross_identity_observations(self) -> None:
+        cases = (
+            ("wrong repository", "repository", "SecPal/other"),
+            ("wrong pull request", "pull_request", 999),
+            ("stale head", "head_sha", "f" * 40),
+            ("closed PR", "pr_state", "CLOSED"),
+            ("Draft PR", "draft", True),
+            ("pending check", "status", "IN_PROGRESS"),
+            ("successful check", "conclusion", "SUCCESS"),
+            ("cancelled infrastructure", "conclusion", "CANCELLED"),
+            ("unrelated failed workflow", "workflow_name", "Other Workflow"),
+            ("missing run", "workflow_run_id", 0),
+            ("missing job", "check_run_id", 0),
+            ("missing attempt", "attempt", 0),
+        )
+        for label, field, value in cases:
+            temporary, root, current, validation, commit, observation = self._inputs()
+            self.addCleanup(temporary.cleanup)
+            observation[field] = value
+            with (
+                self.subTest(label=label),
+                mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+                self.assertRaises(orchestration.LifecycleOrchestrationError),
+            ):
+                orchestration._verify_post_ready_validation_defect_authority(
+                    current,
+                    candidate_validation=validation,
+                    authenticated_commit=commit,
+                    repository_root=root,
+                    failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
+                )
+
+    def test_rejects_stale_validation_wrong_topology_signer_and_unrelated_change(self) -> None:
+        cases = (
+            (
+                "stale receipt",
+                lambda current, validation, commit: (
+                    replace(
+                        validation,
+                        validation_receipt_digest=current.lifecycle.validation_receipt_digest,
+                    ),
+                    commit,
+                ),
+            ),
+            (
+                "stale attestation",
+                lambda current, validation, commit: (
+                    replace(
+                        validation,
+                        final_attestation_digest=current.lifecycle.adoption_source_evidence_digest,
+                    ),
+                    commit,
+                ),
+            ),
+            (
+                "wrong parent",
+                lambda _current, validation, commit: (
+                    validation,
+                    replace(commit, parent_shas=("f" * 40,)),
+                ),
+            ),
+            (
+                "wrong signer",
+                lambda _current, validation, commit: (
+                    validation,
+                    replace(commit, signer_identity="other@example.invalid"),
+                ),
+            ),
+        )
+        for label, mutate in cases:
+            temporary, root, current, validation, commit, observation = self._inputs()
+            self.addCleanup(temporary.cleanup)
+            changed_validation, changed_commit = mutate(current, validation, commit)
+            with (
+                self.subTest(label=label),
+                mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+                self.assertRaises(orchestration.LifecycleOrchestrationError),
+            ):
+                orchestration._verify_post_ready_validation_defect_authority(
+                    current,
+                    candidate_validation=changed_validation,
+                    authenticated_commit=changed_commit,
+                    repository_root=root,
+                    failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
+                )
+
+        temporary, root, current, validation, _commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        (root / "README.md").write_text("unrelated\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "add", "README.md"], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "--amend", "--no-edit", "--quiet"], check=True)
+        successor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        successor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        changed_validation = replace(validation, head_sha=successor, tree_sha=successor_tree)
+        commit_fields = {
+            "repository": REPOSITORY,
+            "head_sha": successor,
+            "tree_sha": successor_tree,
+            "parent_shas": [current.lifecycle.head_sha],
+            "signer_kind": "SSH_PRINCIPAL",
+            "signer_identity": "aroviqen@secpal.app",
+            "signature_fingerprint": "SHA256:fixture",
+            "signature_classification": "GOODSIG",
+            "signature_policy_digest": "a" * 64,
+        }
+        changed_commit = fast_path.AuthenticatedIntegrationCommit(
+            **{**commit_fields, "parent_shas": (current.lifecycle.head_sha,)},
+            authentication_digest=fast_path.digest_json(commit_fields),
+        )
+        with (
+            mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+            self.assertRaisesRegex(
+                orchestration.LifecycleOrchestrationError, "unrelated"
+            ),
+        ):
+            orchestration._verify_post_ready_validation_defect_authority(
+                current,
+                candidate_validation=changed_validation,
+                authenticated_commit=changed_commit,
+                repository_root=root,
+                failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
+            )
+
+        temporary, root, current, _validation, _commit, _observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        (root / "package.json").write_text(
+            '{"engines":{"node":"^24.0.0"}}\n', encoding="utf-8"
+        )
+        subprocess.run(["git", "-C", str(root), "add", "package.json"], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "--amend", "--no-edit", "--quiet"], check=True)
+        weakened_head = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        weakened_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "engine contract"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=current.lifecycle.pull_request,
+                predecessor_head=current.lifecycle.head_sha,
+                predecessor_tree=current.lifecycle.tree_sha,
+                resulting_head=weakened_head,
+                resulting_tree=weakened_tree,
+                observed_workflow_name="Code Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+            )
+
+    def test_source_modes_are_not_substitutable_and_authorization_is_finite(self) -> None:
+        temporary, root, current, validation, commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        with mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True):
+            verified = orchestration._verify_post_ready_validation_defect_authority(
+                current,
+                candidate_validation=validation,
+                authenticated_commit=commit,
+                repository_root=root,
+                failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
+            )
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            orchestration.issue_ready_remediation_provider_growth_authorization(
+                authorization_id="wrong-source",
+                reason="Attempt source substitution",
+                current=current,
+                finding_authority=verified,
+                signer_identity="aroviqen@secpal.app",
+                signer=lambda _payload, _domain: {
+                    "format": "ssh",
+                    "signer_identity": "aroviqen@secpal.app",
+                    "value": "fixture-signature",
+                },
+            )
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "maintained issuer"
+        ):
+            orchestration.create_user_authorization(
+                authorization_id="caller-selected-transition",
+                repository=REPOSITORY,
+                delivery_issue=current.lifecycle.delivery_issue,
+                lifecycle=current.lifecycle,
+                publication_oid=current.publication_oid,
+                publication_digest=current.publication_digest,
+                operation="HEAD_ADVANCED",
+                reason="Attempt caller-selected substitution",
+                scope=orchestration.ordinary_ready_remediation_authorization_scope(verified),
+                signer_identity="aroviqen@secpal.app",
+                signer=lambda _payload, _domain: {
+                    "format": "ssh",
+                    "signer_identity": "aroviqen@secpal.app",
+                    "value": "fixture-signature",
+                },
+            )
+        exhausted = authority.derive_state(
+            current.lifecycle.state, "REMEDIATION_COMPLETED", "d" * 64
+        )
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "budget is exhausted"
+        ):
+            authority.derive_state(exhausted, "REMEDIATION_COMPLETED", "e" * 64)
+
+
 if __name__ == "__main__":
     main()

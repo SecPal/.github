@@ -9,6 +9,136 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-19 - Bind Post-Ready Failure To Lifecycle Current
+
+**Fixed:**
+
+- Derive post-Ready hosted failure evidence from the exact protected lifecycle
+  CURRENT predecessor SHA instead of the mutable live pull-request head.
+- Authenticate the live Ready correction independently as the exact signed
+  sole-parent successor, with complete GitHub pagination, same-PR binding, and
+  final CURRENT/live-PR rereads before remediation authorization.
+
+## 2026-09-19 - Correct Mixed Reusable-Workflow Source Resolution
+
+**Fixed:**
+
+- Normalize legal trailing comments on the closed workflow metadata scalar
+  subset while preserving hashes inside plain and quoted scalar values.
+- Ignore unrelated external reusable siblings when an observed failed check
+  resolves uniquely to an authenticated local reusable workflow, while keeping
+  observed external, dynamic, invalid and ambiguous sources fail-closed.
+
+## 2026-09-19 - Authenticate Local Reusable-Workflow Failure Sources
+
+**Changed:**
+
+- Resolve post-Ready hosted failures through exact candidate-byte local
+  reusable-workflow call graphs while preserving direct-workflow behavior and
+  the existing finite remediation authority.
+- Reject ambiguous, dynamic, traversing, remote, mixed-head and unrelated
+  workflow sources before selector-defect correction authority is issued.
+
+## 2026-09-18 - Authenticate Post-Ready Validation Remediation
+
+**Added:**
+
+- Admit one independently reproduced, technically blocking in-contract
+  validation defect into the remaining ordinary Ready remediation slot while
+  preserving Review 1/1, Ready, one Ready transition and the existing
+  `REMEDIATION_COMPLETED` transition.
+- Bind the exact current-head hosted failure, deterministic candidate-byte
+  proof, signed sole-parent correction and fresh validation evidence through a
+  one-use authorization, while keeping provider growth, Ready/Draft,
+  Exceptional Recovery and Exceptional Continuation semantics unchanged.
+
+## 2026-09-18 - Enable Contracts Lifecycle Enrollment
+
+**Changed:**
+
+- Register `SecPal/contracts` for the maintained native delivery lifecycle,
+  binding its repository-local protected publication boundary and the canonical
+  SecPal lifecycle signer roles.
+- Start with no historical, bootstrap, adoption or initialization records so
+  the first contracts delivery enters through ordinary admission-first native
+  enrollment without changing validation or review commands.
+
+## 2026-09-18 - Protect Contracts Lifecycle Publications
+
+**Changed:**
+
+- Provision repository-local prospective protection in `SecPal/contracts` for
+  the exact `refs/heads/secpal-lifecycle-publications` ref through active
+  ruleset `23668089`, requiring deletion and non-fast-forward protection with no
+  bypass actors.
+- Keep that ref absent as the empty contracts lifecycle journal until its first
+  lawful native publication, without creating lifecycle authority or the
+  contracts policy owned by the subsequent enrollment delivery.
+
+## 2026-09-18 - Authenticate Recovery In Pre-Enrollment Projection
+
+**Fixed:**
+
+- Classify Ready-source recovery publications under their existing protected-
+  journal schema when proving pre-enrollment absence, while preserving their
+  ancillary role and excluding them from lifecycle and genesis identity.
+- Require the projection to authenticate the recovery's preceding `CURRENT`,
+  authorization, signature, parent binding and one-use identity before
+  continuing journal ancestry.
+
+## 2026-09-18 - Bound One Governance Amendment Bootstrap
+
+**Fixed:**
+
+- Preserve provider-enforced strict up-to-date checks for `SecPal/.github`
+  while keeping every other managed repository's existing non-strict baseline.
+  Governance-amendment observation now derives the exact thirteen-check
+  inventory from the bound accepted-main synchronizer, admits combined-status
+  contexts only from that inventory plus the maintained external CLA context,
+  authenticates the complete paginated combined-status inventory, and binds
+  the registered bootstrap scope, authorized Ready actor, and strict base
+  policy before canonical squash consumption. Repeated post-Ready workflow
+  identities retain their full history while only the uniquely identified
+  newest run supplies the terminal result.
+- Bind the qualified-remediation signer and exact twelve-thread inventory to
+  accepted registration, and persist its safety report before the one-use
+  lifecycle publication can be signed or advanced.
+- Add one registered, governance-only amendment boundary for issue #960 / PR
+  #961. The accepted-main authority signer binds the exact one-use root
+  authorization, the legacy-adoption signer wraps it, and accepted-main keys
+  authenticate source and merge commits. Candidate policy and ambient Git trust
+  cannot authorize adoption. The canonical GitHub squash path adopts the
+  governance-only tree only when its verified commit has the authorized sole
+  parent and exact qualified tree, with immutable authorization and consumption
+  read-back.
+- Derive the exact change digest through the maintained canonical JSON encoder,
+  verify every adopted source commit, verify the constructed merge before any
+  push, and independently rebuild live GitHub/Git/CI/feedback facts before the
+  accepted-main authority or adoption signer can sign.
+- Bind the complete accepted-main-to-head signature range through one shared
+  canonical digest while retaining the Exact-State-Adoption consumer's distinct
+  normalized head-commit evidence.
+- Represent historical evidence truthfully as `PRESENT`, `UNAVAILABLE`, or
+  `ABSENT_NEVER_ISSUED`; the last state carries typed nulls and cannot synthesize
+  receipt, source-validation, or final-attestation identities. Derive that
+  absence from the protected lifecycle journal and the exact signed qualified-
+  source artifact history, and derive current-validation identity from the
+  bound accepted-main registry instead of caller objects.
+
+## 2026-09-18 - Admit Exact Node-24 Delivery Evidence Loss
+
+**Fixed:**
+
+- Extend the existing Exact-State-Adoption validation-evidence-loss owner with
+  one exact admission for issue #948 / PR #953, binding its signed current-head
+  receipt identity, unavailable package bytes, complete Ready/review/remediation
+  history, stable feedback and accepted-main current safety. Require the live
+  trailer to match the accepted digest and execute both Node baseline governance
+  layers in the disposable safety projection.
+- Preserve Review 1/1, Remediation 1/2, one Ready transition and Cycle-3 absence
+  without adding a recovery family, lifecycle state, signer, journal or trust
+  root.
+
 ## 2026-09-17 - Admit Exact Ready Source With Zero Historical Receipt Package
 
 **Fixed:**
@@ -43,6 +173,16 @@ Log of notable changes to SecPal organization defaults (newest first).
   the existing ordinary eligibility manifest, and the remaining normal
   remediation authorization without requesting another review or adding a
   lifecycle operation.
+
+## 2026-09-16 - Adopt Node 24 LTS Governance Baseline
+
+**Changed:**
+
+- Make Node 24 LTS the shared governance, reusable-workflow, composite-action,
+  and contributor-tooling baseline while preserving caller overrides.
+- Derive local system-requirement enforcement and structural workflow checks
+  from `.nvmrc`, with active documentation kept coherent and historical Node 22
+  evidence preserved.
 
 ## 2026-09-16 - Define Builder-Independent OCI Publication Evidence
 

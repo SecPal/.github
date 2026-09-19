@@ -1,0 +1,2082 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import subprocess
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import TestCase, main, mock
+
+from scripts.secpal_pr_review import governance_amendment as amendment
+from scripts.secpal_pr_review import lifecycle_authority as authority
+
+SIGNER = "lifecycle-legacy-adoption@secpal.app"
+SOURCE = "aroviqen@secpal.app"
+ROOT_SIGNER = SOURCE
+HEAD = "a" * 40
+TREE = "b" * 40
+PARENT = "c" * 40
+FULL_CANDIDATE_PATHS = [
+    ".agents/skills/secpal-pr-review/references/contract.md",
+    ".agents/skills/secpal-pr-review/references/repositories.json",
+    ".agents/skills/secpal-pr-review/references/repositories.schema.json",
+    "CHANGELOG.md",
+    "docs/secpal-pr-review-workflow.md",
+    "policies/governance-amendment-bootstrap.json",
+    "policies/governance-amendment-bootstrap.json.license",
+    "policies/qualified-remediation-successor-evidence-loss.json",
+    "policies/qualified-remediation-successor-evidence-loss.json.license",
+    "scripts/README.md",
+    "scripts/secpal-pr-review-actions.py",
+    "scripts/secpal-resolve-fixed-threads.py",
+    "scripts/sync-required-checks.sh",
+    "scripts/secpal_pr_review/fast_path.py",
+    "scripts/secpal_pr_review/governance_amendment.py",
+    "scripts/secpal_pr_review/lifecycle_authority.py",
+    "scripts/secpal_pr_review/qualified_remediation_successor_loss.py",
+    "tests/secpal-governance-amendment-unit.py",
+    "tests/secpal-lifecycle-authority-unit.py",
+    "tests/secpal-pr-review-actions-unit.py",
+    "tests/secpal-pr-review-static-policy.py",
+    "tests/secpal-qualified-remediation-successor-loss-unit.py",
+    "tests/secpal-resolve-fixed-threads-unit.py",
+]
+
+
+def ready_ci_fixtures(
+    head: str, base: str,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    ready_at = "2026-09-18T12:00:00Z"
+    events = [{
+        "id": 9601, "event": "ready_for_review", "created_at": ready_at,
+        "actor": {"login": "aroviqen"},
+    }]
+    runs = [{
+        "id": 9700 + index, "name": name, "event": "pull_request_target",
+        "status": "completed", "conclusion": "success", "head_sha": head,
+        "created_at": "2026-09-18T12:00:01Z",
+        "run_started_at": "2026-09-18T12:00:02Z",
+        "pull_requests": [{
+            "number": 961,
+            "head": {"sha": head},
+            "base": {"sha": base},
+        }],
+    } for index, name in enumerate(sorted(amendment.READY_WORKFLOW_NAMES))]
+    return events, runs
+
+
+def feedback_response(
+    arguments: list[str], head: str, threads: list[dict[str, object]],
+    reviews: list[dict[str, object]], comments: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    query = next(item[6:] for item in arguments if item.startswith("query="))
+    page = {"hasNextPage": False, "endCursor": None}
+    pull: dict[str, object] = {"headRefOid": head}
+    value: dict[str, object] = {
+        "data": {"repository": {"pullRequest": pull}},
+    }
+    if "reviewThreads(first:" in query:
+        pull["reviewThreads"] = {"nodes": threads, "pageInfo": page}
+    elif "reviews(first:" in query:
+        pull["reviews"] = {"nodes": reviews, "pageInfo": page}
+    elif "comments(first:" in query and "node(id:$thread)" not in query:
+        pull["comments"] = {"nodes": comments or [], "pageInfo": page}
+    elif "node(id:$thread)" in query:
+        value["data"]["node"] = {"comments": {"nodes": [], "pageInfo": page}}
+    else:
+        raise AssertionError(query)
+    return value
+
+
+def signer(payload: bytes, domain: str) -> dict[str, str]:
+    return {
+        "format": "ssh", "signer_identity": SIGNER,
+        "value": hashlib.sha256(domain.encode() + payload).hexdigest(),
+    }
+
+
+def verifier(payload: bytes, signature: dict[str, str], identity: str, domain: str) -> authority.VerifiedSignature:
+    if signature != signer(payload, domain) or identity != SIGNER:
+        raise authority.LifecycleAuthorityError("bad fixture signature")
+    return authority.VerifiedSignature(identity, "ssh")
+
+
+def root_signer(payload: bytes, domain: str) -> dict[str, str]:
+    return {
+        "format": "ssh", "signer_identity": ROOT_SIGNER,
+        "value": hashlib.sha256(domain.encode() + payload).hexdigest(),
+    }
+
+
+def root_verifier(payload: bytes, signature: dict[str, str], identity: str, domain: str) -> authority.VerifiedSignature:
+    if signature != root_signer(payload, domain) or identity != ROOT_SIGNER:
+        raise authority.LifecycleAuthorityError("bad root fixture signature")
+    return authority.VerifiedSignature(identity, "ssh")
+
+
+def signature_verifier(
+    payload: bytes, signature: dict[str, str], identity: str, domain: str
+) -> authority.VerifiedSignature:
+    if identity == ROOT_SIGNER:
+        return root_verifier(payload, signature, identity, domain)
+    return verifier(payload, signature, identity, domain)
+
+
+def state() -> dict[str, object]:
+    value = authority.initial_state()
+    value.update(unrestricted_review_count=1, remediation_cycle_count=1)
+    return value
+
+
+def history() -> list[dict[str, object]]:
+    return [
+        {"sequence": 1, "kind": "PR_CREATED_DRAFT", "observed_at": "2026-09-18T10:00:00Z", "head_sha": PARENT, "reviewed_head_sha": None},
+        {"sequence": 2, "kind": "REMEDIATION_HEAD_OBSERVED", "observed_at": "2026-09-18T11:00:00Z", "head_sha": HEAD, "reviewed_head_sha": None},
+    ]
+
+
+def proposed_policy() -> dict[str, object]:
+    return json.loads(
+        (Path(__file__).parents[1] / amendment.POLICY_PATH).read_text()
+    )["amendments"][0]
+
+
+def authorization(
+    *, head: str = HEAD, tree: str = TREE, parent: str = PARENT,
+    accepted_main: str | None = None,
+    changed: list[dict[str, str]] | None = None,
+    source_oids: list[str] | None = None,
+    policy: dict[str, object] | None = None,
+) -> dict[str, object]:
+    policy = policy or proposed_policy()
+    accepted_main = accepted_main or str(policy["accepted_main_sha"])
+    qualified = policy["qualified_source"]
+    changed = changed or [
+        {"path": "policies/governance-amendment-bootstrap.json", "blob_oid": "d" * 40, "mode": "100644"},
+        {"path": "scripts/secpal_pr_review/governance_amendment.py", "blob_oid": "e" * 40, "mode": "100644"},
+    ]
+    value = {
+        "schema_version": "1.0", "kind": amendment.KIND, "domain": amendment.DOMAIN,
+        "purpose": amendment.PURPOSE, "repository": "SecPal/.github",
+        "delivery_issue": 960, "pull_request": 961, "pull_request_state": "OPEN",
+        "qualified_source": qualified, "head_sha": head, "tree_sha": tree,
+        "ordered_parent_shas": [parent],
+        "accepted_main_sha": accepted_main,
+        "changed_files": changed, "change_digest": "",
+        "governance_path_prefixes": policy["allowed_path_prefixes"],
+        "source_commits": [
+            amendment.source_commit_evidence(oid, SOURCE, accepted_main)
+            for oid in (source_oids or [head])
+        ],
+        "natural_ci": {"head_sha": head, "workflow_identity": "pull-request-ci", "result": "PASS", "evidence_digest": "2" * 64},
+        "independent_qualification": {
+            "verifier_identity": "verifier",
+            "conversation_id": "new-verifier",
+            "head_sha": head, "tree_sha": tree, "result": "PASS",
+            "qualification_digest": authority.digest_json({
+                "verifier_identity": "verifier",
+                "conversation_id": "new-verifier",
+                "head_sha": head, "tree_sha": tree, "result": "PASS",
+            }),
+        },
+        "current_validation": {"accepted_main_sha": accepted_main, "policy_digest": "4" * 64, "command_set_digest": "5" * 64, "result": "PASS"},
+        "feedback": {"state_digest": "6" * 64, "feedback_digest": "7" * 64, "thread_inventory_digest": "8" * 64, "material_finding_ids": []},
+        "observed_pre_enrollment_history": [
+            {"sequence": 1, "kind": "PR_CREATED_DRAFT", "observed_at": "2026-09-18T10:00:00Z", "head_sha": parent, "reviewed_head_sha": None},
+            {"sequence": 2, "kind": "REMEDIATION_HEAD_OBSERVED", "observed_at": "2026-09-18T11:00:00Z", "head_sha": head, "reviewed_head_sha": None},
+        ], "intended_state": state(),
+        "historical_evidence": amendment.historical_evidence(),
+        "historical_absence_proof": {
+            "head_sha": head,
+            "verification_authority": "PROTECTED_DELIVERY_HISTORY_AND_ARTIFACT_AUDIT",
+            "history_digest": "9" * 64,
+            "artifact_audit_digest": "a" * 64,
+            "result": "NO_HISTORICAL_RECEIPT_ISSUED",
+        },
+        "architecture_necessity": {
+            "existing_authority_result": "INSUFFICIENT",
+            "smaller_nonrecursive_extension": "NONE",
+            "recursive_self_bootstrap": "PROVEN",
+            "evidence_digest": "b" * 64,
+        },
+        "concepts": policy["concepts"],
+        "human_authority_identity": policy["human_authority_identity"],
+        "human_authorization_digest": policy["human_authorization_digest"],
+        "authorization_id": policy["authorization_id"],
+        "bounded_uses": 1, "root_authorization": {},
+        "signer_identity": SIGNER, "signature": {},
+        "authorization_digest": "",
+    }
+    value["source_signature"] = {
+        "signer_identity": SOURCE,
+        "range_signature_evidence_digest": (
+            amendment.source_signature_binding_digest(
+                value["source_commits"], accepted_main
+            )
+        ),
+        "verified": True,
+    }
+    return reseal(value)
+
+
+def reseal(value: dict[str, object]) -> dict[str, object]:
+    value = copy.deepcopy(value)
+    value["change_digest"] = amendment.change_digest(
+        repository=value["repository"],
+        delivery_issue=value["delivery_issue"],
+        pull_request=value["pull_request"],
+        head_sha=value["head_sha"],
+        tree_sha=value["tree_sha"],
+        ordered_parent_shas=value["ordered_parent_shas"],
+        accepted_main_sha=value["accepted_main_sha"],
+        changed_files=value["changed_files"],
+    )
+    facts = {
+        key: copy.deepcopy(item) for key, item in value.items()
+        if key not in {
+            "root_authorization", "signer_identity", "signature",
+            "authorization_digest",
+        }
+    }
+    root_fields = {
+        "schema_version": "1.0",
+        "kind": amendment.ROOT_AUTHORIZATION_KIND,
+        "domain": amendment.ROOT_AUTHORIZATION_DOMAIN,
+        "repository": value["repository"],
+        "delivery_issue": value["delivery_issue"],
+        "pull_request": value["pull_request"],
+        "accepted_main_sha": value["accepted_main_sha"],
+        "head_sha": value["head_sha"],
+        "tree_sha": value["tree_sha"],
+        "purpose": value["purpose"],
+        "governance_path_prefixes": value["governance_path_prefixes"],
+        "human_authority_identity": value["human_authority_identity"],
+        "human_authorization_digest": value["human_authorization_digest"],
+        "authorized_facts_digest": authority.digest_json(facts),
+        "bounded_uses": 1,
+        "signer_identity": ROOT_SIGNER,
+    }
+    root_signed = {
+        **root_fields,
+        "signature": root_signer(
+            authority.canonical_json_bytes(root_fields),
+            amendment.ROOT_AUTHORIZATION_DOMAIN,
+        ),
+    }
+    value["root_authorization"] = {
+        **root_signed,
+        "authorization_digest": authority.digest_json(root_signed),
+    }
+    unsigned = {key: copy.deepcopy(item) for key, item in value.items() if key not in {"authorization_digest", "signature"}}
+    value["signature"] = signer(authority.canonical_json_bytes(unsigned), amendment.DOMAIN)
+    signed = {key: copy.deepcopy(item) for key, item in value.items() if key != "authorization_digest"}
+    value["authorization_digest"] = authority.digest_json(signed)
+    return value
+
+
+def observation_inputs(value: dict[str, object]) -> dict[str, object]:
+    return {
+        key: copy.deepcopy(value[key])
+        for key in amendment.ISSUANCE_INPUT_FIELDS
+    }
+
+
+class GovernanceAmendmentTests(TestCase):
+    def test_consumption_planner_has_one_safe_path_without_new_decision(self) -> None:
+        self.assertEqual(
+            amendment.consumption_plan(),
+            {
+                "schema_version": "1.0",
+                "operation": "GOVERNANCE_AMENDMENT_CONSUMPTION",
+                "merge_method": "SQUASH",
+                "protected_ref_write": "GITHUB_PULL_REQUEST_MERGE",
+                "provider_atomic_base_precondition": (
+                    "STRICT_REQUIRED_STATUS_CHECKS"
+                ),
+                "direct_push": False,
+                "force": False,
+                "branch_protection_bypass": False,
+                "decision_required": False,
+            },
+        )
+
+    def patches(self, trust: object | None = None):
+        trust = trust or SimpleNamespace(
+            authority_signer_identities=frozenset({ROOT_SIGNER}),
+            legacy_adoption_signer_identities=frozenset({SIGNER}),
+            signers={},
+        )
+        return (
+            mock.patch.object(
+                amendment, "_accepted_trust_policy",
+                return_value=trust,
+            ),
+            mock.patch.object(
+                authority, "_policy_signature_verifier",
+                return_value=signature_verifier,
+            ),
+        )
+
+    def hermetic_repository(
+        self, directory: str, *, attacker_intermediate: bool,
+    ) -> dict[str, object]:
+        root, remote = Path(directory) / "work", Path(directory) / "remote.git"
+        subprocess.run(["git", "init", "--bare", "--quiet", str(remote)], check=True)
+        subprocess.run(["git", "init", "--quiet", "-b", "main", str(root)], check=True)
+
+        def git(*args: str) -> str:
+            return subprocess.run(
+                ["git", "-C", str(root), *args], check=True,
+                stdout=subprocess.PIPE, text=True,
+            ).stdout.strip()
+
+        git("config", "user.name", "SecPal Test")
+        git("config", "user.email", "test@secpal.invalid")
+        trusted, attacker = Path(directory) / "trusted", Path(directory) / "attacker"
+        for key in (trusted, attacker):
+            subprocess.run(
+                ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+                check=True,
+            )
+        allowed = Path(directory) / "allowed-signers"
+        allowed.write_text(
+            "".join(
+                f"{SOURCE} {key.with_suffix('.pub').read_text()}"
+                for key in (trusted, attacker)
+            ),
+            encoding="utf-8",
+        )
+        git("config", "gpg.format", "ssh")
+        git("config", "user.signingkey", str(trusted))
+        git("config", "gpg.ssh.allowedSignersFile", str(allowed))
+        git("config", "commit.gpgsign", "true")
+        path = root / "scripts" / "secpal_pr_review" / "governance_amendment.py"
+        path.parent.mkdir(parents=True)
+        path.write_text("base\n", encoding="utf-8")
+        git("add", ".")
+        git("commit", "-S", "-m", "base")
+        base = git("rev-parse", "HEAD")
+        git("remote", "add", "origin", str(remote))
+        git("push", "origin", "HEAD:main")
+        git("switch", "-c", "candidate")
+        source_oids: list[str] = []
+        if attacker_intermediate:
+            git("config", "user.signingkey", str(attacker))
+            path.write_text("attacker intermediate\n", encoding="utf-8")
+            git("commit", "-S", "-am", "attacker intermediate")
+            source_oids.append(git("rev-parse", "HEAD"))
+            git("config", "user.signingkey", str(trusted))
+        path.write_text("trusted tip\n", encoding="utf-8")
+        git("commit", "-S", "-am", "trusted tip")
+        head = git("rev-parse", "HEAD")
+        source_oids.append(head)
+        return {
+            "root": root, "remote": remote, "git": git,
+            "path": path, "base": base, "head": head,
+            "tree": git("rev-parse", "HEAD^{tree}"),
+            "blob": git("rev-parse", f"HEAD:{path.relative_to(root)}"),
+            "trusted": trusted, "attacker": attacker,
+            "source_oids": source_oids,
+        }
+
+    def test_change_digest_matches_independent_canonical_oracle(self) -> None:
+        value = authorization()
+        facts = {
+            key: value[key] for key in (
+                "repository", "delivery_issue", "pull_request", "head_sha",
+                "tree_sha", "ordered_parent_shas", "accepted_main_sha",
+                "changed_files",
+            )
+        }
+        oracle = hashlib.sha256(
+            json.dumps(
+                facts, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"), allow_nan=False,
+            ).encode("utf-8") + b"\n"
+        ).hexdigest()
+        self.assertEqual(value["change_digest"], oracle)
+        without_newline = hashlib.sha256(
+            json.dumps(
+                facts, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"), allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        self.assertNotEqual(value["change_digest"], without_newline)
+        reordered = copy.deepcopy(facts)
+        reordered["changed_files"].reverse()
+        self.assertNotEqual(
+            amendment.change_digest(**reordered), value["change_digest"]
+        )
+
+    def test_canonical_issue_consume_and_protected_main_read_back(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root, remote = Path(directory) / "work", Path(directory) / "remote.git"
+            subprocess.run(["git", "init", "--bare", "--quiet", str(remote)], check=True)
+            subprocess.run(["git", "init", "--quiet", "-b", "main", str(root)], check=True)
+            def git(*args: str) -> str:
+                return subprocess.run(["git", "-C", str(root), *args], check=True, stdout=subprocess.PIPE, text=True).stdout.strip()
+            git("config", "user.name", "SecPal Test")
+            git("config", "user.email", "test@secpal.invalid")
+            key = Path(directory) / "key"
+            subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True)
+            allowed = Path(directory) / "allowed-signers"
+            allowed.write_text(f"{SOURCE} {key.with_suffix('.pub').read_text()}")
+            git("config", "gpg.format", "ssh"); git("config", "user.signingkey", str(key)); git("config", "gpg.ssh.allowedSignersFile", str(allowed)); git("config", "commit.gpgsign", "true")
+            path = root / "base.txt"
+            path.write_text("accepted base\n")
+            git("add", "."); git("commit", "-S", "-m", "base")
+            base = git("rev-parse", "HEAD")
+            git("remote", "add", "origin", str(remote)); git("push", "origin", "HEAD:main")
+            git("switch", "-c", "candidate")
+            policy = copy.deepcopy(proposed_policy())
+            policy["accepted_main_sha"] = base
+            policy["human_authorization_digest"] = authority.digest_json({
+                "authority_identity": policy["human_authority_identity"],
+                "repository": "SecPal/.github", "delivery_issue": 960,
+                "pull_request": 961, "purpose": amendment.PURPOSE,
+                "qualified_source_digest": policy["qualified_source"]["qualification_digest"],
+                "accepted_main_sha": base, "decision": "APPROVED", "bounded_uses": 1,
+            })
+            midpoint = len(FULL_CANDIDATE_PATHS) // 2
+            for sequence, paths in enumerate(
+                (FULL_CANDIDATE_PATHS[:midpoint], FULL_CANDIDATE_PATHS[midpoint:]),
+                start=1,
+            ):
+                for relative in paths:
+                    candidate = root / relative
+                    candidate.parent.mkdir(parents=True, exist_ok=True)
+                    if relative == amendment.POLICY_PATH:
+                        candidate.write_text(json.dumps({
+                            "schema_version": "1.0", "amendments": [policy],
+                        }), encoding="utf-8")
+                    elif relative == amendment.REGISTRY_PATH:
+                        candidate.write_text(json.dumps({
+                            "schema_version": "1.0",
+                            "repositories": [{
+                                "repository": "SecPal/.github",
+                                "governance_amendment_policy": {
+                                    "path": amendment.POLICY_PATH,
+                                    "kind": amendment.KIND,
+                                    "purpose": amendment.PURPOSE,
+                                },
+                            }],
+                        }), encoding="utf-8")
+                    else:
+                        candidate.write_text(f"candidate {relative}\n", encoding="utf-8")
+                git("add", ".")
+                git("commit", "-S", "-m", f"amendment part {sequence}")
+            head, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
+            source_oids = git(
+                "rev-list", "--reverse", "--topo-order", f"{base}..{head}"
+            ).splitlines()
+            changed = []
+            for relative in sorted(FULL_CANDIDATE_PATHS):
+                mode, kind, blob = git("ls-tree", head, "--", relative).split(None, 2)[0:3]
+                self.assertEqual(kind, "blob")
+                changed.append({
+                    "path": relative, "blob_oid": blob.split("\t", 1)[0],
+                    "mode": mode,
+                })
+            raw = authorization(
+                head=head, tree=tree, parent=source_oids[-2],
+                accepted_main=base, changed=changed,
+                source_oids=source_oids, policy=policy,
+            )
+            trusted_signer = authority.TrustedSigner(
+                SOURCE,
+                (key.with_suffix(".pub").read_text().strip(),),
+                (),
+            )
+            trust = SimpleNamespace(
+                authority_signer_identities=frozenset({ROOT_SIGNER}),
+                legacy_adoption_signer_identities=frozenset({SIGNER}),
+                signers={SOURCE: trusted_signer},
+                publication_remote_url=str(remote),
+            )
+            checks = [{
+                "name": "governance", "status": "completed",
+                "conclusion": "success", "head_sha": head,
+            }]
+            statuses: list[dict[str, object]] = []
+            ready_events, ready_runs = ready_ci_fixtures(head, base)
+            threads: list[dict[str, object]] = []
+            reviews = [{
+                "id": "R_fixture", "body": "",
+                "state": "COMMENTED", "commit": {"oid": head},
+                "author": {"login": "review-bot"},
+            }]
+            pull = {
+                "number": 961, "state": "open", "draft": False,
+                "merged": False, "mergeable": True,
+                "mergeable_state": "clean",
+                "head": {"sha": head, "repo": {"full_name": "SecPal/.github"}},
+                "base": {"sha": base, "ref": "main", "repo": {"full_name": "SecPal/.github"}},
+            }
+            squash: dict[str, str] = {}
+            def github(arguments: list[str]):
+                joined = " ".join(arguments)
+                if "pulls/961/merge" in joined:
+                    fields = {
+                        item.split("=", 1)[0]: item.split("=", 1)[1]
+                        for item in arguments if "=" in item
+                    }
+                    self.assertEqual(fields["sha"], head)
+                    self.assertEqual(fields["merge_method"], "squash")
+                    self.assertNotIn("force", joined)
+                    rendered = (
+                        fields["commit_title"] + "\n\n"
+                        + fields["commit_message"]
+                    )
+                    created = subprocess.run(
+                        ["git", "-C", str(root), "commit-tree", tree, "-p", base],
+                        input=rendered + "\n", text=True,
+                        check=True, stdout=subprocess.PIPE,
+                    ).stdout.strip()
+                    git("push", "origin", f"{created}:main")
+                    squash.update(oid=created, message=rendered)
+                    value = {"merged": True, "sha": created}
+                elif squash and f"commits/{squash['oid']}" in joined:
+                    value = {
+                        "sha": squash["oid"],
+                        "parents": [{"sha": base}],
+                        "commit": {
+                            "tree": {"sha": tree},
+                            "message": squash["message"],
+                            "verification": {"verified": True, "reason": "valid"},
+                        },
+                    }
+                elif "pulls/961" in joined:
+                    value = pull
+                elif "issues/960" in joined:
+                    value = {"number": 960, "state": "open"}
+                elif "issues/961/events" in joined:
+                    value = ready_events
+                elif "actions/runs" in joined:
+                    value = {
+                        "total_count": len(ready_runs),
+                        "workflow_runs": ready_runs,
+                    }
+                elif "check-runs" in joined:
+                    value = {"total_count": len(checks), "check_runs": checks}
+                elif "/status" in joined:
+                    value = {
+                        "sha": head, "state": "success",
+                        "total_count": len(statuses),
+                        "statuses": statuses,
+                    }
+                elif "graphql" in arguments:
+                    value = feedback_response(arguments, head, threads, reviews)
+                else:
+                    raise AssertionError(arguments)
+                return subprocess.CompletedProcess(
+                    arguments, 0, json.dumps(value).encode(), b""
+                )
+
+            first, second = self.patches(trust)
+            signer_factory = mock.Mock()
+            def role_signer(_trust, identities, _label, **_kwargs):
+                if identities == trust.authority_signer_identities:
+                    return ROOT_SIGNER, root_signer
+                return SIGNER, signer
+            signer_factory.side_effect = role_signer
+
+            signature_policy = {
+                "accepted_formats": ["ssh"],
+                "require_github_verified": True,
+            }
+            required_policy = {
+                "strict": True,
+                "checks": [{"context": "governance", "app_id": None}],
+            }
+            with mock.patch.object(amendment, "ROOT", root), mock.patch.object(amendment.publication, "_run_gh", side_effect=github), mock.patch.object(authority, "_load_delivery_signature_policy", return_value=signature_policy), first, second, mock.patch.object(amendment.execution, "_policy_role_signer", signer_factory), mock.patch.object(amendment, "_live_required_check_policy", return_value=required_policy), mock.patch.object(amendment, "_bound_current_validation", return_value=raw["current_validation"]), mock.patch.object(amendment, "_observe_historical_absence", return_value=(raw["historical_evidence"], raw["historical_absence_proof"])):
+                inputs = observation_inputs(raw)
+                pull["draft"] = True
+                with self.assertRaisesRegex(
+                    amendment.GovernanceAmendmentError,
+                    "delivery identity or state changed",
+                ):
+                    authority.authenticate_governance_amendment_issuance(
+                        "SecPal/.github", 960, inputs
+                    )
+                pull["draft"] = False
+                saved_ready_runs = list(ready_runs)
+                ready_runs.clear()
+                with self.assertRaisesRegex(
+                    amendment.GovernanceAmendmentError,
+                    "Ready CI is not terminal and passing",
+                ):
+                    authority.authenticate_governance_amendment_issuance(
+                        "SecPal/.github", 960, inputs
+                    )
+                ready_runs.extend(saved_ready_runs)
+                authenticated = authority.authenticate_governance_amendment_issuance("SecPal/.github", 960, inputs)
+                observed = authenticated.facts
+                self.assertEqual(
+                    [item["path"] for item in observed["changed_files"]],
+                    sorted(FULL_CANDIDATE_PATHS),
+                )
+                oracle_facts = {
+                    key: observed[key] for key in (
+                        "repository", "delivery_issue", "pull_request",
+                        "head_sha", "tree_sha", "ordered_parent_shas",
+                        "accepted_main_sha", "changed_files",
+                    )
+                }
+                oracle = hashlib.sha256(
+                    json.dumps(
+                        oracle_facts, ensure_ascii=False, sort_keys=True,
+                        separators=(",", ":"), allow_nan=False,
+                    ).encode("utf-8") + b"\n"
+                ).hexdigest()
+                self.assertEqual(observed["change_digest"], oracle)
+                self.assertEqual(
+                    [item["oid"] for item in observed["source_commits"]],
+                    source_oids,
+                )
+                self.assertEqual(
+                    observed["source_signature"][
+                        "range_signature_evidence_digest"
+                    ],
+                    amendment.source_signature_binding_digest(
+                        observed["source_commits"], base
+                    ),
+                )
+                issued = authority.issue_governance_amendment_authorization(authenticated)
+                amendment.verify(issued)
+                head_evidence = {
+                    "oid": head, "source": "USER",
+                    "local_signature": {
+                        "verified": True, "state": "valid", "format": "ssh",
+                    },
+                    "github_verification": {
+                        "verified": True, "reason": "valid",
+                    },
+                }
+                changed_head = copy.deepcopy(head_evidence)
+                changed_head["oid"] = source_oids[-2]
+                with self.assertRaisesRegex(
+                    authority.LifecycleAuthorityError,
+                    "changed identity",
+                ):
+                    authority.authenticate_exact_state_adoption_external_evidence(
+                        repository="SecPal/.github", delivery_issue=960,
+                        pull_request=961, head_sha=head, tree_sha=tree,
+                        pull_request_state="OPEN",
+                        commit_signature_evidence=changed_head,
+                        validation_evidence=None,
+                        observed_pre_enrollment_history=raw[
+                            "observed_pre_enrollment_history"
+                        ],
+                        intended_state=raw["intended_state"],
+                        governance_amendment_authorization=issued,
+                    )
+                external = authority.authenticate_exact_state_adoption_external_evidence(
+                    repository="SecPal/.github", delivery_issue=960,
+                    pull_request=961, head_sha=head, tree_sha=tree,
+                    pull_request_state="OPEN",
+                    commit_signature_evidence=head_evidence,
+                    validation_evidence=None,
+                    observed_pre_enrollment_history=raw[
+                        "observed_pre_enrollment_history"
+                    ],
+                    intended_state=raw["intended_state"],
+                    governance_amendment_authorization=issued,
+                )
+                adoption = authority.create_exact_state_adoption_evidence(
+                    verified_external_evidence=external,
+                    adoption_timestamp="2026-09-18T12:00:00Z",
+                )
+                self.assertEqual(adoption["proof_version"], "4.0")
+                self.assertEqual(
+                    authority.exact_state_adoption_historical_evidence(adoption),
+                    amendment.historical_evidence(),
+                )
+                result = authority.execute_governance_amendment(issued)
+                self.assertEqual(result["status"], "CONSUMED")
+                self.assertEqual(git("ls-remote", str(remote), "refs/heads/main").split()[0], result["merge_commit_sha"])
+                self.assertEqual(git("show", "-s", "--format=%P", result["merge_commit_sha"]).split(), [base])
+                self.assertEqual(git("rev-parse", f"{result['merge_commit_sha']}^{{tree}}"), tree)
+                accepted_message = git("show", "-s", "--format=%B", result["merge_commit_sha"])
+                self.assertIn(issued["authorization_digest"], accepted_message)
+                self.assertEqual(result["merge_method"], "SQUASH")
+                for fabricated in ("lifecycle CURRENT", "Ready transition", "validation receipt"):
+                    self.assertNotIn(fabricated, accepted_message)
+                with self.assertRaisesRegex(
+                    amendment.GovernanceAmendmentError,
+                    "protected main changed",
+                ):
+                    authority.execute_governance_amendment(issued)
+            self.assertEqual(signer_factory.call_count, 2)
+
+    def test_exact_governance_tools_do_not_admit_nearby_scripts(self) -> None:
+        exact = [
+            {
+                "path": "scripts/secpal-pr-review-actions.py",
+                "blob_oid": "a" * 40, "mode": "100755",
+            },
+            {
+                "path": "scripts/secpal-resolve-fixed-threads.py",
+                "blob_oid": "b" * 40, "mode": "100755",
+            },
+            {
+                "path": "scripts/sync-required-checks.sh",
+                "blob_oid": "c" * 40, "mode": "100755",
+            },
+        ]
+        self.assertEqual(
+            amendment._changed_files(exact, amendment.GOVERNANCE_PATH_PREFIXES),
+            exact,
+        )
+        for path in (
+            "scripts/secpal-pr-review-actions-helper.py",
+            "scripts/secpal-resolve-fixed-threads.py/child",
+            "scripts/unrelated-governance.py",
+        ):
+            with self.subTest(path=path), self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError, "non-governance source"
+            ):
+                amendment._changed_files(
+                    [{"path": path, "blob_oid": "c" * 40, "mode": "100644"}],
+                    amendment.GOVERNANCE_PATH_PREFIXES,
+                )
+
+    def test_source_range_rejects_intermediate_signature_substitution(self) -> None:
+        value = authorization(source_oids=["7" * 40, HEAD])
+        value["source_commits"][0]["signature_evidence_digest"] = "0" * 64
+        value["source_signature"]["range_signature_evidence_digest"] = (
+            amendment.source_signature_binding_digest(
+                value["source_commits"], value["accepted_main_sha"]
+            )
+        )
+        value = reseal(value)
+        first, second = self.patches()
+        with first, second, self.assertRaises(
+            amendment.GovernanceAmendmentError
+        ):
+            amendment.verify(value)
+
+    def test_issuer_requires_exact_root_observation_and_sealed_input(self) -> None:
+        value = authorization()
+        unsigned = {
+            key: copy.deepcopy(item) for key, item in value.items()
+            if key not in {
+                "root_authorization", "signer_identity", "signature",
+                "authorization_digest",
+            }
+        }
+        inputs = observation_inputs(value)
+        unclosed = {**inputs, "caller_asserted_live_head": "9" * 40}
+        with mock.patch.object(amendment, "produce_observation") as producer:
+            with self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError, "not closed"
+            ):
+                authority.authenticate_governance_amendment_issuance(
+                    "SecPal/.github", 960, unclosed
+                )
+        producer.assert_not_called()
+        with self.assertRaisesRegex(
+            amendment.GovernanceAmendmentError, "canonical authenticated"
+        ):
+            authority.issue_governance_amendment_authorization(unsigned)
+
+        invalid = copy.deepcopy(unsigned)
+        invalid["changed_files"].append({
+            "path": "src/runtime.py", "blob_oid": "f" * 40,
+            "mode": "100644",
+        })
+        root_signature = mock.Mock(side_effect=root_signer)
+        legacy_signature = mock.Mock(side_effect=signer)
+        trust = SimpleNamespace(
+            authority_signer_identities=frozenset({ROOT_SIGNER}),
+            legacy_adoption_signer_identities=frozenset({SIGNER}),
+        )
+
+        def role_signer(_trust, identities, _label, **_kwargs):
+            if identities == trust.authority_signer_identities:
+                return ROOT_SIGNER, root_signature
+            return SIGNER, legacy_signature
+
+        with mock.patch.object(
+            amendment, "produce_observation", return_value=invalid
+        ), mock.patch.object(
+            amendment, "_accepted_trust_policy", return_value=trust
+        ), mock.patch.object(
+            amendment.execution, "_policy_role_signer", side_effect=role_signer
+        ):
+            authenticated = authority.authenticate_governance_amendment_issuance(
+                "SecPal/.github", 960, inputs
+            )
+            with self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError, "non-governance source"
+            ):
+                authority.issue_governance_amendment_authorization(authenticated)
+        root_signature.assert_not_called()
+        legacy_signature.assert_not_called()
+
+    def test_public_observation_producer_rebuilds_live_facts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = self.hermetic_repository(
+                directory, attacker_intermediate=False
+            )
+            policy = copy.deepcopy(proposed_policy())
+            policy["accepted_main_sha"] = repo["base"]
+            policy["human_authorization_digest"] = authority.digest_json({
+                "authority_identity": policy["human_authority_identity"],
+                "repository": "SecPal/.github", "delivery_issue": 960,
+                "pull_request": 961, "purpose": amendment.PURPOSE,
+                "qualified_source_digest": policy["qualified_source"]["qualification_digest"],
+                "accepted_main_sha": repo["base"], "decision": "APPROVED",
+                "bounded_uses": 1,
+            })
+            raw = authorization(
+                head=repo["head"], tree=repo["tree"], parent=repo["base"],
+                accepted_main=repo["base"], changed=[{
+                    "path": str(repo["path"].relative_to(repo["root"])),
+                    "blob_oid": repo["blob"], "mode": "100644",
+                }], source_oids=repo["source_oids"], policy=policy,
+            )
+            inputs = observation_inputs(raw)
+            facts = {
+                key: copy.deepcopy(item) for key, item in raw.items()
+                if key not in {
+                    "root_authorization", "signer_identity", "signature",
+                    "authorization_digest",
+                }
+            }
+            checks = [{
+                "name": "governance", "status": "completed",
+                "conclusion": "success", "head_sha": repo["head"],
+            }]
+            statuses: list[dict[str, object]] = []
+            ready_events, ready_runs = ready_ci_fixtures(
+                repo["head"], repo["base"]
+            )
+            source_ci = {
+                "head_sha": repo["head"],
+                "workflow_identity": amendment.SOURCE_CI_VERSION,
+                "result": "PASS",
+                "evidence_digest": authority.digest_json({
+                    "checks": checks, "statuses": statuses,
+                    "required_check_policy": {
+                        "strict": True,
+                        "checks": [{"context": "governance", "app_id": None}],
+                    },
+                }),
+            }
+            ready_authority = {
+                "operation": "DRAFT_TO_READY", "actor": "aroviqen",
+                "event_id": ready_events[0]["id"],
+                "head_sha": repo["head"],
+                "accepted_main_sha": repo["base"],
+                "source_ci_evidence_digest": source_ci["evidence_digest"],
+            }
+            facts["natural_ci"] = {
+                "head_sha": repo["head"],
+                "workflow_identity": amendment.LIVE_OBSERVATION_VERSION,
+                "result": "PASS",
+                "evidence_digest": authority.digest_json({
+                    "source_ci_evidence_digest": source_ci["evidence_digest"],
+                    "ready_event": {
+                        "id": ready_events[0]["id"],
+                        "event": ready_events[0]["event"],
+                        "created_at": ready_events[0]["created_at"],
+                        "actor": ready_events[0]["actor"]["login"],
+                    },
+                    "ready_workflow_run_history": sorted(
+                        [{
+                            key: run[key] for key in (
+                                "id", "name", "event", "status", "conclusion",
+                                "head_sha", "created_at", "run_started_at",
+                            )
+                        } | {"pull_requests": [{
+                            "number": run["pull_requests"][0]["number"],
+                            "head_sha": run["pull_requests"][0]["head"]["sha"],
+                            "base_sha": run["pull_requests"][0]["base"]["sha"],
+                        }]} for run in ready_runs],
+                        key=lambda run: (
+                            run["name"], run["created_at"], run["id"]
+                        ),
+                    ),
+                    "ready_workflow_runs": sorted(
+                        [{
+                            key: run[key] for key in (
+                                "id", "name", "event", "status", "conclusion",
+                                "head_sha", "created_at", "run_started_at",
+                            )
+                        } | {"pull_requests": [{
+                            "number": run["pull_requests"][0]["number"],
+                            "head_sha": run["pull_requests"][0]["head"]["sha"],
+                            "base_sha": run["pull_requests"][0]["base"]["sha"],
+                        }]} for run in ready_runs],
+                        key=lambda run: (
+                            run["name"], run["created_at"], run["id"]
+                        ),
+                    ),
+                    "ready_transition_authority": {
+                        **ready_authority,
+                        "authorization_digest": authority.digest_json(
+                            ready_authority
+                        ),
+                    },
+                }),
+            }
+            threads: list[dict[str, object]] = []
+            reviews = [{
+                "id": "R_fixture", "body": "",
+                "state": "COMMENTED", "commit": {"oid": repo["head"]},
+                "author": {"login": "review-bot"},
+            }]
+            facts["feedback"] = {
+                "state_digest": authority.digest_json({
+                    "head_sha": repo["head"], "pull_request": 961,
+                }),
+                "feedback_digest": authority.digest_json({
+                    "threads": threads, "comments": [], "reviews": reviews,
+                }),
+                "thread_inventory_digest": authority.digest_json({
+                    "threads": threads,
+                }),
+                "material_finding_ids": [],
+            }
+            facts["source_signature"] = {
+                "signer_identity": SOURCE,
+                "range_signature_evidence_digest": (
+                    amendment.source_signature_binding_digest(
+                        facts["source_commits"], repo["base"]
+                    )
+                ),
+                "verified": True,
+            }
+            trusted_signer = authority.TrustedSigner(
+                SOURCE,
+                (repo["trusted"].with_suffix(".pub").read_text().strip(),),
+                (),
+            )
+            trust = SimpleNamespace(
+                authority_signer_identities=frozenset({ROOT_SIGNER}),
+                legacy_adoption_signer_identities=frozenset({SIGNER}),
+                signers={SOURCE: trusted_signer},
+                publication_remote_url=str(repo["remote"]),
+            )
+            pull = {
+                "number": 961, "state": "open", "draft": False,
+                "merged": False,
+                "head": {"sha": repo["head"], "repo": {"full_name": "SecPal/.github"}},
+                "base": {"sha": repo["base"], "ref": "main", "repo": {"full_name": "SecPal/.github"}},
+            }
+            issue = {"number": 960, "state": "open"}
+            def github(arguments: list[str]):
+                joined = " ".join(arguments)
+                if "pulls/961" in joined:
+                    value = pull
+                elif "issues/960" in joined:
+                    value = issue
+                elif "issues/961/events" in joined:
+                    value = ready_events
+                elif "actions/runs" in joined:
+                    value = {
+                        "total_count": len(ready_runs),
+                        "workflow_runs": ready_runs,
+                    }
+                elif "check-runs" in joined:
+                    value = {"total_count": len(checks), "check_runs": checks}
+                elif "/status" in joined:
+                    value = {
+                        "sha": repo["head"], "state": "success",
+                        "total_count": len(statuses),
+                        "statuses": statuses,
+                    }
+                elif "graphql" in arguments:
+                    value = feedback_response(
+                        arguments, repo["head"], threads, reviews
+                    )
+                else:
+                    raise AssertionError(arguments)
+                return subprocess.CompletedProcess(
+                    arguments, 0, json.dumps(value).encode(), b""
+                )
+
+            signer_factory = mock.Mock()
+            first, second = self.patches(trust)
+            with mock.patch.object(
+                amendment, "ROOT", repo["root"]
+            ), mock.patch.object(
+                amendment.publication, "_run_gh", side_effect=github
+            ), mock.patch.object(
+                amendment.execution, "_policy_role_signer", signer_factory
+            ), mock.patch.object(
+                amendment, "_registered_bootstrap_policy",
+                return_value=policy,
+            ), mock.patch.object(
+                amendment, "_live_required_check_policy",
+                return_value={
+                    "strict": True,
+                    "checks": [{"context": "governance", "app_id": None}],
+                },
+            ), mock.patch.object(
+                amendment, "_bound_current_validation",
+                return_value=facts["current_validation"],
+            ), mock.patch.object(
+                amendment, "_observe_historical_absence",
+                return_value=(
+                    facts["historical_evidence"],
+                    facts["historical_absence_proof"],
+                ),
+            ), first, second:
+                observed = authority.observe_governance_amendment_issuance(
+                    "SecPal/.github", 960, inputs
+                )
+                self.assertEqual(
+                    observed,
+                    {
+                        key: value for key, value in facts.items()
+                        if key != "independent_qualification"
+                    },
+                )
+                mutations = {
+                    "stale head": lambda value: value[
+                        "independent_qualification"
+                    ].update(head_sha="9" * 40),
+                    "stale main": lambda value: value.update(
+                        accepted_main_sha="9" * 40
+                    ),
+                    "caller-selected bootstrap source": lambda value: value[
+                        "qualified_source"
+                    ].update(head_sha="9" * 40),
+                }
+                for label, mutate in mutations.items():
+                    stale = copy.deepcopy(inputs)
+                    mutate(stale)
+                    with self.subTest(label=label), self.assertRaises(
+                        amendment.GovernanceAmendmentError
+                    ):
+                        authority.authenticate_governance_amendment_issuance(
+                            "SecPal/.github", 960, stale
+                        )
+            signer_factory.assert_not_called()
+
+    def test_live_ci_authenticates_and_inherits_combined_status_head(self) -> None:
+        checks = [{
+            "name": "governance", "status": "completed",
+            "conclusion": "success", "head_sha": HEAD,
+        }]
+        status = {
+            "sha": HEAD, "state": "success", "total_count": 2,
+            "statuses": [
+                {"context": "license/cla", "state": "success"},
+                {"context": "governance", "state": "success"},
+            ],
+        }
+        required_policy = {
+            "strict": True,
+            "checks": [{"context": "governance", "app_id": None}],
+        }
+
+        def observe(value: dict[str, object]) -> dict[str, object]:
+            if "statuses" in value and "total_count" not in value:
+                value = {**value, "total_count": len(value["statuses"])}
+            responses = iter((
+                {"total_count": len(checks), "check_runs": checks}, value,
+            ))
+
+            def github(arguments: list[str]):
+                return subprocess.CompletedProcess(
+                    arguments, 0,
+                    json.dumps(next(responses)).encode(), b"",
+                )
+
+            with mock.patch.object(
+                amendment.publication, "_run_gh", side_effect=github
+            ), mock.patch.object(
+                amendment, "_live_required_check_policy",
+                return_value=required_policy,
+            ):
+                return amendment._live_ci("SecPal/.github", HEAD, PARENT)
+
+        observed = observe(status)
+        normalized = [
+            {"context": "governance", "state": "success", "sha": HEAD},
+            {"context": "license/cla", "state": "success", "sha": HEAD},
+        ]
+        self.assertEqual(observed, {
+            "head_sha": HEAD,
+            "workflow_identity": amendment.SOURCE_CI_VERSION,
+            "result": "PASS",
+            "evidence_digest": authority.digest_json({
+                "checks": checks, "statuses": normalized,
+                "required_check_policy": required_policy,
+            }),
+        })
+
+        superseded = [
+            {**checks[0], "id": 20},
+            {
+                **checks[0], "id": 10,
+                "conclusion": "cancelled",
+            },
+        ]
+        responses = iter((
+            {"total_count": len(superseded), "check_runs": superseded},
+            status,
+        ))
+        with mock.patch.object(
+            amendment.publication, "_run_gh",
+            side_effect=lambda arguments: subprocess.CompletedProcess(
+                arguments, 0, json.dumps(next(responses)).encode(), b"",
+            ),
+        ), mock.patch.object(
+            amendment, "_live_required_check_policy",
+            return_value=required_policy,
+        ):
+            self.assertEqual(
+                amendment._live_ci("SecPal/.github", HEAD, PARENT)["result"],
+                "PASS",
+            )
+
+        latest_cancelled = [
+            {**checks[0], "id": 10},
+            {
+                **checks[0], "id": 20,
+                "conclusion": "cancelled",
+            },
+        ]
+        responses = iter((
+            {
+                "total_count": len(latest_cancelled),
+                "check_runs": latest_cancelled,
+            },
+            status,
+        ))
+        with mock.patch.object(
+            amendment.publication, "_run_gh",
+            side_effect=lambda arguments: subprocess.CompletedProcess(
+                arguments, 0, json.dumps(next(responses)).encode(), b"",
+            ),
+        ), mock.patch.object(
+            amendment, "_live_required_check_policy",
+            return_value=required_policy,
+        ), self.assertRaises(amendment.GovernanceAmendmentError):
+            amendment._live_ci("SecPal/.github", HEAD, PARENT)
+
+        invalid = {
+            "missing envelope head": {
+                "state": "success", "statuses": status["statuses"],
+            },
+            "wrong envelope head": {
+                "sha": "9" * 40, "state": "success",
+                "statuses": status["statuses"],
+            },
+            "wrong explicit context head": {
+                "sha": HEAD, "state": "success", "statuses": [{
+                    "context": "license/cla", "state": "success",
+                    "sha": "9" * 40,
+                }],
+            },
+            "null explicit context head": {
+                "sha": HEAD, "state": "success", "statuses": [{
+                    "context": "license/cla", "state": "success",
+                    "sha": None,
+                }],
+            },
+            "duplicate context": {
+                "sha": HEAD, "state": "success", "statuses": [
+                    {"context": "license/cla", "state": "success"},
+                    {"context": "license/cla", "state": "success"},
+                ],
+            },
+            "unexpected context": {
+                "sha": HEAD, "state": "success", "statuses": [{
+                    "context": "unbound/provider", "state": "success",
+                }],
+            },
+            "pending context": {
+                "sha": HEAD, "state": "pending", "statuses": [{
+                    "context": "license/cla", "state": "pending",
+                }],
+            },
+            "failed context": {
+                "sha": HEAD, "state": "failure", "statuses": [{
+                    "context": "license/cla", "state": "failure",
+                }],
+            },
+        }
+        for label, value in invalid.items():
+            with self.subTest(label=label), self.assertRaises(
+                amendment.GovernanceAmendmentError
+            ):
+                observe(value)
+
+        with self.assertRaisesRegex(
+            amendment.GovernanceAmendmentError, "status inventory is truncated"
+        ):
+            observe({**status, "total_count": 31})
+
+        with mock.patch.object(
+            amendment, "_live_required_check_policy",
+            return_value=required_policy,
+        ):
+            for label, check_value in {
+                "truncated inventory": {
+                    "total_count": 2, "check_runs": checks,
+                },
+                "arbitrary skipped check": {
+                    "total_count": 2,
+                    "check_runs": checks + [{
+                        "name": "unregistered optional", "status": "completed",
+                        "conclusion": "skipped", "head_sha": HEAD,
+                    }],
+                },
+                "required check skipped": {
+                    "total_count": 1,
+                    "check_runs": [{**checks[0], "conclusion": "skipped"}],
+                },
+            }.items():
+                responses = iter((check_value, status))
+                def github(arguments: list[str]):
+                    return subprocess.CompletedProcess(
+                        arguments, 0, json.dumps(next(responses)).encode(), b""
+                    )
+                with self.subTest(label=label), mock.patch.object(
+                    amendment.publication, "_run_gh", side_effect=github
+                ), self.assertRaises(amendment.GovernanceAmendmentError):
+                    amendment._live_ci("SecPal/.github", HEAD, PARENT)
+
+    def test_required_check_policy_is_exactly_bound_to_accepted_main(self) -> None:
+        contexts = [f"required-{index}" for index in range(13)]
+        source = (
+            "REQUIRED_CONTEXTS_JSON=\"$(cat <<'EOF'\n"
+            + json.dumps({".github": contexts})
+            + "\nEOF\n)\"\n"
+        ).encode()
+
+        def observe(checks: list[dict[str, object]]) -> dict[str, object]:
+            def github(arguments: list[str]):
+                return subprocess.CompletedProcess(
+                    arguments, 0,
+                    json.dumps({"strict": True, "checks": checks}).encode(),
+                    b"",
+                )
+            with mock.patch.object(
+                amendment, "_accepted_main_bytes", return_value=source,
+            ), mock.patch.object(
+                amendment.publication, "_run_gh", side_effect=github,
+            ):
+                return amendment._live_required_check_policy(
+                    "SecPal/.github", PARENT
+                )
+
+        exact = [{"context": value, "app_id": None} for value in contexts]
+        self.assertEqual(
+            observe(exact),
+            {"strict": True, "checks": sorted(exact, key=lambda item: item["context"])},
+        )
+        mutations = {
+            "missing": exact[:-1],
+            "extra": exact + [{"context": "extra", "app_id": None}],
+            "substituted": exact[:-1] + [{"context": "other", "app_id": None}],
+            "duplicated": exact[:-1] + [copy.deepcopy(exact[0])],
+            "wrong app identity": [
+                {**item, "app_id": "untrusted"} if index == 0 else item
+                for index, item in enumerate(exact)
+            ],
+        }
+        for label, changed in mutations.items():
+            with self.subTest(label=label), self.assertRaises(
+                amendment.GovernanceAmendmentError
+            ):
+                observe(changed)
+
+    def test_historical_absence_comes_from_protected_authority(self) -> None:
+        trust = SimpleNamespace(
+            repository="SecPal/.github",
+            publication_branch="refs/heads/secpal-lifecycle-publications",
+        )
+        protected = amendment.publication.VerifiedPreEnrollmentAbsence(
+            "SecPal/.github", 960,
+            "refs/heads/secpal-lifecycle-publications", "1" * 40,
+            "2" * 64,
+        )
+        history = {
+            "qualified_source_head_sha": "3" * 40,
+            "qualified_source_tree_sha": "4" * 40,
+            "qualified_source_parent_shas": ["5" * 40],
+            "commits": [],
+            "result": "NO_COMMIT_BOUND_VALIDATION_ARTIFACT_ISSUED",
+        }
+        with mock.patch.object(
+            amendment.publication, "verify_pre_enrollment_absence",
+            return_value=protected,
+        ) as verify_absence, mock.patch.object(
+            amendment, "_qualified_source_history_audit", return_value=history,
+        ):
+            evidence, proof = amendment._observe_historical_absence(
+                Path("."), "SecPal/.github", 960, 961, HEAD, PARENT,
+                proposed_policy(), trust,
+            )
+        self.assertEqual(evidence, amendment.historical_evidence())
+        self.assertEqual(proof["head_sha"], HEAD)
+        self.assertEqual(proof["result"], "NO_HISTORICAL_RECEIPT_ISSUED")
+        verify_absence.assert_called_once_with(
+            "SecPal/.github", 960, policy=trust
+        )
+
+        substituted = copy.copy(protected)
+        object.__setattr__(substituted, "delivery_issue", 959)
+        with mock.patch.object(
+            amendment.publication, "verify_pre_enrollment_absence",
+            return_value=substituted,
+        ), mock.patch.object(
+            amendment, "_qualified_source_history_audit", return_value=history,
+        ), self.assertRaisesRegex(
+            amendment.GovernanceAmendmentError, "scope changed"
+        ):
+            amendment._observe_historical_absence(
+                Path("."), "SecPal/.github", 960, 961, HEAD, PARENT,
+                proposed_policy(), trust,
+            )
+
+    def test_qualified_source_artifact_audit_rejects_receipt_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = self.hermetic_repository(
+                directory, attacker_intermediate=False
+            )
+            trust = SimpleNamespace(signers={
+                SOURCE: authority.TrustedSigner(
+                    SOURCE,
+                    (repo["trusted"].with_suffix(".pub").read_text().strip(),),
+                    (),
+                ),
+            })
+
+            def policy() -> dict[str, object]:
+                return {"qualified_source": {
+                    "head_sha": repo["git"]("rev-parse", "HEAD"),
+                    "tree_sha": repo["git"]("rev-parse", "HEAD^{tree}"),
+                    "ordered_parent_shas": [repo["base"]],
+                }}
+
+            observed = amendment._qualified_source_history_audit(
+                repo["root"], policy(), trust
+            )
+            self.assertEqual(
+                observed["result"],
+                "NO_COMMIT_BOUND_VALIDATION_ARTIFACT_ISSUED",
+            )
+            self.assertEqual(len(observed["commits"]), 2)
+
+            repo["git"](
+                "commit", "--amend", "-S", "-m",
+                "trusted tip\n\nSecPal-Validation-Receipt: " + "a" * 64,
+            )
+            with self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError,
+                "provenance contradicts absence",
+            ):
+                amendment._qualified_source_history_audit(
+                    repo["root"], policy(), trust
+                )
+
+    def test_caller_cannot_supply_absence_or_current_validation(self) -> None:
+        inputs = observation_inputs(authorization())
+        for field, value in {
+            "historical_evidence": amendment.historical_evidence(),
+            "historical_absence_proof": {
+                "head_sha": HEAD,
+                "verification_authority": "CALLER_ASSERTION",
+                "history_digest": "1" * 64,
+                "artifact_audit_digest": "2" * 64,
+                "result": "NO_HISTORICAL_RECEIPT_ISSUED",
+            },
+            "current_validation": {
+                "accepted_main_sha": PARENT,
+                "policy_digest": "3" * 64,
+                "command_set_digest": "4" * 64,
+                "result": "PASS",
+            },
+        }.items():
+            changed = {**inputs, field: value}
+            with self.subTest(field=field), mock.patch.object(
+                amendment, "produce_observation"
+            ) as producer, self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError, "not closed"
+            ):
+                amendment.authenticate_issuance(
+                    "SecPal/.github", 960, changed
+                )
+            producer.assert_not_called()
+
+    def test_current_validation_is_derived_from_accepted_main_registry(self) -> None:
+        record = {
+            "repository": "SecPal/.github",
+            "focused_validation": [{"argv": ["focused"], "working_directory": "."}],
+            "required_local_validation": [{"argv": ["complete"], "working_directory": "."}],
+        }
+        raw = json.dumps({
+            "schema_version": "1.0", "repositories": [record],
+        }).encode()
+        with mock.patch.object(
+            amendment, "_accepted_main_bytes", return_value=raw,
+        ):
+            observed = amendment._bound_current_validation(
+                Path("."), "SecPal/.github", PARENT
+            )
+        self.assertEqual(observed, {
+            "accepted_main_sha": PARENT,
+            "policy_digest": authority.digest_json(record),
+            "command_set_digest": authority.digest_json({
+                "focused_validation": record["focused_validation"],
+                "required_local_validation": record[
+                    "required_local_validation"
+                ],
+            }),
+            "result": "PASS",
+        })
+        for label, registry in {
+            "missing": {"schema_version": "1.0", "repositories": []},
+            "duplicate": {
+                "schema_version": "1.0", "repositories": [record, record],
+            },
+            "candidate local substitute": {
+                "schema_version": "1.0", "repositories": [{
+                    **record, "repository": "SecPal/api",
+                }],
+            },
+        }.items():
+            with self.subTest(label=label), mock.patch.object(
+                amendment, "_accepted_main_bytes",
+                return_value=json.dumps(registry).encode(),
+            ), self.assertRaises(amendment.GovernanceAmendmentError):
+                amendment._bound_current_validation(
+                    Path("."), "SecPal/.github", PARENT
+                )
+
+    def test_live_ready_ci_binds_transition_triggered_workflows(self) -> None:
+        source_ci = {
+            "head_sha": HEAD,
+            "workflow_identity": amendment.SOURCE_CI_VERSION,
+            "result": "PASS",
+            "evidence_digest": "1" * 64,
+        }
+        events, runs = ready_ci_fixtures(HEAD, PARENT)
+
+        def observe(
+            event_values: list[dict[str, object]],
+            run_values: list[dict[str, object]],
+            *, total_count: int | None = None,
+        ) -> dict[str, object]:
+            responses = iter((event_values, {
+                "total_count": (
+                    len(run_values) if total_count is None else total_count
+                ),
+                "workflow_runs": run_values,
+            }))
+
+            def github(arguments: list[str]):
+                return subprocess.CompletedProcess(
+                    arguments, 0,
+                    json.dumps(next(responses)).encode(), b"",
+                )
+
+            with mock.patch.object(
+                amendment.publication, "_run_gh", side_effect=github
+            ):
+                return amendment._live_ready_ci(
+                    "SecPal/.github", 961, HEAD, PARENT, source_ci
+                )
+
+        observed = observe(events, runs)
+        normalized_event = {
+            "id": events[0]["id"], "event": events[0]["event"],
+            "created_at": events[0]["created_at"],
+            "actor": events[0]["actor"]["login"],
+        }
+        ready_authority = {
+            "operation": "DRAFT_TO_READY",
+            "actor": "aroviqen", "event_id": events[0]["id"],
+            "head_sha": HEAD, "accepted_main_sha": PARENT,
+            "source_ci_evidence_digest": source_ci["evidence_digest"],
+        }
+        self.assertEqual(observed, {
+            "head_sha": HEAD,
+            "workflow_identity": amendment.LIVE_OBSERVATION_VERSION,
+            "result": "PASS",
+            "evidence_digest": authority.digest_json({
+                "source_ci_evidence_digest": source_ci["evidence_digest"],
+                "ready_event": normalized_event,
+                "ready_workflow_run_history": sorted(
+                    [{
+                        key: run[key] for key in (
+                            "id", "name", "event", "status", "conclusion",
+                            "head_sha", "created_at", "run_started_at",
+                        )
+                    } | {"pull_requests": [{
+                        "number": run["pull_requests"][0]["number"],
+                        "head_sha": run["pull_requests"][0]["head"]["sha"],
+                        "base_sha": run["pull_requests"][0]["base"]["sha"],
+                    }]} for run in runs],
+                    key=lambda run: (run["name"], run["created_at"], run["id"]),
+                ),
+                "ready_workflow_runs": sorted(
+                    [{
+                        key: run[key] for key in (
+                            "id", "name", "event", "status", "conclusion",
+                            "head_sha", "created_at", "run_started_at",
+                        )
+                    } | {"pull_requests": [{
+                        "number": run["pull_requests"][0]["number"],
+                        "head_sha": run["pull_requests"][0]["head"]["sha"],
+                        "base_sha": run["pull_requests"][0]["base"]["sha"],
+                    }]} for run in runs],
+                    key=lambda run: (run["name"], run["created_at"], run["id"]),
+                ),
+                "ready_transition_authority": {
+                    **ready_authority,
+                    "authorization_digest": authority.digest_json(
+                        ready_authority
+                    ),
+                },
+            }),
+        })
+
+        superseded = dict(
+            runs[0], id=runs[0]["id"] - 100, conclusion="cancelled"
+        )
+        self.assertEqual(observe(events, runs + [superseded])["result"], "PASS")
+        newest_cancelled = dict(
+            runs[0], id=runs[0]["id"] + 100, conclusion="cancelled"
+        )
+        with self.assertRaises(amendment.GovernanceAmendmentError):
+            observe(events, runs + [newest_cancelled])
+
+        invalid = {
+            "missing Ready event": ([], runs),
+            "duplicate Ready event": (events + copy.deepcopy(events), runs),
+            "missing workflow": (events, runs[:-1]),
+            "pre-Ready workflow": (
+                events,
+                [dict(runs[0], created_at="2026-09-18T11:59:59Z")] + runs[1:],
+            ),
+            "equal-time workflow": (
+                events,
+                [dict(runs[0], created_at="2026-09-18T12:00:00Z")] + runs[1:],
+            ),
+            "malformed event time": (
+                [dict(events[0], created_at="z")], runs,
+            ),
+            "malformed workflow time": (
+                events,
+                [dict(runs[0], created_at="zz")] + runs[1:],
+            ),
+            "noncanonical workflow time": (
+                events,
+                [dict(runs[0], created_at="2026-9-18T12:00:01Z")] + runs[1:],
+            ),
+            "impossible workflow time": (
+                events,
+                [dict(runs[0], created_at="2026-09-31T12:00:01Z")] + runs[1:],
+            ),
+            "pending workflow": (
+                events,
+                [dict(runs[0], status="in_progress", conclusion=None)] + runs[1:],
+            ),
+            "wrong-head workflow": (
+                events,
+                [dict(runs[0], head_sha="9" * 40)] + runs[1:],
+            ),
+            "wrong-PR workflow": (
+                events,
+                [dict(
+                    runs[0],
+                    pull_requests=[{
+                        "number": 962,
+                        "head": {"sha": HEAD},
+                        "base": {"sha": PARENT},
+                    }],
+                )] + runs[1:],
+            ),
+            "unauthorized Ready actor": (
+                [{**events[0], "actor": {"login": "attacker"}}], runs,
+            ),
+            "missing workflow ID": (
+                events, [{**runs[0], "id": None}] + runs[1:],
+            ),
+            "duplicate workflow ID": (
+                events, [runs[0], {**runs[1], "id": runs[0]["id"]}]
+                + runs[2:],
+            ),
+        }
+        for label, (event_values, run_values) in invalid.items():
+            with self.subTest(label=label), self.assertRaises(
+                amendment.GovernanceAmendmentError
+            ):
+                observe(event_values, run_values)
+
+        with self.assertRaises(amendment.GovernanceAmendmentError):
+            observe(events, runs, total_count=101)
+
+    def test_live_feedback_uses_valid_closed_query_and_fails_closed(self) -> None:
+        def observe(
+            *, live_head: str = HEAD, comment_body: str = "",
+            review_body: str = "", incomplete: bool = False,
+        ) -> dict[str, object]:
+            def github(arguments: list[str]):
+                query = next(
+                    item[6:] for item in arguments if item.startswith("query=")
+                )
+                self.assertEqual(query.count("{"), query.count("}"))
+                self.assertIn("headRefOid", query)
+                cursor = next(
+                    (item[7:] for item in arguments if item.startswith("cursor=")),
+                    None,
+                )
+                page = {"hasNextPage": False, "endCursor": None}
+                pull: dict[str, object] = {"headRefOid": live_head}
+                value: dict[str, object] = {
+                    "data": {"repository": {"pullRequest": pull}},
+                }
+                if "reviewThreads(first:" in query:
+                    if incomplete:
+                        page = {"hasNextPage": True, "endCursor": None}
+                    elif cursor is None:
+                        page = {"hasNextPage": True, "endCursor": "threads-2"}
+                    pull["reviewThreads"] = {
+                        "nodes": [{
+                            "id": "T1", "isResolved": True,
+                            "isOutdated": False,
+                        }],
+                        "pageInfo": page,
+                    }
+                elif "node(id:$thread)" in query:
+                    self.assertIn("thread=T1", arguments)
+                    value["data"]["node"] = {
+                        "comments": {"nodes": [], "pageInfo": page},
+                    }
+                elif "reviews(first:" in query:
+                    pull["reviews"] = {
+                        "nodes": [{
+                            "id": "R1", "state": "COMMENTED",
+                            "body": review_body, "commit": {"oid": HEAD},
+                            "author": {"login": "review-bot"},
+                        }],
+                        "pageInfo": page,
+                    }
+                elif "comments(first:" in query:
+                    pull["comments"] = {
+                        "nodes": [{
+                            "id": "C1", "body": comment_body,
+                            "author": {"login": "review-bot"},
+                        }],
+                        "pageInfo": page,
+                    }
+                else:
+                    raise AssertionError(query)
+                return subprocess.CompletedProcess(
+                    arguments, 0, json.dumps(value).encode(), b"",
+                )
+
+            with mock.patch.object(
+                amendment.publication, "_run_gh", side_effect=github,
+            ):
+                return amendment._live_feedback("SecPal/.github", 961, HEAD)
+
+        observed = observe()
+        self.assertEqual(observed["material_finding_ids"], [])
+        self.assertEqual(observed, observe())
+        self.assertEqual(
+            observe(comment_body="blocking")["material_finding_ids"],
+            ["comment:C1"],
+        )
+        self.assertEqual(
+            observe(review_body="blocking")["material_finding_ids"],
+            ["review:R1"],
+        )
+        with self.assertRaisesRegex(
+            amendment.GovernanceAmendmentError,
+            "live governance amendment feedback head changed",
+        ):
+            observe(live_head="9" * 40)
+        with self.assertRaisesRegex(
+            amendment.GovernanceAmendmentError,
+            "live governance amendment feedback pagination is incomplete",
+        ):
+            observe(incomplete=True)
+
+        self.assertTrue(amendment._provider_summary_is_nonmaterial({
+            "author": {"login": "chatgpt-codex-connector"},
+            "body": '<!-- codex-pull-request-review-summary -->\n'
+                    '<!-- codex-security-review:v1 {"status":"completed"} -->',
+        }, review=False))
+        self.assertTrue(amendment._provider_summary_is_nonmaterial({
+            "author": {"login": "copilot-pull-request-reviewer"},
+            "body": "<!-- ccr-overview-v2 -->\nsummary",
+        }, review=True))
+
+    def test_strict_provider_merge_gate_binds_base_head_and_clean_state(self) -> None:
+        item = authorization()
+        pull = {
+            "state": "open", "draft": False, "merged": False,
+            "head": {"sha": item["head_sha"]},
+            "base": {"sha": item["accepted_main_sha"], "ref": "main"},
+            "mergeable": True, "mergeable_state": "clean",
+        }
+        with mock.patch.object(
+            amendment, "_live_required_check_policy",
+            return_value={"strict": True, "checks": [{"context": "x", "app_id": None}]},
+        ), mock.patch.object(
+            amendment, "_github_json", return_value=pull,
+        ):
+            amendment._authenticate_provider_merge_gate(item)
+        for label, mutate in {
+            "base advance": lambda value: value["base"].update(sha="9" * 40),
+            "head change": lambda value: value["head"].update(sha="8" * 40),
+            "behind": lambda value: value.update(mergeable_state="behind"),
+        }.items():
+            changed = copy.deepcopy(pull); mutate(changed)
+            with self.subTest(label=label), mock.patch.object(
+                amendment, "_live_required_check_policy",
+                return_value={"strict": True, "checks": [{"context": "x", "app_id": None}]},
+            ), mock.patch.object(
+                amendment, "_github_json", return_value=changed,
+            ), self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError, "strict provider merge gate"
+            ):
+                amendment._authenticate_provider_merge_gate(item)
+        with mock.patch.object(
+            amendment, "_live_required_check_policy",
+            side_effect=amendment.GovernanceAmendmentError("not strict"),
+        ), self.assertRaises(amendment.GovernanceAmendmentError):
+            amendment._authenticate_provider_merge_gate(item)
+
+    def test_signed_delivery_scope_cannot_change_without_new_root_signature(self) -> None:
+        value = authorization()
+        for field, replacement in (("delivery_issue", 962), ("pull_request", 962)):
+            changed = copy.deepcopy(value)
+            changed[field] = replacement
+            changed["authorization_id"] = (
+                "governance-amendment:SecPal/.github:"
+                f"{changed['delivery_issue']}:{changed['pull_request']}"
+            )
+            unsigned = {
+                key: copy.deepcopy(item) for key, item in changed.items()
+                if key not in {"authorization_digest", "signature"}
+            }
+            changed["signature"] = signer(
+                authority.canonical_json_bytes(unsigned), amendment.DOMAIN
+            )
+            signed = {
+                key: copy.deepcopy(item) for key, item in changed.items()
+                if key != "authorization_digest"
+            }
+            changed["authorization_digest"] = authority.digest_json(signed)
+            first, second = self.patches()
+            with self.subTest(field=field), first, second, self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError,
+                "root authorization scope changed",
+            ):
+                amendment.verify(changed)
+
+    def test_executor_reauthenticates_all_facts_before_any_git_mutation(self) -> None:
+        value = authorization()
+        current = {
+            key: copy.deepcopy(item) for key, item in value.items()
+            if key not in {
+                    "root_authorization", "signer_identity", "signature",
+                    "authorization_digest",
+                }
+        }
+        current["feedback"]["material_finding_ids"] = ["blocking"]
+        first, second = self.patches()
+        with first, second, mock.patch.object(
+            amendment, "_remote_url", return_value="unused"
+        ), mock.patch.object(
+            amendment, "produce_observation", return_value=current
+        ), mock.patch.object(amendment, "_run_git") as run_git:
+            with self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError, "prerequisites changed"
+            ):
+                authority.execute_governance_amendment(value)
+        run_git.assert_not_called()
+
+    def test_squash_transport_rejects_incompatible_read_back(self) -> None:
+        message = b"record\n"
+        exact = {
+            "oid": "d" * 40, "parent_shas": ["a" * 40],
+            "tree_sha": "b" * 40, "message": "record",
+            "verification": {"verified": True, "reason": "valid"},
+        }
+        amendment._verify_squash_read_back(
+            exact, oid="d" * 40, parent_sha="a" * 40,
+            tree_sha="b" * 40, message=message,
+        )
+        mutations = {
+            "two-parent": lambda value: value.update(
+                parent_shas=["a" * 40, "c" * 40]
+            ),
+            "wrong parent": lambda value: value.update(parent_shas=["c" * 40]),
+            "wrong tree": lambda value: value.update(tree_sha="c" * 40),
+            "non-squash message": lambda value: value.update(message="other"),
+            "unverified": lambda value: value["verification"].update(
+                verified=False
+            ),
+            "bad verification": lambda value: value["verification"].update(
+                reason="unsigned"
+            ),
+        }
+        for label, mutate in mutations.items():
+            changed = copy.deepcopy(exact)
+            mutate(changed)
+            with self.subTest(label=label), self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError, "immutable read-back"
+            ):
+                amendment._verify_squash_read_back(
+                    changed, oid="d" * 40, parent_sha="a" * 40,
+                    tree_sha="b" * 40, message=message,
+                )
+
+    def test_squash_transport_uses_normal_pr_merge_without_direct_push(self) -> None:
+        calls: list[list[str]] = []
+        def github(arguments: list[str]):
+            calls.append(arguments)
+            return subprocess.CompletedProcess(
+                arguments, 0,
+                json.dumps({"merged": True, "sha": "d" * 40}).encode(), b"",
+            )
+        with mock.patch.object(amendment.publication, "_run_gh", side_effect=github):
+            self.assertEqual(
+                amendment._merge_pull_request(
+                    "SecPal/.github", 961, "a" * 40,
+                    b"Governance amendment\n\nrecord\n",
+                ),
+                "d" * 40,
+            )
+        flattened = " ".join(calls[0])
+        self.assertIn("merge_method=squash", flattened)
+        self.assertNotIn("push", flattened)
+        self.assertNotIn("force", flattened)
+
+    def test_scope_and_absence_substitutions_fail_closed(self) -> None:
+        mutations = {
+            "repository": lambda v: v.update(repository="SecPal/api"),
+            "issue": lambda v: v.update(delivery_issue=959),
+            "pull request": lambda v: v.update(pull_request=962),
+            "head": lambda v: v.update(head_sha="9" * 40),
+            "tree": lambda v: v.update(tree_sha="9" * 40),
+            "parents": lambda v: v.update(ordered_parent_shas=["9" * 40]),
+            "source signer": lambda v: v["source_signature"].update(signer_identity="other"),
+            "range digest": lambda v: v["source_signature"].update(
+                range_signature_evidence_digest="0" * 64
+            ),
+            "intermediate signature": lambda v: v.update(source_commits=[
+                amendment.source_commit_evidence("8" * 40, SOURCE, v["accepted_main_sha"]),
+                *v["source_commits"],
+            ]),
+            "stale main": lambda v: v.update(accepted_main_sha="9" * 40),
+            "caller absence": lambda v: v["historical_evidence"].update(state="UNAVAILABLE"),
+            "absence receipt": lambda v: v["historical_evidence"].update(validation_receipt_digest="9" * 64),
+            "absence source digest": lambda v: v["historical_evidence"].update(source_validation_evidence_digest="9" * 64),
+            "absence attestation digest": lambda v: v["historical_evidence"].update(final_attestation_digest="9" * 64),
+            "caller asserted absence": lambda v: v["historical_absence_proof"].update(verification_authority="CALLER_ASSERTION"),
+            "unproven recursion": lambda v: v["architecture_necessity"].update(recursive_self_bootstrap="ASSERTED"),
+            "unknown reason": lambda v: v.update(purpose="OTHER"),
+            "failed validation": lambda v: v["current_validation"].update(result="FAIL"),
+            "blocking feedback": lambda v: v["feedback"].update(material_finding_ids=["finding"]),
+            "other qualification": lambda v: v["qualified_source"].update(head_sha="9" * 40),
+            "counter reset": lambda v: v["intended_state"].update(remediation_cycle_count=0),
+            "fabricated Ready": lambda v: v["intended_state"].update(draft=False, ready=True, ready_transition_count=1),
+            "Cycle 3": lambda v: v["intended_state"].update(cycle_3_absent=False),
+            "cross delivery": lambda v: v.update(authorization_id="governance-amendment:other"),
+            "product source": lambda v: v["changed_files"].append({"path":"src/runtime.py","blob_oid":"f"*40,"mode":"100644"}),
+            "second use": lambda v: v.update(bounded_uses=2),
+        }
+        for label, mutate in mutations.items():
+            changed = authorization(); mutate(changed); changed = reseal(changed)
+            if label == "parents":
+                # Final topology is dynamically authorized. Exercise cross-topology
+                # replay by tampering after the exact signed authorization exists.
+                changed["ordered_parent_shas"] = ["8" * 40]
+            first, second = self.patches()
+            with self.subTest(label=label), first, second, self.assertRaises((amendment.GovernanceAmendmentError, authority.LifecycleAuthorityError)):
+                amendment.verify(changed)
+
+    def test_root_signature_remains_authority_after_registered_scope_binding(self) -> None:
+        value = authorization()
+        first, second = self.patches()
+        with first, second:
+            self.assertTrue(amendment.is_verified(amendment.verify(value)))
+
+        changed = copy.deepcopy(value)
+        changed["governance_path_prefixes"] = ["src"]
+        unsigned = {
+            key: copy.deepcopy(item) for key, item in changed.items()
+            if key not in {"authorization_digest", "signature"}
+        }
+        changed["signature"] = signer(
+            authority.canonical_json_bytes(unsigned), amendment.DOMAIN
+        )
+        signed = {
+            key: copy.deepcopy(item) for key, item in changed.items()
+            if key != "authorization_digest"
+        }
+        changed["authorization_digest"] = authority.digest_json(signed)
+        first, second = self.patches()
+        with first, second, self.assertRaisesRegex(
+            amendment.GovernanceAmendmentError, "root authorization scope changed"
+        ):
+            amendment.verify(changed)
+
+    def test_trusted_tip_over_attacker_intermediate_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = self.hermetic_repository(
+                directory, attacker_intermediate=True
+            )
+            policy = copy.deepcopy(proposed_policy())
+            policy["accepted_main_sha"] = repo["base"]
+            policy["human_authorization_digest"] = authority.digest_json({
+                "authority_identity": policy["human_authority_identity"],
+                "repository": "SecPal/.github", "delivery_issue": 960,
+                "pull_request": 961, "purpose": amendment.PURPOSE,
+                "qualified_source_digest": policy["qualified_source"]["qualification_digest"],
+                "accepted_main_sha": repo["base"], "decision": "APPROVED",
+                "bounded_uses": 1,
+            })
+            raw = authorization(
+                head=repo["head"], tree=repo["tree"],
+                parent=repo["source_oids"][-2], accepted_main=repo["base"],
+                changed=[{
+                    "path": str(repo["path"].relative_to(repo["root"])),
+                    "blob_oid": repo["blob"], "mode": "100644",
+                }],
+                source_oids=repo["source_oids"], policy=policy,
+            )
+            execution_facts = {
+                key: copy.deepcopy(item) for key, item in raw.items()
+                if key not in {
+                    "root_authorization", "signer_identity", "signature",
+                    "authorization_digest",
+                }
+            }
+            trust = SimpleNamespace(
+                authority_signer_identities=frozenset({ROOT_SIGNER}),
+                legacy_adoption_signer_identities=frozenset({SIGNER}),
+                signers={SOURCE: authority.TrustedSigner(
+                    SOURCE,
+                    (repo["trusted"].with_suffix(".pub").read_text().strip(),),
+                    (),
+                )},
+            )
+            first, second = self.patches(trust)
+            with mock.patch.object(
+                amendment, "ROOT", repo["root"]
+            ), mock.patch.object(
+                amendment, "_remote_url", return_value=str(repo["remote"])
+            ), mock.patch.object(
+                amendment, "produce_observation",
+                return_value=execution_facts,
+            ), first, second, self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError, "accepted-main key"
+            ):
+                authority.execute_governance_amendment(raw)
+            self.assertEqual(
+                repo["git"]("ls-remote", str(repo["remote"]), "refs/heads/main").split()[0],
+                repo["base"],
+            )
+
+    def test_wrong_or_missing_legacy_signature_fails_before_merge(self) -> None:
+        for label, mutate in {
+            "missing": lambda value: value.update(signature={}),
+            "altered": lambda value: value["signature"].update(value="altered"),
+            "wrong signer": lambda value: value.update(signer_identity=SOURCE),
+        }.items():
+            value = authorization()
+            mutate(value)
+            first, second = self.patches()
+            with self.subTest(label=label), first, second, mock.patch.object(
+                amendment, "_merge_pull_request"
+            ) as merge, self.assertRaises((
+                amendment.GovernanceAmendmentError,
+                authority.LifecycleAuthorityError,
+            )):
+                authority.execute_governance_amendment(value)
+            merge.assert_not_called()
+
+    def test_ambient_accepted_principal_with_arbitrary_key_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repository"
+            subprocess.run(
+                ["git", "init", "--quiet", "-b", "main", str(root)],
+                check=True,
+            )
+            trusted = Path(directory) / "trusted"
+            attacker = Path(directory) / "attacker"
+            for key in (trusted, attacker):
+                subprocess.run(
+                    ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+                    check=True,
+                )
+            ambient = Path(directory) / "ambient-allowed-signers"
+            ambient.write_text(
+                f"{SOURCE} {attacker.with_suffix('.pub').read_text()}",
+                encoding="utf-8",
+            )
+            for key, value in (
+                ("user.name", "SecPal Test"),
+                ("user.email", "test@secpal.invalid"),
+                ("gpg.format", "ssh"),
+                ("user.signingkey", str(attacker)),
+                ("gpg.ssh.allowedSignersFile", str(ambient)),
+                ("commit.gpgsign", "true"),
+            ):
+                subprocess.run(
+                    ["git", "-C", str(root), "config", key, value], check=True
+                )
+            (root / "governance.txt").write_text("candidate\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "commit", "-S", "-m", "candidate"],
+                check=True,
+            )
+            head = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                check=True, stdout=subprocess.PIPE, text=True,
+            ).stdout.strip()
+            subprocess.run(
+                ["git", "-C", str(root), "verify-commit", head], check=True
+            )
+            trust = SimpleNamespace(signers={
+                SOURCE: authority.TrustedSigner(
+                    SOURCE,
+                    (trusted.with_suffix(".pub").read_text().strip(),),
+                    (),
+                )
+            })
+            with self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError, "accepted-main key"
+            ):
+                amendment._verify_commit_against_accepted_trust(
+                    root, head, SOURCE, trust
+                )
+
+    def test_candidate_local_and_mixed_historical_authority_fail_closed(self) -> None:
+        value = authorization()
+        with mock.patch.object(authority, "_load_lifecycle_trust_policy", return_value=SimpleNamespace(legacy_adoption_signer_identities=frozenset({SIGNER}))), mock.patch.object(authority, "_policy_signature_verifier", return_value=lambda *_: (_ for _ in ()).throw(authority.LifecycleAuthorityError("untrusted"))):
+            with self.assertRaises(amendment.GovernanceAmendmentError):
+                amendment.verify(value)
+        first, second = self.patches()
+        with first, second, self.assertRaises(authority.LifecycleAuthorityError):
+            authority.authenticate_exact_state_adoption_external_evidence(
+                repository="SecPal/.github", delivery_issue=960, pull_request=961,
+                head_sha=HEAD, tree_sha=TREE, pull_request_state="OPEN",
+                commit_signature_evidence={"oid": HEAD}, validation_evidence=SimpleNamespace(),
+                observed_pre_enrollment_history=history(), intended_state=state(),
+                governance_amendment_authorization=value,
+            )
+
+
+if __name__ == "__main__":
+    main()

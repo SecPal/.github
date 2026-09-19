@@ -4761,6 +4761,13 @@ def build_parser() -> argparse.ArgumentParser:
     pre_enrollment_parser.add_argument("--receipt-output", required=True)
     pre_enrollment_parser.add_argument("--attestation-output", required=True)
     pre_enrollment_parser.add_argument("--apply", action="store_true")
+    qualified_parser = subparsers.add_parser(
+        "advance-qualified-remediation-successor-loss"
+    )
+    qualified_parser.add_argument("--repo-root", required=True)
+    qualified_parser.add_argument("--manual-gate-evidence", required=True)
+    qualified_parser.add_argument("--output", required=True)
+    qualified_parser.add_argument("--apply", action="store_true")
     return parser
 
 
@@ -4986,6 +4993,7 @@ def _acquire_ready_source_recovery_facts(
     _gateway_factory: Any,
     _validation_runner: Any,
     ready_source_provider_binding: Any = None,
+    qualified_remediation_loss: Any = None,
 ) -> Any:
     """Test-seamed implementation; production fixes every observation boundary."""
 
@@ -5005,6 +5013,17 @@ def _acquire_ready_source_recovery_facts(
             current_safety_profile
         ),
     }
+    if qualified_remediation_loss is not None:
+        from secpal_pr_review import qualified_remediation_successor_loss
+
+        qualified_remediation_loss = (
+            qualified_remediation_successor_loss.verify_admission(
+                qualified_remediation_loss
+            )
+        )
+        binding["qualified_remediation_successor_evidence_loss"] = copy.deepcopy(
+            qualified_remediation_loss
+        )
     head, status = _attestation_local_state(root, repository)
     if head != expected_head_sha or status:
         raise fast_path.SecurityBlocker(
@@ -5017,7 +5036,17 @@ def _acquire_ready_source_recovery_facts(
         raise fast_path.SecurityBlocker(
             "Ready-source recovery candidate tree is malformed"
         )
-    parent = _validated_commit_parent(root, head)
+    if qualified_remediation_loss is None:
+        parents = [_validated_commit_parent(root, head)]
+    else:
+        topology = _run_attestation_git(
+            root, ["rev-list", "--parents", "-n", "1", head]
+        ).stdout.split()
+        parents = topology[1:] if topology and topology[0] == head else []
+        if parents != qualified_remediation_loss["successor"]["ordered_parent_shas"]:
+            raise fast_path.SecurityBlocker(
+                "qualified remediation successor parent topology changed"
+            )
     if ready_source_provider_binding is None:
         gateway = _gateway_factory(root, entry)
     else:
@@ -5046,6 +5075,24 @@ def _acquire_ready_source_recovery_facts(
             **observation,
         }
     )
+    if qualified_remediation_loss is not None:
+        classified = fast_path._classified_feedback_sources(
+            reviewed, include_resolved=True
+        )
+        feedback_findings = [
+            {
+                "finding_id": f"qualification:{qualified_remediation_loss['qualification']['id']}:{index}",
+                "thread_id": thread_id,
+                "sources": [{"kind": kind, "node_id": node_id, "digest": digest}],
+                "classification": "INFORMATIONAL",
+                "disposition": "NON_ACTIONABLE",
+                "evidence_digest": qualified_remediation_loss["admission_digest"],
+                "technically_blocking": False,
+            }
+            for index, ((kind, node_id), (digest, thread_id)) in enumerate(
+                sorted(classified.items()), start=1
+            )
+        ]
     if reviewed.head_sha != head:
         raise fast_path.SecurityBlocker(
             "Ready-source recovery feedback does not bind the candidate"
@@ -5105,7 +5152,7 @@ def _acquire_ready_source_recovery_facts(
         pull_request_number=pull_request_number,
         head_sha=head,
         tree_sha=tree,
-        parent_shas=[parent],
+        parent_shas=parents,
         expected_base_ref=reviewed.base_ref,
         expected_base_sha=reviewed.base_sha,
         reviewed_state=reviewed,
@@ -5291,6 +5338,206 @@ def issue_ready_source_recovery_authorization(
         ),
         _provider_binding_deriver=derive_provider_binding,
     )
+
+
+def advance_qualified_remediation_successor_loss(
+    *,
+    repository_root: Path,
+    manual_gate_evidence: Any,
+    apply: bool,
+    report_output: str | None = None,
+) -> dict[str, Any]:
+    """Advance the one accepted #956/#957 loss case through existing authority."""
+
+    from secpal_pr_review import (
+        lifecycle_execution,
+        qualified_remediation_successor_loss as successor_loss,
+    )
+
+    record = successor_loss.load_accepted_admission("SecPal/.github", 956)
+    candidate_root = repository_root.resolve(strict=True)
+    if candidate_root == REPOSITORY_ROOT.resolve(strict=True):
+        raise fast_path.SecurityBlocker(
+            "qualified remediation candidate must be separate from accepted-main tooling"
+        )
+    policy_head, entry = _load_current_recovery_policy(record["repository"])
+    accepted_ancestor = _run_attestation_git(
+        REPOSITORY_ROOT,
+        [
+            "merge-base", "--is-ancestor",
+            record["accepted_main_at_classification"], policy_head,
+        ],
+        allow_failure=True,
+    )
+    if accepted_ancestor.returncode != 0:
+        raise fast_path.SecurityBlocker(
+            "qualified remediation accepted-main ancestry changed"
+        )
+    if entry.get("qualified_remediation_successor_evidence_loss_policy") != {
+        "path": record["policy_path"],
+        "admission_digest": record["admission_digest"],
+    }:
+        raise fast_path.SecurityBlocker(
+            "qualified remediation accepted-main registration changed"
+        )
+    _verify_recovery_issuer_source(policy_head)
+    _lifecycle_authority, lifecycle_publication = (
+        _load_lifecycle_publication_helpers()
+    )
+    current = lifecycle_publication.verify_current_lifecycle_authority(
+        record["repository"], record["delivery_issue"]
+    )
+    predecessor = record["predecessor"]
+    state = current.lifecycle.state
+    if (
+        current.publication_oid != predecessor["publication_oid"]
+        or current.publication_digest != predecessor["publication_digest"]
+        or current.lifecycle.authority_digest
+        != predecessor["terminal_authority_digest"]
+        or current.lifecycle.pull_request != record["pull_request"]
+        or current.lifecycle.head_sha != predecessor["head_sha"]
+        or current.lifecycle.tree_sha != predecessor["tree_sha"]
+        or {key: state.get(key) for key in record["predecessor_state"]}
+        != record["predecessor_state"]
+    ):
+        raise fast_path.SecurityBlocker(
+            "qualified remediation predecessor publication changed"
+        )
+    for trailer in ("SecPal-Validation-Receipt", "SecPal-Integration-Evidence"):
+        output = _run_attestation_git(
+            candidate_root,
+            [
+                "show", "-s",
+                f"--format=%(trailers:key={trailer},valueonly,separator=%x00)",
+                record["successor"]["head_sha"],
+            ],
+        ).stdout
+        if [value for value in output.rstrip("\n").split("\x00") if value.strip()]:
+            raise fast_path.SecurityBlocker(
+                "qualified remediation historical commit-bound evidence is present"
+            )
+
+    binding = _fast_registry_binding(entry)
+    gates = fast_path.validate_manual_gate_evidence(
+        manual_gate_evidence, binding["manual_gates"]
+    )
+
+    def accepted_policy(requested_repository: str) -> tuple[str, dict[str, Any]]:
+        if requested_repository != record["repository"]:
+            raise fast_path.SecurityBlocker(
+                "qualified remediation repository changed"
+            )
+        return policy_head, copy.deepcopy(entry)
+
+    facts, _commit_signature = _acquire_ready_source_recovery_facts(
+        repository=record["repository"],
+        pull_request_number=record["pull_request"],
+        expected_head_sha=record["successor"]["head_sha"],
+        repository_root=candidate_root,
+        feedback_findings=None,
+        manual_gate_evidence=gates,
+        expected_commit_signer={
+            "kind": "SSH_PRINCIPAL", "identity": record["signer_identity"],
+        },
+        _policy_loader=accepted_policy,
+        _gateway_factory=FastPathGateway,
+        _validation_runner=_run_ready_source_recovery_current_safety,
+        ready_source_provider_binding=successor_loss.provider_binding(record),
+        qualified_remediation_loss=record,
+    )
+    final_policy_head, final_entry = _load_current_recovery_policy(
+        record["repository"]
+    )
+    final_current = lifecycle_publication.verify_current_lifecycle_authority(
+        record["repository"], record["delivery_issue"]
+    )
+    if (
+        final_policy_head != policy_head
+        or _fast_registry_binding(final_entry) != binding
+        or final_current.publication_oid != current.publication_oid
+        or final_current.publication_digest != current.publication_digest
+        or final_current.lifecycle != current.lifecycle
+    ):
+        raise fast_path.SecurityBlocker(
+            "qualified remediation authority changed during validation"
+        )
+    _verify_recovery_issuer_source(final_policy_head)
+    verified_current_evidence = (
+        fast_path.qualified_remediation_successor_loss_validation_evidence(
+        record, facts
+        )
+    )
+    report = {
+        "schema_version": "1.0",
+        "kind": record["kind"],
+        "repository": record["repository"],
+        "delivery_issue": record["delivery_issue"],
+        "pull_request": record["pull_request"],
+        "predecessor_publication_oid": current.publication_oid,
+        "head_sha": verified_current_evidence.head_sha,
+        "tree_sha": verified_current_evidence.tree_sha,
+        "ordered_parent_shas": record["successor"]["ordered_parent_shas"],
+        "safety_facts": facts,
+        "applied": False,
+    }
+    if not apply:
+        return report
+    if not report_output:
+        raise fast_path.SecurityBlocker(
+            "qualified remediation apply requires durable safety report output"
+        )
+    prepared_report = {**report, "publication_status": "PREPARED"}
+    try:
+        _write_fast_report(report_output, prepared_report)
+        persisted = _read_json_value(
+            report_output, "qualified remediation persisted safety report"
+        )
+    except (OSError, ValueError) as exc:
+        raise fast_path.SecurityBlocker(
+            "qualified remediation safety report persistence failed"
+        ) from exc
+    if persisted != prepared_report:
+        raise fast_path.SecurityBlocker(
+            "qualified remediation safety report read-back changed"
+        )
+    signers = lifecycle_execution._production_signing_authorities(
+        record["repository"], record["signer_identity"]
+    )
+    successor = lifecycle_execution._append_successor_evidence(
+        current,
+        {
+            "authorization_digest": record["admission_digest"],
+            "operation": record["transition_kind"],
+        },
+        signers,
+        resulting_head_sha=record["successor"]["head_sha"],
+        current_head_evidence=verified_current_evidence,
+    )
+    published = lifecycle_publication.advance_current_terminal(
+        successor,
+        signer_identity=signers.publication_identity,
+        signer=signers.publication_signer,
+    )
+    if (
+        published.lifecycle.head_sha != record["successor"]["head_sha"]
+        or {key: published.lifecycle.state.get(key) for key in record["resulting_state"]}
+        != record["resulting_state"]
+        or published.lifecycle.validation_receipt_digest
+        != verified_current_evidence.validation_receipt_digest
+        or published.lifecycle.source_validation_evidence_digest
+        != verified_current_evidence.source_validation_evidence_digest
+    ):
+        raise fast_path.SecurityBlocker(
+            "qualified remediation published successor changed"
+        )
+    return {
+        **report,
+        "applied": True,
+        "publication_oid": published.publication_oid,
+        "publication_digest": published.publication_digest,
+        "authority_digest": published.lifecycle.authority_digest,
+        "resulting_state": copy.deepcopy(published.lifecycle.state),
+    }
 
 
 def _load_fast_state(path: str) -> Any:
@@ -9176,6 +9423,24 @@ def main(argv: list[str] | None = None) -> int:
             return _command_resolve_batch(arguments)
         if arguments.command == "integrate-pre-enrollment-draft":
             return _command_integrate_pre_enrollment_draft(arguments)
+        if arguments.command == "advance-qualified-remediation-successor-loss":
+            report = advance_qualified_remediation_successor_loss(
+                repository_root=Path(arguments.repo_root),
+                manual_gate_evidence=_read_json_value(
+                    arguments.manual_gate_evidence, "manual-gate evidence"
+                ),
+                apply=arguments.apply,
+                report_output=arguments.output,
+            )
+            if not arguments.apply:
+                _write_fast_report(arguments.output, report)
+            elif arguments.output is None:
+                raise fast_path.SecurityBlocker(
+                    "qualified remediation apply requires durable safety report output"
+                )
+            else:
+                _write_fast_report(arguments.output, report)
+            return 0
         return _command_mutation(arguments)
     except fast_path.RecoverableLocalError as exc:
         report = {

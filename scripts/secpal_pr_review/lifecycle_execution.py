@@ -840,6 +840,8 @@ def _authenticate_source_commit(
     repository: str,
     head_sha: str,
     signer_identity: str,
+    *,
+    repository_root: Path | str = Path.cwd(),
 ) -> fast_path.AuthenticatedIntegrationCommit:
     try:
         policy = authority._load_lifecycle_trust_policy(repository)
@@ -863,7 +865,7 @@ def _authenticate_source_commit(
     for expected_signer in expected:
         try:
             candidate = fast_path.authenticate_integration_commit(
-                repository_root=Path.cwd(),
+                repository_root=repository_root,
                 repository=repository,
                 head_sha=head_sha,
                 expected_signer=expected_signer,

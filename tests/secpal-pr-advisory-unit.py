@@ -604,13 +604,13 @@ class AdvisoryCommandTests(TestCase):
         self.assertIn('"status": "not_a_delivery_pr"', stdout.getvalue())
         load_snapshot.assert_not_called()
 
-    def test_workflow_pins_node_22_before_installing_parser_dependencies(self):
+    def test_workflow_sets_up_qualified_node_before_installing_parser_dependencies(self):
         workflow = (ROOT / ".github/workflows/pr-governance-advisory.yml").read_text(
             encoding="utf-8"
         )
 
         setup = workflow.index("uses: actions/setup-node@")
-        version = workflow.index('node-version: "22.x"')
+        version = workflow.index("node-version:", setup)
         install = workflow.index("run: npm ci")
         self.assertLess(setup, version)
         self.assertLess(version, install)
