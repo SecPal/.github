@@ -15,7 +15,7 @@
         "material_finding_ids": [],
         "qualification_digest": "cf11784fa573fd54240386d86c66f7ae7c4d591a60b2ac169e030a53a41d8cc8"
       },
-      "accepted_main_sha": "8e862232bb6d1e7659d7d4e9196a32ec61018ad7",
+      "accepted_main_sha": "fd16dcb1f16cd7d9c195c2d082276d3556b9b3d4",
       "source_signer_identity": "aroviqen@secpal.app",
       "allowed_path_prefixes": [
         ".agents/skills/secpal-pr-review/references",
@@ -31,7 +31,7 @@
       ],
       "concepts": ["GOVERNANCE_AMENDMENT", "ABSENT_NEVER_ISSUED", "EXACT_STATE_ADOPTION"],
       "human_authority_identity": "SecPal human architecture authority for issue 960",
-      "human_authorization_digest": "f775df244677440f1d055b45f91082a5f245c94b0ba52aeaceb049096e93e032",
+      "human_authorization_digest": "2fe8516fecf84985305271a4ba2470a559654314105d243c76a52ce7ffb15f8a",
       "authorization_id": "governance-amendment:SecPal/.github:960:961",
       "intended_state": {
         "unrestricted_review_count": 1,
