@@ -955,15 +955,19 @@ def _live_ci(
     )
     try:
         status_head = statuses["sha"]
-        normalized_runs = sorted(
-            ({
+        normalized_runs = []
+        for item in runs:
+            run = {
                 "name": item["name"], "status": item["status"],
                 "conclusion": item["conclusion"], "head_sha": item["head_sha"],
-            } for item in runs),
-            key=lambda item: (
-                item["name"], item["status"], str(item["conclusion"])
-            ),
-        )
+            }
+            if "id" in item:
+                run["id"] = item["id"]
+            normalized_runs.append(run)
+        normalized_runs.sort(key=lambda item: (
+            item["name"], item.get("id", 0), item["status"],
+            str(item["conclusion"]),
+        ))
         contexts = []
         for item in statuses["statuses"]:
             contexts.append({
@@ -975,6 +979,28 @@ def _live_ci(
         raise GovernanceAmendmentError(
             "live governance amendment CI is incomplete"
         ) from exc
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for run in normalized_runs:
+        groups.setdefault(run["name"], []).append(run)
+    effective_runs: list[dict[str, Any]] = []
+    terminal_conclusions = {
+        "success", "skipped", "cancelled", "failure", "timed_out",
+        "action_required", "neutral", "stale", "startup_failure",
+    }
+    for group in groups.values():
+        if len(group) == 1:
+            effective_runs.append(group[0])
+            continue
+        ids = [run.get("id") for run in group]
+        if (
+            any(not isinstance(value, int) or isinstance(value, bool)
+                or value < 1 for value in ids)
+            or len(set(ids)) != len(ids)
+        ):
+            raise GovernanceAmendmentError(
+                "live governance amendment duplicate check identity is ambiguous"
+            )
+        effective_runs.append(max(group, key=lambda run: run["id"]))
     if (
         not normalized_runs
         or status_head != head_sha
@@ -985,8 +1011,12 @@ def _live_ci(
         ) for status in contexts)
         or any(
             run["head_sha"] != head_sha or run["status"] != "completed"
-            or run["conclusion"] not in {"success", "skipped"}
+            or run["conclusion"] not in terminal_conclusions
             for run in normalized_runs
+        )
+        or any(
+            run["conclusion"] not in {"success", "skipped"}
+            for run in effective_runs
         )
         or statuses.get("state") != "success"
         or any(
@@ -999,12 +1029,12 @@ def _live_ci(
             "live governance amendment CI is not terminal and passing"
         )
     required = {item["context"] for item in protection["checks"]}
-    observed_names = {run["name"] for run in normalized_runs}
+    observed_names = {run["name"] for run in effective_runs}
     if (
         not required.issubset(observed_names)
         or any(
             run["name"] in required and run["conclusion"] != "success"
-            for run in normalized_runs
+            for run in effective_runs
         )
         or any(
             run["conclusion"] == "skipped"

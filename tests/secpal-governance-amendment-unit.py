@@ -1095,6 +1095,56 @@ class GovernanceAmendmentTests(TestCase):
             }),
         })
 
+        superseded = [
+            {**checks[0], "id": 20},
+            {
+                **checks[0], "id": 10,
+                "conclusion": "cancelled",
+            },
+        ]
+        responses = iter((
+            {"total_count": len(superseded), "check_runs": superseded},
+            status,
+        ))
+        with mock.patch.object(
+            amendment.publication, "_run_gh",
+            side_effect=lambda arguments: subprocess.CompletedProcess(
+                arguments, 0, json.dumps(next(responses)).encode(), b"",
+            ),
+        ), mock.patch.object(
+            amendment, "_live_required_check_policy",
+            return_value=required_policy,
+        ):
+            self.assertEqual(
+                amendment._live_ci("SecPal/.github", HEAD, PARENT)["result"],
+                "PASS",
+            )
+
+        latest_cancelled = [
+            {**checks[0], "id": 10},
+            {
+                **checks[0], "id": 20,
+                "conclusion": "cancelled",
+            },
+        ]
+        responses = iter((
+            {
+                "total_count": len(latest_cancelled),
+                "check_runs": latest_cancelled,
+            },
+            status,
+        ))
+        with mock.patch.object(
+            amendment.publication, "_run_gh",
+            side_effect=lambda arguments: subprocess.CompletedProcess(
+                arguments, 0, json.dumps(next(responses)).encode(), b"",
+            ),
+        ), mock.patch.object(
+            amendment, "_live_required_check_policy",
+            return_value=required_policy,
+        ), self.assertRaises(amendment.GovernanceAmendmentError):
+            amendment._live_ci("SecPal/.github", HEAD, PARENT)
+
         invalid = {
             "missing envelope head": {
                 "state": "success", "statuses": status["statuses"],
