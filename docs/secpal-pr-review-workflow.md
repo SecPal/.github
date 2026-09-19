@@ -235,12 +235,23 @@ substituted for it.
 
 The verifier first authenticates protected CURRENT at exactly Review 1/1,
 Remediation 1/2, Ready true, Draft false, one Ready transition, Cycle 3 absent,
-and no Exceptional Recovery or Continuation. A maintained GitHub boundary must
-then observe an OPEN, Ready PR at that exact repository, issue, PR and CURRENT
-head with one terminal failed check. The observation binds the workflow,
-check, run, job and attempt identities. Pending, successful, cancelled,
-stale-head and cross-identity observations grant no authority. A hosted failure
-is only a discovery signal; it is never sufficient source-change authority.
+and no Exceptional Recovery or Continuation. The lifecycle CURRENT head, not
+the mutable live PR head, selects the only admissible predecessor failure. A
+maintained GitHub boundary reads the complete check-run, pull-request workflow-
+run and job sets for that exact SHA; binds the terminal failure to the same
+repository and delivery PR; and derives the workflow, check, run, job and
+attempt identities without accepting caller-selected historical IDs. Missing,
+incomplete, ambiguous, push-event, foreign-PR, stale-head and cross-identity
+observations grant no authority. A hosted failure is only a discovery signal;
+it is never sufficient source-change authority.
+
+The live OPEN Ready PR is authenticated separately. It must remain either on
+CURRENT while the exact failure is read directly, or, before correction
+authority is returned, on the fresh validated head that is the exact signed
+sole-parent successor of CURRENT. More than one unpublished successor, a merge,
+rebase, replacement PR, wrong signer, or mismatched candidate head/tree fails
+closed. CURRENT and the live PR are both re-read before the finding authority
+returns and again before the one-use remediation authorization is signed.
 
 Independent deterministic reproduction against the authenticated predecessor
 bytes must prove a violated current-delivery invariant and classify it as

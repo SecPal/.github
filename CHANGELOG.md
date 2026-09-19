@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-19 - Bind Post-Ready Failure To Lifecycle Current
+
+**Fixed:**
+
+- Derive post-Ready hosted failure evidence from the exact protected lifecycle
+  CURRENT predecessor SHA instead of the mutable live pull-request head.
+- Authenticate the live Ready correction independently as the exact signed
+  sole-parent successor, with complete GitHub pagination, same-PR binding, and
+  final CURRENT/live-PR rereads before remediation authorization.
+
 ## 2026-09-19 - Correct Mixed Reusable-Workflow Source Resolution
 
 **Fixed:**

@@ -180,11 +180,16 @@ issuer rejects the provider-growth digest.
 
 A sibling ordinary Ready-remediation admission handles a terminal hosted
 failure only when protected CURRENT is exactly Ready Review 1/1 and Remediation
-1/2, the live OPEN PR remains on that exact head, and an independent
-repository-byte reproduction proves a technically blocking
-`IN_CONTRACT_DEFECT`. The maintained runtime-selector proof derives workflow
-and engine floors from candidate configuration. Direct workflows retain their
-existing source binding; local reusable calls additionally require one exact
+1/2. The exact CURRENT SHA selects the complete authenticated check-run,
+pull-request workflow-run and job evidence; no caller chooses historical run or
+job IDs. That failure must bind uniquely to the same repository and delivery
+PR. The live OPEN Ready PR is authenticated independently at the exact fresh
+validated signed sole-parent successor, and CURRENT plus the live PR are
+re-read before finding and authorization issuance. An independent repository-
+byte reproduction must prove a technically blocking `IN_CONTRACT_DEFECT`. The
+maintained runtime-selector proof derives workflow and engine floors from
+candidate configuration. Direct workflows retain their existing source
+binding; local reusable calls additionally require one exact
 candidate-byte caller/callee mapping under `.github/workflows`, a declared
 `workflow_call`, and the observed caller/called-job display-name composition.
 Its closed scalar parser supports plain or quoted names and sources plus legal
