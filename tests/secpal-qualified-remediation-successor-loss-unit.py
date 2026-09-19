@@ -127,9 +127,62 @@ class QualifiedRemediationSuccessorLossTests(unittest.TestCase):
         }
         loss.verify_safety_binding(record, safety)
 
-        safety["reviewed_state"]["threads"].pop()
-        with self.assertRaises(loss.QualifiedRemediationSuccessorLossError):
-            loss.verify_safety_binding(record, safety)
+        reordered = copy.deepcopy(safety)
+        reordered["reviewed_state"]["threads"].reverse()
+        loss.verify_safety_binding(record, reordered)
+
+        for label, mutate in (
+            (
+                "missing",
+                lambda value: value["reviewed_state"]["threads"].pop(),
+            ),
+            (
+                "duplicate",
+                lambda value: value["reviewed_state"]["threads"].append(
+                    copy.deepcopy(value["reviewed_state"]["threads"][0])
+                ),
+            ),
+            (
+                "substituted",
+                lambda value: value["reviewed_state"]["threads"][0].update(
+                    node_id="PRRT_substituted"
+                ),
+            ),
+            (
+                "additional",
+                lambda value: value["reviewed_state"]["threads"].append(
+                    {
+                        "node_id": "PRRT_additional",
+                        "is_resolved": False,
+                        "is_outdated": True,
+                    }
+                ),
+            ),
+            (
+                "changed state",
+                lambda value: value["reviewed_state"]["threads"][0].update(
+                    is_resolved=True
+                ),
+            ),
+            (
+                "malformed",
+                lambda value: value["reviewed_state"]["threads"].__setitem__(
+                    0,
+                    {
+                        "node_id": value["reviewed_state"]["threads"][0][
+                            "node_id"
+                        ]
+                    },
+                ),
+            ),
+        ):
+            with self.subTest(label=label):
+                changed = copy.deepcopy(safety)
+                mutate(changed)
+                with self.assertRaises(
+                    loss.QualifiedRemediationSuccessorLossError
+                ):
+                    loss.verify_safety_binding(record, changed)
 
     def test_provider_binding_rejects_other_identity_or_head(self) -> None:
         record = loss.load_accepted_admission("SecPal/.github", 956)

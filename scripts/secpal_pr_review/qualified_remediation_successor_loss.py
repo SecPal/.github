@@ -270,14 +270,27 @@ def verify_safety_binding(admission: Any, safety: Any) -> None:
     successor = record["successor"]
     reviewed = safety.get("reviewed_state")
     threads = reviewed.get("threads") if isinstance(reviewed, Mapping) else None
-    observed = [
-        {
-            "thread_id": item.get("node_id"),
-            "resolved": item.get("is_resolved"),
-            "outdated": item.get("is_outdated"),
-        }
-        for item in threads or [] if isinstance(item, Mapping)
-    ]
+    observed = None
+    if isinstance(threads, list):
+        observed_by_id: dict[str, tuple[bool, bool]] = {}
+        for item in threads:
+            if (
+                not isinstance(item, Mapping)
+                or not isinstance(item.get("node_id"), str)
+                or not isinstance(item.get("is_resolved"), bool)
+                or not isinstance(item.get("is_outdated"), bool)
+                or item["node_id"] in observed_by_id
+            ):
+                break
+            observed_by_id[item["node_id"]] = (
+                item["is_resolved"], item["is_outdated"]
+            )
+        else:
+            observed = observed_by_id
+    expected = {
+        item["thread_id"]: (item["resolved"], item["outdated"])
+        for item in record["stable_thread_inventory"]
+    }
     material = [
         item.get("finding_id") for item in safety.get("feedback_findings", [])
         if isinstance(item, Mapping) and item.get("technically_blocking") is True
@@ -290,7 +303,7 @@ def verify_safety_binding(admission: Any, safety: Any) -> None:
         or safety.get("parent_shas") != successor["ordered_parent_shas"]
         or safety.get("expected_base_ref") != successor["base_ref"]
         or safety.get("expected_base_sha") != successor["base_sha"]
-        or observed != record["stable_thread_inventory"]
+        or observed != expected
         or material != record["current_material_finding_ids"]
         or safety.get("reviewed_state_digest")
         != record["qualification"]["reviewed_state_digest"]
