@@ -30,6 +30,9 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.secpal_pr_review import lifecycle_authority as authority
 from scripts.secpal_pr_review import fast_path
+from scripts.secpal_pr_review import (
+    qualified_remediation_successor_loss as qualified_loss,
+)
 
 REPOSITORY = "SecPal/.github"
 ISSUE = 750
@@ -296,6 +299,164 @@ def authenticated_external_evidence(
 
 
 class LifecycleAuthorityTests(TestCase):
+    def test_qualified_remediation_evidence_verifies_and_issues_successor(
+        self,
+    ) -> None:
+        record = qualified_loss.load_accepted_admission("SecPal/.github", 956)
+        safety = {
+            "accepted": "qualified remediation safety facts",
+            "fresh_validation_receipt_digest": "2" * 64,
+            "safety_facts_digest": "3" * 64,
+        }
+
+        def verify_safety(value: Any) -> dict[str, Any]:
+            if value != safety:
+                raise fast_path.SecurityBlocker("changed qualified safety facts")
+            return copy.deepcopy(safety)
+
+        def verify_binding(admission: Any, facts: Any) -> None:
+            if admission != record or facts != safety:
+                raise qualified_loss.QualifiedRemediationSuccessorLossError(
+                    "qualified remediation binding changed"
+                )
+
+        with patch.object(
+            fast_path,
+            "verify_ready_source_recovery_safety_facts",
+            side_effect=verify_safety,
+        ), patch.object(
+            qualified_loss, "verify_safety_binding", side_effect=verify_binding
+        ):
+            evidence = (
+                fast_path.qualified_remediation_successor_loss_validation_evidence(
+                    record, safety
+                )
+            )
+            self.assertNotIn(
+                "reviewed_state",
+                json.loads(evidence._verification_seal.provenance_json),
+            )
+            self.assertTrue(fast_path.is_verified_validation_evidence(evidence))
+
+            predecessor_state = authority.initial_state()
+            predecessor_state.update(record["predecessor_state"])
+            predecessor_state["ready_history"] = [
+                {
+                    "sequence": 1,
+                    "transition_kind": "DRAFT_TO_READY",
+                    "observation_digest": "4" * 64,
+                }
+            ]
+            predecessor = SimpleNamespace(
+                repository=record["repository"],
+                delivery_issue=record["delivery_issue"],
+                lifecycle_id="qualified-remediation-lifecycle",
+                pull_request=record["pull_request"],
+                authority_digest=record["predecessor"][
+                    "terminal_authority_digest"
+                ],
+                head_sha=record["predecessor"]["head_sha"],
+                initialization_evidence_digest="0" * 64,
+                state=predecessor_state,
+            )
+            event = {
+                "repository": record["repository"],
+                "delivery_issue": record["delivery_issue"],
+                "lifecycle_id": predecessor.lifecycle_id,
+                "pull_request": record["pull_request"],
+                "predecessor_authority_digest": predecessor.authority_digest,
+                "predecessor_head_sha": predecessor.head_sha,
+                "resulting_head_sha": record["successor"]["head_sha"],
+                "transition_kind": record["transition_kind"],
+                "replacement_pull_request": None,
+                "initialization_evidence_digest": (
+                    predecessor.initialization_evidence_digest
+                ),
+                "event_digest": "1" * 64,
+            }
+            policy = SimpleNamespace(
+                transition_signer_identities=frozenset({SIGNER}),
+                authority_signer_identities=frozenset({SIGNER}),
+            )
+            serialized = {
+                field: None for field in authority.EXACT_ADOPTION_PUBLICATION_FIELDS
+            }
+            with patch.object(
+                authority, "_load_canonical_json", return_value=serialized
+            ), patch.object(
+                authority,
+                "_verify_exact_state_adoption_bundle",
+                return_value=predecessor,
+            ), patch.object(
+                authority, "_load_lifecycle_trust_policy", return_value=policy
+            ), patch.object(
+                authority, "_policy_signature_verifier", return_value=Mock()
+            ), patch.object(
+                authority, "_verify_transition_authorization", return_value=event
+            ):
+                successor = authority.issue_exact_state_adoption_successor_authority(
+                    serialized_adoption_evidence=b"{}",
+                    authorization={},
+                    signer_identity=SIGNER,
+                    authority_signer=signer_for(),
+                    current_head_evidence=evidence,
+                )
+            self.assertEqual(
+                successor["current_head_evidence"],
+                {
+                    "head_sha": evidence.head_sha,
+                    "tree_sha": evidence.tree_sha,
+                    "validation_receipt_digest": (
+                        evidence.validation_receipt_digest
+                    ),
+                    "source_validation_evidence_digest": (
+                        evidence.source_validation_evidence_digest
+                    ),
+                    "final_attestation_digest": evidence.final_attestation_digest,
+                },
+            )
+
+            changed_provenance = json.loads(
+                evidence._verification_seal.provenance_json
+            )
+            changed_provenance["admission"]["pull_request"] += 1
+            changed_admission = replace(
+                evidence,
+                _verification_seal=fast_path._VerifiedValidationEvidenceSeal(
+                    fast_path.canonical_json_bytes(changed_provenance).decode("utf-8")
+                ),
+            )
+            self.assertFalse(
+                fast_path.is_verified_validation_evidence(changed_admission)
+            )
+
+            changed_provenance = json.loads(
+                evidence._verification_seal.provenance_json
+            )
+            changed_provenance["safety_facts"]["accepted"] = "changed"
+            changed_safety = replace(
+                evidence,
+                _verification_seal=fast_path._VerifiedValidationEvidenceSeal(
+                    fast_path.canonical_json_bytes(changed_provenance).decode("utf-8")
+                ),
+            )
+            self.assertFalse(fast_path.is_verified_validation_evidence(changed_safety))
+
+            for field, changed in (
+                ("head_sha", "0" * 40),
+                ("pull_request_number", record["pull_request"] + 1),
+                ("tree_sha", "0" * 40),
+                ("validation_receipt_digest", "0" * 64),
+                ("source_validation_evidence_digest", "0" * 64),
+                ("final_attestation_digest", "0" * 64),
+            ):
+                with self.subTest(field=field):
+                    self.assertFalse(
+                        fast_path.is_verified_validation_evidence(
+                            replace(evidence, **{field: changed})
+                        )
+                    )
+
     def test_target_827_validation_loss_admission_authenticates_adoption_source(self) -> None:
         head = "7fd0467c321f1c2b9a06494f4a0c46531c9cc006"
         tree = "ab8da939ca30a3b906f22c471031083f7132ff94"
