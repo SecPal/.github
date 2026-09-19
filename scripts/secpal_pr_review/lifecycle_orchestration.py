@@ -638,11 +638,42 @@ def _setup_node_selectors_by_job(
     )
 
 
+def _workflow_scalar(raw: str) -> str:
+    """Normalize the closed YAML scalar subset used by workflow identities."""
+
+    value = raw.strip()
+    if not value:
+        raise LifecycleOrchestrationError("workflow call graph is malformed")
+    if value[0] in "'\"":
+        quote = value[0]
+        match = re.fullmatch(
+            rf"{re.escape(quote)}([^{re.escape(quote)}\\]*){re.escape(quote)}"
+            r"(?:[ \t]+#.*)?",
+            value,
+        )
+        if match is None:
+            raise LifecycleOrchestrationError("workflow call graph is malformed")
+        normalized = match.group(1)
+    else:
+        comment = re.search(r"[ \t]+#", value)
+        normalized = value[: comment.start()].rstrip() if comment else value
+        if (
+            not normalized
+            or normalized[0] in "#[{&*!|>"
+            or "'" in normalized
+            or '"' in normalized
+        ):
+            raise LifecycleOrchestrationError("workflow call graph is malformed")
+    if not normalized.strip():
+        raise LifecycleOrchestrationError("workflow call graph is malformed")
+    return normalized
+
+
 def _workflow_name(workflow: str) -> str | None:
     for line in workflow.splitlines():
-        match = re.match(r"^name:\s*['\"]?([^'\"#]+?)['\"]?\s*(?:#.*)?$", line)
+        match = re.fullmatch(r"name:\s*(.+?)\s*", line)
         if match:
-            return match.group(1).strip()
+            return _workflow_scalar(match.group(1))
     return None
 
 
@@ -658,16 +689,6 @@ def _workflow_job_calls(workflow: str) -> tuple[dict[str, str], ...]:
     ]
     if len(jobs_indexes) != 1:
         raise LifecycleOrchestrationError("workflow call graph is malformed")
-
-    def scalar(raw: str) -> str:
-        value = raw.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-            value = value[1:-1]
-        elif not value or value[0] in "[{&*!|>" or " #" in value:
-            raise LifecycleOrchestrationError("workflow call graph is malformed")
-        if not value.strip():
-            raise LifecycleOrchestrationError("workflow call graph is malformed")
-        return value
 
     jobs: list[dict[str, str]] = []
     seen_ids: set[str] = set()
@@ -694,7 +715,7 @@ def _workflow_job_calls(workflow: str) -> tuple[dict[str, str], ...]:
             key = field.group(1)
             if key in current:
                 raise LifecycleOrchestrationError("workflow call graph is ambiguous")
-            current[key] = scalar(field.group(2))
+            current[key] = _workflow_scalar(field.group(2))
     return tuple(jobs)
 
 
@@ -755,11 +776,18 @@ def _authenticated_selector_source_paths(
         assert uses is not None
         if "${{" in uses or "}}" in uses:
             raise LifecycleOrchestrationError("dynamic reusable workflow calls are unsupported")
+        caller_name = caller.get("name")
         if not uses.startswith("./"):
-            raise LifecycleOrchestrationError("remote reusable workflows are unsupported")
+            if (
+                caller_name is not None
+                and observed_check_name.startswith(f"{caller_name} / ")
+            ):
+                raise LifecycleOrchestrationError(
+                    "remote reusable workflows are unsupported"
+                )
+            continue
         if not re.fullmatch(r"\./\.github/workflows/[^/]+\.ya?ml", uses):
             raise LifecycleOrchestrationError("local reusable workflow path is invalid")
-        caller_name = caller.get("name")
         if caller_name is None:
             raise LifecycleOrchestrationError("local reusable workflow caller is unnamed")
         called_path = uses[2:]

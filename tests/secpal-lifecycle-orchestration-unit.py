@@ -10913,6 +10913,75 @@ class PostReadyValidationRemediationTests(TestCase):
             orchestration._setup_node_selectors(shorthand), ("24.21.0",)
         )
 
+    def test_workflow_call_parser_normalizes_supported_scalar_comments(self) -> None:
+        workflow = (
+            "name: Quality\non:\n  pull_request:\njobs:\n"
+            "  external:\n    name: REUSE Compliance # displayed caller\n"
+            "    uses: owner/repository/.github/workflows/reuse.yml@immutable # main\n"
+            "  single:\n    name: 'Single # hash' # trailing comment\n"
+            "    uses: './.github/workflows/single.yml' # local\n"
+            "  double:\n    name: \"Foo # Bar\" # trailing comment\n"
+            "    uses: \"./.github/workflows/double.yml\"\n"
+            "  embedded:\n    name: abc#def\n"
+            "    uses: owner/repository/.github/workflows/reuse.yml@immutable\n"
+        )
+
+        self.assertEqual(
+            orchestration._workflow_job_calls(workflow),
+            (
+                {
+                    "job_id": "external",
+                    "name": "REUSE Compliance",
+                    "uses": "owner/repository/.github/workflows/reuse.yml@immutable",
+                },
+                {
+                    "job_id": "single",
+                    "name": "Single # hash",
+                    "uses": "./.github/workflows/single.yml",
+                },
+                {
+                    "job_id": "double",
+                    "name": "Foo # Bar",
+                    "uses": "./.github/workflows/double.yml",
+                },
+                {
+                    "job_id": "embedded",
+                    "name": "abc#def",
+                    "uses": "owner/repository/.github/workflows/reuse.yml@immutable",
+                },
+            ),
+        )
+        self.assertEqual(
+            orchestration._workflow_name('name: "Foo # Bar" # trailing comment\n'),
+            "Foo # Bar",
+        )
+        self.assertEqual(
+            orchestration._workflow_name("name: OpenAPI Lint # trailing comment\n"),
+            "OpenAPI Lint",
+        )
+
+    def test_workflow_call_parser_rejects_unsupported_complex_scalars(self) -> None:
+        for label, value in (
+            ("anchor", "&source local.yml"),
+            ("alias", "*source"),
+            ("tag", "!source local.yml"),
+            ("literal block", "|"),
+            ("folded block", ">"),
+            ("unterminated quote", '"Foo # Bar'),
+            ("quoted suffix without comment", '"Foo" suffix'),
+        ):
+            workflow = (
+                "name: Quality\non:\n  pull_request:\njobs:\n  check:\n"
+                f"    name: {value}\n    uses: ./.github/workflows/check.yml\n"
+            )
+            with (
+                self.subTest(label=label),
+                self.assertRaisesRegex(
+                    orchestration.LifecycleOrchestrationError, "malformed"
+                ),
+            ):
+                orchestration._workflow_job_calls(workflow)
+
     def test_authenticates_selector_defect_in_local_reusable_workflow(self) -> None:
         caller = (
             "name: Quality\non:\n  pull_request:\njobs:\n  schema:\n"
@@ -10944,6 +11013,82 @@ class PostReadyValidationRemediationTests(TestCase):
         )
 
         self.assertRegex(proof, r"^[0-9a-f]{64}$")
+
+    def test_ignores_commented_external_siblings_for_local_reusable_failure(self) -> None:
+        caller = (
+            "name: Code Quality\non:\n  pull_request:\njobs:\n"
+            "  reuse:\n    name: REUSE Compliance\n"
+            "    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@"
+            "14c5bcf19eaa9e144af5e9afa05f12f2c08648dc # main\n"
+            "  license:\n    name: License Compatibility\n"
+            "    uses: SecPal/.github/.github/workflows/reusable-license.yml@"
+            "14c5bcf19eaa9e144af5e9afa05f12f2c08648dc # main\n"
+            "  openapi:\n    name: OpenAPI Lint\n"
+            "    uses: ./.github/workflows/local-openapi-lint.yml\n"
+        )
+        called = (
+            "name: Local OpenAPI Lint\non:\n  workflow_call:\njobs:\n"
+            "  openapi-lint:\n    name: Validate OpenAPI Specification\n"
+            "    runs-on: ubuntu-latest\n    steps:\n"
+            "      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(
+                caller, {"local-openapi-lint.yml": called}
+            )
+        )
+        self.addCleanup(temporary.cleanup)
+
+        proof = orchestration._verify_node_selector_defect_correction(
+            root,
+            repository=REPOSITORY,
+            pull_request=971,
+            predecessor_head=predecessor,
+            predecessor_tree=predecessor_tree,
+            resulting_head=successor,
+            resulting_tree=successor_tree,
+            observed_workflow_name="Code Quality",
+            observed_workflow_path=".github/workflows/quality.yml",
+            observed_check_name="OpenAPI Lint / Validate OpenAPI Specification",
+        )
+
+        self.assertRegex(proof, r"^[0-9a-f]{64}$")
+
+    def test_rejects_observed_external_reusable_failure(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n"
+            "  external:\n    name: Reusable validation\n"
+            "    uses: owner/repository/.github/workflows/schema.yml@immutable # main\n"
+            "  local:\n    name: Other validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Other check\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, {"schema.yml": called})
+        )
+        self.addCleanup(temporary.cleanup)
+
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "remote"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=971,
+                predecessor_head=predecessor,
+                predecessor_tree=predecessor_tree,
+                resulting_head=successor,
+                resulting_tree=successor_tree,
+                observed_workflow_name="Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+                observed_check_name="Reusable validation / Validate schema",
+            )
 
     def test_authenticates_complete_reachable_reusable_violation_set(self) -> None:
         caller = (
@@ -11199,6 +11344,11 @@ class PostReadyValidationRemediationTests(TestCase):
         cases = (
             ("path traversal", "./.github/workflows/../schema.yml", "invalid"),
             ("outside workflows", "./scripts/schema.yml", "invalid"),
+            (
+                "quoted hash changes source identity",
+                '"./.github/workflows/schema.yml # main"',
+                "invalid",
+            ),
             ("dynamic", "${{ inputs.workflow }}", "dynamic"),
             ("remote", "other/repository/.github/workflows/schema.yml@main", "remote"),
         )
