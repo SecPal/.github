@@ -10897,6 +10897,76 @@ class PostReadyValidationRemediationTests(TestCase):
             head_sha=head_sha,
         ), None
 
+    @staticmethod
+    def _historical_failure_api_responses(
+        current,
+        validation,
+        *,
+        run_updates=None,
+        failure_count=1,
+        check_total=None,
+    ):
+        checks = [
+            {
+                "id": 200 + index,
+                "name": f"Validate candidate{index or ''}",
+                "status": "completed",
+                "conclusion": "failure",
+                "details_url": (
+                    f"https://github.com/{REPOSITORY}/actions/runs/100/job/"
+                    f"{200 + index}"
+                ),
+                "app": {"slug": "github-actions"},
+            }
+            for index in range(failure_count)
+        ]
+        run = {
+            "id": 100,
+            "name": "Code Quality",
+            "path": ".github/workflows/quality.yml",
+            "event": "pull_request",
+            "head_sha": current.lifecycle.head_sha,
+            "status": "completed",
+            "conclusion": "failure",
+            "run_attempt": 2,
+            "repository": {"full_name": REPOSITORY},
+            "head_repository": {"full_name": REPOSITORY},
+            "pull_requests": [{
+                "number": 971,
+                "url": f"https://api.github.com/repos/{REPOSITORY}/pulls/971",
+            }],
+        }
+        run.update(run_updates or {})
+        jobs = [
+            {
+                "id": 200 + index,
+                "run_id": 100,
+                "head_sha": current.lifecycle.head_sha,
+                "status": "completed",
+                "conclusion": "failure",
+                "name": f"Validate candidate{index or ''}",
+            }
+            for index in range(failure_count)
+        ]
+        payloads = (
+            {
+                "state": "OPEN",
+                "isDraft": False,
+                "headRefOid": validation.head_sha,
+                "headRepository": {"nameWithOwner": REPOSITORY},
+            },
+            [{
+                "total_count": len(checks) if check_total is None else check_total,
+                "check_runs": checks,
+            }],
+            [{"total_count": 1, "workflow_runs": [run]}],
+            [{"total_count": len(jobs), "jobs": jobs}],
+        )
+        return [
+            SimpleNamespace(returncode=0, stdout=json.dumps(payload).encode())
+            for payload in payloads
+        ]
+
     def test_setup_node_parser_accepts_named_and_shorthand_steps(self) -> None:
         named = (
             "steps:\n  - name: Setup Node.js\n    uses: actions/setup-node@immutable\n"
@@ -11579,7 +11649,7 @@ class PostReadyValidationRemediationTests(TestCase):
                 candidate_validation=validation,
                 authenticated_commit=commit,
                 repository_root=root,
-                failure_reader=lambda _repository, _pull_request: copy.deepcopy(observation),
+                failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
             )
 
         self.assertEqual(verified.source_kind, "POST_READY_IN_CONTRACT_VALIDATION_DEFECT")
@@ -11593,18 +11663,35 @@ class PostReadyValidationRemediationTests(TestCase):
         self.assertEqual(scope["finding_ids"], [verified.finding_id])
         self.assertEqual(scope["finding_authority_digest"], verified.finding_authority_digest)
 
-        issued = orchestration.issue_post_ready_validation_remediation_authorization(
-            authorization_id="post-ready-validation-defect-1",
-            reason="Correct the independently reproduced current-delivery invariant",
-            current=current,
-            finding_authority=verified,
-            signer_identity="aroviqen@secpal.app",
-            signer=lambda _payload, _domain: {
-                "format": "ssh",
-                "signer_identity": "aroviqen@secpal.app",
-                "value": "fixture-signature",
-            },
-        )
+        live_correction = {
+            "repository": REPOSITORY,
+            "pull_request": 971,
+            "head_sha": validation.head_sha,
+            "pr_state": "OPEN",
+            "draft": False,
+        }
+        with (
+            mock.patch.object(
+                publication, "verify_current_lifecycle_authority", return_value=current
+            ) as reread_current,
+            mock.patch.object(
+                orchestration, "_read_live_post_ready_pr", return_value=live_correction
+            ) as reread_live,
+        ):
+            issued = orchestration.issue_post_ready_validation_remediation_authorization(
+                authorization_id="post-ready-validation-defect-1",
+                reason="Correct the independently reproduced current-delivery invariant",
+                current=current,
+                finding_authority=verified,
+                signer_identity="aroviqen@secpal.app",
+                signer=lambda _payload, _domain: {
+                    "format": "ssh",
+                    "signer_identity": "aroviqen@secpal.app",
+                    "value": "fixture-signature",
+                },
+            )
+        reread_current.assert_called_once_with(REPOSITORY, 970)
+        reread_live.assert_called_once_with(REPOSITORY, 971)
         authorization = authority.loads_closed_json(issued)
         self.assertEqual(authorization["operation"], "REMEDIATION_COMPLETED")
         result = authority.derive_state(
@@ -11620,47 +11707,51 @@ class PostReadyValidationRemediationTests(TestCase):
         self.assertEqual(result["exceptional_recovery_count"], 0)
         self.assertEqual(result["exceptional_continuation_count"], 0)
 
-    def test_public_entry_uses_bounded_live_github_failure_observation(self) -> None:
-        temporary, root, current, validation, commit, _observation = self._inputs()
-        self.addCleanup(temporary.cleanup)
-        failure = {
-            "state": "OPEN",
-            "isDraft": False,
-            "headRefOid": current.lifecycle.head_sha,
-            "headRepository": {"nameWithOwner": REPOSITORY},
-            "statusCheckRollup": [{
-                "__typename": "CheckRun",
-                "workflowName": "Code Quality",
-                "name": "Validate candidate",
-                "status": "COMPLETED",
-                "conclusion": "FAILURE",
-                "detailsUrl": (
-                    f"https://github.com/{REPOSITORY}/actions/runs/100/job/200"
+        for label, reread, reread_head in (
+            ("CURRENT moved", replace(current, publication_oid="e" * 40), validation.head_sha),
+            ("live PR moved", current, "e" * 40),
+        ):
+            changed_live = {**live_correction, "head_sha": reread_head}
+            with (
+                self.subTest(label=label),
+                mock.patch.object(
+                    publication,
+                    "verify_current_lifecycle_authority",
+                    return_value=reread,
                 ),
-            }],
+                mock.patch.object(
+                    orchestration,
+                    "_read_live_post_ready_pr",
+                    return_value=changed_live,
+                ),
+                self.assertRaisesRegex(
+                    orchestration.LifecycleOrchestrationError,
+                    "changed before remediation authorization",
+                ),
+            ):
+                orchestration.issue_post_ready_validation_remediation_authorization(
+                    authorization_id="stale-post-ready-validation-defect",
+                    reason="Attempt stale authorization",
+                    current=current,
+                    finding_authority=verified,
+                    signer_identity="aroviqen@secpal.app",
+                    signer=lambda _payload, _domain: {
+                        "format": "ssh",
+                        "signer_identity": "aroviqen@secpal.app",
+                        "value": "fixture-signature",
+                    },
+                )
+
+    def test_public_entry_uses_bounded_live_github_failure_observation(self) -> None:
+        temporary, root, current, validation, commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        live_correction = {
+            "repository": REPOSITORY,
+            "pull_request": 971,
+            "head_sha": validation.head_sha,
+            "pr_state": "OPEN",
+            "draft": False,
         }
-        run = {
-            "id": 100,
-            "head_sha": current.lifecycle.head_sha,
-            "status": "completed",
-            "conclusion": "failure",
-            "run_attempt": 2,
-            "repository": {"full_name": REPOSITORY},
-            "path": ".github/workflows/quality.yml",
-        }
-        job = {
-            "id": 200,
-            "run_id": 100,
-            "head_sha": current.lifecycle.head_sha,
-            "status": "completed",
-            "conclusion": "failure",
-            "name": "Validate candidate",
-        }
-        responses = [
-            SimpleNamespace(returncode=0, stdout=json.dumps(failure).encode()),
-            SimpleNamespace(returncode=0, stdout=json.dumps(run).encode()),
-            SimpleNamespace(returncode=0, stdout=json.dumps(job).encode()),
-        ]
         with (
             mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
             mock.patch.object(
@@ -11673,7 +11764,21 @@ class PostReadyValidationRemediationTests(TestCase):
                 "_authenticate_maintained_correction_commit",
                 return_value=commit,
             ) as authenticate,
-            mock.patch.object(publication, "_run_gh", side_effect=responses) as live,
+            mock.patch.object(
+                orchestration,
+                "_read_post_ready_failure",
+                return_value=observation,
+            ) as failure_reader,
+            mock.patch.object(
+                orchestration,
+                "_read_live_post_ready_pr",
+                return_value=live_correction,
+            ) as live,
+            mock.patch.object(
+                publication,
+                "verify_current_lifecycle_authority",
+                return_value=current,
+            ) as current_reader,
         ):
             verified = orchestration.verify_post_ready_validation_defect_authority(
                 current,
@@ -11684,47 +11789,187 @@ class PostReadyValidationRemediationTests(TestCase):
         authenticate.assert_called_once_with(
             root, REPOSITORY, validation.head_sha
         )
-        self.assertEqual(live.call_count, 3)
+        failure_reader.assert_called_once_with(
+            REPOSITORY, 971, current.lifecycle.head_sha
+        )
+        self.assertEqual(live.call_count, 2)
+        current_reader.assert_called_once_with(REPOSITORY, 970)
 
-    def test_live_reader_rejects_ambiguous_failed_check_selection(self) -> None:
-        temporary, _root, current, _validation, _commit, _observation = self._inputs()
+    def test_exact_current_failure_reader_survives_live_pr_advancement(self) -> None:
+        temporary, _root, current, validation, _commit, observation = self._inputs()
         self.addCleanup(temporary.cleanup)
-        failure = {
-            "state": "OPEN",
-            "isDraft": False,
-            "headRefOid": current.lifecycle.head_sha,
-            "headRepository": {"nameWithOwner": REPOSITORY},
-            "statusCheckRollup": [
-                {
-                    "__typename": "CheckRun",
-                    "workflowName": "Code Quality",
-                    "name": name,
-                    "status": "COMPLETED",
-                    "conclusion": "FAILURE",
-                    "detailsUrl": (
-                        f"https://github.com/{REPOSITORY}/actions/runs/{run}/job/{job}"
-                    ),
-                }
-                for name, run, job in (
-                    ("Unrelated", 99, 199),
-                    ("Validate candidate", 100, 200),
-                )
-            ],
-        }
-        with (
-            mock.patch.object(
-                publication,
-                "_run_gh",
-                return_value=SimpleNamespace(
-                    returncode=0, stdout=json.dumps(failure).encode()
+        check_pages = [{
+            "total_count": 1,
+            "check_runs": [{
+                "id": 200,
+                "name": "Validate candidate",
+                "status": "completed",
+                "conclusion": "failure",
+                "details_url": (
+                    f"https://github.com/{REPOSITORY}/actions/runs/100/job/200"
                 ),
-            ) as live,
-            self.assertRaisesRegex(
-                orchestration.LifecycleOrchestrationError, "unique"
-            ),
+                "app": {"slug": "github-actions"},
+            }],
+        }]
+        run_pages = [{
+            "total_count": 1,
+            "workflow_runs": [{
+                "id": 100,
+                "name": "Code Quality",
+                "path": ".github/workflows/quality.yml",
+                "event": "pull_request",
+                "head_sha": current.lifecycle.head_sha,
+                "status": "completed",
+                "conclusion": "failure",
+                "run_attempt": 2,
+                "repository": {"full_name": REPOSITORY},
+                "head_repository": {"full_name": REPOSITORY},
+                "pull_requests": [{
+                    "number": 971,
+                    "url": f"https://api.github.com/repos/{REPOSITORY}/pulls/971",
+                    "head": {"sha": validation.head_sha},
+                }],
+            }],
+        }]
+        job_pages = [{
+            "total_count": 1,
+            "jobs": [{
+                "id": 200,
+                "run_id": 100,
+                "head_sha": current.lifecycle.head_sha,
+                "status": "completed",
+                "conclusion": "failure",
+                "name": "Validate candidate",
+            }],
+        }]
+        for label, live_head in (
+            ("direct current-head case", current.lifecycle.head_sha),
+            ("post-push correction case", validation.head_sha),
         ):
-            orchestration._read_live_post_ready_failure(REPOSITORY, 971)
-        self.assertEqual(live.call_count, 1)
+            responses = [
+                SimpleNamespace(returncode=0, stdout=json.dumps({
+                    "state": "OPEN",
+                    "isDraft": False,
+                    "headRefOid": live_head,
+                    "headRepository": {"nameWithOwner": REPOSITORY},
+                }).encode()),
+                SimpleNamespace(returncode=0, stdout=json.dumps(check_pages).encode()),
+                SimpleNamespace(returncode=0, stdout=json.dumps(run_pages).encode()),
+                SimpleNamespace(returncode=0, stdout=json.dumps(job_pages).encode()),
+            ]
+            with (
+                self.subTest(label=label),
+                mock.patch.object(
+                    publication, "_run_gh", side_effect=responses
+                ) as github,
+            ):
+                observed = orchestration._read_post_ready_failure(
+                    REPOSITORY, 971, current.lifecycle.head_sha
+                )
+
+            self.assertEqual(observed, observation)
+            self.assertEqual(github.call_count, 4)
+
+    def test_exact_current_failure_reader_rejects_substitution_and_ambiguity(self) -> None:
+        cases = (
+            ("wrong head", {"head_sha": "f" * 40}, 1, None),
+            ("push event", {"event": "push"}, 1, None),
+            (
+                "foreign PR",
+                {"pull_requests": [{
+                    "number": 972,
+                    "url": f"https://api.github.com/repos/{REPOSITORY}/pulls/972",
+                }]},
+                1,
+                None,
+            ),
+            ("ambiguous failures", {}, 2, None),
+            ("incomplete check pagination", {}, 1, 2),
+            ("no failed validation", {}, 0, None),
+        )
+        for label, run_updates, failure_count, check_total in cases:
+            temporary, _root, current, validation, _commit, _observation = self._inputs()
+            self.addCleanup(temporary.cleanup)
+            responses = self._historical_failure_api_responses(
+                current,
+                validation,
+                run_updates=run_updates,
+                failure_count=failure_count,
+                check_total=check_total,
+            )
+            with (
+                self.subTest(label=label),
+                mock.patch.object(publication, "_run_gh", side_effect=responses),
+                self.assertRaises(orchestration.LifecycleOrchestrationError),
+            ):
+                orchestration._read_post_ready_failure(
+                    REPOSITORY, 971, current.lifecycle.head_sha
+                )
+
+    def test_failure_reader_accepts_no_caller_selected_run_or_job(self) -> None:
+        with self.assertRaisesRegex(TypeError, "unexpected keyword"):
+            orchestration._read_post_ready_failure(
+                REPOSITORY,
+                971,
+                "f" * 40,
+                workflow_run_id=100,
+                check_run_id=200,
+            )
+
+    def test_public_entry_rejects_live_head_or_current_movement(self) -> None:
+        cases = (
+            ("live predecessor", "live", None),
+            ("live second successor", "live", "e" * 40),
+            ("CURRENT moved", "current", None),
+        )
+        for label, movement, moved_head in cases:
+            temporary, root, current, validation, commit, observation = self._inputs()
+            self.addCleanup(temporary.cleanup)
+            live_head = (
+                current.lifecycle.head_sha
+                if movement == "live" and moved_head is None
+                else moved_head or validation.head_sha
+            )
+            live = {
+                "repository": REPOSITORY,
+                "pull_request": 971,
+                "head_sha": live_head,
+                "pr_state": "OPEN",
+                "draft": False,
+            }
+            reread = current
+            if movement == "current":
+                reread = replace(current, publication_oid="e" * 40)
+            with (
+                self.subTest(label=label),
+                mock.patch.object(
+                    fast_path, "is_verified_validation_evidence", return_value=True
+                ),
+                mock.patch.object(
+                    orchestration,
+                    "_read_post_ready_failure",
+                    return_value=observation,
+                ),
+                mock.patch.object(
+                    orchestration,
+                    "_authenticate_maintained_correction_commit",
+                    return_value=commit,
+                ),
+                mock.patch.object(
+                    orchestration, "_read_live_post_ready_pr", return_value=live
+                ),
+                mock.patch.object(
+                    publication,
+                    "verify_current_lifecycle_authority",
+                    return_value=reread,
+                ),
+                self.assertRaises(orchestration.LifecycleOrchestrationError),
+            ):
+                orchestration.verify_post_ready_validation_defect_authority(
+                    current,
+                    candidate_validation=validation,
+                    repository_root=root,
+                )
 
     def test_rejects_stale_validation_review_context(self) -> None:
         temporary, root, current, validation, commit, observation = self._inputs()
@@ -11745,7 +11990,7 @@ class PostReadyValidationRemediationTests(TestCase):
                 candidate_validation=validation,
                 authenticated_commit=commit,
                 repository_root=root,
-                failure_reader=lambda _repository, _pull_request: copy.deepcopy(observation),
+                failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
             )
 
     def test_rejects_same_name_workflow_from_another_path(self) -> None:
@@ -11887,7 +12132,7 @@ class PostReadyValidationRemediationTests(TestCase):
                     candidate_validation=validation,
                     authenticated_commit=commit,
                     repository_root=root,
-                    failure_reader=lambda _repository, _pull_request: copy.deepcopy(observation),
+                    failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
                 )
 
     def test_rejects_stale_nonfailure_and_cross_identity_observations(self) -> None:
@@ -11919,7 +12164,7 @@ class PostReadyValidationRemediationTests(TestCase):
                     candidate_validation=validation,
                     authenticated_commit=commit,
                     repository_root=root,
-                    failure_reader=lambda _repository, _pull_request: copy.deepcopy(observation),
+                    failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
                 )
 
     def test_rejects_stale_validation_wrong_topology_signer_and_unrelated_change(self) -> None:
@@ -11973,7 +12218,7 @@ class PostReadyValidationRemediationTests(TestCase):
                     candidate_validation=changed_validation,
                     authenticated_commit=changed_commit,
                     repository_root=root,
-                    failure_reader=lambda _repository, _pull_request: copy.deepcopy(observation),
+                    failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
                 )
 
         temporary, root, current, validation, _commit, observation = self._inputs()
@@ -12014,7 +12259,7 @@ class PostReadyValidationRemediationTests(TestCase):
                 candidate_validation=changed_validation,
                 authenticated_commit=changed_commit,
                 repository_root=root,
-                failure_reader=lambda _repository, _pull_request: copy.deepcopy(observation),
+                failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
             )
 
         temporary, root, current, _validation, _commit, _observation = self._inputs()
@@ -12054,7 +12299,7 @@ class PostReadyValidationRemediationTests(TestCase):
                 candidate_validation=validation,
                 authenticated_commit=commit,
                 repository_root=root,
-                failure_reader=lambda _repository, _pull_request: copy.deepcopy(observation),
+                failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
             )
         with self.assertRaises(orchestration.LifecycleOrchestrationError):
             orchestration.issue_ready_remediation_provider_growth_authorization(

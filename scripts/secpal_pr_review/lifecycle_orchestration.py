@@ -375,15 +375,15 @@ _FAILURE_OBSERVATION_FIELDS = frozenset(
 )
 
 
-def _read_live_post_ready_failure(repository: str, pull_request: int) -> dict[str, Any]:
-    """Read one deterministic terminal failure from the exact live PR head."""
+def _read_live_post_ready_pr(repository: str, pull_request: int) -> dict[str, Any]:
+    """Read the bounded live identity of one OPEN Ready delivery PR."""
 
     result = publication._run_gh([
         "pr", "view", str(pull_request), "--repo", repository,
-        "--json", "state,isDraft,headRefOid,headRepository,statusCheckRollup",
+        "--json", "state,isDraft,headRefOid,headRepository",
     ])
     if result.returncode != 0:
-        raise LifecycleOrchestrationError("live validation failure is unavailable")
+        raise LifecycleOrchestrationError("live correction PR is unavailable")
     try:
         payload = json.loads(
             result.stdout,
@@ -394,82 +394,12 @@ def _read_live_post_ready_failure(repository: str, pull_request: int) -> dict[st
             or payload.get("isDraft") is not False
             or (payload.get("headRepository") or {}).get("nameWithOwner")
             != repository
+            or not re.fullmatch(
+                r"(?:[0-9a-f]{40}|[0-9a-f]{64})", payload.get("headRefOid", "")
+            )
         ):
             raise LifecycleOrchestrationError(
-                "live validation failure does not belong to an OPEN Ready PR"
-            )
-        failures = [
-            item for item in payload.get("statusCheckRollup", [])
-            if isinstance(item, dict)
-            and item.get("__typename") == "CheckRun"
-            and item.get("status") == "COMPLETED"
-            and item.get("conclusion") == "FAILURE"
-            and isinstance(item.get("detailsUrl"), str)
-        ]
-        failures.sort(key=lambda item: (
-            str(item.get("workflowName", "")), str(item.get("name", "")),
-            str(item.get("detailsUrl", "")),
-        ))
-        if len(failures) != 1:
-            raise LifecycleOrchestrationError(
-                "exact current head must have one unique terminal validation failure"
-            )
-        failure = failures[0]
-        match = re.fullmatch(
-            r"https://github\.com/([^/]+/[^/]+)/actions/runs/([1-9][0-9]*)/job/([1-9][0-9]*)",
-            failure["detailsUrl"],
-        )
-        if match is None or match.group(1) != repository:
-            raise LifecycleOrchestrationError(
-                "validation failure run identity is malformed or cross-repository"
-            )
-        workflow_run_id = int(match.group(2))
-        run = publication._run_gh([
-            "api", "--hostname", "github.com",
-            f"repos/{repository}/actions/runs/{workflow_run_id}",
-        ])
-        if run.returncode != 0:
-            raise LifecycleOrchestrationError(
-                "validation failure attempt identity is unavailable"
-            )
-        run_payload = json.loads(
-            run.stdout,
-            object_pairs_hook=publication._reject_duplicate_pairs,
-        )
-        if (
-            run_payload.get("id") != workflow_run_id
-            or run_payload.get("head_sha") != payload.get("headRefOid")
-            or run_payload.get("status") != "completed"
-            or run_payload.get("conclusion") != "failure"
-            or (run_payload.get("repository") or {}).get("full_name") != repository
-            or not isinstance(run_payload.get("path"), str)
-            or not run_payload["path"].startswith(".github/workflows/")
-        ):
-            raise LifecycleOrchestrationError(
-                "validation failure attempt differs from the current PR head"
-            )
-        job = publication._run_gh([
-            "api", "--hostname", "github.com",
-            f"repos/{repository}/actions/jobs/{match.group(3)}",
-        ])
-        if job.returncode != 0:
-            raise LifecycleOrchestrationError(
-                "validation failure job identity is unavailable"
-            )
-        job_payload = json.loads(
-            job.stdout,
-            object_pairs_hook=publication._reject_duplicate_pairs,
-        )
-        if (
-            job_payload.get("id") != int(match.group(3))
-            or job_payload.get("run_id") != workflow_run_id
-            or job_payload.get("head_sha") != payload.get("headRefOid")
-            or job_payload.get("status") != "completed"
-            or job_payload.get("conclusion") != "failure"
-            or job_payload.get("name") != failure.get("name")
-        ):
-            raise LifecycleOrchestrationError(
-                "validation failure job differs from the selected failed check"
+                "live correction does not belong to the OPEN Ready delivery PR"
             )
         return {
             "repository": repository,
@@ -477,21 +407,179 @@ def _read_live_post_ready_failure(repository: str, pull_request: int) -> dict[st
             "head_sha": payload["headRefOid"],
             "pr_state": payload["state"],
             "draft": payload["isDraft"],
-            "workflow_name": failure.get("workflowName"),
-            "workflow_path": run_payload["path"],
-            "check_name": failure.get("name"),
-            "workflow_run_id": workflow_run_id,
-            "check_run_id": int(match.group(3)),
-            "status": failure["status"],
-            "conclusion": failure["conclusion"],
-            "attempt": run_payload.get("run_attempt"),
         }
     except LifecycleOrchestrationError:
         raise
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise LifecycleOrchestrationError("live correction PR is malformed") from exc
+
+
+def _github_paginated_collection(endpoint: str, field: str) -> tuple[dict[str, Any], ...]:
+    """Read one complete maintained GitHub REST collection via gh pagination."""
+
+    result = publication._run_gh([
+        "api", "--hostname", "github.com", "--paginate", "--slurp", endpoint,
+    ])
+    if result.returncode != 0:
+        raise LifecycleOrchestrationError("hosted validation evidence is unavailable")
+    try:
+        pages = json.loads(
+            result.stdout,
+            object_pairs_hook=publication._reject_duplicate_pairs,
+        )
+        if not isinstance(pages, list) or not pages:
+            raise LifecycleOrchestrationError(
+                "hosted validation evidence pagination is incomplete"
+            )
+        totals = {page.get("total_count") for page in pages if isinstance(page, dict)}
+        if (
+            len(totals) != 1
+            or any(not isinstance(page, dict) for page in pages)
+            or any(not isinstance(page.get(field), list) for page in pages)
+        ):
+            raise LifecycleOrchestrationError(
+                "hosted validation evidence pagination is malformed"
+            )
+        total = next(iter(totals))
+        values = tuple(item for page in pages for item in page[field])
+        if (
+            not isinstance(total, int)
+            or isinstance(total, bool)
+            or total < 0
+            or len(values) != total
+            or any(not isinstance(item, dict) for item in values)
+        ):
+            raise LifecycleOrchestrationError(
+                "hosted validation evidence pagination is incomplete"
+            )
+        identities = [item.get("id") for item in values]
+        if any(
+            not isinstance(identity, int) or isinstance(identity, bool) or identity <= 0
+            for identity in identities
+        ) or len(set(identities)) != len(identities):
+            raise LifecycleOrchestrationError(
+                "hosted validation evidence identities are malformed or ambiguous"
+            )
+        return values
+    except LifecycleOrchestrationError:
+        raise
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise LifecycleOrchestrationError(
-            "live validation failure evidence is malformed"
+            "hosted validation evidence pagination is malformed"
         ) from exc
+
+
+def _run_pull_request_identity(run: dict[str, Any]) -> tuple[str, int] | None:
+    """Return the unique repository-qualified PR identity carried by a run."""
+
+    identities: set[tuple[str, int]] = set()
+    for item in run.get("pull_requests", []):
+        if not isinstance(item, dict) or not isinstance(item.get("url"), str):
+            return None
+        match = re.fullmatch(
+            r"https://api\.github\.com/repos/([^/]+/[^/]+)/pulls/([1-9][0-9]*)",
+            item["url"],
+        )
+        if match is None or item.get("number") != int(match.group(2)):
+            return None
+        identities.add((match.group(1), int(match.group(2))))
+    return next(iter(identities)) if len(identities) == 1 else None
+
+
+def _read_post_ready_failure(
+    repository: str, pull_request: int, predecessor_head: str
+) -> dict[str, Any]:
+    """Derive one PR-bound terminal failure from exact lifecycle CURRENT."""
+
+    live = _read_live_post_ready_pr(repository, pull_request)
+    checks = _github_paginated_collection(
+        f"repos/{repository}/commits/{predecessor_head}/check-runs?per_page=100",
+        "check_runs",
+    )
+    runs = _github_paginated_collection(
+        f"repos/{repository}/actions/runs?head_sha={predecessor_head}"
+        "&event=pull_request&per_page=100",
+        "workflow_runs",
+    )
+    admissible_runs = {
+        run["id"]: run
+        for run in runs
+        if (
+            run.get("event") == "pull_request"
+            and run.get("head_sha") == predecessor_head
+            and run.get("status") == "completed"
+            and run.get("conclusion") == "failure"
+            and (run.get("repository") or {}).get("full_name") == repository
+            and (run.get("head_repository") or {}).get("full_name") == repository
+            and _run_pull_request_identity(run) == (repository, pull_request)
+            and isinstance(run.get("name"), str)
+            and run["name"].strip()
+            and isinstance(run.get("path"), str)
+            and re.fullmatch(r"\.github/workflows/[^/]+\.ya?ml", run["path"])
+            and isinstance(run.get("run_attempt"), int)
+            and not isinstance(run.get("run_attempt"), bool)
+            and run["run_attempt"] > 0
+        )
+    }
+    failures: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+    jobs_by_run: dict[int, tuple[dict[str, Any], ...]] = {}
+    for check in checks:
+        if (
+            check.get("status") != "completed"
+            or check.get("conclusion") != "failure"
+            or (check.get("app") or {}).get("slug") != "github-actions"
+            or not isinstance(check.get("details_url"), str)
+        ):
+            continue
+        match = re.fullmatch(
+            rf"https://github\.com/{re.escape(repository)}/actions/runs/"
+            r"([1-9][0-9]*)/job/([1-9][0-9]*)",
+            check["details_url"],
+        )
+        if match is None:
+            continue
+        run_id, job_id = map(int, match.groups())
+        run = admissible_runs.get(run_id)
+        if run is None or check.get("id") != job_id:
+            continue
+        if run_id not in jobs_by_run:
+            jobs_by_run[run_id] = _github_paginated_collection(
+                f"repos/{repository}/actions/runs/{run_id}/jobs?per_page=100",
+                "jobs",
+            )
+        matching_jobs = [
+            job for job in jobs_by_run[run_id]
+            if (
+                job.get("id") == job_id
+                and job.get("run_id") == run_id
+                and job.get("head_sha") == predecessor_head
+                and job.get("status") == "completed"
+                and job.get("conclusion") == "failure"
+                and job.get("name") == check.get("name")
+            )
+        ]
+        if len(matching_jobs) == 1:
+            failures.append((check, run, matching_jobs[0]))
+    if len(failures) != 1:
+        raise LifecycleOrchestrationError(
+            "exact lifecycle CURRENT head must have one unique terminal validation failure"
+        )
+    check, run, job = failures[0]
+    return {
+        "repository": repository,
+        "pull_request": pull_request,
+        "head_sha": predecessor_head,
+        "pr_state": live["pr_state"],
+        "draft": live["draft"],
+        "workflow_name": run["name"],
+        "workflow_path": run["path"],
+        "check_name": check["name"],
+        "workflow_run_id": run["id"],
+        "check_run_id": job["id"],
+        "status": check["status"].upper(),
+        "conclusion": check["conclusion"].upper(),
+        "attempt": run["run_attempt"],
+    }
 
 
 def _validated_failure_observation(
@@ -1259,7 +1347,7 @@ def _verify_post_ready_validation_defect_authority(
     candidate_validation: fast_path.VerifiedValidationEvidence,
     authenticated_commit: fast_path.AuthenticatedIntegrationCommit,
     repository_root: Path | str,
-    failure_reader: Callable[[str, int], Any] = _read_live_post_ready_failure,
+    failure_reader: Callable[[str, int, str], Any] = _read_post_ready_failure,
 ) -> VerifiedPostReadyValidationDefectAuthority:
     """Admit one exact validation defect into the existing remaining slot."""
 
@@ -1291,7 +1379,10 @@ def _verify_post_ready_validation_defect_authority(
             "post-Ready validation remediation requires the exact remaining-slot state"
         )
     observation, observation_digest = _validated_failure_observation(
-        failure_reader(lifecycle.repository, lifecycle.pull_request), lifecycle
+        failure_reader(
+            lifecycle.repository, lifecycle.pull_request, lifecycle.head_sha
+        ),
+        lifecycle,
     )
     try:
         reviewed_state, _eligibility_digest = (
@@ -1427,18 +1518,55 @@ def verify_post_ready_validation_defect_authority(
 ) -> VerifiedPostReadyValidationDefectAuthority:
     """Use only the maintained live GitHub observation boundary in production."""
 
+    lifecycle = current.lifecycle if isinstance(
+        current, publication.VerifiedLifecyclePublication
+    ) else None
+    if not isinstance(lifecycle, authority.VerifiedLifecycleAuthority):
+        raise LifecycleOrchestrationError(
+            "post-Ready validation remediation requires authenticated CURRENT"
+        )
+    observation = _read_post_ready_failure(
+        lifecycle.repository, lifecycle.pull_request, lifecycle.head_sha
+    )
     authenticated_commit = _authenticate_maintained_correction_commit(
         repository_root,
-        current.lifecycle.repository,
+        lifecycle.repository,
         candidate_validation.head_sha,
     )
-    return _verify_post_ready_validation_defect_authority(
+    verified = _verify_post_ready_validation_defect_authority(
         current,
         candidate_validation=candidate_validation,
         authenticated_commit=authenticated_commit,
         repository_root=repository_root,
-        failure_reader=_read_live_post_ready_failure,
+        failure_reader=lambda _repository, _pull_request, _head: observation,
     )
+    live = _read_live_post_ready_pr(lifecycle.repository, lifecycle.pull_request)
+    if live["head_sha"] != candidate_validation.head_sha:
+        raise LifecycleOrchestrationError(
+            "live correction PR is not the exact validated correction head"
+        )
+    try:
+        reread = publication.verify_current_lifecycle_authority(
+            lifecycle.repository, lifecycle.delivery_issue
+        )
+    except publication.LifecyclePublicationError as exc:
+        raise LifecycleOrchestrationError(
+            "CURRENT changed or became unavailable during validation remediation"
+        ) from exc
+    final_live = _read_live_post_ready_pr(
+        lifecycle.repository, lifecycle.pull_request
+    )
+    if (
+        reread.publication_oid != current.publication_oid
+        or reread.publication_digest != current.publication_digest
+        or reread.lifecycle.authority_digest != lifecycle.authority_digest
+        or reread.lifecycle.head_sha != lifecycle.head_sha
+        or final_live != live
+    ):
+        raise LifecycleOrchestrationError(
+            "CURRENT or live correction PR changed during validation remediation"
+        )
+    return verified
 
 
 def issue_post_ready_validation_remediation_authorization(
@@ -1474,6 +1602,25 @@ def issue_post_ready_validation_remediation_authorization(
     ):
         raise LifecycleOrchestrationError(
             "post-Ready validation-defect authority is stale or substituted"
+        )
+    try:
+        reread = publication.verify_current_lifecycle_authority(
+            lifecycle.repository, lifecycle.delivery_issue
+        )
+    except publication.LifecyclePublicationError as exc:
+        raise LifecycleOrchestrationError(
+            "CURRENT changed before post-Ready remediation authorization"
+        ) from exc
+    live = _read_live_post_ready_pr(lifecycle.repository, lifecycle.pull_request)
+    if (
+        reread.publication_oid != current.publication_oid
+        or reread.publication_digest != current.publication_digest
+        or reread.lifecycle.authority_digest != lifecycle.authority_digest
+        or reread.lifecycle.head_sha != lifecycle.head_sha
+        or live["head_sha"] != finding_authority.resulting_head_sha
+    ):
+        raise LifecycleOrchestrationError(
+            "CURRENT or live correction PR changed before remediation authorization"
         )
     return _create_user_authorization(
         authorization_id=authorization_id,
