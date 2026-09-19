@@ -6224,11 +6224,11 @@ def is_verified_validation_evidence(value: Any) -> bool:
             or canonical_json_bytes(provenance).decode("utf-8") != raw
         ):
             return False
-        reviewed_state = StableFeedbackState.from_payload(
-            provenance["reviewed_state"]
-        )
         kind = provenance.get("kind")
         if kind == "ORDINARY":
+            reviewed_state = StableFeedbackState.from_payload(
+                provenance["reviewed_state"]
+            )
             verified = _verify_validation_attestation_unsealed(
                 provenance["attestation"],
                 repository=provenance["repository"],
@@ -6244,6 +6244,9 @@ def is_verified_validation_evidence(value: Any) -> bool:
                 delivery_issue_number=provenance.get("delivery_issue_number"),
             )
         elif kind == "READY_INTEGRATION":
+            reviewed_state = StableFeedbackState.from_payload(
+                provenance["reviewed_state"]
+            )
             verified = _verify_ready_integration_attestation_unsealed(
                 provenance["attestation"],
                 repository=provenance["repository"],
