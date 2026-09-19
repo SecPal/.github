@@ -537,6 +537,77 @@ Version 3 adds the distinct
 `SECPAL_PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_ADMISSION` source mode. It does
 not reinterpret versions 1/2. Loss-admission schema 1.0 retains its exact signed,
 unenrolled OPEN Draft and same-head validation-receipt-trailer semantics.
+
+Version 4 adds one closed `GOVERNANCE_AMENDMENT` source mode for the registered
+issue #960 / PR #961 bootstrap only. It accepts no historical validation object:
+the typed state is `ABSENT_NEVER_ISSUED`, and validation-receipt,
+source-validation, and final-attestation digests are canonical JSON nulls.
+`PRESENT` projects the unchanged version-1/2 evidence, while `UNAVAILABLE`
+projects unchanged version-3 evidence whose receipt identity exists but whose
+package bytes are unavailable. These states are disjoint; prose, caller flags,
+synthetic digests, and candidate-local policy cannot select one.
+
+The amendment authorization contains a one-use exact-scope root authorization
+signed by an authority signer whose identity and key come from the bound
+accepted-main registry. The candidate policy and its proposed registry entry
+are prospective implementation data and have no authority before adoption.
+The outer authorization uses the existing legacy-adoption signer and is bound to
+the registered repository, delivery, exact qualified source, final signed
+head/tree/topology, accepted-main boundary, complete governance-only change
+set, natural CI, independent exact-head qualification, stable feedback, finite
+history and counters, and explicit human architecture authority. It adds no
+journal operation, signer, lifecycle state, counter, reset, or recovery path.
+The maintained observation producer accepts only the closed external human,
+qualification, and finite-history inputs that it cannot originate;
+it does not accept a preassembled or presigned live-facts descriptor. It
+independently reacquires the live
+issue, Ready PR at issuance, protected main, complete source range and signatures, exact
+tree/topology/path/blob/mode scope, terminal CI, stable feedback, threads, and
+qualification binding before either signer runs. The exact required-check set
+comes from `sync-required-checks.sh` at bound accepted main, and combined-status
+contexts are limited to that set plus the maintained CLA context. Current-
+validation identity is derived from the bound accepted-main registry. Typed
+historical absence is derived from the protected lifecycle journal plus an
+accepted-key verification and trailer audit of the exact qualified-source
+history; caller absence, validation, receipt, provenance, and candidate-local
+audit objects are rejected. Issuance occurs only after the
+separately authorized normal Draft-to-Ready transition, exactly one authenticated
+`ready_for_review` event, and the complete required workflow set registered after
+that event reach terminal acceptance. The event actor must be the registered
+operator, and the root-signed facts include the exact `DRAFT_TO_READY` authority
+binding. The provider-produced fact set excludes the external qualification
+claim; it becomes authorization evidence only when the accepted-main root
+signer binds its exact verifier, conversation, head, tree, result, and digest.
+Execution reuses that verified root-bound qualification while independently
+reobserving every provider fact. Canonical timestamps, complete pagination, the bounded exact run count,
+the registered bootstrap record, and the closed allowed-skip set prevent stale,
+truncated, or caller-selected evidence from claiming that order; execution then
+reacquires byte-identical facts.
+Every adopted source commit is
+verified directly against the bound accepted-main signer keys; ambient Git trust
+and matching principal text are insufficient. The governance-only scope admits the two maintained command
+entry points, `scripts/secpal-pr-review-actions.py` and
+`scripts/secpal-resolve-fixed-threads.py`, as exact files; it does not admit
+nearby or arbitrary `scripts/` paths. The canonical change digest is derived only from the exact
+repository/delivery/source/base/change-set object using newline-terminated
+canonical JSON. One shared range-signature binding digests the complete ordered
+accepted-main-to-head commit evidence plus the accepted-main identity. The
+Exact-State-Adoption boundary keeps its independently normalized head-commit
+evidence under the distinct `commit_signature_evidence_digest`; it never
+compares that head-only digest to the range digest. Consumption uses only the
+canonical GitHub squash method. The GitHub-verified protected-main commit must
+have the authorized predecessor as its sole parent and the exact qualified
+tree. Its message embeds the complete legacy-adoption-signed authorization and
+closed consumption record, including the expected method, parent, tree, CI,
+qualification, feedback, zero-findings and one-use identity. Direct push,
+two-parent merge, rebase, force, and bypass forms fail closed;
+`SecPal/.github` protected main must retain strict up-to-date required checks,
+so a concurrent base advance is rejected by GitHub before squash mutation;
+it neither creates lifecycle CURRENT nor synthesizes ordinary enrollment,
+Ready, receipt, counter, or thread state.
+Future deliveries must establish native genesis and commit-bound validation
+authority before review, remediation, or a Ready transition; this exact policy
+is not a generic grandfather or administrative override.
 Successor schema 1.1 admits an exact Ready source only for a centrally registered
 repository with accepted lifecycle authority. It authenticates the complete
 delivery source history, every required edge and commit signature, and derives

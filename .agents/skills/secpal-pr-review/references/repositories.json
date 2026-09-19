@@ -44,6 +44,15 @@
       "default_branch": "main",
       "allowed_base_repositories": ["SecPal/.github"],
       "reviewer_identities": [],
+      "qualified_remediation_successor_evidence_loss_policy": {
+        "path": "policies/qualified-remediation-successor-evidence-loss.json",
+        "admission_digest": "6dda7969b7f064548c6474abd895322b697ba5f2f22d960351db43318df45f94"
+      },
+      "governance_amendment_policy": {
+        "path": "policies/governance-amendment-bootstrap.json",
+        "kind": "SECPAL_GOVERNANCE_AMENDMENT_AUTHORIZATION",
+        "purpose": "EXACT_ZERO_RECEIPT_PRE_ENROLLMENT_BOOTSTRAP"
+      },
       "focused_validation": [
         {
           "argv": ["python3", "-m", "unittest", "tests/secpal-resolve-fixed-threads-unit.py"],

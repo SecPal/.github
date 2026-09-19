@@ -505,6 +505,53 @@ Mixed provider-review/admission inputs, replay into another context, resets,
 and using the admission to derive remediation or Ready state fail closed.
 The lifecycle-authority suite is an unconditional registered validation command.
 
+Exact-State-Adoption version 4 is the registered, one-delivery
+`GOVERNANCE_AMENDMENT` mode for #960 / PR #961. It represents historical
+validation as `ABSENT_NEVER_ISSUED` with typed null receipt, source-validation,
+and final-attestation fields. It consumes an independently signed exact-scope
+authorization only after current validation, natural CI, exact-head independent
+qualification, and zero material findings. Its public producer accepts only the
+closed external human/verifier inputs that cannot be observed from providers,
+then independently rebuilds the live GitHub, Git, CI, feedback, thread,
+source-range and exact change-set facts from the Ready PR. Before signing it
+requires one authenticated `ready_for_review` event and the complete required
+workflow set registered strictly after that event to be terminal and successful.
+The bounded run inventory, canonical GitHub timestamps, exact returned count,
+registered bootstrap scope, authorized Ready actor, and live strict required-
+check policy are authenticated fail closed. The check identities come from the
+bound accepted-main copy of `sync-required-checks.sh`; accepted combined-status
+contexts are that exact set plus the maintained CLA context. The producer also
+derives current-validation policy identity from the bound accepted-main
+registry and derives `ABSENT_NEVER_ISSUED` only after the protected journal and
+exact signed qualified-source trailer history both prove absence. Caller-
+provided validation, receipt, provenance, or absence objects are outside the
+closed input schema. The provider-produced fact set excludes the external
+qualification claim; only the accepted-main root signature turns its exact
+verifier, head, tree, result and digest into authorization evidence. Execution
+reuses that verified value while reobserving provider facts. A preassembled or presigned live-
+facts descriptor cannot replace that observation. Provider-enforced strict
+up-to-date checks ensure a base advance rejects the normal squash before main
+changes. It creates an
+exact-scope authorization with the existing accepted-main authority signer, wraps it with
+the existing legacy-adoption signer, and consumes once through the repository's
+canonical GitHub squash merge. Candidate policy and registry additions are
+prospective only; their exact bootstrap scope is compared before root signing
+but cannot authorize itself. Every adopted source commit
+must match a key in the bound accepted-main registry. The resulting GitHub-
+verified protected-main commit must have exactly the authorized predecessor and
+qualified tree. Its two top-level command entry points are admitted as exact files;
+other paths under `scripts/` remain outside this authority. Direct push, merge-
+commit, rebase, force, and branch-protection bypass forms are rejected; ambient
+Git trust is not authority. The change
+digest uses the maintained newline-terminated canonical JSON encoder over one
+closed base/head/tree/topology/path/blob/mode object. The accepted squash
+commit stores the canonical authorization and consumption digest for immutable
+read-back and replay rejection. A separate canonical range-signature digest
+binds every ordered accepted-main-to-head commit, while the existing adoption
+field retains only independently normalized head-commit evidence. It does not create lifecycle CURRENT, Ready,
+receipt, counter, or thread authority. Versions 1/2 remain `PRESENT`, and version
+3 remains `UNAVAILABLE`, without serialization changes.
+
 ### `secpal_pr_review/validation_evidence_loss.py`
 
 Owns the versioned
@@ -1341,6 +1388,11 @@ bash scripts/sync-required-checks.sh --apply
 2. Builds the exact JSON payload GitHub expects for branch protection updates
 3. Applies the payload through `gh api` using `--input` so booleans and arrays stay typed correctly
 4. Keeps the live branch-protection baseline repeatable after workflow or context drift
+5. Emits `strict: true` only for `SecPal/.github`; all other managed
+   repositories retain `strict: false`. Live-preserving apply mode keeps the
+   same canonical check inventory and app bindings, so a later sync cannot
+   undo the provider-enforced exact-base merge precondition or duplicate a
+   check identity.
 
 **Exit Codes:**
 

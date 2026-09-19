@@ -1,0 +1,88 @@
+{
+  "schema_version": "1.0",
+  "admissions": [
+    {
+      "schema_version": "1.0",
+      "kind": "QUALIFIED_TWO_PARENT_REMEDIATION_SUCCESSOR_WITH_MISSING_COMMIT_BOUND_EVIDENCE",
+      "repository": "SecPal/.github",
+      "delivery_issue": 956,
+      "pull_request": 957,
+      "accepted_main_at_classification": "14c5bcf19eaa9e144af5e9afa05f12f2c08648dc",
+      "predecessor": {
+        "publication_oid": "e8bb42d5bbb1837bc0fd3c7b18873ea91f17bbb2",
+        "publication_digest": "1237f43d9b2bb2e63c2648fe5f866f7837c502d3438be20567cb2003a5a9fd88",
+        "head_sha": "fd6e9ff07552cdbbd15373131a073d6bb5357936",
+        "tree_sha": "16784bf3473caa9f9d10106681ad12a03cd89040",
+        "terminal_authority_digest": "486f179c69400c8243421e4ecb9d630c7a62e3e1f28703d631fa337aa3700939"
+      },
+      "successor": {
+        "head_sha": "14c8646aecd3555473cef58d59fc3cf441260baa",
+        "tree_sha": "391cec4156c7cbc735c28dccddaa3d6e937e74d0",
+        "ordered_parent_shas": [
+          "fd6e9ff07552cdbbd15373131a073d6bb5357936",
+          "14c5bcf19eaa9e144af5e9afa05f12f2c08648dc"
+        ],
+        "base_ref": "main",
+        "base_sha": "14c5bcf19eaa9e144af5e9afa05f12f2c08648dc"
+      },
+      "predecessor_state": {
+        "unrestricted_review_count": 1,
+        "remediation_cycle_count": 1,
+        "cycle_3_absent": true,
+        "draft": false,
+        "ready": true,
+        "ready_transition_count": 1,
+        "exceptional_recovery_count": 0,
+        "exceptional_continuation_count": 0
+      },
+      "resulting_state": {
+        "unrestricted_review_count": 1,
+        "remediation_cycle_count": 2,
+        "cycle_3_absent": true,
+        "draft": false,
+        "ready": true,
+        "ready_transition_count": 1,
+        "exceptional_recovery_count": 0,
+        "exceptional_continuation_count": 0
+      },
+      "qualification": {
+        "id": "e92cf027-a097-4853-a65c-5151577df509",
+        "classification": "QUALIFIED_TWO_PARENT_REMEDIATION_SUCCESSOR_WITH_MISSING_COMMIT_BOUND_EVIDENCE",
+        "qualified_source_repository": "SecPal/.github",
+        "qualified_source_issue": 956,
+        "qualified_source_pull_request": 957,
+        "qualified_source_head_sha": "14c8646aecd3555473cef58d59fc3cf441260baa",
+        "qualified_source_tree_sha": "391cec4156c7cbc735c28dccddaa3d6e937e74d0",
+        "provider_summary_head_sha": "d017aec38b0f0c3c38ecf526a7ea011156636e57",
+        "reviewed_state_digest": "769a646a244f0c4b816070cd6fa0f29f1cbdbe7e28ca4baf9a1a836ebb81de04",
+        "reviewed_feedback_digest": "79d2f93b48468f7d0ec567093e6fda36857fa29604b5ac58364360760f20a489"
+      },
+      "stable_thread_inventory": [
+        { "thread_id": "PRRT_kwDOQFR1MM6jHjKn", "resolved": false, "outdated": true },
+        { "thread_id": "PRRT_kwDOQFR1MM6jHjKu", "resolved": false, "outdated": true },
+        { "thread_id": "PRRT_kwDOQFR1MM6jHjK0", "resolved": false, "outdated": true },
+        { "thread_id": "PRRT_kwDOQFR1MM6jHjK4", "resolved": false, "outdated": true },
+        { "thread_id": "PRRT_kwDOQFR1MM6jHjK6", "resolved": false, "outdated": true },
+        { "thread_id": "PRRT_kwDOQFR1MM6jHjK_", "resolved": false, "outdated": true },
+        { "thread_id": "PRRT_kwDOQFR1MM6jHjLD", "resolved": false, "outdated": true },
+        { "thread_id": "PRRT_kwDOQFR1MM6jHjLI", "resolved": false, "outdated": true },
+        { "thread_id": "PRRT_kwDOQFR1MM6jHjLO", "resolved": false, "outdated": true },
+        { "thread_id": "PRRT_kwDOQFR1MM6jHmaj", "resolved": false, "outdated": true },
+        { "thread_id": "PRRT_kwDOQFR1MM6jHmbU", "resolved": false, "outdated": true },
+        { "thread_id": "PRRT_kwDOQFR1MM6jHmb3", "resolved": false, "outdated": true }
+      ],
+      "current_material_finding_ids": [],
+      "transition_kind": "REMEDIATION_COMPLETED",
+      "bounded_uses": 1,
+      "historical_package_status": "UNAVAILABLE",
+      "historical_integration_evidence_digest": null,
+      "historical_validation_receipt_digest": null,
+      "historical_bytes_reconstructed": false,
+      "publication_branch": "refs/heads/secpal-lifecycle-publications",
+      "signer_identity": "aroviqen@secpal.app",
+      "policy_path": "policies/qualified-remediation-successor-evidence-loss.json",
+      "registration_path": ".agents/skills/secpal-pr-review/references/repositories.json",
+      "admission_digest": "6dda7969b7f064548c6474abd895322b697ba5f2f22d960351db43318df45f94"
+    }
+  ]
+}

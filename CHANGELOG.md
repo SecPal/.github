@@ -86,6 +86,45 @@ Log of notable changes to SecPal organization defaults (newest first).
   authorization, signature, parent binding and one-use identity before
   continuing journal ancestry.
 
+## 2026-09-18 - Bound One Governance Amendment Bootstrap
+
+**Fixed:**
+
+- Preserve provider-enforced strict up-to-date checks for `SecPal/.github`
+  while keeping every other managed repository's existing non-strict baseline.
+  Governance-amendment observation now derives the exact thirteen-check
+  inventory from the bound accepted-main synchronizer, admits combined-status
+  contexts only from that inventory plus the maintained external CLA context,
+  authenticates the complete paginated combined-status inventory, and binds
+  the registered bootstrap scope, authorized Ready actor, and strict base
+  policy before canonical squash consumption. Repeated post-Ready workflow
+  identities retain their full history while only the uniquely identified
+  newest run supplies the terminal result.
+- Bind the qualified-remediation signer and exact twelve-thread inventory to
+  accepted registration, and persist its safety report before the one-use
+  lifecycle publication can be signed or advanced.
+- Add one registered, governance-only amendment boundary for issue #960 / PR
+  #961. The accepted-main authority signer binds the exact one-use root
+  authorization, the legacy-adoption signer wraps it, and accepted-main keys
+  authenticate source and merge commits. Candidate policy and ambient Git trust
+  cannot authorize adoption. The canonical GitHub squash path adopts the
+  governance-only tree only when its verified commit has the authorized sole
+  parent and exact qualified tree, with immutable authorization and consumption
+  read-back.
+- Derive the exact change digest through the maintained canonical JSON encoder,
+  verify every adopted source commit, verify the constructed merge before any
+  push, and independently rebuild live GitHub/Git/CI/feedback facts before the
+  accepted-main authority or adoption signer can sign.
+- Bind the complete accepted-main-to-head signature range through one shared
+  canonical digest while retaining the Exact-State-Adoption consumer's distinct
+  normalized head-commit evidence.
+- Represent historical evidence truthfully as `PRESENT`, `UNAVAILABLE`, or
+  `ABSENT_NEVER_ISSUED`; the last state carries typed nulls and cannot synthesize
+  receipt, source-validation, or final-attestation identities. Derive that
+  absence from the protected lifecycle journal and the exact signed qualified-
+  source artifact history, and derive current-validation identity from the
+  bound accepted-main registry instead of caller objects.
+
 ## 2026-09-18 - Admit Exact Node-24 Delivery Evidence Loss
 
 **Fixed:**

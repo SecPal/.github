@@ -552,8 +552,50 @@ Review-budget consumption remains a separate authenticated admission. Lost
 historical bytes are not reconstructed, and fresh current safety is not a
 historical receipt or another unrestricted review.
 
-This boundary publishes authority; it does not derive lifecycle semantics,
-implement two-parent integration, or orchestrate the full finite workflow.
+Version 4 retains the same Exact-State-Adoption and protected journal/CAS
+owners. Its sole registered source is the #960 / PR #961
+`GOVERNANCE_AMENDMENT`: one existing-role signature over the exact qualified
+source, final governance-only tree and topology, accepted-main boundary,
+signatures, current validation, natural CI, independent qualification, stable
+feedback, finite counters, and explicit human architecture authority. Its
+historical evidence state is `ABSENT_NEVER_ISSUED`, with canonical null receipt,
+source-validation, and final-attestation digests. Existing versions project as
+`PRESENT` or `UNAVAILABLE` without changing their bytes. No caller assertion,
+candidate-local registration, replay, second use, product change, finding,
+counter reset, Cycle 3, or fabricated digest is authority.
+
+The producer derives the exact required-check identities from the bound
+accepted-main synchronizer and admits combined-status contexts only from that
+set plus the maintained external CLA context. It derives current-validation
+identity from the bound accepted-main registry. `ABSENT_NEVER_ISSUED` additionally
+requires both the existing protected-journal pre-enrollment absence verifier and
+an accepted-key audit of the exact qualified-source history with no validation-
+receipt, integration-receipt, or final-attestation trailer. These facts are not
+caller inputs and candidate-local replacements have no authority.
+The provider-produced facts also exclude the external independent-qualification
+claim. That claim acquires authority only inside the exact accepted-main-root-
+signed authorization; consumption reuses the verified signed value while
+reobserving all provider-owned facts independently.
+
+Issuance requires an exact canonical root observation of the Ready PR with one
+authenticated `ready_for_review` event and the complete required workflow set
+registered strictly after that event terminal and successful. Canonical timestamps
+and the bounded exact run count fail closed on equal-time or truncated evidence.
+The observation is signed by the existing
+authority role and then the existing legacy-adoption signature. Execution requires a distinct
+fresh observation with identical facts. It
+uses one canonical digest for the complete ordered accepted-main-to-head source
+signature range. Exact-State-Adoption retains its distinct normalized
+head-commit evidence digest and must not conflate it with that range binding. It
+consumes only through the repository's canonical GitHub squash merge. The
+GitHub-verified, single-parent protected-main commit must have the authorized
+predecessor and exact qualified tree. Its closed message embeds the legacy-
+adoption-signed authorization and the canonical consumption record for
+immutable read-back and replay rejection. The squash transport grants no
+authority of its own, and direct push, merge-commit, force, rebase, or branch-
+protection bypass forms fail closed. This path does not publish lifecycle
+CURRENT, derive lifecycle semantics, synthesize enrollment or Ready evidence,
+or grant authority over another pull request.
 
 ## Finite lifecycle-orchestration boundary
 

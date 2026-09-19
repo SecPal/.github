@@ -59,6 +59,19 @@ EXACT_ADOPTION_EVIDENCE_KIND = "SECPAL_EXACT_STATE_ADOPTION_EVIDENCE"
 EXACT_ADOPTION_EVIDENCE_DOMAIN = "secpal.exact-state-adoption-evidence/v1"
 EXACT_ADOPTION_CONSUMPTION_VERSION = "2.0"
 EXACT_ADOPTION_LOSS_VERSION = "3.0"
+EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION = "4.0"
+EXACT_ADOPTION_GOVERNANCE_AMENDMENT_EVIDENCE_DOMAIN = (
+    "secpal.exact-state-adoption-evidence/v4"
+)
+EXACT_ADOPTION_GOVERNANCE_AMENDMENT_AUTHORIZATION_DOMAIN = (
+    "secpal.exact-state-adoption-authorization/v4"
+)
+EXACT_ADOPTION_GOVERNANCE_AMENDMENT_PROOF_DOMAIN = (
+    "secpal.exact-state-adoption-proof/v4"
+)
+EXACT_ADOPTION_HISTORICAL_EVIDENCE_STATES = frozenset(
+    {"PRESENT", "UNAVAILABLE", "ABSENT_NEVER_ISSUED"}
+)
 EXACT_ADOPTION_LOSS_EVIDENCE_DOMAIN = "secpal.exact-state-adoption-evidence/v3"
 EXACT_ADOPTION_LOSS_AUTHORIZATION_DOMAIN = "secpal.exact-state-adoption-authorization/v3"
 EXACT_ADOPTION_LOSS_PROOF_DOMAIN = "secpal.exact-state-adoption-proof/v3"
@@ -212,15 +225,16 @@ class VerifiedExactStateAdoptionExternalEvidence:
     tree_sha: str
     pull_request_state: str
     commit_signature_evidence_digest: str
-    validation_receipt_digest: str
-    source_validation_evidence_digest: str
-    adoption_source_evidence_digest: str
+    validation_receipt_digest: str | None
+    source_validation_evidence_digest: str | None
+    adoption_source_evidence_digest: str | None
     observed_pre_enrollment_history: tuple[dict[str, Any], ...]
     intended_state: dict[str, Any]
     supporting_evidence_digests: tuple[str, ...]
     review_budget_consumption_admission: dict[str, Any] | None
     _verification_seal: object
     validation_evidence_loss_admission: dict[str, Any] | None = None
+    governance_amendment_authorization: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -545,6 +559,10 @@ EXACT_ADOPTION_CONSUMPTION_EVIDENCE_FIELDS = frozenset(
 EXACT_ADOPTION_LOSS_EVIDENCE_FIELDS = frozenset(
     EXACT_ADOPTION_CONSUMPTION_EVIDENCE_FIELDS | {"validation_evidence_loss_admission"}
 )
+EXACT_ADOPTION_GOVERNANCE_AMENDMENT_EVIDENCE_FIELDS = frozenset(
+    EXACT_ADOPTION_EVIDENCE_FIELDS
+    | {"governance_amendment_authorization", "historical_evidence"}
+)
 EXACT_ADOPTION_AUTHORIZATION_FIELDS = frozenset(
     {
         "schema_version", "kind", "domain", "proof_version", "repository",
@@ -572,6 +590,14 @@ EXACT_ADOPTION_CONSUMPTION_PROOF_FIELDS = frozenset(
 )
 EXACT_ADOPTION_LOSS_PROOF_FIELDS = frozenset(
     EXACT_ADOPTION_CONSUMPTION_PROOF_FIELDS | {"validation_evidence_loss_admission"}
+)
+EXACT_ADOPTION_GOVERNANCE_AMENDMENT_PROOF_FIELDS = frozenset(
+    (EXACT_ADOPTION_GOVERNANCE_AMENDMENT_EVIDENCE_FIELDS - {"kind", "domain"})
+    | {
+        "kind", "domain", "historical_proof_mode", "lifecycle_id",
+        "authorization", "authorization_digest", "signer_identity", "signature",
+        "proof_digest",
+    }
 )
 PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_FIELDS = frozenset(
     {
@@ -3202,6 +3228,46 @@ def issue_pre_enrollment_validation_evidence_loss_admission(
     return validation_evidence_loss.issue(repository, delivery_issue)
 
 
+def authenticate_governance_amendment_issuance(
+    repository: str, delivery_issue: int, inputs: Mapping[str, Any]
+) -> Any:
+    """Authenticate exact amendment facts at the maintained root boundary."""
+
+    from . import governance_amendment
+
+    return governance_amendment.authenticate_issuance(
+        repository, delivery_issue, inputs
+    )
+
+
+def observe_governance_amendment_issuance(
+    repository: str, delivery_issue: int, inputs: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Produce exact live facts from root inputs and maintained providers."""
+
+    from . import governance_amendment
+
+    return governance_amendment.observe_issuance(
+        repository, delivery_issue, inputs
+    )
+
+
+def issue_governance_amendment_authorization(authenticated: Any) -> dict[str, Any]:
+    """Issue one existing-role authorization from sealed root observations."""
+
+    from . import governance_amendment
+
+    return governance_amendment.issue(authenticated)
+
+
+def execute_governance_amendment(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Consume one amendment through protected-main compare-and-swap."""
+
+    from . import governance_amendment
+
+    return governance_amendment.execute(value)
+
+
 def authenticate_exact_state_adoption_external_evidence(
     *,
     repository: str,
@@ -3216,6 +3282,7 @@ def authenticate_exact_state_adoption_external_evidence(
     intended_state: Mapping[str, Any],
     review_budget_consumption_admission: Mapping[str, Any] | None = None,
     validation_evidence_loss_admission: Any = None,
+    governance_amendment_authorization: Any = None,
 ) -> VerifiedExactStateAdoptionExternalEvidence:
     """Authenticate external artifacts before any adoption proof is assembled."""
 
@@ -3227,7 +3294,39 @@ def authenticate_exact_state_adoption_external_evidence(
     if pull_request_state != "OPEN":
         raise LifecycleAuthorityError("adoption requires an open delivery")
     loss = None
-    if validation_evidence_loss_admission is not None:
+    amendment = None
+    if governance_amendment_authorization is not None:
+        from . import governance_amendment
+
+        if validation_evidence is not None or validation_evidence_loss_admission is not None:
+            raise LifecycleAuthorityError(
+                "governance amendment cannot substitute for supplied historical evidence"
+            )
+        try:
+            amendment_value = governance_amendment.verify(
+                governance_amendment_authorization
+            )
+        except governance_amendment.GovernanceAmendmentError as exc:
+            raise LifecycleAuthorityError(
+                "governance amendment authority is invalid"
+            ) from exc
+        amendment = amendment_value.authorization
+        if any(
+            amendment[field] != expected
+            for field, expected in {
+                "repository": repository, "delivery_issue": issue,
+                "pull_request": pr, "head_sha": head, "tree_sha": tree,
+                "pull_request_state": pull_request_state,
+                "observed_pre_enrollment_history": list(observed_pre_enrollment_history),
+                "intended_state": dict(intended_state),
+            }.items()
+            if field in amendment
+        ) or amendment["historical_evidence"] != governance_amendment.historical_evidence():
+            raise LifecycleAuthorityError("governance amendment scope changed")
+        receipt_digest = None
+        source_digest = None
+        adoption_digest = amendment["authorization_digest"]
+    elif validation_evidence_loss_admission is not None:
         from . import validation_evidence_loss
 
         if validation_evidence is not None:
@@ -3275,13 +3374,29 @@ def authenticate_exact_state_adoption_external_evidence(
         raise LifecycleAuthorityError(
             "adoption commit signature evidence changed identity"
         )
-    signature_evidence_digest = digest_json(verified_commits[0])
-    if loss is not None and signature_evidence_digest != loss["commit_signature_evidence_digest"]:
+    head_signature_evidence_digest = digest_json(verified_commits[0])
+    if amendment is not None:
+        expected_range_digest = (
+            governance_amendment.source_signature_binding_digest(
+                amendment["source_commits"], amendment["accepted_main_sha"]
+            )
+        )
+        if (
+            amendment["source_signature"][
+                "range_signature_evidence_digest"
+            ] != expected_range_digest
+        ):
+            raise LifecycleAuthorityError(
+                "governance amendment source signature range changed"
+            )
+    if loss is not None and head_signature_evidence_digest != loss["commit_signature_evidence_digest"]:
         raise LifecycleAuthorityError("loss admission source signature changed")
     state = _validate_state(
         dict(intended_state), allow_adopted_observations=True
     )
-    has_review_budget_admission = review_budget_consumption_admission is not None
+    has_review_budget_admission = (
+        review_budget_consumption_admission is not None or amendment is not None
+    )
     history = _normalize_observed_pre_enrollment_history(
         list(observed_pre_enrollment_history),
         expected_head=head,
@@ -3299,7 +3414,7 @@ def authenticate_exact_state_adoption_external_evidence(
                 head_sha=head,
                 tree_sha=tree,
                 pull_request_state=pull_request_state,
-                commit_signature_evidence_digest=signature_evidence_digest,
+                commit_signature_evidence_digest=head_signature_evidence_digest,
                 validation_receipt_digest=receipt_digest,
                 source_validation_evidence_digest=source_digest,
                 adoption_source_evidence_digest=adoption_digest,
@@ -3311,10 +3426,8 @@ def authenticate_exact_state_adoption_external_evidence(
             )
         )
     supporting_digests = tuple(sorted({
-        receipt_digest,
-        source_digest,
-        adoption_digest,
-        signature_evidence_digest,
+        *(value for value in (receipt_digest, source_digest, adoption_digest) if value is not None),
+        head_signature_evidence_digest,
         digest_json(history),
         *(
             ()
@@ -3329,7 +3442,7 @@ def authenticate_exact_state_adoption_external_evidence(
         head_sha=head,
         tree_sha=tree,
         pull_request_state=pull_request_state,
-        commit_signature_evidence_digest=signature_evidence_digest,
+        commit_signature_evidence_digest=head_signature_evidence_digest,
         validation_receipt_digest=receipt_digest,
         source_validation_evidence_digest=source_digest,
         adoption_source_evidence_digest=adoption_digest,
@@ -3345,6 +3458,9 @@ def authenticate_exact_state_adoption_external_evidence(
         ),
         _verification_seal=_VERIFIED_EXACT_ADOPTION_EVIDENCE,
         validation_evidence_loss_admission=loss,
+        governance_amendment_authorization=(
+            None if amendment is None else copy.deepcopy(amendment)
+        ),
     )
 
 
@@ -3684,13 +3800,15 @@ def verify_ready_source_recovery_authorization(
 def _assemble_exact_state_adoption_evidence(
     *, repository: str, delivery_issue: int, pull_request: int, head_sha: str,
     tree_sha: str, pull_request_state: str, commit_signature_evidence_digest: str,
-    validation_receipt_digest: str, source_validation_evidence_digest: str,
-    adoption_source_evidence_digest: str,
+    validation_receipt_digest: str | None,
+    source_validation_evidence_digest: str | None,
+    adoption_source_evidence_digest: str | None,
     observed_pre_enrollment_history: Sequence[Mapping[str, Any]],
     intended_state: Mapping[str, Any], adoption_timestamp: str,
     supporting_evidence_digests: Sequence[str],
     review_budget_consumption_admission: Mapping[str, Any] | None = None,
     validation_evidence_loss_admission: Mapping[str, Any] | None = None,
+    governance_amendment_authorization: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble canonical proof fields from already authenticated evidence."""
 
@@ -3710,6 +3828,7 @@ def _assemble_exact_state_adoption_evidence(
         intended_state=state,
         review_budget_consumption_admitted=(
             review_budget_consumption_admission is not None
+            or governance_amendment_authorization is not None
         ),
     )
     timestamp = _require_adoption_timestamp(adoption_timestamp, "adoption timestamp")
@@ -3777,6 +3896,36 @@ def _assemble_exact_state_adoption_evidence(
             raise LifecycleAuthorityError("loss admission is missing from supporting evidence")
         version = EXACT_ADOPTION_LOSS_VERSION
         domain = EXACT_ADOPTION_LOSS_EVIDENCE_DOMAIN
+    amendment = None
+    if governance_amendment_authorization is not None:
+        from . import governance_amendment
+
+        try:
+            verified_amendment = governance_amendment.verify(
+                governance_amendment_authorization
+            )
+        except governance_amendment.GovernanceAmendmentError as exc:
+            raise LifecycleAuthorityError(
+                "governance amendment authority is invalid"
+            ) from exc
+        amendment = verified_amendment.authorization
+        if (
+            review_budget_consumption_admission is not None
+            or validation_evidence_loss_admission is not None
+            or any(value is not None for value in (
+                validation_receipt_digest, source_validation_evidence_digest
+            ))
+            or adoption_source_evidence_digest != amendment["authorization_digest"]
+            or amendment["historical_evidence"] != governance_amendment.historical_evidence()
+            or amendment["observed_pre_enrollment_history"] != history
+            or amendment["intended_state"] != state
+        ):
+            raise LifecycleAuthorityError(
+                "governance amendment evidence cannot claim historical validation"
+            )
+        version = EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION
+        domain = EXACT_ADOPTION_GOVERNANCE_AMENDMENT_EVIDENCE_DOMAIN
+
     fields = {
         "schema_version": version,
         "kind": EXACT_ADOPTION_EVIDENCE_KIND,
@@ -3792,14 +3941,20 @@ def _assemble_exact_state_adoption_evidence(
         "commit_signature_evidence_digest": _require_digest(
             commit_signature_evidence_digest, "commit signature evidence"
         ),
-        "validation_receipt_digest": _require_digest(
-            validation_receipt_digest, "adoption validation receipt"
+        "validation_receipt_digest": (
+            None if amendment is not None else _require_digest(
+                validation_receipt_digest, "adoption validation receipt"
+            )
         ),
-        "source_validation_evidence_digest": _require_digest(
-            source_validation_evidence_digest, "source validation evidence"
+        "source_validation_evidence_digest": (
+            None if amendment is not None else _require_digest(
+                source_validation_evidence_digest, "source validation evidence"
+            )
         ),
-        "adoption_source_evidence_digest": _require_digest(
-            adoption_source_evidence_digest, "adoption-time source evidence"
+        "adoption_source_evidence_digest": (
+            amendment["authorization_digest"] if amendment is not None else _require_digest(
+                adoption_source_evidence_digest, "adoption-time source evidence"
+            )
         ),
         "observed_pre_enrollment_history": history,
         "observed_history_digest": digest_json(history),
@@ -3821,6 +3976,9 @@ def _assemble_exact_state_adoption_evidence(
         )
     if loss is not None:
         fields["validation_evidence_loss_admission"] = loss
+    if amendment is not None:
+        fields["governance_amendment_authorization"] = copy.deepcopy(amendment)
+        fields["historical_evidence"] = copy.deepcopy(amendment["historical_evidence"])
     return {**fields, "adoption_evidence_digest": digest_json(fields)}
 
 
@@ -3859,6 +4017,7 @@ def create_exact_state_adoption_evidence(
             evidence.review_budget_consumption_admission
         ),
         validation_evidence_loss_admission=evidence.validation_evidence_loss_admission,
+        governance_amendment_authorization=evidence.governance_amendment_authorization,
     )
 
 
@@ -3867,6 +4026,7 @@ def _verify_exact_state_adoption_evidence(value: Any) -> dict[str, Any]:
         raise LifecycleAuthorityError("exact-state adoption evidence is malformed")
     fields = frozenset(value)
     loss_admission = None
+    governance_amendment_authorization = None
     if fields == EXACT_ADOPTION_EVIDENCE_FIELDS:
         expected_version = SCHEMA_VERSION
         expected_domain = EXACT_ADOPTION_EVIDENCE_DOMAIN
@@ -3880,6 +4040,13 @@ def _verify_exact_state_adoption_evidence(value: Any) -> dict[str, Any]:
         expected_domain = EXACT_ADOPTION_LOSS_EVIDENCE_DOMAIN
         review_budget_admission = value.get("review_budget_consumption_admission")
         loss_admission = value.get("validation_evidence_loss_admission")
+    elif fields == EXACT_ADOPTION_GOVERNANCE_AMENDMENT_EVIDENCE_FIELDS:
+        expected_version = EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION
+        expected_domain = EXACT_ADOPTION_GOVERNANCE_AMENDMENT_EVIDENCE_DOMAIN
+        review_budget_admission = None
+        governance_amendment_authorization = value.get(
+            "governance_amendment_authorization"
+        )
     else:
         raise LifecycleAuthorityError(
             "exact-state adoption evidence contains unknown or missing fields"
@@ -3912,10 +4079,45 @@ def _verify_exact_state_adoption_evidence(value: Any) -> dict[str, Any]:
         supporting_evidence_digests=evidence["supporting_evidence_digests"],
         review_budget_consumption_admission=review_budget_admission,
         validation_evidence_loss_admission=loss_admission,
+        governance_amendment_authorization=governance_amendment_authorization,
     )
     if rebuilt != evidence:
         raise LifecycleAuthorityError("exact-state adoption evidence binding changed")
     return rebuilt
+
+
+def exact_state_adoption_historical_evidence(value: Any) -> dict[str, Any]:
+    """Project every immutable adoption version into one closed typed state."""
+
+    evidence = _verify_exact_state_adoption_evidence(value)
+    version = evidence["proof_version"]
+    if version == EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION:
+        result = copy.deepcopy(evidence["historical_evidence"])
+    elif version == EXACT_ADOPTION_LOSS_VERSION:
+        result = {
+            "state": "UNAVAILABLE",
+            "validation_receipt_digest": evidence["validation_receipt_digest"],
+            "source_validation_evidence_digest": evidence[
+                "source_validation_evidence_digest"
+            ],
+            "final_attestation_digest": None,
+            "bytes_reconstructed": False,
+        }
+    else:
+        result = {
+            "state": "PRESENT",
+            "validation_receipt_digest": evidence["validation_receipt_digest"],
+            "source_validation_evidence_digest": evidence[
+                "source_validation_evidence_digest"
+            ],
+            "final_attestation_digest": evidence[
+                "adoption_source_evidence_digest"
+            ],
+            "bytes_reconstructed": False,
+        }
+    if result["state"] not in EXACT_ADOPTION_HISTORICAL_EVIDENCE_STATES:
+        raise LifecycleAuthorityError("exact-state historical evidence state is unknown")
+    return result
 
 
 def create_exact_state_adoption_authorization(
@@ -3935,6 +4137,10 @@ def create_exact_state_adoption_authorization(
     )
     if evidence["proof_version"] == EXACT_ADOPTION_LOSS_VERSION:
         authorization_domain = EXACT_ADOPTION_LOSS_AUTHORIZATION_DOMAIN
+    elif evidence["proof_version"] == EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION:
+        authorization_domain = (
+            EXACT_ADOPTION_GOVERNANCE_AMENDMENT_AUTHORIZATION_DOMAIN
+        )
     fields = {
         "schema_version": evidence["proof_version"],
         "kind": EXACT_ADOPTION_AUTHORIZATION_KIND,
@@ -3976,6 +4182,8 @@ def create_exact_state_adoption_proof(
     )
     if evidence["proof_version"] == EXACT_ADOPTION_LOSS_VERSION:
         proof_domain = EXACT_ADOPTION_LOSS_PROOF_DOMAIN
+    elif evidence["proof_version"] == EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION:
+        proof_domain = EXACT_ADOPTION_GOVERNANCE_AMENDMENT_PROOF_DOMAIN
     fields = {
         **{key: copy.deepcopy(value) for key, value in evidence.items()
            if key not in {"kind", "domain"}},
@@ -4021,6 +4229,14 @@ def verify_exact_state_adoption_proof(
         evidence_domain = EXACT_ADOPTION_LOSS_EVIDENCE_DOMAIN
         authorization_domain = EXACT_ADOPTION_LOSS_AUTHORIZATION_DOMAIN
         proof_domain = EXACT_ADOPTION_LOSS_PROOF_DOMAIN
+    elif proof_fields == EXACT_ADOPTION_GOVERNANCE_AMENDMENT_PROOF_FIELDS:
+        expected_version = EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION
+        evidence_fields = EXACT_ADOPTION_GOVERNANCE_AMENDMENT_EVIDENCE_FIELDS
+        evidence_domain = EXACT_ADOPTION_GOVERNANCE_AMENDMENT_EVIDENCE_DOMAIN
+        authorization_domain = (
+            EXACT_ADOPTION_GOVERNANCE_AMENDMENT_AUTHORIZATION_DOMAIN
+        )
+        proof_domain = EXACT_ADOPTION_GOVERNANCE_AMENDMENT_PROOF_DOMAIN
     else:
         raise LifecycleAuthorityError(
             "exact-state adoption proof contains unknown or missing fields"

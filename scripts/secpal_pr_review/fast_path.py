@@ -151,6 +151,8 @@ VALIDATION_REGISTRY_ENTRY_FIELDS = frozenset(
         "focused_validation",
         "required_local_validation",
         "final_eligibility_absence_recoveries",
+        "qualified_remediation_successor_evidence_loss_policy",
+        "governance_amendment_policy",
         "signature_policy",
         "lifecycle_authority_policy",
         "pre_enrollment_integration_policy",
@@ -6262,6 +6264,10 @@ def is_verified_validation_evidence(value: Any) -> bool:
                 repository_root=provenance["repository_root"],
                 signature_policy=provenance["signature_policy"],
             )
+        elif kind == "QUALIFIED_REMEDIATION_SUCCESSOR_LOSS":
+            verified = qualified_remediation_successor_loss_validation_evidence(
+                provenance["admission"], provenance["safety_facts"]
+            )
         else:
             return False
         return _validation_evidence_binding(verified) == _validation_evidence_binding(
@@ -6489,9 +6495,21 @@ def derive_ready_source_recovery_safety_facts(
     parents = tuple(
         _require_oid(item, "Ready-source recovery parent") for item in parent_shas
     ) if isinstance(parent_shas, (list, tuple)) else ()
-    if len(parents) != 1:
+    qualified_loss = (
+        registry.get("qualified_remediation_successor_evidence_loss")
+        if isinstance(registry, dict)
+        else None
+    )
+    if qualified_loss is not None:
+        from . import qualified_remediation_successor_loss as successor_loss
+
+        try:
+            qualified_loss = successor_loss.verify_admission(qualified_loss)
+        except successor_loss.QualifiedRemediationSuccessorLossError as exc:
+            raise SecurityBlocker(str(exc)) from exc
+    if len(parents) != (2 if qualified_loss is not None else 1):
         raise SecurityBlocker(
-            "Ready-source recovery requires the exact sole-parent delivery topology"
+            "Ready-source recovery delivery topology is not admitted"
         )
     base_ref = _require_string(
         expected_base_ref, "Ready-source recovery target base"
@@ -6747,7 +6765,7 @@ def derive_ready_source_recovery_safety_facts(
             raise SecurityBlocker(
                 "Ready-source recovery current-safety profile is invalid"
             )
-        schema_version = "1.1"
+        schema_version = "1.2" if qualified_loss is not None else "1.1"
         validation_execution_origin = (
             "ACCEPTED_MAIN_EXACT_SOURCE_CURRENT_SAFETY"
         )
@@ -6796,7 +6814,13 @@ def derive_ready_source_recovery_safety_facts(
         "fresh_validation_receipt_digest": expected_receipt["receipt_digest"],
         "validation_execution_origin": validation_execution_origin,
     }
-    return {**facts, "safety_facts_digest": digest_json(facts)}
+    result = {**facts, "safety_facts_digest": digest_json(facts)}
+    if qualified_loss is not None:
+        try:
+            successor_loss.verify_safety_binding(qualified_loss, result)
+        except successor_loss.QualifiedRemediationSuccessorLossError as exc:
+            raise SecurityBlocker(str(exc)) from exc
+    return result
 
 
 def verify_ready_source_recovery_safety_facts(value: Any) -> dict[str, Any]:
@@ -6825,6 +6849,7 @@ def verify_ready_source_recovery_safety_facts(value: Any) -> dict[str, Any]:
     origins = {
         "1.0": "MAINTAINED_REGISTERED_EXECUTION",
         "1.1": "ACCEPTED_MAIN_EXACT_SOURCE_CURRENT_SAFETY",
+        "1.2": "ACCEPTED_MAIN_EXACT_SOURCE_CURRENT_SAFETY",
     }
     if (
         version not in origins
@@ -6848,13 +6873,48 @@ def verify_ready_source_recovery_safety_facts(value: Any) -> dict[str, Any]:
         registry=value["policy_binding"], command_set=value["command_set"],
         current_safety_profile=(
             value["policy_binding"].get("ready_source_recovery_current_safety")
-            if version == "1.1" and isinstance(value["policy_binding"], dict)
+            if version in {"1.1", "1.2"}
+            and isinstance(value["policy_binding"], dict)
             else None
         ),
     )
     if derived != value:
         raise SecurityBlocker("Ready-source recovery safety facts are inconsistent")
     return derived
+
+
+def qualified_remediation_successor_loss_validation_evidence(
+    admission: Any, safety_facts: Any,
+) -> VerifiedValidationEvidence:
+    """Seal current evidence only after re-verifying the exact accepted loss case."""
+
+    from . import qualified_remediation_successor_loss as successor_loss
+
+    try:
+        record = successor_loss.verify_admission(admission)
+        safety = verify_ready_source_recovery_safety_facts(safety_facts)
+        successor_loss.verify_safety_binding(record, safety)
+    except successor_loss.QualifiedRemediationSuccessorLossError as exc:
+        raise SecurityBlocker(str(exc)) from exc
+    result = VerifiedValidationEvidence(
+        repository=record["repository"],
+        delivery_issue_number=record["delivery_issue"],
+        pull_request_number=record["pull_request"],
+        head_sha=record["successor"]["head_sha"],
+        tree_sha=record["successor"]["tree_sha"],
+        validation_receipt_digest=safety["fresh_validation_receipt_digest"],
+        source_validation_evidence_digest=safety["safety_facts_digest"],
+        final_attestation_digest=record["admission_digest"],
+        _verification_seal=None,
+    )
+    return _seal_validation_evidence(
+        result,
+        {
+            "kind": "QUALIFIED_REMEDIATION_SUCCESSOR_LOSS",
+            "admission": copy.deepcopy(record),
+            "safety_facts": copy.deepcopy(safety),
+        },
+    )
 
 
 def _verify_classified_findings(

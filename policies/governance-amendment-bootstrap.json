@@ -1,0 +1,51 @@
+{
+  "schema_version": "1.0",
+  "amendments": [
+    {
+      "repository": "SecPal/.github",
+      "delivery_issue": 960,
+      "pull_request": 961,
+      "qualified_source": {
+        "head_sha": "1bdcdde601bf5c96c9175f5c07c48e3f30e9d37d",
+        "tree_sha": "25ae416e95fb0704f365580c917c840dcc97303d",
+        "ordered_parent_shas": ["af5aa59ebaf81e6407048b1586a521dd1cf38c0d"],
+        "verifier_conversation_id": "21427904-1d97-4c38-bda1-f6d9f8e23b7e",
+        "verifier_workspace": "github-pr961-remediation-214279041d974c38bda1f6d9f8e23b7e",
+        "result": "PASS",
+        "material_finding_ids": [],
+        "qualification_digest": "cf11784fa573fd54240386d86c66f7ae7c4d591a60b2ac169e030a53a41d8cc8"
+      },
+      "accepted_main_sha": "fd16dcb1f16cd7d9c195c2d082276d3556b9b3d4",
+      "source_signer_identity": "aroviqen@secpal.app",
+      "allowed_path_prefixes": [
+        ".agents/skills/secpal-pr-review/references",
+        "CHANGELOG.md",
+        "docs",
+        "policies",
+        "scripts/README.md",
+        "scripts/secpal-pr-review-actions.py",
+        "scripts/secpal-resolve-fixed-threads.py",
+        "scripts/sync-required-checks.sh",
+        "scripts/secpal_pr_review",
+        "tests"
+      ],
+      "concepts": ["GOVERNANCE_AMENDMENT", "ABSENT_NEVER_ISSUED", "EXACT_STATE_ADOPTION"],
+      "human_authority_identity": "SecPal human architecture authority for issue 960",
+      "human_authorization_digest": "2fe8516fecf84985305271a4ba2470a559654314105d243c76a52ce7ffb15f8a",
+      "authorization_id": "governance-amendment:SecPal/.github:960:961",
+      "intended_state": {
+        "unrestricted_review_count": 1,
+        "remediation_cycle_count": 1,
+        "cycle_3_absent": true,
+        "draft": true,
+        "ready": false,
+        "ready_transition_count": 0,
+        "ready_history": [],
+        "exceptional_recovery_count": 0,
+        "exceptional_recovery_history": [],
+        "exceptional_continuation_count": 0,
+        "exceptional_continuation_history": []
+      }
+    }
+  ]
+}

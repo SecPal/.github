@@ -455,6 +455,11 @@ class LifecycleAuthorityTests(TestCase):
                 verified_external_evidence=external, adoption_timestamp=timestamp,
             )
             self.assertEqual(evidence["proof_version"], "3.0")
+            historical_state = authority.exact_state_adoption_historical_evidence(
+                evidence
+            )
+            self.assertEqual(historical_state["state"], "UNAVAILABLE")
+            self.assertIsNone(historical_state["final_attestation_digest"])
             authorization = authority.create_exact_state_adoption_authorization(
                 adoption_evidence=evidence, authorization_id="adopt:827:830",
                 bounded_uses=1, signer_identity=migration, signer=signer_for(migration),
@@ -1124,6 +1129,10 @@ class LifecycleAuthorityTests(TestCase):
                 observed=observed, state=state
             ),
             adoption_timestamp="2026-08-06T00:00:00Z",
+        )
+        self.assertEqual(
+            authority.exact_state_adoption_historical_evidence(evidence)["state"],
+            "PRESENT",
         )
         authorization = authority.create_exact_state_adoption_authorization(
             adoption_evidence=evidence,
@@ -3523,6 +3532,10 @@ printf 'Usage: fixture\\n'
             adoption_timestamp=document["adoption_timestamp"],
         )
         self.assertEqual(evidence["proof_version"], "3.0")
+        self.assertEqual(
+            authority.exact_state_adoption_historical_evidence(evidence)["state"],
+            "UNAVAILABLE",
+        )
         self.assertEqual(external.intended_state["unrestricted_review_count"], 1)
         self.assertEqual(external.intended_state["remediation_cycle_count"], 1)
         self.assertTrue(external.intended_state["ready"])

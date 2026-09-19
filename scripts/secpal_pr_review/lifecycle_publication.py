@@ -2554,11 +2554,16 @@ def _verify_historical_lifecycle_transition(
 
 
 def verify_pre_enrollment_absence(
-    repository: str, delivery_issue: int
+    repository: str, delivery_issue: int,
+    *, policy: authority.LifecycleTrustPolicy | None = None,
 ) -> VerifiedPreEnrollmentAbsence:
     """Observe the protected journal once and reject any existing authority."""
 
-    policy = authority._load_lifecycle_trust_policy(repository)
+    policy = policy or authority._load_lifecycle_trust_policy(repository)
+    if policy.repository != repository:
+        raise LifecyclePublicationError(
+            "pre-enrollment absence trust policy repository changed"
+        )
     _verify_live_protection(policy)
     issue = authority._require_positive_int(delivery_issue, "delivery issue")
     with _isolated_repository(policy, write=False) as (root, credential_environment):
