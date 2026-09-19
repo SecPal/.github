@@ -283,7 +283,7 @@ def reseal(value: dict[str, object]) -> dict[str, object]:
 def observation_inputs(value: dict[str, object]) -> dict[str, object]:
     return {
         key: copy.deepcopy(value[key])
-        for key in amendment.OBSERVATION_INPUT_FIELDS
+        for key in amendment.ISSUANCE_INPUT_FIELDS
     }
 
 
@@ -593,7 +593,7 @@ class GovernanceAmendmentTests(TestCase):
                 "strict": True,
                 "checks": [{"context": "governance", "app_id": None}],
             }
-            with mock.patch.object(amendment, "ROOT", root), mock.patch.object(amendment.publication, "_run_gh", side_effect=github), mock.patch.object(authority, "_load_delivery_signature_policy", return_value=signature_policy), first, second, mock.patch.object(amendment.execution, "_policy_role_signer", signer_factory), mock.patch.object(amendment, "_live_required_check_policy", return_value=required_policy):
+            with mock.patch.object(amendment, "ROOT", root), mock.patch.object(amendment.publication, "_run_gh", side_effect=github), mock.patch.object(authority, "_load_delivery_signature_policy", return_value=signature_policy), first, second, mock.patch.object(amendment.execution, "_policy_role_signer", signer_factory), mock.patch.object(amendment, "_live_required_check_policy", return_value=required_policy), mock.patch.object(amendment, "_bound_current_validation", return_value=raw["current_validation"]), mock.patch.object(amendment, "_observe_historical_absence", return_value=(raw["historical_evidence"], raw["historical_absence_proof"])):
                 inputs = observation_inputs(raw)
                 pull["draft"] = True
                 with self.assertRaisesRegex(
@@ -1002,11 +1002,26 @@ class GovernanceAmendmentTests(TestCase):
                     "strict": True,
                     "checks": [{"context": "governance", "app_id": None}],
                 },
+            ), mock.patch.object(
+                amendment, "_bound_current_validation",
+                return_value=facts["current_validation"],
+            ), mock.patch.object(
+                amendment, "_observe_historical_absence",
+                return_value=(
+                    facts["historical_evidence"],
+                    facts["historical_absence_proof"],
+                ),
             ), first, second:
                 observed = authority.observe_governance_amendment_issuance(
                     "SecPal/.github", 960, inputs
                 )
-                self.assertEqual(observed, facts)
+                self.assertEqual(
+                    observed,
+                    {
+                        key: value for key, value in facts.items()
+                        if key != "independent_qualification"
+                    },
+                )
                 mutations = {
                     "stale head": lambda value: value[
                         "independent_qualification"
@@ -1024,7 +1039,7 @@ class GovernanceAmendmentTests(TestCase):
                     with self.subTest(label=label), self.assertRaises(
                         amendment.GovernanceAmendmentError
                     ):
-                        authority.observe_governance_amendment_issuance(
+                        authority.authenticate_governance_amendment_issuance(
                             "SecPal/.github", 960, stale
                         )
             signer_factory.assert_not_called()
@@ -1036,7 +1051,10 @@ class GovernanceAmendmentTests(TestCase):
         }]
         status = {
             "sha": HEAD, "state": "success",
-            "statuses": [{"context": "license/cla", "state": "success"}],
+            "statuses": [
+                {"context": "license/cla", "state": "success"},
+                {"context": "governance", "state": "success"},
+            ],
         }
         required_policy = {
             "strict": True,
@@ -1060,12 +1078,13 @@ class GovernanceAmendmentTests(TestCase):
                 amendment, "_live_required_check_policy",
                 return_value=required_policy,
             ):
-                return amendment._live_ci("SecPal/.github", HEAD)
+                return amendment._live_ci("SecPal/.github", HEAD, PARENT)
 
         observed = observe(status)
-        normalized = [{
-            "context": "license/cla", "state": "success", "sha": HEAD,
-        }]
+        normalized = [
+            {"context": "governance", "state": "success", "sha": HEAD},
+            {"context": "license/cla", "state": "success", "sha": HEAD},
+        ]
         self.assertEqual(observed, {
             "head_sha": HEAD,
             "workflow_identity": amendment.SOURCE_CI_VERSION,
@@ -1152,7 +1171,216 @@ class GovernanceAmendmentTests(TestCase):
                 with self.subTest(label=label), mock.patch.object(
                     amendment.publication, "_run_gh", side_effect=github
                 ), self.assertRaises(amendment.GovernanceAmendmentError):
-                    amendment._live_ci("SecPal/.github", HEAD)
+                    amendment._live_ci("SecPal/.github", HEAD, PARENT)
+
+    def test_required_check_policy_is_exactly_bound_to_accepted_main(self) -> None:
+        contexts = [f"required-{index}" for index in range(13)]
+        source = (
+            "REQUIRED_CONTEXTS_JSON=\"$(cat <<'EOF'\n"
+            + json.dumps({".github": contexts})
+            + "\nEOF\n)\"\n"
+        ).encode()
+
+        def observe(checks: list[dict[str, object]]) -> dict[str, object]:
+            def github(arguments: list[str]):
+                return subprocess.CompletedProcess(
+                    arguments, 0,
+                    json.dumps({"strict": True, "checks": checks}).encode(),
+                    b"",
+                )
+            with mock.patch.object(
+                amendment, "_accepted_main_bytes", return_value=source,
+            ), mock.patch.object(
+                amendment.publication, "_run_gh", side_effect=github,
+            ):
+                return amendment._live_required_check_policy(
+                    "SecPal/.github", PARENT
+                )
+
+        exact = [{"context": value, "app_id": None} for value in contexts]
+        self.assertEqual(
+            observe(exact),
+            {"strict": True, "checks": sorted(exact, key=lambda item: item["context"])},
+        )
+        mutations = {
+            "missing": exact[:-1],
+            "extra": exact + [{"context": "extra", "app_id": None}],
+            "substituted": exact[:-1] + [{"context": "other", "app_id": None}],
+            "duplicated": exact[:-1] + [copy.deepcopy(exact[0])],
+            "wrong app identity": [
+                {**item, "app_id": "untrusted"} if index == 0 else item
+                for index, item in enumerate(exact)
+            ],
+        }
+        for label, changed in mutations.items():
+            with self.subTest(label=label), self.assertRaises(
+                amendment.GovernanceAmendmentError
+            ):
+                observe(changed)
+
+    def test_historical_absence_comes_from_protected_authority(self) -> None:
+        trust = SimpleNamespace(
+            repository="SecPal/.github",
+            publication_branch="refs/heads/secpal-lifecycle-publications",
+        )
+        protected = amendment.publication.VerifiedPreEnrollmentAbsence(
+            "SecPal/.github", 960,
+            "refs/heads/secpal-lifecycle-publications", "1" * 40,
+            "2" * 64,
+        )
+        history = {
+            "qualified_source_head_sha": "3" * 40,
+            "qualified_source_tree_sha": "4" * 40,
+            "qualified_source_parent_shas": ["5" * 40],
+            "commits": [],
+            "result": "NO_COMMIT_BOUND_VALIDATION_ARTIFACT_ISSUED",
+        }
+        with mock.patch.object(
+            amendment.publication, "verify_pre_enrollment_absence",
+            return_value=protected,
+        ) as verify_absence, mock.patch.object(
+            amendment, "_qualified_source_history_audit", return_value=history,
+        ):
+            evidence, proof = amendment._observe_historical_absence(
+                Path("."), "SecPal/.github", 960, 961, HEAD, PARENT,
+                proposed_policy(), trust,
+            )
+        self.assertEqual(evidence, amendment.historical_evidence())
+        self.assertEqual(proof["head_sha"], HEAD)
+        self.assertEqual(proof["result"], "NO_HISTORICAL_RECEIPT_ISSUED")
+        verify_absence.assert_called_once_with(
+            "SecPal/.github", 960, policy=trust
+        )
+
+        substituted = copy.copy(protected)
+        object.__setattr__(substituted, "delivery_issue", 959)
+        with mock.patch.object(
+            amendment.publication, "verify_pre_enrollment_absence",
+            return_value=substituted,
+        ), mock.patch.object(
+            amendment, "_qualified_source_history_audit", return_value=history,
+        ), self.assertRaisesRegex(
+            amendment.GovernanceAmendmentError, "scope changed"
+        ):
+            amendment._observe_historical_absence(
+                Path("."), "SecPal/.github", 960, 961, HEAD, PARENT,
+                proposed_policy(), trust,
+            )
+
+    def test_qualified_source_artifact_audit_rejects_receipt_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = self.hermetic_repository(
+                directory, attacker_intermediate=False
+            )
+            trust = SimpleNamespace(signers={
+                SOURCE: authority.TrustedSigner(
+                    SOURCE,
+                    (repo["trusted"].with_suffix(".pub").read_text().strip(),),
+                    (),
+                ),
+            })
+
+            def policy() -> dict[str, object]:
+                return {"qualified_source": {
+                    "head_sha": repo["git"]("rev-parse", "HEAD"),
+                    "tree_sha": repo["git"]("rev-parse", "HEAD^{tree}"),
+                    "ordered_parent_shas": [repo["base"]],
+                }}
+
+            observed = amendment._qualified_source_history_audit(
+                repo["root"], policy(), trust
+            )
+            self.assertEqual(
+                observed["result"],
+                "NO_COMMIT_BOUND_VALIDATION_ARTIFACT_ISSUED",
+            )
+            self.assertEqual(len(observed["commits"]), 2)
+
+            repo["git"](
+                "commit", "--amend", "-S", "-m",
+                "trusted tip\n\nSecPal-Validation-Receipt: " + "a" * 64,
+            )
+            with self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError,
+                "provenance contradicts absence",
+            ):
+                amendment._qualified_source_history_audit(
+                    repo["root"], policy(), trust
+                )
+
+    def test_caller_cannot_supply_absence_or_current_validation(self) -> None:
+        inputs = observation_inputs(authorization())
+        for field, value in {
+            "historical_evidence": amendment.historical_evidence(),
+            "historical_absence_proof": {
+                "head_sha": HEAD,
+                "verification_authority": "CALLER_ASSERTION",
+                "history_digest": "1" * 64,
+                "artifact_audit_digest": "2" * 64,
+                "result": "NO_HISTORICAL_RECEIPT_ISSUED",
+            },
+            "current_validation": {
+                "accepted_main_sha": PARENT,
+                "policy_digest": "3" * 64,
+                "command_set_digest": "4" * 64,
+                "result": "PASS",
+            },
+        }.items():
+            changed = {**inputs, field: value}
+            with self.subTest(field=field), mock.patch.object(
+                amendment, "produce_observation"
+            ) as producer, self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError, "not closed"
+            ):
+                amendment.authenticate_issuance(
+                    "SecPal/.github", 960, changed
+                )
+            producer.assert_not_called()
+
+    def test_current_validation_is_derived_from_accepted_main_registry(self) -> None:
+        record = {
+            "repository": "SecPal/.github",
+            "focused_validation": [{"argv": ["focused"], "working_directory": "."}],
+            "required_local_validation": [{"argv": ["complete"], "working_directory": "."}],
+        }
+        raw = json.dumps({
+            "schema_version": "1.0", "repositories": [record],
+        }).encode()
+        with mock.patch.object(
+            amendment, "_accepted_main_bytes", return_value=raw,
+        ):
+            observed = amendment._bound_current_validation(
+                Path("."), "SecPal/.github", PARENT
+            )
+        self.assertEqual(observed, {
+            "accepted_main_sha": PARENT,
+            "policy_digest": authority.digest_json(record),
+            "command_set_digest": authority.digest_json({
+                "focused_validation": record["focused_validation"],
+                "required_local_validation": record[
+                    "required_local_validation"
+                ],
+            }),
+            "result": "PASS",
+        })
+        for label, registry in {
+            "missing": {"schema_version": "1.0", "repositories": []},
+            "duplicate": {
+                "schema_version": "1.0", "repositories": [record, record],
+            },
+            "candidate local substitute": {
+                "schema_version": "1.0", "repositories": [{
+                    **record, "repository": "SecPal/api",
+                }],
+            },
+        }.items():
+            with self.subTest(label=label), mock.patch.object(
+                amendment, "_accepted_main_bytes",
+                return_value=json.dumps(registry).encode(),
+            ), self.assertRaises(amendment.GovernanceAmendmentError):
+                amendment._bound_current_validation(
+                    Path("."), "SecPal/.github", PARENT
+                )
 
     def test_live_ready_ci_binds_transition_triggered_workflows(self) -> None:
         source_ci = {

@@ -547,17 +547,28 @@ set, natural CI, independent exact-head qualification, stable feedback, finite
 history and counters, and explicit human architecture authority. It adds no
 journal operation, signer, lifecycle state, counter, reset, or recovery path.
 The maintained observation producer accepts only the closed external human,
-qualification, validation, history, and absence inputs that it cannot originate;
+qualification, and finite-history inputs that it cannot originate;
 it does not accept a preassembled or presigned live-facts descriptor. It
 independently reacquires the live
 issue, Ready PR at issuance, protected main, complete source range and signatures, exact
 tree/topology/path/blob/mode scope, terminal CI, stable feedback, threads, and
-qualification binding before either signer runs. Issuance occurs only after the
+qualification binding before either signer runs. The exact required-check set
+comes from `sync-required-checks.sh` at bound accepted main, and combined-status
+contexts are limited to that set plus the maintained CLA context. Current-
+validation identity is derived from the bound accepted-main registry. Typed
+historical absence is derived from the protected lifecycle journal plus an
+accepted-key verification and trailer audit of the exact qualified-source
+history; caller absence, validation, receipt, provenance, and candidate-local
+audit objects are rejected. Issuance occurs only after the
 separately authorized normal Draft-to-Ready transition, exactly one authenticated
 `ready_for_review` event, and the complete required workflow set registered after
 that event reach terminal acceptance. The event actor must be the registered
 operator, and the root-signed facts include the exact `DRAFT_TO_READY` authority
-binding. Canonical timestamps, complete pagination, the bounded exact run count,
+binding. The provider-produced fact set excludes the external qualification
+claim; it becomes authorization evidence only when the accepted-main root
+signer binds its exact verifier, conversation, head, tree, result, and digest.
+Execution reuses that verified root-bound qualification while independently
+reobserving every provider fact. Canonical timestamps, complete pagination, the bounded exact run count,
 the registered bootstrap record, and the closed allowed-skip set prevent stale,
 truncated, or caller-selected evidence from claiming that order; execution then
 reacquires byte-identical facts.

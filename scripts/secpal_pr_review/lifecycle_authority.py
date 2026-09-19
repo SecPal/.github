@@ -3247,7 +3247,7 @@ def observe_governance_amendment_issuance(
 
     from . import governance_amendment
 
-    return governance_amendment.produce_observation(
+    return governance_amendment.observe_issuance(
         repository, delivery_issue, inputs
     )
 

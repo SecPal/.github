@@ -72,8 +72,10 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 - Preserve provider-enforced strict up-to-date checks for `SecPal/.github`
   while keeping every other managed repository's existing non-strict baseline.
-  Governance-amendment observation now binds the complete required-check
-  inventory, registered bootstrap scope, authorized Ready actor, and strict
+  Governance-amendment observation now derives the exact thirteen-check
+  inventory from the bound accepted-main synchronizer, admits combined-status
+  contexts only from that inventory plus the maintained external CLA context,
+  and binds the registered bootstrap scope, authorized Ready actor, and strict
   base policy before canonical squash consumption.
 - Bind the qualified-remediation signer and exact twelve-thread inventory to
   accepted registration, and persist its safety report before the one-use
@@ -95,7 +97,10 @@ Log of notable changes to SecPal organization defaults (newest first).
   normalized head-commit evidence.
 - Represent historical evidence truthfully as `PRESENT`, `UNAVAILABLE`, or
   `ABSENT_NEVER_ISSUED`; the last state carries typed nulls and cannot synthesize
-  receipt, source-validation, or final-attestation identities.
+  receipt, source-validation, or final-attestation identities. Derive that
+  absence from the protected lifecycle journal and the exact signed qualified-
+  source artifact history, and derive current-validation identity from the
+  bound accepted-main registry instead of caller objects.
 
 ## 2026-09-18 - Admit Exact Node-24 Delivery Evidence Loss
 

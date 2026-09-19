@@ -510,7 +510,17 @@ requires one authenticated `ready_for_review` event and the complete required
 workflow set registered strictly after that event to be terminal and successful.
 The bounded run inventory, canonical GitHub timestamps, exact returned count,
 registered bootstrap scope, authorized Ready actor, and live strict required-
-check policy are authenticated fail closed. A preassembled or presigned live-
+check policy are authenticated fail closed. The check identities come from the
+bound accepted-main copy of `sync-required-checks.sh`; accepted combined-status
+contexts are that exact set plus the maintained CLA context. The producer also
+derives current-validation policy identity from the bound accepted-main
+registry and derives `ABSENT_NEVER_ISSUED` only after the protected journal and
+exact signed qualified-source trailer history both prove absence. Caller-
+provided validation, receipt, provenance, or absence objects are outside the
+closed input schema. The provider-produced fact set excludes the external
+qualification claim; only the accepted-main root signature turns its exact
+verifier, head, tree, result and digest into authorization evidence. Execution
+reuses that verified value while reobserving provider facts. A preassembled or presigned live-
 facts descriptor cannot replace that observation. Provider-enforced strict
 up-to-date checks ensure a base advance rejects the normal squash before main
 changes. It creates an

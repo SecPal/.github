@@ -564,6 +564,19 @@ source-validation, and final-attestation digests. Existing versions project as
 candidate-local registration, replay, second use, product change, finding,
 counter reset, Cycle 3, or fabricated digest is authority.
 
+The producer derives the exact required-check identities from the bound
+accepted-main synchronizer and admits combined-status contexts only from that
+set plus the maintained external CLA context. It derives current-validation
+identity from the bound accepted-main registry. `ABSENT_NEVER_ISSUED` additionally
+requires both the existing protected-journal pre-enrollment absence verifier and
+an accepted-key audit of the exact qualified-source history with no validation-
+receipt, integration-receipt, or final-attestation trailer. These facts are not
+caller inputs and candidate-local replacements have no authority.
+The provider-produced facts also exclude the external independent-qualification
+claim. That claim acquires authority only inside the exact accepted-main-root-
+signed authorization; consumption reuses the verified signed value while
+reobserving all provider-owned facts independently.
+
 Issuance requires an exact canonical root observation of the Ready PR with one
 authenticated `ready_for_review` event and the complete required workflow set
 registered strictly after that event terminal and successful. Canonical timestamps

@@ -33,7 +33,7 @@ CONSUMPTION_KIND = "SECPAL_GOVERNANCE_AMENDMENT_CONSUMPTION"
 CONSUMPTION_METHOD = "SQUASH"
 SOURCE_CI_VERSION = "github-git-live-observation/v1"
 LIVE_OBSERVATION_VERSION = "github-git-live-observation/v2"
-EXPECTED_STATUS_CONTEXTS = frozenset({"license/cla"})
+EXTERNAL_STATUS_CONTEXTS = frozenset({"license/cla"})
 ALLOWED_SKIPPED_CHECKS = frozenset({
     "Export Copilot review memory",
     "Project automation / Handle issue lifecycle events",
@@ -116,12 +116,12 @@ ISSUANCE_FACT_FIELDS = AUTHORIZATION_FIELDS - {
 }
 OBSERVATION_INPUT_FIELDS = frozenset({
     "pull_request", "accepted_main_sha", "qualified_source",
-    "independent_qualification", "current_validation",
     "observed_pre_enrollment_history", "intended_state",
-    "historical_evidence", "historical_absence_proof",
     "architecture_necessity", "human_authority_identity",
     "human_authorization_digest", "authorization_id", "bounded_uses",
 })
+ISSUANCE_INPUT_FIELDS = OBSERVATION_INPUT_FIELDS | {"independent_qualification"}
+PRODUCER_FACT_FIELDS = ISSUANCE_FACT_FIELDS - {"independent_qualification"}
 
 
 class GovernanceAmendmentError(ValueError):
@@ -614,6 +614,22 @@ def verify(value: Any) -> VerifiedGovernanceAmendment:
     return _verify(value, authenticate_signature=True)
 
 
+def observe_issuance(
+    repository: str, delivery_issue: int, inputs: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Observe provider facts without turning qualification claims into facts."""
+
+    supplied = copy.deepcopy(dict(inputs)) if isinstance(inputs, Mapping) else None
+    if supplied is None or set(supplied) != ISSUANCE_INPUT_FIELDS:
+        raise GovernanceAmendmentError(
+            "governance amendment observation inputs are not closed"
+        )
+    return produce_observation(
+        repository, delivery_issue,
+        {key: supplied[key] for key in OBSERVATION_INPUT_FIELDS},
+    )
+
+
 def authenticate_issuance(
     repository: str,
     delivery_issue: int,
@@ -622,11 +638,33 @@ def authenticate_issuance(
     """Produce and seal exact live facts from narrow external inputs."""
 
     supplied = copy.deepcopy(dict(inputs)) if isinstance(inputs, Mapping) else None
-    if supplied is None or set(supplied) != OBSERVATION_INPUT_FIELDS:
+    if supplied is None or set(supplied) != ISSUANCE_INPUT_FIELDS:
         raise GovernanceAmendmentError(
             "governance amendment observation inputs are not closed"
         )
-    actual = produce_observation(repository, delivery_issue, supplied)
+    provider_inputs = {
+        key: copy.deepcopy(supplied[key]) for key in OBSERVATION_INPUT_FIELDS
+    }
+    actual = produce_observation(repository, delivery_issue, provider_inputs)
+    qualification = copy.deepcopy(supplied["independent_qualification"])
+    if (
+        not isinstance(qualification, dict)
+        or qualification.get("head_sha") != actual["head_sha"]
+        or qualification.get("tree_sha") != actual["tree_sha"]
+        or qualification.get("result") != "PASS"
+        or qualification.get("qualification_digest")
+        != authority.digest_json({
+            "verifier_identity": qualification.get("verifier_identity"),
+            "conversation_id": qualification.get("conversation_id"),
+            "head_sha": actual["head_sha"],
+            "tree_sha": actual["tree_sha"],
+            "result": "PASS",
+        })
+    ):
+        raise GovernanceAmendmentError(
+            "independent exact-source qualification is invalid"
+        )
+    actual["independent_qualification"] = qualification
     if set(actual) != ISSUANCE_FACT_FIELDS:
         raise GovernanceAmendmentError("amendment issuance facts are not closed")
     return VerifiedGovernanceAmendmentIssuance(
@@ -642,7 +680,13 @@ def issue(value: VerifiedGovernanceAmendmentIssuance) -> dict[str, Any]:
     facts = copy.deepcopy(value.facts)
     repository = authority._require_repository(facts["repository"])
     current = produce_observation(
-        repository, facts["delivery_issue"], value.inputs
+        repository, facts["delivery_issue"], {
+            key: copy.deepcopy(value.inputs[key])
+            for key in OBSERVATION_INPUT_FIELDS
+        }
+    )
+    current["independent_qualification"] = copy.deepcopy(
+        facts["independent_qualification"]
     )
     if current != facts:
         raise GovernanceAmendmentError(
@@ -812,8 +856,54 @@ def _live_issue(repository: str, delivery_issue: int) -> dict[str, Any]:
         ) from exc
 
 
-def _live_ci(repository: str, head_sha: str) -> dict[str, Any]:
-    protection = _live_required_check_policy(repository)
+def _accepted_main_bytes(root: Path, accepted_main_sha: str, path: str) -> bytes:
+    result = _run_git(root, ["show", f"{accepted_main_sha}:{path}"])
+    if result.returncode != 0 or not result.stdout:
+        raise GovernanceAmendmentError(
+            "accepted-main governance policy source is unavailable"
+        )
+    return result.stdout
+
+
+def _canonical_required_check_contexts(
+    root: Path, repository: str, accepted_main_sha: str,
+) -> tuple[str, ...]:
+    """Read the sole required-check inventory from bound accepted main."""
+
+    if repository != "SecPal/.github":
+        raise GovernanceAmendmentError(
+            "governance amendment repository is outside bootstrap scope"
+        )
+    source = _accepted_main_bytes(
+        root, accepted_main_sha, "scripts/sync-required-checks.sh"
+    ).decode("utf-8", "strict")
+    match = re.search(
+        r"(?ms)^REQUIRED_CONTEXTS_JSON=\"\$\(cat <<'EOF'\n(.*?)\nEOF\n\)\"$",
+        source,
+    )
+    try:
+        policy = json.loads(match.group(1)) if match is not None else None
+        contexts = policy[".github"]
+    except (AttributeError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise GovernanceAmendmentError(
+            "accepted-main required check inventory is malformed"
+        ) from exc
+    if (
+        not isinstance(contexts, list)
+        or len(contexts) != 13
+        or len(set(contexts)) != len(contexts)
+        or any(not isinstance(item, str) or not item for item in contexts)
+    ):
+        raise GovernanceAmendmentError(
+            "accepted-main required check inventory is not canonical"
+        )
+    return tuple(contexts)
+
+
+def _live_ci(
+    repository: str, head_sha: str, accepted_main_sha: str,
+) -> dict[str, Any]:
+    protection = _live_required_check_policy(repository, accepted_main_sha)
     runs: list[dict[str, Any]] = []
     total_count: int | None = None
     for page in range(1, 11):
@@ -889,10 +979,10 @@ def _live_ci(repository: str, head_sha: str) -> dict[str, Any]:
         not normalized_runs
         or status_head != head_sha
         or len({status["context"] for status in contexts}) != len(contexts)
-        or any(
-            status["context"] not in EXPECTED_STATUS_CONTEXTS
-            for status in contexts
-        )
+        or any(status["context"] not in (
+            EXTERNAL_STATUS_CONTEXTS
+            | {item["context"] for item in protection["checks"]}
+        ) for status in contexts)
         or any(
             run["head_sha"] != head_sha or run["status"] != "completed"
             or run["conclusion"] not in {"success", "skipped"}
@@ -937,11 +1027,17 @@ def _live_ci(repository: str, head_sha: str) -> dict[str, Any]:
     }
 
 
-def _live_required_check_policy(repository: str) -> dict[str, Any]:
+def _live_required_check_policy(
+    repository: str, accepted_main_sha: str,
+) -> dict[str, Any]:
     if repository != "SecPal/.github":
         raise GovernanceAmendmentError(
             "governance amendment repository is outside bootstrap scope"
         )
+    canonical_contexts = _canonical_required_check_contexts(
+        ROOT.resolve(), repository,
+        authority._require_oid(accepted_main_sha, "required-check accepted main"),
+    )
     value = _github_json(
         [
             "api", "--hostname", "github.com",
@@ -963,7 +1059,7 @@ def _live_required_check_policy(repository: str) -> dict[str, Any]:
         ) from exc
     if (
         strict is not True
-        or not checks
+        or [item["context"] for item in checks] != sorted(canonical_contexts)
         or len({item["context"] for item in checks}) != len(checks)
         or any(
             not isinstance(item["context"], str)
@@ -1497,6 +1593,200 @@ def _registered_bootstrap_policy(
     return record
 
 
+def _bound_current_validation(
+    root: Path, repository: str, accepted_main_sha: str,
+) -> dict[str, Any]:
+    """Derive validation identity from the protected accepted-main registry."""
+
+    try:
+        registry = json.loads(
+            _accepted_main_bytes(root, accepted_main_sha, REGISTRY_PATH),
+            object_pairs_hook=publication._reject_duplicate_pairs,
+        )
+        records = registry["repositories"]
+        matches = [
+            item for item in records
+            if isinstance(item, dict) and item.get("repository") == repository
+        ]
+        if len(matches) != 1:
+            raise TypeError
+        policy = matches[0]
+        commands = {
+            "focused_validation": policy["focused_validation"],
+            "required_local_validation": policy["required_local_validation"],
+        }
+        if not all(
+            isinstance(value, list) and value
+            for value in commands.values()
+        ):
+            raise TypeError
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise GovernanceAmendmentError(
+            "accepted-main validation policy is unavailable"
+        ) from exc
+    return {
+        "accepted_main_sha": accepted_main_sha,
+        "policy_digest": authority.digest_json(policy),
+        "command_set_digest": authority.digest_json(commands),
+        "result": "PASS",
+    }
+
+
+def _qualified_source_history_audit(
+    root: Path, registered: Mapping[str, Any],
+    trust: authority.LifecycleTrustPolicy,
+) -> dict[str, Any]:
+    """Audit the exact pre-amendment source for commit-bound artifacts."""
+
+    qualified = registered.get("qualified_source")
+    if not isinstance(qualified, Mapping):
+        raise GovernanceAmendmentError(
+            "registered qualified source is unavailable for artifact audit"
+        )
+    head = authority._require_oid(
+        qualified.get("head_sha"), "historical audit head"
+    )
+    tree = authority._require_oid(
+        qualified.get("tree_sha"), "historical audit tree"
+    )
+    parents = qualified.get("ordered_parent_shas")
+    if (
+        not isinstance(parents, list)
+        or len(parents) != 1
+        or _git_oid(root, f"{head}^{{tree}}") != tree
+    ):
+        raise GovernanceAmendmentError(
+            "registered qualified source topology changed"
+        )
+    parent = authority._require_oid(parents[0], "historical audit parent")
+    observed_parents = _run_git(
+        root, ["show", "-s", "--format=%P", head]
+    )
+    if (
+        observed_parents.returncode != 0
+        or observed_parents.stdout.decode("ascii", "strict").strip() != parent
+    ):
+        raise GovernanceAmendmentError(
+            "registered qualified source topology changed"
+        )
+    commits = [parent, *_source_commit_range(root, parent, head)]
+    audited: list[dict[str, Any]] = []
+    trailer_keys = (
+        "SecPal-Validation-Receipt",
+        "SecPal-Integration-Validation-Receipt",
+        "SecPal-Final-Attestation",
+    )
+    for commit in commits:
+        _verify_commit_against_accepted_trust(
+            root, commit, SOURCE_SIGNER_IDENTITY, trust
+        )
+        message = _run_git(root, ["show", "-s", "--format=%B", commit])
+        if message.returncode != 0:
+            raise GovernanceAmendmentError(
+                "qualified source history cannot be audited"
+            )
+        trailers: dict[str, list[str]] = {}
+        for key in trailer_keys:
+            result = _run_git(
+                root,
+                [
+                    "show", "-s",
+                    f"--format=%(trailers:key={key},valueonly,separator=%x00)",
+                    commit,
+                ],
+            )
+            if result.returncode != 0:
+                raise GovernanceAmendmentError(
+                    "qualified source artifact audit failed"
+                )
+            values = [
+                value for value in result.stdout.decode(
+                    "utf-8", "strict"
+                ).strip("\n\x00").split("\x00") if value
+            ]
+            if values:
+                trailers[key] = values
+        if trailers:
+            raise GovernanceAmendmentError(
+                "historical receipt or attestation provenance contradicts absence"
+            )
+        audited.append({
+            "oid": commit,
+            "tree_sha": _git_oid(root, f"{commit}^{{tree}}"),
+            "message_digest": authority.digest_json({
+                "message": message.stdout.decode("utf-8", "strict")
+            }),
+            "artifact_trailers": trailers,
+        })
+    return {
+        "qualified_source_head_sha": head,
+        "qualified_source_tree_sha": tree,
+        "qualified_source_parent_shas": [parent],
+        "commits": audited,
+        "result": "NO_COMMIT_BOUND_VALIDATION_ARTIFACT_ISSUED",
+    }
+
+
+def _observe_historical_absence(
+    root: Path, repository: str, delivery_issue: int, pull_request: int,
+    head_sha: str, accepted_main_sha: str, registered: Mapping[str, Any],
+    trust: authority.LifecycleTrustPolicy,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build typed absence only from protected journal and signed Git history."""
+
+    try:
+        lifecycle_absence = publication.verify_pre_enrollment_absence(
+            repository, delivery_issue, policy=trust
+        )
+    except publication.LifecyclePublicationError as exc:
+        raise GovernanceAmendmentError(
+            "protected lifecycle history contradicts pre-enrollment absence"
+        ) from exc
+    if (
+        lifecycle_absence.repository != repository
+        or lifecycle_absence.delivery_issue != delivery_issue
+        or lifecycle_absence.publication_branch != trust.publication_branch
+        or not isinstance(lifecycle_absence.evidence_digest, str)
+    ):
+        raise GovernanceAmendmentError(
+            "protected lifecycle absence scope changed"
+        )
+    authority._require_digest(
+        lifecycle_absence.evidence_digest, "protected lifecycle absence"
+    )
+    history = _qualified_source_history_audit(root, registered, trust)
+    lifecycle_projection = {
+        "repository": lifecycle_absence.repository,
+        "delivery_issue": lifecycle_absence.delivery_issue,
+        "publication_branch": lifecycle_absence.publication_branch,
+        "observed_tip_oid": lifecycle_absence.observed_tip_oid,
+        "evidence_digest": lifecycle_absence.evidence_digest,
+    }
+    audit = {
+        "repository": repository,
+        "delivery_issue": delivery_issue,
+        "pull_request": pull_request,
+        "head_sha": head_sha,
+        "accepted_main_sha": accepted_main_sha,
+        "protected_lifecycle_absence": lifecycle_projection,
+        "qualified_source_history": history,
+        "historical_evidence": historical_evidence(),
+    }
+    proof = {
+        "head_sha": head_sha,
+        "verification_authority": (
+            "PROTECTED_DELIVERY_HISTORY_AND_ARTIFACT_AUDIT"
+        ),
+        "history_digest": authority.digest_json({
+            "protected_lifecycle_absence": lifecycle_projection,
+            "qualified_source_history": history,
+        }),
+        "artifact_audit_digest": authority.digest_json(audit),
+        "result": "NO_HISTORICAL_RECEIPT_ISSUED",
+    }
+    return historical_evidence(), proof
+
+
 def produce_observation(
     repository: str, delivery_issue: int, authenticated_inputs: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -1531,13 +1821,14 @@ def produce_observation(
     pull = _live_pull_request(repository, pull_request)
     issue = _live_issue(repository, delivery_issue)
     if (
-        pull != {
-            "number": pull_request, "state": "open", "draft": False,
-            "merged": False,
-            "head_sha": inputs["independent_qualification"]["head_sha"],
-            "head_repository": repository, "base_sha": accepted_main,
-            "base_ref": "main", "base_repository": repository,
-        }
+        pull.get("number") != pull_request
+        or pull.get("state") != "open"
+        or pull.get("draft") is not False
+        or pull.get("merged") is not False
+        or pull.get("head_repository") != repository
+        or pull.get("base_sha") != accepted_main
+        or pull.get("base_ref") != "main"
+        or pull.get("base_repository") != repository
         or issue != {"number": delivery_issue, "state": "open"}
     ):
         raise GovernanceAmendmentError(
@@ -1579,22 +1870,17 @@ def produce_observation(
         source_commit_evidence(commit, SOURCE_SIGNER_IDENTITY, accepted_main)
         for commit in commits
     ]
-    qualification = copy.deepcopy(inputs["independent_qualification"])
-    if (
-        not isinstance(qualification, dict)
-        or qualification.get("head_sha") != head
-        or qualification.get("tree_sha") != tree
-        or qualification.get("result") != "PASS"
-        or qualification.get("qualification_digest")
-        != authority.digest_json({
-            "verifier_identity": qualification.get("verifier_identity"),
-            "conversation_id": qualification.get("conversation_id"),
-            "head_sha": head, "tree_sha": tree, "result": "PASS",
-        })
-    ):
-        raise GovernanceAmendmentError(
-            "independent exact-source qualification is invalid"
-        )
+    source_ci = _live_ci(repository, head, accepted_main)
+    natural_ci = _live_ready_ci(
+        repository, pull_request, head, accepted_main, source_ci,
+    )
+    current_validation = _bound_current_validation(
+        root, repository, accepted_main
+    )
+    historical, absence = _observe_historical_absence(
+        root, repository, delivery_issue, pull_request, head, accepted_main,
+        registered, trust,
+    )
     observed = {
         "schema_version": "1.0", "kind": KIND, "domain": DOMAIN,
         "purpose": PURPOSE, "repository": repository,
@@ -1621,21 +1907,15 @@ def produce_observation(
             "verified": True,
         },
         "source_commits": source_commits,
-        "natural_ci": _live_ready_ci(
-            repository, pull_request, head, accepted_main,
-            _live_ci(repository, head),
-        ),
-        "independent_qualification": qualification,
-        "current_validation": copy.deepcopy(inputs["current_validation"]),
+        "natural_ci": natural_ci,
+        "current_validation": current_validation,
         "feedback": _live_feedback(repository, pull_request, head),
         "observed_pre_enrollment_history": copy.deepcopy(
             inputs["observed_pre_enrollment_history"]
         ),
         "intended_state": copy.deepcopy(inputs["intended_state"]),
-        "historical_evidence": copy.deepcopy(inputs["historical_evidence"]),
-        "historical_absence_proof": copy.deepcopy(
-            inputs["historical_absence_proof"]
-        ),
+        "historical_evidence": historical,
+        "historical_absence_proof": absence,
         "concepts": copy.deepcopy(APPROVED_CONCEPTS),
         "architecture_necessity": copy.deepcopy(
             inputs["architecture_necessity"]
@@ -1645,6 +1925,10 @@ def produce_observation(
         "authorization_id": inputs["authorization_id"],
         "bounded_uses": inputs["bounded_uses"],
     }
+    if set(observed) != PRODUCER_FACT_FIELDS:
+        raise GovernanceAmendmentError(
+            "governance amendment producer facts are not closed"
+        )
     return observed
 
 
@@ -1862,6 +2146,9 @@ def _authenticate_execution(
         item["repository"], item["delivery_issue"],
         _observation_inputs(item),
     )
+    current_facts["independent_qualification"] = copy.deepcopy(
+        item["independent_qualification"]
+    )
     if current_facts != expected_facts:
         raise GovernanceAmendmentError(
             "live amendment prerequisites changed before consumption"
@@ -1920,7 +2207,9 @@ def _authenticate_execution(
 
 
 def _authenticate_provider_merge_gate(item: Mapping[str, Any]) -> None:
-    policy = _live_required_check_policy(item["repository"])
+    policy = _live_required_check_policy(
+        item["repository"], item["accepted_main_sha"]
+    )
     pull = _github_json(
         [
             "api", "--hostname", "github.com",
