@@ -183,9 +183,14 @@ failure only when protected CURRENT is exactly Ready Review 1/1 and Remediation
 1/2, the live OPEN PR remains on that exact head, and an independent
 repository-byte reproduction proves a technically blocking
 `IN_CONTRACT_DEFECT`. The maintained runtime-selector proof derives workflow
-and engine floors from candidate configuration, requires the exact signed
-sole-parent correction to remove the violation, rejects unrelated changes, and
-requires fresh resulting-head validation and attestation. It seals a distinct
+and engine floors from candidate configuration. Direct workflows retain their
+existing source binding; local reusable calls additionally require one exact
+candidate-byte caller/callee mapping under `.github/workflows`, a declared
+`workflow_call`, and the observed caller/called-job display-name composition.
+Dynamic, traversing, remote, missing and ambiguous sources fail closed. The
+proof requires the exact signed sole-parent correction to remove the
+authenticated violation set, rejects unrelated changes, and requires fresh
+resulting-head validation and attestation. It seals a distinct
 `POST_READY_IN_CONTRACT_VALIDATION_DEFECT` source digest into the same one-use
 `REMEDIATION_COMPLETED` authorization. Provider-growth and validation-defect
 sources cannot substitute for one another and compete for the same final
