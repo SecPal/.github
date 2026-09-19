@@ -240,11 +240,25 @@ evidence that can change without moving the PR head or its top-level counts.
 This includes labels, review requests, reviews and their reactions, the pull
 request and its reactions, comments and reactions, inline threads and replies,
 remote commit and GitHub-signature evidence, effective commit checks, rulesets,
-and branch protection. The two normalized observations must be identical. Their
-connections, API calls, and items are recorded with a `.revalidation` suffix
+and complete classic branch protection. Classic protection retains required
+checks and strictness, review and approval requirements, conversation
+resolution, signed-commit and linear-history requirements, force-push and
+deletion policy, and admin enforcement. It remains a distinct authenticated
+input from repository rulesets. The two normalized observations must be
+identical. Their connections, API calls, and items are recorded with a
+`.revalidation` suffix
 and count against the same configured caps. Any
 difference terminates with `BLOCKED_INCOMPLETE_REVIEW_STATE` before output is
 prepared.
+
+Version-1 snapshots retain two closed classic-protection projections: the
+historical compact `strict`/`contexts`/`checks` object and the current complete
+object. The validator authenticates either representation in its original
+canonical bytes, rejects mixed or unknown shapes, and uses the canonical empty
+complete object when policy disables classic-protection evidence. A missing raw
+`required_signatures` field means signed-commit protection is disabled; a
+present malformed value and every other missing required protection field fail
+closed.
 
 Independent cursors prevent unequal page counts from causing duplicate or
 omitted reads. `completeness.fully_paginated_connections` records pages and

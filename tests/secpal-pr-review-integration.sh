@@ -134,6 +134,26 @@ assert snapshot["pull_request"]["captured_connection_counts"] == {
 assert snapshot["pull_request"]["potential_merge_commit_oid"] == "d" * 40
 assert snapshot["pull_request"]["check_commit_oid"] == "d" * 40
 assert snapshot["pull_request"]["check_commit_source"] == "test_merge"
+classic = snapshot["applicable_rules"]["branch_protection"]
+assert classic["required_pull_request_reviews"] == {
+    "enabled": True,
+    "required_approving_review_count": 2,
+    "dismiss_stale_reviews": True,
+    "require_code_owner_reviews": True,
+    "require_last_push_approval": True,
+    "dismissal_restrictions": {
+        "users": ["maintainer"],
+        "teams": ["security"],
+        "apps": ["policy-bot"],
+    },
+    "bypass_pull_request_allowances": {"users": [], "teams": [], "apps": []},
+}
+assert classic["required_conversation_resolution"] is True
+assert classic["required_signatures"] is True
+assert classic["required_linear_history"] is True
+assert classic["allow_force_pushes"] is False
+assert classic["allow_deletions"] is False
+assert classic["enforce_admins"] is True
 connections = {item["connection"]: item for item in snapshot["completeness"]["fully_paginated_connections"]}
 assert connections["reviews"]["pages"] == 2
 assert connections["pull_request.reactions"]["pages"] == 1
