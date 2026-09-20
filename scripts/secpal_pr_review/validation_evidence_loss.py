@@ -40,6 +40,11 @@ REGISTERED_CURRENT_SAFETY_PATH = (
 NO_RECEIPT_CURRENT_SAFETY_PATH = (
     "tests/pre-enrollment-github-711-current-safety.py"
 )
+NO_RECEIPT_REGISTERED_VALIDATION_PATHS = (
+    "tests/secpal-trivy-repository-scan-unit.py",
+    "tests/fixtures/trivy-repository-scan/malformed.txt",
+    "tests/fixtures/trivy-repository-scan/stale-database.json",
+)
 CURRENT_RECEIPT_SAFETY_PATH = "tests/pre-enrollment-github-948-current-safety.py"
 CURRENT_RECEIPT_NODE_TEST_PATH = "tests/node-baseline-governance.test.mjs"
 CURRENT_SAFETY_INVARIANTS = (
@@ -99,6 +104,9 @@ ANCESTOR_RECORD_FIELDS = frozenset({
     "intended_state", "feedback_digest", "technical_decisions",
     "historical_provider_summary_digest", "current_safety_harness_path",
 })
+PROJECTED_VALIDATION_RECORD_FIELDS = frozenset(
+    ANCESTOR_RECORD_FIELDS | {"registered_validation_projection"}
+)
 CURRENT_RECEIPT_RECORD_FIELDS = frozenset(
     ANCESTOR_RECORD_FIELDS | {"historical_validation_receipt_digest"}
 )
@@ -810,6 +818,16 @@ def _accepted_policy(repository: str, issue: int) -> tuple[str, dict[str, Any], 
         NO_RECEIPT_SCHEMA_VERSION: ANCESTOR_RECORD_FIELDS,
         CURRENT_RECEIPT_SCHEMA_VERSION: CURRENT_RECEIPT_RECORD_FIELDS,
     }.get(record_version, ANCESTOR_RECORD_FIELDS)
+    if "registered_validation_projection" in records[0]:
+        if (
+            record_version != NO_RECEIPT_SCHEMA_VERSION
+            or repository != "SecPal/.github"
+            or issue != 711
+        ):
+            raise authority.LifecycleAuthorityError(
+                "registered validation projection is not maintained"
+            )
+        record_fields = PROJECTED_VALIDATION_RECORD_FIELDS
     record = copy.deepcopy(
         authority._require_closed(records[0], record_fields, "loss proof policy")
     )
@@ -1555,14 +1573,41 @@ def _registered_current_safety_profile(main: str) -> dict[str, Any]:
     )
 
 
-def _zero_receipt_current_safety_profile(main: str) -> dict[str, Any]:
-    return exact_source_safety.build_profile(
+def _zero_receipt_current_safety_profile(
+    main: str, record: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    profile = exact_source_safety.build_profile(
         ROOT, main,
         policy=NO_RECEIPT_CURRENT_SAFETY_POLICY,
         harness_paths=(NO_RECEIPT_CURRENT_SAFETY_PATH,),
         purpose="Validate exact zero-receipt adoption current safety",
         required_invariants=REGISTERED_CURRENT_SAFETY_INVARIANTS,
     )
+    if record is not None and "registered_validation_projection" in record:
+        projection = record["registered_validation_projection"]
+        if (
+            not isinstance(projection, Mapping)
+            or set(projection)
+            != {"provenance", "repository", "head_sha", "tree_sha", "files"}
+            or projection.get("provenance")
+            != "ACCEPTED_RECOVERY_RECORD_EXACT_SOURCE"
+            or projection.get("repository") != record.get("repository")
+            or projection.get("head_sha") != record.get("head_sha")
+            or projection.get("tree_sha") != record.get("tree_sha")
+            or not isinstance(projection.get("files"), list)
+            or tuple(
+                item.get("path") if isinstance(item, Mapping) else None
+                for item in projection.get("files", [])
+            )
+            != NO_RECEIPT_REGISTERED_VALIDATION_PATHS
+        ):
+            raise authority.LifecycleAuthorityError(
+                "registered validation projection is not the maintained exact source"
+            )
+        profile["registered_candidate_validation"] = copy.deepcopy(
+            projection
+        )
+    return profile
 
 
 def _current_receipt_safety_profile(main: str) -> dict[str, Any]:
@@ -1590,7 +1635,7 @@ def _current_safety_profile_for_record(
             _record_version(record) == NO_RECEIPT_SCHEMA_VERSION
             and path == NO_RECEIPT_CURRENT_SAFETY_PATH
         ):
-            return _zero_receipt_current_safety_profile(main)
+            return _zero_receipt_current_safety_profile(main, record)
     if (
         _record_version(record) == CURRENT_RECEIPT_SCHEMA_VERSION
         and record.get("current_safety_harness_path") == CURRENT_RECEIPT_SAFETY_PATH
@@ -1689,11 +1734,16 @@ def _current_policy_validation_root(
     helper: Any,
     entry: Any,
     profile: Mapping[str, Any] | None = None,
+    candidate_repository: str | None = None,
 ) -> Iterator[Path]:
     """Build a disposable target tree with only accepted-main harness bytes overlaid."""
     profile = _current_safety_profile(main) if profile is None else profile
     with exact_source_safety.execution_root(
-        ROOT, main, source_root=source_root, profile=profile,
+        ROOT,
+        main,
+        source_root=source_root,
+        profile=profile,
+        candidate_repository=candidate_repository,
     ) as prepared:
         preserved_test: Path | None = None
         expected_test_bytes: bytes | None = None
@@ -1739,14 +1789,24 @@ def _verify_current_safety_root(
     )
 
 
-def _run_current_safety(main: str, root: Path, profile: Mapping[str, Any]) -> None:
+def _run_current_safety(
+    main: str,
+    root: Path,
+    profile: Mapping[str, Any],
+    *,
+    record: Mapping[str, Any] | None = None,
+) -> None:
     builders = {
         REGISTERED_CURRENT_SAFETY_POLICY: _registered_current_safety_profile,
         NO_RECEIPT_CURRENT_SAFETY_POLICY: _zero_receipt_current_safety_profile,
         CURRENT_RECEIPT_SAFETY_POLICY: _current_receipt_safety_profile,
     }
     builder = builders.get(profile.get("policy"), _current_safety_profile)
-    expected = builder(main)
+    expected = (
+        _zero_receipt_current_safety_profile(main, record)
+        if profile.get("policy") == NO_RECEIPT_CURRENT_SAFETY_POLICY
+        else builder(main)
+    )
     exact_source_safety.run_profile(
         root, profile, expected_profile=expected,
     )
@@ -1792,8 +1852,14 @@ def _acquire(repository: str, issue: int, *, execute_validation: bool) -> dict[s
         source_listing = _verify_source_bytes(root, record["tree_sha"])
         if execute_validation:
             validation_arguments = {
-                "source_root": root, "helper": helper, "entry": entry,
+                "source_root": root,
+                "helper": helper,
+                "entry": entry,
             }
+            if "registered_candidate_validation" in profile:
+                validation_arguments["candidate_repository"] = record[
+                    "repository"
+                ]
             if _record_version(record) in {
                 ANCESTOR_SCHEMA_VERSION, NO_RECEIPT_SCHEMA_VERSION,
                 CURRENT_RECEIPT_SCHEMA_VERSION,
@@ -1802,7 +1868,14 @@ def _acquire(repository: str, issue: int, *, execute_validation: bool) -> dict[s
             with _current_policy_validation_root(
                 main, **validation_arguments,
             ) as validation_root:
-                _run_current_safety(main, validation_root, profile)
+                run_arguments = (
+                    {"record": record}
+                    if "registered_candidate_validation" in profile
+                    else {}
+                )
+                _run_current_safety(
+                    main, validation_root, profile, **run_arguments,
+                )
         _verify_source_bytes(root, record["tree_sha"], expected_listing=source_listing)
         if (
             transport._git_text(root, ["rev-parse", "HEAD"]).strip() != record["head_sha"]
