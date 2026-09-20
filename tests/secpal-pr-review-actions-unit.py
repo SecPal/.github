@@ -27,10 +27,7 @@ from unittest import TestCase, main, mock
 import jsonschema
 
 from scripts import secpal_pr_review as review_package
-from scripts.secpal_pr_review import (
-    lifecycle_publication,
-    qualified_remediation_successor_loss,
-)
+from scripts.secpal_pr_review import lifecycle_publication
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -7055,8 +7052,24 @@ class FastPathTests(TestCase):
                 cwd=repository,
                 check=True,
             )
+            protected_main_only_module = (
+                repository
+                / "scripts/secpal_pr_review/qualified_remediation_successor_loss.py"
+            )
+            self.assertTrue(protected_main_only_module.is_file())
+            protected_main_only_module.unlink()
             shutil.copy2(
                 Path(__file__), repository / "tests/secpal-pr-review-actions-unit.py"
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "add",
+                    "--update",
+                    "scripts/secpal_pr_review/qualified_remediation_successor_loss.py",
+                ],
+                cwd=repository,
+                check=True,
             )
             subprocess.run(
                 ["git", "add", "tests/secpal-pr-review-actions-unit.py"],
@@ -7109,6 +7122,15 @@ class FastPathTests(TestCase):
                 check=False,
             )
             self.assertEqual(ancestry.returncode, 1)
+            topology = subprocess.run(
+                ["git", "rev-list", "--parents", "-n", "1", "HEAD"],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.split()
+            self.assertEqual(topology, [historical_draft])
+            self.assertFalse(protected_main_only_module.exists())
 
             validation = subprocess.run(
                 [
@@ -7124,11 +7146,30 @@ class FastPathTests(TestCase):
                 capture_output=True,
                 text=True,
             )
+            dependency_owner = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "unittest",
+                    "tests/secpal-pr-review-actions-unit.py",
+                    "-k",
+                    "test_exact_qualified_successor_uses_existing_publication_authority",
+                ],
+                cwd=repository,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
 
         self.assertEqual(
             validation.returncode,
             0,
             f"{validation.stdout}\n{validation.stderr}",
+        )
+        self.assertNotEqual(dependency_owner.returncode, 0)
+        self.assertIn(
+            "cannot import name 'qualified_remediation_successor_loss'",
+            dependency_owner.stderr,
         )
 
     def test_ready_integration_reconstructs_prior_policy_from_central_history(self) -> None:
@@ -14646,6 +14687,8 @@ class ReadySourceCurrentSafetyTests(TestCase):
 
 class QualifiedRemediationSuccessorApplicationTests(TestCase):
     def setUp(self) -> None:
+        from scripts.secpal_pr_review import qualified_remediation_successor_loss
+
         self.record = qualified_remediation_successor_loss.load_accepted_admission(
             "SecPal/.github", 956
         )
