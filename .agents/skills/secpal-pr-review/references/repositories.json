@@ -167,6 +167,12 @@
           "purpose": "Validate REUSE metadata"
         }
       ],
+      "complete_validation_preparation": {
+        "kind": "NPM_CI_LOCKED",
+        "working_directory": ".",
+        "package_manifest": "package.json",
+        "lockfile": "package-lock.json"
+      },
       "final_eligibility_absence_recoveries": [
         {
           "schema_version": "1.0",

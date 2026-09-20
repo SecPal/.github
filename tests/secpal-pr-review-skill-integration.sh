@@ -190,14 +190,21 @@ assert calls[4][calls[4].index("--method") + 1] == "POST"
 assert calls[4][3] == "repos/SecPal/.github/pulls/comments/21/reactions"
 PY
 
-# A failed complete validation identifies the exact registered entry while
-# keeping command output secret, invalidating the receipt, and stopping once.
+# Locked Node preparation succeeds from exact tracked fixture manifests before
+# a failed complete validation identifies the exact registered entry, keeps
+# command output secret, invalidates the receipt, and stops once.
 validation_repo="$workspace/validation-repository"
 mkdir -p "$validation_repo"
 git -C "$validation_repo" init -q -b main
 git -C "$validation_repo" config user.name "SecPal Integration Fixture"
 git -C "$validation_repo" config user.email "fixture@secpal.dev"
 git -C "$validation_repo" remote add origin https://github.com/SecPal/.github.git
+printf '{"name":"secpal-validation-fixture","version":"1.0.0","private":true}\n' \
+  >"$validation_repo/package.json"
+printf '%s\n' \
+  '{"name":"secpal-validation-fixture","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"secpal-validation-fixture","version":"1.0.0"}}}' \
+  >"$validation_repo/package-lock.json"
+printf 'node_modules/\n' >"$validation_repo/.gitignore"
 printf '#!/bin/sh\nprintf "first\\n" >>"%s"\nprintf "secret=integration-command-output-must-not-leak\\n" >&2\nexit 9\n' \
   "$workspace/validation-runs.log" >"$validation_repo/validation-fail.sh"
 printf '#!/bin/sh\nprintf "second\\n" >>"%s"\n' \
@@ -205,7 +212,12 @@ printf '#!/bin/sh\nprintf "second\\n" >>"%s"\n' \
 chmod 0700 \
   "$validation_repo/validation-fail.sh" \
   "$validation_repo/validation-must-not-run.sh"
-git -C "$validation_repo" add validation-fail.sh validation-must-not-run.sh
+git -C "$validation_repo" add \
+  .gitignore \
+  package.json \
+  package-lock.json \
+  validation-fail.sh \
+  validation-must-not-run.sh
 git -C "$validation_repo" -c commit.gpgsign=false commit -q -m "test: add validation fixtures"
 validation_head="$(git -C "$validation_repo" rev-parse HEAD)"
 

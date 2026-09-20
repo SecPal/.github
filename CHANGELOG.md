@@ -9,6 +9,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-20 - Prepare Locked Complete Validation Dependencies
+
+**Fixed:**
+
+- Prepare repository-pinned Node dependencies from authenticated tracked
+  manifests with `npm ci --ignore-scripts` before the sole Complete Validation
+  attempt, failing before validation on setup failure or tracked-source drift.
+
 ## 2026-09-20 - Rebaseline SecPal Product-Family Authority
 
 **Changed:**

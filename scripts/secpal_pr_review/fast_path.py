@@ -149,6 +149,7 @@ VALIDATION_REGISTRY_ENTRY_FIELDS = frozenset(
         "reviewer_identities",
         "focused_validation",
         "required_local_validation",
+        "complete_validation_preparation",
         "final_eligibility_absence_recoveries",
         "qualified_remediation_successor_evidence_loss_policy",
         "governance_amendment_policy",

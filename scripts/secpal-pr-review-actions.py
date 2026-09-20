@@ -1330,6 +1330,164 @@ def _complete_validation_commands(
     return (*focused, *repository["required_local_validation"])
 
 
+def _complete_validation_source_state(
+    repository_root: Path,
+    preparation: dict[str, Any],
+) -> tuple[str, str, str]:
+    """Bind locked Node inputs and the complete tracked-source state."""
+
+    working_directory = Path(preparation["working_directory"])
+    identities: list[str] = []
+    for key in ("package_manifest", "lockfile"):
+        relative_path = working_directory / preparation[key]
+        candidate = repository_root / relative_path
+        try:
+            if (
+                candidate.absolute().resolve(strict=True) != candidate.absolute()
+                or not candidate.is_file()
+            ):
+                raise fast_path.SecurityBlocker(
+                    "complete validation dependency input is not an exact regular file"
+                )
+        except OSError as exc:
+            raise fast_path.SecurityBlocker(
+                "complete validation dependency input is unavailable"
+            ) from exc
+        tracked = _run_attestation_git(
+            repository_root,
+            ["ls-files", "--stage", "--", relative_path.as_posix()],
+            allow_failure=True,
+        )
+        lines = tracked.stdout.rstrip("\n").splitlines()
+        fields = lines[0].split(maxsplit=3) if len(lines) == 1 else []
+        if (
+            tracked.returncode != 0
+            or len(fields) != 4
+            or fields[0] not in {"100644", "100755"}
+            or not OID_PATTERN.fullmatch(fields[1])
+            or fields[2] != "0"
+            or fields[3] != relative_path.as_posix()
+        ):
+            raise fast_path.SecurityBlocker(
+                "complete validation dependency input is not exact tracked source"
+            )
+        actual = _run_attestation_git(
+            repository_root,
+            ["hash-object", "--no-filters", "--", relative_path.as_posix()],
+            allow_failure=True,
+        )
+        if (
+            actual.returncode != 0
+            or actual.stdout.strip().lower() != fields[1].lower()
+        ):
+            raise fast_path.SecurityBlocker(
+                "complete validation dependency input differs from the staged tree"
+            )
+        identities.append(fields[1].lower())
+    status = _run_attestation_git(
+        repository_root,
+        ["status", "--porcelain=v2", "--untracked-files=no"],
+    ).stdout
+    return identities[0], identities[1], status
+
+
+def _prepare_complete_validation_dependencies(
+    repository: dict[str, Any],
+    repository_root: Path,
+    environment: dict[str, str],
+    *,
+    integrity_verifier: Any = None,
+) -> RegisteredValidationResult:
+    preparation = repository.get("complete_validation_preparation")
+    if preparation is None:
+        return RegisteredValidationResult()
+    if (
+        not isinstance(preparation, dict)
+        or preparation.get("kind") != "NPM_CI_LOCKED"
+    ):
+        return RegisteredValidationResult(
+            failure_category="dependency preparation authority invalid"
+        )
+    try:
+        working_directory = (
+            repository_root / preparation["working_directory"]
+        ).resolve(strict=True)
+        if (
+            not working_directory.is_dir()
+            or (
+                working_directory != repository_root
+                and repository_root not in working_directory.parents
+            )
+        ):
+            return RegisteredValidationResult(
+                failure_category="dependency preparation directory unsafe"
+            )
+        source_before = _complete_validation_source_state(
+            repository_root, preparation
+        )
+        executable = _validation_executable(
+            {
+                "argv": ["npm", "ci", "--ignore-scripts"],
+                "working_directory": preparation["working_directory"],
+                "purpose": "Prepare locked Node dependencies",
+            },
+            working_directory,
+            repository_root,
+        )
+    except (
+        KeyError,
+        OSError,
+        RegistryError,
+        fast_path.RecoverableLocalError,
+        fast_path.SecurityBlocker,
+    ):
+        return RegisteredValidationResult(
+            failure_category="dependency preparation authority invalid"
+        )
+    if integrity_verifier is not None:
+        integrity_verifier()
+    arguments = ["ci", "--ignore-scripts"]
+    try:
+        completed = subprocess.run(
+            [executable, *arguments],
+            cwd=working_directory,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=LOCAL_VALIDATION_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return RegisteredValidationResult(
+            failure_category="dependency installation failed"
+        )
+    finally:
+        if integrity_verifier is not None:
+            integrity_verifier()
+    if completed.returncode != 0:
+        return RegisteredValidationResult(
+            failure_category="dependency installation failed"
+        )
+    try:
+        source_after = _complete_validation_source_state(
+            repository_root, preparation
+        )
+    except (
+        OSError,
+        fast_path.RecoverableLocalError,
+        fast_path.SecurityBlocker,
+    ):
+        return RegisteredValidationResult(
+            failure_category="dependency preparation authority invalid"
+        )
+    if source_after != source_before:
+        return RegisteredValidationResult(
+            failure_category="dependency installation mutated tracked source"
+        )
+    return RegisteredValidationResult()
+
+
 def _run_registered_validations(
     repository: dict[str, Any],
     repository_root: Path,
@@ -1381,6 +1539,14 @@ def _run_registered_validations(
             "XDG_CONFIG_HOME": str(sandbox / ".config"),
             "XDG_DATA_HOME": str(sandbox / ".local/share"),
         }
+        preparation_result = _prepare_complete_validation_dependencies(
+            repository,
+            repository_root,
+            environment,
+            integrity_verifier=integrity_verifier,
+        )
+        if not preparation_result:
+            return preparation_result
         for index, command in enumerate(commands, start=1):
             _validate_command(command)
             try:
