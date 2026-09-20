@@ -6924,6 +6924,8 @@ def _derive_qualified_loss_rebound_ready_prior_authority(
         or rebound.predecessor_head_sha != before.head_sha
         or rebound.resulting_head_sha != after.head_sha
         or predecessor.publication_oid != predecessor_oid
+        or predecessor.predecessor_publication_oid
+        != record["predecessor"]["publication_oid"]
         or successor.predecessor_publication_oid != predecessor.publication_oid
         or before.repository != repository
         or after.repository != repository
@@ -7799,16 +7801,37 @@ def _verify_ready_integration_prior_authority(
     ):
         raise fast_path.SecurityBlocker("Ready integration prior authority identity changed")
     if adopted:
+        reviewed_state_digest = integration_evidence["reviewed_state_digest"]
+        reviewed_feedback_digest = integration_evidence[
+            "reviewed_feedback_digest"
+        ]
+        if authority.get("source_authority_mode") == "EXISTING_AUTHORITY_COMPOSITION":
+            from secpal_pr_review import qualified_remediation_successor_loss
+
+            try:
+                qualification = qualified_remediation_successor_loss.load_accepted_admission(
+                    arguments.repo, arguments.delivery_issue
+                )["qualification"]
+                reviewed_state_digest = qualification["reviewed_state_digest"]
+                reviewed_feedback_digest = qualification[
+                    "reviewed_feedback_digest"
+                ]
+            except (
+                KeyError,
+                TypeError,
+                qualified_remediation_successor_loss.QualifiedRemediationSuccessorLossError,
+            ) as exc:
+                raise fast_path.SecurityBlocker(
+                    "authenticated qualified-loss review selectors are unavailable"
+                ) from exc
         derived = _derive_exact_state_adoption_ready_prior_authority(
             repository_root=repository_root,
             repository=arguments.repo,
             delivery_issue=arguments.delivery_issue,
             pull_request=integration_evidence["pull_request_number"],
             binding=binding,
-            reviewed_state_digest=integration_evidence["reviewed_state_digest"],
-            reviewed_feedback_digest=integration_evidence[
-                "reviewed_feedback_digest"
-            ],
+            reviewed_state_digest=reviewed_state_digest,
+            reviewed_feedback_digest=reviewed_feedback_digest,
         )
         _require_exact_adopted_ready_manifest(authority, derived)
         if required_paths[4] != _canonical_ready_prior_authority_tag_ref(authority):

@@ -377,6 +377,13 @@ def qualified_loss_record() -> dict[str, object]:
         "repository": REPOSITORY,
         "delivery_issue": ISSUE,
         "pull_request": PR,
+        "predecessor": {
+            "publication_oid": "3" * 40,
+            "publication_digest": "2" * 64,
+            "head_sha": PARENT,
+            "tree_sha": "1" * 40,
+            "terminal_authority_digest": "0" * 64,
+        },
         "successor": {
             "head_sha": HEAD,
             "tree_sha": TREE,
@@ -712,6 +719,19 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
                     reviewed_state_digest=reviewed_state,
                     reviewed_feedback_digest=reviewed_feedback,
                 )
+
+    def test_same_head_rebound_rejects_changed_loss_predecessor(self) -> None:
+        record = qualified_loss_record()
+        record["predecessor"]["publication_oid"] = "0" * 40
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker,
+            "qualified Ready authority",
+        ):
+            self.derive_rebound(
+                record=record,
+                reviewed_state_digest=REVIEWED_STATE,
+                reviewed_feedback_digest=REVIEWED_FEEDBACK,
+            )
 
     def test_same_head_rebound_composition_rejects_authority_drift(self) -> None:
         labels = (
@@ -1869,6 +1889,7 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             prior_receipt=None,
             prior_attestation=None,
         )
+
         with (
             mock.patch.object(actions, "_read_json", return_value=manifest),
             mock.patch.object(
@@ -1900,8 +1921,8 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             "prior_delivery_head_sha": HEAD,
             "prior_authority_digest": fast_path.digest_json(manifest),
             "prior_authority_tag_object_sha": "9" * 40,
-            "reviewed_state_digest": REVIEWED_STATE,
-            "reviewed_feedback_digest": REVIEWED_FEEDBACK,
+            "reviewed_state_digest": "8" * 64,
+            "reviewed_feedback_digest": "9" * 64,
             "eligibility": {
                 "lifecycle_identity": manifest["lifecycle"]["identity"],
                 "unrestricted_reviews_before": 1,
@@ -1931,12 +1952,23 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             prior_receipt=None,
             prior_attestation=None,
         )
+
+        def derive(**kwargs: object) -> dict[str, object]:
+            self.assertEqual(kwargs["reviewed_state_digest"], REVIEWED_STATE)
+            self.assertEqual(kwargs["reviewed_feedback_digest"], REVIEWED_FEEDBACK)
+            return manifest
+
         with (
             mock.patch.object(actions, "_read_json", return_value=manifest),
             mock.patch.object(
+                qualified_remediation_successor_loss,
+                "load_accepted_admission",
+                return_value=qualified_loss_record(),
+            ),
+            mock.patch.object(
                 actions,
                 "_derive_exact_state_adoption_ready_prior_authority",
-                return_value=manifest,
+                side_effect=derive,
             ),
             mock.patch.object(actions, "_verify_prior_authority_tag") as tag,
         ):
