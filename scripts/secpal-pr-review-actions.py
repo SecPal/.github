@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import quote
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE_HELPER = REPOSITORY_ROOT / "scripts/secpal-pr-review.py"
 PLAN_SCHEMA_PATH = (
@@ -4761,6 +4760,13 @@ def build_parser() -> argparse.ArgumentParser:
     pre_enrollment_parser.add_argument("--receipt-output", required=True)
     pre_enrollment_parser.add_argument("--attestation-output", required=True)
     pre_enrollment_parser.add_argument("--apply", action="store_true")
+    qualified_parser = subparsers.add_parser(
+        "advance-qualified-remediation-successor-loss"
+    )
+    qualified_parser.add_argument("--repo-root", required=True)
+    qualified_parser.add_argument("--manual-gate-evidence", required=True)
+    qualified_parser.add_argument("--output", required=True)
+    qualified_parser.add_argument("--apply", action="store_true")
     return parser
 
 
@@ -4986,6 +4992,7 @@ def _acquire_ready_source_recovery_facts(
     _gateway_factory: Any,
     _validation_runner: Any,
     ready_source_provider_binding: Any = None,
+    qualified_remediation_loss: Any = None,
 ) -> Any:
     """Test-seamed implementation; production fixes every observation boundary."""
 
@@ -5005,6 +5012,17 @@ def _acquire_ready_source_recovery_facts(
             current_safety_profile
         ),
     }
+    if qualified_remediation_loss is not None:
+        from secpal_pr_review import qualified_remediation_successor_loss
+
+        qualified_remediation_loss = (
+            qualified_remediation_successor_loss.verify_admission(
+                qualified_remediation_loss
+            )
+        )
+        binding["qualified_remediation_successor_evidence_loss"] = copy.deepcopy(
+            qualified_remediation_loss
+        )
     head, status = _attestation_local_state(root, repository)
     if head != expected_head_sha or status:
         raise fast_path.SecurityBlocker(
@@ -5017,7 +5035,17 @@ def _acquire_ready_source_recovery_facts(
         raise fast_path.SecurityBlocker(
             "Ready-source recovery candidate tree is malformed"
         )
-    parent = _validated_commit_parent(root, head)
+    if qualified_remediation_loss is None:
+        parents = [_validated_commit_parent(root, head)]
+    else:
+        topology = _run_attestation_git(
+            root, ["rev-list", "--parents", "-n", "1", head]
+        ).stdout.split()
+        parents = topology[1:] if topology and topology[0] == head else []
+        if parents != qualified_remediation_loss["successor"]["ordered_parent_shas"]:
+            raise fast_path.SecurityBlocker(
+                "qualified remediation successor parent topology changed"
+            )
     if ready_source_provider_binding is None:
         gateway = _gateway_factory(root, entry)
     else:
@@ -5046,6 +5074,24 @@ def _acquire_ready_source_recovery_facts(
             **observation,
         }
     )
+    if qualified_remediation_loss is not None:
+        classified = fast_path._classified_feedback_sources(
+            reviewed, include_resolved=True
+        )
+        feedback_findings = [
+            {
+                "finding_id": f"qualification:{qualified_remediation_loss['qualification']['id']}:{index}",
+                "thread_id": thread_id,
+                "sources": [{"kind": kind, "node_id": node_id, "digest": digest}],
+                "classification": "INFORMATIONAL",
+                "disposition": "NON_ACTIONABLE",
+                "evidence_digest": qualified_remediation_loss["admission_digest"],
+                "technically_blocking": False,
+            }
+            for index, ((kind, node_id), (digest, thread_id)) in enumerate(
+                sorted(classified.items()), start=1
+            )
+        ]
     if reviewed.head_sha != head:
         raise fast_path.SecurityBlocker(
             "Ready-source recovery feedback does not bind the candidate"
@@ -5105,7 +5151,7 @@ def _acquire_ready_source_recovery_facts(
         pull_request_number=pull_request_number,
         head_sha=head,
         tree_sha=tree,
-        parent_shas=[parent],
+        parent_shas=parents,
         expected_base_ref=reviewed.base_ref,
         expected_base_sha=reviewed.base_sha,
         reviewed_state=reviewed,
@@ -5291,6 +5337,206 @@ def issue_ready_source_recovery_authorization(
         ),
         _provider_binding_deriver=derive_provider_binding,
     )
+
+
+def advance_qualified_remediation_successor_loss(
+    *,
+    repository_root: Path,
+    manual_gate_evidence: Any,
+    apply: bool,
+    report_output: str | None = None,
+) -> dict[str, Any]:
+    """Advance the one accepted #956/#957 loss case through existing authority."""
+
+    from secpal_pr_review import (
+        lifecycle_execution,
+        qualified_remediation_successor_loss as successor_loss,
+    )
+
+    record = successor_loss.load_accepted_admission("SecPal/.github", 956)
+    candidate_root = repository_root.resolve(strict=True)
+    if candidate_root == REPOSITORY_ROOT.resolve(strict=True):
+        raise fast_path.SecurityBlocker(
+            "qualified remediation candidate must be separate from accepted-main tooling"
+        )
+    policy_head, entry = _load_current_recovery_policy(record["repository"])
+    accepted_ancestor = _run_attestation_git(
+        REPOSITORY_ROOT,
+        [
+            "merge-base", "--is-ancestor",
+            record["accepted_main_at_classification"], policy_head,
+        ],
+        allow_failure=True,
+    )
+    if accepted_ancestor.returncode != 0:
+        raise fast_path.SecurityBlocker(
+            "qualified remediation accepted-main ancestry changed"
+        )
+    if entry.get("qualified_remediation_successor_evidence_loss_policy") != {
+        "path": record["policy_path"],
+        "admission_digest": record["admission_digest"],
+    }:
+        raise fast_path.SecurityBlocker(
+            "qualified remediation accepted-main registration changed"
+        )
+    _verify_recovery_issuer_source(policy_head)
+    _lifecycle_authority, lifecycle_publication = (
+        _load_lifecycle_publication_helpers()
+    )
+    current = lifecycle_publication.verify_current_lifecycle_authority(
+        record["repository"], record["delivery_issue"]
+    )
+    predecessor = record["predecessor"]
+    state = current.lifecycle.state
+    if (
+        current.publication_oid != predecessor["publication_oid"]
+        or current.publication_digest != predecessor["publication_digest"]
+        or current.lifecycle.authority_digest
+        != predecessor["terminal_authority_digest"]
+        or current.lifecycle.pull_request != record["pull_request"]
+        or current.lifecycle.head_sha != predecessor["head_sha"]
+        or current.lifecycle.tree_sha != predecessor["tree_sha"]
+        or {key: state.get(key) for key in record["predecessor_state"]}
+        != record["predecessor_state"]
+    ):
+        raise fast_path.SecurityBlocker(
+            "qualified remediation predecessor publication changed"
+        )
+    for trailer in ("SecPal-Validation-Receipt", "SecPal-Integration-Evidence"):
+        output = _run_attestation_git(
+            candidate_root,
+            [
+                "show", "-s",
+                f"--format=%(trailers:key={trailer},valueonly,separator=%x00)",
+                record["successor"]["head_sha"],
+            ],
+        ).stdout
+        if [value for value in output.rstrip("\n").split("\x00") if value.strip()]:
+            raise fast_path.SecurityBlocker(
+                "qualified remediation historical commit-bound evidence is present"
+            )
+
+    binding = _fast_registry_binding(entry)
+    gates = fast_path.validate_manual_gate_evidence(
+        manual_gate_evidence, binding["manual_gates"]
+    )
+
+    def accepted_policy(requested_repository: str) -> tuple[str, dict[str, Any]]:
+        if requested_repository != record["repository"]:
+            raise fast_path.SecurityBlocker(
+                "qualified remediation repository changed"
+            )
+        return policy_head, copy.deepcopy(entry)
+
+    facts, _commit_signature = _acquire_ready_source_recovery_facts(
+        repository=record["repository"],
+        pull_request_number=record["pull_request"],
+        expected_head_sha=record["successor"]["head_sha"],
+        repository_root=candidate_root,
+        feedback_findings=None,
+        manual_gate_evidence=gates,
+        expected_commit_signer={
+            "kind": "SSH_PRINCIPAL", "identity": record["signer_identity"],
+        },
+        _policy_loader=accepted_policy,
+        _gateway_factory=FastPathGateway,
+        _validation_runner=_run_ready_source_recovery_current_safety,
+        ready_source_provider_binding=successor_loss.provider_binding(record),
+        qualified_remediation_loss=record,
+    )
+    final_policy_head, final_entry = _load_current_recovery_policy(
+        record["repository"]
+    )
+    final_current = lifecycle_publication.verify_current_lifecycle_authority(
+        record["repository"], record["delivery_issue"]
+    )
+    if (
+        final_policy_head != policy_head
+        or _fast_registry_binding(final_entry) != binding
+        or final_current.publication_oid != current.publication_oid
+        or final_current.publication_digest != current.publication_digest
+        or final_current.lifecycle != current.lifecycle
+    ):
+        raise fast_path.SecurityBlocker(
+            "qualified remediation authority changed during validation"
+        )
+    _verify_recovery_issuer_source(final_policy_head)
+    verified_current_evidence = (
+        fast_path.qualified_remediation_successor_loss_validation_evidence(
+        record, facts
+        )
+    )
+    report = {
+        "schema_version": "1.0",
+        "kind": record["kind"],
+        "repository": record["repository"],
+        "delivery_issue": record["delivery_issue"],
+        "pull_request": record["pull_request"],
+        "predecessor_publication_oid": current.publication_oid,
+        "head_sha": verified_current_evidence.head_sha,
+        "tree_sha": verified_current_evidence.tree_sha,
+        "ordered_parent_shas": record["successor"]["ordered_parent_shas"],
+        "safety_facts": facts,
+        "applied": False,
+    }
+    if not apply:
+        return report
+    if not report_output:
+        raise fast_path.SecurityBlocker(
+            "qualified remediation apply requires durable safety report output"
+        )
+    prepared_report = {**report, "publication_status": "PREPARED"}
+    try:
+        _write_fast_report(report_output, prepared_report)
+        persisted = _read_json_value(
+            report_output, "qualified remediation persisted safety report"
+        )
+    except (OSError, ValueError) as exc:
+        raise fast_path.SecurityBlocker(
+            "qualified remediation safety report persistence failed"
+        ) from exc
+    if persisted != prepared_report:
+        raise fast_path.SecurityBlocker(
+            "qualified remediation safety report read-back changed"
+        )
+    signers = lifecycle_execution._production_signing_authorities(
+        record["repository"], record["signer_identity"]
+    )
+    successor = lifecycle_execution._append_successor_evidence(
+        current,
+        {
+            "authorization_digest": record["admission_digest"],
+            "operation": record["transition_kind"],
+        },
+        signers,
+        resulting_head_sha=record["successor"]["head_sha"],
+        current_head_evidence=verified_current_evidence,
+    )
+    published = lifecycle_publication.advance_current_terminal(
+        successor,
+        signer_identity=signers.publication_identity,
+        signer=signers.publication_signer,
+    )
+    if (
+        published.lifecycle.head_sha != record["successor"]["head_sha"]
+        or {key: published.lifecycle.state.get(key) for key in record["resulting_state"]}
+        != record["resulting_state"]
+        or published.lifecycle.validation_receipt_digest
+        != verified_current_evidence.validation_receipt_digest
+        or published.lifecycle.source_validation_evidence_digest
+        != verified_current_evidence.source_validation_evidence_digest
+    ):
+        raise fast_path.SecurityBlocker(
+            "qualified remediation published successor changed"
+        )
+    return {
+        **report,
+        "applied": True,
+        "publication_oid": published.publication_oid,
+        "publication_digest": published.publication_digest,
+        "authority_digest": published.lifecycle.authority_digest,
+        "resulting_state": copy.deepcopy(published.lifecycle.state),
+    }
 
 
 def _load_fast_state(path: str) -> Any:
@@ -6230,10 +6476,17 @@ def _verified_prior_delivery_commit(
     head: str,
     expected_source_signer: str,
     binding: dict[str, Any],
+    expected_parent_shas: list[str] | None = None,
 ) -> dict[str, Any]:
     """Derive the exact source topology and signer from the signed commit."""
 
-    parent = _validated_commit_parent(repository_root, head)
+    parents = (
+        [_validated_commit_parent(repository_root, head)]
+        if expected_parent_shas is None
+        else _validated_integration_commit_parents(
+            repository_root, head, expected_parent_shas
+        )
+    )
     tree = _run_attestation_git(
         repository_root, ["rev-parse", f"{head}^{{tree}}"]
     ).stdout.strip()
@@ -6265,7 +6518,12 @@ def _verified_prior_delivery_commit(
     )
     if not OID_PATTERN.fullmatch(tree):
         raise fast_path.SecurityBlocker("prior delivery tree identity is invalid")
-    return {"parent_sha": parent, "tree_sha": tree, "signer": signer}
+    return {
+        "parent_sha": parents[0],
+        "parent_shas": parents,
+        "tree_sha": tree,
+        "signer": signer,
+    }
 
 
 def _require_bridge_import_provenance(
@@ -6587,6 +6845,262 @@ def _exact_state_adoption_ready_receipt_digest(
     return current_safety.get("receipt_digest")
 
 
+
+def _derive_qualified_loss_rebound_ready_prior_authority(
+    *,
+    repository_root: Path,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    binding: dict[str, Any],
+    current: Any,
+    lifecycle_authority: Any,
+    lifecycle_publication: Any,
+    reviewed_state_digest: str | None,
+    reviewed_feedback_digest: str | None,
+) -> dict[str, Any]:
+    """Compose accepted same-head rebound, qualified loss, and Ready authority."""
+
+    from secpal_pr_review import qualified_remediation_successor_loss
+
+    if reviewed_state_digest is None or reviewed_feedback_digest is None:
+        raise fast_path.SecurityBlocker(
+            "composed Ready reviewed-state selectors are incomplete"
+        )
+    try:
+        record = qualified_remediation_successor_loss.verify_admission(
+            qualified_remediation_successor_loss.load_accepted_admission(
+                repository, delivery_issue
+            )
+        )
+        predecessor_oid = current.predecessor_publication_oid
+        if not isinstance(predecessor_oid, str):
+            raise lifecycle_publication.LifecyclePublicationError(
+                "PR_REBOUND predecessor publication is unavailable"
+            )
+        rebound = lifecycle_publication._verify_historical_lifecycle_transition(
+            repository, delivery_issue, predecessor_oid
+        )
+        historical_evidence = (
+            lifecycle_authority.normalize_exact_state_adoption_historical_evidence(
+                {
+                    "state": "ABSENT_NEVER_ISSUED",
+                    "validation_receipt_digest": record[
+                        "historical_validation_receipt_digest"
+                    ],
+                    "source_validation_evidence_digest": None,
+                    "final_attestation_digest": None,
+                    "bytes_reconstructed": record[
+                        "historical_bytes_reconstructed"
+                    ],
+                }
+            )
+        )
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        lifecycle_authority.LifecycleAuthorityError,
+        lifecycle_publication.LifecyclePublicationError,
+        qualified_remediation_successor_loss.QualifiedRemediationSuccessorLossError,
+    ) as exc:
+        raise fast_path.SecurityBlocker(
+            "accepted same-head rebound composition is unavailable"
+        ) from exc
+    if (
+        record["qualification"]["reviewed_state_digest"]
+        != reviewed_state_digest
+        or record["qualification"]["reviewed_feedback_digest"]
+        != reviewed_feedback_digest
+    ):
+        raise fast_path.SecurityBlocker(
+            "integration reviewed predecessor differs from authenticated qualified loss"
+        )
+
+    predecessor = rebound.predecessor
+    successor = rebound.successor
+    before = predecessor.lifecycle
+    after = successor.lifecycle
+    state = after.state
+    ready_history = state.get("ready_history") if isinstance(state, dict) else None
+    expected_state = record["resulting_state"]
+    projected_state = (
+        {
+            "unrestricted_review_count": state.get("unrestricted_review_count"),
+            "remediation_cycle_count": state.get("remediation_cycle_count"),
+            "cycle_3_absent": state.get("cycle_3_absent"),
+            "draft": state.get("draft"),
+            "ready": state.get("ready"),
+            "ready_transition_count": state.get("ready_transition_count"),
+            "exceptional_recovery_count": state.get("exceptional_recovery_count"),
+            "exceptional_continuation_count": state.get(
+                "exceptional_continuation_count"
+            ),
+        }
+        if isinstance(state, dict)
+        else None
+    )
+    if (
+        current.publication_oid != successor.publication_oid
+        or current.publication_digest != successor.publication_digest
+        or current.predecessor_publication_oid
+        != successor.predecessor_publication_oid
+        or current.lifecycle.repository != after.repository
+        or current.lifecycle.delivery_issue != after.delivery_issue
+        or current.lifecycle.pull_request != after.pull_request
+        or current.lifecycle.lifecycle_id != after.lifecycle_id
+        or current.lifecycle.authority_digest != after.authority_digest
+        or current.lifecycle.head_sha != after.head_sha
+        or current.lifecycle.tree_sha != after.tree_sha
+        or current.lifecycle.historical_proof_mode != after.historical_proof_mode
+        or current.lifecycle.validation_receipt_digest
+        != after.validation_receipt_digest
+        or current.lifecycle.source_validation_evidence_digest
+        != after.source_validation_evidence_digest
+        or current.lifecycle.adoption_source_evidence_digest
+        != after.adoption_source_evidence_digest
+        or current.lifecycle.state != after.state
+        or rebound.transition_kind != "PR_REBOUND"
+        or rebound.pull_request != record["pull_request"]
+        or rebound.predecessor_authority_digest != before.authority_digest
+        or rebound.predecessor_head_sha != before.head_sha
+        or rebound.resulting_head_sha != after.head_sha
+        or predecessor.publication_oid != predecessor_oid
+        or predecessor.predecessor_publication_oid
+        != record["predecessor"]["publication_oid"]
+        or successor.predecessor_publication_oid != predecessor.publication_oid
+        or before.repository != repository
+        or after.repository != repository
+        or before.delivery_issue != delivery_issue
+        or after.delivery_issue != delivery_issue
+        or before.pull_request != record["pull_request"]
+        or after.pull_request != pull_request
+        or before.pull_request == after.pull_request
+        or before.lifecycle_id != after.lifecycle_id
+        or before.head_sha != after.head_sha
+        or after.head_sha != record["successor"]["head_sha"]
+        or before.tree_sha != record["successor"]["tree_sha"]
+        or after.tree_sha is not None
+        or before.state != after.state
+        or projected_state != expected_state
+        or not isinstance(ready_history, list)
+        or len(ready_history) != 1
+        or ready_history[0].get("sequence") != 1
+        or ready_history[0].get("transition_kind") != "DRAFT_TO_READY"
+        or not isinstance(
+            ready_history[0].get("event_authorization_digest"), str
+        )
+        or state.get("exceptional_recovery_history") != []
+        or state.get("exceptional_continuation_history") != []
+        or before.validation_receipt_digest is None
+        or before.source_validation_evidence_digest is None
+        or before.adoption_source_evidence_digest != record["admission_digest"]
+        or record["historical_package_status"] != "UNAVAILABLE"
+        or record["historical_integration_evidence_digest"] is not None
+        or historical_evidence["state"] != "ABSENT_NEVER_ISSUED"
+        or historical_evidence["validation_receipt_digest"] is not None
+    ):
+        raise fast_path.SecurityBlocker(
+            "same-head PR_REBOUND does not preserve the qualified Ready authority"
+        )
+
+    source_commit = _verified_prior_delivery_commit(
+        repository_root,
+        after.head_sha,
+        record["signer_identity"],
+        binding,
+        record["successor"]["ordered_parent_shas"],
+    )
+    if (
+        source_commit["tree_sha"] != before.tree_sha
+        or source_commit["signer"]["identity"] != record["signer_identity"]
+    ):
+        raise fast_path.SecurityBlocker("composed Ready source commit changed")
+
+    manifest = {
+        "schema_version": "1.2",
+        "kind": "READY_INTEGRATION_PRIOR_AUTHORITY",
+        "repository": repository,
+        "delivery_issue_number": delivery_issue,
+        "pull_request_number": pull_request,
+        "prior_delivery_head_sha": after.head_sha,
+        "prior_delivery_tree_sha": before.tree_sha,
+        "prior_validation_receipt_digest": historical_evidence[
+            "validation_receipt_digest"
+        ],
+        "prior_final_attestation_digest": historical_evidence[
+            "final_attestation_digest"
+        ],
+        "expected_signer": source_commit["signer"],
+        "lifecycle": {
+            "identity": after.lifecycle_id,
+            "current_authority_digest": after.authority_digest,
+            "historical_proof_mode": "native_lifecycle",
+            "draft": False,
+            "ready": True,
+            "ready_transition": False,
+            "unrestricted_reviews": 1,
+            "remediation_cycles": 2,
+            "exceptional_recoveries": 0,
+            "exceptional_continuations": 0,
+            "cycle_3": False,
+            "ready_transition_count": 1,
+            "ready_history": copy.deepcopy(ready_history),
+            "exceptional_recovery_history": [],
+            "exceptional_continuation_history": [],
+        },
+        "publication": {
+            "object_oid": successor.publication_oid,
+            "publication_digest": successor.publication_digest,
+        },
+        "source_authority_mode": "EXISTING_AUTHORITY_COMPOSITION",
+        "source_authority": {
+            "composition": [
+                "PR_REBOUND",
+                "QUALIFIED_REMEDIATION_SUCCESSOR_LOSS",
+                "READY_INTEGRATION_PRIOR_AUTHORITY",
+            ],
+            "source_parent_shas": source_commit["parent_shas"],
+            "source_signer_identity": record["signer_identity"],
+            "replaced_pull_request_number": before.pull_request,
+            "replacement_pull_request_number": after.pull_request,
+            "qualified_loss_admission_digest": record["admission_digest"],
+            "qualified_loss_qualification_id": record["qualification"]["id"],
+            "qualified_loss_head_evidence": {
+                "validation_receipt_digest": before.validation_receipt_digest,
+                "source_validation_evidence_digest": (
+                    before.source_validation_evidence_digest
+                ),
+                "final_attestation_digest": before.adoption_source_evidence_digest,
+            },
+            "rebound": {
+                "event_id": rebound.event_id,
+                "event_digest": rebound.event_digest,
+                "predecessor_authority_digest": (
+                    rebound.predecessor_authority_digest
+                ),
+                "predecessor_publication": {
+                    "object_oid": predecessor.publication_oid,
+                    "publication_digest": predecessor.publication_digest,
+                },
+                "successor_publication": {
+                    "object_oid": successor.publication_oid,
+                    "publication_digest": successor.publication_digest,
+                },
+            },
+            "historical_evidence": historical_evidence,
+        },
+        "historical_companions": {
+            "reviewed_state_bytes": "UNAVAILABLE",
+            "validation_receipt_bytes": "ABSENT_NEVER_ISSUED",
+            "final_attestation_bytes": "ABSENT_NEVER_ISSUED",
+            "historical_bytes_reconstructed": False,
+        },
+    }
+    return fast_path.normalize_ready_integration_prior_authority(manifest)
+
+
+
 def _derive_exact_state_adoption_ready_prior_authority(
     *,
     repository_root: Path,
@@ -6630,6 +7144,27 @@ def _derive_exact_state_adoption_ready_prior_authority(
         current = lifecycle_publication.verify_current_lifecycle_authority(
             repository, delivery_issue
         )
+        if (
+            current.lifecycle.historical_proof_mode == "native_lifecycle"
+            and current.lifecycle.pull_request == pull_request
+            and current.lifecycle.tree_sha is None
+        ):
+            manifest = _derive_qualified_loss_rebound_ready_prior_authority(
+                repository_root=repository_root,
+                repository=repository,
+                delivery_issue=delivery_issue,
+                pull_request=pull_request,
+                binding=binding,
+                current=current,
+                lifecycle_authority=lifecycle_authority,
+                lifecycle_publication=lifecycle_publication,
+                reviewed_state_digest=reviewed_state_digest,
+                reviewed_feedback_digest=reviewed_feedback_digest,
+            )
+            _require_accepted_main_bridge_source(
+                repository, expected_main=accepted_main
+            )
+            return manifest
         raw = current.serialized_lifecycle_evidence
         if raw is None:
             raise lifecycle_authority.LifecycleAuthorityError(
@@ -7271,6 +7806,7 @@ def _verify_ready_integration_prior_authority(
     adopted = authority.get("source_authority_mode") in {
         "EXACT_STATE_ADOPTION_V3",
         "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS",
+        "EXISTING_AUTHORITY_COMPOSITION",
     }
     historical_paths = required_paths[1:4]
     caller_signer = required_paths[5]
@@ -7310,16 +7846,37 @@ def _verify_ready_integration_prior_authority(
     ):
         raise fast_path.SecurityBlocker("Ready integration prior authority identity changed")
     if adopted:
+        reviewed_state_digest = integration_evidence["reviewed_state_digest"]
+        reviewed_feedback_digest = integration_evidence[
+            "reviewed_feedback_digest"
+        ]
+        if authority.get("source_authority_mode") == "EXISTING_AUTHORITY_COMPOSITION":
+            from secpal_pr_review import qualified_remediation_successor_loss
+
+            try:
+                qualification = qualified_remediation_successor_loss.load_accepted_admission(
+                    arguments.repo, arguments.delivery_issue
+                )["qualification"]
+                reviewed_state_digest = qualification["reviewed_state_digest"]
+                reviewed_feedback_digest = qualification[
+                    "reviewed_feedback_digest"
+                ]
+            except (
+                KeyError,
+                TypeError,
+                qualified_remediation_successor_loss.QualifiedRemediationSuccessorLossError,
+            ) as exc:
+                raise fast_path.SecurityBlocker(
+                    "authenticated qualified-loss review selectors are unavailable"
+                ) from exc
         derived = _derive_exact_state_adoption_ready_prior_authority(
             repository_root=repository_root,
             repository=arguments.repo,
             delivery_issue=arguments.delivery_issue,
             pull_request=integration_evidence["pull_request_number"],
             binding=binding,
-            reviewed_state_digest=integration_evidence["reviewed_state_digest"],
-            reviewed_feedback_digest=integration_evidence[
-                "reviewed_feedback_digest"
-            ],
+            reviewed_state_digest=reviewed_state_digest,
+            reviewed_feedback_digest=reviewed_feedback_digest,
         )
         _require_exact_adopted_ready_manifest(authority, derived)
         if required_paths[4] != _canonical_ready_prior_authority_tag_ref(authority):
@@ -7575,6 +8132,16 @@ def _verify_exceptional_recovery_selection(
         )
 
 
+def _is_diagnostic_exceptional_recovery(path: str) -> bool:
+    value = _read_json(path, "exceptional recovery evidence")
+    return (
+        isinstance(value, dict)
+        and value.get("schema_version") == "1.1"
+        and value.get("admission_kind")
+        == "REPRODUCED_MATERIAL_SECURITY_DIAGNOSTIC"
+    )
+
+
 def _load_exceptional_recovery_evidence(
     *,
     path: str,
@@ -7796,14 +8363,8 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
     )
     diagnostic_recovery = False
     if exceptional_recovery_path:
-        raw_recovery = _read_json(
-            exceptional_recovery_path, "exceptional recovery evidence"
-        )
-        diagnostic_recovery = (
-            isinstance(raw_recovery, dict)
-            and raw_recovery.get("schema_version") == "1.1"
-            and raw_recovery.get("admission_kind")
-            == "REPRODUCED_MATERIAL_SECURITY_DIAGNOSTIC"
+        diagnostic_recovery = _is_diagnostic_exceptional_recovery(
+            exceptional_recovery_path
         )
     integration_selectors = (
         getattr(arguments, "delivery_issue", None),
@@ -9219,6 +9780,24 @@ def main(argv: list[str] | None = None) -> int:
             return _command_resolve_batch(arguments)
         if arguments.command == "integrate-pre-enrollment-draft":
             return _command_integrate_pre_enrollment_draft(arguments)
+        if arguments.command == "advance-qualified-remediation-successor-loss":
+            report = advance_qualified_remediation_successor_loss(
+                repository_root=Path(arguments.repo_root),
+                manual_gate_evidence=_read_json_value(
+                    arguments.manual_gate_evidence, "manual-gate evidence"
+                ),
+                apply=arguments.apply,
+                report_output=arguments.output,
+            )
+            if not arguments.apply:
+                _write_fast_report(arguments.output, report)
+            elif arguments.output is None:
+                raise fast_path.SecurityBlocker(
+                    "qualified remediation apply requires durable safety report output"
+                )
+            else:
+                _write_fast_report(arguments.output, report)
+            return 0
         return _command_mutation(arguments)
     except fast_path.RecoverableLocalError as exc:
         report = {

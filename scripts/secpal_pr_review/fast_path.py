@@ -19,7 +19,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
-
 FOLLOW_UP_HELPER = Path(__file__).resolve().with_name("follow_up.py")
 EVIDENCE_HELPER = Path(__file__).resolve().parents[1] / "secpal-pr-review.py"
 CENTRAL_REGISTRY_ROOT = Path(__file__).resolve().parents[2]
@@ -151,6 +150,8 @@ VALIDATION_REGISTRY_ENTRY_FIELDS = frozenset(
         "focused_validation",
         "required_local_validation",
         "final_eligibility_absence_recoveries",
+        "qualified_remediation_successor_evidence_loss_policy",
+        "governance_amendment_policy",
         "signature_policy",
         "lifecycle_authority_policy",
         "pre_enrollment_integration_policy",
@@ -1180,6 +1181,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         "exceptional_continuations",
         "cycle_3",
     }
+    source_mode = value.get("source_authority_mode")
     if authority_mode == "ADOPTED":
         lifecycle_keys |= {
             "ready_transition_count",
@@ -1224,16 +1226,23 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         raise SecurityBlocker("Ready integration prior lifecycle authority is invalid")
     if authority_mode == "ADOPTED":
         ready_history = lifecycle.get("ready_history")
-        source_mode = value.get("source_authority_mode")
         ready_history_keys = (
             {"sequence", "transition_kind", "event_authorization_digest"}
-            if source_mode == "EXACT_STATE_ADOPTION_V3"
+            if source_mode in {
+                "EXACT_STATE_ADOPTION_V3",
+                "EXISTING_AUTHORITY_COMPOSITION",
+            }
             else {"sequence", "transition_kind", "observation_digest"}
             if source_mode == "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS"
             else None
         )
         if (
-            lifecycle.get("historical_proof_mode") != "exact_state_adoption"
+            lifecycle.get("historical_proof_mode")
+            != (
+                "native_lifecycle"
+                if source_mode == "EXISTING_AUTHORITY_COMPOSITION"
+                else "exact_state_adoption"
+            )
             or isinstance(lifecycle.get("ready_transition_count"), bool)
             or lifecycle.get("ready_transition_count") != 1
             or not isinstance(ready_history, list)
@@ -1245,7 +1254,10 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             or not _require_digest(
                 ready_history[0].get(
                     "event_authorization_digest"
-                    if source_mode == "EXACT_STATE_ADOPTION_V3"
+                    if source_mode in {
+                        "EXACT_STATE_ADOPTION_V3",
+                        "EXISTING_AUTHORITY_COMPOSITION",
+                    }
                     else "observation_digest"
                 ),
                 "Ready integration transition authorization",
@@ -1272,15 +1284,22 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         "pull_request_number": _require_positive_integer(value.get("pull_request_number"), "prior authority pull request"),
         "prior_delivery_head_sha": _require_oid(value.get("prior_delivery_head_sha"), "prior authority head"),
         "prior_delivery_tree_sha": _require_oid(value.get("prior_delivery_tree_sha"), "prior authority tree"),
-        "prior_validation_receipt_digest": _require_digest(value.get("prior_validation_receipt_digest"), "prior validation receipt"),
+        "prior_validation_receipt_digest": (
+            None
+            if source_mode == "EXISTING_AUTHORITY_COMPOSITION"
+            and value.get("prior_validation_receipt_digest") is None
+            else _require_digest(
+                value.get("prior_validation_receipt_digest"),
+                "prior validation receipt",
+            )
+        ),
         "prior_final_attestation_digest": (
             _require_digest(
                 value.get("prior_final_attestation_digest"),
                 "prior final attestation",
             )
             if authority_mode != "ADOPTED"
-            or value.get("source_authority_mode")
-            == "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS"
+            or source_mode == "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS"
             else value.get("prior_final_attestation_digest")
         ),
         "expected_signer": {"kind": signer_kind, "identity": signer_identity},
@@ -1339,7 +1358,12 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             "historical_bytes_reconstructed": False,
         }
         return normalized
-    source_mode = value.get("source_authority_mode")
+    if source_mode == "EXISTING_AUTHORITY_COMPOSITION":
+        return _normalize_existing_authority_composition_ready_source(
+            normalized,
+            value.get("source_authority"),
+            value.get("historical_companions"),
+        )
     if (
         source_mode == "EXACT_STATE_ADOPTION_V3"
         and normalized["prior_final_attestation_digest"] is not None
@@ -1453,6 +1477,179 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         historical_companions=copy.deepcopy(companions),
     )
     return normalized
+
+
+def _normalize_existing_authority_composition_ready_source(
+    normalized: dict[str, Any],
+    source: Any,
+    companions: Any,
+) -> dict[str, Any]:
+    """Normalize PR_REBOUND + qualified-loss Ready authority composition."""
+
+    source_keys = {
+        "composition",
+        "source_parent_shas",
+        "source_signer_identity",
+        "replaced_pull_request_number",
+        "replacement_pull_request_number",
+        "qualified_loss_admission_digest",
+        "qualified_loss_qualification_id",
+        "qualified_loss_head_evidence",
+        "rebound",
+        "historical_evidence",
+    }
+    if not isinstance(source, dict) or set(source) != source_keys:
+        raise SecurityBlocker("composed Ready source authority is malformed")
+    if source.get("composition") != [
+        "PR_REBOUND",
+        "QUALIFIED_REMEDIATION_SUCCESSOR_LOSS",
+        "READY_INTEGRATION_PRIOR_AUTHORITY",
+    ]:
+        raise SecurityBlocker("composed Ready source authority is unsupported")
+    replaced = _require_positive_integer(
+        source.get("replaced_pull_request_number"), "replaced pull request"
+    )
+    replacement = _require_positive_integer(
+        source.get("replacement_pull_request_number"), "replacement pull request"
+    )
+    if replaced == replacement or replacement != normalized["pull_request_number"]:
+        raise SecurityBlocker("composed Ready pull-request identity is invalid")
+    if (
+        normalized["prior_validation_receipt_digest"] is not None
+        or normalized["prior_final_attestation_digest"] is not None
+        or _require_string(
+            source.get("source_signer_identity"), "composed source signer"
+        )
+        != normalized["expected_signer"]["identity"]
+    ):
+        raise SecurityBlocker("composed Ready historical identity is invalid")
+    source_parents = source.get("source_parent_shas")
+    if (
+        not isinstance(source_parents, list)
+        or len(source_parents) != 2
+        or source_parents[0] == source_parents[1]
+        or any(
+            _require_oid(parent, "composed source parent")
+            == normalized["prior_delivery_head_sha"]
+            for parent in source_parents
+        )
+    ):
+        raise SecurityBlocker("composed Ready source topology is invalid")
+    _require_digest(
+        source.get("qualified_loss_admission_digest"),
+        "qualified loss admission",
+    )
+    _require_string(
+        source.get("qualified_loss_qualification_id"),
+        "qualified loss identity",
+    )
+    head_evidence = source.get("qualified_loss_head_evidence")
+    if not isinstance(head_evidence, dict) or set(head_evidence) != {
+        "validation_receipt_digest",
+        "source_validation_evidence_digest",
+        "final_attestation_digest",
+    }:
+        raise SecurityBlocker("qualified loss head evidence is malformed")
+    for field, label in (
+        ("validation_receipt_digest", "qualified loss current receipt"),
+        ("source_validation_evidence_digest", "qualified loss current safety"),
+        ("final_attestation_digest", "qualified loss admission binding"),
+    ):
+        _require_digest(head_evidence.get(field), label)
+    if (
+        head_evidence["final_attestation_digest"]
+        != source["qualified_loss_admission_digest"]
+    ):
+        raise SecurityBlocker("qualified loss admission binding changed")
+    rebound = source.get("rebound")
+    if not isinstance(rebound, dict) or set(rebound) != {
+        "event_id",
+        "event_digest",
+        "predecessor_authority_digest",
+        "predecessor_publication",
+        "successor_publication",
+    }:
+        raise SecurityBlocker("composed Ready rebound authority is malformed")
+    _require_string(rebound.get("event_id"), "PR rebound event")
+    _require_digest(rebound.get("event_digest"), "PR rebound event")
+    _require_digest(
+        rebound.get("predecessor_authority_digest"),
+        "PR rebound predecessor authority",
+    )
+    for label in ("predecessor_publication", "successor_publication"):
+        publication = rebound.get(label)
+        if not isinstance(publication, dict) or set(publication) != {
+            "object_oid", "publication_digest"
+        }:
+            raise SecurityBlocker("composed Ready rebound publication is malformed")
+        _require_oid(publication.get("object_oid"), "PR rebound publication")
+        _require_digest(
+            publication.get("publication_digest"), "PR rebound publication"
+        )
+    if rebound["successor_publication"] != normalized["publication"]:
+        raise SecurityBlocker("composed Ready rebound successor is not CURRENT")
+    historical = normalize_exact_state_adoption_historical_evidence(
+        source.get("historical_evidence")
+    )
+    if (
+        historical["state"] != "ABSENT_NEVER_ISSUED"
+        or historical["validation_receipt_digest"]
+        != normalized["prior_validation_receipt_digest"]
+    ):
+        raise SecurityBlocker("composed Ready historical receipt identity changed")
+    expected_companions = {
+        "reviewed_state_bytes": "UNAVAILABLE",
+        "validation_receipt_bytes": "ABSENT_NEVER_ISSUED",
+        "final_attestation_bytes": "ABSENT_NEVER_ISSUED",
+        "historical_bytes_reconstructed": False,
+    }
+    if companions != expected_companions:
+        raise SecurityBlocker("composed Ready historical companion status is invalid")
+    normalized.update(
+        source_authority_mode="EXISTING_AUTHORITY_COMPOSITION",
+        source_authority=copy.deepcopy(source),
+        historical_companions=copy.deepcopy(companions),
+    )
+    return normalized
+
+
+def normalize_exact_state_adoption_historical_evidence(
+    value: Any,
+) -> dict[str, Any]:
+    """Normalize the closed schema-aware historical receipt identity."""
+
+    fields = {
+        "state",
+        "validation_receipt_digest",
+        "source_validation_evidence_digest",
+        "final_attestation_digest",
+        "bytes_reconstructed",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise SecurityBlocker("exact-state historical evidence is malformed")
+    result = copy.deepcopy(value)
+    state = result["state"]
+    if (
+        state not in {"PRESENT", "UNAVAILABLE", "ABSENT_NEVER_ISSUED"}
+        or result["bytes_reconstructed"] is not False
+    ):
+        raise SecurityBlocker("exact-state historical evidence state is unknown")
+    receipt = result["validation_receipt_digest"]
+    source = result["source_validation_evidence_digest"]
+    attestation = result["final_attestation_digest"]
+    if state == "ABSENT_NEVER_ISSUED":
+        if any(item is not None for item in (receipt, source, attestation)):
+            raise SecurityBlocker("absent historical evidence cannot claim a digest")
+    else:
+        _require_digest(receipt, "historical validation receipt")
+        _require_digest(source, "historical source validation")
+        if state == "PRESENT":
+            _require_digest(attestation, "historical final attestation")
+        elif attestation is not None:
+            raise SecurityBlocker(
+                "unavailable historical evidence cannot claim an attestation"
+            )
+    return result
 
 
 def _normalize_legacy_enrolled_ready_source(
@@ -6261,11 +6458,11 @@ def is_verified_validation_evidence(value: Any) -> bool:
             or canonical_json_bytes(provenance).decode("utf-8") != raw
         ):
             return False
-        reviewed_state = StableFeedbackState.from_payload(
-            provenance["reviewed_state"]
-        )
         kind = provenance.get("kind")
         if kind == "ORDINARY":
+            reviewed_state = StableFeedbackState.from_payload(
+                provenance["reviewed_state"]
+            )
             verified = _verify_validation_attestation_unsealed(
                 provenance["attestation"],
                 repository=provenance["repository"],
@@ -6281,6 +6478,9 @@ def is_verified_validation_evidence(value: Any) -> bool:
                 delivery_issue_number=provenance.get("delivery_issue_number"),
             )
         elif kind == "READY_INTEGRATION":
+            reviewed_state = StableFeedbackState.from_payload(
+                provenance["reviewed_state"]
+            )
             verified = _verify_ready_integration_attestation_unsealed(
                 provenance["attestation"],
                 repository=provenance["repository"],
@@ -6300,6 +6500,10 @@ def is_verified_validation_evidence(value: Any) -> bool:
                 ],
                 repository_root=provenance["repository_root"],
                 signature_policy=provenance["signature_policy"],
+            )
+        elif kind == "QUALIFIED_REMEDIATION_SUCCESSOR_LOSS":
+            verified = qualified_remediation_successor_loss_validation_evidence(
+                provenance["admission"], provenance["safety_facts"]
             )
         else:
             return False
@@ -6528,9 +6732,21 @@ def derive_ready_source_recovery_safety_facts(
     parents = tuple(
         _require_oid(item, "Ready-source recovery parent") for item in parent_shas
     ) if isinstance(parent_shas, (list, tuple)) else ()
-    if len(parents) != 1:
+    qualified_loss = (
+        registry.get("qualified_remediation_successor_evidence_loss")
+        if isinstance(registry, dict)
+        else None
+    )
+    if qualified_loss is not None:
+        from . import qualified_remediation_successor_loss as successor_loss
+
+        try:
+            qualified_loss = successor_loss.verify_admission(qualified_loss)
+        except successor_loss.QualifiedRemediationSuccessorLossError as exc:
+            raise SecurityBlocker(str(exc)) from exc
+    if len(parents) != (2 if qualified_loss is not None else 1):
         raise SecurityBlocker(
-            "Ready-source recovery requires the exact sole-parent delivery topology"
+            "Ready-source recovery delivery topology is not admitted"
         )
     base_ref = _require_string(
         expected_base_ref, "Ready-source recovery target base"
@@ -6786,7 +7002,7 @@ def derive_ready_source_recovery_safety_facts(
             raise SecurityBlocker(
                 "Ready-source recovery current-safety profile is invalid"
             )
-        schema_version = "1.1"
+        schema_version = "1.2" if qualified_loss is not None else "1.1"
         validation_execution_origin = (
             "ACCEPTED_MAIN_EXACT_SOURCE_CURRENT_SAFETY"
         )
@@ -6835,7 +7051,13 @@ def derive_ready_source_recovery_safety_facts(
         "fresh_validation_receipt_digest": expected_receipt["receipt_digest"],
         "validation_execution_origin": validation_execution_origin,
     }
-    return {**facts, "safety_facts_digest": digest_json(facts)}
+    result = {**facts, "safety_facts_digest": digest_json(facts)}
+    if qualified_loss is not None:
+        try:
+            successor_loss.verify_safety_binding(qualified_loss, result)
+        except successor_loss.QualifiedRemediationSuccessorLossError as exc:
+            raise SecurityBlocker(str(exc)) from exc
+    return result
 
 
 def verify_ready_source_recovery_safety_facts(value: Any) -> dict[str, Any]:
@@ -6864,6 +7086,7 @@ def verify_ready_source_recovery_safety_facts(value: Any) -> dict[str, Any]:
     origins = {
         "1.0": "MAINTAINED_REGISTERED_EXECUTION",
         "1.1": "ACCEPTED_MAIN_EXACT_SOURCE_CURRENT_SAFETY",
+        "1.2": "ACCEPTED_MAIN_EXACT_SOURCE_CURRENT_SAFETY",
     }
     if (
         version not in origins
@@ -6887,13 +7110,48 @@ def verify_ready_source_recovery_safety_facts(value: Any) -> dict[str, Any]:
         registry=value["policy_binding"], command_set=value["command_set"],
         current_safety_profile=(
             value["policy_binding"].get("ready_source_recovery_current_safety")
-            if version == "1.1" and isinstance(value["policy_binding"], dict)
+            if version in {"1.1", "1.2"}
+            and isinstance(value["policy_binding"], dict)
             else None
         ),
     )
     if derived != value:
         raise SecurityBlocker("Ready-source recovery safety facts are inconsistent")
     return derived
+
+
+def qualified_remediation_successor_loss_validation_evidence(
+    admission: Any, safety_facts: Any,
+) -> VerifiedValidationEvidence:
+    """Seal current evidence only after re-verifying the exact accepted loss case."""
+
+    from . import qualified_remediation_successor_loss as successor_loss
+
+    try:
+        record = successor_loss.verify_admission(admission)
+        safety = verify_ready_source_recovery_safety_facts(safety_facts)
+        successor_loss.verify_safety_binding(record, safety)
+    except successor_loss.QualifiedRemediationSuccessorLossError as exc:
+        raise SecurityBlocker(str(exc)) from exc
+    result = VerifiedValidationEvidence(
+        repository=record["repository"],
+        delivery_issue_number=record["delivery_issue"],
+        pull_request_number=record["pull_request"],
+        head_sha=record["successor"]["head_sha"],
+        tree_sha=record["successor"]["tree_sha"],
+        validation_receipt_digest=safety["fresh_validation_receipt_digest"],
+        source_validation_evidence_digest=safety["safety_facts_digest"],
+        final_attestation_digest=record["admission_digest"],
+        _verification_seal=None,
+    )
+    return _seal_validation_evidence(
+        result,
+        {
+            "kind": "QUALIFIED_REMEDIATION_SUCCESSOR_LOSS",
+            "admission": copy.deepcopy(record),
+            "safety_facts": copy.deepcopy(safety),
+        },
+    )
 
 
 def _verify_classified_findings(

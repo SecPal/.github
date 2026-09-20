@@ -178,6 +178,33 @@ state, transition, counter, signer, trust root, or journal. Its verifier-owned
 seal is not reproducible from serialized fields, and the generic authorization
 issuer rejects the provider-growth digest.
 
+A sibling ordinary Ready-remediation admission handles a terminal hosted
+failure only when protected CURRENT is exactly Ready Review 1/1 and Remediation
+1/2. The exact CURRENT SHA selects the complete authenticated check-run,
+pull-request workflow-run and job evidence; no caller chooses historical run or
+job IDs. That failure must bind uniquely to the same repository and delivery
+PR. The live OPEN Ready PR is authenticated independently at the exact fresh
+validated signed sole-parent successor, and CURRENT plus the live PR are
+re-read before finding and authorization issuance. An independent repository-
+byte reproduction must prove a technically blocking `IN_CONTRACT_DEFECT`. The
+maintained runtime-selector proof derives workflow and engine floors from
+candidate configuration. Direct workflows retain their existing source
+binding; local reusable calls additionally require one exact
+candidate-byte caller/callee mapping under `.github/workflows`, a declared
+`workflow_call`, and the observed caller/called-job display-name composition.
+Its closed scalar parser supports plain or quoted names and sources plus legal
+whitespace-delimited trailing comments while preserving embedded hashes.
+Unrelated remote reusable jobs are ignored for source authority; an observed
+remote source, and dynamic, traversing, missing or ambiguous sources, fail
+closed. The proof requires the exact signed sole-parent correction to remove the
+authenticated violation set, rejects unrelated changes, and requires fresh
+resulting-head validation and attestation. It seals a distinct
+`POST_READY_IN_CONTRACT_VALIDATION_DEFECT` source digest into the same one-use
+`REMEDIATION_COMPLETED` authorization. Provider-growth and validation-defect
+sources cannot substitute for one another and compete for the same final
+ordinary slot; neither adds a review, Ready transition, state, counter,
+recovery family, signer or journal.
+
 Applicable protected-branch
 rules independently determine whether `NONE` is admissible; `REVIEW_REQUIRED`
 always fails closed. Unsigned recovery facts and caller-selected feedback
@@ -478,6 +505,53 @@ Mixed provider-review/admission inputs, replay into another context, resets,
 and using the admission to derive remediation or Ready state fail closed.
 The lifecycle-authority suite is an unconditional registered validation command.
 
+Exact-State-Adoption version 4 is the registered, one-delivery
+`GOVERNANCE_AMENDMENT` mode for #960 / PR #961. It represents historical
+validation as `ABSENT_NEVER_ISSUED` with typed null receipt, source-validation,
+and final-attestation fields. It consumes an independently signed exact-scope
+authorization only after current validation, natural CI, exact-head independent
+qualification, and zero material findings. Its public producer accepts only the
+closed external human/verifier inputs that cannot be observed from providers,
+then independently rebuilds the live GitHub, Git, CI, feedback, thread,
+source-range and exact change-set facts from the Ready PR. Before signing it
+requires one authenticated `ready_for_review` event and the complete required
+workflow set registered strictly after that event to be terminal and successful.
+The bounded run inventory, canonical GitHub timestamps, exact returned count,
+registered bootstrap scope, authorized Ready actor, and live strict required-
+check policy are authenticated fail closed. The check identities come from the
+bound accepted-main copy of `sync-required-checks.sh`; accepted combined-status
+contexts are that exact set plus the maintained CLA context. The producer also
+derives current-validation policy identity from the bound accepted-main
+registry and derives `ABSENT_NEVER_ISSUED` only after the protected journal and
+exact signed qualified-source trailer history both prove absence. Caller-
+provided validation, receipt, provenance, or absence objects are outside the
+closed input schema. The provider-produced fact set excludes the external
+qualification claim; only the accepted-main root signature turns its exact
+verifier, head, tree, result and digest into authorization evidence. Execution
+reuses that verified value while reobserving provider facts. A preassembled or presigned live-
+facts descriptor cannot replace that observation. Provider-enforced strict
+up-to-date checks ensure a base advance rejects the normal squash before main
+changes. It creates an
+exact-scope authorization with the existing accepted-main authority signer, wraps it with
+the existing legacy-adoption signer, and consumes once through the repository's
+canonical GitHub squash merge. Candidate policy and registry additions are
+prospective only; their exact bootstrap scope is compared before root signing
+but cannot authorize itself. Every adopted source commit
+must match a key in the bound accepted-main registry. The resulting GitHub-
+verified protected-main commit must have exactly the authorized predecessor and
+qualified tree. Its two top-level command entry points are admitted as exact files;
+other paths under `scripts/` remain outside this authority. Direct push, merge-
+commit, rebase, force, and branch-protection bypass forms are rejected; ambient
+Git trust is not authority. The change
+digest uses the maintained newline-terminated canonical JSON encoder over one
+closed base/head/tree/topology/path/blob/mode object. The accepted squash
+commit stores the canonical authorization and consumption digest for immutable
+read-back and replay rejection. A separate canonical range-signature digest
+binds every ordered accepted-main-to-head commit, while the existing adoption
+field retains only independently normalized head-commit evidence. It does not create lifecycle CURRENT, Ready,
+receipt, counter, or thread authority. Versions 1/2 remain `PRESENT`, and version
+3 remains `UNAVAILABLE`, without serialization changes.
+
 ### `secpal_pr_review/validation_evidence_loss.py`
 
 Owns the versioned
@@ -529,14 +603,22 @@ diagnostics. The harness exercises the parked candidate's APIs, which need not
 exist in an unrelated current-main implementation.
 Historical tests are removed only in the disposable copy. Every non-test source
 file remains exact candidate content, checked before and after execution with
-no extra files or bytecode admitted. No npm installation or implementation
-overlay is needed. Normal repository Complete Validation is unaffected.
+no extra files or bytecode admitted. The exact schema-1.3 profile temporarily
+preserves only its authenticated Node baseline test, installs the locked npm
+graph without scripts in that disposable copy, executes the candidate validator
+and test, and removes `node_modules` before the projection is reverified. Other
+profiles require no npm installation or implementation overlay. Normal
+repository Complete Validation is unaffected.
 
 `current_safety.receipt_digest` is the current execution identity under
 `secpal.pre-enrollment-current-safety/v1`, **not** an ordinary validation receipt.
 The target-shaped regression retains the previously observed divergent receipt
 identities; production derives its own current execution identity. No historical
 package bytes or unauthenticated final-attestation identity are reconstructed.
+The closed schema-1.3 variant admits only #948 / PR #953's authenticated
+receipt-at-current-head history and its exact accepted-main safety harness; it
+requires the observed trailer digest to match the accepted record, and does not
+generalize missing-package admission or create recovery authority.
 
 The sealed source enters existing external-evidence authentication with
 `validation_evidence=None` and a separately authenticated review-budget admission.
@@ -1126,7 +1208,7 @@ bash scripts/check-system-requirements.sh --repo=android
 
 **What It Checks For Android:**
 
-1. Node.js 22 and `npm`
+1. Node.js 24 LTS and `npm`
 2. Java 21 plus `javac`
 3. Android command-line tools via `sdkmanager`
 4. Android platform-tools via `adb`
@@ -1310,6 +1392,11 @@ bash scripts/sync-required-checks.sh --apply
 2. Builds the exact JSON payload GitHub expects for branch protection updates
 3. Applies the payload through `gh api` using `--input` so booleans and arrays stay typed correctly
 4. Keeps the live branch-protection baseline repeatable after workflow or context drift
+5. Emits `strict: true` only for `SecPal/.github`; all other managed
+   repositories retain `strict: false`. Live-preserving apply mode keeps the
+   same canonical check inventory and app bindings, so a later sync cannot
+   undo the provider-enforced exact-base merge precondition or duplicate a
+   check identity.
 
 **Exit Codes:**
 

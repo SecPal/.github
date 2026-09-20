@@ -16,7 +16,7 @@ Before rolling out to a repository:
 - [ ] You have admin access to the repository
 - [ ] `PROJECT_TOKEN` secret is set (can be organization-level or repo-level)
 - [ ] A trusted local checkout of `SecPal/.github` at a reviewed revision is available,
-      with Node.js 22 and its locked dependencies installed for PR-body validation.
+      with Node.js 24 LTS and its locked dependencies installed for PR-body validation.
 
 Set the canonical source path before following the target-repository steps:
 

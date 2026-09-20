@@ -11,7 +11,7 @@ on:
         description: "Node.js version to use"
         required: false
         type: string
-        default: "22.x"
+        default: "24.x"
       files:
         description: "File patterns to check (space-separated)"
         required: false

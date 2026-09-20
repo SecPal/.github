@@ -1640,6 +1640,131 @@ def recovered_ready_source_fixture(
 
 
 class ResolveFixedThreadsTests(TestCase):
+    def test_qualified_remediation_late_disposition_accepts_only_exact_boundary(
+        self,
+    ) -> None:
+        from secpal_pr_review import qualified_remediation_successor_loss as loss
+
+        record = loss.load_accepted_admission("SecPal/.github", 956)
+        reviewed_payload = {"reviewed": "exact qualified successor"}
+        reviewed = MODULE.ReviewedState(
+            head_sha=record["successor"]["head_sha"],
+            state_digest=record["qualification"]["reviewed_state_digest"],
+            feedback_digest=record["qualification"]["reviewed_feedback_digest"],
+            targets={},
+            thread_ids=frozenset(
+                item["thread_id"] for item in record["stable_thread_inventory"]
+            ),
+            payload=reviewed_payload,
+        )
+        receipt = {
+            "registry_digest": "a" * 64,
+            "command_set_digest": "b" * 64,
+        }
+        registry = {"authenticated": True}
+        safety = {
+            "reviewed_state": reviewed_payload,
+            "fresh_validation_receipt": receipt,
+            "policy_binding": registry,
+        }
+        evidence = SimpleNamespace(
+            head_sha=record["successor"]["head_sha"],
+            tree_sha=record["successor"]["tree_sha"],
+            validation_receipt_digest="c" * 64,
+            source_validation_evidence_digest="d" * 64,
+            final_attestation_digest=record["admission_digest"],
+        )
+
+        def current(*, publication_oid: str | None = None, state_delta: int = 0) -> Any:
+            state = copy.deepcopy(record["resulting_state"])
+            state["remediation_cycle_count"] += state_delta
+            return SimpleNamespace(
+                publication_oid=(
+                    record["predecessor"]["publication_oid"]
+                    if publication_oid is None
+                    else publication_oid
+                ),
+                publication_digest="e" * 64,
+                lifecycle=SimpleNamespace(
+                    head_sha=evidence.head_sha,
+                    tree_sha=evidence.tree_sha,
+                    validation_receipt_digest=evidence.validation_receipt_digest,
+                    source_validation_evidence_digest=(
+                        evidence.source_validation_evidence_digest
+                    ),
+                    adoption_source_evidence_digest=evidence.final_attestation_digest,
+                    state=state,
+                ),
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            safety_path = Path(directory) / "safety.json"
+            safety_path.write_text(json.dumps(safety), encoding="utf-8")
+
+            def load(
+                observed_current: Any,
+                observed_evidence: Any = evidence,
+                publication_oid: str = record["predecessor"]["publication_oid"],
+            ) -> Any:
+                with (
+                    mock.patch.object(MODULE, "load_reviewed_state", return_value=reviewed),
+                    mock.patch.object(
+                        MODULE.fast_path,
+                        "qualified_remediation_successor_loss_validation_evidence",
+                        return_value=observed_evidence,
+                    ),
+                    mock.patch.object(
+                        MODULE.lifecycle_publication,
+                        "verify_current_lifecycle_authority",
+                        return_value=observed_current,
+                    ),
+                    mock.patch.object(
+                        MODULE,
+                        "_immutable_delivery_registry_binding",
+                        return_value=registry,
+                    ),
+                ):
+                    return MODULE.load_final_feedback_boundary(
+                        repository_root=Path(directory),
+                        repository=record["repository"],
+                        delivery_issue=record["delivery_issue"],
+                        number=record["pull_request"],
+                        expected_head=record["successor"]["head_sha"],
+                        final_reviewed_state_path=Path(directory) / "reviewed.json",
+                        expected_final_reviewed_state_digest=reviewed.state_digest,
+                        final_validation_evidence_path=None,
+                        final_eligibility_evidence_path=None,
+                        qualified_remediation_publication_oid=(
+                            publication_oid
+                        ),
+                        qualified_remediation_safety_facts_path=safety_path,
+                    )
+
+            boundary = load(current())
+            self.assertEqual(
+                boundary.validation.kind,
+                "qualified-remediation-successor-loss",
+            )
+            self.assertEqual(
+                boundary.validation.qualified_remediation_admission, record
+            )
+
+            substitutions = {
+                "publication identity": current(publication_oid="0" * 40),
+                "lifecycle state": current(state_delta=-1),
+                "current evidence": current(),
+            }
+            for label, observed_current in substitutions.items():
+                observed_evidence = (
+                    SimpleNamespace(**{**vars(evidence), "head_sha": "0" * 40})
+                    if label == "current evidence"
+                    else evidence
+                )
+                with self.subTest(label=label), self.assertRaises(
+                    MODULE.ResolutionError
+                ):
+                    load(observed_current, observed_evidence)
+
     def test_recovered_ready_source_authenticates_base_registry_separately(
         self,
     ) -> None:

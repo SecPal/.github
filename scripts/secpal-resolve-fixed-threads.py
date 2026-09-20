@@ -414,6 +414,8 @@ class ValidationEvidence:
     registry_binding: dict[str, Any] | None = None
     ready_source_recovery: Any | None = None
     ready_source_recovery_verification_seal: object | None = None
+    qualified_remediation_admission: dict[str, Any] | None = None
+    qualified_remediation_verification_seal: object | None = None
 
 
 @dataclass(frozen=True)
@@ -444,6 +446,7 @@ class FinalEligibilityMode(Enum):
 
 _VERIFIED_FINAL_ELIGIBILITY_ABSENCE = object()
 _VERIFIED_READY_SOURCE_RECOVERY = object()
+_VERIFIED_QUALIFIED_REMEDIATION = object()
 
 
 @dataclass(frozen=True)
@@ -619,6 +622,9 @@ def _immutable_delivery_registry_binding(
         current_safety = base_binding.pop(
             "ready_source_recovery_current_safety", None
         )
+        qualified_admission = base_binding.pop(
+            "qualified_remediation_successor_evidence_loss", None
+        )
         base_command_set = base_binding.get("validation")
         if (
             not isinstance(current_safety, dict)
@@ -639,6 +645,23 @@ def _immutable_delivery_registry_binding(
             raise fast_path.SecurityBlocker(
                 "Ready-source recovery base registry binding changed"
             )
+        if qualified_admission is not None:
+            from secpal_pr_review import qualified_remediation_successor_loss as loss
+
+            accepted = loss.load_accepted_admission(repository, 956)
+            registration = _load_repository_entry(repository).get(
+                "qualified_remediation_successor_evidence_loss_policy"
+            )
+            if (
+                loss.verify_admission(qualified_admission) != accepted
+                or registration != {
+                    "path": accepted["policy_path"],
+                    "admission_digest": accepted["admission_digest"],
+                }
+            ):
+                raise fast_path.SecurityBlocker(
+                    "qualified remediation accepted registration changed"
+                )
         return recovery_binding
     except fast_path.SecurityBlocker as exc:
         raise ResolutionError(str(exc)) from exc
@@ -1425,6 +1448,7 @@ def verify_local_fix_commit(
             "final-eligibility-absence-attestation",
             "ready-integration-source",
             "ready-source-recovery",
+            "qualified-remediation-successor-loss",
         }
         or not isinstance(validation.evidence_digest, str)
         or not DIGEST.fullmatch(validation.evidence_digest)
@@ -1438,6 +1462,7 @@ def verify_local_fix_commit(
                 "final-eligibility-absence-attestation",
                 "ready-integration-source",
                 "ready-source-recovery",
+                "qualified-remediation-successor-loss",
             }
             and validation.eligibility_evidence_digest is not None
         )
@@ -1447,6 +1472,7 @@ def verify_local_fix_commit(
                 "final-eligibility-absence-attestation",
                 "ready-integration-source",
                 "ready-source-recovery",
+                "qualified-remediation-successor-loss",
             }
             and (
                 not isinstance(validation.eligibility_evidence_digest, str)
@@ -1503,6 +1529,18 @@ def verify_local_fix_commit(
             raise ResolutionError(
                 "recovered Ready source parents do not match recovery authority"
             )
+    elif validation.kind == "qualified-remediation-successor-loss":
+        admission = validation.qualified_remediation_admission
+        if (
+            validation.qualified_remediation_verification_seal
+            is not _VERIFIED_QUALIFIED_REMEDIATION
+            or not isinstance(admission, dict)
+            or ancestry
+            != [expected_head.lower(), *admission["successor"]["ordered_parent_shas"]]
+        ):
+            raise ResolutionError(
+                "qualified remediation successor parents changed"
+            )
     else:
         integration = validation.integration_evidence
         if (
@@ -1534,13 +1572,20 @@ def verify_local_fix_commit(
         and validation.ready_source_recovery is not None
         else validation.validation_receipt_digest
     )
-    if trailers != [expected_trailer_digest]:
+    expected_trailers = (
+        []
+        if validation.kind == "qualified-remediation-successor-loss"
+        else [expected_trailer_digest]
+    )
+    if trailers != expected_trailers:
         raise ResolutionError(
             "fix commit validation-receipt trailer does not match evidence"
         )
     registry_digest_source = (
         validation.validation_receipt
-        if validation.kind == "ready-source-recovery"
+        if validation.kind in {
+            "ready-source-recovery", "qualified-remediation-successor-loss"
+        }
         else validation.attestation
     )
     authenticated_registry_binding = _immutable_delivery_registry_binding(
@@ -1558,7 +1603,9 @@ def verify_local_fix_commit(
         ),
         (
             validation.attestation
-            if validation.kind == "ready-source-recovery"
+            if validation.kind in {
+                "ready-source-recovery", "qualified-remediation-successor-loss"
+            }
             else None
         ),
     )
@@ -1570,6 +1617,7 @@ def verify_local_fix_commit(
     if validation.kind in {
         "eligibility-bound-ready-integration",
         "ready-integration-source",
+        "qualified-remediation-successor-loss",
     }:
         integration_output = effective_runner(
             root,
@@ -1586,16 +1634,49 @@ def verify_local_fix_commit(
             for value in integration_output.rstrip("\n").split("\x00")
             if value.strip()
         ]
-        if len(integration_trailers) != 1:
+        if validation.kind == "qualified-remediation-successor-loss":
+            if integration_trailers:
+                raise ResolutionError(
+                    "qualified remediation integration evidence must be absent"
+                )
+        elif len(integration_trailers) != 1:
             raise ResolutionError(
                 "integration commit evidence trailer is invalid or stale"
             )
-        integration_trailer = integration_trailers[0]
+        else:
+            integration_trailer = integration_trailers[0]
     signature_policy = _load_repository_entry(repository)["signature_policy"]
     authenticated_commit: fast_path.AuthenticatedIntegrationCommit | None = None
     local_signature: dict[str, Any] | None = None
     verified_output: str | None = None
-    if validation.kind == "ready-source-recovery":
+    if validation.kind == "qualified-remediation-successor-loss":
+        admission = validation.qualified_remediation_admission
+        if not isinstance(admission, dict):
+            raise ResolutionError(
+                "qualified remediation commit authority is unavailable"
+            )
+        try:
+            authenticated_commit = fast_path.authenticate_integration_commit(
+                repository_root=root,
+                repository=repository,
+                head_sha=expected_head.lower(),
+                expected_signer={
+                    "kind": "SSH_PRINCIPAL",
+                    "identity": admission["signer_identity"],
+                },
+                signature_policy=signature_policy,
+            )
+        except (fast_path.RecoverableLocalError, fast_path.SecurityBlocker) as exc:
+            raise ResolutionError(str(exc)) from exc
+        if (
+            authenticated_commit.tree_sha != admission["successor"]["tree_sha"]
+            or authenticated_commit.parent_shas
+            != admission["successor"]["ordered_parent_shas"]
+        ):
+            raise ResolutionError(
+                "qualified remediation commit binding is invalid or stale"
+            )
+    elif validation.kind == "ready-source-recovery":
         recovery = validation.ready_source_recovery
         if recovery is None:
             raise ResolutionError(
@@ -2114,6 +2195,52 @@ def _require_valid_final_feedback_boundary(
     if boundary.eligibility_mode is (
         FinalEligibilityMode.NO_COMMIT_BOUND_RECOVERED_READY_ELIGIBILITY
     ):
+        if boundary.validation.kind == "qualified-remediation-successor-loss":
+            from secpal_pr_review import (
+                qualified_remediation_successor_loss as loss,
+            )
+
+            admission = boundary.validation.qualified_remediation_admission
+            receipt = boundary.validation.validation_receipt
+            try:
+                verified_admission = loss.verify_admission(admission)
+            except loss.QualifiedRemediationSuccessorLossError as exc:
+                raise ResolutionError(
+                    "qualified remediation successor boundary is invalid"
+                ) from exc
+            if (
+                boundary.eligibility is not None
+                or boundary.eligibility_absence is not None
+                or boundary.validation.final_eligibility_absence is not None
+                or boundary.validation.integration_evidence is not None
+                or boundary.validation.eligibility_evidence_digest is not None
+                or boundary.validation.ready_source_recovery is not None
+                or boundary.validation.ready_source_recovery_verification_seal
+                is not None
+                or boundary.validation.qualified_remediation_verification_seal
+                is not _VERIFIED_QUALIFIED_REMEDIATION
+                or admission != verified_admission
+                or boundary.reviewed.payload
+                != boundary.validation.attestation.get("reviewed_state")
+                or receipt
+                != boundary.validation.attestation.get(
+                    "fresh_validation_receipt"
+                )
+                or boundary.reviewed.head_sha
+                != admission["successor"]["head_sha"]
+                or boundary.reviewed.state_digest
+                != admission["qualification"]["reviewed_state_digest"]
+                or boundary.reviewed.feedback_digest
+                != admission["qualification"]["reviewed_feedback_digest"]
+                or boundary.validation.validated_tree_sha
+                != admission["successor"]["tree_sha"]
+                or "eligibility_evidence_digest" in receipt
+                or "integration_evidence_digest" in receipt
+            ):
+                raise ResolutionError(
+                    "qualified remediation successor boundary is invalid"
+                )
+            return
         recovery = boundary.validation.ready_source_recovery
         receipt = boundary.validation.validation_receipt
         if (
@@ -2510,6 +2637,81 @@ def _load_recovered_ready_source_validation(
     )
 
 
+def _load_qualified_remediation_successor_validation(
+    *, repository: str, delivery_issue: int, pull_request: int,
+    expected_head: str, publication_oid: str, reviewed: ReviewedState,
+    safety_facts_path: Path,
+) -> ValidationEvidence:
+    """Reverify the exact accepted loss case for fixed-thread disposition only."""
+
+    from secpal_pr_review import qualified_remediation_successor_loss as loss
+
+    try:
+        record = loss.load_accepted_admission(repository, delivery_issue)
+        safety = json.loads(safety_facts_path.read_text(encoding="utf-8"))
+        evidence_value = fast_path.qualified_remediation_successor_loss_validation_evidence(
+            record, safety
+        )
+        current = lifecycle_publication.verify_current_lifecycle_authority(
+            repository, delivery_issue
+        )
+    except (
+        OSError, json.JSONDecodeError, ValueError, fast_path.SecurityBlocker,
+        lifecycle_publication.LifecyclePublicationError,
+    ) as exc:
+        raise ResolutionError(
+            "qualified remediation successor authority is invalid or stale"
+        ) from exc
+    receipt = safety.get("fresh_validation_receipt")
+    registry = safety.get("policy_binding")
+    lifecycle = current.lifecycle
+    if (
+        publication_oid != current.publication_oid
+        or repository != record["repository"]
+        or delivery_issue != record["delivery_issue"]
+        or pull_request != record["pull_request"]
+        or expected_head.lower() != record["successor"]["head_sha"]
+        or reviewed.payload != safety.get("reviewed_state")
+        or lifecycle.head_sha != evidence_value.head_sha
+        or lifecycle.tree_sha != evidence_value.tree_sha
+        or lifecycle.validation_receipt_digest
+        != evidence_value.validation_receipt_digest
+        or lifecycle.source_validation_evidence_digest
+        != evidence_value.source_validation_evidence_digest
+        or lifecycle.adoption_source_evidence_digest
+        != evidence_value.final_attestation_digest
+        or {key: lifecycle.state.get(key) for key in record["resulting_state"]}
+        != record["resulting_state"]
+        or not isinstance(receipt, dict)
+        or not isinstance(registry, dict)
+    ):
+        raise ResolutionError(
+            "qualified remediation successor scope is invalid or stale"
+        )
+    authenticated_registry = _immutable_delivery_registry_binding(
+        expected_head, repository, receipt.get("registry_digest", ""),
+        receipt.get("command_set_digest", ""), safety,
+    )
+    if registry != authenticated_registry:
+        raise ResolutionError(
+            "qualified remediation registry differs from the immutable delivery"
+        )
+    return ValidationEvidence(
+        kind="qualified-remediation-successor-loss",
+        evidence_digest=current.publication_digest,
+        validated_tree_sha=evidence_value.tree_sha,
+        validation_receipt_digest=evidence_value.validation_receipt_digest,
+        eligibility_evidence_digest=None,
+        attestation=safety,
+        validation_receipt=receipt,
+        registry_binding=authenticated_registry,
+        qualified_remediation_admission=record,
+        qualified_remediation_verification_seal=(
+            _VERIFIED_QUALIFIED_REMEDIATION
+        ),
+    )
+
+
 def load_final_feedback_boundary(
     *,
     repository_root: Path,
@@ -2524,6 +2726,8 @@ def load_final_feedback_boundary(
     integration_evidence_path: Path | None = None,
     integration_validation_receipt_path: Path | None = None,
     ready_source_recovery_publication_oid: str | None = None,
+    qualified_remediation_publication_oid: str | None = None,
+    qualified_remediation_safety_facts_path: Path | None = None,
 ) -> FinalFeedbackBoundary:
     reviewed = load_reviewed_state(
         final_reviewed_state_path,
@@ -2532,6 +2736,32 @@ def load_final_feedback_boundary(
         expected_final_reviewed_state_digest,
         (),
     )
+    if qualified_remediation_publication_oid is not None:
+        if (
+            qualified_remediation_safety_facts_path is None
+            or ready_source_recovery_publication_oid is not None
+            or final_validation_evidence_path is not None
+            or final_eligibility_evidence_path is not None
+            or integration_evidence_path is not None
+            or integration_validation_receipt_path is not None
+        ):
+            raise ResolutionError(
+                "qualified remediation rejects incompatible source evidence"
+            )
+        validation = _load_qualified_remediation_successor_validation(
+            repository=repository, delivery_issue=delivery_issue,
+            pull_request=number, expected_head=expected_head,
+            publication_oid=qualified_remediation_publication_oid,
+            reviewed=reviewed,
+            safety_facts_path=qualified_remediation_safety_facts_path,
+        )
+        boundary = FinalFeedbackBoundary(
+            reviewed, validation,
+            FinalEligibilityMode.NO_COMMIT_BOUND_RECOVERED_READY_ELIGIBILITY,
+            None, None,
+        )
+        _require_valid_final_feedback_boundary(boundary)
+        return boundary
     if ready_source_recovery_publication_oid is not None:
         if (
             final_validation_evidence_path is not None
@@ -3589,6 +3819,8 @@ def resolve_late_disposition_threads(
     integration_evidence_path: Path | str | None = None,
     integration_validation_receipt_path: Path | str | None = None,
     ready_source_recovery_publication_oid: str | None = None,
+    qualified_remediation_publication_oid: str | None = None,
+    qualified_remediation_safety_facts_path: Path | str | None = None,
 ) -> dict[str, Any]:
     """Resolve only exact late threads authenticated independently of Git history."""
 
@@ -3638,6 +3870,14 @@ def resolve_late_disposition_threads(
         ),
         ready_source_recovery_publication_oid=(
             ready_source_recovery_publication_oid
+        ),
+        qualified_remediation_publication_oid=(
+            qualified_remediation_publication_oid
+        ),
+        qualified_remediation_safety_facts_path=(
+            Path(qualified_remediation_safety_facts_path)
+            if qualified_remediation_safety_facts_path is not None
+            else None
         ),
     )
     signer = verify_local_fix_commit(
@@ -4259,6 +4499,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--late-classification-signature")
     parser.add_argument("--final-eligibility-evidence")
     parser.add_argument("--ready-source-recovery-publication")
+    parser.add_argument("--qualified-remediation-publication")
+    parser.add_argument("--qualified-remediation-successor-safety")
     parser.add_argument("--thread-id", action="append", required=True)
     parser.add_argument("--apply", action="store_true")
     arguments = parser.parse_args(argv)
@@ -4309,10 +4551,27 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
                     or arguments.final_eligibility_evidence is not None
                     or arguments.integration_evidence is not None
                     or arguments.integration_validation_receipt is not None
+                    or arguments.qualified_remediation_publication is not None
+                    or arguments.qualified_remediation_successor_safety is not None
                 ):
                     raise ResolutionError(
                         "Ready-source recovery rejects incompatible source evidence"
                     )
+            elif arguments.qualified_remediation_publication is not None:
+                if (
+                    arguments.qualified_remediation_successor_safety is None
+                    or arguments.validation_evidence is not None
+                    or arguments.final_eligibility_evidence is not None
+                    or arguments.integration_evidence is not None
+                    or arguments.integration_validation_receipt is not None
+                ):
+                    raise ResolutionError(
+                        "qualified remediation rejects incompatible source evidence"
+                    )
+            elif arguments.qualified_remediation_successor_safety is not None:
+                raise ResolutionError(
+                    "qualified remediation safety requires its lifecycle publication"
+                )
             elif arguments.validation_evidence is None:
                 raise ResolutionError(
                     "late disposition requires validation evidence or Ready-source recovery"
@@ -4343,6 +4602,13 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         elif arguments.ready_source_recovery_publication is not None:
             raise ResolutionError(
                 "Ready-source recovery is valid only for late disposition"
+            )
+        elif (
+            arguments.qualified_remediation_publication is not None
+            or arguments.qualified_remediation_successor_safety is not None
+        ):
+            raise ResolutionError(
+                "qualified remediation source is valid only for late disposition"
             )
         elif arguments.eligibility_evidence is None:
             raise ResolutionError(
@@ -4455,6 +4721,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                         )
                     }
                     if arguments.ready_source_recovery_publication is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "qualified_remediation_publication_oid": (
+                            arguments.qualified_remediation_publication
+                        ),
+                        "qualified_remediation_safety_facts_path": (
+                            arguments.qualified_remediation_successor_safety
+                        ),
+                    }
+                    if arguments.qualified_remediation_publication is not None
                     else {}
                 ),
             )

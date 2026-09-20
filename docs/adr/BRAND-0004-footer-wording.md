@@ -7,7 +7,12 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Status
 
-**Accepted**
+**Partially Superseded by BRAND-0007**
+
+The two-line footer structure, SecPal wording, separator, localization, license,
+and per-surface source-link decisions remain current. BRAND-0007 retires the
+GuardGuide identity, so the GuardGuide-specific footer, slogan, domain, and
+source mappings below are historical rather than active guidance.
 
 ## Date
 
