@@ -293,6 +293,19 @@ def registry_entry(repository: str) -> dict[str, Any]:
     }
 
 
+def with_node_dependency_preparation(
+    repository: dict[str, Any],
+) -> dict[str, Any]:
+    value = copy.deepcopy(repository)
+    value["complete_validation_preparation"] = {
+        "kind": "NPM_CI_LOCKED",
+        "working_directory": ".",
+        "package_manifest": "package.json",
+        "lockfile": "package-lock.json",
+    }
+    return value
+
+
 def frontend_registry_entry() -> dict[str, Any]:
     value = registry_entry("SecPal/frontend")
     value["focused_validation"] = [
@@ -4253,6 +4266,372 @@ class RegistryTests(TestCase):
                             expected,
                         )
 
+    def test_complete_validation_registers_exact_locked_node_preparation(self) -> None:
+        repository = actions.select_repository(
+            actions.load_registry(), "SecPal/.github"
+        )
+
+        self.assertEqual(
+            repository["complete_validation_preparation"],
+            {
+                "kind": "NPM_CI_LOCKED",
+                "working_directory": ".",
+                "package_manifest": "package.json",
+                "lockfile": "package-lock.json",
+            },
+        )
+        self.assertEqual(
+            actions._fast_registry_binding(repository)[
+                "complete_validation_preparation"
+            ],
+            repository["complete_validation_preparation"],
+        )
+        without_preparation = copy.deepcopy(repository)
+        del without_preparation["complete_validation_preparation"]
+        self.assertNotIn(
+            "complete_validation_preparation",
+            actions._fast_registry_binding(without_preparation),
+        )
+        self.assertNotEqual(
+            fast_path.digest_json(actions._fast_registry_binding(repository)),
+            fast_path.digest_json(
+                actions._fast_registry_binding(without_preparation)
+            ),
+        )
+        commands = actions._complete_validation_commands(repository)
+        self.assertIn(
+            ["./tests/review-governance-suite.sh"],
+            [command["argv"] for command in commands],
+        )
+        self.assertEqual(len(commands), 19)
+
+    def test_locked_node_preparation_requires_exact_staged_manifest_identities(
+        self,
+    ) -> None:
+        preparation = with_node_dependency_preparation(
+            registry_entry("SecPal/.github")
+        )["complete_validation_preparation"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
+            (root / "package.json").write_text(
+                '{"private":true}\n', encoding="utf-8"
+            )
+            (root / "package-lock.json").write_text(
+                '{"lockfileVersion":3}\n', encoding="utf-8"
+            )
+            subprocess.run(
+                ["git", "-C", str(root), "add", "package.json", "package-lock.json"],
+                check=True,
+            )
+
+            manifest_oid, lock_oid, status = (
+                actions._complete_validation_source_state(root, preparation)
+            )
+            self.assertRegex(manifest_oid, r"^[0-9a-f]{40,64}$")
+            self.assertRegex(lock_oid, r"^[0-9a-f]{40,64}$")
+            self.assertIn("package.json", status)
+            self.assertIn("package-lock.json", status)
+
+            (root / "package.json").write_text(
+                '{"private":false}\n', encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "differs from the staged tree"
+            ):
+                actions._complete_validation_source_state(root, preparation)
+
+    def test_locked_node_preparation_precedes_the_single_validation_attempt(
+        self,
+    ) -> None:
+        repository = with_node_dependency_preparation(
+            registry_entry("SecPal/.github")
+        )
+        completed = SimpleNamespace(returncode=0)
+        npm_configs: list[tuple[str, str]] = []
+
+        def completed_with_config_capture(*_args, **kwargs):
+            environment = kwargs["env"]
+            if "NPM_CONFIG_USERCONFIG" in environment:
+                npm_configs.append(
+                    (
+                        Path(environment["NPM_CONFIG_USERCONFIG"]).read_text(
+                            encoding="utf-8"
+                        ),
+                        Path(environment["NPM_CONFIG_GLOBALCONFIG"]).read_text(
+                            encoding="utf-8"
+                        ),
+                    )
+                )
+            return completed
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "node_modules").mkdir()
+            with (
+                mock.patch.dict(
+                    actions.os.environ,
+                    {"NODE_PATH": "/caller/modules"},
+                    clear=False,
+                ),
+                mock.patch.object(
+                    actions,
+                    "_complete_validation_source_state",
+                    side_effect=[
+                        ("a" * 40, "b" * 40, "frozen"),
+                        ("a" * 40, "b" * 40, "frozen"),
+                    ],
+                ) as source_state,
+                mock.patch.object(
+                    actions, "_validate_locked_node_dependency_authority"
+                ),
+                mock.patch.object(
+                    actions,
+                    "_validation_executable",
+                    side_effect=lambda command, *_: (
+                        "/usr/bin/npm"
+                        if command["argv"][0] == "npm"
+                        else "/usr/bin/validator"
+                    ),
+                ),
+                mock.patch.object(
+                    actions.subprocess,
+                    "run",
+                    side_effect=completed_with_config_capture,
+                ) as run,
+            ):
+                result = actions._run_registered_validations(repository, root)
+
+        self.assertTrue(result)
+        self.assertEqual(source_state.call_count, 2)
+        self.assertEqual(
+            run.call_args_list[0].args[0],
+            ["/usr/bin/npm", "ci", "--ignore-scripts"],
+        )
+        self.assertNotIn("NODE_PATH", run.call_args_list[0].kwargs["env"])
+        npm_environment = run.call_args_list[0].kwargs["env"]
+        self.assertEqual(npm_environment["NPM_CONFIG_AUDIT"], "false")
+        self.assertEqual(npm_environment["NPM_CONFIG_FUND"], "false")
+        self.assertEqual(npm_environment["NPM_CONFIG_IGNORE_SCRIPTS"], "true")
+        self.assertEqual(
+            npm_environment["NPM_CONFIG_REGISTRY"],
+            "https://registry.npmjs.org/",
+        )
+        self.assertEqual(npm_configs, [("", ""), ("", ""), ("", "")])
+        self.assertEqual(run.call_count, 3)
+
+    def test_locked_node_preparation_failure_blocks_before_validation(self) -> None:
+        repository = with_node_dependency_preparation(
+            registry_entry("SecPal/.github")
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(
+                actions,
+                "_complete_validation_source_state",
+                return_value=("a" * 40, "b" * 40, "frozen"),
+            ),
+            mock.patch.object(
+                actions, "_validate_locked_node_dependency_authority"
+            ),
+            mock.patch.object(
+                actions,
+                "_validation_executable",
+                return_value="/usr/bin/npm",
+            ),
+            mock.patch.object(
+                actions.subprocess,
+                "run",
+                return_value=SimpleNamespace(returncode=1),
+            ) as run,
+        ):
+            result = actions._run_registered_validations(
+                repository, Path(directory)
+            )
+
+        self.assertFalse(result)
+        self.assertEqual(
+            result.failure_report(),
+            {
+                "category": "dependency installation failed",
+                "index": 0,
+                "purpose": "Prepare locked Node dependencies",
+            },
+        )
+        self.assertEqual(run.call_count, 1)
+
+    def test_locked_node_preparation_rejects_tracked_source_mutation(self) -> None:
+        repository = with_node_dependency_preparation(
+            registry_entry("SecPal/.github")
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(
+                actions,
+                "_complete_validation_source_state",
+                side_effect=[
+                    ("a" * 40, "b" * 40, "frozen"),
+                    ("a" * 40, "b" * 40, "changed"),
+                ],
+            ),
+            mock.patch.object(
+                actions, "_validate_locked_node_dependency_authority"
+            ),
+            mock.patch.object(
+                actions,
+                "_validation_executable",
+                return_value="/usr/bin/npm",
+            ),
+            mock.patch.object(
+                actions.subprocess,
+                "run",
+                return_value=SimpleNamespace(returncode=0),
+            ) as run,
+        ):
+            result = actions._run_registered_validations(
+                repository, Path(directory)
+            )
+
+        self.assertFalse(result)
+        self.assertEqual(
+            result.failure_report(),
+            {
+                "category": "dependency installation mutated tracked source",
+                "index": 0,
+                "purpose": "Prepare locked Node dependencies",
+            },
+        )
+        self.assertEqual(run.call_count, 1)
+
+    def test_locked_node_preparation_rejects_project_npm_configuration(self) -> None:
+        repository = with_node_dependency_preparation(
+            registry_entry("SecPal/.github")
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(
+                actions,
+                "_complete_validation_source_state",
+                return_value=("a" * 40, "b" * 40, "frozen"),
+            ),
+            mock.patch.object(actions.subprocess, "run") as run,
+        ):
+            root = Path(directory)
+            (root / ".npmrc").write_text("omit=dev\n", encoding="utf-8")
+            result = actions._run_registered_validations(repository, root)
+
+        self.assertFalse(result)
+        self.assertEqual(
+            result.failure_report(),
+            {
+                "category": "dependency preparation authority invalid",
+                "index": 0,
+                "purpose": "Prepare locked Node dependencies",
+            },
+        )
+        run.assert_not_called()
+
+    def test_locked_node_preparation_rejects_local_dependency_sources(self) -> None:
+        repository = with_node_dependency_preparation(
+            registry_entry("SecPal/.github")
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(
+                actions,
+                "_complete_validation_source_state",
+                return_value=("a" * 40, "b" * 40, "frozen"),
+            ),
+            mock.patch.object(actions.subprocess, "run") as run,
+        ):
+            root = Path(directory)
+            (root / "package-lock.json").write_text(
+                '{"lockfileVersion":3,"packages":{"node_modules/ambient":'
+                '{"resolved":"file:../ambient","link":true}}}\n',
+                encoding="utf-8",
+            )
+            result = actions._run_registered_validations(repository, root)
+
+        self.assertFalse(result)
+        self.assertEqual(
+            result.failure_report(),
+            {
+                "category": "dependency preparation authority invalid",
+                "index": 0,
+                "purpose": "Prepare locked Node dependencies",
+            },
+        )
+        run.assert_not_called()
+
+    def test_collision_runtime_satisfies_preparation_without_reinstallation(
+        self,
+    ) -> None:
+        repository = with_node_dependency_preparation(
+            registry_entry("SecPal/.github")
+        )
+        integrity = mock.Mock()
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(
+                actions,
+                "_complete_validation_source_state",
+                side_effect=[
+                    ("a" * 40, "b" * 40, "frozen"),
+                    ("a" * 40, "b" * 40, "frozen"),
+                ],
+            ) as source_state,
+            mock.patch.object(
+                actions, "_validate_locked_node_dependency_authority"
+            ),
+            mock.patch.object(
+                actions,
+                "_validation_executable",
+                return_value="/usr/bin/validator",
+            ),
+            mock.patch.object(
+                actions.subprocess,
+                "run",
+                return_value=SimpleNamespace(returncode=0),
+            ) as run,
+        ):
+            result = actions._run_registered_validations(
+                repository,
+                Path(directory),
+                integrity_verifier=integrity,
+                dependency_preparation_satisfied=True,
+            )
+
+        self.assertTrue(result)
+        self.assertEqual(source_state.call_count, 2)
+        self.assertEqual(run.call_count, 2)
+        self.assertGreaterEqual(integrity.call_count, 2)
+        self.assertNotIn("npm", [call.args[0][0] for call in run.call_args_list])
+
+    def test_repository_without_preparation_starts_with_validation(self) -> None:
+        repository = registry_entry("SecPal/no-node-preparation")
+        with (
+            mock.patch.object(
+                actions, "_complete_validation_source_state"
+            ) as source_state,
+            mock.patch.object(
+                actions,
+                "_validation_executable",
+                return_value="/usr/bin/validator",
+            ),
+            mock.patch.object(
+                actions.subprocess,
+                "run",
+                return_value=SimpleNamespace(returncode=0),
+            ) as run,
+        ):
+            result = actions._run_registered_validations(
+                repository, REPO_ROOT
+            )
+
+        self.assertTrue(result)
+        source_state.assert_not_called()
+        self.assertEqual(run.call_count, 2)
+
     def test_registered_validations_receive_a_minimal_secret_free_environment(self) -> None:
         repository = registry_entry("SecPal/.github")
         completed = SimpleNamespace(returncode=0)
@@ -6575,6 +6954,7 @@ class FastPathTests(TestCase):
             accepted_entry,
             execution_root,
             integrity_verifier=execution.verify_execution_root,
+            dependency_preparation_satisfied=True,
         )
         self.assertEqual(
             reports[-1]["registry_digest"],

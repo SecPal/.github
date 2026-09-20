@@ -2737,7 +2737,7 @@ class LifecycleOrchestrationTests(TestCase):
             self.assertEqual(len(current_binding["validation"]), 19)
             self.assertEqual(
                 fast_path.digest_json(current_binding),
-                "873fa3c4d55437f5e28c9f223eb69ab93d00e82dd0ce16bc02418768e9a1a222",
+                "0c54567c91ee3cbd4bd17bdcafcc652e5c08aaf330e5ca5b74237b6d93195742",
             )
             self.assertEqual(
                 fast_path.digest_json(current_binding["validation"]),

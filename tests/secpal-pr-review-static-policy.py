@@ -44,6 +44,21 @@ class ClassShape:
 ACTION_CALLS = (
     ProcessCall(
         None,
+        "_prepare_complete_validation_dependencies",
+        "executable",
+        "arguments",
+        (
+            ("check", "False"),
+            ("cwd", "working_directory"),
+            ("env", "environment"),
+            ("stderr", "subprocess.DEVNULL"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("stdout", "subprocess.DEVNULL"),
+            ("timeout", "LOCAL_VALIDATION_TIMEOUT_SECONDS"),
+        ),
+    ),
+    ProcessCall(
+        None,
         "_run_registered_validations",
         "executable",
         "command['argv'][1:]",

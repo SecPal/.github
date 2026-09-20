@@ -1374,6 +1374,20 @@ python3 scripts/secpal-resolve-fixed-threads.py \
   --apply
 ```
 
+Before command 1 of the one normal Complete Validation attempt, an optional
+repository registration may require `NPM_CI_LOCKED` preparation. The runner
+authenticates the exact staged `package.json` and `package-lock.json`, runs
+`npm ci --ignore-scripts` in the registered directory with its secret-free
+environment, closed npm configuration, and no caller `NODE_PATH`, then proves
+the tracked source state is unchanged. Project `.npmrc`, local/link dependency
+sources, missing or substituted inputs, install failure, or tracked-source
+mutation blocks before validation. A collision-validation root reuses its
+already authenticated lockfile-derived runtime instead of reinstalling over
+that closed projection. The generated ignored `node_modules` is disposable and
+is not validation evidence. Preparation neither consumes nor
+creates a validation attempt, and it never authorizes an unchanged-tree retry.
+It is therefore excluded from receipt-time validation command projections.
+
 If a registered command fails during the complete validation run, the terminal
 JSON diagnostic includes `registered_validation_failure` with the command's
 one-based `index`, registry `purpose`, and a safe `category` such as

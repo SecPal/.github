@@ -397,6 +397,20 @@
         },
         "focused_validation": { "type": "array", "items": { "$ref": "#/$defs/command" } },
         "required_local_validation": { "type": "array", "items": { "$ref": "#/$defs/command" } },
+        "complete_validation_preparation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "working_directory", "package_manifest", "lockfile"],
+          "properties": {
+            "kind": { "const": "NPM_CI_LOCKED" },
+            "working_directory": {
+              "type": "string",
+              "pattern": "^(?:\\.|[A-Za-z0-9_.+-]+(?:/[A-Za-z0-9_.+-]+)*)$"
+            },
+            "package_manifest": { "const": "package.json" },
+            "lockfile": { "const": "package-lock.json" }
+          }
+        },
         "final_eligibility_absence_recoveries": {
           "type": "array",
           "items": { "$ref": "#/$defs/final_eligibility_absence_recovery" }
