@@ -11294,6 +11294,252 @@ class FastPathTests(TestCase):
                     eligibility_evidence_digest=eligibility_digest,
                 )
 
+    def test_thread_backed_exceptional_recovery_binds_at_public_entrypoint(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="secpal-recovery-bind-") as directory:
+            root = Path(directory)
+            repository = root / "repository"
+            repository.mkdir()
+
+            def git(*arguments: str, input_text: str | None = None) -> str:
+                return subprocess.run(
+                    ["git", *arguments], cwd=repository, check=True,
+                    capture_output=True, text=True, input=input_text,
+                ).stdout.strip()
+
+            subprocess.run(
+                [
+                    "ssh-keygen", "-q", "-t", "ed25519", "-N", "",
+                    "-f", str(root / "key"),
+                ],
+                check=True, capture_output=True,
+            )
+            principal = "recovery@example.test"
+            (root / "allowed").write_text(
+                f"{principal} {(root / 'key.pub').read_text()}", encoding="utf-8"
+            )
+            git("init", "-q")
+            for key, value in (
+                ("user.name", "Recovery Fixture"), ("user.email", principal),
+                ("gpg.format", "ssh"), ("user.signingkey", str(root / "key")),
+                ("gpg.ssh.allowedSignersFile", str(root / "allowed")),
+            ):
+                git("config", key, value)
+            git("remote", "add", "origin", "https://github.com/SecPal/.github.git")
+            (repository / "delivery.txt").write_text("before\n", encoding="utf-8")
+            git("add", "delivery.txt")
+            git("commit", "-q", "-S", "-m", "prior Ready head")
+            prior_head = git("rev-parse", "HEAD")
+            prior_tree = git("rev-parse", "HEAD^{tree}")
+            reviewed_payload = fast_feedback(
+                thread_count=1, head_sha=prior_head
+            ).to_dict()
+            reviewed_payload["threads"][0]["node_id"] = "PRRT_RECOVERY_1"
+            reviewed = fast_path.StableFeedbackState.from_payload(reviewed_payload)
+            (repository / "delivery.txt").write_text("after\n", encoding="utf-8")
+            git("add", "delivery.txt")
+            recovery_tree = git("write-tree")
+
+            eligibility = {
+                "schema_version": "1.1",
+                "repository": "SecPal/.github",
+                "pull_request_number": reviewed.pull_request_number,
+                "reviewed_head_sha": reviewed.head_sha,
+                "reviewed_state_digest": reviewed.state_digest,
+                "eligible_threads": [{
+                    "thread_id": "PRRT_RECOVERY_1",
+                    "classification": "VALID_ACTIONABLE",
+                    "disposition": "CORRECTED_AND_VERIFIED",
+                    "finding_ids": ["recovery-finding-1"],
+                    "evidence_digest": "a" * 64,
+                    "follow_up": None,
+                }],
+            }
+            eligibility_path = root / "eligibility.json"
+            eligibility_path.write_text(json.dumps(eligibility), encoding="utf-8")
+            eligibility_digest = actions._resolution_eligibility_digest(
+                str(eligibility_path), "SecPal/.github", reviewed
+            )
+            recovery = {
+                "schema_version": "1.0",
+                "kind": "READY_EXCEPTIONAL_RECOVERY",
+                "authorization_id": "thread-backed-recovery-001",
+                "repository": "SecPal/.github",
+                "delivery_issue_number": 987,
+                "pull_request_number": reviewed.pull_request_number,
+                "prior_ready_head_sha": prior_head,
+                "prior_ready_tree_sha": prior_tree,
+                "recovery_tree_sha": recovery_tree,
+                "reviewed_state_digest": reviewed.state_digest,
+                "reviewed_feedback_digest": reviewed.feedback_digest,
+                "eligibility_evidence_digest": eligibility_digest,
+                "finding_ids": ["recovery-finding-1"],
+                "thread_ids": ["PRRT_RECOVERY_1"],
+                "lifecycle": {
+                    "unrestricted_reviews": 1,
+                    "remediation_cycles": 2,
+                    "cycle_3": False,
+                    "draft": False,
+                    "ready": True,
+                    "ready_transition": False,
+                    "exceptional_recovery_count": 1,
+                },
+            }
+            registry = actions.load_registry()
+            binding = actions._fast_registry_binding(
+                actions.select_repository(registry, "SecPal/.github")
+            )
+            normalized = fast_path.normalize_exceptional_recovery_evidence(
+                recovery,
+                repository="SecPal/.github",
+                reviewed_state=reviewed,
+                validated_tree_sha=recovery_tree,
+                eligibility_evidence_digest=eligibility_digest,
+            )
+            manual_gates = [
+                {"gate": gate, "satisfied": True, "evidence": "Recovery fixture."}
+                for gate in binding["manual_gates"]
+            ]
+            receipt = actions._validation_receipt(
+                repository="SecPal/.github", head_sha=prior_head,
+                tree_sha=recovery_tree, binding=binding, reviewed=reviewed,
+                manual_gate_evidence=manual_gates,
+                eligibility_evidence_digest=eligibility_digest,
+                exceptional_recovery_evidence_digest=fast_path.digest_json(normalized),
+            )
+            candidate = git(
+                "commit-tree", "-S", recovery_tree, "-p", prior_head,
+                input_text=(
+                    "thread-backed Exceptional Recovery\n\n"
+                    f"SecPal-Validation-Receipt: {receipt['receipt_digest']}\n"
+                ),
+            )
+            git("reset", "--hard", "-q", candidate)
+            files = {
+                "reviewed.json": reviewed.to_dict(),
+                "receipt.json": receipt,
+                "recovery.json": recovery,
+            }
+            for name, value in files.items():
+                (root / name).write_text(json.dumps(value), encoding="utf-8")
+            output = root / "attestation.json"
+            result = subprocess.run(
+                [
+                    sys.executable, str(ACTIONS_HELPER), "attest-validation",
+                    "--repo", "SecPal/.github", "--expected-head", candidate,
+                    "--reviewed-state", str(root / "reviewed.json"),
+                    "--repo-root", str(repository), "--receipt", str(root / "receipt.json"),
+                    "--bind-commit", "--output", str(output),
+                    "--eligibility-evidence", str(eligibility_path),
+                    "--exceptional-recovery-evidence", str(root / "recovery.json"),
+                    "--exceptional-recovery-delivery-issue", "987",
+                    "--exceptional-recovery-authorization-id",
+                    recovery["authorization_id"],
+                ],
+                check=False, capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            attestation = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(attestation["head_sha"], candidate)
+            self.assertEqual(
+                attestation["exceptional_recovery_evidence_digest"],
+                fast_path.digest_json(normalized),
+            )
+
+            base_arguments = [
+                sys.executable, str(ACTIONS_HELPER), "attest-validation",
+                "--repo", "SecPal/.github", "--expected-head", candidate,
+                "--reviewed-state", str(root / "reviewed.json"),
+                "--repo-root", str(repository), "--receipt", str(root / "receipt.json"),
+                "--bind-commit", "--output", str(output),
+                "--eligibility-evidence", str(eligibility_path),
+                "--exceptional-recovery-evidence", str(root / "recovery.json"),
+                "--exceptional-recovery-delivery-issue", "987",
+                "--exceptional-recovery-authorization-id",
+                recovery["authorization_id"],
+            ]
+            for case, changed in (
+                ("schema", {**recovery, "schema_version": "1.2"}),
+                ("kind", {**recovery, "kind": "READY_EXCEPTIONAL_CONTINUATION"}),
+                ("pr", {**recovery, "pull_request_number": 2}),
+                ("head", {**recovery, "prior_ready_head_sha": "1" * 40}),
+                ("tree", {**recovery, "recovery_tree_sha": "2" * 40}),
+                ("finding", {**recovery, "finding_ids": ["substituted-finding"]}),
+                ("thread", {**recovery, "thread_ids": ["PRRT_SUBSTITUTED"]}),
+                (
+                    "diagnostic",
+                    {
+                        **recovery,
+                        "schema_version": "1.1",
+                        "admission_kind":
+                        "REPRODUCED_MATERIAL_SECURITY_DIAGNOSTIC",
+                    },
+                ),
+            ):
+                (root / "recovery.json").write_text(
+                    json.dumps(changed), encoding="utf-8"
+                )
+                rejected = subprocess.run(
+                    base_arguments, check=False, capture_output=True, text=True
+                )
+                self.assertNotEqual(rejected.returncode, 0, case)
+            (root / "recovery.json").write_text(
+                json.dumps(recovery), encoding="utf-8"
+            )
+            for case, removed in (
+                ("recovery evidence", ["--exceptional-recovery-evidence", str(root / "recovery.json")]),
+                ("eligibility evidence", ["--eligibility-evidence", str(eligibility_path)]),
+            ):
+                arguments = list(base_arguments)
+                offset = arguments.index(removed[0])
+                del arguments[offset:offset + 2]
+                rejected = subprocess.run(
+                    arguments, check=False, capture_output=True, text=True
+                )
+                self.assertNotEqual(rejected.returncode, 0, case)
+            wrong_issue = list(base_arguments)
+            wrong_issue[
+                wrong_issue.index("--exceptional-recovery-delivery-issue") + 1
+            ] = "988"
+            rejected = subprocess.run(
+                wrong_issue, check=False, capture_output=True, text=True
+            )
+            self.assertNotEqual(rejected.returncode, 0, "delivery issue")
+            substituted_eligibility = copy.deepcopy(eligibility)
+            substituted_eligibility["eligible_threads"][0]["finding_ids"] = [
+                "substituted-finding"
+            ]
+            eligibility_path.write_text(
+                json.dumps(substituted_eligibility), encoding="utf-8"
+            )
+            rejected = subprocess.run(
+                base_arguments, check=False, capture_output=True, text=True
+            )
+            self.assertNotEqual(rejected.returncode, 0, "eligibility substitution")
+
+    def test_exceptional_recovery_type_selector_is_closed(self) -> None:
+        diagnostic = {
+            "schema_version": "1.1",
+            "admission_kind": "REPRODUCED_MATERIAL_SECURITY_DIAGNOSTIC",
+        }
+        cases = (
+            (diagnostic, True),
+            ({"schema_version": "1.0", "kind": "READY_EXCEPTIONAL_RECOVERY"}, False),
+            ({**diagnostic, "schema_version": "1.0"}, False),
+            ({**diagnostic, "admission_kind": "CALLER_DIAGNOSTIC"}, False),
+            ([diagnostic], False),
+        )
+        for value, expected in cases:
+            with (
+                self.subTest(value=value),
+                mock.patch.object(actions, "_read_json", return_value=value),
+            ):
+                self.assertIs(
+                    actions._is_diagnostic_exceptional_recovery("recovery.json"),
+                    expected,
+                )
+
     def test_diagnostic_recovery_loader_uses_current_maintained_authority(
         self,
     ) -> None:
