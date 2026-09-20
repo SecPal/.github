@@ -14161,6 +14161,35 @@ class ReadySourceCurrentSafetyTests(TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def test_zero_receipt_ready_projection_uses_current_safety_identity(self) -> None:
+        from scripts.secpal_pr_review import lifecycle_authority
+
+        current_receipt = "a" * 64
+        loss = {
+            "schema_version": "1.2",
+            "historical_validation_receipt_digest": None,
+            "historical_final_attestation_digest": None,
+            "historical_bytes_reconstructed": False,
+        }
+        self.assertEqual(
+            actions._exact_state_adoption_ready_receipt_digest(
+                loss,
+                {"receipt_digest": current_receipt},
+                lifecycle_authority,
+            ),
+            current_receipt,
+        )
+        changed = copy.deepcopy(loss)
+        changed["historical_validation_receipt_digest"] = "b" * 64
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "historical evidence"
+        ):
+            actions._exact_state_adoption_ready_receipt_digest(
+                changed,
+                {"receipt_digest": current_receipt},
+                lifecycle_authority,
+            )
+
     def _commit(self, root: Path, subject: str) -> str:
         subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
         subprocess.run(["git", "-C", str(root), "add", "-f", "."], check=True)

@@ -563,6 +563,10 @@ derived unique historical receipt ancestor through the complete authenticated
 delivery source history. Existing adoption versions 1/2 and ordinary commit-
 bound validation remain unchanged. Its semantic contract is the
 exact-state-adoption section of `docs/secpal-pr-review-workflow.md`.
+Schema 1.2 keeps that registered Ready-source boundary for one exact source
+history with zero validation-receipt trailers. It binds canonical `null`
+historical receipt fields and uses fresh current-safety identity only as the
+existing adoption receipt input.
 
 The maintained entry points are
 `lifecycle_authority.issue_pre_enrollment_validation_evidence_loss_admission(repository, delivery_issue)`
