@@ -2678,6 +2678,131 @@ class ValidationEvidenceLossTests(TestCase):
                         main_oid, execution_root, profile
                     )
 
+    def test_exact_candidate_validation_projects_only_registered_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            accepted = Path(directory) / "accepted"
+            source = Path(directory) / "source"
+            (accepted / "tests").mkdir(parents=True)
+            (source / "tests/fixtures/trivy-repository-scan").mkdir(parents=True)
+            (source / "product.py").write_text("REGISTERED = True\n")
+            registered = {
+                "tests/secpal-trivy-repository-scan-unit.py": "SCANNER_TEST = True\n",
+                "tests/fixtures/trivy-repository-scan/malformed.txt": "malformed\n",
+                "tests/fixtures/trivy-repository-scan/stale-database.json": "{}\n",
+            }
+            for relative, contents in registered.items():
+                (source / relative).write_text(contents)
+            (source / "tests/unregistered.py").write_text("UNREGISTERED = True\n")
+            source_head = self.commit_fixture(source)
+            source_tree = subprocess.check_output(
+                ["git", "-C", str(source), "rev-parse", "HEAD^{tree}"],
+                text=True,
+            ).strip()
+            harness = (
+                "import json, pathlib\n"
+                "def main(arguments):\n"
+                "    assert not arguments\n"
+                "    assert pathlib.Path('tests/secpal-trivy-repository-scan-unit.py').is_file()\n"
+                "    assert pathlib.Path('tests/fixtures/trivy-repository-scan/malformed.txt').is_file()\n"
+                "    assert pathlib.Path('tests/fixtures/trivy-repository-scan/stale-database.json').is_file()\n"
+                "    assert not pathlib.Path('tests/unregistered.py').exists()\n"
+                f"    print(json.dumps({list(self.loss.REGISTERED_CURRENT_SAFETY_INVARIANTS)!r}))\n"
+                "    return 0\n"
+            )
+            (accepted / self.loss.NO_RECEIPT_CURRENT_SAFETY_PATH).write_text(harness)
+            main_oid = self.commit_fixture(accepted)
+            files = []
+            for relative in registered:
+                mode, object_type, blob_oid, size, path = subprocess.check_output(
+                    ["git", "-C", str(source), "ls-tree", "-l", source_head, "--", relative],
+                    text=True,
+                ).split()
+                self.assertEqual((object_type, path), ("blob", relative))
+                files.append({
+                    "path": relative,
+                    "mode": mode,
+                    "blob_oid": blob_oid,
+                    "size": int(size),
+                })
+            record = {
+                "admission_schema_version": self.loss.NO_RECEIPT_SCHEMA_VERSION,
+                "repository": "SecPal/.github",
+                "head_sha": source_head,
+                "tree_sha": source_tree,
+                "current_safety_harness_path": self.loss.NO_RECEIPT_CURRENT_SAFETY_PATH,
+                "registered_validation_projection": {
+                    "provenance": "ACCEPTED_RECOVERY_RECORD_EXACT_SOURCE",
+                    "repository": "SecPal/.github",
+                    "head_sha": source_head,
+                    "tree_sha": source_tree,
+                    "files": files,
+                },
+            }
+            with patch.object(self.loss, "ROOT", accepted):
+                profile = self.loss._current_safety_profile_for_record(main_oid, record)
+                for field, replacement in (
+                    ("provenance", "CANDIDATE_ASSERTED"),
+                    ("repository", "Other/repository"),
+                    ("head_sha", "a" * 40),
+                    ("tree_sha", "b" * 40),
+                ):
+                    with self.subTest(field=field), self.assertRaisesRegex(
+                        authority.LifecycleAuthorityError, "maintained exact source",
+                    ):
+                        changed = copy.deepcopy(record)
+                        changed["registered_validation_projection"][field] = replacement
+                        self.loss._current_safety_profile_for_record(main_oid, changed)
+                for mutation in ("wrong-path", "extra-path"):
+                    with self.subTest(mutation=mutation), self.assertRaisesRegex(
+                        authority.LifecycleAuthorityError, "maintained exact source",
+                    ):
+                        changed = copy.deepcopy(record)
+                        if mutation == "wrong-path":
+                            changed["registered_validation_projection"]["files"][0]["path"] = (
+                                "tests/unregistered.py"
+                            )
+                        else:
+                            changed["registered_validation_projection"]["files"].append(
+                                copy.deepcopy(
+                                    changed["registered_validation_projection"]["files"][0]
+                                )
+                            )
+                        self.loss._current_safety_profile_for_record(main_oid, changed)
+                substituted = copy.deepcopy(record)
+                substituted["registered_validation_projection"]["files"][0][
+                    "blob_oid"
+                ] = "c" * 40
+                substituted_profile = self.loss._current_safety_profile_for_record(
+                    main_oid, substituted
+                )
+                with self.assertRaisesRegex(
+                    authority.LifecycleAuthorityError, "binding changed",
+                ):
+                    with self.loss._current_policy_validation_root(
+                        main_oid,
+                        source_root=source,
+                        helper=None,
+                        entry=None,
+                        profile=substituted_profile,
+                        candidate_repository="SecPal/.github",
+                    ):
+                        self.fail("substituted registered scanner blob was admitted")
+                with self.loss._current_policy_validation_root(
+                    main_oid, source_root=source, helper=None, entry=None,
+                    profile=profile, candidate_repository="SecPal/.github",
+                ) as execution_root:
+                    self.assertEqual(
+                        {
+                            path.relative_to(execution_root).as_posix()
+                            for path in (execution_root / "tests").rglob("*")
+                            if path.is_file()
+                        },
+                        {self.loss.NO_RECEIPT_CURRENT_SAFETY_PATH, *registered},
+                    )
+                    self.loss._run_current_safety(
+                        main_oid, execution_root, profile, record=record,
+                    )
+
     def test_registered_harness_rejects_empty_and_semantically_inert_contracts(self) -> None:
         path = REPO_ROOT / self.loss.REGISTERED_CURRENT_SAFETY_PATH
         spec = importlib.util.spec_from_file_location(

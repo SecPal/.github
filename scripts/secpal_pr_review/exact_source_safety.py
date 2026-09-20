@@ -25,6 +25,7 @@ _EVIDENCE_VERSION = re.compile(
     r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})", re.ASCII,
 )
 _GIT_OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", re.ASCII)
+_REGISTERED_VALIDATION_PROVENANCE = "ACCEPTED_RECOVERY_RECORD_EXACT_SOURCE"
 _COLLISION_MAX_OBJECTS = 4096
 _COLLISION_MAX_OBJECT_BYTES = 1024 * 1024
 _COLLISION_MAX_COMMIT_BYTES = 64 * 1024
@@ -1601,6 +1602,80 @@ def _candidate_listing_without_harness(listing: str) -> str:
     return "\0".join(entries) + ("\0" if entries else "")
 
 
+def _registered_candidate_validation(
+    source_root: Path,
+    value: Any,
+    *,
+    candidate_repository: str | None,
+) -> tuple[str, tuple[Mapping[str, Any], ...]]:
+    """Authenticate one closed accepted-policy inventory from the exact candidate."""
+
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != {"provenance", "repository", "head_sha", "tree_sha", "files"}
+        or value.get("provenance") != _REGISTERED_VALIDATION_PROVENANCE
+        or value.get("repository") != candidate_repository
+        or not isinstance(candidate_repository, str)
+        or re.fullmatch(
+            r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", candidate_repository
+        ) is None
+        or not isinstance(value.get("head_sha"), str)
+        or _GIT_OID.fullmatch(value["head_sha"]) is None
+        or not isinstance(value.get("tree_sha"), str)
+        or _GIT_OID.fullmatch(value["tree_sha"]) is None
+        or not isinstance(value.get("files"), list)
+        or not value["files"]
+    ):
+        raise authority.LifecycleAuthorityError(
+            "registered candidate validation provenance is malformed"
+        )
+    head = value["head_sha"]
+    tree = value["tree_sha"]
+    if (
+        transport._git_text(source_root, ["rev-parse", "HEAD"]).strip() != head
+        or transport._git_text(source_root, ["rev-parse", "HEAD^{tree}"]).strip()
+        != tree
+    ):
+        raise authority.LifecycleAuthorityError(
+            "registered candidate validation source identity changed"
+        )
+    files = tuple(value["files"])
+    if any(
+        not isinstance(item, Mapping)
+        or set(item) != {"path", "mode", "blob_oid", "size"}
+        or not isinstance(item.get("path"), str)
+        or item.get("mode") not in {"100644", "100755"}
+        or not isinstance(item.get("blob_oid"), str)
+        or _GIT_OID.fullmatch(item["blob_oid"]) is None
+        or type(item.get("size")) is not int
+        or item["size"] < 0
+        for item in files
+    ):
+        raise authority.LifecycleAuthorityError(
+            "registered candidate validation inventory is malformed"
+        )
+    paths = tuple(item["path"] for item in files)
+    allowed = frozenset(paths)
+    if len(allowed) != len(paths):
+        raise authority.LifecycleAuthorityError(
+            "registered candidate validation inventory is ambiguous"
+        )
+    for item in files:
+        path = admit_harness_path(item["path"], allowed_paths=allowed)
+        if not path.startswith("tests/"):
+            raise authority.LifecycleAuthorityError(
+                "registered candidate validation path is outside tests"
+            )
+        observed = harness_blob(
+            source_root, head, path, allowed_paths=allowed,
+        )
+        if observed != (item["mode"], item["blob_oid"], item["size"]):
+            raise authority.LifecycleAuthorityError(
+                "registered candidate validation binding changed"
+            )
+    return head, files
+
+
 def _verify_execution_root(
     repository_root: Path,
     root: Path,
@@ -1853,6 +1928,7 @@ def execution_root(
     *,
     source_root: Path,
     profile: Mapping[str, Any],
+    candidate_repository: str | None = None,
 ) -> Iterator[Path]:
     """Build a disposable exact candidate with only profile harness bytes overlaid."""
 
@@ -1870,6 +1946,20 @@ def execution_root(
     tree = transport._git_text(source_root, ["rev-parse", "HEAD^{tree}"]).strip()
     listing = verify_source_bytes(source_root, tree)
     candidate_listing = _candidate_listing_without_harness(listing)
+    registered_value = profile.get("registered_candidate_validation")
+    registered_head: str | None = None
+    registered_files: tuple[Mapping[str, Any], ...] = ()
+    if registered_value is not None:
+        registered_head, registered_files = _registered_candidate_validation(
+            source_root,
+            registered_value,
+            candidate_repository=candidate_repository,
+        )
+    registered_allowed = frozenset(item["path"] for item in registered_files)
+    if allowed.intersection(registered_allowed):
+        raise authority.LifecycleAuthorityError(
+            "accepted harness and registered candidate validation overlap"
+        )
     with tempfile.TemporaryDirectory(prefix="secpal-exact-source-safety-") as directory:
         root = Path(directory) / "source"
         try:
@@ -1883,6 +1973,15 @@ def execution_root(
                 )
                 for item in harness
             }
+            if registered_head is not None:
+                for item in registered_files:
+                    bindings[item["path"]] = _copy_harness_file(
+                        source_root,
+                        registered_head,
+                        item,
+                        root,
+                        allowed_paths=registered_allowed,
+                    )
         except OSError as exc:
             raise authority.LifecycleAuthorityError("current safety harness preparation failed") from exc
         _verify_execution_root(repository_root, root, tree, candidate_listing, bindings)
@@ -1891,6 +1990,12 @@ def execution_root(
         finally:
             _verify_execution_root(repository_root, root, tree, candidate_listing, bindings)
             verify_source_bytes(source_root, tree, expected_listing=listing)
+            if registered_value is not None:
+                _registered_candidate_validation(
+                    source_root,
+                    registered_value,
+                    candidate_repository=candidate_repository,
+                )
 
 
 def run_profile(
