@@ -8087,6 +8087,16 @@ def _verify_exceptional_recovery_selection(
         )
 
 
+def _is_diagnostic_exceptional_recovery(path: str) -> bool:
+    value = _read_json(path, "exceptional recovery evidence")
+    return (
+        isinstance(value, dict)
+        and value.get("schema_version") == "1.1"
+        and value.get("admission_kind")
+        == "REPRODUCED_MATERIAL_SECURITY_DIAGNOSTIC"
+    )
+
+
 def _load_exceptional_recovery_evidence(
     *,
     path: str,
@@ -8308,14 +8318,8 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
     )
     diagnostic_recovery = False
     if exceptional_recovery_path:
-        raw_recovery = _read_json(
-            exceptional_recovery_path, "exceptional recovery evidence"
-        )
-        diagnostic_recovery = (
-            isinstance(raw_recovery, dict)
-            and raw_recovery.get("schema_version") == "1.1"
-            and raw_recovery.get("admission_kind")
-            == "REPRODUCED_MATERIAL_SECURITY_DIAGNOSTIC"
+        diagnostic_recovery = _is_diagnostic_exceptional_recovery(
+            exceptional_recovery_path
         )
     integration_selectors = (
         getattr(arguments, "delivery_issue", None),
