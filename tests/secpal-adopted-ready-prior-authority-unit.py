@@ -698,6 +698,21 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
                     reviewed_feedback_digest=reviewed_feedback,
                 )
 
+    def test_same_head_rebound_requires_complete_review_selectors(self) -> None:
+        for label, reviewed_state, reviewed_feedback in (
+            ("omitted", None, None),
+            ("missing state", None, REVIEWED_FEEDBACK),
+            ("missing feedback", REVIEWED_STATE, None),
+        ):
+            with self.subTest(label=label), self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "selectors are incomplete",
+            ):
+                self.derive_rebound(
+                    reviewed_state_digest=reviewed_state,
+                    reviewed_feedback_digest=reviewed_feedback,
+                )
+
     def test_same_head_rebound_composition_rejects_authority_drift(self) -> None:
         labels = (
             "head",
@@ -737,17 +752,29 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             }[label]
             mutate()
             with self.subTest(label=label), self.assertRaises(fast_path.SecurityBlocker):
-                self.derive_rebound(current=current, rebound=rebound)
+                self.derive_rebound(
+                    current=current,
+                    rebound=rebound,
+                    reviewed_state_digest=REVIEWED_STATE,
+                    reviewed_feedback_digest=REVIEWED_FEEDBACK,
+                )
 
         changed_loss = qualified_loss_record()
         changed_loss["historical_validation_receipt_digest"] = "1" * 64
         with self.assertRaises(fast_path.SecurityBlocker):
-            self.derive_rebound(record=changed_loss)
+            self.derive_rebound(
+                record=changed_loss,
+                reviewed_state_digest=REVIEWED_STATE,
+                reviewed_feedback_digest=REVIEWED_FEEDBACK,
+            )
 
     def test_same_head_rebound_consumer_rejects_receipt_and_provider_substitution(
         self,
     ) -> None:
-        manifest = self.derive_rebound()
+        manifest = self.derive_rebound(
+            reviewed_state_digest=REVIEWED_STATE,
+            reviewed_feedback_digest=REVIEWED_FEEDBACK,
+        )
         mutations = {
             "fabricated historical receipt": lambda value: value[
                 "source_authority"
@@ -1864,7 +1891,10 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
         tag.assert_called_once()
 
     def test_rebound_composition_normalizes_into_the_integration_verifier(self) -> None:
-        manifest = self.derive_rebound()
+        manifest = self.derive_rebound(
+            reviewed_state_digest=REVIEWED_STATE,
+            reviewed_feedback_digest=REVIEWED_FEEDBACK,
+        )
         integration = {
             "pull_request_number": REBOUND_PR,
             "prior_delivery_head_sha": HEAD,

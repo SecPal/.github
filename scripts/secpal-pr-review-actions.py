@@ -6821,7 +6821,7 @@ def _derive_qualified_loss_rebound_ready_prior_authority(
 
     from secpal_pr_review import qualified_remediation_successor_loss
 
-    if (reviewed_state_digest is None) != (reviewed_feedback_digest is None):
+    if reviewed_state_digest is None or reviewed_feedback_digest is None:
         raise fast_path.SecurityBlocker(
             "composed Ready reviewed-state selectors are incomplete"
         )
@@ -6865,7 +6865,7 @@ def _derive_qualified_loss_rebound_ready_prior_authority(
         raise fast_path.SecurityBlocker(
             "accepted same-head rebound composition is unavailable"
         ) from exc
-    if reviewed_state_digest is not None and (
+    if (
         record["qualification"]["reviewed_state_digest"]
         != reviewed_state_digest
         or record["qualification"]["reviewed_feedback_digest"]
