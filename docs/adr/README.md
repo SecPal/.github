@@ -85,6 +85,7 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 
 ### Accepted
 
+- [BRAND-0007: SecPal Product Family Architecture](BRAND-0007-secpal-product-family-architecture.md) - 2026-09-20; supersedes BRAND-0001 as current product-family hierarchy authority without implying product implementation or availability
 - [ADR-024: Managed Operations Control Plane Authority and Trust Boundaries](20260906-managed-operations-control-plane-authority-adr024.md) - 2026-09-06; consumes ADR-023's ownership boundary without claiming control-plane implementation or production qualification
 - [ADR-023: Public Self-Hosting vs Private Managed Operations Boundary](20260824-public-self-hosting-private-managed-operations-adr023.md) - 2026-08-24; ownership boundary clarified under [#748](https://github.com/SecPal/.github/issues/748)
 - [ADR-022: Deployment Topology Evolution and High Availability](20260824-deployment-topology-high-availability-adr022.md) - 2026-08-24; local HA, Managed capability profiles, and controlled cross-provider continuity refined under [#843](https://github.com/SecPal/.github/issues/843)
@@ -96,11 +97,8 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 - [ADR-016: Native Work-Graph and Engineering Governance](20260824-native-work-graph-engineering-governance-adr016.md) - 2026-08-24; refines ADR-013
 - [ADR-015: Global Identity Key Security](20260720-global-identity-key-security-adr015.md) - 2026-07-20
 - [ADR-014: Tenant, Identity, Employee, and Access Model](20260720-tenant-identity-access-model-adr014.md) - 2026-07-20
-- [BRAND-0001: Brand Architecture](BRAND-0001-brand-architecture.md) - 2026-06-13
 - [BRAND-0002: Typography](BRAND-0002-typography.md) - 2026-06-13
 - [BRAND-0003: Navigation Pattern](BRAND-0003-navigation-pattern.md) - 2026-06-13
-- [BRAND-0004: Footer Wording](BRAND-0004-footer-wording.md) - 2026-06-13
-- [BRAND-0005: Page Titles](BRAND-0005-page-titles.md) - 2026-06-13
 - [BRAND-0006: App UI Stack Ownership](BRAND-0006-app-ui-stack.md) - 2026-06-13
 - [ADR-013: Issue-First Planning Governance And Optional Project Board Mirror](20260415-issue-first-planning-governance-adr013.md) - 2026-04-15; refined by ADR-016
 
@@ -112,12 +110,15 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 
 ### Superseded
 
+- [BRAND-0001: Brand Architecture](BRAND-0001-brand-architecture.md) - 2026-06-13; superseded by [BRAND-0007](BRAND-0007-secpal-product-family-architecture.md) for the current product-family hierarchy while preserved as historical evidence
 - [ADR-009: Permission Inheritance Blocking & Leadership-Based Access Control](20251221-inheritance-blocking-and-leadership-access-control.md) - 2025-12-21; superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 - [ADR-008: User-Based Tenant Resolution for Multi-Tenant Architecture](20251219-user-based-tenant-resolution.md) - 2025-12-19; superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 - [ADR-007: Flexible Organizational Structure & Multi-Level Hierarchies](20251126-organizational-structure-hierarchy.md) - 2025-11-26; superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 
 ### Partially Superseded
 
+- [BRAND-0004: Footer Wording](BRAND-0004-footer-wording.md) - 2026-06-13; GuardGuide-specific identity and mappings superseded by [BRAND-0007](BRAND-0007-secpal-product-family-architecture.md), with the two-line SecPal footer structure and legal/source rules retained
+- [BRAND-0005: Page Titles](BRAND-0005-page-titles.md) - 2026-06-13; former product-name rules superseded by [BRAND-0007](BRAND-0007-secpal-product-family-architecture.md), with the content-first title pattern retained
 - [ADR-012: Single-App Android Distribution and Private Provisioning QR Architecture](20260406-single-app-android-distribution-and-private-provisioning-adr012.md) - 2026-04-06; partially superseded by [Epic #586](https://github.com/SecPal/.github/issues/586): frontend-issued provisioning QR/URL, enrollment-session, bootstrap-token, and dependent native coordination decisions are retired; `app.secpal`, its signing identity and version line, Play Store, GitHub Releases, Obtainium, and direct APK distribution, `apk.secpal.app`, Stable/Beta tracks and metadata paths, the `secpal.app/android` landing surface, and use of the same signed application package for normal, Device Owner, and profile-owner operation remain accepted
 - [ADR-011: Simplify Management Level from Model to Integer Field](20251227-simplify-management-level-to-integer-field-adr011.md) - 2025-12-27; partially superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 - [ADR-010: Activity Logging & Audit Trail Strategy](20251221-activity-logging-audit-trail-strategy.md) - 2025-12-24; partially superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)

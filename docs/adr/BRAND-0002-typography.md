@@ -9,6 +9,11 @@ SPDX-License-Identifier: CC0-1.0
 
 **Accepted**
 
+The typography decision remains current. Product names in the context below
+record the product set at acceptance time; BRAND-0007 defines current product
+identity, and this typography direction applies to current SecPal-family
+surfaces.
+
 ## Date
 
 2026-06-13
