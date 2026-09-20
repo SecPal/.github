@@ -62,8 +62,10 @@ operation. Standalone capability does not make either an independent brand
 outside the SecPal family. Product naming, strategic identity, intended
 direction, accepted architecture, implementation, availability, deployment,
 and production qualification are separate claims. This ADR establishes the
-first two only; current evidence governed by #763 is required for stronger
-claims.
+approved names, strategic identities, intended family direction, and accepted
+brand architecture. It does not establish implementation, availability,
+deployment, or production qualification; current evidence governed by #763 is
+required for those claims.
 
 Central brand authority owns the family hierarchy, exact public names, allowed
 short references, slogan approval, and shared presentation rules. Owning
