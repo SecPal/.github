@@ -611,6 +611,10 @@ def validation_registry_projection(entry: Any) -> dict[str, Any]:
             ]
         ),
     }
+    if "complete_validation_preparation" in entry:
+        binding["complete_validation_preparation"] = copy.deepcopy(
+            entry["complete_validation_preparation"]
+        )
     if "pre_enrollment_integration_policy" in entry:
         if not isinstance(entry["pre_enrollment_integration_policy"], dict):
             raise SecurityBlocker(

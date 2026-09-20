@@ -15,7 +15,10 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 - Prepare repository-pinned Node dependencies from authenticated tracked
   manifests with `npm ci --ignore-scripts` before the sole Complete Validation
-  attempt, failing before validation on setup failure or tracked-source drift.
+  attempt, failing before validation on setup failure, ambient npm
+  configuration, local dependency sources, or tracked-source drift. Collision
+  validation reuses its authenticated lockfile-derived runtime without
+  reinstalling over the closed source projection.
 
 ## 2026-09-20 - Rebaseline SecPal Product-Family Authority
 
