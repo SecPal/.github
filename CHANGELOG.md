@@ -9,6 +9,20 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-20 - Rebaseline SecPal Product-Family Authority
+
+**Changed:**
+
+- Establish SecPal as the organization, brand, product-family umbrella, and
+  main-product name, with SecPal Assure and SecPal Visit as the approved
+  specialist-product identities.
+- Retire GuardGuide from current brand architecture while preserving its ADR,
+  issue, commit, and changelog history as historical evidence.
+- Distinguish the security and security-adjacent organization scope from the
+  main SecPal product's professional-security-operations audience and separate
+  product naming from implementation, availability, deployment, and production
+  claims.
+
 ## 2026-09-19 - Preserve Ready Prior Authority Across PR Rebound
 
 **Fixed:**

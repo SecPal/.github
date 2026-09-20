@@ -7,7 +7,11 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Status
 
-**Accepted**
+**Partially Superseded by BRAND-0007**
+
+The content-first title order and en-dash separator remain current. BRAND-0007
+supersedes the product-name rule and GuardGuide examples below; active titles
+use the current naming authority.
 
 ## Date
 

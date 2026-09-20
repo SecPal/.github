@@ -9,6 +9,11 @@ SPDX-License-Identifier: CC0-1.0
 
 **Accepted**
 
+The navigation decision remains current. Product names in the context below
+record the product set at acceptance time; BRAND-0007 defines current product
+identity, and the shell direction applies to current SecPal-family application
+surfaces.
+
 ## Date
 
 2026-06-13
