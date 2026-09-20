@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-19 - Preserve Ready Prior Authority Across PR Rebound
+
+**Fixed:**
+
+- Compose an authenticated same-head pull-request rebound with the accepted
+  qualified-remediation-successor-loss and Ready prior authorities while
+  preserving the existing loss identity and finite lifecycle state.
+- Normalize typed never-issued historical receipts consistently across Ready
+  prior production and consumption without promoting current-safety evidence
+  into historical evidence.
+
 ## 2026-09-19 - Bind Post-Ready Failure To Lifecycle Current
 
 **Fixed:**

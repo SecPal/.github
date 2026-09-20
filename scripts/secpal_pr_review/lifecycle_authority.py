@@ -33,6 +33,7 @@ from .fast_path import (
     canonical_json_bytes,
     digest_json,
     is_verified_validation_evidence,
+    normalize_exact_state_adoption_historical_evidence as normalize_historical_evidence,
     verify_commit_signatures,
     verify_ready_source_recovery_safety_facts,
 )
@@ -4086,6 +4087,17 @@ def _verify_exact_state_adoption_evidence(value: Any) -> dict[str, Any]:
     return rebuilt
 
 
+def normalize_exact_state_adoption_historical_evidence(
+    value: Any,
+) -> dict[str, Any]:
+    """Normalize the closed schema-aware historical receipt identity."""
+
+    try:
+        return normalize_historical_evidence(value)
+    except SecurityBlocker as exc:
+        raise LifecycleAuthorityError(str(exc)) from exc
+
+
 def exact_state_adoption_historical_evidence(value: Any) -> dict[str, Any]:
     """Project every immutable adoption version into one closed typed state."""
 
@@ -4115,9 +4127,7 @@ def exact_state_adoption_historical_evidence(value: Any) -> dict[str, Any]:
             ],
             "bytes_reconstructed": False,
         }
-    if result["state"] not in EXACT_ADOPTION_HISTORICAL_EVIDENCE_STATES:
-        raise LifecycleAuthorityError("exact-state historical evidence state is unknown")
-    return result
+    return normalize_exact_state_adoption_historical_evidence(result)
 
 
 def create_exact_state_adoption_authorization(
