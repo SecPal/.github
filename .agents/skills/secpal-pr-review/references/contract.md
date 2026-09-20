@@ -542,6 +542,10 @@ The version-3 exact-state-adoption source mode consumes the separately signed
 pre-enrollment validation-evidence-loss admission defined in
 `docs/secpal-pr-review-workflow.md`. It reuses ordinary enrollment publication;
 it adds no journal operation or authority to this review-processing skill.
+That admission's registered Ready-source successor may bind either one exact
+ancestor receipt or an exact signed source history containing zero receipt
+trailers; the latter uses fresh current safety without claiming historical
+receipt bytes.
 The exact #948 / PR #953 admission binds its sole historical receipt identity
 at the signed current remediation head while preserving the canonical absence
 of retained receipt and final-attestation package bytes. It compares that
