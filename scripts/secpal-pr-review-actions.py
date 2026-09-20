@@ -6865,6 +6865,15 @@ def _derive_qualified_loss_rebound_ready_prior_authority(
         raise fast_path.SecurityBlocker(
             "accepted same-head rebound composition is unavailable"
         ) from exc
+    if reviewed_state_digest is not None and (
+        record["qualification"]["reviewed_state_digest"]
+        != reviewed_state_digest
+        or record["qualification"]["reviewed_feedback_digest"]
+        != reviewed_feedback_digest
+    ):
+        raise fast_path.SecurityBlocker(
+            "integration reviewed predecessor differs from authenticated qualified loss"
+        )
 
     predecessor = rebound.predecessor
     successor = rebound.successor

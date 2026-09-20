@@ -392,7 +392,11 @@ def qualified_loss_record() -> dict[str, object]:
             "exceptional_recovery_count": 0,
             "exceptional_continuation_count": 0,
         },
-        "qualification": {"id": QUALIFICATION_ID},
+        "qualification": {
+            "id": QUALIFICATION_ID,
+            "reviewed_state_digest": REVIEWED_STATE,
+            "reviewed_feedback_digest": REVIEWED_FEEDBACK,
+        },
         "historical_package_status": "UNAVAILABLE",
         "historical_integration_evidence_digest": None,
         "historical_validation_receipt_digest": None,
@@ -643,7 +647,10 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
     def test_same_head_rebound_preserves_qualified_loss_ready_prior_authority(
         self,
     ) -> None:
-        manifest = self.derive_rebound()
+        manifest = self.derive_rebound(
+            reviewed_state_digest=REVIEWED_STATE,
+            reviewed_feedback_digest=REVIEWED_FEEDBACK,
+        )
         self.assertEqual(manifest["schema_version"], "1.2")
         self.assertEqual(
             manifest["source_authority_mode"], "EXISTING_AUTHORITY_COMPOSITION"
@@ -676,6 +683,20 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
         self.assertEqual(
             fast_path.normalize_ready_integration_prior_authority(manifest), manifest
         )
+
+    def test_same_head_rebound_rejects_changed_review_selectors(self) -> None:
+        for label, reviewed_state, reviewed_feedback in (
+            ("reviewed state", "0" * 64, REVIEWED_FEEDBACK),
+            ("reviewed feedback", REVIEWED_STATE, "0" * 64),
+        ):
+            with self.subTest(label=label), self.assertRaisesRegex(
+                fast_path.SecurityBlocker,
+                "reviewed predecessor",
+            ):
+                self.derive_rebound(
+                    reviewed_state_digest=reviewed_state,
+                    reviewed_feedback_digest=reviewed_feedback,
+                )
 
     def test_same_head_rebound_composition_rejects_authority_drift(self) -> None:
         labels = (
