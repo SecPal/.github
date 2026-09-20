@@ -7141,11 +7141,23 @@ class FastPathTests(TestCase):
             REPO_ROOT / fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH
         ).read_text(encoding="utf-8")
         registry = json.loads(registry_raw)
-        historical_entry = next(
+        current_entry = next(
             item
             for item in registry["repositories"]
             if item["repository"] == "SecPal/.github"
         )
+        current_binding = fast_path.validation_registry_binding(current_entry)
+        historical_entry = copy.deepcopy(current_entry)
+        historical_entry["focused_validation"] = historical_entry[
+            "focused_validation"
+        ][:-1]
+        registry["repositories"] = [
+            historical_entry
+            if item["repository"] == "SecPal/.github"
+            else item
+            for item in registry["repositories"]
+        ]
+        registry_raw = json.dumps(registry)
         historical_binding = fast_path.validation_registry_binding(
             historical_entry
         )
@@ -7153,6 +7165,7 @@ class FastPathTests(TestCase):
         command_set_digest = fast_path.digest_json(
             historical_binding["validation"]
         )
+        self.assertNotEqual(historical_binding, current_binding)
 
         responses = {
             ("remote", "get-url", "origin"): (

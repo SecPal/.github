@@ -202,9 +202,15 @@ def _synthetic_historical_registry(
         entry["required_local_validation"] = entry[
             "required_local_validation"
         ][:-1]
-    schema_raw = MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_PATH.read_text(
-        encoding="utf-8"
+    schema = json.loads(
+        MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_PATH.read_text(
+            encoding="utf-8"
+        )
     )
+    registry["historical_fixture"] = True
+    schema["required"].append("historical_fixture")
+    schema["properties"]["historical_fixture"] = {"const": True}
+    schema_raw = json.dumps(schema)
     return registry, schema_raw, MODULE._validation_registry_binding(entry)
 
 
@@ -216,6 +222,13 @@ def _bounded_central_history(
     history_commit: str,
 ) -> Any:
     central_tip = "c" * 40
+    newer_history_commit = "d" * 40
+    current_registry_raw = MODULE.REGISTRY_PATH.read_text(encoding="utf-8")
+    current_schema_raw = (
+        MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_PATH.read_text(
+            encoding="utf-8"
+        )
+    )
 
     def read(
         arguments: list[str], *, allow_failure: bool = False
@@ -242,7 +255,18 @@ def _bounded_central_history(
             "--",
             MODULE.fast_path.DELIVERY_REGISTRY_PATH,
         ):
-            return 0, f"{history_commit}\n"
+            return 0, f"{newer_history_commit}\n{history_commit}\n"
+        if call == (
+            "show",
+            f"{newer_history_commit}:{MODULE.fast_path.DELIVERY_REGISTRY_PATH}",
+        ):
+            return 0, current_registry_raw
+        if call == (
+            "show",
+            f"{newer_history_commit}:"
+            f"{MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH}",
+        ):
+            return 0, current_schema_raw
         if call == (
             "show",
             f"{history_commit}:{MODULE.fast_path.DELIVERY_REGISTRY_PATH}",
@@ -11368,6 +11392,25 @@ class ResolveFixedThreadsTests(TestCase):
         registry, schema_raw, expected = _synthetic_historical_registry(
             "SecPal/.github"
         )
+        self.assertNotEqual(
+            schema_raw,
+            MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_PATH.read_text(
+                encoding="utf-8"
+            ),
+        )
+        with self.assertRaisesRegex(
+            MODULE.fast_path.SecurityBlocker,
+            "immutable delivery validation registry is invalid",
+        ):
+            MODULE.fast_path._validated_historical_registry_binding(
+                registry_raw=json.dumps(registry),
+                schema_raw=(
+                    MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_PATH.read_text(
+                        encoding="utf-8"
+                    )
+                ),
+                repository="SecPal/.github",
+            )
         central_history = _bounded_central_history(
             registry_raw=json.dumps(registry),
             schema_raw=schema_raw,
@@ -11407,7 +11450,7 @@ class ResolveFixedThreadsTests(TestCase):
             MODULE.fast_path,
             "_central_git_result",
             side_effect=central_history,
-        ):
+        ) as git_read:
             binding = MODULE.fast_path.load_immutable_delivery_registry_binding(
                 repository="SecPal/api",
                 delivery_head_sha=delivery_head,
@@ -11418,6 +11461,24 @@ class ResolveFixedThreadsTests(TestCase):
             )
 
         self.assertEqual(binding, expected)
+        current_candidate = mock.call(
+            [
+                "show",
+                f"{'d' * 40}:{MODULE.fast_path.DELIVERY_REGISTRY_PATH}",
+            ],
+            allow_failure=True,
+        )
+        historical_candidate = mock.call(
+            [
+                "show",
+                f"{'b' * 40}:{MODULE.fast_path.DELIVERY_REGISTRY_PATH}",
+            ],
+            allow_failure=True,
+        )
+        self.assertLess(
+            git_read.call_args_list.index(current_candidate),
+            git_read.call_args_list.index(historical_candidate),
+        )
 
     def test_attestation_rejects_forged_receipt_and_missing_manual_gates(
         self,
