@@ -187,6 +187,78 @@ def _current_registry_git_result(
     return result.returncode, result.stdout
 
 
+def _synthetic_historical_registry(
+    repository: str,
+) -> tuple[dict[str, Any], str, dict[str, Any]]:
+    registry = json.loads(MODULE.REGISTRY_PATH.read_text(encoding="utf-8"))
+    entry = next(
+        item
+        for item in registry["repositories"]
+        if item["repository"] == repository
+    )
+    if entry["focused_validation"]:
+        entry["focused_validation"] = entry["focused_validation"][:-1]
+    else:
+        entry["required_local_validation"] = entry[
+            "required_local_validation"
+        ][:-1]
+    schema_raw = MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_PATH.read_text(
+        encoding="utf-8"
+    )
+    return registry, schema_raw, MODULE._validation_registry_binding(entry)
+
+
+def _bounded_central_history(
+    *,
+    registry_raw: str,
+    schema_raw: str,
+    delivery_head: str,
+    history_commit: str,
+) -> Any:
+    central_tip = "c" * 40
+
+    def read(
+        arguments: list[str], *, allow_failure: bool = False
+    ) -> tuple[int, str]:
+        del allow_failure
+        call = tuple(arguments)
+        if call == ("remote", "get-url", "origin"):
+            return 0, "https://github.com/SecPal/.github.git\n"
+        if call == ("rev-parse", "HEAD"):
+            return 0, f"{central_tip}\n"
+        if call == ("cat-file", "-e", f"{delivery_head}^{{commit}}"):
+            return (0, "") if delivery_head == history_commit else (1, "")
+        if call == (
+            "merge-base",
+            "--is-ancestor",
+            delivery_head,
+            central_tip,
+        ):
+            return 0, ""
+        if call == (
+            "log",
+            "--format=%H",
+            central_tip,
+            "--",
+            MODULE.fast_path.DELIVERY_REGISTRY_PATH,
+        ):
+            return 0, f"{history_commit}\n"
+        if call == (
+            "show",
+            f"{history_commit}:{MODULE.fast_path.DELIVERY_REGISTRY_PATH}",
+        ):
+            return 0, registry_raw
+        if call == (
+            "show",
+            f"{history_commit}:"
+            f"{MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH}",
+        ):
+            return 0, schema_raw
+        raise AssertionError(call)
+
+    return read
+
+
 def load_validation_evidence(*args: Any, **kwargs: Any) -> Any:
     if "repository_root" not in kwargs:
         kwargs["repository_root"] = ROOT
@@ -10881,36 +10953,12 @@ class ResolveFixedThreadsTests(TestCase):
 
     def test_historical_attestation_uses_bound_central_registry_history(self) -> None:
         thread_id = "PRRT_HISTORICAL_REGISTRY"
-        historical_head = "e78db9eeb0973d1f5853c4abfafa26e6cc8ab289"
-        historical_registry = json.loads(
-            REAL_SUBPROCESS_RUN(
-                [
-                    "git",
-                    "show",
-                    f"{historical_head}:{MODULE.fast_path.DELIVERY_REGISTRY_PATH}",
-                ],
-                cwd=ROOT,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout
-        )
-        historical_entry = next(
-            entry
-            for entry in historical_registry["repositories"]
-            if entry["repository"] == "SecPal/.github"
-        )
-        historical_binding = MODULE._validation_registry_binding(
-            historical_entry
-        )
-        self.assertEqual(
-            MODULE.fast_path.digest_json(historical_binding),
-            "38629c17e2397bfc1df44e5fa65fc176326f47fdf9dbfee98d1de52ecd093340",
-        )
-        self.assertEqual(
-            MODULE.fast_path.digest_json(historical_binding["validation"]),
-            "15d370f613fb13d39bcf5136ffb4ebae298eb78e0acfaf18635253571f9ff12a",
-        )
+        (
+            historical_registry,
+            historical_schema,
+            historical_binding,
+        ) = _synthetic_historical_registry("SecPal/.github")
+        historical_registry_raw = json.dumps(historical_registry)
         current_binding = MODULE._validation_registry_binding(
             MODULE._load_repository_entry("SecPal/.github")
         )
@@ -11047,13 +11095,28 @@ class ResolveFixedThreadsTests(TestCase):
             evidence_path = repository_root / "attestation.json"
             evidence_path.write_text(json.dumps(attestation), encoding="utf-8")
 
-            validation = load_validation_evidence(
-                evidence_path,
-                "SecPal/.github",
-                delivery_head,
-                reviewed,
-                repository_root=repository_root,
+            central_history = _bounded_central_history(
+                registry_raw=historical_registry_raw,
+                schema_raw=historical_schema,
+                delivery_head=delivery_head,
+                history_commit="b" * 40,
             )
+
+            def load_bound_evidence() -> Any:
+                with mock.patch.object(
+                    MODULE.fast_path,
+                    "_central_git_result",
+                    side_effect=central_history,
+                ):
+                    return load_validation_evidence(
+                        evidence_path,
+                        "SecPal/.github",
+                        delivery_head,
+                        reviewed,
+                        repository_root=repository_root,
+                    )
+
+            validation = load_bound_evidence()
 
             older_binding = copy.deepcopy(historical_binding)
             older_binding["validation"] = older_binding["validation"][:-1]
@@ -11084,13 +11147,7 @@ class ResolveFixedThreadsTests(TestCase):
                 MODULE.ResolutionError,
                 "immutable delivery validation registry binding is unavailable",
             ):
-                load_validation_evidence(
-                    evidence_path,
-                    "SecPal/.github",
-                    delivery_head,
-                    reviewed,
-                    repository_root=repository_root,
-                )
+                load_bound_evidence()
 
             digest_substitution = copy.deepcopy(attestation)
             digest_substitution["registry_digest"] = "0" * 64
@@ -11109,44 +11166,15 @@ class ResolveFixedThreadsTests(TestCase):
                 MODULE.ResolutionError,
                 "immutable delivery validation registry binding is unavailable",
             ):
-                load_validation_evidence(
-                    evidence_path,
-                    "SecPal/.github",
-                    delivery_head,
-                    reviewed,
-                    repository_root=repository_root,
-                )
+                load_bound_evidence()
 
         self.assertEqual(validation.validation_receipt, receipt)
         self.assertEqual(validation.attestation, attestation)
 
     def test_immutable_registry_rejects_invalid_maintained_structure(self) -> None:
-        historical_head = "e78db9eeb0973d1f5853c4abfafa26e6cc8ab289"
-        historical = json.loads(
-            REAL_SUBPROCESS_RUN(
-                [
-                    "git",
-                    "show",
-                    f"{historical_head}:{MODULE.fast_path.DELIVERY_REGISTRY_PATH}",
-                ],
-                cwd=ROOT,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout
+        historical, historical_schema, _ = _synthetic_historical_registry(
+            "SecPal/.github"
         )
-        historical_schema = REAL_SUBPROCESS_RUN(
-            [
-                "git",
-                "show",
-                f"{historical_head}:"
-                f"{MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH}",
-            ],
-            cwd=ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
 
         def load(registry_raw: str, schema_raw: str) -> None:
             head = "a" * 40
@@ -11336,38 +11364,60 @@ class ResolveFixedThreadsTests(TestCase):
     def test_immutable_registry_uses_historical_schema_from_central_history(
         self,
     ) -> None:
-        historical_head = "e78db9eeb0973d1f5853c4abfafa26e6cc8ab289"
-
-        binding = MODULE.fast_path.load_immutable_delivery_registry_binding(
-            repository="SecPal/.github",
-            delivery_head_sha=historical_head,
-            expected_registry_digest=(
-                "38629c17e2397bfc1df44e5fa65fc176326f47fdf9dbfee98d1de52ecd093340"
-            ),
-            expected_command_set_digest=(
-                "15d370f613fb13d39bcf5136ffb4ebae298eb78e0acfaf18635253571f9ff12a"
-            ),
+        historical_head = "b" * 40
+        registry, schema_raw, expected = _synthetic_historical_registry(
+            "SecPal/.github"
+        )
+        central_history = _bounded_central_history(
+            registry_raw=json.dumps(registry),
+            schema_raw=schema_raw,
+            delivery_head=historical_head,
+            history_commit=historical_head,
         )
 
-        self.assertEqual(binding["repository"], "SecPal/.github")
-        self.assertEqual(
-            MODULE.fast_path.digest_json(binding),
-            "38629c17e2397bfc1df44e5fa65fc176326f47fdf9dbfee98d1de52ecd093340",
-        )
+        with mock.patch.object(
+            MODULE.fast_path,
+            "_central_git_result",
+            side_effect=central_history,
+        ):
+            binding = MODULE.fast_path.load_immutable_delivery_registry_binding(
+                repository="SecPal/.github",
+                delivery_head_sha=historical_head,
+                expected_registry_digest=MODULE.fast_path.digest_json(expected),
+                expected_command_set_digest=MODULE.fast_path.digest_json(
+                    expected["validation"]
+                ),
+            )
+
+        self.assertEqual(binding, expected)
 
     def test_cross_repository_registry_uses_central_history(self) -> None:
-        binding = MODULE.fast_path.load_immutable_delivery_registry_binding(
-            repository="SecPal/api",
-            delivery_head_sha="a" * 40,
-            expected_registry_digest=(
-                "0284e90a0d918f7baeb2d496d75cf1326858d7e0626c1bd8b72e05f2de2dc0ff"
-            ),
-            expected_command_set_digest=(
-                "d3f0d9498954210c1676533210e6bc34ed95468c3fe1db3454098ed7454e4227"
-            ),
+        delivery_head = "a" * 40
+        registry, schema_raw, expected = _synthetic_historical_registry(
+            "SecPal/api"
+        )
+        central_history = _bounded_central_history(
+            registry_raw=json.dumps(registry),
+            schema_raw=schema_raw,
+            delivery_head=delivery_head,
+            history_commit="b" * 40,
         )
 
-        self.assertEqual(binding["repository"], "SecPal/api")
+        with mock.patch.object(
+            MODULE.fast_path,
+            "_central_git_result",
+            side_effect=central_history,
+        ):
+            binding = MODULE.fast_path.load_immutable_delivery_registry_binding(
+                repository="SecPal/api",
+                delivery_head_sha=delivery_head,
+                expected_registry_digest=MODULE.fast_path.digest_json(expected),
+                expected_command_set_digest=MODULE.fast_path.digest_json(
+                    expected["validation"]
+                ),
+            )
+
+        self.assertEqual(binding, expected)
 
     def test_attestation_rejects_forged_receipt_and_missing_manual_gates(
         self,

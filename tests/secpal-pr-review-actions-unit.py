@@ -7033,24 +7033,177 @@ class FastPathTests(TestCase):
                 live_observation=None,
             )
 
+    def test_registered_validation_test_is_independent_of_candidate_head_ancestry(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="secpal-historical-draft-validation-"
+        ) as directory:
+            repository = Path(directory) / "repository"
+            subprocess.run(
+                ["git", "clone", "-q", str(REPO_ROOT), str(repository)],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "remote",
+                    "set-url",
+                    "origin",
+                    "https://github.com/SecPal/.github.git",
+                ],
+                cwd=repository,
+                check=True,
+            )
+            shutil.copy2(
+                Path(__file__), repository / "tests/secpal-pr-review-actions-unit.py"
+            )
+            subprocess.run(
+                ["git", "add", "tests/secpal-pr-review-actions-unit.py"],
+                cwd=repository,
+                check=True,
+            )
+            accepted_main = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            candidate_tree = subprocess.run(
+                ["git", "write-tree"],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            environment = {
+                **os.environ,
+                "GIT_AUTHOR_NAME": "SecPal Test",
+                "GIT_AUTHOR_EMAIL": "test@secpal.invalid",
+                "GIT_COMMITTER_NAME": "SecPal Test",
+                "GIT_COMMITTER_EMAIL": "test@secpal.invalid",
+            }
+            historical_draft = subprocess.run(
+                ["git", "commit-tree", candidate_tree],
+                cwd=repository,
+                check=True,
+                input="synthetic historical Draft candidate\n",
+                capture_output=True,
+                text=True,
+                env=environment,
+            ).stdout.strip()
+            subprocess.run(
+                ["git", "update-ref", "refs/heads/authenticated-main", accepted_main],
+                cwd=repository,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "checkout", "-q", "--detach", historical_draft],
+                cwd=repository,
+                check=True,
+            )
+            ancestry = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", accepted_main, "HEAD"],
+                cwd=repository,
+                check=False,
+            )
+            self.assertEqual(ancestry.returncode, 1)
+
+            validation = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "unittest",
+                    "tests/secpal-pr-review-actions-unit.py",
+                    "-k",
+                    "test_ready_integration_reconstructs_prior_policy_from_central_history",
+                ],
+                cwd=repository,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(
+            validation.returncode,
+            0,
+            f"{validation.stdout}\n{validation.stderr}",
+        )
+
     def test_ready_integration_reconstructs_prior_policy_from_central_history(self) -> None:
-        historical_head = "e78db9eeb0973d1f5853c4abfafa26e6cc8ab289"
+        historical_head = "b" * 40
+        central_history_tip = "c" * 40
+        registry_raw = (
+            REPO_ROOT / fast_path.DELIVERY_REGISTRY_PATH
+        ).read_text(encoding="utf-8")
+        schema_raw = (
+            REPO_ROOT / fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH
+        ).read_text(encoding="utf-8")
+        registry = json.loads(registry_raw)
+        historical_entry = next(
+            item
+            for item in registry["repositories"]
+            if item["repository"] == "SecPal/.github"
+        )
+        historical_binding = fast_path.validation_registry_binding(
+            historical_entry
+        )
+        registry_digest = fast_path.digest_json(historical_binding)
+        command_set_digest = fast_path.digest_json(
+            historical_binding["validation"]
+        )
+
+        responses = {
+            ("remote", "get-url", "origin"): (
+                0,
+                "https://github.com/SecPal/.github.git\n",
+            ),
+            ("rev-parse", "HEAD"): (0, f"{central_history_tip}\n"),
+            ("cat-file", "-e", f"{historical_head}^{{commit}}"): (0, ""),
+            (
+                "merge-base",
+                "--is-ancestor",
+                historical_head,
+                central_history_tip,
+            ): (0, ""),
+            (
+                "log",
+                "--format=%H",
+                central_history_tip,
+                "--",
+                fast_path.DELIVERY_REGISTRY_PATH,
+            ): (0, f"{historical_head}\n"),
+            (
+                "show",
+                f"{historical_head}:{fast_path.DELIVERY_REGISTRY_PATH}",
+            ): (0, registry_raw),
+            (
+                "show",
+                f"{historical_head}:"
+                f"{fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH}",
+            ): (0, schema_raw),
+        }
+
+        def central_git_result(
+            arguments: list[str], *, allow_failure: bool = False
+        ) -> tuple[int, str]:
+            del allow_failure
+            return responses[tuple(arguments)]
+
         with mock.patch.object(
             fast_path,
             "_central_git_result",
-            wraps=fast_path._central_git_result,
+            side_effect=central_git_result,
         ) as git_read:
             binding = actions._prior_delivery_registry_binding(
                 historical_head,
                 "SecPal/.github",
-                "38629c17e2397bfc1df44e5fa65fc176326f47fdf9dbfee98d1de52ecd093340",
-                "15d370f613fb13d39bcf5136ffb4ebae298eb78e0acfaf18635253571f9ff12a",
+                registry_digest,
+                command_set_digest,
             )
         self.assertEqual(binding["repository"], "SecPal/.github")
-        self.assertEqual(
-            fast_path.digest_json(binding),
-            "38629c17e2397bfc1df44e5fa65fc176326f47fdf9dbfee98d1de52ecd093340",
-        )
+        self.assertEqual(binding, historical_binding)
         self.assertIn(
             mock.call(
                 ["show", f"{historical_head}:{fast_path.DELIVERY_REGISTRY_PATH}"],
