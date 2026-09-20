@@ -576,7 +576,33 @@
         }
       ],
       "historical_provider_summary_digest": "8597e0cc0bf44f984847ad293b8c8a937f448fa3ea29c7f590f6c21c6e0ecfa8",
-      "current_safety_harness_path": "tests/pre-enrollment-github-711-current-safety.py"
+      "current_safety_harness_path": "tests/pre-enrollment-github-711-current-safety.py",
+      "registered_validation_projection": {
+        "provenance": "ACCEPTED_RECOVERY_RECORD_EXACT_SOURCE",
+        "repository": "SecPal/.github",
+        "head_sha": "a158d6f5755ce1eecb7fada3a1c71722a21c5988",
+        "tree_sha": "c7f5e38cb982dbd196316d0d45908de38d89854e",
+        "files": [
+          {
+            "path": "tests/secpal-trivy-repository-scan-unit.py",
+            "mode": "100644",
+            "blob_oid": "3a07b035b105e75f725a51543f904b13216695e9",
+            "size": 30439
+          },
+          {
+            "path": "tests/fixtures/trivy-repository-scan/malformed.txt",
+            "mode": "100644",
+            "blob_oid": "81a9e65929e48f13ac3128db23f10653134b1040",
+            "size": 16
+          },
+          {
+            "path": "tests/fixtures/trivy-repository-scan/stale-database.json",
+            "mode": "100644",
+            "blob_oid": "87196705f782aeb6bc6dbbade589c9130eed8962",
+            "size": 237
+          }
+        ]
+      }
     }
   ]
 }
