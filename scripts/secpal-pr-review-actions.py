@@ -6546,6 +6546,47 @@ def _run_bridge_gh(arguments: list[str]) -> subprocess.CompletedProcess[str]:
         ) from exc
 
 
+def _exact_state_adoption_ready_receipt_digest(
+    loss: Any,
+    current_safety: Any,
+    lifecycle_authority: Any,
+) -> Any:
+    """Select current safety only when schema 1.2 proves no receipt existed."""
+
+    if not isinstance(loss, dict):
+        return None
+    historical_receipt = loss.get("historical_validation_receipt_digest")
+    if loss.get("schema_version") != "1.2":
+        return historical_receipt
+    try:
+        historical = (
+            lifecycle_authority.normalize_exact_state_adoption_historical_evidence(
+                {
+                    "state": "ABSENT_NEVER_ISSUED",
+                    "validation_receipt_digest": historical_receipt,
+                    "source_validation_evidence_digest": None,
+                    "final_attestation_digest": loss.get(
+                        "historical_final_attestation_digest"
+                    ),
+                    "bytes_reconstructed": loss.get(
+                        "historical_bytes_reconstructed"
+                    ),
+                }
+            )
+        )
+    except (
+        fast_path.SecurityBlocker,
+        lifecycle_authority.LifecycleAuthorityError,
+    ) as exc:
+        raise fast_path.SecurityBlocker(str(exc)) from exc
+    if (
+        historical["state"] != "ABSENT_NEVER_ISSUED"
+        or not isinstance(current_safety, dict)
+    ):
+        return None
+    return current_safety.get("receipt_digest")
+
+
 def _derive_exact_state_adoption_ready_prior_authority(
     *,
     repository_root: Path,
@@ -6678,6 +6719,9 @@ def _derive_exact_state_adoption_ready_prior_authority(
     budget = proof.get("review_budget_consumption_admission")
     authorization = proof.get("authorization")
     current_safety = loss.get("current_safety") if isinstance(loss, dict) else None
+    receipt_digest = _exact_state_adoption_ready_receipt_digest(
+        loss, current_safety, lifecycle_authority
+    )
     if (
         not isinstance(loss, dict)
         or not isinstance(budget, dict)
@@ -6692,8 +6736,7 @@ def _derive_exact_state_adoption_ready_prior_authority(
         or loss.get("tree_sha") != current.lifecycle.tree_sha
         or loss.get("commit_signature_evidence_digest")
         != proof.get("commit_signature_evidence_digest")
-        or loss.get("historical_validation_receipt_digest")
-        != proof.get("validation_receipt_digest")
+        or receipt_digest != proof.get("validation_receipt_digest")
         or proof.get("source_validation_evidence_digest")
         != fast_path.digest_json(current_safety)
         or budget.get("admission_digest")

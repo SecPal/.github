@@ -1564,6 +1564,45 @@ def _normalize_legacy_enrolled_ready_source(
     return normalized
 
 
+def normalize_exact_state_adoption_historical_evidence(
+    value: Any,
+) -> dict[str, Any]:
+    """Normalize the closed schema-aware historical receipt identity."""
+
+    fields = {
+        "state",
+        "validation_receipt_digest",
+        "source_validation_evidence_digest",
+        "final_attestation_digest",
+        "bytes_reconstructed",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise SecurityBlocker("exact-state historical evidence is malformed")
+    result = copy.deepcopy(value)
+    state = result["state"]
+    if (
+        state not in {"PRESENT", "UNAVAILABLE", "ABSENT_NEVER_ISSUED"}
+        or result["bytes_reconstructed"] is not False
+    ):
+        raise SecurityBlocker("exact-state historical evidence state is unknown")
+    receipt = result["validation_receipt_digest"]
+    source = result["source_validation_evidence_digest"]
+    attestation = result["final_attestation_digest"]
+    if state == "ABSENT_NEVER_ISSUED":
+        if any(item is not None for item in (receipt, source, attestation)):
+            raise SecurityBlocker("absent historical evidence cannot claim a digest")
+    else:
+        _require_digest(receipt, "historical validation receipt")
+        _require_digest(source, "historical source validation")
+        if state == "PRESENT":
+            _require_digest(attestation, "historical final attestation")
+        elif attestation is not None:
+            raise SecurityBlocker(
+                "unavailable historical evidence cannot claim an attestation"
+            )
+    return result
+
+
 def normalize_ready_integration_evidence(
     value: Any,
     *,

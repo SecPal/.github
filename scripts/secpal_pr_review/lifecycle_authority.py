@@ -33,6 +33,7 @@ from .fast_path import (
     canonical_json_bytes,
     digest_json,
     is_verified_validation_evidence,
+    normalize_exact_state_adoption_historical_evidence as normalize_historical_evidence,
     verify_commit_signatures,
     verify_ready_source_recovery_safety_facts,
 )
@@ -3214,6 +3215,17 @@ def _exact_adoption_loss_receipt_digest(loss: Mapping[str, Any]) -> str:
     return _require_digest(
         safety.get("receipt_digest"), "current safety validation receipt"
     )
+
+
+def normalize_exact_state_adoption_historical_evidence(
+    value: Any,
+) -> dict[str, Any]:
+    """Normalize the closed schema-aware historical receipt identity."""
+
+    try:
+        return normalize_historical_evidence(value)
+    except SecurityBlocker as exc:
+        raise LifecycleAuthorityError(str(exc)) from exc
 
 
 def authenticate_exact_state_adoption_external_evidence(
