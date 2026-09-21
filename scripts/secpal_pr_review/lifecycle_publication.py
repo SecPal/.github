@@ -1017,6 +1017,25 @@ def _require_exact_successor(
         or new_authorities[-1]["transition_kind"] not in ADVANCE_TRANSITIONS
     ):
         raise LifecyclePublicationError("terminal publication is not one exact allowed successor")
+    event = new_events[-1]
+    if event.get("transition_kind") == "INVALID_REVIEW_CONSUMPTION_CORRECTED":
+        if (
+            event.get("current_publication_oid")
+            != predecessor_document.get("_object_oid")
+            and event.get("current_publication_oid")
+            != successor_document.get("predecessor_publication_oid")
+        ):
+            raise LifecyclePublicationError(
+                "invalid review correction differs from CURRENT publication"
+            )
+        if (
+            event.get("current_publication_digest")
+            != predecessor_document.get("publication_digest")
+            or event.get("current_authority_digest") != predecessor.authority_digest
+        ):
+            raise LifecyclePublicationError(
+                "invalid review correction differs from CURRENT authority"
+            )
     old_evidence = predecessor_document["lifecycle_evidence"]
     new_evidence = successor_document["lifecycle_evidence"]
     if isinstance(old_evidence, dict) and old_evidence.get("kind") == authority.PUBLICATION_EVIDENCE_KIND:
@@ -1778,7 +1797,10 @@ def advance_current_terminal(
         predecessor_oid, predecessor_document, predecessor = previous
         _require_exact_successor(
             predecessor, predecessor_document, successor,
-            {"lifecycle_evidence": bundle},
+            {
+                "lifecycle_evidence": bundle,
+                "predecessor_publication_oid": predecessor_oid,
+            },
         )
         fields = _publication_fields(
             operation="ADVANCE_CURRENT_TERMINAL", verified=successor,
@@ -2050,6 +2072,112 @@ def verify_current_lifecycle_authority(
         document["predecessor_publication_oid"], lifecycle,
         canonical_json_bytes(document["lifecycle_evidence"]),
     )
+
+
+def verify_invalid_review_consumption_correction(
+    authorization: Mapping[str, Any],
+) -> VerifiedLifecyclePublication:
+    """Authenticate CURRENT and derive eligibility for one exact correction."""
+
+    if not isinstance(authorization, Mapping):
+        raise LifecyclePublicationError("invalid review correction is malformed")
+    try:
+        repository = authority._require_repository(authorization.get("repository"))
+        issue = authority._require_positive_int(
+            authorization.get("delivery_issue"), "delivery issue"
+        )
+        policy = authority._load_lifecycle_trust_policy(repository)
+        event = authority._verify_transition_authorization(
+            authorization,
+            accepted_signers=policy.transition_signer_identities,
+            signature_verifier=authority._policy_signature_verifier(policy),
+        )
+        current = verify_current_lifecycle_authority(repository, issue)
+        current_tree = _resolve_delivery_head_tree(policy, current.lifecycle.head_sha)
+        live_pull_request = _observe_pre_enrollment_pull_request(
+            repository, current.lifecycle.pull_request
+        )
+        raw = current.serialized_lifecycle_evidence
+        bundle = authority._load_canonical_json(raw, "CURRENT lifecycle evidence")
+        if not isinstance(bundle, dict):
+            raise authority.LifecycleAuthorityError(
+                "CURRENT lifecycle evidence is malformed"
+            )
+        if bundle.get("kind") == authority.PUBLICATION_EVIDENCE_KIND:
+            bundle = bundle.get("lifecycle_evidence")
+        if not isinstance(bundle, dict):
+            raise authority.LifecycleAuthorityError(
+                "CURRENT lifecycle evidence is malformed"
+            )
+        events = bundle.get("transition_authorizations")
+        snapshots = bundle.get("authority_chain")
+        if not isinstance(events, list) or not isinstance(snapshots, list):
+            raise authority.LifecycleAuthorityError(
+                "CURRENT lifecycle evidence chain is malformed"
+            )
+        authority._require_invalid_review_correction_suffix(
+            events, snapshots, event
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecyclePublicationError(str(exc)) from exc
+    state = current.lifecycle.state
+    if (
+        event["pull_request"] != current.lifecycle.pull_request
+        or event["lifecycle_id"] != current.lifecycle.lifecycle_id
+        or event["predecessor_authority_digest"]
+        != current.lifecycle.authority_digest
+        or event["predecessor_head_sha"] != current.lifecycle.head_sha
+        or event["resulting_head_sha"] != current.lifecycle.head_sha
+        or event["initialization_evidence_digest"]
+        != current.lifecycle.initialization_evidence_digest
+        or event["current_publication_oid"] != current.publication_oid
+        or event["current_publication_digest"] != current.publication_digest
+        or event["current_authority_digest"] != current.lifecycle.authority_digest
+        or event["current_tree_sha"] != current_tree
+        or live_pull_request
+        != {
+            "repository": repository,
+            "pull_request": current.lifecycle.pull_request,
+            "state": "OPEN",
+            "draft": True,
+            "head_sha": current.lifecycle.head_sha,
+        }
+        or state.get("unrestricted_review_count") != 1
+        or state.get("remediation_cycle_count") != 0
+        or state.get("draft") is not True
+        or state.get("ready") is not False
+        or state.get("ready_transition_count") != 0
+        or state.get("ready_history") != []
+        or state.get("exceptional_recovery_count") != 0
+        or state.get("exceptional_recovery_history") != []
+        or state.get("exceptional_continuation_count") != 0
+        or state.get("exceptional_continuation_history") != []
+        or state.get("cycle_3_absent") is not True
+    ):
+        raise LifecyclePublicationError(
+            "invalid review correction differs from exact eligible CURRENT"
+        )
+    return current
+
+
+def _resolve_delivery_head_tree(
+    policy: authority.LifecycleTrustPolicy, head_sha: str
+) -> str:
+    """Resolve the immutable commit tree from the maintained repository remote."""
+
+    head = authority._require_oid(head_sha, "delivery head")
+    with _isolated_repository(policy, write=False) as (root, _credential_environment):
+        fetched = _run_git(
+            root,
+            ["fetch", "--no-tags", "--depth=1", policy.publication_remote_url, head],
+        )
+        if fetched.returncode != 0:
+            raise LifecyclePublicationError("delivery head tree is unavailable")
+        result = _run_git(root, ["rev-parse", f"{head}^{{tree}}"])
+    tree = result.stdout.decode("ascii", "strict").strip() if result.returncode == 0 else ""
+    if not _OID.fullmatch(tree):
+        raise LifecyclePublicationError("delivery head tree is invalid")
+    return tree
 
 
 def _ready_source_provider_binding_fields(

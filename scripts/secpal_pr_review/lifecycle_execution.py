@@ -109,6 +109,73 @@ class LifecycleExecutionResult:
     publication_digest: str | None
 
 
+def execute_invalid_review_consumption_correction(
+    authorization: Mapping[str, Any],
+    signers: SigningAuthorities,
+) -> publication.VerifiedLifecyclePublication:
+    """Append and publish the one authorized correction without a GitHub write."""
+
+    current = publication.verify_invalid_review_consumption_correction(authorization)
+    raw = current.serialized_lifecycle_evidence
+    if not isinstance(raw, bytes):
+        raise LifecycleExecutionError("authenticated CURRENT evidence is unavailable")
+    try:
+        parsed = authority._load_canonical_json(raw, "CURRENT lifecycle evidence")
+        bundle = (
+            parsed.get("lifecycle_evidence")
+            if isinstance(parsed, dict)
+            and parsed.get("kind") == authority.PUBLICATION_EVIDENCE_KIND
+            else parsed
+        )
+        if not isinstance(bundle, dict):
+            raise authority.LifecycleAuthorityError(
+                "CURRENT lifecycle evidence bundle is malformed"
+            )
+        events = bundle.get("transition_authorizations")
+        snapshots = bundle.get("authority_chain")
+        if not isinstance(events, list) or not isinstance(snapshots, list):
+            raise authority.LifecycleAuthorityError(
+                "CURRENT lifecycle evidence chain is malformed"
+            )
+        policy = authority._load_lifecycle_trust_policy(current.lifecycle.repository)
+        snapshot = authority.issue_lifecycle_authority(
+            predecessor_chain=snapshots,
+            transition_authorizations=events,
+            authorization=authorization,
+            signer_identity=signers.authority_identity,
+            authority_signer=signers.authority_signer,
+            accepted_event_signers=policy.transition_signer_identities,
+            accepted_authority_signers=policy.authority_signer_identities,
+            signature_verifier=authority._policy_signature_verifier(policy),
+        )
+        events.append(copy.deepcopy(dict(authorization)))
+        snapshots.append(snapshot)
+        successor_raw = canonical_json_bytes(parsed)
+        admitted = bundle.get("delivery_initialization")
+        if not isinstance(admitted, dict):
+            raise authority.LifecycleAuthorityError(
+                "native CURRENT initialization is unavailable"
+            )
+        verified = authority._verify_lifecycle_authority_for_journal(
+            successor_raw, admitted_initialization=admitted
+        )
+        expected = copy.deepcopy(current.lifecycle.state)
+        expected["unrestricted_review_count"] = 0
+        if verified.state != expected:
+            raise authority.LifecycleAuthorityError(
+                "correction changed preserved lifecycle state"
+            )
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecycleExecutionError(
+            "exact invalid-review correction could not be derived"
+        ) from exc
+    return publication.advance_current_terminal(
+        successor_raw,
+        signer_identity=signers.publication_identity,
+        signer=signers.publication_signer,
+    )
+
+
 CurrentReader = Callable[[str, int], publication.VerifiedLifecyclePublication]
 HistoricalReader = Callable[
     [str, int, str], publication.VerifiedLifecyclePublicationTransition
