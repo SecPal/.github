@@ -537,6 +537,12 @@ Version 3 adds the distinct
 `SECPAL_PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_ADMISSION` source mode. It does
 not reinterpret versions 1/2. Loss-admission schema 1.0 retains its exact signed,
 unenrolled OPEN Draft and same-head validation-receipt-trailer semantics.
+When a schema-1.2 admission proves `ABSENT_NEVER_ISSUED`, its current-safety
+receipt is never historical receipt evidence. A Ready enrollment root with no
+publication predecessor or transition/authority suffix can enter the existing
+Ready-integration prior-authority family only through its exact protected
+Ready-source recovery; all repository, delivery, PR, lifecycle, source,
+publication, reviewed-state and current-safety identities must agree.
 
 Version 4 adds one closed `GOVERNANCE_AMENDMENT` source mode for the registered
 issue #960 / PR #961 bootstrap only. It accepts no historical validation object:

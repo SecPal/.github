@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-20 - Compose Recovered Adoption Root Into Ready Prior Authority
+
+**Fixed:**
+
+- Authenticate an Exact-State-Adoption v3 enrollment root together with its
+  exact protected Ready-source recovery when historical validation evidence is
+  truthfully `ABSENT_NEVER_ISSUED`, preserving the current-safety receipt as
+  current evidence while the historical receipt remains null.
+- Preserve the signed canonical tag as the immutable consumption marker without
+  treating its legacy-shaped manifest digest as Ready prior authority.
+
 ## 2026-09-20 - Prepare Locked Complete Validation Dependencies
 
 **Fixed:**
