@@ -407,6 +407,39 @@ class LifecycleAuthorityTests(TestCase):
                 unrestricted_review_count=0,
             )
 
+    def test_invalid_review_correction_rejects_generic_and_adopted_paths(self) -> None:
+        chain = reviewed_chain()
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "specialized constructor"
+        ):
+            authority.create_transition_authorization(
+                event_id="generic-correction",
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                lifecycle_id=LIFECYCLE,
+                pull_request=PR,
+                predecessor_authority_digest=chain.authorities[-1][
+                    "authority_digest"
+                ],
+                predecessor_head_sha=chain.head,
+                resulting_head_sha=chain.head,
+                transition_kind="INVALID_REVIEW_CONSUMPTION_CORRECTED",
+                replacement_pull_request=None,
+                initialization_evidence_digest=INITIALIZATION_DIGEST,
+                signer_identity=SIGNER,
+                signer=signer_for(),
+            )
+
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "requires a native lifecycle"
+        ):
+            authority._derive_state(
+                chain.authorities[-1]["state_after"],
+                "INVALID_REVIEW_CONSUMPTION_CORRECTED",
+                "1" * 64,
+                allow_adopted_observations=True,
+            )
+
     def test_correction_verifier_binds_authenticated_current_and_tree(self) -> None:
         chain = reviewed_chain()
         lifecycle = replace(chain.verify(), tree_sha=HEADS[9])
@@ -502,6 +535,22 @@ class LifecycleAuthorityTests(TestCase):
                     },
                 ),
                 self.assertRaises(publication.LifecyclePublicationError),
+            ):
+                publication.verify_invalid_review_consumption_correction(correction())
+
+            non_native = replace(
+                current.lifecycle,
+                historical_proof_mode=authority.EXACT_ADOPTION_PROOF_MODE,
+            )
+            with (
+                patch.object(
+                    publication,
+                    "verify_current_lifecycle_authority",
+                    return_value=replace(current, lifecycle=non_native),
+                ),
+                self.assertRaisesRegex(
+                    publication.LifecyclePublicationError, "exact eligible CURRENT"
+                ),
             ):
                 publication.verify_invalid_review_consumption_correction(correction())
 

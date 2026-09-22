@@ -2103,6 +2103,10 @@ def _derive_state(
             raise LifecycleAuthorityError("unrestricted-review budget is exhausted")
         state["unrestricted_review_count"] += 1
     elif transition_kind == "INVALID_REVIEW_CONSUMPTION_CORRECTED":
+        if allow_adopted_observations:
+            raise LifecycleAuthorityError(
+                "invalid review correction requires a native lifecycle"
+            )
         if (
             state["unrestricted_review_count"] != MAX_UNRESTRICTED_REVIEWS
             or state["remediation_cycle_count"] != 0
@@ -2210,6 +2214,10 @@ def create_transition_authorization(
     """Create independently signed authorization for one exact transition."""
 
     transition_kind = _require_transition_kind(transition_kind)
+    if transition_kind == "INVALID_REVIEW_CONSUMPTION_CORRECTED":
+        raise LifecycleAuthorityError(
+            "invalid review correction requires its specialized constructor"
+        )
     fields: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "kind": EVENT_KIND,

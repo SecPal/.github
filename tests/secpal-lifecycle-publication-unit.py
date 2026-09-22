@@ -827,6 +827,44 @@ class LifecyclePublicationTests(TestCase):
             self.assertEqual(self.remote_tip(), corrected.publication_oid)
             self.assertNotEqual(reviewed.publication_oid, corrected.publication_oid)
 
+    def test_direct_correction_publication_reauthenticates_eligibility(self) -> None:
+        chain, reviewed, correction, policy = self.correction_fixture()
+        snapshot = authority.issue_lifecycle_authority(
+            predecessor_chain=chain.authorities,
+            transition_authorizations=chain.events,
+            authorization=correction,
+            signer_identity=SIGNER,
+            authority_signer=signer_for(),
+            accepted_event_signers=policy.transition_signer_identities,
+            accepted_authority_signers=policy.authority_signer_identities,
+            signature_verifier=verify_signature,
+        )
+        chain.events.append(correction)
+        chain.authorities.append(snapshot)
+
+        with (
+            patch.object(
+                authority, "_load_lifecycle_trust_policy", return_value=policy
+            ),
+            patch.object(
+                publication,
+                "verify_invalid_review_consumption_correction",
+                side_effect=publication.LifecyclePublicationError(
+                    "live correction eligibility changed"
+                ),
+            ) as eligibility,
+            self.assertRaisesRegex(
+                publication.LifecyclePublicationError,
+                "live correction eligibility changed",
+            ),
+        ):
+            publication.advance_current_terminal(
+                chain.raw(), signer_identity=SIGNER, signer=signer_for()
+            )
+
+        eligibility.assert_called_once_with(correction)
+        self.assertEqual(self.remote_tip(), reviewed.publication_oid)
+
     def test_correction_executor_fails_closed_on_publication_cas_race(self) -> None:
         chain, reviewed, correction, policy = self.correction_fixture()
         signers = execution.SigningAuthorities(

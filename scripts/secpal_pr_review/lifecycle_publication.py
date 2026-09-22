@@ -1802,6 +1802,27 @@ def advance_current_terminal(
                 "predecessor_publication_oid": predecessor_oid,
             },
         )
+        successor_events = lifecycle_bundle.get("transition_authorizations")
+        if (
+            isinstance(successor_events, list)
+            and successor_events
+            and successor_events[-1].get("transition_kind")
+            == "INVALID_REVIEW_CONSUMPTION_CORRECTED"
+        ):
+            eligible = verify_invalid_review_consumption_correction(
+                successor_events[-1]
+            )
+            if (
+                eligible.publication_oid != predecessor_oid
+                or eligible.publication_digest
+                != predecessor_document.get("publication_digest")
+                or eligible.lifecycle.authority_digest
+                != predecessor.authority_digest
+                or eligible.lifecycle.head_sha != predecessor.head_sha
+            ):
+                raise LifecyclePublicationError(
+                    "invalid review correction eligibility became stale"
+                )
         fields = _publication_fields(
             operation="ADVANCE_CURRENT_TERMINAL", verified=successor,
             bundle=bundle, bundle_raw=bundle_raw,
@@ -2122,7 +2143,8 @@ def verify_invalid_review_consumption_correction(
         raise LifecyclePublicationError(str(exc)) from exc
     state = current.lifecycle.state
     if (
-        event["pull_request"] != current.lifecycle.pull_request
+        current.lifecycle.historical_proof_mode != authority.NATIVE_PROOF_MODE
+        or event["pull_request"] != current.lifecycle.pull_request
         or event["lifecycle_id"] != current.lifecycle.lifecycle_id
         or event["predecessor_authority_digest"]
         != current.lifecycle.authority_digest
