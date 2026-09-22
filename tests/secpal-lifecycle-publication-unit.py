@@ -613,6 +613,91 @@ class LifecyclePublicationTests(TestCase):
         )
         return chain, current, correction, policy
 
+    def ready_correction_fixture(
+        self,
+    ) -> tuple[
+        Chain,
+        publication.VerifiedLifecyclePublication,
+        dict[str, Any],
+        authority.LifecycleTrustPolicy,
+        tuple[publication.GitHubPullRequestTimelineEvent, ...],
+        tuple[publication.GitHubPullRequestTimelineEvent, ...],
+    ]:
+        chain = Chain()
+        chain.append("INITIALIZED_DRAFT")
+        anchor = authority.InitializationAnchor(
+            ISSUE,
+            PR,
+            HEADS[0],
+            chain.initialization["initialization_digest"],
+            PR,
+            chain.head,
+            chain.authorities[-1]["authority_digest"],
+        )
+        policy = replace(self.policy, initialization_anchors=(anchor,))
+        with patch.object(
+            authority, "_load_lifecycle_trust_policy", return_value=policy
+        ):
+            publication.admit_native_genesis(
+                chain.raw(), signer_identity=SIGNER, signer=signer_for()
+            )
+            publication.enroll_existing_lifecycle(
+                chain.raw(), signer_identity=SIGNER, signer=signer_for()
+            )
+            chain.append("UNRESTRICTED_REVIEW_CONSUMED")
+            publication.advance_current_terminal(
+                chain.raw(), signer_identity=SIGNER, signer=signer_for()
+            )
+            chain.append("DRAFT_TO_READY")
+            current = publication.advance_current_terminal(
+                chain.raw(), signer_identity=SIGNER, signer=signer_for()
+            )
+        invalid_review = chain.events[1]
+        unauthorized_ready = chain.events[2]
+        correction = authority.create_invalid_review_derived_ready_correction_authorization(
+            event_id="ready-correction-1",
+            repository=REPOSITORY,
+            delivery_issue=ISSUE,
+            lifecycle_id=chain.lifecycle_id,
+            pull_request=PR,
+            predecessor_authority_digest=current.lifecycle.authority_digest,
+            head_sha=current.lifecycle.head_sha,
+            initialization_evidence_digest=chain.initialization[
+                "initialization_digest"
+            ],
+            current_publication_oid=current.publication_oid,
+            current_publication_digest=current.publication_digest,
+            current_tree_sha=HEADS[9],
+            invalid_review_event_id=invalid_review["event_id"],
+            invalid_review_event_digest=invalid_review["event_digest"],
+            unauthorized_ready_event_id=unauthorized_ready["event_id"],
+            unauthorized_ready_event_digest=unauthorized_ready["event_digest"],
+            unauthorized_ready_predecessor_authority_digest=(
+                unauthorized_ready["predecessor_authority_digest"]
+            ),
+            github_ready_event_database_id=31627413421,
+            github_ready_event_node_id="RFRE_lADOQFR1MM8AAAABSTyF988AAAAHXSQHrQ",
+            github_ready_event_actor="aroviqen",
+            github_ready_event_created_at="2026-09-22T19:51:55Z",
+            signer_identity=SIGNER,
+            signer=signer_for(),
+        )
+        ready = publication.GitHubPullRequestTimelineEvent(
+            "READY_FOR_REVIEW",
+            31627413421,
+            "RFRE_lADOQFR1MM8AAAABSTyF988AAAAHXSQHrQ",
+            "aroviqen",
+            "2026-09-22T19:51:55Z",
+        )
+        converted = publication.GitHubPullRequestTimelineEvent(
+            "CONVERT_TO_DRAFT",
+            31627419999,
+            "CTDE_exact_correction",
+            "aroviqen",
+            "2026-09-22T21:45:00Z",
+        )
+        return chain, current, correction, policy, (ready,), (ready, converted)
+
     @staticmethod
     def resign_correction(value: dict[str, Any]) -> dict[str, Any]:
         fields = copy.deepcopy(value)
@@ -623,6 +708,248 @@ class LifecyclePublicationTests(TestCase):
         )
         fields["event_digest"] = authority.digest_json(fields)
         return fields
+
+    def test_ready_correction_converges_once_and_is_idempotent(self) -> None:
+        chain, current, correction, policy, before, after = (
+            self.ready_correction_fixture()
+        )
+        ready_live = execution.LivePullRequest(
+            REPOSITORY, PR, "OPEN", chain.head, False
+        )
+        draft_live = replace(ready_live, draft=True)
+        ready_api = {
+            "repository": REPOSITORY,
+            "pull_request": PR,
+            "state": "OPEN",
+            "draft": False,
+            "head_sha": chain.head,
+        }
+        draft_api = {**ready_api, "draft": True}
+        signers = execution.SigningAuthorities(
+            SIGNER, signer_for(), SIGNER, signer_for(), SIGNER, signer_for()
+        )
+        preserved = copy.deepcopy(chain.events)
+
+        with (
+            patch.object(
+                authority, "_load_lifecycle_trust_policy", return_value=policy
+            ),
+            patch.object(
+                publication, "_resolve_delivery_head_tree", return_value=HEADS[9]
+            ),
+            patch.object(
+                execution, "_read_live_github",
+                side_effect=[ready_live, draft_live, draft_live, draft_live],
+            ),
+            patch.object(
+                publication, "_observe_pre_enrollment_pull_request",
+                side_effect=[ready_api, draft_api],
+            ),
+            patch.object(
+                publication, "_observe_pull_request_lifecycle_timeline",
+                side_effect=[before, before, after, after, after, after],
+            ),
+            patch.object(
+                execution, "_write_live_github", return_value="SUCCESS"
+            ) as github_write,
+        ):
+            corrected = execution.execute_invalid_review_derived_ready_correction(
+                correction, signers
+            )
+            replay = execution.execute_invalid_review_derived_ready_correction(
+                correction, signers
+            )
+
+        github_write.assert_called_once_with(REPOSITORY, PR, "READY_TO_DRAFT")
+        self.assertEqual(replay, corrected)
+        bundle = json.loads(corrected.serialized_lifecycle_evidence)
+        self.assertEqual(bundle["transition_authorizations"][:3], preserved)
+        self.assertEqual(
+            bundle["transition_authorizations"][-1]["transition_kind"],
+            "INVALID_REVIEW_DERIVED_READY_CORRECTED",
+        )
+        expected = copy.deepcopy(current.lifecycle.state)
+        expected.update(
+            unrestricted_review_count=0,
+            draft=True,
+            ready=False,
+            ready_transition_count=0,
+            ready_history=[],
+        )
+        self.assertEqual(corrected.lifecycle.state, expected)
+
+    def test_ready_correction_resumes_authenticated_draft_interruption(self) -> None:
+        chain, _current, correction, policy, _before, after = (
+            self.ready_correction_fixture()
+        )
+        draft_live = execution.LivePullRequest(
+            REPOSITORY, PR, "OPEN", chain.head, True
+        )
+        draft_api = {
+            "repository": REPOSITORY,
+            "pull_request": PR,
+            "state": "OPEN",
+            "draft": True,
+            "head_sha": chain.head,
+        }
+        signers = execution.SigningAuthorities(
+            SIGNER, signer_for(), SIGNER, signer_for(), SIGNER, signer_for()
+        )
+        with (
+            patch.object(
+                authority, "_load_lifecycle_trust_policy", return_value=policy
+            ),
+            patch.object(
+                publication, "_resolve_delivery_head_tree", return_value=HEADS[9]
+            ),
+            patch.object(
+                execution, "_read_live_github",
+                side_effect=[draft_live, draft_live],
+            ),
+            patch.object(
+                publication, "_observe_pre_enrollment_pull_request",
+                side_effect=[draft_api, draft_api],
+            ),
+            patch.object(
+                publication, "_observe_pull_request_lifecycle_timeline",
+                side_effect=[after, after, after, after],
+            ),
+            patch.object(
+                execution, "_write_live_github",
+                side_effect=AssertionError("resume must not mutate GitHub"),
+            ) as github_write,
+        ):
+            corrected = execution.execute_invalid_review_derived_ready_correction(
+                correction, signers
+            )
+        github_write.assert_not_called()
+        self.assertTrue(corrected.lifecycle.state["draft"])
+        self.assertFalse(corrected.lifecycle.state["ready"])
+
+    def test_ready_correction_rejects_identity_history_and_convergence_drift(self) -> None:
+        chain, current, correction, policy, before, after = (
+            self.ready_correction_fixture()
+        )
+        ready_live = execution.LivePullRequest(
+            REPOSITORY, PR, "OPEN", chain.head, False
+        )
+        draft_live = replace(ready_live, draft=True)
+        ready_api = {
+            "repository": REPOSITORY,
+            "pull_request": PR,
+            "state": "OPEN",
+            "draft": False,
+            "head_sha": chain.head,
+        }
+        signers = execution.SigningAuthorities(
+            SIGNER, signer_for(), SIGNER, signer_for(), SIGNER, signer_for()
+        )
+
+        with (
+            patch.object(
+                authority, "_load_lifecycle_trust_policy", return_value=policy
+            ),
+            patch.object(
+                publication, "_resolve_delivery_head_tree", return_value=HEADS[9]
+            ),
+            patch.object(
+                publication, "verify_current_lifecycle_authority",
+                return_value=current,
+            ),
+            patch.object(
+                publication, "_observe_pre_enrollment_pull_request",
+                return_value=ready_api,
+            ),
+            patch.object(
+                publication, "_observe_pull_request_lifecycle_timeline",
+                return_value=before,
+            ),
+        ):
+            self.assertIs(
+                publication.verify_invalid_review_derived_ready_correction(
+                    correction
+                ),
+                current,
+            )
+            for field, value in (
+                ("repository", "Other/repository"),
+                ("delivery_issue", ISSUE + 1),
+                ("pull_request", PR + 1),
+                ("lifecycle_id", "lifecycle:" + "7" * 64),
+                ("resulting_head_sha", HEADS[7]),
+                ("current_publication_oid", HEADS[7]),
+                ("current_publication_digest", "7" * 64),
+                ("current_tree_sha", HEADS[7]),
+                ("invalid_review_event_digest", "7" * 64),
+                ("unauthorized_ready_event_digest", "7" * 64),
+                ("github_ready_event_database_id", 31627413422),
+                ("github_ready_event_node_id", "RFRE_wrong"),
+                ("github_ready_event_actor", "other"),
+                ("github_ready_event_created_at", "2026-09-22T19:51:56Z"),
+            ):
+                changed = copy.deepcopy(correction)
+                changed[field] = value
+                with self.subTest(field=field), self.assertRaises(
+                    (authority.LifecycleAuthorityError,
+                     publication.LifecyclePublicationError)
+                ):
+                    publication.verify_invalid_review_derived_ready_correction(
+                        self.resign_correction(changed)
+                    )
+
+        later = after + (
+            publication.GitHubPullRequestTimelineEvent(
+                "READY_FOR_REVIEW", 31627420000, "RFRE_later", "aroviqen",
+                "2026-09-22T21:46:00Z",
+            ),
+        )
+        cases = (
+            ("draft without exact event", draft_live, before, "SUCCESS"),
+            ("unknown write result", ready_live, before, "UNKNOWN"),
+            ("write did not converge", ready_live, before, "AMBIGUOUS"),
+            ("later event", ready_live, later, "SUCCESS"),
+        )
+        for label, live_after, timeline_after, outcome in cases:
+            with (
+                self.subTest(label=label),
+                patch.object(
+                    authority, "_load_lifecycle_trust_policy", return_value=policy
+                ),
+                patch.object(
+                    publication, "_resolve_delivery_head_tree", return_value=HEADS[9]
+                ),
+                patch.object(
+                    execution, "_read_live_github",
+                    side_effect=(
+                        [draft_live]
+                        if label == "draft without exact event"
+                        else [ready_live, live_after]
+                    ),
+                ),
+                patch.object(
+                    publication, "_observe_pre_enrollment_pull_request",
+                    return_value=ready_api,
+                ),
+                patch.object(
+                    publication, "_observe_pull_request_lifecycle_timeline",
+                    side_effect=(
+                        [before]
+                        if label == "draft without exact event"
+                        else [before, before, timeline_after]
+                    ),
+                ),
+                patch.object(
+                    execution, "_write_live_github", return_value=outcome
+                ),
+                self.assertRaises(
+                    (execution.LifecycleExecutionError,
+                     publication.LifecyclePublicationError)
+                ),
+            ):
+                execution.execute_invalid_review_derived_ready_correction(
+                    correction, signers
+                )
+            self.assertEqual(self.remote_tip(), current.publication_oid)
 
     def test_correction_executor_composes_append_only_cas_and_one_later_review(
         self,
