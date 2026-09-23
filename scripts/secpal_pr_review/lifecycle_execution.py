@@ -298,11 +298,16 @@ def execute_invalid_review_derived_ready_correction(
         raise LifecycleExecutionError(
             "Draft conversion evidence cannot bypass a live Ready correction"
         )
-    if live.draft is True and conversion is not None:
+    if live.draft is True:
         try:
-            publication._require_ready_correction_conversion(
-                conversion, authorization, timeline
+            reconstructed = publication._reconstruct_ready_correction_conversion(
+                authorization, timeline
             )
+            if conversion is not None:
+                publication._require_ready_correction_conversion(
+                    conversion, authorization, timeline
+                )
+            conversion = reconstructed
         except publication.LifecyclePublicationError as exc:
             raise LifecycleExecutionError(str(exc)) from exc
 
@@ -332,10 +337,6 @@ def execute_invalid_review_derived_ready_correction(
         or not isinstance(live.draft, bool)
     ):
         raise LifecycleExecutionError("GitHub is not the exact unauthorized Ready target")
-    if live.draft is True and conversion is None:
-        raise LifecycleExecutionError(
-            "preexisting GitHub Draft lacks conversion evidence from this correction attempt"
-        )
     if conversion is None:
         before = timeline
         publication._require_bound_github_ready_event(before, authorization)

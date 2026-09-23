@@ -455,6 +455,7 @@ def _observe_pull_request_lifecycle_timeline(
         names = {
             "ready_for_review": "READY_FOR_REVIEW",
             "convert_to_draft": "CONVERT_TO_DRAFT",
+            "head_ref_force_pushed": "HEAD_REF_FORCE_PUSHED",
         }
         for item in items:
             if item.get("event") not in names:
@@ -464,6 +465,17 @@ def _observe_pull_request_lifecycle_timeline(
             actor_login = authority._require_github_login(
                 actor_login, "GitHub lifecycle event actor"
             )
+            if item["event"] == "head_ref_force_pushed":
+                authority._require_oid(
+                    item.get("before_commit_id"),
+                    "GitHub force-push predecessor",
+                )
+                commit_id = authority._require_oid(
+                    item.get("after_commit_id"),
+                    "GitHub force-push successor",
+                )
+            else:
+                commit_id = item.get("commit_id")
             projected.append(
                 GitHubPullRequestTimelineEvent(
                     kind=names[item["event"]],
@@ -477,7 +489,7 @@ def _observe_pull_request_lifecycle_timeline(
                     created_at=authority._require_identity(
                         item.get("created_at"), "GitHub lifecycle event timestamp"
                     ),
-                    commit_id=item.get("commit_id"),
+                    commit_id=commit_id,
                 )
             )
     except (
@@ -494,6 +506,8 @@ def _require_bound_github_ready_event(
     observed: tuple[GitHubPullRequestTimelineEvent, ...],
     authorization: Mapping[str, Any],
 ) -> None:
+    """Require the complete represented pre-correction chronology."""
+
     target = GitHubPullRequestTimelineEvent(
         kind="READY_FOR_REVIEW",
         database_id=authorization["github_ready_event_database_id"],
@@ -502,9 +516,19 @@ def _require_bound_github_ready_event(
         created_at=authorization["github_ready_event_created_at"],
         commit_id=None,
     )
-    if observed.count(target) != 1 or not observed or observed[-1] != target:
+    if any(item.kind == "HEAD_REF_FORCE_PUSHED" for item in observed):
         raise LifecyclePublicationError(
-            "GitHub Ready event is not the exact terminal authorized event"
+            "GitHub Ready correction source history contains a force push"
+        )
+    represented = tuple(
+        item
+        for item in observed
+        if item.kind in {"READY_FOR_REVIEW", "CONVERT_TO_DRAFT"}
+    )
+    if represented != (target,) or not observed or observed[-1] != target:
+        raise LifecyclePublicationError(
+            "GitHub Ready correction chronology is not the exact represented "
+            "terminal Ready history"
         )
 
 
@@ -542,11 +566,30 @@ def _authenticate_ready_correction_conversion(
     )
 
 
+def _reconstruct_ready_correction_conversion(
+    authorization: Mapping[str, Any],
+    observed: tuple[GitHubPullRequestTimelineEvent, ...],
+) -> VerifiedReadyCorrectionConversion:
+    """Reconstruct one exact conversion from complete authenticated chronology."""
+
+    if not observed:
+        raise LifecyclePublicationError(
+            "GitHub Ready correction chronology lacks its Draft conversion"
+        )
+    return _authenticate_ready_correction_conversion(
+        authorization=authorization,
+        before=observed[:-1],
+        after=observed,
+    )
+
+
 def _require_ready_correction_conversion(
     value: VerifiedReadyCorrectionConversion,
     authorization: Mapping[str, Any],
     observed: tuple[GitHubPullRequestTimelineEvent, ...],
 ) -> None:
+    if isinstance(value, VerifiedReadyCorrectionConversion):
+        _require_bound_github_ready_event(value.before, authorization)
     if (
         not isinstance(value, VerifiedReadyCorrectionConversion)
         or value._seal is not _READY_CORRECTION_CONVERSION_SEAL
@@ -567,6 +610,17 @@ def _require_ready_correction_conversion(
     ):
         raise LifecyclePublicationError(
             "GitHub Draft conversion evidence is not from this correction attempt"
+        )
+    reconstructed = _reconstruct_ready_correction_conversion(
+        authorization, observed
+    )
+    if (
+        reconstructed.before != value.before
+        or reconstructed.event != value.event
+        or reconstructed.authorized_ready_event != value.authorized_ready_event
+    ):
+        raise LifecyclePublicationError(
+            "GitHub Draft conversion chronology changed"
         )
 
 

@@ -846,6 +846,190 @@ class LifecyclePublicationTests(TestCase):
                 conversion, substituted, after
             )
 
+    def test_ready_correction_rejects_unrepresented_ready_draft_prefix(self) -> None:
+        _chain, _current, correction, _policy, before, _after = (
+            self.ready_correction_fixture()
+        )
+        older_ready = publication.GitHubPullRequestTimelineEvent(
+            "READY_FOR_REVIEW", 31627410001, "RFRE_older", "aroviqen",
+            "2026-09-22T18:00:00Z",
+        )
+        older_draft = publication.GitHubPullRequestTimelineEvent(
+            "CONVERT_TO_DRAFT", 31627410002, "CTDE_older", "aroviqen",
+            "2026-09-22T18:30:00Z",
+        )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "chronology"
+        ):
+            publication._require_bound_github_ready_event(
+                (older_ready, older_draft, *before), correction
+            )
+
+    def test_ready_correction_rejects_conversion_with_unbound_before(self) -> None:
+        _chain, _current, correction, _policy, before, after = (
+            self.ready_correction_fixture()
+        )
+        conversion = publication._authenticate_ready_correction_conversion(
+            authorization=correction, before=before, after=after
+        )
+        unrelated = publication.GitHubPullRequestTimelineEvent(
+            "READY_FOR_REVIEW", 31627410003, "RFRE_unrelated", "aroviqen",
+            "2026-09-22T18:45:00Z",
+        )
+        forged = replace(conversion, before=(unrelated,))
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "chronology"
+        ):
+            publication._require_ready_correction_conversion(
+                forged, correction, (unrelated, conversion.event)
+            )
+
+    def test_ready_correction_observes_and_rejects_force_push_history(self) -> None:
+        _chain, _current, correction, _policy, before, _after = (
+            self.ready_correction_fixture()
+        )
+        force_push = {
+            "event": "head_ref_force_pushed",
+            "id": 31627410004,
+            "node_id": "HRFPE_unsafe",
+            "actor": {"login": "aroviqen"},
+            "created_at": "2026-09-22T19:45:00Z",
+            "before_commit_id": HEADS[8],
+            "after_commit_id": HEADS[9],
+        }
+        ready = {
+            "event": "ready_for_review",
+            "id": before[0].database_id,
+            "node_id": before[0].node_id,
+            "actor": {"login": before[0].actor},
+            "created_at": before[0].created_at,
+            "commit_id": None,
+        }
+        with patch.object(
+            publication,
+            "_run_gh",
+            return_value=subprocess.CompletedProcess(
+                [], 0, json.dumps([force_push, ready]).encode(), b""
+            ),
+        ):
+            observed = publication._observe_pull_request_lifecycle_timeline(
+                REPOSITORY, PR
+            )
+        self.assertEqual(observed[0].kind, "HEAD_REF_FORCE_PUSHED")
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "source history"
+        ):
+            publication._require_bound_github_ready_event(observed, correction)
+
+    def test_ready_correction_reconstructs_interrupted_draft_conversion(self) -> None:
+        chain, _current, correction, policy, _before, after = (
+            self.ready_correction_fixture()
+        )
+        draft_live = execution.LivePullRequest(
+            REPOSITORY, PR, "OPEN", chain.head, True
+        )
+        draft_api = {
+            "repository": REPOSITORY,
+            "pull_request": PR,
+            "state": "OPEN",
+            "draft": True,
+            "head_sha": chain.head,
+        }
+        signers = execution.SigningAuthorities(
+            SIGNER, signer_for(), SIGNER, signer_for(), SIGNER, signer_for()
+        )
+        with (
+            patch.object(
+                authority, "_load_lifecycle_trust_policy", return_value=policy
+            ),
+            patch.object(
+                publication, "_resolve_delivery_head_tree", return_value=HEADS[9]
+            ),
+            patch.object(
+                execution, "_read_live_github", side_effect=[draft_live, draft_live]
+            ),
+            patch.object(
+                publication, "_observe_pre_enrollment_pull_request",
+                side_effect=[draft_api, draft_api],
+            ),
+            patch.object(
+                publication, "_observe_pull_request_lifecycle_timeline",
+                side_effect=[after, after, after, after],
+            ),
+            patch.object(
+                execution, "_write_live_github",
+                side_effect=AssertionError("resume must not mutate GitHub"),
+            ) as github_write,
+        ):
+            corrected = execution.execute_invalid_review_derived_ready_correction(
+                correction, signers
+            )
+        github_write.assert_not_called()
+        self.assertTrue(corrected.lifecycle.state["draft"])
+        self.assertFalse(corrected.lifecycle.state["ready"])
+
+    def test_ready_correction_idempotent_replay_rejects_later_churn(self) -> None:
+        chain, _current, correction, policy, before, after = (
+            self.ready_correction_fixture()
+        )
+        ready_live = execution.LivePullRequest(
+            REPOSITORY, PR, "OPEN", chain.head, False
+        )
+        draft_live = replace(ready_live, draft=True)
+        ready_api = {
+            "repository": REPOSITORY,
+            "pull_request": PR,
+            "state": "OPEN",
+            "draft": False,
+            "head_sha": chain.head,
+        }
+        draft_api = {**ready_api, "draft": True}
+        later = after + (
+            publication.GitHubPullRequestTimelineEvent(
+                "READY_FOR_REVIEW", 31627420000, "RFRE_later", "aroviqen",
+                "2026-09-22T21:46:00Z",
+            ),
+            publication.GitHubPullRequestTimelineEvent(
+                "CONVERT_TO_DRAFT", 31627420001, "CTDE_later", "aroviqen",
+                "2026-09-22T21:47:00Z",
+            ),
+        )
+        signers = execution.SigningAuthorities(
+            SIGNER, signer_for(), SIGNER, signer_for(), SIGNER, signer_for()
+        )
+        with (
+            patch.object(
+                authority, "_load_lifecycle_trust_policy", return_value=policy
+            ),
+            patch.object(
+                publication, "_resolve_delivery_head_tree", return_value=HEADS[9]
+            ),
+            patch.object(
+                execution, "_read_live_github",
+                side_effect=[ready_live, draft_live, draft_live, draft_live],
+            ),
+            patch.object(
+                publication, "_observe_pre_enrollment_pull_request",
+                side_effect=[ready_api, draft_api],
+            ),
+            patch.object(
+                publication, "_observe_pull_request_lifecycle_timeline",
+                side_effect=[before, before, after, after, after, later],
+            ),
+            patch.object(
+                execution, "_write_live_github", return_value="SUCCESS"
+            ),
+        ):
+            execution.execute_invalid_review_derived_ready_correction(
+                correction, signers
+            )
+            with self.assertRaisesRegex(
+                execution.LifecycleExecutionError, "chronology"
+            ):
+                execution.execute_invalid_review_derived_ready_correction(
+                    correction, signers
+                )
+
     def test_ready_correction_publication_requires_conversion_evidence(self) -> None:
         _chain, current, correction, policy, _before, _after = (
             self.ready_correction_fixture()
