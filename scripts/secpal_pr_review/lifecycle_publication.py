@@ -1989,49 +1989,6 @@ def advance_current_terminal(
         )
         successor_events = lifecycle_bundle.get("transition_authorizations")
         if (
-            predecessor.historical_proof_mode == authority.NATIVE_PROOF_MODE
-            and predecessor.tree_sha is not None
-            and isinstance(successor_events, list)
-            and successor_events
-            and successor_events[-1].get("transition_kind")
-            == "UNRESTRICTED_REVIEW_CONSUMED"
-        ):
-            review_event = successor_events[-1]
-            if set(review_event) != authority.EVENT_FIELDS | authority.NORMAL_REVIEW_EVENT_FIELDS:
-                raise LifecyclePublicationError(
-                    "native unrestricted review requires typed normal-review admission"
-                )
-            try:
-                admitted_review = authority._verify_normal_review_admission(
-                    review_event["normal_review_admission"],
-                    accepted_signers=policy.transition_signer_identities,
-                    signature_verifier=authority._policy_signature_verifier(policy),
-                )
-            except authority.LifecycleAuthorityError as exc:
-                raise LifecyclePublicationError(str(exc)) from exc
-            if (
-                review_event["normal_review_admission_digest"]
-                != admitted_review.admission_digest
-                or admitted_review.repository != predecessor.repository
-                or admitted_review.delivery_issue != predecessor.delivery_issue
-                or admitted_review.pull_request != predecessor.pull_request
-                or admitted_review.lifecycle_id != predecessor.lifecycle_id
-                or admitted_review.current_publication_oid != predecessor_oid
-                or admitted_review.current_publication_digest
-                != predecessor_document.get("publication_digest")
-                or admitted_review.current_authority_digest
-                != predecessor.authority_digest
-                or admitted_review.head_sha != predecessor.head_sha
-                or admitted_review.tree_sha != predecessor.tree_sha
-                or admitted_review.validation_receipt_digest
-                != predecessor.validation_receipt_digest
-                or admitted_review.final_attestation_digest
-                != predecessor.adoption_source_evidence_digest
-            ):
-                raise LifecyclePublicationError(
-                    "normal-review admission targets another CURRENT"
-                )
-        if (
             isinstance(successor_events, list)
             and successor_events
             and successor_events[-1].get("transition_kind")

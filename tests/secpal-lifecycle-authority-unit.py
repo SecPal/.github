@@ -179,367 +179,6 @@ class Chain:
         return snapshot
 
 
-class NormalReviewAdmissionTests(TestCase):
-    """Typed normal-review authority must originate in control-plane facts."""
-
-    AUTHOR = "11111111-1111-4111-8111-111111111111"
-    VERIFIER = "22222222-2222-4222-8222-222222222222"
-    AUTHOR_PROFILE = "33333333-3333-4333-8333-333333333333"
-    VERIFIER_PROFILE = "44444444-4444-4444-8444-444444444444"
-
-    def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
-        self.conversations = self.root / "dev_conversations"
-        self.author_workspace = self.root / "workspaces" / "author-runs" / "delivery"
-        self.verifier_workspace = self.root / "workspaces" / "verifier-runs" / "delivery"
-        self.candidate = self.verifier_workspace / "evidence" / "candidate"
-        self.author_workspace.mkdir(parents=True)
-        self.candidate.mkdir(parents=True)
-        subprocess.run(["git", "init", "--quiet"], cwd=self.candidate, check=True)
-        subprocess.run(["git", "config", "user.name", "Verifier Fixture"], cwd=self.candidate, check=True)
-        subprocess.run(["git", "config", "user.email", "verifier@example.invalid"], cwd=self.candidate, check=True)
-        subprocess.run(
-            ["git", "remote", "add", "origin", "https://github.com/SecPal/.github.git"],
-            cwd=self.candidate, check=True,
-        )
-        (self.candidate / "source.txt").write_text("qualified\n", encoding="utf-8")
-        subprocess.run(["git", "add", "source.txt"], cwd=self.candidate, check=True)
-        subprocess.run(["git", "commit", "--quiet", "-m", "qualified"], cwd=self.candidate, check=True)
-        self.head = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=self.candidate, check=True,
-            capture_output=True, text=True,
-        ).stdout.strip()
-        self.tree = subprocess.run(
-            ["git", "rev-parse", "HEAD^{tree}"], cwd=self.candidate, check=True,
-            capture_output=True, text=True,
-        ).stdout.strip()
-        self._write_conversation(
-            self.AUTHOR, self.author_workspace, self.AUTHOR_PROFILE,
-            role="single-writer-author", terminal=False, secret_refs=["AUTHOR_TOKEN"],
-            mcp_config={"github": {}}, result=None,
-        )
-        self._write_conversation(
-            self.VERIFIER, self.verifier_workspace, self.VERIFIER_PROFILE,
-            role="verifier", terminal=True, secret_refs=[], mcp_config={}, result="PASS",
-        )
-
-    def tearDown(self) -> None:
-        self.temporary.cleanup()
-
-    def _conversation_dir(self, conversation: str) -> Path:
-        return self.conversations / conversation.replace("-", "")
-
-    def _write_conversation(
-        self, conversation: str, workspace: Path, profile: str, *, role: str,
-        terminal: bool, secret_refs: list[str], mcp_config: dict[str, Any],
-        result: str | None,
-    ) -> None:
-        location = self._conversation_dir(conversation)
-        events = location / "events"
-        events.mkdir(parents=True, exist_ok=True)
-        meta = {
-            "conversation_id": conversation,
-            "id": conversation.replace("-", ""),
-            "parent_conversation_id": None,
-            "forked_from_conversation_id": None,
-            "workspace": {"working_dir": str(workspace), "kind": "LocalWorkspace"},
-            "launched_agent_profile": {
-                "agent_profile_id": profile, "revision": 0,
-                "secret_refs": secret_refs,
-            },
-            "required_runtime_credential_bindings": [],
-            "secrets": {}, "tool_module_qualnames": {},
-            "tags": {
-                "role": role, "repository": "secpal-github",
-                "issue": str(ISSUE), "pr": str(PR),
-            },
-        }
-        base = {
-            "id": conversation,
-            "execution_status": "finished" if terminal else "running",
-            "workspace": meta["workspace"],
-            "secret_registry": {"secret_sources": {} if not secret_refs else {"author": {}}},
-            "agent": {"tools": [], "mcp_config": mcp_config, "include_default_tools": []},
-        }
-        (location / "meta.json").write_bytes(authority.canonical_json_bytes(meta))
-        (location / "base_state.json").write_bytes(authority.canonical_json_bytes(base))
-        if terminal:
-            message = (
-                f"RESULT: **{result}**\n\n`MATERIAL_FINDINGS: 0`\n\n"
-                f"Exact head: `{self.head}`\nTree: `{self.tree}`\n"
-            )
-            action = {
-                "id": "finish-action", "parent_id": None, "kind": "ActionEvent",
-                "source": "agent", "tool_name": "finish",
-                "action": {"kind": "FinishAction", "message": message},
-            }
-            observation = {
-                "id": "finish-observation", "parent_id": "finish-action",
-                "kind": "ObservationEvent", "source": "environment",
-                "tool_name": "finish",
-                "observation": {"kind": "FinishObservation", "is_error": False,
-                                "content": [{"type": "text", "text": message}]},
-            }
-            state = {
-                "id": "finished-state", "parent_id": "finish-observation",
-                "kind": "ConversationStateUpdateEvent", "source": "environment",
-                "key": "execution_status", "value": "finished",
-            }
-            for index, value in enumerate((action, observation, state)):
-                (events / f"event-{index:05d}-fixture.json").write_bytes(
-                    authority.canonical_json_bytes(value)
-                )
-            (events / ".eventlog-len-3.marker").touch()
-        else:
-            (events / ".eventlog-len-0.marker").touch()
-
-    def authenticate(self, **changes: Any) -> Any:
-        values = {
-            "control_plane_root": self.root,
-            "author_conversation_id": self.AUTHOR,
-            "verifier_conversation_id": self.VERIFIER,
-            "expected_verifier_profile_id": self.VERIFIER_PROFILE,
-            "repository": REPOSITORY,
-            "delivery_issue": ISSUE,
-            "pull_request": PR,
-            "head_sha": self.head,
-            "tree_sha": self.tree,
-        }
-        values.update(changes)
-        return authority.authenticate_openhands_normal_review(**values)
-
-    def admission(self, qualification: Any | None = None, **changes: Any) -> dict[str, Any]:
-        values = {
-            "admission_id": "normal-review-fixture",
-            "lifecycle_id": LIFECYCLE,
-            "current_publication_oid": HEADS[8],
-            "current_publication_digest": "8" * 64,
-            "current_authority_digest": "9" * 64,
-            "validation_receipt_digest": "a" * 64,
-            "final_attestation_digest": "b" * 64,
-            "signer_identity": SIGNER,
-            "signer": signer_for(),
-        }
-        values.update(changes)
-        if qualification is not None:
-            return authority._create_normal_review_admission(
-                qualification=qualification, **values
-            )
-        return authority.issue_openhands_normal_review_admission(
-            control_plane_root=self.root,
-            author_conversation_id=self.AUTHOR,
-            verifier_conversation_id=self.VERIFIER,
-            expected_verifier_profile_id=self.VERIFIER_PROFILE,
-            repository=REPOSITORY, delivery_issue=ISSUE, pull_request=PR,
-            head_sha=self.head, tree_sha=self.tree, **values,
-        )
-
-    def event(self, admission: dict[str, Any], **changes: Any) -> dict[str, Any]:
-        values = {
-            "event_id": "review:" + admission["admission_digest"],
-            "repository": REPOSITORY, "delivery_issue": ISSUE,
-            "lifecycle_id": LIFECYCLE, "pull_request": PR,
-            "predecessor_authority_digest": "9" * 64,
-            "predecessor_head_sha": self.head, "resulting_head_sha": self.head,
-            "initialization_evidence_digest": INITIALIZATION_DIGEST,
-            "normal_review_admission": admission,
-            "signer_identity": SIGNER, "signer": signer_for(),
-        }
-        values.update(changes)
-        return authority.create_normal_review_transition_authorization(**values)
-
-    def test_control_plane_authentication_and_typed_review_positive_path(self) -> None:
-        self.assertNotIn(
-            "qualification",
-            inspect.signature(
-                authority.issue_openhands_normal_review_admission
-            ).parameters,
-        )
-        self.assertIn(
-            "authenticate_openhands_normal_review",
-            inspect.getsource(authority.issue_openhands_normal_review_admission),
-        )
-        self.assertFalse(hasattr(authority, "create_normal_review_admission"))
-        qualification = self.authenticate()
-        self.assertEqual(qualification.result, "PASS")
-        self.assertEqual(qualification.material_finding_ids, ())
-        self.assertNotEqual(qualification.author_workspace, qualification.verifier_workspace)
-        admission = self.admission(qualification)
-        event = self.event(admission)
-        self.assertEqual(event["transition_kind"], "UNRESTRICTED_REVIEW_CONSUMED")
-        self.assertEqual(event["normal_review_admission_digest"], admission["admission_digest"])
-        with patch.object(
-            authority, "_load_lifecycle_trust_policy",
-            return_value=SimpleNamespace(transition_signer_identities=frozenset({SIGNER})),
-        ), patch.object(
-            authority, "_policy_signature_verifier", return_value=verify_signature,
-        ):
-            verified = authority.verify_normal_review_admission(
-                admission,
-                repository=REPOSITORY, delivery_issue=ISSUE, pull_request=PR,
-                lifecycle_id=LIFECYCLE, current_publication_oid=HEADS[8],
-                current_publication_digest="8" * 64,
-                current_authority_digest="9" * 64, head_sha=self.head,
-                tree_sha=self.tree, validation_receipt_digest="a" * 64,
-                final_attestation_digest="b" * 64,
-            )
-        self.assertEqual(verified.qualification_digest, qualification.qualification_digest)
-        for label, changes in (
-            ("repository", {"repository": "Other/repository"}),
-            ("issue", {"delivery_issue": ISSUE + 1}),
-            ("PR", {"pull_request": PR + 1}),
-            ("head", {"head_sha": HEADS[7]}),
-            ("tree", {"tree_sha": HEADS[7]}),
-        ):
-            with self.subTest(label=label), self.assertRaises(
-                authority.LifecycleAuthorityError
-            ):
-                self.authenticate(**changes)
-
-    def test_control_plane_authentication_rejects_identity_isolation_and_capability_drift(self) -> None:
-        cases = (
-            ("author substitution", {"author_conversation_id": self.VERIFIER}),
-            ("same workspace", {"workspace": self.author_workspace}),
-            ("wrong profile", {"profile": OTHER_SIGNER}),
-            ("nonterminal", {"terminal": False}),
-            ("fail result", {"result": "FAIL"}),
-            ("secret", {"secret_refs": ["GITHUB_TOKEN"]}),
-            ("mutation mcp", {"mcp_config": {"github": {}}}),
-        )
-        for label, mutation in cases:
-            with self.subTest(label=label):
-                self._write_conversation(
-                    self.VERIFIER,
-                    mutation.get("workspace", self.verifier_workspace),
-                    mutation.get("profile", self.VERIFIER_PROFILE),
-                    role="verifier", terminal=mutation.get("terminal", True),
-                    secret_refs=mutation.get("secret_refs", []),
-                    mcp_config=mutation.get("mcp_config", {}),
-                    result=mutation.get("result", "PASS"),
-                )
-                with self.assertRaises(authority.LifecycleAuthorityError):
-                    self.authenticate(**({"author_conversation_id": self.VERIFIER}
-                                         if label == "author substitution" else {}))
-                self._write_conversation(
-                    self.VERIFIER, self.verifier_workspace, self.VERIFIER_PROFILE,
-                    role="verifier", terminal=True, secret_refs=[], mcp_config={}, result="PASS",
-                )
-        events = self._conversation_dir(self.VERIFIER) / "events"
-        existing = [
-            json.loads(path.read_text(encoding="utf-8"))
-            for path in sorted(events.glob("event-*.json"))
-        ]
-        for path in events.iterdir():
-            if path.is_file():
-                path.unlink()
-        write_call = {
-            "id": "write-call", "parent_id": None, "kind": "ACPToolCallEvent",
-            "source": "agent", "tool_kind": "execute", "status": "completed",
-            "raw_input": {"command": "git push origin HEAD:refs/heads/forbidden", "cwd": "/tmp"},
-        }
-        for index, value in enumerate([write_call, *existing]):
-            (events / f"event-{index:05d}-fixture.json").write_bytes(
-                authority.canonical_json_bytes(value)
-            )
-        (events / ".eventlog-len-4.marker").touch()
-        with self.assertRaisesRegex(
-            authority.LifecycleAuthorityError, "write authority"
-        ):
-            self.authenticate()
-
-    def test_admission_rejects_every_delivery_binding_digest_and_replay(self) -> None:
-        admission = self.admission()
-        checks = (
-            ("repository", {"repository": "Other/repository"}),
-            ("delivery issue", {"delivery_issue": ISSUE + 1}),
-            ("pull request", {"pull_request": PR + 1}),
-            ("lifecycle", {"lifecycle_id": "lifecycle:" + "c" * 64}),
-            ("CURRENT OID", {"current_publication_oid": HEADS[7]}),
-            ("CURRENT digest", {"current_publication_digest": "7" * 64}),
-            ("authority", {"current_authority_digest": "7" * 64}),
-            ("head", {"head_sha": HEADS[7]}),
-            ("tree", {"tree_sha": HEADS[7]}),
-            ("receipt", {"validation_receipt_digest": "7" * 64}),
-            ("attestation", {"final_attestation_digest": "7" * 64}),
-        )
-        base = {
-            "repository": REPOSITORY, "delivery_issue": ISSUE, "pull_request": PR,
-            "lifecycle_id": LIFECYCLE, "current_publication_oid": HEADS[8],
-            "current_publication_digest": "8" * 64,
-            "current_authority_digest": "9" * 64, "head_sha": self.head,
-            "tree_sha": self.tree, "validation_receipt_digest": "a" * 64,
-            "final_attestation_digest": "b" * 64,
-        }
-        for label, change in checks:
-            with self.subTest(label=label), self.assertRaises(authority.LifecycleAuthorityError):
-                with patch.object(
-                    authority, "_load_lifecycle_trust_policy",
-                    return_value=SimpleNamespace(
-                        transition_signer_identities=frozenset({SIGNER})
-                    ),
-                ), patch.object(
-                    authority, "_policy_signature_verifier",
-                    return_value=verify_signature,
-                ):
-                    authority.verify_normal_review_admission(
-                        admission, **{**base, **change}
-                    )
-        event = self.event(admission)
-        authority._verify_transition_authorization(
-            event,
-            accepted_signers=frozenset({SIGNER}),
-            signature_verifier=verify_signature,
-        )
-        reviewed = authority.derive_state(
-            authority.initial_state(), "UNRESTRICTED_REVIEW_CONSUMED",
-            event["event_digest"],
-        )
-        self.assertEqual(reviewed["unrestricted_review_count"], 1)
-        with self.assertRaisesRegex(authority.LifecycleAuthorityError, "exhausted"):
-            authority.derive_state(
-                reviewed, "UNRESTRICTED_REVIEW_CONSUMED", "d" * 64
-            )
-
-    def test_candidate_local_forgery_and_fabricated_metadata_fail_closed(self) -> None:
-        qualification = self.authenticate()
-        (self.verifier_workspace / "qualification.json").write_text(
-            json.dumps({"result": "FAIL", "head": HEADS[7]}), encoding="utf-8"
-        )
-        self.assertEqual(self.authenticate().qualification_digest, qualification.qualification_digest)
-        meta_path = self._conversation_dir(self.VERIFIER) / "meta.json"
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        meta["conversation_id"] = self.AUTHOR
-        meta_path.write_bytes(authority.canonical_json_bytes(meta))
-        with self.assertRaises(authority.LifecycleAuthorityError):
-            self.authenticate()
-
-    def test_admission_rejects_omitted_findings_and_qualification_substitution(self) -> None:
-        admission = self.admission()
-        for field, value in (
-            ("complete_material_finding_ids", ["omitted-material-finding"]),
-            ("qualification_digest", "7" * 64),
-            ("finish_message_digest", "7" * 64),
-            ("control_plane_evidence_digest", "7" * 64),
-        ):
-            changed = copy.deepcopy(admission)
-            changed.pop("admission_digest")
-            changed.pop("signature")
-            changed[field] = value
-            changed["signature"] = signer_for()(
-                authority.canonical_json_bytes(changed),
-                authority.NORMAL_REVIEW_ADMISSION_DOMAIN,
-            )
-            changed["admission_digest"] = authority.digest_json(changed)
-            with self.subTest(field=field), self.assertRaises(
-                authority.LifecycleAuthorityError
-            ):
-                authority._verify_normal_review_admission(
-                    changed, accepted_signers=frozenset({SIGNER}),
-                    signature_verifier=verify_signature,
-                )
-
-
 def genesis_chain() -> Chain:
     chain = Chain()
     chain.append("INITIALIZED_DRAFT")
@@ -700,6 +339,75 @@ def authenticated_external_evidence(
         return authority.authenticate_exact_state_adoption_external_evidence(
             **arguments
         )
+
+
+class NormalReviewAuthorityBoundaryRegressionTests(TestCase):
+    def test_review_budget_uses_only_the_signed_lifecycle_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            assertion = Path(directory) / "author-local-review.json"
+            assertion.write_text(
+                json.dumps(
+                    {
+                        "unrestricted_review_count": 1,
+                        "verifier_result": "PASS",
+                        "credentials_absent": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            chain = genesis_chain()
+            self.assertEqual(chain.verify().state["unrestricted_review_count"], 0)
+            self.assertTrue(assertion.is_file())
+            self.assertEqual(authority.MAX_UNRESTRICTED_REVIEWS, 1)
+
+            chain.append("UNRESTRICTED_REVIEW_CONSUMED")
+            self.assertEqual(chain.verify().state["unrestricted_review_count"], 1)
+            self.assertEqual(set(chain.events[-1]), authority.EVENT_FIELDS)
+            with self.assertRaisesRegex(
+                authority.LifecycleAuthorityError, "budget is exhausted"
+            ):
+                chain.append("UNRESTRICTED_REVIEW_CONSUMED")
+
+    def test_candidate_local_verifier_assertions_have_no_authority(self) -> None:
+        chain = reviewed_chain()
+        forged = copy.deepcopy(chain.events[-1])
+        forged["candidate_verifier_assertion"] = {
+            "result": "PASS",
+            "credentials_absent": True,
+        }
+        forged = resign_event(forged)
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "schema is not closed"
+        ):
+            verify_raw(chain.authorities, [chain.events[0], forged])
+
+    def test_lifecycle_verification_has_no_openhands_metadata_surface(self) -> None:
+        for name in (
+            "AuthenticatedNormalReviewQualification",
+            "VerifiedNormalReviewAdmission",
+            "authenticate_openhands_normal_review",
+            "issue_openhands_normal_review_admission",
+            "verify_normal_review_admission",
+            "create_normal_review_transition_authorization",
+            "NORMAL_REVIEW_EVENT_FIELDS",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(authority, name))
+
+        source = "\n".join(
+            inspect.getsource(module)
+            for module in (authority, publication)
+        )
+        for forbidden in (
+            "OpenHands",
+            "control_plane_root",
+            "credential_reference",
+            "verifier_runtime_credential_bindings",
+            "mutation_mcp_count",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
 
 
 class LifecycleAuthorityTests(TestCase):
