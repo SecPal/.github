@@ -145,6 +145,8 @@ class VerifiedReadyCorrectionConversion:
     repository: str
     pull_request: int
     head_sha: str
+    authorization_digest: str
+    authorized_ready_event: GitHubPullRequestTimelineEvent
     before: tuple[GitHubPullRequestTimelineEvent, ...]
     event: GitHubPullRequestTimelineEvent
     _seal: object
@@ -433,26 +435,35 @@ def _observe_pull_request_lifecycle_timeline(
 
     result = _run_gh(
         [
-            "api", "--hostname", "github.com", "--paginate", "--slurp",
+            "api", "--hostname", "github.com",
             "-H", "Accept: application/vnd.github+json",
+            "-H", "X-GitHub-Api-Version: 2026-03-10",
             f"repos/{repository}/issues/{pull_request}/timeline?per_page=100",
         ]
     )
     if result.returncode != 0:
         raise LifecyclePublicationError("GitHub lifecycle timeline is unavailable")
     try:
-        pages = json.loads(result.stdout, object_pairs_hook=_reject_duplicate_pairs)
-        if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+        items = json.loads(result.stdout, object_pairs_hook=_reject_duplicate_pairs)
+        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
             raise LifecyclePublicationError("GitHub lifecycle timeline is malformed")
+        if len(items) >= 100:
+            raise LifecyclePublicationError(
+                "GitHub lifecycle timeline exceeds the closed 99-event bound"
+            )
         projected: list[GitHubPullRequestTimelineEvent] = []
         names = {
             "ready_for_review": "READY_FOR_REVIEW",
             "convert_to_draft": "CONVERT_TO_DRAFT",
         }
-        for item in (entry for page in pages for entry in page):
-            if not isinstance(item, dict) or item.get("event") not in names:
+        for item in items:
+            if item.get("event") not in names:
                 continue
             actor = item.get("actor")
+            actor_login = actor.get("login") if isinstance(actor, dict) else None
+            actor_login = authority._require_github_login(
+                actor_login, "GitHub lifecycle event actor"
+            )
             projected.append(
                 GitHubPullRequestTimelineEvent(
                     kind=names[item["event"]],
@@ -462,10 +473,7 @@ def _observe_pull_request_lifecycle_timeline(
                     node_id=authority._require_identity(
                         item.get("node_id"), "GitHub lifecycle event node"
                     ),
-                    actor=authority._require_identity(
-                        actor.get("login") if isinstance(actor, dict) else None,
-                        "GitHub lifecycle event actor",
-                    ),
+                    actor=actor_login,
                     created_at=authority._require_identity(
                         item.get("created_at"), "GitHub lifecycle event timestamp"
                     ),
@@ -526,6 +534,8 @@ def _authenticate_ready_correction_conversion(
         repository=authorization["repository"],
         pull_request=authorization["pull_request"],
         head_sha=authorization["resulting_head_sha"],
+        authorization_digest=authorization["event_digest"],
+        authorized_ready_event=before[-1],
         before=before,
         event=converted,
         _seal=_READY_CORRECTION_CONVERSION_SEAL,
@@ -543,6 +553,16 @@ def _require_ready_correction_conversion(
         or value.repository != authorization["repository"]
         or value.pull_request != authorization["pull_request"]
         or value.head_sha != authorization["resulting_head_sha"]
+        or value.authorization_digest != authorization["event_digest"]
+        or value.authorized_ready_event
+        != GitHubPullRequestTimelineEvent(
+            kind="READY_FOR_REVIEW",
+            database_id=authorization["github_ready_event_database_id"],
+            node_id=authorization["github_ready_event_node_id"],
+            actor=authorization["github_ready_event_actor"],
+            created_at=authorization["github_ready_event_created_at"],
+            commit_id=None,
+        )
         or observed != value.before + (value.event,)
     ):
         raise LifecyclePublicationError(
@@ -1969,6 +1989,49 @@ def advance_current_terminal(
         )
         successor_events = lifecycle_bundle.get("transition_authorizations")
         if (
+            predecessor.historical_proof_mode == authority.NATIVE_PROOF_MODE
+            and predecessor.tree_sha is not None
+            and isinstance(successor_events, list)
+            and successor_events
+            and successor_events[-1].get("transition_kind")
+            == "UNRESTRICTED_REVIEW_CONSUMED"
+        ):
+            review_event = successor_events[-1]
+            if set(review_event) != authority.EVENT_FIELDS | authority.NORMAL_REVIEW_EVENT_FIELDS:
+                raise LifecyclePublicationError(
+                    "native unrestricted review requires typed normal-review admission"
+                )
+            try:
+                admitted_review = authority._verify_normal_review_admission(
+                    review_event["normal_review_admission"],
+                    accepted_signers=policy.transition_signer_identities,
+                    signature_verifier=authority._policy_signature_verifier(policy),
+                )
+            except authority.LifecycleAuthorityError as exc:
+                raise LifecyclePublicationError(str(exc)) from exc
+            if (
+                review_event["normal_review_admission_digest"]
+                != admitted_review.admission_digest
+                or admitted_review.repository != predecessor.repository
+                or admitted_review.delivery_issue != predecessor.delivery_issue
+                or admitted_review.pull_request != predecessor.pull_request
+                or admitted_review.lifecycle_id != predecessor.lifecycle_id
+                or admitted_review.current_publication_oid != predecessor_oid
+                or admitted_review.current_publication_digest
+                != predecessor_document.get("publication_digest")
+                or admitted_review.current_authority_digest
+                != predecessor.authority_digest
+                or admitted_review.head_sha != predecessor.head_sha
+                or admitted_review.tree_sha != predecessor.tree_sha
+                or admitted_review.validation_receipt_digest
+                != predecessor.validation_receipt_digest
+                or admitted_review.final_attestation_digest
+                != predecessor.adoption_source_evidence_digest
+            ):
+                raise LifecyclePublicationError(
+                    "normal-review admission targets another CURRENT"
+                )
+        if (
             isinstance(successor_events, list)
             and successor_events
             and successor_events[-1].get("transition_kind")
@@ -1989,6 +2052,10 @@ def advance_current_terminal(
                     successor_events[-1]
                 )
             else:
+                if ready_correction_conversion is None:
+                    raise LifecyclePublicationError(
+                        "Ready correction publication requires exact Draft conversion evidence"
+                    )
                 eligible = verify_invalid_review_derived_ready_correction(
                     successor_events[-1], conversion=ready_correction_conversion
                 )

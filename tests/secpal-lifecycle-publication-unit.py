@@ -553,6 +553,132 @@ class LifecyclePublicationTests(TestCase):
         ).stdout.strip()
         return value
 
+    def test_typed_normal_review_publishes_once_and_rejects_second_use(self) -> None:
+        chain = Chain()
+        chain.append("INITIALIZED_DRAFT")
+        lifecycle = replace(
+            authority._verify_lifecycle_authority_objects(
+                chain.authorities, chain.events,
+                accepted_event_signers=frozenset({SIGNER}),
+                accepted_authority_signers=frozenset({SIGNER}),
+                signature_verifier=verify_signature,
+            ),
+            tree_sha=HEADS[9], validation_receipt_digest="8" * 64,
+            adoption_source_evidence_digest="9" * 64,
+        )
+        current = publication.VerifiedLifecyclePublication(
+            HEADS[7], "7" * 64, BRANCH, HEADS[6], HEADS[5], lifecycle,
+            chain.raw(),
+        )
+        qualification_fields = {
+            "repository": REPOSITORY, "delivery_issue": ISSUE,
+            "pull_request": PR, "head_sha": lifecycle.head_sha,
+            "tree_sha": lifecycle.tree_sha,
+            "author_conversation_id": "11111111-1111-4111-8111-111111111111",
+            "author_workspace": "/author", "author_profile_id": "author-profile",
+            "verifier_conversation_id": "22222222-2222-4222-8222-222222222222",
+            "verifier_workspace": "/verifier", "verifier_profile_id": "verifier-profile",
+            "verifier_execution_status": "finished",
+            "execution_isolation": authority.NORMAL_REVIEW_ISOLATION,
+            "author_verifier_distinct": True, "verifier_secret_refs": [],
+            "verifier_runtime_credential_bindings": [], "verifier_mcp_modules": [],
+            "github_write_count": 0, "lifecycle_write_count": 0,
+            "mutation_mcp_count": 0, "result": "PASS",
+            "complete_material_finding_ids": [], "finish_event_id": "finish-event",
+            "finish_message_digest": "a" * 64,
+            "control_plane_evidence_digest": "b" * 64,
+        }
+        qualification = authority.AuthenticatedNormalReviewQualification(
+            repository=REPOSITORY, delivery_issue=ISSUE, pull_request=PR,
+            head_sha=lifecycle.head_sha, tree_sha=lifecycle.tree_sha,
+            author_conversation_id=qualification_fields["author_conversation_id"],
+            author_workspace="/author", author_profile_id="author-profile",
+            verifier_conversation_id=qualification_fields["verifier_conversation_id"],
+            verifier_workspace="/verifier", verifier_profile_id="verifier-profile",
+            verifier_execution_status="finished", result="PASS",
+            material_finding_ids=(), finish_event_id="finish-event",
+            finish_message_digest="a" * 64,
+            control_plane_evidence_digest="b" * 64,
+            qualification_digest=authority.digest_json(qualification_fields),
+            _verification_seal=authority._AUTHENTICATED_NORMAL_REVIEW_QUALIFICATION,
+        )
+        admission = authority._create_normal_review_admission(
+            admission_id="normal-review-publication", qualification=qualification,
+            lifecycle_id=lifecycle.lifecycle_id,
+            current_publication_oid=current.publication_oid,
+            current_publication_digest=current.publication_digest,
+            current_authority_digest=lifecycle.authority_digest,
+            validation_receipt_digest=lifecycle.validation_receipt_digest,
+            final_attestation_digest=lifecycle.adoption_source_evidence_digest,
+            signer_identity=SIGNER, signer=signer_for(),
+        )
+        policy = replace(
+            self.policy,
+            transition_signer_identities=frozenset({SIGNER}),
+            authority_signer_identities=frozenset({SIGNER}),
+        )
+        signers = execution.SigningAuthorities(
+            SIGNER, signer_for(), SIGNER, signer_for(), SIGNER, signer_for()
+        )
+        captured: list[bytes] = []
+
+        def publish(raw: bytes, **_kwargs: Any) -> publication.VerifiedLifecyclePublication:
+            captured.append(raw)
+            bundle = json.loads(raw)
+            self.assertEqual(
+                bundle["transition_authorizations"][-1]["normal_review_admission_digest"],
+                admission["admission_digest"],
+            )
+            reviewed_lifecycle = replace(
+                lifecycle,
+                authority_digest=bundle["authority_chain"][-1]["authority_digest"],
+                state=copy.deepcopy(bundle["authority_chain"][-1]["state_after"]),
+            )
+            return replace(
+                current, publication_oid=HEADS[8], publication_digest="c" * 64,
+                lifecycle=reviewed_lifecycle, serialized_lifecycle_evidence=raw,
+            )
+
+        published: list[publication.VerifiedLifecyclePublication] = []
+
+        def publish_and_remember(
+            raw: bytes, **kwargs: Any
+        ) -> publication.VerifiedLifecyclePublication:
+            result = publish(raw, **kwargs)
+            published.append(result)
+            return result
+
+        reads = 0
+
+        def read_current(*_args: Any) -> publication.VerifiedLifecyclePublication:
+            nonlocal reads
+            reads += 1
+            return published[-1] if published else current
+
+        with patch.object(
+            authority, "_load_lifecycle_trust_policy", return_value=policy
+        ), patch.object(
+            authority, "_policy_signature_verifier", return_value=verify_signature
+        ), patch.object(
+            publication, "verify_current_lifecycle_authority",
+            side_effect=read_current,
+        ), patch.object(
+            publication, "advance_current_terminal", side_effect=publish_and_remember
+        ):
+            result = execution.publish_typed_normal_review(
+                REPOSITORY, ISSUE, admission, signers
+            )
+        self.assertEqual(result.lifecycle.state["unrestricted_review_count"], 1)
+        self.assertEqual(len(captured), 1)
+        with patch.object(
+            publication, "verify_current_lifecycle_authority", return_value=result
+        ), self.assertRaisesRegex(
+            execution.LifecycleExecutionError, "exact native Draft CURRENT"
+        ):
+            execution.publish_typed_normal_review(
+                REPOSITORY, ISSUE, admission, signers
+            )
+
     def correction_fixture(
         self,
     ) -> tuple[
@@ -795,6 +921,9 @@ class LifecyclePublicationTests(TestCase):
         signers = execution.SigningAuthorities(
             SIGNER, signer_for(), SIGNER, signer_for(), SIGNER, signer_for()
         )
+        conversion = publication._authenticate_ready_correction_conversion(
+            authorization=correction, before=after[:-1], after=after
+        )
         with (
             patch.object(
                 authority, "_load_lifecycle_trust_policy", return_value=policy
@@ -820,11 +949,78 @@ class LifecyclePublicationTests(TestCase):
             ) as github_write,
         ):
             corrected = execution.execute_invalid_review_derived_ready_correction(
-                correction, signers
+                correction, signers, ready_correction_conversion=conversion
             )
         github_write.assert_not_called()
         self.assertTrue(corrected.lifecycle.state["draft"])
         self.assertFalse(corrected.lifecycle.state["ready"])
+
+    def test_ready_correction_conversion_is_bound_to_exact_authorization(self) -> None:
+        _chain, _current, correction, _policy, before, after = (
+            self.ready_correction_fixture()
+        )
+        conversion = publication._authenticate_ready_correction_conversion(
+            authorization=correction, before=before, after=after
+        )
+        substituted = copy.deepcopy(correction)
+        substituted["event_id"] = "ready-correction-substituted"
+        substituted = self.resign_correction(substituted)
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "this correction attempt"
+        ):
+            publication._require_ready_correction_conversion(
+                conversion, substituted, after
+            )
+
+    def test_ready_correction_publication_requires_conversion_evidence(self) -> None:
+        _chain, current, correction, policy, _before, _after = (
+            self.ready_correction_fixture()
+        )
+        signers = execution.SigningAuthorities(
+            SIGNER, signer_for(), SIGNER, signer_for(), SIGNER, signer_for()
+        )
+        successor = execution._derive_invalid_review_ready_correction_successor(
+            current, correction, signers
+        )
+        with patch.object(
+            authority, "_load_lifecycle_trust_policy", return_value=policy
+        ), self.assertRaisesRegex(
+            publication.LifecyclePublicationError,
+            "requires exact Draft conversion evidence",
+        ):
+            publication.advance_current_terminal(
+                successor, signer_identity=SIGNER, signer=signer_for()
+            )
+
+    def test_lifecycle_timeline_capture_is_bounded_and_accepts_app_actor(self) -> None:
+        app_event = {
+            "event": "ready_for_review", "id": 1, "node_id": "RFRE_app",
+            "actor": {"login": "review-app[bot]"},
+            "created_at": "2026-09-23T00:00:00Z", "commit_id": None,
+        }
+        with patch.object(
+            publication, "_run_gh",
+            return_value=subprocess.CompletedProcess(
+                [], 0, json.dumps([app_event]).encode(), b""
+            ),
+        ) as run:
+            observed = publication._observe_pull_request_lifecycle_timeline(
+                REPOSITORY, PR
+            )
+        self.assertEqual(observed[0].actor, "review-app[bot]")
+        command = run.call_args.args[0]
+        self.assertNotIn("--paginate", command)
+        self.assertNotIn("--slurp", command)
+        self.assertIn("X-GitHub-Api-Version: 2026-03-10", command)
+        with patch.object(
+            publication, "_run_gh",
+            return_value=subprocess.CompletedProcess(
+                [], 0, json.dumps([{} for _ in range(100)]).encode(), b""
+            ),
+        ), self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "closed 99-event bound"
+        ):
+            publication._observe_pull_request_lifecycle_timeline(REPOSITORY, PR)
 
     def test_ready_correction_rejects_identity_history_and_convergence_drift(self) -> None:
         chain, current, correction, policy, before, after = (
@@ -933,7 +1129,7 @@ class LifecyclePublicationTests(TestCase):
                 patch.object(
                     publication, "_observe_pull_request_lifecycle_timeline",
                     side_effect=(
-                        [before]
+                        [before, before]
                         if label == "draft without exact event"
                         else [before, before, timeline_after]
                     ),

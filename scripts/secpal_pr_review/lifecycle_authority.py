@@ -22,6 +22,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -108,6 +109,10 @@ READY_SOURCE_RECOVERY_AUTHORIZATION_KIND = (
 READY_SOURCE_RECOVERY_AUTHORIZATION_DOMAIN = (
     "secpal.ready-source-recovery-authorization/v1"
 )
+NORMAL_REVIEW_ADMISSION_KIND = "SECPAL_TYPED_NORMAL_REVIEW_ADMISSION"
+NORMAL_REVIEW_ADMISSION_DOMAIN = "secpal.typed-normal-review-admission/v1"
+NORMAL_REVIEW_ADMISSION_VERSION = "1.0"
+NORMAL_REVIEW_ISOLATION = "DISTINCT_OPENHANDS_CONVERSATION_AND_WORKSPACE"
 
 MAX_UNRESTRICTED_REVIEWS = 1
 MAX_REMEDIATION_CYCLES = 2
@@ -135,6 +140,9 @@ _OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@/+\-=]{0,254}")
 _REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+_GITHUB_LOGIN = re.compile(
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,98}[A-Za-z0-9])?(?:\[bot\])?"
+)
 
 Signature = Mapping[str, Any]
 Signer = Callable[[bytes, str], Signature]
@@ -213,6 +221,57 @@ class VerifiedPreEnrollmentReviewBudgetConsumptionAdmission:
     adoption_timestamp: str
     adoption_context_digest: str
     signer_identity: str
+    canonical_admission: dict[str, Any]
+    _verification_seal: object
+
+
+_AUTHENTICATED_NORMAL_REVIEW_QUALIFICATION = object()
+_VERIFIED_NORMAL_REVIEW_ADMISSION = object()
+
+
+@dataclass(frozen=True)
+class AuthenticatedNormalReviewQualification:
+    """OpenHands control-plane facts for one terminal independent review."""
+
+    repository: str
+    delivery_issue: int
+    pull_request: int
+    head_sha: str
+    tree_sha: str
+    author_conversation_id: str
+    author_workspace: str
+    author_profile_id: str
+    verifier_conversation_id: str
+    verifier_workspace: str
+    verifier_profile_id: str
+    verifier_execution_status: str
+    result: str
+    material_finding_ids: tuple[str, ...]
+    finish_event_id: str
+    finish_message_digest: str
+    control_plane_evidence_digest: str
+    qualification_digest: str
+    _verification_seal: object
+
+
+@dataclass(frozen=True)
+class VerifiedNormalReviewAdmission:
+    """One signed, delivery-bound use of an independent normal review."""
+
+    admission_digest: str
+    admission_id: str
+    repository: str
+    delivery_issue: int
+    pull_request: int
+    lifecycle_id: str
+    current_publication_oid: str
+    current_publication_digest: str
+    current_authority_digest: str
+    head_sha: str
+    tree_sha: str
+    validation_receipt_digest: str
+    final_attestation_digest: str
+    qualification_digest: str
     canonical_admission: dict[str, Any]
     _verification_seal: object
 
@@ -411,6 +470,28 @@ EVENT_FIELDS = frozenset(
         "signer_identity",
         "signature",
         "event_digest",
+    }
+)
+NORMAL_REVIEW_EVENT_FIELDS = frozenset(
+    {"normal_review_admission", "normal_review_admission_digest"}
+)
+NORMAL_REVIEW_ADMISSION_FIELDS = frozenset(
+    {
+        "schema_version", "kind", "domain", "admission_id", "repository",
+        "delivery_issue", "pull_request", "lifecycle_id",
+        "current_publication_oid", "current_publication_digest",
+        "current_authority_digest", "head_sha", "tree_sha",
+        "validation_receipt_digest", "final_attestation_digest",
+        "author_conversation_id", "author_workspace", "author_profile_id",
+        "verifier_conversation_id", "verifier_workspace", "verifier_profile_id",
+        "verifier_execution_status", "execution_isolation",
+        "author_verifier_distinct", "verifier_secret_refs",
+        "verifier_runtime_credential_bindings", "verifier_mcp_modules",
+        "github_write_count", "lifecycle_write_count", "mutation_mcp_count",
+        "result", "complete_material_finding_ids", "finish_event_id",
+        "finish_message_digest", "control_plane_evidence_digest",
+        "qualification_digest", "bounded_uses", "signer_identity", "signature",
+        "admission_digest",
     }
 )
 INVALID_REVIEW_CORRECTION_FIELDS = frozenset(
@@ -722,6 +803,14 @@ def _require_closed(value: Any, fields: frozenset[str], label: str) -> dict[str,
 def _require_identity(value: Any, label: str) -> str:
     if not isinstance(value, str) or not _IDENTITY.fullmatch(value):
         raise LifecycleAuthorityError(f"{label} is invalid")
+    return value
+
+
+def _require_github_login(value: Any, label: str) -> str:
+    """Validate one provider login without applying lifecycle-ID grammar."""
+
+    if not isinstance(value, str) or _GITHUB_LOGIN.fullmatch(value) is None:
+        raise LifecycleAuthorityError(f"{label} is malformed")
     return value
 
 
@@ -2245,6 +2334,614 @@ def derive_state(
     )
 
 
+def _read_control_plane_json(path: Path, label: str) -> tuple[dict[str, Any], str]:
+    """Read one regular control-plane record without following a final symlink."""
+
+    try:
+        metadata = path.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or path.is_symlink():
+            raise LifecycleAuthorityError(f"{label} is not a regular control-plane record")
+        raw = path.read_bytes()
+        value = loads_closed_json(raw)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, LifecycleAuthorityError) as exc:
+        raise LifecycleAuthorityError(f"{label} is unavailable or malformed") from exc
+    if not isinstance(value, dict):
+        raise LifecycleAuthorityError(f"{label} is malformed")
+    return value, hashlib.sha256(raw).hexdigest()
+
+
+def _control_plane_conversation_dir(root: Path, conversation_id: str) -> Path:
+    identity = _require_identity(conversation_id, "OpenHands conversation")
+    compact = identity.replace("-", "")
+    if not re.fullmatch(r"[0-9a-f]{32}", compact):
+        raise LifecycleAuthorityError("OpenHands conversation identity is malformed")
+    directory = root / "dev_conversations" / compact
+    try:
+        resolved_root = root.resolve(strict=True)
+        resolved = directory.resolve(strict=True)
+    except OSError as exc:
+        raise LifecycleAuthorityError("OpenHands conversation persistence is unavailable") from exc
+    if resolved_root not in resolved.parents or directory.is_symlink():
+        raise LifecycleAuthorityError("OpenHands conversation persistence escaped its root")
+    return directory
+
+
+def _conversation_profile(meta: Mapping[str, Any], label: str) -> tuple[str, list[Any]]:
+    profile = meta.get("launched_agent_profile")
+    if not isinstance(profile, dict):
+        raise LifecycleAuthorityError(f"{label} profile is unavailable")
+    profile_id = _require_identity(profile.get("agent_profile_id"), f"{label} profile")
+    secret_refs = profile.get("secret_refs")
+    if not isinstance(secret_refs, list):
+        raise LifecycleAuthorityError(f"{label} secret references are malformed")
+    return profile_id, secret_refs
+
+
+def _conversation_workspace(
+    meta: Mapping[str, Any], base: Mapping[str, Any], label: str
+) -> str:
+    meta_workspace = meta.get("workspace")
+    base_workspace = base.get("workspace")
+    if (
+        not isinstance(meta_workspace, dict)
+        or not isinstance(base_workspace, dict)
+        or meta_workspace != base_workspace
+        or meta_workspace.get("kind") != "LocalWorkspace"
+        or not isinstance(meta_workspace.get("working_dir"), str)
+    ):
+        raise LifecycleAuthorityError(f"{label} workspace is not authenticated")
+    path = Path(meta_workspace["working_dir"])
+    if not path.is_absolute():
+        raise LifecycleAuthorityError(f"{label} workspace is not absolute")
+    try:
+        return str(path.resolve(strict=True))
+    except OSError as exc:
+        raise LifecycleAuthorityError(f"{label} workspace is unavailable") from exc
+
+
+def _load_control_plane_events(directory: Path) -> tuple[list[dict[str, Any]], str]:
+    events_dir = directory / "events"
+    if not events_dir.is_dir() or events_dir.is_symlink():
+        raise LifecycleAuthorityError("OpenHands event persistence is unavailable")
+    indexed: list[tuple[int, Path]] = []
+    for path in events_dir.glob("event-*.json"):
+        match = re.fullmatch(r"event-(\d{5})-[A-Za-z0-9-]+\.json", path.name)
+        if match is None or path.is_symlink():
+            raise LifecycleAuthorityError("OpenHands event persistence is malformed")
+        indexed.append((int(match.group(1)), path))
+    indexed.sort()
+    if [index for index, _ in indexed] != list(range(len(indexed))):
+        raise LifecycleAuthorityError("OpenHands event sequence is incomplete")
+    marker = events_dir / f".eventlog-len-{len(indexed)}.marker"
+    if not marker.is_file() or marker.is_symlink():
+        raise LifecycleAuthorityError("OpenHands event sequence is not sealed")
+    values: list[dict[str, Any]] = []
+    evidence = []
+    for index, path in indexed:
+        value, raw_digest = _read_control_plane_json(path, "OpenHands event")
+        values.append(value)
+        evidence.append({"sequence": index, "sha256": raw_digest})
+    return values, digest_json(evidence)
+
+
+def _terminal_normal_review_result(
+    events: Sequence[Mapping[str, Any]], head_sha: str, tree_sha: str
+) -> tuple[str, tuple[str, ...], str, str]:
+    finish_indexes = [
+        index for index, event in enumerate(events)
+        if event.get("kind") == "ActionEvent"
+        and event.get("tool_name") == "finish"
+        and isinstance(event.get("action"), dict)
+        and event["action"].get("kind") == "FinishAction"
+    ]
+    if not finish_indexes:
+        raise LifecycleAuthorityError("independent verifier has no terminal result")
+    index = finish_indexes[-1]
+    action = events[index]
+    message = action["action"].get("message")
+    if not isinstance(message, str):
+        raise LifecycleAuthorityError("independent verifier result is malformed")
+    if index + 1 >= len(events):
+        raise LifecycleAuthorityError("independent verifier result is not observed")
+    observation = events[index + 1]
+    content = observation.get("observation")
+    text_blocks = content.get("content") if isinstance(content, dict) else None
+    if (
+        observation.get("kind") != "ObservationEvent"
+        or observation.get("tool_name") != "finish"
+        or observation.get("parent_id") != action.get("id")
+        or not isinstance(content, dict)
+        or content.get("kind") != "FinishObservation"
+        or content.get("is_error") is not False
+        or not isinstance(text_blocks, list)
+        or [item.get("text") for item in text_blocks if isinstance(item, dict)] != [message]
+    ):
+        raise LifecycleAuthorityError("independent verifier result is not exact")
+    later_user_or_agent = any(
+        item.get("source") in {"user", "agent"}
+        and item.get("kind") not in {"ConversationStateUpdateEvent"}
+        for item in events[index + 2:]
+    )
+    finished = any(
+        item.get("kind") == "ConversationStateUpdateEvent"
+        and item.get("source") == "environment"
+        and item.get("key") == "execution_status"
+        and item.get("value") == "finished"
+        and item.get("parent_id") == observation.get("id")
+        for item in events[index + 2:]
+    )
+    if later_user_or_agent or not finished:
+        raise LifecycleAuthorityError("independent verifier is not terminal")
+    result_matches = re.findall(
+        r"RESULT:\s*(?:\*\*)?(PASS|FAIL|BLOCKED)(?:\*\*)?", message
+    )
+    finding_matches = re.findall(r"MATERIAL_FINDINGS:\s*(\d+)", message)
+    if result_matches != ["PASS"] or finding_matches != ["0"]:
+        raise LifecycleAuthorityError("independent verifier did not report complete PASS")
+    if head_sha not in message or tree_sha not in message:
+        raise LifecycleAuthorityError("independent verifier result targets another tree")
+    return "PASS", (), _require_identity(action.get("id"), "verifier finish event"), hashlib.sha256(
+        message.encode("utf-8")
+    ).hexdigest()
+
+
+def _require_verifier_no_remote_mutation(events: Sequence[Mapping[str, Any]]) -> None:
+    """Reject mutation-capable MCP use and observed remote-write commands."""
+
+    remote_write = re.compile(
+        r"(?is)(?:^|[;&|\n]\s*)"
+        r"(?:git\s+(?:-[^\s]+\s+)*push\b|"
+        r"gh\s+(?:pr\s+(?:ready|merge|edit|close|reopen|review|comment)\b|"
+        r"issue\s+(?:create|edit|close|reopen|comment)\b|"
+        r"workflow\s+run\b|api\b[^\n]*(?:--method|-X)\s*(?:POST|PUT|PATCH|DELETE)\b)|"
+        r"curl\b[^\n]*(?:--request|-X)\s*(?:POST|PUT|PATCH|DELETE)\b)"
+    )
+    lifecycle_write = re.compile(
+        r"\b(?:advance_current_terminal|admit_native_genesis|"
+        r"enroll_existing_lifecycle|execute_lifecycle_transition|_cas_remote_ref)\s*\("
+    )
+    credential_reference = re.compile(
+        r"\b(?:GH_TOKEN|GITHUB_TOKEN|SECPAL_GITHUB_[A-Z0-9_]*CREDENTIAL|"
+        r"SECPAL_LIFECYCLE_[A-Z0-9_]*(?:KEY|CREDENTIAL))\b"
+    )
+    for event in events:
+        if event.get("kind") != "ACPToolCallEvent":
+            continue
+        tool_kind = event.get("tool_kind")
+        if isinstance(tool_kind, str) and "mcp" in tool_kind.lower():
+            raise LifecycleAuthorityError("Verifier invoked mutation MCP capability")
+        raw_input = event.get("raw_input")
+        command = raw_input.get("command") if isinstance(raw_input, dict) else None
+        if not isinstance(command, str):
+            continue
+        if (
+            remote_write.search(command)
+            or lifecycle_write.search(command)
+            or credential_reference.search(command)
+        ):
+            raise LifecycleAuthorityError(
+                "Verifier execution observed GitHub/lifecycle write authority"
+            )
+
+
+def authenticate_openhands_normal_review(
+    *, control_plane_root: str | os.PathLike[str], author_conversation_id: str,
+    verifier_conversation_id: str, expected_verifier_profile_id: str,
+    repository: str, delivery_issue: int, pull_request: int,
+    head_sha: str, tree_sha: str,
+) -> AuthenticatedNormalReviewQualification:
+    """Authenticate one isolated terminal PASS from OpenHands persistence."""
+
+    root = Path(control_plane_root)
+    author_dir = _control_plane_conversation_dir(root, author_conversation_id)
+    verifier_dir = _control_plane_conversation_dir(root, verifier_conversation_id)
+    if author_dir == verifier_dir:
+        raise LifecycleAuthorityError("Author and Verifier conversations must differ")
+    author_meta, author_meta_digest = _read_control_plane_json(
+        author_dir / "meta.json", "Author conversation metadata"
+    )
+    author_base, author_base_digest = _read_control_plane_json(
+        author_dir / "base_state.json", "Author conversation state"
+    )
+    verifier_meta, verifier_meta_digest = _read_control_plane_json(
+        verifier_dir / "meta.json", "Verifier conversation metadata"
+    )
+    verifier_base, verifier_base_digest = _read_control_plane_json(
+        verifier_dir / "base_state.json", "Verifier conversation state"
+    )
+    if (
+        author_meta.get("conversation_id") != author_conversation_id
+        or author_base.get("id") != author_conversation_id
+        or verifier_meta.get("conversation_id") != verifier_conversation_id
+        or verifier_base.get("id") != verifier_conversation_id
+    ):
+        raise LifecycleAuthorityError("OpenHands conversation identity was substituted")
+    author_profile, _ = _conversation_profile(author_meta, "Author")
+    verifier_profile, verifier_secret_refs = _conversation_profile(
+        verifier_meta, "Verifier"
+    )
+    if verifier_profile != _require_identity(
+        expected_verifier_profile_id, "expected Verifier profile"
+    ):
+        raise LifecycleAuthorityError("Verifier profile was substituted")
+    author_workspace = _conversation_workspace(author_meta, author_base, "Author")
+    verifier_workspace = _conversation_workspace(verifier_meta, verifier_base, "Verifier")
+    if author_workspace == verifier_workspace or author_profile == verifier_profile:
+        raise LifecycleAuthorityError("Author and Verifier execution isolation failed")
+    verifier_agent = verifier_base.get("agent")
+    secret_sources = verifier_base.get("secret_registry")
+    if (
+        verifier_secret_refs != []
+        or verifier_meta.get("required_runtime_credential_bindings") != []
+        or verifier_meta.get("secrets") != {}
+        or verifier_meta.get("tool_module_qualnames") != {}
+        or not isinstance(secret_sources, dict)
+        or secret_sources.get("secret_sources") != {}
+        or not isinstance(verifier_agent, dict)
+        or verifier_agent.get("mcp_config") != {}
+    ):
+        raise LifecycleAuthorityError(
+            "Verifier has credentials, secret references, or mutation MCP capability"
+        )
+    if verifier_base.get("execution_status") != "finished":
+        raise LifecycleAuthorityError("independent verifier is not terminal")
+    normalized_repository = _require_repository(repository)
+    issue = _require_positive_int(delivery_issue, "delivery issue")
+    pr = _require_positive_int(pull_request, "pull request")
+    head = _require_oid(head_sha, "review head")
+    tree = _require_oid(tree_sha, "review tree")
+    tags = verifier_meta.get("tags")
+    if (
+        not isinstance(tags, dict)
+        or tags.get("role") != "verifier"
+        or tags.get("repository")
+        != re.sub(r"[^a-z0-9]+", "-", normalized_repository.lower()).strip("-")
+        or tags.get("issue") != str(issue)
+        or tags.get("pr") != str(pr)
+    ):
+        raise LifecycleAuthorityError("Verifier delivery metadata does not match")
+    candidate = Path(verifier_workspace) / "evidence" / "candidate"
+    try:
+        observed_head_tree = subprocess.run(
+            ["git", "-C", str(candidate), "rev-parse", "HEAD", f"{head}^{{tree}}"],
+            check=True, capture_output=True, text=True, timeout=30,
+        ).stdout.splitlines()
+        observed_remote = subprocess.run(
+            ["git", "-C", str(candidate), "remote", "get-url", "origin"],
+            check=True, capture_output=True, text=True, timeout=30,
+        ).stdout.strip()
+        observed_status = subprocess.run(
+            ["git", "-C", str(candidate), "status", "--porcelain=v1", "--untracked-files=all"],
+            check=True, capture_output=True, text=True, timeout=30,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise LifecycleAuthorityError("Verifier candidate object is unavailable") from exc
+    if (
+        observed_head_tree != [head, tree]
+        or observed_remote != f"https://github.com/{normalized_repository}.git"
+        or observed_status != ""
+    ):
+        raise LifecycleAuthorityError(
+            "Verifier candidate repository, head, tree, or worktree does not match"
+        )
+    events, event_log_digest = _load_control_plane_events(verifier_dir)
+    _require_verifier_no_remote_mutation(events)
+    result, finding_ids, finish_event_id, finish_digest = _terminal_normal_review_result(
+        events, head, tree
+    )
+    observed = {
+        "repository": normalized_repository, "delivery_issue": issue,
+        "pull_request": pr, "head_sha": head, "tree_sha": tree,
+        "author_conversation_id": author_conversation_id,
+        "author_workspace": author_workspace, "author_profile_id": author_profile,
+        "verifier_conversation_id": verifier_conversation_id,
+        "verifier_workspace": verifier_workspace,
+        "verifier_profile_id": verifier_profile,
+        "verifier_execution_status": "finished",
+        "execution_isolation": NORMAL_REVIEW_ISOLATION,
+        "author_verifier_distinct": True,
+        "verifier_secret_refs": [], "verifier_runtime_credential_bindings": [],
+        "verifier_mcp_modules": [], "github_write_count": 0,
+        "lifecycle_write_count": 0, "mutation_mcp_count": 0,
+        "result": result, "complete_material_finding_ids": list(finding_ids),
+        "finish_event_id": finish_event_id, "finish_message_digest": finish_digest,
+        "control_plane_evidence_digest": digest_json({
+            "author_meta_sha256": author_meta_digest,
+            "author_state_sha256": author_base_digest,
+            "verifier_meta_sha256": verifier_meta_digest,
+            "verifier_state_sha256": verifier_base_digest,
+            "verifier_event_log_digest": event_log_digest,
+        }),
+    }
+    qualification_digest = digest_json(observed)
+    return AuthenticatedNormalReviewQualification(
+        repository=normalized_repository, delivery_issue=issue, pull_request=pr,
+        head_sha=head, tree_sha=tree,
+        author_conversation_id=author_conversation_id,
+        author_workspace=author_workspace, author_profile_id=author_profile,
+        verifier_conversation_id=verifier_conversation_id,
+        verifier_workspace=verifier_workspace, verifier_profile_id=verifier_profile,
+        verifier_execution_status="finished", result=result,
+        material_finding_ids=finding_ids, finish_event_id=finish_event_id,
+        finish_message_digest=finish_digest,
+        control_plane_evidence_digest=observed["control_plane_evidence_digest"],
+        qualification_digest=qualification_digest,
+        _verification_seal=_AUTHENTICATED_NORMAL_REVIEW_QUALIFICATION,
+    )
+
+
+def _create_normal_review_admission(
+    *, admission_id: str, qualification: AuthenticatedNormalReviewQualification,
+    lifecycle_id: str, current_publication_oid: str,
+    current_publication_digest: str, current_authority_digest: str,
+    validation_receipt_digest: str, final_attestation_digest: str,
+    signer_identity: str, signer: Signer,
+) -> dict[str, Any]:
+    """Sign one bounded normal-review admission from authenticated runtime facts."""
+
+    if (
+        not isinstance(qualification, AuthenticatedNormalReviewQualification)
+        or qualification._verification_seal
+        is not _AUTHENTICATED_NORMAL_REVIEW_QUALIFICATION
+        or qualification.result != "PASS"
+        or qualification.material_finding_ids
+    ):
+        raise LifecycleAuthorityError("normal-review qualification is not authenticated")
+    fields = {
+        "schema_version": NORMAL_REVIEW_ADMISSION_VERSION,
+        "kind": NORMAL_REVIEW_ADMISSION_KIND,
+        "domain": NORMAL_REVIEW_ADMISSION_DOMAIN,
+        "admission_id": _require_identity(admission_id, "normal-review admission"),
+        "repository": qualification.repository,
+        "delivery_issue": qualification.delivery_issue,
+        "pull_request": qualification.pull_request,
+        "lifecycle_id": _require_identity(lifecycle_id, "lifecycle identity"),
+        "current_publication_oid": _require_oid(current_publication_oid, "CURRENT publication"),
+        "current_publication_digest": _require_digest(current_publication_digest, "CURRENT publication"),
+        "current_authority_digest": _require_digest(current_authority_digest, "CURRENT authority"),
+        "head_sha": qualification.head_sha, "tree_sha": qualification.tree_sha,
+        "validation_receipt_digest": _require_digest(validation_receipt_digest, "validation receipt"),
+        "final_attestation_digest": _require_digest(final_attestation_digest, "final attestation"),
+        "author_conversation_id": qualification.author_conversation_id,
+        "author_workspace": qualification.author_workspace,
+        "author_profile_id": qualification.author_profile_id,
+        "verifier_conversation_id": qualification.verifier_conversation_id,
+        "verifier_workspace": qualification.verifier_workspace,
+        "verifier_profile_id": qualification.verifier_profile_id,
+        "verifier_execution_status": qualification.verifier_execution_status,
+        "execution_isolation": NORMAL_REVIEW_ISOLATION,
+        "author_verifier_distinct": True, "verifier_secret_refs": [],
+        "verifier_runtime_credential_bindings": [], "verifier_mcp_modules": [],
+        "github_write_count": 0, "lifecycle_write_count": 0,
+        "mutation_mcp_count": 0, "result": "PASS",
+        "complete_material_finding_ids": [],
+        "finish_event_id": qualification.finish_event_id,
+        "finish_message_digest": qualification.finish_message_digest,
+        "control_plane_evidence_digest": qualification.control_plane_evidence_digest,
+        "qualification_digest": qualification.qualification_digest,
+        "bounded_uses": 1,
+        "signer_identity": _require_identity(signer_identity, "normal-review admission signer"),
+    }
+    signature = _normalize_signature(
+        signer(canonical_json_bytes(fields), NORMAL_REVIEW_ADMISSION_DOMAIN),
+        fields["signer_identity"],
+    )
+    signed = {**fields, "signature": signature}
+    return {**signed, "admission_digest": digest_json(signed)}
+
+
+def issue_openhands_normal_review_admission(
+    *, admission_id: str, control_plane_root: str | os.PathLike[str],
+    author_conversation_id: str, verifier_conversation_id: str,
+    expected_verifier_profile_id: str, repository: str, delivery_issue: int,
+    pull_request: int, lifecycle_id: str, current_publication_oid: str,
+    current_publication_digest: str, current_authority_digest: str,
+    head_sha: str, tree_sha: str, validation_receipt_digest: str,
+    final_attestation_digest: str, signer_identity: str, signer: Signer,
+) -> dict[str, Any]:
+    """Authenticate OpenHands persistence and issue one typed admission."""
+
+    qualification = authenticate_openhands_normal_review(
+        control_plane_root=control_plane_root,
+        author_conversation_id=author_conversation_id,
+        verifier_conversation_id=verifier_conversation_id,
+        expected_verifier_profile_id=expected_verifier_profile_id,
+        repository=repository, delivery_issue=delivery_issue,
+        pull_request=pull_request, head_sha=head_sha, tree_sha=tree_sha,
+    )
+    return _create_normal_review_admission(
+        admission_id=admission_id, qualification=qualification,
+        lifecycle_id=lifecycle_id,
+        current_publication_oid=current_publication_oid,
+        current_publication_digest=current_publication_digest,
+        current_authority_digest=current_authority_digest,
+        validation_receipt_digest=validation_receipt_digest,
+        final_attestation_digest=final_attestation_digest,
+        signer_identity=signer_identity, signer=signer,
+    )
+
+
+def _verify_normal_review_admission(
+    value: Any, *, accepted_signers: frozenset[str],
+    signature_verifier: SignatureVerifier,
+) -> VerifiedNormalReviewAdmission:
+    admission = _require_closed(
+        value, NORMAL_REVIEW_ADMISSION_FIELDS, "normal-review admission"
+    )
+    qualification_fields = {
+        field: copy.deepcopy(admission[field])
+        for field in (
+            "repository", "delivery_issue", "pull_request", "head_sha", "tree_sha",
+            "author_conversation_id", "author_workspace", "author_profile_id",
+            "verifier_conversation_id", "verifier_workspace", "verifier_profile_id",
+            "verifier_execution_status", "execution_isolation",
+            "author_verifier_distinct", "verifier_secret_refs",
+            "verifier_runtime_credential_bindings", "verifier_mcp_modules",
+            "github_write_count", "lifecycle_write_count", "mutation_mcp_count",
+            "result", "complete_material_finding_ids", "finish_event_id",
+            "finish_message_digest", "control_plane_evidence_digest",
+        )
+    }
+    if (
+        admission["schema_version"] != NORMAL_REVIEW_ADMISSION_VERSION
+        or admission["kind"] != NORMAL_REVIEW_ADMISSION_KIND
+        or admission["domain"] != NORMAL_REVIEW_ADMISSION_DOMAIN
+        or admission["verifier_execution_status"] != "finished"
+        or admission["execution_isolation"] != NORMAL_REVIEW_ISOLATION
+        or admission["author_verifier_distinct"] is not True
+        or admission["verifier_secret_refs"] != []
+        or admission["verifier_runtime_credential_bindings"] != []
+        or admission["verifier_mcp_modules"] != []
+        or admission["github_write_count"] != 0
+        or admission["lifecycle_write_count"] != 0
+        or admission["mutation_mcp_count"] != 0
+        or admission["result"] != "PASS"
+        or admission["complete_material_finding_ids"] != []
+        or admission["bounded_uses"] != 1
+        or isinstance(admission["bounded_uses"], bool)
+        or any(
+            type(admission[field]) is not int or admission[field] != 0
+            for field in (
+                "github_write_count", "lifecycle_write_count", "mutation_mcp_count"
+            )
+        )
+        or admission["author_conversation_id"] == admission["verifier_conversation_id"]
+        or admission["author_workspace"] == admission["verifier_workspace"]
+        or admission["author_profile_id"] == admission["verifier_profile_id"]
+        or admission["qualification_digest"] != digest_json(qualification_fields)
+    ):
+        raise LifecycleAuthorityError("normal-review admission scope changed")
+    for field, validator in (
+        ("repository", _require_repository),
+        ("delivery_issue", lambda item: _require_positive_int(item, "delivery issue")),
+        ("pull_request", lambda item: _require_positive_int(item, "pull request")),
+        ("lifecycle_id", lambda item: _require_identity(item, "lifecycle identity")),
+        ("current_publication_oid", lambda item: _require_oid(item, "CURRENT publication")),
+        ("current_publication_digest", lambda item: _require_digest(item, "CURRENT publication")),
+        ("current_authority_digest", lambda item: _require_digest(item, "CURRENT authority")),
+        ("head_sha", lambda item: _require_oid(item, "review head")),
+        ("tree_sha", lambda item: _require_oid(item, "review tree")),
+        ("validation_receipt_digest", lambda item: _require_digest(item, "validation receipt")),
+        ("final_attestation_digest", lambda item: _require_digest(item, "final attestation")),
+        ("qualification_digest", lambda item: _require_digest(item, "qualification")),
+        ("control_plane_evidence_digest", lambda item: _require_digest(item, "control-plane evidence")),
+        ("finish_message_digest", lambda item: _require_digest(item, "finish message")),
+    ):
+        validator(admission[field])
+    for field in (
+        "admission_id", "author_conversation_id", "author_profile_id",
+        "verifier_conversation_id", "verifier_profile_id", "finish_event_id",
+        "signer_identity",
+    ):
+        _require_identity(admission[field], field.replace("_", " "))
+    for field in ("author_workspace", "verifier_workspace"):
+        workspace = admission[field]
+        if (
+            not isinstance(workspace, str)
+            or not workspace
+            or not Path(workspace).is_absolute()
+            or "\x00" in workspace
+        ):
+            raise LifecycleAuthorityError(
+                "normal-review admission workspace is malformed"
+            )
+    signed = {key: copy.deepcopy(item) for key, item in admission.items() if key != "admission_digest"}
+    digest = _require_digest(admission["admission_digest"], "normal-review admission")
+    if digest != digest_json(signed):
+        raise LifecycleAuthorityError("normal-review admission digest mismatch")
+    signer_identity = admission["signer_identity"]
+    _verify_signature(
+        canonical_json_bytes(_unsigned(admission, "admission_digest", "signature")),
+        admission["signature"], signer_identity, NORMAL_REVIEW_ADMISSION_DOMAIN,
+        accepted_signers, signature_verifier,
+    )
+    return VerifiedNormalReviewAdmission(
+        admission_digest=digest, admission_id=admission["admission_id"],
+        repository=admission["repository"], delivery_issue=admission["delivery_issue"],
+        pull_request=admission["pull_request"], lifecycle_id=admission["lifecycle_id"],
+        current_publication_oid=admission["current_publication_oid"],
+        current_publication_digest=admission["current_publication_digest"],
+        current_authority_digest=admission["current_authority_digest"],
+        head_sha=admission["head_sha"], tree_sha=admission["tree_sha"],
+        validation_receipt_digest=admission["validation_receipt_digest"],
+        final_attestation_digest=admission["final_attestation_digest"],
+        qualification_digest=admission["qualification_digest"],
+        canonical_admission=copy.deepcopy(admission),
+        _verification_seal=_VERIFIED_NORMAL_REVIEW_ADMISSION,
+    )
+
+
+def verify_normal_review_admission(
+    value: Any, *, repository: str, delivery_issue: int, pull_request: int,
+    lifecycle_id: str, current_publication_oid: str,
+    current_publication_digest: str, current_authority_digest: str,
+    head_sha: str, tree_sha: str, validation_receipt_digest: str,
+    final_attestation_digest: str,
+) -> VerifiedNormalReviewAdmission:
+    """Verify a typed normal-review admission against one exact CURRENT."""
+
+    policy = _load_lifecycle_trust_policy(_require_repository(repository))
+    verified = _verify_normal_review_admission(
+        value, accepted_signers=policy.transition_signer_identities,
+        signature_verifier=_policy_signature_verifier(policy),
+    )
+    expected = (
+        (verified.repository, repository), (verified.delivery_issue, delivery_issue),
+        (verified.pull_request, pull_request), (verified.lifecycle_id, lifecycle_id),
+        (verified.current_publication_oid, current_publication_oid),
+        (verified.current_publication_digest, current_publication_digest),
+        (verified.current_authority_digest, current_authority_digest),
+        (verified.head_sha, head_sha), (verified.tree_sha, tree_sha),
+        (verified.validation_receipt_digest, validation_receipt_digest),
+        (verified.final_attestation_digest, final_attestation_digest),
+    )
+    if any(actual != wanted for actual, wanted in expected):
+        raise LifecycleAuthorityError("normal-review admission targets another CURRENT")
+    return verified
+
+
+def create_normal_review_transition_authorization(
+    *, event_id: str, repository: str, delivery_issue: int, lifecycle_id: str,
+    pull_request: int, predecessor_authority_digest: str,
+    predecessor_head_sha: str, resulting_head_sha: str,
+    initialization_evidence_digest: str,
+    normal_review_admission: Mapping[str, Any], signer_identity: str,
+    signer: Signer,
+) -> dict[str, Any]:
+    """Bind one typed normal-review admission into its sole lifecycle event."""
+
+    admission_digest = _require_digest(
+        normal_review_admission.get("admission_digest"), "normal-review admission"
+    )
+    fields: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION, "kind": EVENT_KIND,
+        "domain": EVENT_DOMAIN, "event_id": _require_identity(event_id, "event identity"),
+        "repository": _require_repository(repository),
+        "delivery_issue": _require_positive_int(delivery_issue, "delivery issue"),
+        "lifecycle_id": _require_identity(lifecycle_id, "lifecycle identity"),
+        "pull_request": _require_positive_int(pull_request, "pull request"),
+        "predecessor_authority_digest": _require_digest(
+            predecessor_authority_digest, "predecessor authority digest"
+        ),
+        "predecessor_head_sha": _require_oid(predecessor_head_sha, "predecessor head"),
+        "resulting_head_sha": _require_oid(resulting_head_sha, "resulting head"),
+        "transition_kind": "UNRESTRICTED_REVIEW_CONSUMED",
+        "replacement_pull_request": None,
+        "initialization_evidence_digest": _require_digest(
+            initialization_evidence_digest, "initialization evidence"
+        ),
+        "normal_review_admission": copy.deepcopy(dict(normal_review_admission)),
+        "normal_review_admission_digest": admission_digest,
+        "signer_identity": _require_identity(signer_identity, "event signer"),
+    }
+    _validate_event_semantics(fields)
+    signature = _normalize_signature(
+        signer(canonical_json_bytes(fields), EVENT_DOMAIN), fields["signer_identity"]
+    )
+    signed = {**fields, "signature": signature}
+    return {**signed, "event_digest": digest_json(signed)}
+
+
 def create_transition_authorization(
     *,
     event_id: str,
@@ -2447,7 +3144,7 @@ def create_invalid_review_derived_ready_correction_authorization(
         "github_ready_event_node_id": _require_identity(
             github_ready_event_node_id, "GitHub Ready event node"
         ),
-        "github_ready_event_actor": _require_identity(
+        "github_ready_event_actor": _require_github_login(
             github_ready_event_actor, "GitHub Ready event actor"
         ),
         "github_ready_event_created_at": _require_adoption_timestamp(
@@ -2529,6 +3226,14 @@ def _verify_transition_authorization(
         and value.get("transition_kind")
         == "INVALID_REVIEW_DERIVED_READY_CORRECTED"
     )
+    normal_review = (
+        isinstance(value, Mapping)
+        and value.get("transition_kind") == "UNRESTRICTED_REVIEW_CONSUMED"
+        and (
+            "normal_review_admission" in value
+            or "normal_review_admission_digest" in value
+        )
+    )
     correction_fields = (
         INVALID_REVIEW_CORRECTION_FIELDS
         if review_correction
@@ -2537,7 +3242,10 @@ def _verify_transition_authorization(
         else frozenset()
     )
     event = _require_closed(
-        value, EVENT_FIELDS | correction_fields,
+        value,
+        EVENT_FIELDS
+        | correction_fields
+        | (NORMAL_REVIEW_EVENT_FIELDS if normal_review else frozenset()),
         "transition authorization",
     )
     if event["schema_version"] != SCHEMA_VERSION:
@@ -2606,10 +3314,32 @@ def _verify_transition_authorization(
             "GitHub Ready event database ID",
         )
         _require_identity(event["github_ready_event_node_id"], "GitHub Ready event node")
-        _require_identity(event["github_ready_event_actor"], "GitHub Ready event actor")
+        _require_github_login(event["github_ready_event_actor"], "GitHub Ready event actor")
         _require_adoption_timestamp(
             event["github_ready_event_created_at"], "GitHub Ready event timestamp"
         )
+    elif normal_review:
+        verified_admission = _verify_normal_review_admission(
+            event["normal_review_admission"],
+            accepted_signers=accepted_signers,
+            signature_verifier=signature_verifier,
+        )
+        if (
+            event["normal_review_admission_digest"]
+            != verified_admission.admission_digest
+            or event["event_id"] != f"review:{verified_admission.admission_digest}"
+            or verified_admission.repository != event["repository"]
+            or verified_admission.delivery_issue != event["delivery_issue"]
+            or verified_admission.pull_request != event["pull_request"]
+            or verified_admission.lifecycle_id != event["lifecycle_id"]
+            or verified_admission.current_authority_digest
+            != event["predecessor_authority_digest"]
+            or verified_admission.head_sha != event["predecessor_head_sha"]
+            or event["resulting_head_sha"] != event["predecessor_head_sha"]
+        ):
+            raise LifecycleAuthorityError(
+                "normal-review admission does not bind its exact transition"
+            )
     signed = {key: copy.deepcopy(item) for key, item in event.items() if key != "event_digest"}
     if _require_digest(event["event_digest"], "event digest") != digest_json(signed):
         raise LifecycleAuthorityError("transition-authorization digest mismatch")

@@ -109,6 +109,123 @@ class LifecycleExecutionResult:
     publication_digest: str | None
 
 
+def publish_typed_normal_review(
+    repository: str,
+    delivery_issue: int,
+    normal_review_admission: Mapping[str, Any],
+    signers: SigningAuthorities,
+) -> publication.VerifiedLifecyclePublication:
+    """Publish one normal review authenticated by its typed admission."""
+
+    current = publication.verify_current_lifecycle_authority(repository, delivery_issue)
+    lifecycle = current.lifecycle
+    if (
+        lifecycle.historical_proof_mode != authority.NATIVE_PROOF_MODE
+        or lifecycle.tree_sha is None
+        or lifecycle.validation_receipt_digest is None
+        or lifecycle.adoption_source_evidence_digest is None
+        or lifecycle.state.get("unrestricted_review_count") != 0
+        or lifecycle.state.get("draft") is not True
+        or lifecycle.state.get("ready") is not False
+    ):
+        raise LifecycleExecutionError(
+            "typed normal review requires exact native Draft CURRENT"
+        )
+    try:
+        verified_admission = authority.verify_normal_review_admission(
+            normal_review_admission,
+            repository=lifecycle.repository,
+            delivery_issue=lifecycle.delivery_issue,
+            pull_request=lifecycle.pull_request,
+            lifecycle_id=lifecycle.lifecycle_id,
+            current_publication_oid=current.publication_oid,
+            current_publication_digest=current.publication_digest,
+            current_authority_digest=lifecycle.authority_digest,
+            head_sha=lifecycle.head_sha,
+            tree_sha=lifecycle.tree_sha,
+            validation_receipt_digest=lifecycle.validation_receipt_digest,
+            final_attestation_digest=lifecycle.adoption_source_evidence_digest,
+        )
+        if (
+            verified_admission.canonical_admission["signer_identity"]
+            != signers.transition_identity
+        ):
+            raise authority.LifecycleAuthorityError(
+                "normal-review admission signer differs from transition signer"
+            )
+        raw = current.serialized_lifecycle_evidence
+        if not isinstance(raw, bytes):
+            raise authority.LifecycleAuthorityError(
+                "authenticated CURRENT evidence is unavailable"
+            )
+        parsed = authority._load_canonical_json(raw, "CURRENT lifecycle evidence")
+        bundle = (
+            parsed.get("lifecycle_evidence")
+            if isinstance(parsed, dict)
+            and parsed.get("kind") == authority.PUBLICATION_EVIDENCE_KIND
+            else parsed
+        )
+        if not isinstance(bundle, dict):
+            raise authority.LifecycleAuthorityError(
+                "CURRENT lifecycle evidence bundle is malformed"
+            )
+        events = bundle.get("transition_authorizations")
+        snapshots = bundle.get("authority_chain")
+        if not isinstance(events, list) or not isinstance(snapshots, list):
+            raise authority.LifecycleAuthorityError(
+                "CURRENT lifecycle evidence chain is malformed"
+            )
+        event = authority.create_normal_review_transition_authorization(
+            event_id=f"review:{verified_admission.admission_digest}",
+            repository=lifecycle.repository,
+            delivery_issue=lifecycle.delivery_issue,
+            lifecycle_id=lifecycle.lifecycle_id,
+            pull_request=lifecycle.pull_request,
+            predecessor_authority_digest=lifecycle.authority_digest,
+            predecessor_head_sha=lifecycle.head_sha,
+            resulting_head_sha=lifecycle.head_sha,
+            initialization_evidence_digest=lifecycle.initialization_evidence_digest,
+            normal_review_admission=verified_admission.canonical_admission,
+            signer_identity=signers.transition_identity,
+            signer=signers.transition_signer,
+        )
+        policy = authority._load_lifecycle_trust_policy(lifecycle.repository)
+        snapshot = authority.issue_lifecycle_authority(
+            predecessor_chain=snapshots,
+            transition_authorizations=events,
+            authorization=event,
+            signer_identity=signers.authority_identity,
+            authority_signer=signers.authority_signer,
+            accepted_event_signers=policy.transition_signer_identities,
+            accepted_authority_signers=policy.authority_signer_identities,
+            signature_verifier=authority._policy_signature_verifier(policy),
+        )
+        events.append(event)
+        snapshots.append(snapshot)
+        successor = canonical_json_bytes(parsed)
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecycleExecutionError(str(exc)) from exc
+    refreshed = publication.verify_current_lifecycle_authority(repository, delivery_issue)
+    if not _same_publication(refreshed, current):
+        raise LifecycleExecutionError("CURRENT changed before typed review publication")
+    published = publication.advance_current_terminal(
+        successor,
+        signer_identity=signers.publication_identity,
+        signer=signers.publication_signer,
+    )
+    readback = publication.verify_current_lifecycle_authority(repository, delivery_issue)
+    if (
+        not _same_publication(published, readback)
+        or readback.lifecycle.state.get("unrestricted_review_count") != 1
+        or readback.lifecycle.state.get("draft") is not True
+        or readback.lifecycle.state.get("ready") is not False
+    ):
+        raise LifecycleExecutionError(
+            "typed normal review publication readback is not exact"
+        )
+    return readback
+
+
 def execute_invalid_review_consumption_correction(
     authorization: Mapping[str, Any],
     signers: SigningAuthorities,
@@ -276,6 +393,8 @@ def _derive_invalid_review_ready_correction_successor(
 def execute_invalid_review_derived_ready_correction(
     authorization: Mapping[str, Any],
     signers: SigningAuthorities,
+    *,
+    ready_correction_conversion: publication.VerifiedReadyCorrectionConversion | None = None,
 ) -> publication.VerifiedLifecyclePublication:
     """Converge one exact unauthorized Ready to Draft, then append compensation."""
 
@@ -291,13 +410,15 @@ def execute_invalid_review_derived_ready_correction(
         repository, authorization["pull_request"]
     )
 
-    conversion: publication.VerifiedReadyCorrectionConversion | None = None
-    if live.draft is True and timeline:
+    conversion = ready_correction_conversion
+    if live.draft is False and conversion is not None:
+        raise LifecycleExecutionError(
+            "Draft conversion evidence cannot bypass a live Ready correction"
+        )
+    if live.draft is True and conversion is not None:
         try:
-            conversion = publication._authenticate_ready_correction_conversion(
-                authorization=authorization,
-                before=timeline[:-1],
-                after=timeline,
+            publication._require_ready_correction_conversion(
+                conversion, authorization, timeline
             )
         except publication.LifecyclePublicationError as exc:
             raise LifecycleExecutionError(str(exc)) from exc
@@ -309,7 +430,6 @@ def execute_invalid_review_derived_ready_correction(
             or live.state != "OPEN"
             or live.head_sha != authorization["resulting_head_sha"]
             or live.draft is not True
-            or conversion is None
         ):
             raise LifecycleExecutionError(
                 "corrected CURRENT and GitHub Draft state do not converge"
@@ -329,6 +449,10 @@ def execute_invalid_review_derived_ready_correction(
         or not isinstance(live.draft, bool)
     ):
         raise LifecycleExecutionError("GitHub is not the exact unauthorized Ready target")
+    if live.draft is True and conversion is None:
+        raise LifecycleExecutionError(
+            "preexisting GitHub Draft lacks conversion evidence from this correction attempt"
+        )
     if conversion is None:
         before = timeline
         publication._require_bound_github_ready_event(before, authorization)
