@@ -124,6 +124,35 @@ class VerifiedLifecyclePublication:
 
 
 @dataclass(frozen=True)
+class GitHubPullRequestTimelineEvent:
+    """Authenticated lifecycle-relevant GitHub timeline projection."""
+
+    kind: str
+    database_id: int
+    node_id: str
+    actor: str
+    created_at: str
+    commit_id: str | None = None
+
+
+_READY_CORRECTION_CONVERSION_SEAL = object()
+
+
+@dataclass(frozen=True)
+class VerifiedReadyCorrectionConversion:
+    """One exact Ready-to-Draft event observed across this correction attempt."""
+
+    repository: str
+    pull_request: int
+    head_sha: str
+    authorization_digest: str
+    authorized_ready_event: GitHubPullRequestTimelineEvent
+    before: tuple[GitHubPullRequestTimelineEvent, ...]
+    event: GitHubPullRequestTimelineEvent
+    _seal: object
+
+
+@dataclass(frozen=True)
 class VerifiedNativeGenesisAdmission:
     """An independently authorized native genesis, never a CURRENT selector."""
 
@@ -397,6 +426,202 @@ def _observe_pre_enrollment_pull_request(
         "draft": value.get("draft"),
         "head_sha": head.get("sha"),
     }
+
+
+def _observe_pull_request_lifecycle_timeline(
+    repository: str, pull_request: int
+) -> tuple[GitHubPullRequestTimelineEvent, ...]:
+    """Read the complete native Ready/Draft timeline without trusting caller data."""
+
+    result = _run_gh(
+        [
+            "api", "--hostname", "github.com",
+            "-H", "Accept: application/vnd.github+json",
+            "-H", "X-GitHub-Api-Version: 2026-03-10",
+            f"repos/{repository}/issues/{pull_request}/timeline?per_page=100",
+        ]
+    )
+    if result.returncode != 0:
+        raise LifecyclePublicationError("GitHub lifecycle timeline is unavailable")
+    try:
+        items = json.loads(result.stdout, object_pairs_hook=_reject_duplicate_pairs)
+        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+            raise LifecyclePublicationError("GitHub lifecycle timeline is malformed")
+        if len(items) >= 100:
+            raise LifecyclePublicationError(
+                "GitHub lifecycle timeline exceeds the closed 99-event bound"
+            )
+        projected: list[GitHubPullRequestTimelineEvent] = []
+        names = {
+            "ready_for_review": "READY_FOR_REVIEW",
+            "convert_to_draft": "CONVERT_TO_DRAFT",
+            "head_ref_force_pushed": "HEAD_REF_FORCE_PUSHED",
+        }
+        for item in items:
+            if item.get("event") not in names:
+                continue
+            actor = item.get("actor")
+            actor_login = actor.get("login") if isinstance(actor, dict) else None
+            actor_login = authority._require_github_login(
+                actor_login, "GitHub lifecycle event actor"
+            )
+            if item["event"] == "head_ref_force_pushed":
+                authority._require_oid(
+                    item.get("before_commit_id"),
+                    "GitHub force-push predecessor",
+                )
+                commit_id = authority._require_oid(
+                    item.get("after_commit_id"),
+                    "GitHub force-push successor",
+                )
+            else:
+                commit_id = item.get("commit_id")
+            projected.append(
+                GitHubPullRequestTimelineEvent(
+                    kind=names[item["event"]],
+                    database_id=authority._require_positive_int(
+                        item.get("id"), "GitHub lifecycle event database ID"
+                    ),
+                    node_id=authority._require_identity(
+                        item.get("node_id"), "GitHub lifecycle event node"
+                    ),
+                    actor=actor_login,
+                    created_at=authority._require_identity(
+                        item.get("created_at"), "GitHub lifecycle event timestamp"
+                    ),
+                    commit_id=commit_id,
+                )
+            )
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        TypeError,
+        authority.LifecycleAuthorityError,
+    ) as exc:
+        raise LifecyclePublicationError("GitHub lifecycle timeline is malformed") from exc
+    return tuple(projected)
+
+
+def _require_bound_github_ready_event(
+    observed: tuple[GitHubPullRequestTimelineEvent, ...],
+    authorization: Mapping[str, Any],
+) -> None:
+    """Require the complete represented pre-correction chronology."""
+
+    target = GitHubPullRequestTimelineEvent(
+        kind="READY_FOR_REVIEW",
+        database_id=authorization["github_ready_event_database_id"],
+        node_id=authorization["github_ready_event_node_id"],
+        actor=authorization["github_ready_event_actor"],
+        created_at=authorization["github_ready_event_created_at"],
+        commit_id=None,
+    )
+    if any(item.kind == "HEAD_REF_FORCE_PUSHED" for item in observed):
+        raise LifecyclePublicationError(
+            "GitHub Ready correction source history contains a force push"
+        )
+    represented = tuple(
+        item
+        for item in observed
+        if item.kind in {"READY_FOR_REVIEW", "CONVERT_TO_DRAFT"}
+    )
+    if represented != (target,) or not observed or observed[-1] != target:
+        raise LifecyclePublicationError(
+            "GitHub Ready correction chronology is not the exact represented "
+            "terminal Ready history"
+        )
+
+
+def _authenticate_ready_correction_conversion(
+    *,
+    authorization: Mapping[str, Any],
+    before: tuple[GitHubPullRequestTimelineEvent, ...],
+    after: tuple[GitHubPullRequestTimelineEvent, ...],
+) -> VerifiedReadyCorrectionConversion:
+    """Seal only the one Draft conversion newly observed across this attempt."""
+
+    _require_bound_github_ready_event(before, authorization)
+    if len(after) != len(before) + 1 or after[:-1] != before:
+        raise LifecyclePublicationError(
+            "GitHub Draft conversion is not the sole event from this correction attempt"
+        )
+    converted = after[-1]
+    if (
+        converted.kind != "CONVERT_TO_DRAFT"
+        or converted.actor != authorization["github_ready_event_actor"]
+        or converted.commit_id is not None
+    ):
+        raise LifecyclePublicationError(
+            "GitHub Draft conversion is not the exact authenticated correction event"
+        )
+    return VerifiedReadyCorrectionConversion(
+        repository=authorization["repository"],
+        pull_request=authorization["pull_request"],
+        head_sha=authorization["resulting_head_sha"],
+        authorization_digest=authorization["event_digest"],
+        authorized_ready_event=before[-1],
+        before=before,
+        event=converted,
+        _seal=_READY_CORRECTION_CONVERSION_SEAL,
+    )
+
+
+def _reconstruct_ready_correction_conversion(
+    authorization: Mapping[str, Any],
+    observed: tuple[GitHubPullRequestTimelineEvent, ...],
+) -> VerifiedReadyCorrectionConversion:
+    """Reconstruct one exact conversion from complete authenticated chronology."""
+
+    if not observed:
+        raise LifecyclePublicationError(
+            "GitHub Ready correction chronology lacks its Draft conversion"
+        )
+    return _authenticate_ready_correction_conversion(
+        authorization=authorization,
+        before=observed[:-1],
+        after=observed,
+    )
+
+
+def _require_ready_correction_conversion(
+    value: VerifiedReadyCorrectionConversion,
+    authorization: Mapping[str, Any],
+    observed: tuple[GitHubPullRequestTimelineEvent, ...],
+) -> None:
+    if isinstance(value, VerifiedReadyCorrectionConversion):
+        _require_bound_github_ready_event(value.before, authorization)
+    if (
+        not isinstance(value, VerifiedReadyCorrectionConversion)
+        or value._seal is not _READY_CORRECTION_CONVERSION_SEAL
+        or value.repository != authorization["repository"]
+        or value.pull_request != authorization["pull_request"]
+        or value.head_sha != authorization["resulting_head_sha"]
+        or value.authorization_digest != authorization["event_digest"]
+        or value.authorized_ready_event
+        != GitHubPullRequestTimelineEvent(
+            kind="READY_FOR_REVIEW",
+            database_id=authorization["github_ready_event_database_id"],
+            node_id=authorization["github_ready_event_node_id"],
+            actor=authorization["github_ready_event_actor"],
+            created_at=authorization["github_ready_event_created_at"],
+            commit_id=None,
+        )
+        or observed != value.before + (value.event,)
+    ):
+        raise LifecyclePublicationError(
+            "GitHub Draft conversion evidence is not from this correction attempt"
+        )
+    reconstructed = _reconstruct_ready_correction_conversion(
+        authorization, observed
+    )
+    if (
+        reconstructed.before != value.before
+        or reconstructed.event != value.event
+        or reconstructed.authorized_ready_event != value.authorized_ready_event
+    ):
+        raise LifecyclePublicationError(
+            "GitHub Draft conversion chronology changed"
+        )
 
 
 def _verify_pre_enrollment_genesis_boundary(
@@ -1018,7 +1243,10 @@ def _require_exact_successor(
     ):
         raise LifecyclePublicationError("terminal publication is not one exact allowed successor")
     event = new_events[-1]
-    if event.get("transition_kind") == "INVALID_REVIEW_CONSUMPTION_CORRECTED":
+    if event.get("transition_kind") in {
+        "INVALID_REVIEW_CONSUMPTION_CORRECTED",
+        "INVALID_REVIEW_DERIVED_READY_CORRECTED",
+    }:
         if (
             event.get("current_publication_oid")
             != predecessor_document.get("_object_oid")
@@ -1751,11 +1979,22 @@ def enroll_existing_lifecycle(
 def advance_current_terminal(
     serialized_evidence: bytes | str,
     *, signer_identity: str, signer: authority.Signer,
+    ready_correction_conversion: VerifiedReadyCorrectionConversion | None = None,
 ) -> VerifiedLifecyclePublication:
     """Append one exact #750 successor to the protected global journal."""
 
     bundle, bundle_raw = _canonical_bundle(serialized_evidence)
     lifecycle_bundle = _lifecycle_bundle({"lifecycle_evidence": bundle})
+    requested_events = lifecycle_bundle.get("transition_authorizations")
+    if ready_correction_conversion is not None and (
+        not isinstance(requested_events, list)
+        or not requested_events
+        or requested_events[-1].get("transition_kind")
+        != "INVALID_REVIEW_DERIVED_READY_CORRECTED"
+    ):
+        raise LifecyclePublicationError(
+            "GitHub Draft conversion evidence targets another transition"
+        )
     if bundle.get("kind") == authority.EXACT_ADOPTION_EVIDENCE_KIND:
         proof = bundle.get("exact_state_adoption_proof")
         if not isinstance(proof, dict):
@@ -1807,11 +2046,30 @@ def advance_current_terminal(
             isinstance(successor_events, list)
             and successor_events
             and successor_events[-1].get("transition_kind")
-            == "INVALID_REVIEW_CONSUMPTION_CORRECTED"
+            in {
+                "INVALID_REVIEW_CONSUMPTION_CORRECTED",
+                "INVALID_REVIEW_DERIVED_READY_CORRECTED",
+            }
         ):
-            eligible = verify_invalid_review_consumption_correction(
-                successor_events[-1]
-            )
+            if (
+                successor_events[-1].get("transition_kind")
+                == "INVALID_REVIEW_CONSUMPTION_CORRECTED"
+            ):
+                if ready_correction_conversion is not None:
+                    raise LifecyclePublicationError(
+                        "GitHub Draft conversion evidence targets another transition"
+                    )
+                eligible = verify_invalid_review_consumption_correction(
+                    successor_events[-1]
+                )
+            else:
+                if ready_correction_conversion is None:
+                    raise LifecyclePublicationError(
+                        "Ready correction publication requires exact Draft conversion evidence"
+                    )
+                eligible = verify_invalid_review_derived_ready_correction(
+                    successor_events[-1], conversion=ready_correction_conversion
+                )
             if (
                 eligible.publication_oid != predecessor_oid
                 or eligible.publication_digest
@@ -2178,6 +2436,106 @@ def verify_invalid_review_consumption_correction(
     ):
         raise LifecyclePublicationError(
             "invalid review correction differs from exact eligible CURRENT"
+        )
+    return current
+
+
+def verify_invalid_review_derived_ready_correction(
+    authorization: Mapping[str, Any],
+    *,
+    conversion: VerifiedReadyCorrectionConversion | None = None,
+) -> VerifiedLifecyclePublication:
+    """Authenticate exact CURRENT and live Ready event for one compensation."""
+
+    if not isinstance(authorization, Mapping):
+        raise LifecyclePublicationError(
+            "invalid review-derived Ready correction is malformed"
+        )
+    try:
+        repository = authority._require_repository(authorization.get("repository"))
+        issue = authority._require_positive_int(
+            authorization.get("delivery_issue"), "delivery issue"
+        )
+        policy = authority._load_lifecycle_trust_policy(repository)
+        event = authority._verify_transition_authorization(
+            authorization,
+            accepted_signers=policy.transition_signer_identities,
+            signature_verifier=authority._policy_signature_verifier(policy),
+        )
+        current = verify_current_lifecycle_authority(repository, issue)
+        current_tree = _resolve_delivery_head_tree(policy, current.lifecycle.head_sha)
+        live_pull_request = _observe_pre_enrollment_pull_request(
+            repository, current.lifecycle.pull_request
+        )
+        timeline = _observe_pull_request_lifecycle_timeline(
+            repository, current.lifecycle.pull_request
+        )
+        if conversion is None:
+            _require_bound_github_ready_event(timeline, event)
+        else:
+            _require_ready_correction_conversion(conversion, event, timeline)
+        raw = current.serialized_lifecycle_evidence
+        bundle = authority._load_canonical_json(raw, "CURRENT lifecycle evidence")
+        if isinstance(bundle, dict) and bundle.get("kind") == authority.PUBLICATION_EVIDENCE_KIND:
+            bundle = bundle.get("lifecycle_evidence")
+        if not isinstance(bundle, dict):
+            raise authority.LifecycleAuthorityError(
+                "CURRENT lifecycle evidence is malformed"
+            )
+        events = bundle.get("transition_authorizations")
+        snapshots = bundle.get("authority_chain")
+        if not isinstance(events, list) or not isinstance(snapshots, list):
+            raise authority.LifecycleAuthorityError(
+                "CURRENT lifecycle evidence chain is malformed"
+            )
+        authority._require_invalid_review_derived_ready_correction_suffix(
+            events, snapshots, event
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecyclePublicationError(str(exc)) from exc
+    state = current.lifecycle.state
+    ready_history = state.get("ready_history")
+    if (
+        current.lifecycle.historical_proof_mode != authority.NATIVE_PROOF_MODE
+        or event["repository"] != current.lifecycle.repository
+        or event["delivery_issue"] != current.lifecycle.delivery_issue
+        or event["pull_request"] != current.lifecycle.pull_request
+        or event["lifecycle_id"] != current.lifecycle.lifecycle_id
+        or event["predecessor_authority_digest"] != current.lifecycle.authority_digest
+        or event["predecessor_head_sha"] != current.lifecycle.head_sha
+        or event["resulting_head_sha"] != current.lifecycle.head_sha
+        or event["initialization_evidence_digest"]
+        != current.lifecycle.initialization_evidence_digest
+        or event["current_publication_oid"] != current.publication_oid
+        or event["current_publication_digest"] != current.publication_digest
+        or event["current_authority_digest"] != current.lifecycle.authority_digest
+        or event["current_tree_sha"] != current_tree
+        or live_pull_request
+        != {
+            "repository": repository,
+            "pull_request": current.lifecycle.pull_request,
+            "state": "OPEN",
+            "draft": conversion is not None,
+            "head_sha": current.lifecycle.head_sha,
+        }
+        or state.get("unrestricted_review_count") != 1
+        or state.get("remediation_cycle_count") != 0
+        or state.get("draft") is not False
+        or state.get("ready") is not True
+        or state.get("ready_transition_count") != 1
+        or not isinstance(ready_history, list)
+        or len(ready_history) != 1
+        or ready_history[0].get("transition_kind") != "DRAFT_TO_READY"
+        or ready_history[0].get("event_authorization_digest")
+        != event["unauthorized_ready_event_digest"]
+        or state.get("exceptional_recovery_count") != 0
+        or state.get("exceptional_recovery_history") != []
+        or state.get("exceptional_continuation_count") != 0
+        or state.get("exceptional_continuation_history") != []
+        or state.get("cycle_3_absent") is not True
+    ):
+        raise LifecyclePublicationError(
+            "invalid review-derived Ready correction differs from exact eligible CURRENT"
         )
     return current
 
