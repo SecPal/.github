@@ -7413,63 +7413,20 @@ class FastPathTests(TestCase):
     def test_registered_validation_test_is_independent_of_candidate_head_ancestry(
         self,
     ) -> None:
+        # Reuse the immutable historical source already shipped for #771. Its
+        # production closure predates qualified-remediation successor loss.
+        historical_base = "daa953695caaed338b81dad1fc8d8f7012382ae7"
+        historical_tree = "43642afd3066209f07912228781e368bbfea17d4"
+        bundle = FIXTURES / "issue771-exact-candidate.bundle"
         with tempfile.TemporaryDirectory(
             prefix="secpal-historical-draft-validation-"
         ) as directory:
             repository = Path(directory) / "repository"
             subprocess.run(
-                ["git", "clone", "-q", str(REPO_ROOT), str(repository)],
-                check=True,
-            )
-            subprocess.run(
-                [
-                    "git",
-                    "remote",
-                    "set-url",
-                    "origin",
-                    "https://github.com/SecPal/.github.git",
-                ],
-                cwd=repository,
-                check=True,
-            )
-            protected_main_only_module = (
-                repository
-                / "scripts/secpal_pr_review/qualified_remediation_successor_loss.py"
-            )
-            self.assertTrue(protected_main_only_module.is_file())
-            protected_main_only_module.unlink()
-            shutil.copy2(
-                Path(__file__), repository / "tests/secpal-pr-review-actions-unit.py"
-            )
-            subprocess.run(
-                [
-                    "git",
-                    "add",
-                    "--update",
-                    "scripts/secpal_pr_review/qualified_remediation_successor_loss.py",
-                ],
-                cwd=repository,
-                check=True,
-            )
-            subprocess.run(
-                ["git", "add", "tests/secpal-pr-review-actions-unit.py"],
-                cwd=repository,
-                check=True,
-            )
-            accepted_main = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=repository,
+                ["git", "clone", "-q", "--no-checkout", str(REPO_ROOT), str(repository)],
                 check=True,
                 capture_output=True,
-                text=True,
-            ).stdout.strip()
-            candidate_tree = subprocess.run(
-                ["git", "write-tree"],
-                cwd=repository,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
+            )
             environment = {
                 **os.environ,
                 "GIT_AUTHOR_NAME": "SecPal Test",
@@ -7477,24 +7434,61 @@ class FastPathTests(TestCase):
                 "GIT_COMMITTER_NAME": "SecPal Test",
                 "GIT_COMMITTER_EMAIL": "test@secpal.invalid",
             }
-            historical_draft = subprocess.run(
-                ["git", "commit-tree", candidate_tree],
-                cwd=repository,
+
+            def git(*arguments: str, input: str | None = None) -> str:
+                return subprocess.run(
+                    ["git", *arguments],
+                    cwd=repository,
+                    check=True,
+                    input=input,
+                    capture_output=True,
+                    text=True,
+                    env=environment,
+                ).stdout.strip()
+
+            git("remote", "set-url", "origin", "https://github.com/SecPal/.github.git")
+            git("checkout", "-q", "--detach", "HEAD")
+            # The execution root can itself have historical HEAD with current
+            # validation staged before integration. Preserve its whole tracked
+            # source tree, including edits under test, instead of copying one
+            # modern test onto an incompatible historical production closure.
+            source_delta = subprocess.run(
+                ["git", "diff", "--binary", "HEAD", "--"],
+                cwd=REPO_ROOT,
                 check=True,
-                input="synthetic historical Draft candidate\n",
                 capture_output=True,
                 text=True,
-                env=environment,
-            ).stdout.strip()
-            subprocess.run(
-                ["git", "update-ref", "refs/heads/authenticated-main", accepted_main],
-                cwd=repository,
-                check=True,
+            ).stdout
+            if source_delta:
+                git("apply", "--index", "--binary", input=source_delta)
+            validation_tree = git("write-tree")
+            git(
+                "fetch", "-q", str(bundle),
+                "refs/heads/issue771-resolved-fixture:refs/heads/historical-fixture",
             )
-            subprocess.run(
-                ["git", "checkout", "-q", "--detach", historical_draft],
-                cwd=repository,
-                check=True,
+            self.assertEqual(
+                git("merge-base", historical_base, "refs/heads/historical-fixture"),
+                historical_base,
+            )
+            self.assertEqual(git("rev-parse", f"{historical_base}^{{tree}}"), historical_tree)
+            accepted_main = git(
+                "commit-tree", validation_tree, "-p", historical_base,
+                input="current validation source fixture\n",
+            )
+            historical_draft = git(
+                "commit-tree", historical_tree, "-p", historical_base,
+                input="historical Draft source fixture\n",
+            )
+            git("checkout", "-q", "--force", "--detach", historical_draft)
+            protected_main_only_module = (
+                repository
+                / "scripts/secpal_pr_review/qualified_remediation_successor_loss.py"
+            )
+            self.assertFalse(protected_main_only_module.exists())
+            self.assertEqual(git("write-tree"), historical_tree)
+            self.assertEqual(
+                git("rev-list", "--parents", "-n", "1", "HEAD").split(),
+                [historical_draft, historical_base],
             )
             ancestry = subprocess.run(
                 ["git", "merge-base", "--is-ancestor", accepted_main, "HEAD"],
@@ -7502,55 +7496,43 @@ class FastPathTests(TestCase):
                 check=False,
             )
             self.assertEqual(ancestry.returncode, 1)
-            topology = subprocess.run(
-                ["git", "rev-list", "--parents", "-n", "1", "HEAD"],
-                cwd=repository,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.split()
-            self.assertEqual(topology, [historical_draft])
-            self.assertFalse(protected_main_only_module.exists())
 
-            validation = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "unittest",
-                    "tests/secpal-pr-review-actions-unit.py",
-                    "-k",
-                    "test_ready_integration_reconstructs_prior_policy_from_central_history",
-                ],
-                cwd=repository,
-                check=False,
-                capture_output=True,
-                text=True,
+            # Use the maintained PRE_ENROLLMENT tree derivation. Parent 2
+            # supplies its complete source closure through that authenticated
+            # boundary; HEAD remains the old Draft throughout validation.
+            mechanical_tree, conflicts = actions._mechanical_integration_result(
+                repository, [historical_draft, accepted_main]
             )
-            dependency_owner = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "unittest",
-                    "tests/secpal-pr-review-actions-unit.py",
-                    "-k",
-                    "test_exact_qualified_successor_uses_existing_publication_authority",
-                ],
-                cwd=repository,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-
-        self.assertEqual(
-            validation.returncode,
-            0,
-            f"{validation.stdout}\n{validation.stderr}",
-        )
-        self.assertNotEqual(dependency_owner.returncode, 0)
-        self.assertIn(
-            "cannot import name 'qualified_remediation_successor_loss'",
-            dependency_owner.stderr,
-        )
+            self.assertEqual(conflicts, [])
+            self.assertEqual(mechanical_tree, validation_tree)
+            git("merge", "--no-commit", "--no-ff", accepted_main)
+            self.assertEqual(git("rev-parse", "HEAD"), historical_draft)
+            self.assertEqual(git("rev-parse", "MERGE_HEAD"), accepted_main)
+            self.assertEqual(git("write-tree"), mechanical_tree)
+            for target in (
+                "test_ready_integration_reconstructs_prior_policy_from_central_history",
+                "test_exact_qualified_successor_uses_existing_publication_authority",
+            ):
+                with self.subTest(target=target):
+                    validation = subprocess.run(
+                        [
+                            sys.executable, "-m", "unittest",
+                            "tests/secpal-pr-review-actions-unit.py", "-k", target,
+                        ],
+                        cwd=repository,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(
+                        validation.returncode, 0,
+                        f"{validation.stdout}\n{validation.stderr}",
+                    )
+                    self.assertIn("Ran 1 test", validation.stderr)
+                    self.assertNotIn("skipped=", validation.stderr)
+            self.assertEqual(git("rev-parse", "HEAD"), historical_draft)
+            self.assertEqual(git("write-tree"), mechanical_tree)
+            self.assertEqual(git("diff", "--exit-code"), "")
 
     def test_ready_integration_reconstructs_prior_policy_from_central_history(self) -> None:
         historical_head = "b" * 40
