@@ -114,9 +114,10 @@ parser, duplicated-invariant, hidden-boundary, or insufficient-diagnostic defect
 MUST NOT continue as an unbounded patch/rerun loop.
 
 Before the next run, classify whether the failures share a structural cause. If
-they do, the structural correction is a prerequisite under the canonical
-replanning rules. The current real-system leaf is blocked until that prerequisite
-is delivered or its own contract is legitimately replanned.
+they do, evaluate the structural correction under the canonical work-graph
+contract's Prerequisite Necessity rule. When that judgment proves an independent
+prerequisite, the current real-system leaf is blocked until it is delivered or
+the leaf's own contract is legitimately replanned.
 
 The purpose is not to forbid iterative integration work. The purpose is to stop
 using a paid or destructive external system as a one-assertion-at-a-time debugger
