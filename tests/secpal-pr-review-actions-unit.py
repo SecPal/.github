@@ -7466,6 +7466,10 @@ class FastPathTests(TestCase):
                 "fetch", "-q", str(bundle),
                 "refs/heads/issue771-resolved-fixture:refs/heads/historical-fixture",
             )
+            self.assertEqual(
+                git("merge-base", historical_base, "refs/heads/historical-fixture"),
+                historical_base,
+            )
             self.assertEqual(git("rev-parse", f"{historical_base}^{{tree}}"), historical_tree)
             accepted_main = git(
                 "commit-tree", validation_tree, "-p", historical_base,
