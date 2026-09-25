@@ -1187,6 +1187,13 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         "cycle_3",
     }
     source_mode = value.get("source_authority_mode")
+    source_value = value.get("source_authority")
+    recovered_adoption_root = (
+        authority_mode == "ADOPTED"
+        and source_mode == "EXACT_STATE_ADOPTION_V3"
+        and isinstance(source_value, dict)
+        and "ready_source_recovery" in source_value
+    )
     if authority_mode == "ADOPTED":
         lifecycle_keys |= {
             "ready_transition_count",
@@ -1237,8 +1244,10 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
                 "EXACT_STATE_ADOPTION_V3",
                 "EXISTING_AUTHORITY_COMPOSITION",
             }
+            and not recovered_adoption_root
             else {"sequence", "transition_kind", "observation_digest"}
             if source_mode == "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS"
+            or recovered_adoption_root
             else None
         )
         if (
@@ -1263,6 +1272,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
                         "EXACT_STATE_ADOPTION_V3",
                         "EXISTING_AUTHORITY_COMPOSITION",
                     }
+                    and not recovered_adoption_root
                     else "observation_digest"
                 ),
                 "Ready integration transition authorization",
@@ -1291,7 +1301,10 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         "prior_delivery_tree_sha": _require_oid(value.get("prior_delivery_tree_sha"), "prior authority tree"),
         "prior_validation_receipt_digest": (
             None
-            if source_mode == "EXISTING_AUTHORITY_COMPOSITION"
+            if source_mode in {
+                "EXACT_STATE_ADOPTION_V3",
+                "EXISTING_AUTHORITY_COMPOSITION",
+            }
             and value.get("prior_validation_receipt_digest") is None
             else _require_digest(
                 value.get("prior_validation_receipt_digest"),
@@ -1384,17 +1397,143 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
     companions = value.get("historical_companions")
     expected_companions = {
         "reviewed_state_bytes": "UNAVAILABLE",
-        "validation_receipt_bytes": "UNAVAILABLE",
-        "final_attestation_bytes": "UNAVAILABLE",
+        "validation_receipt_bytes": (
+            "ABSENT_NEVER_ISSUED" if recovered_adoption_root else "UNAVAILABLE"
+        ),
+        "final_attestation_bytes": (
+            "ABSENT_NEVER_ISSUED" if recovered_adoption_root else "UNAVAILABLE"
+        ),
         "historical_bytes_reconstructed": False,
     }
     if companions != expected_companions:
         raise SecurityBlocker("adopted Ready historical companion status is invalid")
-    source = value.get("source_authority")
+    source = source_value
     if source_mode == "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS":
         return _normalize_legacy_enrolled_ready_source(
             normalized, source, source_mode, companions
         )
+    if recovered_adoption_root:
+        source_keys = {
+            "proof_version",
+            "source_parent_sha",
+            "source_signer_identity",
+            "commit_signature_evidence_digest",
+            "historical_evidence",
+            "current_safety_digest",
+            "current_safety_receipt_digest",
+            "observed_history_digest",
+            "intended_state_digest",
+            "head_advanced_count",
+            "head_advanced_history_digest",
+            "loss_admission_id",
+            "loss_admission_digest",
+            "review_budget_admission_id",
+            "review_budget_admission_digest",
+            "adoption_proof_digest",
+            "adoption_authorization_id",
+            "adoption_authorization_digest",
+            "enrollment_publication",
+            "ready_source_recovery",
+        }
+        if not isinstance(source, dict) or set(source) != source_keys:
+            raise SecurityBlocker("adopted Ready root source authority is malformed")
+        historical = normalize_exact_state_adoption_historical_evidence(
+            source.get("historical_evidence")
+        )
+        if (
+            historical["state"] != "ABSENT_NEVER_ISSUED"
+            or historical["validation_receipt_digest"] is not None
+            or normalized["prior_validation_receipt_digest"] is not None
+            or normalized["prior_final_attestation_digest"] is not None
+        ):
+            raise SecurityBlocker("adopted Ready root historical evidence is invalid")
+        enrollment = source.get("enrollment_publication")
+        recovery = source.get("ready_source_recovery")
+        recovery_keys = {
+            "object_oid",
+            "publication_digest",
+            "authorization_id",
+            "authorization_digest",
+            "commit_signature_evidence_digest",
+            "fresh_validation_receipt_digest",
+            "feedback_assessment_digest",
+            "historical_evidence_loss_proof_digest",
+        }
+        if (
+            not isinstance(enrollment, dict)
+            or set(enrollment) != {"object_oid", "publication_digest"}
+            or enrollment != normalized["publication"]
+            or not isinstance(recovery, dict)
+            or set(recovery) != recovery_keys
+            or recovery.get("object_oid") == enrollment.get("object_oid")
+        ):
+            raise SecurityBlocker("adopted Ready root recovery authority is malformed")
+        if (
+            source.get("proof_version") != "3.0"
+            or _require_oid(source.get("source_parent_sha"), "adopted source parent")
+            == normalized["prior_delivery_head_sha"]
+            or not _require_string(
+                source.get("source_signer_identity"), "adopted source signer"
+            )
+            or source.get("source_signer_identity")
+            != normalized["expected_signer"]["identity"]
+        ):
+            raise SecurityBlocker("adopted Ready root source authority is invalid")
+        head_advanced_count = source.get("head_advanced_count")
+        if (
+            isinstance(head_advanced_count, bool)
+            or not isinstance(head_advanced_count, int)
+            or head_advanced_count < 0
+        ):
+            raise SecurityBlocker("adopted Ready root history is invalid")
+        for field, label in (
+            ("commit_signature_evidence_digest", "adopted commit signature evidence"),
+            ("current_safety_digest", "adopted current safety"),
+            ("current_safety_receipt_digest", "adopted current-safety receipt"),
+            ("observed_history_digest", "adopted observed history"),
+            ("intended_state_digest", "adopted intended state"),
+            ("head_advanced_history_digest", "adopted head history"),
+            ("loss_admission_digest", "validation evidence loss admission"),
+            ("review_budget_admission_digest", "review budget admission"),
+            ("adoption_proof_digest", "exact adoption proof"),
+            ("adoption_authorization_digest", "exact adoption authorization"),
+        ):
+            _require_digest(source.get(field), label)
+        for field, label in (
+            ("loss_admission_id", "validation evidence loss admission identity"),
+            ("review_budget_admission_id", "review budget admission identity"),
+            ("adoption_authorization_id", "exact adoption authorization identity"),
+        ):
+            _require_string(source.get(field), label)
+        _require_oid(enrollment.get("object_oid"), "adopted enrollment publication")
+        _require_digest(
+            enrollment.get("publication_digest"), "adopted enrollment publication"
+        )
+        _require_oid(recovery.get("object_oid"), "Ready recovery publication")
+        _require_string(
+            recovery.get("authorization_id"), "Ready recovery authorization identity"
+        )
+        for field, label in (
+            ("publication_digest", "Ready recovery publication"),
+            ("authorization_digest", "Ready recovery authorization"),
+            (
+                "commit_signature_evidence_digest",
+                "Ready recovery commit signature evidence",
+            ),
+            ("fresh_validation_receipt_digest", "Ready recovery current validation"),
+            ("feedback_assessment_digest", "Ready recovery feedback assessment"),
+            (
+                "historical_evidence_loss_proof_digest",
+                "Ready recovery evidence-loss proof",
+            ),
+        ):
+            _require_digest(recovery.get(field), label)
+        normalized.update(
+            source_authority_mode="EXACT_STATE_ADOPTION_V3",
+            source_authority=copy.deepcopy(source),
+            historical_companions=copy.deepcopy(companions),
+        )
+        return normalized
     source_keys = {
         "proof_version",
         "source_parent_sha",

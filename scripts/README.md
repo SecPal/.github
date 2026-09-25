@@ -316,6 +316,19 @@ come from a required distinct repository root whose implementation bytes may
 legitimately differ from main. Ordinary schema `1.1` and the single two-parent
 integration verifier are unchanged.
 
+The same `EXACT_STATE_ADOPTION_V3` mode accepts the original enrollment-root
+shape only when its predecessor is null, both transition arrays are empty, and
+the protected journal authenticates the exact current Ready-source recovery.
+For a schema-1.2 loss admission whose historical state is
+`ABSENT_NEVER_ISSUED`, the enrollment current-safety receipt remains current
+safety and the prior historical receipt stays null. The recovery's publication,
+authorization, source signature, reviewed state, head, tree, lifecycle and
+CURRENT bindings enter the derived authority. An already published canonical
+tag for that head remains the immutable signed consumption marker, but its
+legacy-shaped manifest digest is not accepted as the corrected authority.
+Non-root v3 chains and `PRESENT` / `UNAVAILABLE` historical evidence retain
+their existing rules.
+
 After an explicitly authenticated cycle-limit blocker, a separate user
 authorization may select `--exceptional-recovery-evidence` with exact recovery
 issue/authorization selectors and eligibility evidence. The closed artifact
