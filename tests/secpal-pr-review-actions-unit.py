@@ -7525,6 +7525,7 @@ class FastPathTests(TestCase):
                         f"{validation.stdout}\n{validation.stderr}",
                     )
                     self.assertIn("Ran 1 test", validation.stderr)
+                    self.assertNotIn("skipped=", validation.stderr)
             self.assertEqual(git("rev-parse", "HEAD"), historical_draft)
             self.assertEqual(git("write-tree"), mechanical_tree)
             self.assertEqual(git("diff", "--exit-code"), "")
