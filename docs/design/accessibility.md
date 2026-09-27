@@ -5,7 +5,10 @@ SPDX-License-Identifier: CC0-1.0
 
 # Accessibility
 
-SecPal and GuardGuide surfaces should be usable with keyboard navigation, assistive technology, high-contrast needs, and light or dark themes. Product repositories own testing tools and implementation details, but shared design decisions must preserve the requirements in this document.
+SecPal-family product surfaces should be usable with keyboard navigation, assistive
+technology, high-contrast needs, and light or dark themes. Owning repositories
+control testing tools and implementation details, but shared design decisions
+must preserve the requirements in this document.
 
 ## Core Requirements
 

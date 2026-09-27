@@ -1,28 +1,55 @@
 <!--
-SPDX-FileCopyrightText: 2026 SecPal
+SPDX-FileCopyrightText: 2026 SecPal Contributors
 SPDX-License-Identifier: CC0-1.0
 -->
 
 # Brand Architecture
 
-SecPal is the platform and product family. Use SecPal when referring to the suite, the organization-level product direction, shared standards, repository governance, and cross-product materials.
+SecPal is the organization, company, and brand. The umbrella is the SecPal
+product family. Use `SecPal product family`, or a semantically equivalent phrase
+suited to the surface, when the family meaning needs to be explicit. Do not use
+`SecPal Suite` as a formal family name.
 
-GuardGuide by SecPal is a standalone product within the SecPal family. Use the full name when introducing the product in public copy, documentation titles, release notes, marketplace listings, app store copy, and first mentions in repository documentation.
+The main product is also named SecPal. This deliberate naming asymmetry does not
+require a suffix to distinguish the product from the organization.
 
 ## Product Hierarchy
 
-- **Family/platform:** SecPal
-- **Standalone product:** GuardGuide by SecPal
-- **Short product reference after first mention:** GuardGuide
+- **Organization, company, and brand:** SecPal
+- **Product family:** SecPal product family
+- **Main product:** SecPal
+- **Specialist product:** SecPal Assure
+- **Specialist product:** SecPal Visit
 
-Do not describe GuardGuide as a feature, module, edition, or subpage of SecPal. It can integrate with the SecPal platform, but its public brand position is a standalone product endorsed by the family name.
+SecPal Assure and SecPal Visit belong to the family whether they operate
+standalone or integrate with the main SecPal product. Standalone capability does
+not make either product an independent brand outside the SecPal family.
 
-In compact footer surfaces, each brand uses its own self-attribution lockup `Powered by <Brand> – <Slogan>` rather than the long-form `GuardGuide by SecPal` first-mention name. See `footer-wording.md` for the exact wording and `slogans.md` for the approved slogan strings (none of which are translated).
+GuardGuide is retired from the current product strategy and active brand
+architecture. Historical references remain valid evidence of the former
+`GuardGuide by SecPal` hierarchy, but neither name is a current product brand.
 
-## Rationale
+## Status Boundary
 
-This hierarchy keeps SecPal broad enough to cover current and future products while giving GuardGuide a clear public name that can stand on its own. The `by SecPal` endorsement connects the product to the family in body copy, marketplace listings, and first public mentions; compact footers use each brand's own `Powered by <Brand>` self-attribution because the footer line targets that brand's own homepage and source repository.
+An approved name establishes strategic product identity, not implementation or
+availability. The hierarchy above does not establish that SecPal Assure or
+SecPal Visit is implemented, released, generally available, deployed,
+integrated, or production-qualified. Those claims require current evidence under
+the [Public Status Semantics](../public-status-semantics.md).
 
 ## Repository Scope
 
-This repository documents the shared brand rules. Product repositories own product-specific implementation details, runtime configuration, screenshots, app icons, and distributable brand assets.
+This repository owns the shared hierarchy, exact public names, allowed short
+references, slogan approval, and organization-wide presentation rules. Owning
+product repositories, where they exist, own runtime configuration, screenshots,
+app icons, distributable assets, product-specific implementation details, and
+evidence of current status.
+
+A product name does not require a same-named repository. Repository topology,
+standalone operation, or integration topology does not create a brand identity.
+
+## Authority
+
+[BRAND-0007](../adr/BRAND-0007-secpal-product-family-architecture.md)
+defines the current hierarchy and supersedes BRAND-0001 for that purpose.
+BRAND-0001 remains historical evidence.

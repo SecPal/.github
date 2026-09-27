@@ -7,7 +7,11 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Status
 
-**Accepted**
+**Superseded by BRAND-0007**
+
+BRAND-0007 replaces this ADR as authority for the current product-family
+hierarchy. The decision below remains unchanged as historical evidence of the
+former GuardGuide hierarchy.
 
 ## Date
 

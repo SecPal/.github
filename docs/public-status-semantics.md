@@ -445,14 +445,15 @@ commitment.
 
 ## 6. Illustrative SecPal applications
 
-These examples were inspected on 2026-08-29 to demonstrate use of the vocabulary.
-They are illustrative snapshots, not new authority for the underlying technical
-state. Authors MUST consult the named current owners before repeating any factual
-state.
+These examples were initially inspected on 2026-08-29 to demonstrate use of the
+vocabulary. The Accepted-ADR-range example was refreshed on 2026-09-06 to include
+ADR-024. They are illustrative snapshots, not new authority for the underlying
+technical state. Authors MUST consult the named current owners before repeating
+any factual state.
 
 ### Accepted production architecture and unfinished delivery
 
-[ADR-017 through ADR-023](adr/README.md) are currently indexed as Accepted and
+[ADR-017 through ADR-024](adr/README.md) are currently indexed as Accepted and
 therefore support appropriately scoped Accepted Architecture wording.
 [Epic #695](https://github.com/SecPal/.github/issues/695) and its owning
 implementation work separately govern migration and delivery. ADR acceptance

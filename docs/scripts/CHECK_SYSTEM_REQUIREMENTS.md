@@ -51,7 +51,8 @@ If you want to run workflow linting locally outside pre-commit and CI, install `
 
 - Git user.name - critical
 - Git user.email - critical
-- GPG commit signing - recommended
+- Cryptographic commit signing - required by SecPal; SSH is preferred for new
+  setups and OpenPGP remains supported
 
 ### 2. API Repository (Laravel + Native PHP Runtime)
 
@@ -80,7 +81,7 @@ If you want to run workflow linting locally outside pre-commit and CI, install `
 
 **Node.js & Package Managers:**
 
-- Node.js 22.x+ - critical
+- Node.js 24.x+ - critical; Node 24 LTS is the canonical supported baseline
 - npm - critical
 - yarn - optional
 - pnpm - optional
@@ -96,7 +97,7 @@ If you want to run workflow linting locally outside pre-commit and CI, install `
 
 **Node.js & npm:**
 
-- Node.js 22.x+ - critical
+- Node.js 24.x+ - critical; Node 24 LTS is the canonical supported baseline
 - npm - critical
 
 **Local Dependencies (contracts/node_modules):**
@@ -107,7 +108,7 @@ If you want to run workflow linting locally outside pre-commit and CI, install `
 
 **Node.js & npm:**
 
-- Node.js 22.x+ - critical
+- Node.js 24.x+ - critical; Node 24 LTS is the canonical supported baseline
 - npm - critical
 
 **Java & Android SDK:**
@@ -232,8 +233,11 @@ php artisan test
 
 ```bash
 git config --global commit.gpgsign true
-git config --global user.signingkey <your-gpg-key-id>
 ```
+
+Keep an existing valid SSH or OpenPGP signing configuration unchanged. If no
+valid signing credential is configured, or when creating a new setup, see
+[Signing Commits](../../CONTRIBUTING.md#signing-commits).
 
 ## Future Enhancements
 

@@ -5,7 +5,7 @@ SPDX-License-Identifier: CC0-1.0
 
 # SecPal Product and Public Positioning Contract
 
-## Status and authority
+## Status and Authority
 
 Canonical. This document is the single organization-wide authority for what
 SecPal product descriptions mean and which claims fall outside the accepted
@@ -20,61 +20,83 @@ typography, footer wording, and other presentation mechanics.
 Short and long descriptions MAY be adapted to their surface and audience. They
 MUST remain semantically consistent with this contract and MUST distinguish
 intended direction from current implementation. No paragraph in this document
-is a universal text that every public surface must copy verbatim.
+is universal text that every public surface must copy verbatim.
 
-## Stable product principles
+## Stable Product Principles
 
 The principles in this section define SecPal's durable public position. They do
-not assert that every intended domain or capability is already implemented.
+not assert that every intended product or capability is implemented.
 
-### Identity, audience, and category
+### Organization and Product-Family Positioning
 
-SecPal is being built for private security services operating in Germany. This
-describes the operating and domain context, not the nationality or ownership of
-the companies that use SecPal. The focus is deliberate because current project
-knowledge and domain modelling concern the German private-security environment.
-Suitability for security markets outside Germany has not been established, and
-international expansion remains undecided.
+SecPal develops software for security and security-adjacent processes. Its
+customers do not have to be legally classified as security companies. A German
+surface may express the same guardrail as:
 
-The intended product-category semantics are:
+> SecPal entwickelt Software für Sicherheits- und sicherheitsnahe Prozesse.
+> Unsere Kunden müssen deshalb nicht zwingend Sicherheitsunternehmen sein.
 
-- German: **Betriebs- und Einsatzsoftware für private Sicherheitsdienste in
-  Deutschland**
-- English: **integrated operations software for private security services in
-  Germany**
+This is a semantic positioning boundary, not required marketing copy. SecPal
+remains anchored in security and security-adjacent processes; it is not a
+generic ERP, HR, visitor-management, document-management, or compliance
+platform. Generic business capabilities may be integrated where useful without
+changing that identity.
 
-In this context, German `Einsatzsoftware` does not translate to English
-`deployment software`, which could be confused with software or infrastructure
-deployment. The English category also MUST NOT be narrowed to workforce, human
-resources, or scheduling software.
+Current SecPal domain knowledge is strongly grounded in German security
+operations. German private-security requirements remain important to the main
+product and current domain modelling. That current focus is not a permanent
+organization-level customer eligibility rule, and it does not establish
+suitability or compliance for arbitrary foreign regulatory markets.
 
-Open Source is a separate stable characteristic of SecPal, not a decorative
-modifier whose meaning depends on one canonical marketing sentence. A public
-surface MAY combine the category and Open Source in surface-appropriate prose
-when it preserves both meanings and describes intended direction honestly.
+### Product Family and Main-Product Audience
 
-### Integrated-system direction
+The organization, company, and brand are named `SecPal`. The umbrella is the
+`SecPal product family`; `SecPal Suite` is not its formal name. The main product
+is also named `SecPal`. No suffix such as `Core`, `Operations`, `Guard`, or
+`Platform` is added merely to distinguish it from the organization.
 
-SecPal is intended as an integrated system spanning administrative and
-operational work where those domains meaningfully belong together. It is not
-defined by any one current or future capability, such as guard tours or OWKS,
-scheduling, guard book, employee or HR management, working time, contracts,
-instructions, reporting, or customer and site management. These are
-illustrative domains that may belong in SecPal; the list is neither a promised
-feature inventory nor a claim of present implementation.
+The main SecPal product is directly designed for professional security
+operations, including private security services, in-house security, plant
+protection (`Werkschutz`), corporate security (`Unternehmensschutz`), and
+comparable professional security organizations. The broader family boundary
+does not generalize this main-product audience to all companies.
 
-### Product boundary
+The approved specialist-product identities are `SecPal Assure` and `SecPal
+Visit`. They may be intended to operate standalone or integrated with SecPal
+and may serve a broader security-adjacent audience than the main product. Where
+the SecPal relationship is already unambiguous, nearby references may use
+`Assure` and `Visit`.
+
+GuardGuide is retired from the current SecPal product strategy and active brand
+architecture. `GuardGuide`, `GuardGuide by SecPal`, `VisitGuide`, and
+`VisitGuard` are not current product brands. Historical GuardGuide commits,
+issues, ADRs, and changelog entries remain truthful historical evidence.
+
+### Integrated-System Direction
+
+The main SecPal product is intended as an integrated system spanning
+administrative and operational work where those domains meaningfully belong
+together. It is not defined by any one current or future capability, such as
+guard tours or OWKS, scheduling, guard book, employee or HR management, working
+time, contracts, instructions, reporting, or customer and site management.
+These are illustrative domains that may belong in SecPal; the list is neither a
+promised feature inventory nor a claim of present implementation.
+
+Specialist products may operate independently or integrate with the main
+product. Standalone capability does not create an independent brand outside the
+SecPal product family and does not prove that a runtime integration exists.
+
+### Product Boundary
 
 SecPal should own domain-specific workflows, data relationships, and
-integrations where unified ownership creates meaningful operational value for
-private security services. SecPal does not need to reproduce arbitrary
-general-purpose enterprise software merely because a security company uses it.
-Generic business capabilities may be integrated instead of rebuilt when
-SecPal-specific ownership would not meaningfully improve the security-service
-workflow. Future boundary cases remain product decisions rather than being
-pre-decided here.
+integrations where unified ownership creates meaningful value for security or
+security-adjacent processes. The family does not need to reproduce arbitrary
+general-purpose enterprise software merely because a customer uses it. Generic
+business capabilities may be integrated instead of rebuilt when SecPal-specific
+ownership would not meaningfully improve the relevant workflow. Future boundary
+cases remain product decisions rather than being pre-decided here.
 
-### Intended user value
+### Intended User Value
 
 SecPal's direction goes beyond digitising existing paperwork. It is intended to:
 
@@ -91,46 +113,33 @@ Necessary complexity may live in the system; it should not unnecessarily live
 with the user. This is a product-design principle, not a legal, regulatory, or
 compliance guarantee.
 
-Private security work in Germany can involve substantial interaction between
-operational work, administration, documentation, employment, qualifications,
-scheduling, working time, authorisation, customer and site requirements, and
-other domain constraints. That context explains the value of an integrated
-system. It does not claim that SecPal currently models every applicable
-requirement, or models any requirement correctly merely because it is named.
+Professional security work in Germany can involve substantial interaction
+between operational work, administration, documentation, employment,
+qualifications, scheduling, working time, authorization, customer and site
+requirements, and other domain constraints. That context explains the value of
+an integrated main product. It does not claim that SecPal currently models
+every applicable requirement, or models any requirement correctly merely
+because it is named.
 
-### Foundation before feature volume
+### Foundation Before Feature Volume
 
 SecPal deliberately prefers durable technical and domain foundations over
 accumulating feature volume on structures already known to be wrong. Accepted
 architecture can evidence this project direction, but acceptance of an ADR does
 not prove that its target architecture has been implemented.
 
-### Honest pre-1.0 evolution
+### Honest Pre-1.0 Evolution
 
 SecPal is under active development and remains pre-1.0. Architecture, domain
 modelling, and implementation may change materially during this period. This is
 a stable statement about project maturity, not an apology and not permission to
 present intent as delivered capability.
 
-Public positioning MUST keep these distinct:
-
-- the stable principles in this contract;
-- architecture accepted through the ADR process;
-- current implementation supported by current evidence;
-- mutable product and domain decisions;
-- prioritisation; and
-- roadmap or exploratory work.
-
-The detailed vocabulary and evidence rules for public project-state claims are
-outside this contract. This contract establishes only the positioning-level
-distinction required to prevent direction or accepted architecture from being
-presented as implementation fact.
-
-### Open Source
+### Open Source and Independent Operation
 
 Open Source is fundamental to SecPal:
 
-- SecPal itself is open source, and its software is inspectable.
+- SecPal public product software is open source and inspectable.
 - Independent operation and self-hosting are intentional properties of the
   public project.
 - Portable technical contracts required for independent operation remain
@@ -141,55 +150,78 @@ Open Source is fundamental to SecPal:
 - External contribution and independent improvement are possible.
 
 These principles do not establish that SecPal is community-driven, has a large
-community, or has broad adoption. They also do not imply that every repository
-or internal project in the SecPal organization must be public.
+community, or has broad adoption. They do not imply that every repository or
+internal project in the SecPal organization must be public.
 
 ADR-023 preserves the distinction: private managed customer and fleet
 inventory, commercial policy, customer-specific orchestration, and other
 accepted managed-operations responsibilities may remain separate. Those private
-responsibilities do not make SecPal itself non-open-source, and private managed
-operations MUST NOT become a hidden technical dependency for independent
-operation. Licensing and Open Source wording remain subject to the
-[SecPal Licensing Policy](licensing-policy.md) and the existing repository and
+responsibilities do not make SecPal public product software non-open-source,
+and private managed operations MUST NOT become a hidden technical dependency
+for independent operation. Licensing and Open Source wording remain subject to
+the [SecPal Licensing Policy](licensing-policy.md) and existing repository and
 file-specific license authorities.
 
-## Mutable decisions
+## Product Identity and Status Semantics
 
-The stable principles do not freeze the exact feature or module set, feature
-names, product boundaries in every future case, implementation technology not
-otherwise fixed by an accepted ADR, current architecture details,
-prioritisation, roadmap order, release timing, or future international
-expansion. These examples are not exhaustive.
+Public positioning MUST keep these independent dimensions distinct:
+
+- an approved name or strategic product identity;
+- intended product direction;
+- architecture accepted through the ADR process;
+- current implementation supported by source evidence;
+- availability to users;
+- deployment in an environment; and
+- production qualification or operation.
+
+Naming `SecPal Assure` or `SecPal Visit` establishes approved strategic product
+identity and direction only. It does not prove that either product is
+implemented, released, generally available, deployed, integrated, or
+production-ready. Standalone or integrated operation describes permitted
+product direction, not current runtime evidence.
+
+Likewise, GuardGuide's removal from current brand authority does not erase its
+historical implementation or delivery evidence. Historical evidence does not
+restore GuardGuide as a current product identity.
+
+The detailed vocabulary, admissible evidence, and downgrade rules are defined
+by the [Public Status Semantics](public-status-semantics.md) established under
+[#763](https://github.com/SecPal/.github/issues/763). Public authors MUST use
+the strongest claim supported by current evidence and MUST NOT promote one
+dimension into another.
+
+## Mutable Decisions
+
+The stable principles do not freeze the exact feature or module set, future
+product set, implementation technology not otherwise fixed by an accepted ADR,
+current architecture details, prioritization, roadmap order, release timing,
+repository topology, or future international expansion. These examples are not
+exhaustive.
 
 Mutable decisions MUST remain free to evolve through their owning product,
 domain, architecture, implementation, and planning processes. Public wording
 MUST NOT convert them into permanent positioning commitments or guaranteed
 delivery.
 
-## Relationship to existing authorities
+## Relationship to Existing Authorities
 
 This contract delegates rather than duplicates established authority:
 
-- [BRAND-0001](adr/BRAND-0001-brand-architecture.md) and the accepted
-  [Brand Architecture](brand/brand-architecture.md) define SecPal as the
-  platform and product family and `GuardGuide by SecPal` as a standalone product
-  in that family. The existing first-mention and short-name rules remain
-  authoritative; this contract neither reopens nor alters that hierarchy.
+- [BRAND-0007](adr/BRAND-0007-secpal-product-family-architecture.md) and the
+  active [Brand Architecture](brand/brand-architecture.md) own the current
+  SecPal product-family hierarchy. BRAND-0007 supersedes BRAND-0001 for current
+  product identity while preserving BRAND-0001 as historical evidence.
 - [Naming](brand/naming.md) owns exact public names and capitalization.
 - [Slogans](brand/slogans.md) owns exact slogan and lockup presentation. The
   official SecPal slogan remains exactly `A guard's best friend`, and the
-  approved brand-plus-slogan lockup remains exactly
-  `SecPal – A guard's best friend`. Capitalization, apostrophe, separator,
-  spacing, terminal punctuation, translation, and variant rules are defined
-  there and MUST NOT be locally redefined.
+  approved lockup remains exactly `SecPal – A guard's best friend`.
 - The [SecPal Licensing Policy](licensing-policy.md) and
   [Licensing Wording](brand/licensing-wording.md) own licensing and
   human-readable Open Source wording within their respective scopes.
 - [ADR-014](adr/20260720-tenant-identity-access-model-adr014.md) remains the
   accepted tenant, identity, employee, and access boundary. Newer unresolved
-  `Employee`, `EmploymentPeriod`, `EmploymentTermsVersion`, working-time,
-  absence, or related ideas do not become accepted architecture through this
-  positioning contract.
+  employee, working-time, absence, or related ideas do not become accepted
+  architecture through this positioning contract.
 - [ADR-023](adr/20260824-public-self-hosting-private-managed-operations-adr023.md)
   remains the accepted public-self-hosting and private-managed-operations
   boundary.
@@ -197,34 +229,37 @@ This contract delegates rather than duplicates established authority:
   [ADR-001](adr/20251027-event-sourcing-for-guard-book.md),
   [ADR-002](adr/20251027-opentimestamp-for-audit-trail.md), and
   [ADR-003](adr/20251027-offline-first-architecture.md) Proposed and
-  non-binding. While they remain non-binding, positioning language MUST NOT
-  promote their Guard Book, timestamping, offline, or related unresolved
-  decisions into accepted architecture or implemented capability. If their
-  authoritative ADR status changes, this contract follows the then-current
-  status.
+  non-binding. Positioning language MUST NOT promote their unresolved decisions
+  into accepted architecture or implemented capability.
 
 References to any accepted ADR describe decision authority only. They MUST NOT
 be represented as evidence that the accepted architecture is implemented,
 deployed, production-ready, or operationally verified.
 
-## Historical positioning
+## Successor and Historical Positioning
+
+This contract was originally established under completed
+[#762](https://github.com/SecPal/.github/issues/762). The successor decision in
+[#989](https://github.com/SecPal/.github/issues/989) refines #762 where the
+current human product decision changed the organization-level audience,
+product-family hierarchy, and GuardGuide status. Issue #762 remains historical
+evidence and its still-valid principles continue here.
 
 Completed [#340](https://github.com/SecPal/.github/issues/340) and
-[#344](https://github.com/SecPal/.github/issues/344) remain preserved historical
-positioning evidence. Their rollout and evidence are not invalidated or erased.
+[#344](https://github.com/SecPal/.github/issues/344) also remain preserved
+historical positioning evidence. Their rollout and evidence are not erased.
 
 The sentence `Everything the day-to-day operation needs — in one system that
-just works.` is superseded as active organization-wide positioning wording. Its
-early aspiration remains understandable in historical context, but current use
-can imply feature completeness and maturity that SecPal does not claim. This
-contract succeeds that wording with durable principles and semantic boundaries,
-not another immutable completeness-oriented marketing sentence.
+just works.` remains superseded as active organization-wide positioning. Its
+early aspiration is understandable in historical context, but current use can
+imply feature completeness and maturity that SecPal does not claim.
 
-## Prohibited public-positioning overclaims
+## Prohibited Public-Positioning Overclaims
 
 Public descriptions MUST NOT present unsupported claims as fact, including:
 
-- feature or domain completeness;
+- feature, product, or domain completeness;
+- implementation or availability inferred only from an approved product name;
 - production readiness or unsupported maturity;
 - legal or regulatory compliance guarantees;
 - unsupported security assurance, including `enterprise-grade`,
@@ -236,14 +271,14 @@ Public descriptions MUST NOT present unsupported claims as fact, including:
   expansion.
 
 Specific factual claims may be made only when supported by the authority and
-evidence appropriate to that claim. This section defines positioning boundaries;
-it does not create the detailed public status taxonomy.
+evidence appropriate to that claim.
 
-## Scope boundary
+## Scope Boundary
 
 This contract defines semantic consistency for future public descriptions. It
 does not itself rewrite a repository README, organization profile, website,
 roadmap, deployment or API documentation, or product copy. It changes no
-runtime behavior, decides no unresolved architecture, establishes no fixed
-feature sequence, and creates no compliance or legal guarantee. Applying it to
-individual surfaces is separately owned follow-up work.
+runtime behavior, creates no repositories or runtime products, decides no
+unresolved architecture, establishes no fixed feature sequence, and creates no
+compliance or legal guarantee. Applying it to individual surfaces is separately
+owned follow-up work.

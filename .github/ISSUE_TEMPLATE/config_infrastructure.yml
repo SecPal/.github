@@ -82,7 +82,7 @@ body:
       description: Relevant environment information
       placeholder: |
         - OS: Ubuntu 22.04
-        - Node: 22.x
+        - Node: 24.x
         - PHP: 8.4
         - Composer: 2.x
         - GitHub Actions Runner: ubuntu-latest

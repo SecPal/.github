@@ -31,12 +31,33 @@ signed validation receipt and final attestation for the fix commit. The command
 rejects a swapped state file, a non-matching local commit,
 and stale, missing, incomplete, unauthenticated, or differently bound evidence
 before any GitHub read.
+The reviewed state may contain canonical `provider_review_requests`; the
+resolver admits that optional category only through the shared closed Stable
+Feedback verifier. Recovered Ready capture must reauthenticate protected
+`CURRENT` and derive the provider head through the maintained Ready-source
+binding; it never accepts a caller-selected provider head.
 For an eligibility-bound typed Ready integration, also supply the canonical
 integration evidence. The resolver accepts only the closed version-1.2
 integration-resolution attestation and verifies its ordered two-parent
 topology, tree, receipt and integration trailers, signer, reviewed state, and
 eligibility digest through the integration-specific verifier. Never treat a
 historical integration attestation as an ordinary sole-parent attestation.
+When prior Ready evidence genuinely predates persistence, do not invent the
+missing reviewed-state, receipt, eligibility, or attestation bytes. First
+authenticate and publish the explicit one-use pre-persistence recovery through
+the maintained lifecycle-publication authority.
+Recovery safety facts carry no process-local authority. The maintained issuer
+selects the immutable protected-`main` registry and commands, captures the
+complete current feedback universe including resolved threads, executes that
+validation against the exact candidate, and signs the complete capture,
+source-complete technical decisions, policy/command identity, and receipt into
+the existing one-use recovery authorization. The accepted authorization signer
+and protected publication are the first trusted recovery boundaries. Raw caller
+policy, feedback snapshots, decisions, or claimed-success receipts are never
+recovery authority.
+Ready integration may then use the recovered version-1.2 prior-authority manifest with no historical companion
+files. Supplying any historical companion file selects no fallback: malformed,
+partial, or invalid ordinary evidence remains blocking.
 The command first reads every target completely and requires its current
 comment identities, body digests, and resolution state to match that reviewed
 state. It then performs two complete stable target rechecks of the open PR,
@@ -69,26 +90,55 @@ python3 scripts/secpal-resolve-fixed-threads.py \
 
 Repeat `--thread-id REVIEW_THREAD_NODE_ID` for each additional fixed thread.
 
-For an exact technically non-blocking thread outside the authenticated final
-feedback boundary and observed on the unchanged final delivery head, do not
-create an empty delivery commit. Require the complete final reviewed-state and
-eligibility artifacts, and prove that the thread is absent from both before
-creating any late authority. Require an
-independently established `INVALID_FALSE_OR_MISLEADING +
-DISPROVEN_WITH_EVIDENCE` classification with `technically_blocking=false`, then
-use `scripts/secpal-create-late-classification.py` to capture and authenticate
-that exact decision, then use `scripts/secpal-create-late-disposition.py` to
-verify it and create the canonical detached disposition artifact and signature.
-Both creators must verify the existing final reviewed state, canonical final
-eligibility artifact, receipt/attestation, final tree, receipt trailer, origin,
+When and only when the final attestation carries an
+`exceptional_recovery_evidence_digest`, retain the existing accepted Recovery
+document and its exact signed orchestration authorization and add this closed
+tuple to the same resolver invocation:
+
+```bash
+  --delivery-issue DELIVERY_ISSUE_NUMBER \
+  --exceptional-recovery-evidence READY_EXCEPTIONAL_RECOVERY.json \
+  --exceptional-recovery-authorization SIGNED_RECOVERY_AUTHORIZATION.json
+```
+
+Omit all three inputs for ordinary non-Recovery evidence. Never combine them
+with Ready-integration evidence. The shared Exceptional Recovery verifier owns
+the lifecycle, publication, and signer authentication; the resolver does not
+reconstruct that authority.
+
+For an exact technically non-blocking target absent from authenticated final
+eligibility and observed on the unchanged final delivery head, do not create an
+empty delivery commit. Require the complete final reviewed state and the typed
+final-eligibility boundary: either its canonical manifest or the maintained
+exact authenticated-absence record. A supplied invalid manifest never falls
+back to absence. Derive `REVIEWED_BUT_INELIGIBLE` when the target is present in final
+reviewed state, or `ABSENT_FROM_BOTH` when it is absent; never accept a
+caller-selected origin or amend original eligibility. Require
+the canonical corrected/actionable, invalid/disproven, or
+informational/non-actionable pair for `REVIEWED_BUT_INELIGIBLE`;
+`ABSENT_FROM_BOTH` retains only invalid/disproven or
+informational/non-actionable. Require `technically_blocking=false` for every
+pair. Reject every other decision and every technical blocker. Use
+`scripts/secpal-create-late-classification.py` to capture and authenticate the
+exact decision, then use `scripts/secpal-create-late-disposition.py` to verify it
+and create the canonical detached disposition artifact and signature.
+Both creators must verify the existing final reviewed state, typed final
+eligibility boundary, receipt/attestation, final tree, receipt trailer, origin,
 head, and commit signature before deriving the delivery signer and reading the
-explicitly named thread. The final eligibility artifact must match its
+explicitly named thread. They accept ordinary final-delivery evidence or, when
+`--integration-evidence` is supplied, canonical eligibility-bound Ready-
+integration evidence through the same integration-specific verifier used by
+the resolver. The authenticated attestation shape selects the evidence family;
+there is no caller-selected compatibility mode. A final eligibility manifest must match its
 authenticated digest, every eligible thread must exist in the reviewed state,
-and the proposed late thread must be absent from both final sets. Resolve it
+and the proposed target must be absent from final eligibility. Each creator and
+the resolver must independently derive reviewed-state membership or absence and
+enforce the matching closed decision policy. Resolve it
 only through `scripts/secpal-resolve-fixed-threads.py` with
 `--delivery-issue`, `--late-disposition-evidence`, and
 `--late-disposition-signature`, together with the matching
-`--late-classification-evidence` and `--late-classification-signature`. The
+`--late-classification-evidence` and `--late-classification-signature`, and the
+same `--integration-evidence` for a Ready-integration source. The
 resolver independently verifies the same
 final evidence, requires the detached SSH/OpenPGP signer to equal the verified
 delivery signer, and fails closed on any artifact, classification, action,
@@ -102,9 +152,19 @@ for that input shape and read
 for the exact artifact shape. This exception consumes no review/remediation
 counter and has no commit, push, CI, Ready, or merge authority.
 
-“Post-push” is lifecycle shorthand for this authenticated final-feedback
-boundary. The evidence proves absence from the final reviewed-state and
-commit-bound eligibility artifacts; it does not claim cryptographic proof of
+For a historical schema-1.1 Ready integration, supply its exact original
+validation receipt as `--final-validation-receipt` to both producers and as
+`--integration-validation-receipt` to the resolver, and omit final eligibility.
+The integration-specific verifier must authenticate the exact source while both
+receipt and attestation omit `eligibility_evidence_digest`. That derives
+`NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY` only; schema 1.1 never directly
+authorizes a thread. The signed classification/disposition chain remains
+mandatory. Never substitute the special final-eligibility-absence recovery,
+invent an eligibility artifact, or downgrade schema 1.2.
+
+“Post-push” is lifecycle shorthand for this authenticated disposition
+boundary. The evidence proves reviewed-state membership or absence and
+commit-bound eligibility absence; it does not claim cryptographic proof of
 GitHub wall-clock ordering relative to a push.
 
 This resolution-only path does not capture or reclassify PR-wide feedback, run
@@ -133,7 +193,9 @@ starting:
 Do not use this skill for generic code review, creating a PR, requesting any
 review, debugging CI without completed feedback, ordinary implementation,
 Draft-to-Ready transitions, or merge-only requests. Never request another
-review. Never mark a PR Ready, merge, enable auto-merge, amend a
+review. The skill helper never marks a PR Ready, merges, or enables auto-merge;
+an explicitly authorized larger delivery may use the separate maintained
+lifecycle and merge mechanisms before or after this feedback path. Never amend a
 reviewed commit, force-push, bypass hooks, or use administrator privileges.
 
 Read [references/contract.md](references/contract.md) completely before acting.
@@ -164,6 +226,45 @@ Never import or call the action helper from the evidence helper. Never add a
 mutation command to the evidence helper. Execute configured validation commands
 as argument arrays in the target repository, without a shell.
 
+## Delivery continuity and proof reuse
+
+Apply `SIMPLIFY_BEFORE_EXTEND` to the workflow. A prompt boundary is not an
+evidence invalidator, and a mechanical checkpoint is not a user decision
+boundary. On first delivery entry, perform the relevant full preflight. During
+the same delivery, refresh only operation-relevant facts whose defined
+invalidators may have occurred. A head change invalidates head-bound proof; a
+tree change invalidates validation proof; a new CURRENT publication invalidates
+prior CURRENT proof; relevant feedback or reviewed-head change invalidates
+stable feedback; native graph mutation invalidates work-graph proof; volatile
+readiness is freshly read at its actual boundary. Create no freshness store.
+
+Before mutation, derive the canonical operation and its exact preconditions
+from authenticated current maintained repository authority. Prompt expectations
+bind scope and authority but remain assertions to verify. If they conflict with
+the maintained contract, fail closed before mutation and report the discrepancy.
+
+Commit creation, push, receipt/attestation binding, lifecycle publication,
+eligible thread resolution, and bounded read-back require no new prompt while
+they remain inside current authority. The same applies to an eligible Ready
+transition or merge when the current instruction explicitly authorizes that
+later mutation conditionally on its maintained gate. New user authority is
+required only for a genuine new operation, material scope, recovery, or
+unresolved decision boundary. The helper's own mutation allowlist remains
+unchanged.
+
+Stable feedback is captured once per reviewed head only after every triggered
+review provider has successful terminal evidence. `QUEUED`, `PENDING`,
+`RUNNING`, `FAILED`, and `INDETERMINATE` block stable capture and merge; empty
+comments or threads do not prove completion. Classify the complete bounded
+snapshot before one coherent remediation batch. The existing capture query
+rejects a visible non-terminal Codex summary, a missing Codex summary on a
+Ready PR, and a pending Copilot review request before admitting stable feedback.
+A currently authorized full delivery may observe provider state for about 30
+minutes at 60-to-90-second intervals without requesting another review,
+consuming another review cycle, or polling unrelated hosted CI. Expiry reports
+`REVIEW_NOT_TERMINAL`; the same workspace may resume after external state
+changes.
+
 ## Finite lifecycle continuity
 
 When a completed-feedback workflow consumes persistent lifecycle state, use
@@ -191,6 +292,27 @@ user decision for any remaining bounded recovery authority. A tracked-follow-up
 resolution
 must be reported as safely dispositioned/tracked, never fixed, implemented, or
 completed, with technical and mechanical blocking stated separately.
+
+When provider-owned material threads from the already-consumed assessment
+appear after its canonical Stable Feedback capture, do not request another
+review or rewrite that capture. The maintained ordinary Ready provider-growth
+verifier derives the complete additive delta from the first remediation's
+sealed reviewed state and the candidate remediation's sealed reviewed state.
+It requires protected CURRENT at Review 1/1 and Remediation 1/2, exact H0 to H1
+ordinary lineage, Ready true, Cycle 3 absent, the unique Copilot request and
+review chronology, comment-to-review identity, the first remediation's bound
+eligibility for predecessor resolutions, and complete existing ordinary
+eligibility for every added provider thread. Only
+`issue_ready_remediation_provider_growth_authorization` may turn that sealed
+authority into the existing signed `REMEDIATION_COMPLETED` scope. The path
+consumes the remaining normal remediation slot and grants no review,
+classification, resolution, recovery, continuation, or recursive-growth
+authority.
+Capture its H1 state only through the read-only
+`resolve-batch --ready-remediation-provider-binding FILE
+--capture-reviewed-state FILE` form. The command derives the reviewed provider
+head from the verifier-created ephemeral projection of protected CURRENT, and
+the authority verifier independently repeats the same capture before issuance.
 
 ## Run the finite invocation
 
@@ -226,12 +348,19 @@ The following state machine applies only to the full feedback-remediation path.
    and explicit satisfied evidence for every registered manual gate. Preserve
    its deterministic staged-tree,
    parent-head, registry, command-set, manual-gate, result, and reviewed-feedback
-   receipt. Do not continue discovery or change the tree after this step begins.
-   A failed command produces no receipt and is a terminal security blocker for
-   this invocation. Do not change the tree or retry any complete command.
-   Require a new explicit remediation invocation so any correction receives
-   focused validation and a fresh holistic audit before its single complete
-   validation. Never repeat a successful complete validation.
+   receipt. Do not continue discovery or change that candidate tree after this
+   step begins.
+   A failed command produces no receipt and rejects that candidate tree. Do not
+   retry the unchanged failed candidate or represent it as successful evidence.
+   If the failure is diagnosed, its focused correction remains inside current
+   authority, no external mutation occurred, and the changed tree receives
+   focused validation plus a fresh holistic audit, perform one complete
+   validation of the changed candidate in the same invocation. If that
+   corrected candidate also fails, stop with a validation blocker; do not create
+   a third candidate or validation attempt. Require a new
+   invocation only when correction needs new scope, recovery, authority, or a
+   user decision. Never repeat a successful complete validation on an unchanged
+   tree.
 6. When remediation changed the staged tree, create one signed commit containing
    exactly that tree, use the receipt digest as its single
    `SecPal-Validation-Receipt` trailer, and use `attest-validation --bind-commit`
@@ -253,12 +382,16 @@ The following state machine applies only to the full feedback-remediation path.
    repository, PR, repository root, current head OID, reviewed-state file and
    digest, successful validation evidence for that fix commit, exact
    per-thread eligibility evidence whose canonical digest is authenticated by
-   the signed receipt, and thread IDs. This
+   the signed receipt, and thread IDs. A Recovery-bound ordinary attestation
+   also requires the retained delivery issue, accepted Recovery document, and
+   exact signed orchestration authorization described above. This
    reads only the named targets, requires their comments to equal the reviewed
    feedback, and does not reclassify or gate on unrelated PR state.
-9. Report the commit, branch, remote synchronization, local validation,
-   worktree state, PR identity, and resolution results, then stop. Merge remains
-   separately authorized by the current user instruction.
+9. On ordinary success, report only `RESULT`, `HEAD`, `MUTATIONS`, `EVIDENCE`,
+   relevant lifecycle counters, `BLOCKER`, and `NEXT DECISION`. Add detailed
+   audit evidence for blockers, exceptional paths, or complex security
+   decisions. The helper then stops; a separately maintained merge mechanism
+   may continue only under explicit current authority.
 
 Short-circuit immediately to the applicable terminal outcome when a blocker is
 detected. Green CI alone never establishes technical truth or merge readiness.

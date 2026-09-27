@@ -19,18 +19,82 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
-
 SCHEMA_VERSION = "1.0"
+ABSENCE_SCHEMA_VERSION = "1.1"
+INFORMATIONAL_SCHEMA_VERSION = "1.1"
+INFORMATIONAL_DISPOSITION_SCHEMA_VERSION = "1.2"
+INFORMATIONAL_ABSENCE_SCHEMA_VERSION = "1.3"
+READY_INTEGRATION_SCHEMA_VERSION = "1.4"
+INFORMATIONAL_READY_INTEGRATION_SCHEMA_VERSION = "1.5"
+ACTIONABLE_READY_INTEGRATION_SCHEMA_VERSION = "1.6"
+ACTIONABLE_DISPOSITION_SCHEMA_VERSION = "1.7"
+NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY = (
+    "NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY"
+)
 KIND = "LATE_FEEDBACK_DISPOSITION"
 SIGNATURE_NAMESPACE = "secpal-late-feedback-disposition-v1"
 CLASSIFICATION_KIND = "LATE_FEEDBACK_CLASSIFICATION"
 CLASSIFICATION_SIGNATURE_NAMESPACE = "secpal-late-feedback-classification-v1"
 CLASSIFICATION_PURPOSE = "AUTHORIZE_LATE_FEEDBACK_DISPOSITION"
+SUCCESSOR_CLASSIFICATION_SCHEMA_VERSION = "1.2"
+SUCCESSOR_CLASSIFICATION_PURPOSE = "AUTHENTICATE_CONTINUATION_SUCCESSOR_SAFETY"
+REJECTED_SUCCESSOR_CLASSIFICATION_SCHEMA_VERSION = "1.3"
+REJECTED_SUCCESSOR_CLASSIFICATION_PURPOSE = (
+    "AUTHENTICATE_REJECTED_CONTINUATION_CANDIDATE"
+)
 TECHNICAL_BLOCKERS = frozenset(
     {"P1", "P2", "SECURITY", "AUTHENTICATION", "INTEGRITY", "FAIL_OPEN"}
 )
+REVIEWED_BUT_INELIGIBLE = "REVIEWED_BUT_INELIGIBLE"
+ABSENT_FROM_BOTH = "ABSENT_FROM_BOTH"
+INVALID_DISPROVEN = (
+    "INVALID_FALSE_OR_MISLEADING",
+    "DISPROVEN_WITH_EVIDENCE",
+)
+VALID_CORRECTED = ("VALID_ACTIONABLE", "CORRECTED_AND_VERIFIED")
+INFORMATIONAL_NON_ACTIONABLE = ("INFORMATIONAL", "NON_ACTIONABLE")
+POST_FREEZE_DECISIONS = frozenset(
+    {VALID_CORRECTED, INVALID_DISPROVEN, INFORMATIONAL_NON_ACTIONABLE}
+)
+SUCCESSOR_SAFE_DECISIONS = frozenset(
+    {INVALID_DISPROVEN, INFORMATIONAL_NON_ACTIONABLE}
+)
+POST_FREEZE_ORIGIN_DECISIONS = {
+    REVIEWED_BUT_INELIGIBLE: POST_FREEZE_DECISIONS,
+    ABSENT_FROM_BOTH: frozenset({INVALID_DISPROVEN, INFORMATIONAL_NON_ACTIONABLE}),
+}
+SCHEMA_VERSION_DECISIONS = {
+    SCHEMA_VERSION: frozenset({INVALID_DISPROVEN}),
+    INFORMATIONAL_SCHEMA_VERSION: frozenset({INFORMATIONAL_NON_ACTIONABLE}),
+    "1.3": frozenset({VALID_CORRECTED}),
+}
+DISPOSITION_SCHEMA_VERSION_POLICY = {
+    SCHEMA_VERSION: (False, INVALID_DISPROVEN),
+    ABSENCE_SCHEMA_VERSION: (True, INVALID_DISPROVEN),
+    INFORMATIONAL_DISPOSITION_SCHEMA_VERSION: (
+        False,
+        INFORMATIONAL_NON_ACTIONABLE,
+    ),
+    ACTIONABLE_DISPOSITION_SCHEMA_VERSION: (False, VALID_CORRECTED),
+    INFORMATIONAL_ABSENCE_SCHEMA_VERSION: (
+        True,
+        INFORMATIONAL_NON_ACTIONABLE,
+    ),
+}
+READY_INTEGRATION_DISPOSITION_SCHEMA_VERSION_POLICY = {
+    READY_INTEGRATION_SCHEMA_VERSION: INVALID_DISPROVEN,
+    INFORMATIONAL_READY_INTEGRATION_SCHEMA_VERSION: INFORMATIONAL_NON_ACTIONABLE,
+    ACTIONABLE_READY_INTEGRATION_SCHEMA_VERSION: VALID_CORRECTED,
+}
 MAXIMUM_ARTIFACT_BYTES = 64 * 1024
 MAXIMUM_SIGNATURE_BYTES = 32 * 1024
+MAXIMUM_ROLE_CREDENTIAL_MAPPINGS = 32
+MAXIMUM_ROLE_CREDENTIAL_MAPPING_BYTES = 4096
+MAXIMUM_ROLE_CREDENTIAL_OUTPUT_BYTES = (
+    MAXIMUM_ROLE_CREDENTIAL_MAPPINGS
+    * (MAXIMUM_ROLE_CREDENTIAL_MAPPING_BYTES + 1)
+)
+ROLE_CREDENTIAL_CONFIG_KEY = "secpal.lifecycleSigningCredential"
 OID = re.compile(r"^[0-9a-f]{40}$")
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -38,6 +102,7 @@ THREAD_ID = re.compile(r"^PRRT_[A-Za-z0-9_-]+$")
 IDENTITY = re.compile(r"^[^\x00-\x20\x7f]{1,256}$")
 SSH_FINGERPRINT = re.compile(r"SHA256:[A-Za-z0-9+/]+={0,2}")
 OPENPGP_FINGERPRINT = re.compile(r"[0-9A-Fa-f]{40,64}")
+OPENPGP_CREDENTIAL = re.compile(r"[0-9A-Fa-f]{40,64}!?")
 TRUSTED_COMMAND_DIRECTORIES = tuple(
     Path(value) for value in ("/usr/bin", "/bin", "/usr/local/bin", "/opt/homebrew/bin", "/opt/local/bin")
 )
@@ -93,6 +158,24 @@ class ClassificationEvidence:
     finding_evidence_digest: str
     thread: ThreadAuthorization
     technical_blockers: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SuccessorClassificationEvidence:
+    """Existing classification family extended for exact successor sources."""
+
+    evidence_digest: str
+    repository: str
+    delivery_issue_number: int
+    pull_request_number: int
+    head_sha: str
+    finding_id: str
+    finding_evidence_digest: str
+    thread: ThreadAuthorization
+    technical_blockers: tuple[str, ...]
+    predecessor_state_digest: str
+    resulting_state_digest: str
+    sources: tuple[tuple[str, str, str, str | None], ...]
 
 
 @dataclass
@@ -332,6 +415,7 @@ def _run_signature_command_without_input(
         stdin=subprocess.DEVNULL,
         capture_output=True,
         env=environment,
+        start_new_session=True,
         timeout=30,
     )
 
@@ -348,6 +432,7 @@ def _run_signature_command_with_input(
         input=stdin,
         capture_output=True,
         env=environment,
+        start_new_session=True,
         timeout=30,
     )
 
@@ -371,6 +456,48 @@ def _read_global_git_value(key: str, environment: dict[str, str]) -> str:
     return completed.stdout.decode("utf-8", errors="replace").strip()
 
 
+def _read_global_git_values(
+    key: str, environment: dict[str, str]
+) -> tuple[str, ...]:
+    executable = _trusted_executable("git")
+    arguments = ("config", "--global", "--null", "--get-all", key)
+    try:
+        with tempfile.TemporaryFile() as output:
+            completed = subprocess.run(
+                [executable, *arguments],
+                check=False,
+                stdin=subprocess.DEVNULL,
+                stdout=output,
+                stderr=subprocess.DEVNULL,
+                env=environment,
+                start_new_session=True,
+                timeout=30,
+            )
+            if output.tell() > MAXIMUM_ROLE_CREDENTIAL_OUTPUT_BYTES:
+                raise LateDispositionError(
+                    "OS-account role credential mapping output limit exceeded"
+                )
+            output.seek(0)
+            raw_output = output.read(MAXIMUM_ROLE_CREDENTIAL_OUTPUT_BYTES + 1)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise LateDispositionError(
+            "OS-account signing configuration is unavailable"
+        ) from exc
+    if completed.returncode not in (0, 1):
+        raise LateDispositionError(
+            "OS-account signing configuration is unavailable"
+        )
+    try:
+        values = raw_output.decode("utf-8").split("\0")
+    except UnicodeDecodeError as exc:
+        raise LateDispositionError(
+            "OS-account role credential mapping is malformed"
+        ) from exc
+    if values and values[-1] == "":
+        values.pop()
+    return tuple(values)
+
+
 def read_signing_configuration(
     *, environment: dict[str, str] | None = None
 ) -> tuple[str, str]:
@@ -384,6 +511,79 @@ def read_signing_configuration(
             "OS-account signing configuration is missing or unsupported"
         )
     return signature_format, signing_key
+
+
+def read_role_signing_configuration(
+    identity: str,
+    *,
+    allow_routine_default: bool,
+    environment: dict[str, str] | None = None,
+) -> tuple[str, str]:
+    """Select one configured credential for an already accepted policy identity."""
+
+    if not isinstance(identity, str) or not IDENTITY.fullmatch(identity):
+        raise LateDispositionError("policy-selected signer identity is malformed")
+    command_environment = signing_environment() if environment is None else environment
+    signature_format = _read_global_git_value(
+        "gpg.format", command_environment
+    ) or "openpgp"
+    if signature_format not in {"ssh", "openpgp"}:
+        raise LateDispositionError("OS-account signing format is unsupported")
+    raw_mappings = _read_global_git_values(
+        ROLE_CREDENTIAL_CONFIG_KEY, command_environment
+    )
+    if len(raw_mappings) > MAXIMUM_ROLE_CREDENTIAL_MAPPINGS:
+        raise LateDispositionError("OS-account role credential mapping is ambiguous")
+    mappings: dict[str, str] = {}
+    for raw in raw_mappings:
+        if not raw or len(raw.encode("utf-8")) > MAXIMUM_ROLE_CREDENTIAL_MAPPING_BYTES:
+            raise LateDispositionError("OS-account role credential mapping is malformed")
+        try:
+            value = json.loads(raw, object_pairs_hook=_reject_duplicate_object)
+        except (TypeError, ValueError) as exc:
+            raise LateDispositionError(
+                "OS-account role credential mapping is malformed"
+            ) from exc
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"identity", "credential"}
+            or not isinstance(value.get("identity"), str)
+            or not IDENTITY.fullmatch(value["identity"])
+            or not isinstance(value.get("credential"), str)
+            or not value["credential"]
+            or "\x00" in value["credential"]
+            or "\n" in value["credential"]
+            or "\r" in value["credential"]
+        ):
+            raise LateDispositionError("OS-account role credential mapping is malformed")
+        mapped_identity = value["identity"]
+        if mapped_identity in mappings:
+            raise LateDispositionError("OS-account role credential mapping is ambiguous")
+        mappings[mapped_identity] = value["credential"]
+    credential = mappings.get(identity)
+    if credential is None:
+        if not allow_routine_default:
+            raise LateDispositionError(
+                "OS-account role credential mapping is missing"
+            )
+        credential = _read_global_git_value(
+            "user.signingkey", command_environment
+        )
+        if not credential:
+            raise LateDispositionError(
+                "OS-account signing configuration is missing"
+            )
+    if signature_format == "ssh":
+        path = Path(credential)
+        if not path.is_absolute() or path != Path(os.path.normpath(credential)):
+            raise LateDispositionError(
+                "OS-account role credential reference is ambiguous"
+            )
+    elif not OPENPGP_CREDENTIAL.fullmatch(credential):
+        raise LateDispositionError(
+            "OS-account role credential reference is ambiguous"
+        )
+    return signature_format, credential
 
 
 def verify_detached_signature(
@@ -463,7 +663,53 @@ def _positive_integer(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
-def parse_classification_artifact(
+def schema_version_for_decision(classification: str, disposition: str) -> str:
+    if not isinstance(classification, str) or not isinstance(disposition, str):
+        raise LateDispositionError("late classification decision fields are malformed")
+    decision = (classification, disposition)
+    for schema_version, decisions in SCHEMA_VERSION_DECISIONS.items():
+        if decision in decisions:
+            return schema_version
+    raise LateDispositionError(
+        "late classification decision is not schema-authorized"
+    )
+
+
+def disposition_schema_version_for_decision(
+    classification: str,
+    disposition: str,
+    *,
+    final_eligibility_absent: bool,
+    no_commit_bound_ready_integration_eligibility: bool = False,
+) -> str:
+    if not isinstance(classification, str) or not isinstance(disposition, str):
+        raise LateDispositionError("late disposition decision fields are malformed")
+    decision = (classification, disposition)
+    if no_commit_bound_ready_integration_eligibility:
+        if final_eligibility_absent:
+            raise LateDispositionError(
+                "late disposition eligibility modes are mutually exclusive"
+            )
+        for schema_version, authorized_decision in (
+            READY_INTEGRATION_DISPOSITION_SCHEMA_VERSION_POLICY.items()
+        ):
+            if decision == authorized_decision:
+                return schema_version
+        raise LateDispositionError(
+            "late disposition decision is not schema-authorized"
+        )
+    for schema_version, (absence_mode, authorized_decision) in (
+        DISPOSITION_SCHEMA_VERSION_POLICY.items()
+    ):
+        if (
+            absence_mode is final_eligibility_absent
+            and decision == authorized_decision
+        ):
+            return schema_version
+    raise LateDispositionError("late disposition decision is not schema-authorized")
+
+
+def _parse_classification_artifact(
     artifact_path: Path,
     signature_path: Path,
     *,
@@ -474,7 +720,7 @@ def parse_classification_artifact(
     head_sha: str,
     thread_id: str,
     signature_environment: dict[str, str] | None = None,
-    require_nonblocking_disposition: bool = True,
+    allow_resolved: bool,
 ) -> ClassificationEvidence:
     canonical = verify_detached_signature(
         artifact_path,
@@ -500,10 +746,12 @@ def parse_classification_artifact(
         "thread",
     }
     declared_signer = payload.get("delivery_signer") if isinstance(payload, dict) else None
+    schema_version = payload.get("schema_version") if isinstance(payload, dict) else None
     if (
         not isinstance(payload, dict)
         or set(payload) != expected_keys
-        or payload.get("schema_version") != SCHEMA_VERSION
+        or not isinstance(schema_version, str)
+        or schema_version not in SCHEMA_VERSION_DECISIONS
         or payload.get("kind") != CLASSIFICATION_KIND
         or payload.get("repository") != repository
         or payload.get("delivery_issue_number") != delivery_issue_number
@@ -542,6 +790,10 @@ def parse_classification_artifact(
     }
     if not isinstance(item, dict) or set(item) != item_keys:
         raise LateDispositionError("late classification thread entry is malformed")
+    classification = item.get("classification")
+    disposition = item.get("disposition")
+    if not isinstance(classification, str) or not isinstance(disposition, str):
+        raise LateDispositionError("late classification thread entry is malformed")
     blockers = item.get("technical_blockers")
     if (
         not isinstance(blockers, list)
@@ -566,14 +818,14 @@ def parse_classification_artifact(
         or not isinstance(item.get("reply_count"), int)
         or isinstance(item.get("reply_count"), bool)
         or item["reply_count"] < 0
-        or item.get("is_resolved") is not False
+        or not isinstance(item.get("is_resolved"), bool)
+        or (item["is_resolved"] and not allow_resolved)
         or not isinstance(item.get("is_outdated"), bool)
         or not isinstance(technically_blocking, bool)
     ):
         raise LateDispositionError("late classification thread binding is malformed")
-    if require_nonblocking_disposition and (
-        item.get("classification") != "INVALID_FALSE_OR_MISLEADING"
-        or item.get("disposition") != "DISPROVEN_WITH_EVIDENCE"
+    if (
+        (classification, disposition) not in SCHEMA_VERSION_DECISIONS[schema_version]
         or technically_blocking is not False
         or blockers
     ):
@@ -596,14 +848,346 @@ def parse_classification_artifact(
             finding_body_digest=item["finding_body_digest"],
             reply_state_digest=item["reply_state_digest"],
             reply_count=item["reply_count"],
-            is_resolved=False,
+            is_resolved=item["is_resolved"],
             is_outdated=item["is_outdated"],
-            classification=item["classification"],
-            disposition=item["disposition"],
+            classification=classification,
+            disposition=disposition,
             technically_blocking=technically_blocking,
             classification_evidence_digest=digest,
         ),
         technical_blockers=tuple(blockers),
+    )
+
+
+def parse_classification_artifact(
+    artifact_path: Path,
+    signature_path: Path,
+    *,
+    expected_signer: SignerIdentity,
+    repository: str,
+    delivery_issue_number: int,
+    pull_request_number: int,
+    head_sha: str,
+    thread_id: str,
+    signature_environment: dict[str, str] | None = None,
+) -> ClassificationEvidence:
+    """Verify the ordinary unresolved, resolution-eligible classification."""
+
+    return _parse_classification_artifact(
+        artifact_path,
+        signature_path,
+        expected_signer=expected_signer,
+        repository=repository,
+        delivery_issue_number=delivery_issue_number,
+        pull_request_number=pull_request_number,
+        head_sha=head_sha,
+        thread_id=thread_id,
+        signature_environment=signature_environment,
+        allow_resolved=False,
+    )
+
+
+def parse_preserved_thread_classification_artifact(
+    artifact_path: Path,
+    signature_path: Path,
+    *,
+    expected_signer: SignerIdentity,
+    repository: str,
+    delivery_issue_number: int,
+    pull_request_number: int,
+    head_sha: str,
+    thread_id: str,
+    signature_environment: dict[str, str] | None = None,
+) -> ClassificationEvidence:
+    """Verify a prior classification while preserving its signed thread state.
+
+    This read-only collision-predecessor boundary grants no resolution
+    eligibility. The ordinary parser retains its unresolved-only semantics.
+    """
+
+    return _parse_classification_artifact(
+        artifact_path,
+        signature_path,
+        expected_signer=expected_signer,
+        repository=repository,
+        delivery_issue_number=delivery_issue_number,
+        pull_request_number=pull_request_number,
+        head_sha=head_sha,
+        thread_id=thread_id,
+        signature_environment=signature_environment,
+        allow_resolved=True,
+    )
+
+
+def _parse_successor_classification_artifact(
+    artifact_path: Path,
+    signature_path: Path,
+    *,
+    expected_signer: SignerIdentity,
+    repository: str,
+    delivery_issue_number: int,
+    pull_request_number: int,
+    head_sha: str,
+    predecessor_state_digest: str,
+    resulting_state_digest: str,
+    rejected_candidate: bool,
+    signature_environment: dict[str, str] | None = None,
+) -> SuccessorClassificationEvidence:
+    """Verify one signed exact-head successor classification family member."""
+
+    canonical = verify_detached_signature(
+        artifact_path,
+        signature_path,
+        expected_signer,
+        environment=signature_environment,
+        signature_namespace=CLASSIFICATION_SIGNATURE_NAMESPACE,
+    )
+    payload, _canonical = _load_canonical_json_bytes(
+        canonical, "successor classification artifact", MAXIMUM_ARTIFACT_BYTES
+    )
+    expected_keys = {
+        "schema_version",
+        "kind",
+        "repository",
+        "delivery_issue_number",
+        "pull_request_number",
+        "head_sha",
+        "predecessor_state_digest",
+        "resulting_state_digest",
+        "delivery_signer",
+        "authorized_purpose",
+        "finding_id",
+        "finding_evidence_digest",
+        "thread",
+        "sources",
+    }
+    signer = payload.get("delivery_signer") if isinstance(payload, dict) else None
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != expected_keys
+        or payload.get("schema_version")
+        != (
+            REJECTED_SUCCESSOR_CLASSIFICATION_SCHEMA_VERSION
+            if rejected_candidate
+            else SUCCESSOR_CLASSIFICATION_SCHEMA_VERSION
+        )
+        or payload.get("kind") != CLASSIFICATION_KIND
+        or payload.get("repository") != repository
+        or payload.get("delivery_issue_number") != delivery_issue_number
+        or payload.get("pull_request_number") != pull_request_number
+        or payload.get("head_sha") != head_sha.lower()
+        or payload.get("predecessor_state_digest") != predecessor_state_digest
+        or payload.get("resulting_state_digest") != resulting_state_digest
+        or payload.get("authorized_purpose")
+        != (
+            REJECTED_SUCCESSOR_CLASSIFICATION_PURPOSE
+            if rejected_candidate
+            else SUCCESSOR_CLASSIFICATION_PURPOSE
+        )
+        or signer
+        != {
+            "format": expected_signer.signature_format,
+            "fingerprint": expected_signer.fingerprint,
+        }
+        or not isinstance(payload.get("finding_id"), str)
+        or not IDENTITY.fullmatch(payload["finding_id"])
+        or not isinstance(payload.get("finding_evidence_digest"), str)
+        or not DIGEST.fullmatch(payload["finding_evidence_digest"])
+    ):
+        raise LateDispositionError(
+            "successor classification artifact binding is invalid or stale"
+        )
+    item = payload.get("thread")
+    item_keys = {
+        "thread_id",
+        "top_level_comment_node_id",
+        "top_level_comment_database_id",
+        "finding_body_digest",
+        "reply_state_digest",
+        "reply_count",
+        "is_resolved",
+        "is_outdated",
+        "classification",
+        "disposition",
+        "technically_blocking",
+        "technical_blockers",
+    }
+    blockers = item.get("technical_blockers") if isinstance(item, dict) else None
+    thread_bound = isinstance(item, dict) and item.get("thread_id") is not None
+    if (
+        not isinstance(item, dict)
+        or set(item) != item_keys
+        or not isinstance(item.get("reply_state_digest"), str)
+        or not DIGEST.fullmatch(item["reply_state_digest"])
+        or not isinstance(item.get("reply_count"), int)
+        or isinstance(item.get("reply_count"), bool)
+        or item["reply_count"] < 0
+        or not isinstance(blockers, list)
+        or any(value not in TECHNICAL_BLOCKERS for value in blockers)
+        or len(blockers) != len(set(blockers))
+        or item.get("technically_blocking") is not bool(blockers)
+    ):
+        raise LateDispositionError("successor classification thread is malformed")
+    if thread_bound:
+        if (
+            not isinstance(item.get("thread_id"), str)
+            or not THREAD_ID.fullmatch(item["thread_id"])
+            or not isinstance(item.get("top_level_comment_node_id"), str)
+            or not IDENTITY.fullmatch(item["top_level_comment_node_id"])
+            or not _positive_integer(item.get("top_level_comment_database_id"))
+            or not isinstance(item.get("finding_body_digest"), str)
+            or not DIGEST.fullmatch(item["finding_body_digest"])
+            or item.get("is_resolved") is not False
+            or not isinstance(item.get("is_outdated"), bool)
+        ):
+            raise LateDispositionError("successor classification thread is malformed")
+    elif (
+        item.get("thread_id") is not None
+        or item.get("top_level_comment_node_id") is not None
+        or item.get("top_level_comment_database_id") is not None
+        or item.get("finding_body_digest") is not None
+        or item.get("reply_count") != 0
+        or item.get("is_resolved") is not None
+        or item.get("is_outdated") is not None
+    ):
+        raise LateDispositionError("successor source-only classification is malformed")
+    decision = (item.get("classification"), item.get("disposition"))
+    if rejected_candidate:
+        if (
+            decision
+            != ("IN_CONTRACT_DEFECT", "CANDIDATE_REJECTED_BEFORE_PUBLICATION")
+            or item.get("technically_blocking") is not True
+            or not blockers
+            or (thread_bound and item.get("is_outdated") is not False)
+        ):
+            raise LateDispositionError(
+                "rejected successor classification decision is unsupported"
+            )
+    elif (
+        decision not in SUCCESSOR_SAFE_DECISIONS
+        or item.get("technically_blocking") is not False
+        or blockers
+    ):
+        raise LateDispositionError("successor classification decision is unsupported")
+    raw_sources = payload.get("sources")
+    sources: list[tuple[str, str, str, str | None]] = []
+    if not isinstance(raw_sources, list) or not raw_sources:
+        raise LateDispositionError("successor classification sources are missing")
+    for source in raw_sources:
+        if (
+            not isinstance(source, dict)
+            or set(source) != {"kind", "node_id", "digest", "thread_id"}
+            or not isinstance(source.get("kind"), str)
+            or not IDENTITY.fullmatch(source["kind"])
+            or not isinstance(source.get("node_id"), str)
+            or not IDENTITY.fullmatch(source["node_id"])
+            or not isinstance(source.get("digest"), str)
+            or not DIGEST.fullmatch(source["digest"])
+            or (
+                source.get("thread_id") is not None
+                and (
+                    not isinstance(source["thread_id"], str)
+                    or not THREAD_ID.fullmatch(source["thread_id"])
+                )
+            )
+        ):
+            raise LateDispositionError("successor classification source is malformed")
+        normalized = (
+            source["kind"],
+            source["node_id"],
+            source["digest"],
+            source["thread_id"],
+        )
+        if normalized in sources:
+            raise LateDispositionError("successor classification source is repeated")
+        sources.append(normalized)
+    digest = hashlib.sha256(canonical).hexdigest()
+    return SuccessorClassificationEvidence(
+        evidence_digest=digest,
+        repository=repository,
+        delivery_issue_number=delivery_issue_number,
+        pull_request_number=pull_request_number,
+        head_sha=head_sha.lower(),
+        finding_id=payload["finding_id"],
+        finding_evidence_digest=payload["finding_evidence_digest"],
+        thread=ThreadAuthorization(
+            thread_id=item["thread_id"],
+            top_level_comment_node_id=item["top_level_comment_node_id"],
+            top_level_comment_database_id=item["top_level_comment_database_id"],
+            finding_body_digest=item["finding_body_digest"],
+            reply_state_digest=item["reply_state_digest"],
+            reply_count=item["reply_count"],
+            is_resolved=item["is_resolved"],
+            is_outdated=item["is_outdated"],
+            classification=item["classification"],
+            disposition=item["disposition"],
+            technically_blocking=item["technically_blocking"],
+            classification_evidence_digest=digest,
+        ),
+        technical_blockers=tuple(blockers),
+        predecessor_state_digest=predecessor_state_digest,
+        resulting_state_digest=resulting_state_digest,
+        sources=tuple(sources),
+    )
+
+
+def parse_successor_classification_artifact(
+    artifact_path: Path,
+    signature_path: Path,
+    *,
+    expected_signer: SignerIdentity,
+    repository: str,
+    delivery_issue_number: int,
+    pull_request_number: int,
+    head_sha: str,
+    predecessor_state_digest: str,
+    resulting_state_digest: str,
+    signature_environment: dict[str, str] | None = None,
+) -> SuccessorClassificationEvidence:
+    """Verify one signed, exact-head safe Continuation successor finding."""
+
+    return _parse_successor_classification_artifact(
+        artifact_path,
+        signature_path,
+        expected_signer=expected_signer,
+        repository=repository,
+        delivery_issue_number=delivery_issue_number,
+        pull_request_number=pull_request_number,
+        head_sha=head_sha,
+        predecessor_state_digest=predecessor_state_digest,
+        resulting_state_digest=resulting_state_digest,
+        signature_environment=signature_environment,
+        rejected_candidate=False,
+    )
+
+
+def parse_rejected_successor_classification_artifact(
+    artifact_path: Path,
+    signature_path: Path,
+    *,
+    expected_signer: SignerIdentity,
+    repository: str,
+    delivery_issue_number: int,
+    pull_request_number: int,
+    head_sha: str,
+    predecessor_state_digest: str,
+    resulting_state_digest: str,
+    signature_environment: dict[str, str] | None = None,
+) -> SuccessorClassificationEvidence:
+    """Verify material evidence that rejected one unpublished Continuation."""
+
+    return _parse_successor_classification_artifact(
+        artifact_path,
+        signature_path,
+        expected_signer=expected_signer,
+        repository=repository,
+        delivery_issue_number=delivery_issue_number,
+        pull_request_number=pull_request_number,
+        head_sha=head_sha,
+        predecessor_state_digest=predecessor_state_digest,
+        resulting_state_digest=resulting_state_digest,
+        signature_environment=signature_environment,
+        rejected_candidate=True,
     )
 
 
@@ -619,9 +1203,10 @@ def parse_artifact(
     validated_tree_sha: str,
     validation_receipt_digest: str,
     validation_attestation_digest: str,
-    final_eligibility_evidence_digest: str,
+    final_eligibility_evidence_digest: str | None,
     thread_ids: tuple[str, ...],
-    allowed_dispositions: dict[str, frozenset[str]],
+    final_eligibility_absence_recovery_digest: str | None = None,
+    final_eligibility_status: str | None = None,
     signature_environment: dict[str, str] | None = None,
 ) -> LateDispositionEvidence:
     canonical = verify_detached_signature(
@@ -638,7 +1223,7 @@ def parse_artifact(
         )
     except (TypeError, ValueError) as exc:
         raise LateDispositionError("late-disposition artifact is malformed") from exc
-    expected_keys = {
+    common_keys = {
         "schema_version",
         "kind",
         "repository",
@@ -648,17 +1233,57 @@ def parse_artifact(
         "validated_tree_sha",
         "validation_receipt_digest",
         "validation_attestation_digest",
-        "final_eligibility_evidence_digest",
         "delivery_signer",
         "authorized_action",
         "threads",
     }
-    if not isinstance(payload, dict) or set(payload) != expected_keys:
+    schema_version = payload.get("schema_version") if isinstance(payload, dict) else None
+    manifest_mode = (
+        isinstance(payload, dict)
+        and isinstance(schema_version, str)
+        and schema_version
+        in {
+            SCHEMA_VERSION,
+            INFORMATIONAL_DISPOSITION_SCHEMA_VERSION,
+            ACTIONABLE_DISPOSITION_SCHEMA_VERSION,
+        }
+        and set(payload) == common_keys | {"final_eligibility_evidence_digest"}
+        and isinstance(final_eligibility_evidence_digest, str)
+        and DIGEST.fullmatch(final_eligibility_evidence_digest)
+        and final_eligibility_absence_recovery_digest is None
+    )
+    absence_mode = (
+        isinstance(payload, dict)
+        and isinstance(schema_version, str)
+        and schema_version in {ABSENCE_SCHEMA_VERSION, INFORMATIONAL_ABSENCE_SCHEMA_VERSION}
+        and set(payload)
+        == common_keys
+        | {
+            "final_eligibility_status",
+            "final_eligibility_absence_recovery_digest",
+        }
+        and final_eligibility_evidence_digest is None
+    )
+    ready_integration_mode = (
+        isinstance(payload, dict)
+        and isinstance(schema_version, str)
+        and schema_version
+        in {
+            READY_INTEGRATION_SCHEMA_VERSION,
+            INFORMATIONAL_READY_INTEGRATION_SCHEMA_VERSION,
+            ACTIONABLE_READY_INTEGRATION_SCHEMA_VERSION,
+        }
+        and set(payload) == common_keys | {"final_eligibility_status"}
+        and final_eligibility_evidence_digest is None
+        and final_eligibility_absence_recovery_digest is None
+        and final_eligibility_status
+        == NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY
+    )
+    if not manifest_mode and not absence_mode and not ready_integration_mode:
         raise LateDispositionError("late-disposition artifact shape is unsupported")
     declared_signer = payload.get("delivery_signer")
     if (
-        payload.get("schema_version") != SCHEMA_VERSION
-        or payload.get("kind") != KIND
+        payload.get("kind") != KIND
         or payload.get("repository") != repository
         or payload.get("delivery_issue_number") != delivery_issue_number
         or payload.get("pull_request_number") != pull_request_number
@@ -666,8 +1291,27 @@ def parse_artifact(
         or payload.get("validated_tree_sha") != validated_tree_sha.lower()
         or payload.get("validation_receipt_digest") != validation_receipt_digest
         or payload.get("validation_attestation_digest") != validation_attestation_digest
-        or payload.get("final_eligibility_evidence_digest")
-        != final_eligibility_evidence_digest
+        or (
+            manifest_mode
+            and payload.get("final_eligibility_evidence_digest")
+            != final_eligibility_evidence_digest
+        )
+        or (
+            absence_mode
+            and (
+                payload.get("final_eligibility_status")
+                != "NO_ELIGIBILITY_WAS_AUTHENTICATED_AT_FINAL_VALIDATION"
+                or payload.get("final_eligibility_absence_recovery_digest")
+                != final_eligibility_absence_recovery_digest
+                or not isinstance(final_eligibility_absence_recovery_digest, str)
+                or not DIGEST.fullmatch(final_eligibility_absence_recovery_digest)
+            )
+        )
+        or (
+            ready_integration_mode
+            and payload.get("final_eligibility_status")
+            != NO_COMMIT_BOUND_READY_INTEGRATION_ELIGIBILITY
+        )
         or payload.get("authorized_action") != "RESOLVE_EXACT_REVIEW_THREADS"
         or not isinstance(declared_signer, dict)
         or set(declared_signer) != {"format", "fingerprint"}
@@ -717,8 +1361,17 @@ def parse_artifact(
             or item["reply_count"] < 0
             or item.get("is_resolved") is not False
             or not isinstance(item.get("is_outdated"), bool)
-            or classification != "INVALID_FALSE_OR_MISLEADING"
-            or disposition not in allowed_dispositions.get(classification, frozenset())
+            or not isinstance(classification, str)
+            or not isinstance(disposition, str)
+            or (
+                READY_INTEGRATION_DISPOSITION_SCHEMA_VERSION_POLICY.get(
+                    schema_version
+                )
+                != (classification, disposition)
+                if ready_integration_mode
+                else DISPOSITION_SCHEMA_VERSION_POLICY.get(schema_version)
+                != (absence_mode, (classification, disposition))
+            )
             or item.get("technically_blocking") is not False
             or not isinstance(item.get("classification_evidence_digest"), str)
             or not DIGEST.fullmatch(item["classification_evidence_digest"])

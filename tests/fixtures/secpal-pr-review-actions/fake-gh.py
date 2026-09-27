@@ -90,9 +90,11 @@ if arguments[3] == "graphql":
                             "pullRequest": {
                                 "headRefOid": "a" * 40,
                                 "state": "OPEN",
+                                "isDraft": True,
                                 "reactions": empty,
                                 "reviews": empty,
                                 "comments": empty,
+                                "reviewRequests": empty,
                                 "reviewThreads": {
                                     "nodes": [
                                         {

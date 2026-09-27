@@ -16,6 +16,7 @@
     "allowed_github_operations": [
       "READ_NAMED_REVIEW_THREAD",
       "READ_AUTHENTICATED_FOLLOW_UP_WORK_GRAPH",
+      "AUTHENTICATE_LIFECYCLE_PUBLICATION_PROTECTION",
       "RESOLVE_NAMED_REVIEW_THREAD"
     ],
     "prohibited_hosted_reads": [
@@ -43,6 +44,15 @@
       "default_branch": "main",
       "allowed_base_repositories": ["SecPal/.github"],
       "reviewer_identities": [],
+      "qualified_remediation_successor_evidence_loss_policy": {
+        "path": "policies/qualified-remediation-successor-evidence-loss.json",
+        "admission_digest": "6dda7969b7f064548c6474abd895322b697ba5f2f22d960351db43318df45f94"
+      },
+      "governance_amendment_policy": {
+        "path": "policies/governance-amendment-bootstrap.json",
+        "kind": "SECPAL_GOVERNANCE_AMENDMENT_AUTHORIZATION",
+        "purpose": "EXACT_ZERO_RECEIPT_PRE_ENROLLMENT_BOOTSTRAP"
+      },
       "focused_validation": [
         {
           "argv": ["python3", "-m", "unittest", "tests/secpal-resolve-fixed-threads-unit.py"],
@@ -55,9 +65,29 @@
           "purpose": "Run guarded-action unit tests"
         },
         {
+          "argv": [
+            "python3",
+            "-m",
+            "unittest",
+            "tests/secpal-adopted-ready-prior-authority-unit.py"
+          ],
+          "working_directory": ".",
+          "purpose": "Run adopted Ready prior-authority bridge unit tests"
+        },
+        {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-pre-enrollment-integration-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run pre-enrollment Draft integration unit tests"
+        },
+        {
           "argv": ["python3", "-m", "unittest", "tests/secpal-lifecycle-authority-unit.py"],
           "working_directory": ".",
           "purpose": "Run persistent lifecycle-authority unit tests"
+        },
+        {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-bootstrap-source-admission-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run exact bootstrap source-admission unit tests"
         },
         {
           "argv": ["python3", "-m", "unittest", "tests/secpal-lifecycle-publication-unit.py"],
@@ -68,6 +98,31 @@
           "argv": ["python3", "-m", "unittest", "tests/secpal-lifecycle-orchestration-unit.py"],
           "working_directory": ".",
           "purpose": "Run finite lifecycle-orchestration unit tests"
+        },
+        {
+          "argv": [
+            "python3",
+            "-m",
+            "unittest",
+            "tests/secpal-lifecycle-execution-contract-unit.py"
+          ],
+          "working_directory": ".",
+          "purpose": "Run authenticated Ready/Draft lifecycle execution tests"
+        },
+        {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-lifecycle-role-signing-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run role-specific lifecycle signing tests"
+        },
+        {
+          "argv": [
+            "python3",
+            "-m",
+            "unittest",
+            "tests/secpal-exceptional-recovery-authority-unit.py"
+          ],
+          "working_directory": ".",
+          "purpose": "Run composite Exceptional Recovery authority unit tests"
         },
         {
           "argv": ["./tests/secpal-pr-review-skill-policy.sh"],
@@ -112,10 +167,48 @@
           "purpose": "Validate REUSE metadata"
         }
       ],
+      "complete_validation_preparation": {
+        "kind": "NPM_CI_LOCKED",
+        "working_directory": ".",
+        "package_manifest": "package.json",
+        "lockfile": "package-lock.json"
+      },
+      "final_eligibility_absence_recoveries": [
+        {
+          "schema_version": "1.0",
+          "kind": "FINAL_ELIGIBILITY_ABSENCE_RECOVERY",
+          "repository": "SecPal/.github",
+          "delivery_issue": 810,
+          "pull_request": 821,
+          "final_head_sha": "3bd4dcd08c0c1b9852eeff487c0ecbc2102b02d9",
+          "final_tree_sha": "b26b43004b75340de5c761b00727202b6cd9e255",
+          "final_reviewed_state_digest": "8ab3d9eec9a831cdc0257c4835f264816079a1d5d57c02e4bf5700989b1a52ee",
+          "final_validation_receipt_digest": "8554874ecf0013d9e2f43ba3e060f3bf57987eac3caf142e05c49253a491b1aa",
+          "final_attestation_digest": "d9be593f444a9fa24ce301b236eaaf41776c0230b08cfcd0a2e23ac55f17e05e",
+          "final_delivery_signer": {
+            "format": "ssh",
+            "fingerprint": "SHA256:GCaB6jwhFkzWkmHek5dVQNgxEb1JiLMOyhmIAcd0Vsc"
+          },
+          "expected_final_reviewed_thread_count": 0,
+          "expected_final_eligibility_status": "ABSENT_NOT_AUTHENTICATED",
+          "recovery_digest": "7b63a0d43b3c9f0ddc41500aa12657af61342743e99b9201db634401694d3ccc"
+        }
+      ],
       "signature_policy": {
         "require_github_verified": true,
         "require_local_verified": true,
         "accepted_formats": ["ssh", "openpgp"]
+      },
+      "pre_enrollment_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-pre-enrollment-draft",
+        "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
       },
       "lifecycle_authority_policy": {
         "schema_version": "1.0",
@@ -139,11 +232,195 @@
         "transition_signer_identities": ["aroviqen@secpal.app"],
         "authority_signer_identities": ["aroviqen@secpal.app"],
         "publication_signer_identities": ["aroviqen@secpal.app"],
+        "genesis_admission_signer_identities": ["aroviqen@secpal.app"],
         "legacy_adoption_signer_identities": ["lifecycle-legacy-adoption@secpal.app"],
         "publication_branch": "refs/heads/secpal-lifecycle-publications",
         "publication_remote_url": "https://github.com/SecPal/.github.git",
         "publication_ruleset_id": 21769814,
         "publication_required_rules": ["deletion", "non_fast_forward"],
+        "bootstrap_genesis_repairs": [
+          {
+            "repair_issue": 774,
+            "delivery_issue": 736,
+            "pull_request": 760,
+            "initial_head_sha": "9cce12e839e5f998137cc58fea90d0a5a0a45f63",
+            "initialization_digest": "6477407a86182f6bc9964089382f288e13dbb2e0b096edb2bf4e1c228452e628",
+            "validation_receipt_digest": "ae9cf6c0480aae0effa72bc8128e569db82f84b86351642c14c37ecabdccecc4",
+            "final_attestation_digest": "dad96cfa78d2a2c4d09818b761ec88d9385569e24a8e5117bab16be2351cbd25",
+            "enrollment_publication_oid": "0bb379a9af38bb14a49c651104d31149bb6c7f18",
+            "enrollment_publication_digest": "44fb6c570d4e875f2655e363bfe667107d69d37eedf62487bbf4551cf9288a9d"
+          }
+        ],
+        "bootstrap_source_admissions": [
+          {
+            "schema_version": "1.0",
+            "kind": "BOOTSTRAP_SOURCE_ADMISSION",
+            "subtype": "FIRST_READY_EXECUTOR_BOOTSTRAP_SOURCE",
+            "repository": "SecPal/.github",
+            "delivery_issue": 810,
+            "pull_request": 812,
+            "source_head_sha": "a668f6642ffcc76bcbea7fa6b69c5d6198ef5868",
+            "source_tree_sha": "13987395e5bdbeb586effb08e6a6f0ed5082a383",
+            "source_parent_sha": "6487001f57f6223f6502bacf953d9ad90d37a880",
+            "validation_receipt_digest": "83ef66b94d46d862b728a55ebb3affd4d8231ea70f8bf09c0c0aabcbdc7a63cc",
+            "final_attestation_digest": "a6ed34cbf05647e1c7cce4a9435e3f0f17e5d918f9e344763f6d8fbc9ac4e102",
+            "source_signer_identity": "aroviqen@secpal.app",
+            "implementation_path": "scripts/secpal_pr_review/lifecycle_execution.py",
+            "entrypoint": "execute_lifecycle_transition",
+            "purpose": "FIRST_READY_EXECUTOR_BOOTSTRAP",
+            "source_pr_state": "OPEN",
+            "source_pr_draft": true,
+            "source_base_ref": "main",
+            "admission_digest": "dde958066ab287feefdc88e9bf2e92aa3b6df390d7c713be3486f719da9956b4",
+            "evidence_loss_recovery": {
+              "schema_version": "1.0",
+              "kind": "BOOTSTRAP_SOURCE_EVIDENCE_LOSS_RECOVERY",
+              "historical_evidence_status": "HISTORICAL_EVIDENCE_UNAVAILABLE_BUT_EXACT_RECOVERY_AUTHORIZED",
+              "source_admission_digest": "dde958066ab287feefdc88e9bf2e92aa3b6df390d7c713be3486f719da9956b4",
+              "recovery_validation": {
+                "kind": "EXACT_BOOTSTRAP_SOURCE_RECOVERY_VALIDATION",
+                "source_head_sha": "a668f6642ffcc76bcbea7fa6b69c5d6198ef5868",
+                "source_tree_sha": "13987395e5bdbeb586effb08e6a6f0ed5082a383",
+                "command_set_digest": "efa8f75050280fda50129a5861d139898c9c6350a28eeb3cd73e9c03d5fcd550",
+                "result": "PASSED",
+                "validation_digest": "fd5f4c5ed116c38b9dec715e186cc54aacfe2a6c3da3a441e3c48a99e4722fa4"
+              },
+              "technical_security_gate": {
+                "kind": "BOOTSTRAP_SOURCE_RECOVERY_TECHNICAL_SECURITY_GATE",
+                "source_head_sha": "a668f6642ffcc76bcbea7fa6b69c5d6198ef5868",
+                "source_tree_sha": "13987395e5bdbeb586effb08e6a6f0ed5082a383",
+                "review_scope": "EXACT_IMMUTABLE_BOOTSTRAP_EXECUTOR",
+                "feedback_inventory_digest": "d2236120f769caa74d5da0435330c103a036dfe68a5e0f8274d43a3916ca8f2b",
+                "resolved_review_thread_count": 2,
+                "conversation_comment_count": 0,
+                "review_decision": "NONE",
+                "result": "NO_OPEN_TECHNICAL_OR_SECURITY_FINDINGS",
+                "gate_digest": "4f6a73e91475e8464c4583ac7818c57e5ce19953f54143a359e231ec3a9714b6"
+              },
+              "recovery_digest": "64beea5b886119b8578c01df152992df22f56fdabba80109d589060c40e6b37d"
+            }
+          },
+          {
+            "schema_version": "1.0",
+            "kind": "BOOTSTRAP_SOURCE_ADMISSION",
+            "subtype": "PR_REVIEW_EVIDENCE_HELPER_SOURCE",
+            "repository": "SecPal/.github",
+            "delivery_issue": 818,
+            "pull_request": 819,
+            "source_head_sha": "e14f7668354763af5033f511097ddf990d6e8ef5",
+            "source_tree_sha": "5065ce77573e9753249de055f6122f14362cbb30",
+            "source_parent_sha": "b297745297b7aa98ba24ef05c011a7906a0a43d8",
+            "validation_receipt_digest": "4a21e7f8b0f3a96bdecf78b97a55cf77c12b9fae7b012c32d3d19d2f1195801e",
+            "final_attestation_digest": "6e17c6e1bb3a9a11538605206ef7b6dd6c8738d9f7dedc03ab1c913303cbd0fd",
+            "source_signer_identity": "aroviqen@secpal.app",
+            "implementation_path": "scripts/secpal-pr-review.py",
+            "implementation_blob_oid": "130e49df1c6e90c3db1b4286e74639f1d3fc1418",
+            "purpose": "PR_REVIEW_EVIDENCE_HELPER_SOURCE_ADMISSION",
+            "source_pr_state": "OPEN",
+            "source_pr_draft": false,
+            "source_base_ref": "main",
+            "policy_source": "ACCEPTED_MAIN_REPOSITORY_REGISTRY",
+            "admission_digest": "38aa92b53d5289db44063ce4197687c18bb162c344aa37326ee2703013158418"
+          },
+          {
+            "schema_version": "1.0",
+            "kind": "BOOTSTRAP_SOURCE_ADMISSION",
+            "subtype": "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE",
+            "repository": "SecPal/.github",
+            "delivery_issue": 776,
+            "pull_request": 779,
+            "source_head_sha": "afc22b9ecace257e7fc0d67c414bf40e9153fe26",
+            "source_tree_sha": "6be7fa33a43971640f90c4490820dd6b9314ac9f",
+            "source_parent_sha": "8371bef95afeed854e4892ef1af5ed54467aeb74",
+            "source_signer_identity": "aroviqen@secpal.app",
+            "signer_policy_identity": "MAINTAINED_LIFECYCLE_SIGNER_POLICY",
+            "implementation_path": "scripts/secpal-pr-review-actions.py",
+            "implementation_blob_oid": "10ddb0fd14d33fa28ef9f58391f3558c272eb8ad",
+            "entrypoint": "main",
+            "command": "integrate-pre-enrollment-draft",
+            "purpose": "PRE_ENROLLMENT_IMPLEMENTATION_BOOTSTRAP",
+            "source_pr_state": "OPEN",
+            "source_pr_draft": true,
+            "source_base_ref": "main",
+            "policy_source": "ACCEPTED_MAIN_REPOSITORY_REGISTRY",
+            "historical_evidence_status": "HISTORICAL_EVIDENCE_UNAVAILABLE",
+            "validation_registry_path": ".agents/skills/secpal-pr-review/references/repositories.json",
+            "validation_command_set": [
+              {
+                "argv": [
+                  "python3",
+                  "-m",
+                  "unittest",
+                  "tests/secpal-pre-enrollment-integration-unit.py"
+                ],
+                "working_directory": ".",
+                "purpose": "Run pre-enrollment Draft integration unit tests"
+              },
+              {
+                "argv": ["python3", "-m", "unittest", "tests/secpal-lifecycle-authority-unit.py"],
+                "working_directory": ".",
+                "purpose": "Run persistent lifecycle-authority unit tests"
+              },
+              {
+                "argv": ["python3", "-m", "unittest", "tests/secpal-lifecycle-publication-unit.py"],
+                "working_directory": ".",
+                "purpose": "Run lifecycle enrollment and current-terminal publication tests"
+              }
+            ],
+            "validation_command_set_digest": "fdc9e2f8be6e08546af324de39b4ef32532a98ca997aea91eec14c0c1f5b0827",
+            "validation_results": [
+              {
+                "command_digest": "e094c9760a3900913d19dfe14e4ec04260e5809088a63fbdc95ad1cb827bb337",
+                "exit_status": 0,
+                "successful": true
+              },
+              {
+                "command_digest": "cf9f39c2a893a67ad1031b7fb9274733ffb80f02754fa13b1042e0b8b763314d",
+                "exit_status": 0,
+                "successful": true
+              },
+              {
+                "command_digest": "567d8f90ffdc674313648ca23aa450e855576b76deff70518692675a202ff22a",
+                "exit_status": 0,
+                "successful": true
+              }
+            ],
+            "validation_result_digest": "dc9895751a3922a3396b50e8e0e0333e2afd6e993e799ba86925c374e5e701fc",
+            "admission_digest": "23171459163f9e9b3bd8b4299ec141395b74cdddf6bd9b2691e1e06de8bde93b"
+          }
+        ],
+        "historical_compatibility_publications": [
+          {
+            "repository": "SecPal/.github",
+            "delivery_issue": 692,
+            "pull_request": 757,
+            "initial_head_sha": "6c234f18f4a9cfe3fd80f78be31446efb4634f0c",
+            "initialization_digest": "4e071bcbfc17a20cc54b3f608f10418b3cc376eddce0dfba6ddbe54e2e53108f",
+            "enrollment_publication_oid": "52e76a4eef0fdbb297c16d4bcf64b813bef84062",
+            "enrollment_publication_digest": "ace5dd8f514870f33d734d6e8f6f7371b48783c6a6823d6a496b895f4cc0ac5e",
+            "historical_proof_mode": "native_lifecycle"
+          },
+          {
+            "repository": "SecPal/.github",
+            "delivery_issue": 674,
+            "pull_request": 758,
+            "initial_head_sha": "325c0a3af7fd0f0d7143de7e448ea4fa7c875a65",
+            "initialization_digest": "2756e83b52c8af10c30926cb1d62d5501819a790158f560cf0f608587df321e9",
+            "enrollment_publication_oid": "80950f8908f29ead325eb99caf1977e51fad37e1",
+            "enrollment_publication_digest": "b5fa17ae18f5fc7208c7e13b9c361d59adc0128446404e79bbf42587679cbfad",
+            "historical_proof_mode": "native_lifecycle"
+          },
+          {
+            "repository": "SecPal/.github",
+            "delivery_issue": 735,
+            "pull_request": 759,
+            "initial_head_sha": "bd31adf8a0f797e4af65e9892936bed49a233634",
+            "initialization_digest": "6b630e40702ae69145226f8b40c8e6540914cd6e12815720551330faa2ca9d3d",
+            "enrollment_publication_oid": "2a5c2d9554ca7b70fd4f2e486da18ae9697af912",
+            "enrollment_publication_digest": "abd53fe73fc29257656151b3ad3777cbe72012102a5a5bcec95ec23529c0e211",
+            "historical_proof_mode": "native_lifecycle"
+          }
+        ],
         "delivery_initializations": [
           {
             "delivery_issue": 692,
@@ -369,6 +646,39 @@
           "purpose": "Run documented contract lint and formatting validation"
         }
       ],
+      "lifecycle_authority_policy": {
+        "schema_version": "1.0",
+        "accepted_formats": ["ssh", "openpgp"],
+        "signers": [
+          {
+            "identity": "aroviqen@secpal.app",
+            "ssh_public_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDDKiPWdlHKFaHJL+GQ3EQRs9St95lITw217D17rZ2qB"
+            ],
+            "openpgp_fingerprints": []
+          },
+          {
+            "identity": "lifecycle-legacy-adoption@secpal.app",
+            "ssh_public_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH2v+HkwUVduXOuLQONPPHAfEUT+NmEVMtp7JZMrnzrn"
+            ],
+            "openpgp_fingerprints": []
+          }
+        ],
+        "transition_signer_identities": ["aroviqen@secpal.app"],
+        "authority_signer_identities": ["aroviqen@secpal.app"],
+        "publication_signer_identities": ["aroviqen@secpal.app"],
+        "genesis_admission_signer_identities": ["aroviqen@secpal.app"],
+        "legacy_adoption_signer_identities": ["lifecycle-legacy-adoption@secpal.app"],
+        "publication_branch": "refs/heads/secpal-lifecycle-publications",
+        "publication_remote_url": "https://github.com/SecPal/contracts.git",
+        "publication_ruleset_id": 23668089,
+        "publication_required_rules": ["deletion", "non_fast_forward"],
+        "bootstrap_genesis_repairs": [],
+        "bootstrap_source_admissions": [],
+        "historical_compatibility_publications": [],
+        "delivery_initializations": []
+      },
       "signature_policy": {
         "require_github_verified": true,
         "require_local_verified": true,
@@ -687,6 +997,39 @@
         "require_github_verified": true,
         "require_local_verified": true,
         "accepted_formats": ["ssh", "openpgp"]
+      },
+      "lifecycle_authority_policy": {
+        "schema_version": "1.0",
+        "accepted_formats": ["ssh", "openpgp"],
+        "signers": [
+          {
+            "identity": "aroviqen@secpal.app",
+            "ssh_public_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDDKiPWdlHKFaHJL+GQ3EQRs9St95lITw217D17rZ2qB"
+            ],
+            "openpgp_fingerprints": []
+          },
+          {
+            "identity": "lifecycle-legacy-adoption@secpal.app",
+            "ssh_public_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH2v+HkwUVduXOuLQONPPHAfEUT+NmEVMtp7JZMrnzrn"
+            ],
+            "openpgp_fingerprints": []
+          }
+        ],
+        "transition_signer_identities": ["aroviqen@secpal.app"],
+        "authority_signer_identities": ["aroviqen@secpal.app"],
+        "publication_signer_identities": ["aroviqen@secpal.app"],
+        "genesis_admission_signer_identities": ["aroviqen@secpal.app"],
+        "legacy_adoption_signer_identities": ["lifecycle-legacy-adoption@secpal.app"],
+        "publication_branch": "refs/heads/secpal-lifecycle-publications",
+        "publication_remote_url": "https://github.com/SecPal/deployment.git",
+        "publication_ruleset_id": 23459394,
+        "publication_required_rules": ["deletion", "non_fast_forward"],
+        "bootstrap_genesis_repairs": [],
+        "bootstrap_source_admissions": [],
+        "historical_compatibility_publications": [],
+        "delivery_initializations": []
       },
       "check_policy": {
         "require_ruleset_evidence": true,

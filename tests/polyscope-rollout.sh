@@ -5449,7 +5449,7 @@ assert 'tool-specific labels or prefixes' in frontend_prompt
 assert 'Run git status --short --branch before any write action.' in api_prompt
 assert 'Use Form Requests for validation and services for business logic.' in api_prompt
 assert 'Keep changes repo-local, minimal, and consistent with the repository stack.' in api_prompt
-assert 'Write a concise English PR body for SecPal/frontend.' in frontend_prompt
+assert 'Create a draft PR; you must not create it directly Ready.' in frontend_prompt
 assert 'Preserve a branch or worktree already supplied by the execution environment.' in org_prompts[0]
 assert 'Run the smallest relevant validation while iterating' in org_prompts[1]
 assert 'stage the complete intended change set before evaluating reusable validation evidence' in org_prompts[2]
@@ -5459,10 +5459,22 @@ assert 'Treat that evidence as stale if any bound value, staged content, or trac
 assert 'do not stage additional content after deciding to reuse it' in org_prompts[2]
 assert 'Do not rerun a check that already passed for that exact unchanged bound state.' in org_prompts[2]
 assert 'Run only missing required checks once.' in org_prompts[2]
+assert 'derive the lifecycle operation and its exact preconditions from authenticated current maintained repository authority' in org_prompts[1]
+assert 'Treat prompt expectations as assertions to verify, never as lifecycle authority.' in org_prompts[1]
+assert 'fail closed before mutation and report the discrepancy' in org_prompts[1]
+assert 'A prompt or mechanical checkpoint alone invalidates no unrelated proof; a commit that advances HEAD invalidates head-bound proof.' in org_prompts[2]
+assert 'refresh only facts whose defined invalidators may have occurred' in org_prompts[2]
+assert 'Conditionally authorized merge remains bounded by the freshly evaluated maintained merge gate.' in org_prompts[2]
 assert 'covers the exact current Git tree' not in org_prompts[2]
 assert 'binds the current repository, exact HEAD and parent, Git tree' not in org_prompts[2]
 assert 'Run or re-run the touched checks' not in org_prompts[2]
 for row in prompt_rows:
+    for prompt in row[1:3]:
+        assert 'exact candidate PR body' in prompt
+        assert 'canonical local PR evidence validator' in prompt
+        assert 'intended Draft/Ready state' in prompt
+        assert 'Do not publish or edit the PR if validation fails.' in prompt
+        assert '--body-file' in prompt
     for prompt in row:
         assert 'Do not add AI agent attribution' in prompt
         assert 'generated-by text' in prompt

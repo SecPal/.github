@@ -62,7 +62,10 @@ Concrete provider products are not SecPal architecture primitives. Durable
 architecture may distinguish a capacity profile, compute isolation class such
 as `shared`, `dedicated-vcpu`, or `dedicated-host`, CPU architecture such as
 `amd64` or `arm64`, storage/performance capability, and ADR-022's `single`,
-`replacement`, or `ha` topology.
+`replacement`, or `ha` self-hosted topology. ADR-022 separately owns the
+`MANAGED_SINGLE`, `MANAGED_HA`, and `MANAGED_CONTINUITY` technical capability
+profiles; these do not move portable implementation ownership out of public
+repositories.
 
 Hetzner CX/CPX/CAX/CCX or bare-metal models, AWS EC2 instance types,
 DigitalOcean Droplet types, GCP machine types, and future equivalents may appear
@@ -137,11 +140,13 @@ a hidden technical dependency or maintaining divergent conformance rules.
 
 This ADR defines the ownership boundary; it does not claim that
 `SecPal/operations` is currently an executable, privileged production operations
-control plane. Under [#705](https://github.com/SecPal/.github/issues/705), that
-repository is currently information/architecture collection. Before it gains
-executable or privileged production automation or live control-plane
-responsibility, a separate governance/security-hardening contract must be
-accepted. This refinement does not bypass that requirement.
+control plane. ADR-024 separately accepts Managed Operations Control Plane
+authority, trust, and reconciliation semantics without changing this ownership
+boundary. Before `SecPal/operations` gains executable or privileged production
+automation, the governance and privilege gate owned by
+[`SecPal/operations#11`](https://github.com/SecPal/operations/issues/11) must be
+implemented. ADR acceptance does not satisfy that gate or prove the Control
+Plane implemented or production-qualified.
 
 ## Relationships
 
@@ -149,7 +154,9 @@ Codifies [#695](https://github.com/SecPal/.github/issues/695) and is refined by
 [#748](https://github.com/SecPal/.github/issues/748). ADR-018 owns the host and
 container-runtime baseline, ADR-019 owns the public edge and layered-security
 decision, ADR-021 owns OCI supply-chain evidence and scanner-policy semantics,
-and ADR-022 owns the topology vocabulary and guarantees. This ADR owns only the
-public/private capability and policy boundary; endpoint mechanisms do not alter
-ADR-022 topology semantics. See also
-[#705](https://github.com/SecPal/.github/issues/705) and ADR-020.
+and ADR-022 owns self-hosted topology, Managed technical capability profiles,
+and their bounded failure-class semantics. This ADR owns only the public/private
+capability and policy boundary; endpoint mechanisms do not alter ADR-022
+topology or profile semantics. See also
+[#705](https://github.com/SecPal/.github/issues/705),
+[#844](https://github.com/SecPal/.github/issues/844), ADR-020, and ADR-024.

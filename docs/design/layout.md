@@ -5,11 +5,15 @@ SPDX-License-Identifier: CC0-1.0
 
 # Layout
 
-SecPal and GuardGuide application surfaces use a top navigation shell by default. Product repositories own route structure, breakpoints, and implementation details, but shared application layouts should follow the shell model in this document.
+SecPal-family application surfaces use a top navigation shell by default.
+Owning repositories control route structure, breakpoints, and implementation
+details, but shared application layouts should follow the shell model in this
+document.
 
 ## Default Shell
 
-Use a topbar as the persistent application shell. Do not use a permanent left sidebar as the default pattern for SecPal or GuardGuide.
+Use a topbar as the persistent application shell. Do not use a permanent left
+sidebar as the default pattern for SecPal-family application surfaces.
 
 The default desktop shell includes:
 

@@ -1,0 +1,64 @@
+{
+  "schema_version": "1.0",
+  "authentications": [
+    {
+      "schema_version": "1.0",
+      "kind": "SECPAL_LEGACY_ENROLLED_PACKAGE_LOSS_AUTHENTICATION",
+      "repository": "SecPal/.github",
+      "delivery_issue": 792,
+      "pull_request": 793,
+      "lifecycle_id": "lifecycle-adoption:67799903a7b2c1ffc6e0fafaf18d3127c39b0d02c94928ec4ec33396e21e85f6",
+      "historical_proof_mode": "exact_state_adoption",
+      "proof_version": "1.0",
+      "current_publication_oid": "afa542a289bb43cecac326b24e041c3fb68bad7a",
+      "current_publication_digest": "275e56d899450fef017fadc9913cdb3062b6650ceea1f3fffd11e5a067aa9cec",
+      "head_sha": "5b8a661cec134256cf31273ab30c38b048999978",
+      "tree_sha": "c98663dbcde480c1dcac7858595dabff3cb2fd2c",
+      "parent_sha": "401f0886fdfee9525ced24f703e31087dfa35096",
+      "source_signer_identity": "aroviqen@secpal.app",
+      "commit_signature_evidence_digest": "03ec1b0b217ea7ebecf32e80bbdde28ba07d9c0029bd3a491c9e757c19cea124",
+      "historical_provider_summary_digest": "7b2eb29290745e456b1d52137d60015857933435a633490bf945905dcff3eeb7",
+      "evidence_time_registry_digest": "38629c17e2397bfc1df44e5fa65fc176326f47fdf9dbfee98d1de52ecd093340",
+      "historical_command_set_digest": "15d370f613fb13d39bcf5136ffb4ebae298eb78e0acfaf18635253571f9ff12a",
+      "source_validation_evidence_digest": "951af9087c60ac6da16f8f94f6bde89a42035938a0377ea94a2e583f28d39259",
+      "historical_validation_receipt_digest": "008128e9edf6b3ad9b166f4641698a6849593006a70a8df09afb65b66dd81065",
+      "historical_final_attestation_digest": "c824f0f207b8aae00a8b2019ea6e4870279524eb884fcba0af4bff6c322f6b42",
+      "source_history": [
+        {
+          "head_sha": "15b0934cc8bd00055311c65eeb9a5e3144e4fe8a",
+          "tree_sha": "ab7ee9fe9d97c3c4208fe905a97ba9b91e7f7f00",
+          "parent_sha": "4817458e7b005982e247630460ee0449cffdb919"
+        },
+        {
+          "head_sha": "401f0886fdfee9525ced24f703e31087dfa35096",
+          "tree_sha": "9e57223e1adb024eb1a64af79e071519d7c7e58e",
+          "parent_sha": "15b0934cc8bd00055311c65eeb9a5e3144e4fe8a"
+        },
+        {
+          "head_sha": "5b8a661cec134256cf31273ab30c38b048999978",
+          "tree_sha": "c98663dbcde480c1dcac7858595dabff3cb2fd2c",
+          "parent_sha": "401f0886fdfee9525ced24f703e31087dfa35096"
+        }
+      ],
+      "persistence_contract": {
+        "historical_output_scope": "CALLER_SELECTED_GITIGNORED_LOCAL_SESSION",
+        "local_package_directory": ".context/",
+        "artifact_basenames": [
+          "final-attestation.json",
+          "reviewed-feedback.json",
+          "reviewed-state.json",
+          "thread-eligibility.json",
+          "validation-attestation.json",
+          "validation-receipt.json"
+        ],
+        "maintained_durable_stores": ["DELIVERY_SOURCE_HISTORY", "PROTECTED_LIFECYCLE_PUBLICATION"],
+        "unsurveyed_maintained_stores": [],
+        "retained_local_store": "NO_MAINTAINED_RETAINED_STORE"
+      },
+      "historical_package_status": "UNAVAILABLE",
+      "historical_bytes_reconstructed": false,
+      "package_store_survey_digest": "38d8502ee302be37a1cb6a070eadec758f43b54df4d2019870602960b69f12cd",
+      "record_digest": "15fc86dbe7ed71241dcbbf1480e142207c9e4c32b0ae0dc40ebfe551098b6138"
+    }
+  ]
+}

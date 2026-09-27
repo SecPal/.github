@@ -5,7 +5,9 @@ SPDX-License-Identifier: CC0-1.0
 
 # Components
 
-SecPal and GuardGuide application UI should preserve consistent component behavior and accessibility expectations while runtime implementation choices stay in the owning repositories.
+SecPal-family application UI should preserve consistent component behavior and
+accessibility expectations while runtime implementation choices stay in the
+owning repositories.
 
 ## Ownership Boundaries
 
