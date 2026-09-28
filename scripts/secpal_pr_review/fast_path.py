@@ -6448,6 +6448,350 @@ def verify_validation_attestation(
     return _seal_validation_evidence(result, provenance)
 
 
+def _authenticate_pre_enrollment_commit(
+    *,
+    helper: Any,
+    repository_root: Path,
+    repository: str,
+    head_sha: str,
+    expected_signer: str,
+    trust: Any,
+    signature_policy: dict[str, Any],
+) -> Any:
+    """Verify immutable commit bytes with maintained credentials, never local trust."""
+    from . import lifecycle_authority, pre_enrollment_integration
+
+    origin = helper._run_attestation_git(
+        repository_root, ["remote", "get-url", "origin"]
+    )
+    if _repository_from_remote(origin.stdout) != repository:
+        raise SecurityBlocker("pre-enrollment commit repository changed")
+    credential = trust.signers.get(expected_signer)
+    if credential is None:
+        raise SecurityBlocker("pre-enrollment commit signer is not maintained")
+    commit = helper._run_attestation_git(
+        repository_root, ["cat-file", "commit", head_sha]
+    )
+    tree, parents = _commit_topology(commit.stdout)
+    signature_format = evidence._commit_signature_format(commit.stdout)
+    if signature_format not in trust.accepted_formats:
+        raise SecurityBlocker("pre-enrollment commit signature format is not trusted")
+    with tempfile.TemporaryDirectory(
+        prefix="secpal-bootstrap-verification-"
+    ) as directory:
+        allowed = Path(directory) / "allowed-signers"
+        allowed.write_text(
+            "".join(f"{expected_signer} {key}\n" for key in credential.ssh_public_keys),
+            encoding="utf-8",
+        )
+        verified = helper._run_attestation_git(
+            repository_root,
+            [
+                "-c",
+                f"gpg.ssh.allowedSignersFile={allowed}",
+                "-c",
+                f"gpg.ssh.program={lifecycle_authority._trusted_signature_command('ssh-keygen')[0]}",
+                "-c",
+                f"gpg.program={lifecycle_authority._trusted_signature_command('gpg')[0]}",
+                "verify-commit",
+                "--raw",
+                head_sha,
+            ],
+            allow_failure=True,
+        )
+    output = f"{verified.stdout}\n{verified.stderr}"
+    local = evidence.interpret_local_signature(
+        verified.returncode,
+        output,
+        signature_format_hint=signature_format,
+    )
+    remote = helper._run_bridge_gh(
+        [
+            "api",
+            "--hostname",
+            "github.com",
+            f"repos/{repository}/commits/{head_sha}",
+            "--jq",
+            '{"sha":.sha,"verification":{ "verified":.commit.verification.verified,"reason":.commit.verification.reason}}',
+        ]
+    )
+    observed = _parse_registry_json(remote.stdout, "pre-enrollment commit observation")
+    if (
+        remote.returncode != 0
+        or not isinstance(observed, dict)
+        or set(observed) != {"sha", "verification"}
+        or observed["sha"] != head_sha
+    ):
+        raise SecurityBlocker("pre-enrollment commit GitHub identity changed")
+    verify_commit_signatures(
+        [
+            {
+                "oid": head_sha,
+                "source": "USER",
+                "local_signature": local,
+                "github_verification": observed["verification"],
+            }
+        ],
+        signature_policy,
+    )
+    if signature_format == "ssh":
+        _actual_integration_signer(
+            output, {"kind": "SSH_PRINCIPAL", "identity": expected_signer}
+        )
+    elif signature_format == "openpgp":
+        for fingerprint in credential.openpgp_fingerprints:
+            try:
+                _actual_integration_signer(
+                    output, {"kind": "OPENPGP_FINGERPRINT", "identity": fingerprint}
+                )
+            except SecurityBlocker:
+                continue
+            break
+        else:
+            raise SecurityBlocker("pre-enrollment commit fingerprint is not maintained")
+    else:
+        raise SecurityBlocker("pre-enrollment commit signature is unsupported")
+    return pre_enrollment_integration._seal_verified_candidate_commit(
+        {
+            "head_sha": head_sha,
+            "tree_sha": tree,
+            "parent_shas": list(parents),
+            "verified_signer": expected_signer,
+            "signature_format": signature_format,
+        }
+    )
+
+
+def _verify_pre_enrollment_validation_unsealed(
+    provenance: dict[str, Any],
+) -> VerifiedValidationEvidence:
+    """Replay immutable bootstrap evidence under current accepted-main authority.
+
+    Parent 2 selects the evidence-time registry only after first-parent history
+    authentication. Current protected main selects all executing verifier bytes
+    and trust credentials. Neither authority is a caller-selected policy.
+    """
+    from . import (
+        bootstrap_source_admission,
+        lifecycle_authority,
+        pre_enrollment_integration,
+    )
+
+    fields = {
+        "schema_version",
+        "kind",
+        "repository",
+        "delivery_issue_number",
+        "pull_request_number",
+        "head_sha",
+        "repository_root",
+        "integration_evidence",
+        "validation_receipt",
+        "final_attestation",
+    }
+    if (
+        set(provenance) != fields
+        or provenance["schema_version"] != "1.0"
+        or provenance["kind"] != pre_enrollment_integration.KIND
+    ):
+        raise SecurityBlocker("pre-enrollment validation provenance is unsupported")
+    repository = provenance["repository"]
+    # The maintained pre-enrollment executor is currently registered only here.
+    # Cross-repository policy selection must not infer a central evidence epoch.
+    if repository != CENTRAL_REGISTRY_REPOSITORY:
+        raise SecurityBlocker("pre-enrollment validation repository is not registered")
+    if any(
+        not isinstance(provenance[key], dict)
+        for key in ("integration_evidence", "validation_receipt", "final_attestation")
+    ):
+        raise SecurityBlocker(
+            "pre-enrollment validation requires raw canonical artifacts"
+        )
+    head = _require_oid(provenance["head_sha"], "pre-enrollment candidate head")
+    root = Path(provenance["repository_root"]).resolve(strict=True)
+    helper = bootstrap_source_admission._load_actions_helper()
+    try:
+        helper._require_bridge_import_provenance(
+            {
+                "fast_path": (__file__, __spec__.origin),
+                "evidence": (evidence.__file__, evidence.__spec__.origin),
+                "lifecycle_authority": (
+                    lifecycle_authority.__file__,
+                    lifecycle_authority.__spec__.origin,
+                ),
+                "pre_enrollment": (
+                    pre_enrollment_integration.__file__,
+                    pre_enrollment_integration.__spec__.origin,
+                ),
+                "bootstrap_source_admission": (
+                    bootstrap_source_admission.__file__,
+                    bootstrap_source_admission.__spec__.origin,
+                ),
+            },
+            {
+                "fast_path": helper.FAST_PATH_HELPER,
+                "evidence": helper.EVIDENCE_HELPER,
+                "lifecycle_authority": helper.LIFECYCLE_AUTHORITY_HELPER,
+                "pre_enrollment": helper.PRE_ENROLLMENT_INTEGRATION_HELPER,
+                "bootstrap_source_admission": helper.FAST_PATH_HELPER.with_name(
+                    "bootstrap_source_admission.py"
+                ),
+            },
+        )
+        current_main = helper._require_accepted_main_bridge_source(
+            CENTRAL_REGISTRY_REPOSITORY
+        )
+        helper._require_distinct_candidate_repository_root(root)
+        raw = provenance["integration_evidence"]
+        if not isinstance(raw, dict) or not isinstance(raw.get("current_main"), dict):
+            raise SecurityBlocker("pre-enrollment integration evidence is missing")
+        parent2 = _require_oid(raw["current_main"].get("sha"), "evidence-time main")
+        _, history = _central_git_result(["rev-list", "--first-parent", current_main])
+        if parent2 not in history.splitlines():
+            raise SecurityBlocker(
+                "pre-enrollment parent 2 is outside accepted protected-main history"
+            )
+        _, registry_raw = _central_git_result(
+            ["show", f"{parent2}:{DELIVERY_REGISTRY_PATH}"]
+        )
+        _, schema_raw = _central_git_result(
+            ["show", f"{parent2}:{DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH}"]
+        )
+        registry = _validated_historical_registry_binding(
+            registry_raw=registry_raw,
+            schema_raw=schema_raw,
+            repository=repository,
+        )
+        if (
+            registry.get("pre_enrollment_integration_policy", {}).get("topology_kind")
+            != pre_enrollment_integration.KIND
+        ):
+            raise SecurityBlocker(
+                "evidence-time policy did not support pre-enrollment integration"
+            )
+        normalized = pre_enrollment_integration.normalize_evidence(
+            raw, registry=registry
+        )
+        if (
+            normalized["delivery_issue"] != provenance["delivery_issue_number"]
+            or normalized["pull_request"] != provenance["pull_request_number"]
+            or isinstance(provenance["delivery_issue_number"], bool)
+            or isinstance(provenance["pull_request_number"], bool)
+        ):
+            raise SecurityBlocker(
+                "pre-enrollment validation does not bind the delivery"
+            )
+        trust = lifecycle_authority._load_lifecycle_trust_policy(repository)
+        pre_enrollment_integration.verify_authorization(
+            normalized["authorization"],
+            accepted_signers=trust.transition_signer_identities,
+            verifier=lambda payload, signature, signer, domain: (
+                lifecycle_authority._verify_signature(
+                    payload,
+                    signature,
+                    signer,
+                    domain,
+                    trust.transition_signer_identities,
+                    lifecycle_authority._policy_signature_verifier(trust),
+                )
+                is not None
+            ),
+        )
+        candidate = _authenticate_pre_enrollment_commit(
+            helper=helper,
+            repository_root=root,
+            repository=repository,
+            head_sha=head,
+            expected_signer=normalized["expected_signer"],
+            trust=trust,
+            signature_policy=lifecycle_authority._load_delivery_signature_policy(
+                repository
+            ),
+        )
+        trailers = {
+            key: helper._commit_trailer_digest(root, head, key)
+            for key in (
+                "SecPal-Pre-Enrollment-Integration",
+                "SecPal-Pre-Enrollment-Validation-Receipt",
+            )
+        }
+        proof = pre_enrollment_integration.verify_final_attestation(
+            evidence=normalized,
+            registry=registry,
+            receipt=provenance["validation_receipt"],
+            attestation=provenance["final_attestation"],
+            commit_trailers=trailers,
+            verified_candidate=candidate,
+        )
+        helper._verify_integration_tree_delta(root, normalized, candidate.tree_sha)
+        helper._require_accepted_main_bridge_source(
+            CENTRAL_REGISTRY_REPOSITORY, expected_main=current_main
+        )
+        # Source-validation identity is a typed binding of the complete verified
+        # source. The integration digest alone is not that identity.
+        source_binding = {
+            "schema_version": "1.0",
+            "kind": pre_enrollment_integration.KIND,
+            "repository": repository,
+            "delivery_issue_number": proof.delivery_issue,
+            "pull_request_number": proof.pull_request,
+            "head_sha": proof.initial_head_sha,
+            "tree_sha": candidate.tree_sha,
+            "ordered_parent_shas": list(candidate.parent_shas),
+            "integration_evidence_digest": proof.integration_evidence_digest,
+            "validation_receipt_digest": proof.validation_receipt_digest,
+            "final_attestation_digest": proof.final_attestation_digest,
+        }
+        return _unregistered_validation_evidence(
+            repository=repository,
+            delivery_issue_number=proof.delivery_issue,
+            pull_request_number=proof.pull_request,
+            head_sha=proof.initial_head_sha,
+            tree_sha=candidate.tree_sha,
+            validation_receipt_digest=proof.validation_receipt_digest,
+            final_attestation_digest=proof.final_attestation_digest,
+            source_validation_evidence_digest=digest_json(source_binding),
+        )
+    except (
+        helper.fast_path.SecurityBlocker,
+        helper.fast_path.RecoverableLocalError,
+    ) as exc:
+        # The actions loader may instantiate its own canonical fast-path module;
+        # normalize its boundary errors before predicate replay handles them.
+        raise SecurityBlocker(str(exc)) from exc
+
+
+def verify_pre_enrollment_validation_evidence(
+    *,
+    repository: str,
+    delivery_issue_number: int,
+    pull_request_number: int,
+    head_sha: str,
+    repository_root: Path | str,
+    integration_evidence: dict[str, Any],
+    validation_receipt: dict[str, Any],
+    final_attestation: dict[str, Any],
+) -> VerifiedValidationEvidence:
+    """Compose full bootstrap provenance, never an opaque initial-head proof."""
+    from . import pre_enrollment_integration
+
+    provenance = {
+        "schema_version": "1.0",
+        "kind": pre_enrollment_integration.KIND,
+        "repository": repository,
+        "delivery_issue_number": delivery_issue_number,
+        "pull_request_number": pull_request_number,
+        "head_sha": head_sha,
+        "repository_root": str(Path(repository_root).resolve(strict=True)),
+        "integration_evidence": copy.deepcopy(integration_evidence),
+        "validation_receipt": copy.deepcopy(validation_receipt),
+        "final_attestation": copy.deepcopy(final_attestation),
+    }
+    return _seal_validation_evidence(
+        _verify_pre_enrollment_validation_unsealed(provenance), provenance
+    )
+
+
 def is_verified_validation_evidence(value: Any) -> bool:
     """Re-verify canonical provenance instead of trusting caller-held authority."""
 
@@ -6506,6 +6850,8 @@ def is_verified_validation_evidence(value: Any) -> bool:
                 repository_root=provenance["repository_root"],
                 signature_policy=provenance["signature_policy"],
             )
+        elif kind == "PRE_ENROLLMENT_DRAFT_INTEGRATION":
+            verified = _verify_pre_enrollment_validation_unsealed(provenance)
         elif kind == "QUALIFIED_REMEDIATION_SUCCESSOR_LOSS":
             verified = qualified_remediation_successor_loss_validation_evidence(
                 provenance["admission"], provenance["safety_facts"]

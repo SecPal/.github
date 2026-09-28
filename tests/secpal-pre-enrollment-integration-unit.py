@@ -6,12 +6,18 @@ from __future__ import annotations
 
 import importlib.util
 import copy
+import json
+import subprocess
+import tempfile
+from contextlib import ExitStack
+from dataclasses import replace
 from pathlib import Path
 import sys
 from types import SimpleNamespace
 from unittest import TestCase, main, mock
 
 from scripts.secpal_pr_review import fast_path
+from scripts.secpal_pr_review import bootstrap_source_admission
 from scripts.secpal_pr_review import lifecycle_authority
 from scripts.secpal_pr_review import pre_enrollment_integration as integration
 
@@ -543,6 +549,111 @@ class PreEnrollmentIntegrationContractTests(TestCase):
         self.assertEqual(state["exceptional_continuation_count"], 0)
         self.assertTrue(state["cycle_3_absent"])
 
+    def test_bootstrap_validation_composes_with_historical_adoption(self) -> None:
+        normalized = self.normalized()
+        receipt = integration.create_validation_receipt(
+            evidence=normalized,
+            registry=registry(),
+            successful_result=True,
+            receipt_id="bridge-receipt",
+        )
+        attestation = integration.create_final_attestation(
+            evidence=normalized,
+            registry=registry(),
+            receipt=receipt,
+            candidate_head_sha=CANDIDATE,
+            candidate_parent_shas=[PARENT_1, PARENT_2],
+            candidate_tree_sha=TREE,
+            verified_signer=SIGNER,
+            signature_format="ssh",
+            attestation_id="bridge-attestation",
+        )
+        proof = integration.verify_final_attestation(
+            evidence=normalized,
+            registry=registry(),
+            receipt=receipt,
+            attestation=attestation,
+            verified_candidate=verified_candidate(),
+            commit_trailers={
+                "SecPal-Pre-Enrollment-Integration": fast_path.digest_json(normalized),
+                "SecPal-Pre-Enrollment-Validation-Receipt": receipt["receipt_digest"],
+            },
+        )
+        initialization = lifecycle_authority.create_delivery_initialization(
+            repository="SecPal/.github",
+            delivery_issue=776,
+            pull_request=800,
+            initial_head_sha=CANDIDATE,
+            validation_receipt_digest=receipt["receipt_digest"],
+            final_attestation_digest=attestation["attestation_digest"],
+            signer_identity=SIGNER,
+            signer=lifecycle_signer,
+            initial_head_proof=proof,
+        )
+        self.assertEqual(initialization["schema_version"], "1.1")
+        self.assertEqual(
+            lifecycle_authority.initial_state()["unrestricted_review_count"], 0
+        )
+        self.assertEqual(lifecycle_authority.initial_state()["ready_history"], [])
+        observations = [
+            {
+                "sequence": i,
+                "kind": kind,
+                "observed_at": f"2026-08-0{i}T00:00:00Z",
+                "head_sha": CANDIDATE,
+                "reviewed_head_sha": CANDIDATE if kind == "REVIEW_SUBMITTED" else None,
+            }
+            for i, kind in enumerate(
+                (
+                    "PR_CREATED_DRAFT",
+                    "DRAFT_TO_READY_OBSERVED",
+                    "REVIEW_SUBMITTED",
+                    "READY_TO_DRAFT_OBSERVED",
+                ),
+                1,
+            )
+        ]
+        state = lifecycle_authority.initial_state()
+        state.update(
+            unrestricted_review_count=1,
+            ready_transition_count=1,
+            ready_history=[
+                {
+                    "sequence": i,
+                    "transition_kind": kind,
+                    "observation_digest": fast_path.digest_json(observations[index]),
+                }
+                for i, kind, index in ((1, "DRAFT_TO_READY", 1), (2, "READY_TO_DRAFT", 3))
+            ],
+        )
+        commit = {
+            "oid": CANDIDATE,
+            "source": "USER",
+            "signer_identity": SIGNER,
+            "local_signature": {"verified": True, "state": "valid", "format": "ssh"},
+            "github_verification": {"verified": True, "reason": "valid"},
+        }
+        with mock.patch.object(
+            lifecycle_authority,
+            "_load_delivery_signature_policy",
+            return_value=registry()["signature_policy"],
+        ), self.assertRaisesRegex(
+            lifecycle_authority.LifecycleAuthorityError,
+            "adoption validation evidence does not bind the delivery",
+        ):
+            lifecycle_authority.authenticate_exact_state_adoption_external_evidence(
+                repository="SecPal/.github",
+                delivery_issue=776,
+                pull_request=800,
+                head_sha=CANDIDATE,
+                tree_sha=TREE,
+                pull_request_state="OPEN",
+                commit_signature_evidence=commit,
+                validation_evidence=proof,
+                observed_pre_enrollment_history=observations,
+                intended_state=state,
+            )
+
     def test_generic_merge_cannot_be_substituted_for_verified_initial_head(self) -> None:
         with self.assertRaises(lifecycle_authority.LifecycleAuthorityError):
             lifecycle_authority.create_delivery_initialization(repository="SecPal/.github", delivery_issue=776, pull_request=800, initial_head_sha=CANDIDATE, validation_receipt_digest="1" * 64, final_attestation_digest="2" * 64, signer_identity=SIGNER, signer=lifecycle_signer, initial_head_proof={})
@@ -663,6 +774,750 @@ class PreEnrollmentIntegrationContractTests(TestCase):
                 receipt_id="receipt-001", attestation_id="attestation-001",
             )
         self.assertEqual(calls, {"observe": 1, "create": 0, "push": 0})
+
+
+class BootstrapAdoptionBridgeTests(TestCase):
+    """Real signed Git objects; mock only remote/current-main observations."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.directory = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.directory.cleanup)
+        cls.root = Path(cls.directory.name)
+        cls.key = cls.root / "signing-key"
+        subprocess.run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(cls.key)],
+            check=True,
+        )
+        cls.public = cls.key.with_suffix(".pub").read_text().strip()
+        cls.git("init", "-q")
+        for key, value in (
+            ("user.name", "Fixture"),
+            ("user.email", SIGNER),
+            ("gpg.format", "ssh"),
+            ("user.signingkey", str(cls.key)),
+        ):
+            cls.git("config", key, value)
+        cls.git("remote", "add", "origin", "https://github.com/SecPal/.github.git")
+        (cls.root / "common.txt").write_text("common\n")
+        cls.git("add", "common.txt")
+        base = cls.git("commit-tree", cls.git("write-tree"), "-S", "-m", "base")
+        (cls.root / "draft.txt").write_text("draft\n")
+        cls.git("add", "draft.txt")
+        cls.parent1 = cls.git(
+            "commit-tree", cls.git("write-tree"), "-p", base, "-S", "-m", "draft"
+        )
+        cls.git("read-tree", base)
+        (cls.root / "main.txt").write_text("main\n")
+        cls.git("add", "main.txt")
+        cls.parent2 = cls.git(
+            "commit-tree", cls.git("write-tree"), "-p", base, "-S", "-m", "main"
+        )
+        cls.tree, conflicts = actions._mechanical_integration_result(
+            cls.root, [cls.parent1, cls.parent2]
+        )
+        assert conflicts == []
+        cls.registry_raw = (ROOT / fast_path.DELIVERY_REGISTRY_PATH).read_text()
+        cls.schema_raw = (
+            ROOT / fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH
+        ).read_text()
+        cls.binding = fast_path._validated_historical_registry_binding(
+            registry_raw=cls.registry_raw,
+            schema_raw=cls.schema_raw,
+            repository="SecPal/.github",
+        )
+        cls.trust = lifecycle_authority.LifecycleTrustPolicy(
+            repository="SecPal/.github",
+            accepted_formats=frozenset({"ssh"}),
+            transition_signer_identities=frozenset({AUTHORIZER}),
+            authority_signer_identities=frozenset({AUTHORIZER}),
+            legacy_adoption_signer_identities=frozenset({SIGNER}),
+            signers={
+                identity: lifecycle_authority.TrustedSigner(identity, (cls.public,), ())
+                for identity in (SIGNER, AUTHORIZER)
+            },
+            initialization_anchors=(),
+        )
+        cls.integration = evidence()
+        cls.integration["draft_pr"]["head_sha"] = cls.parent1
+        cls.integration["current_main"]["sha"] = cls.parent2
+        cls.integration["ordered_parent_shas"] = [cls.parent1, cls.parent2]
+        cls.integration["validated_tree_sha"] = cls.tree
+        cls.integration["mechanical_merge_tree_sha"] = cls.tree
+        cls.integration["validation_execution"] = {
+            "registry_digest": fast_path.digest_json(cls.binding),
+            "command_set_digest": fast_path.digest_json(cls.binding["validation"]),
+        }
+        cls.integration["authorization"] = integration.create_authorization(
+            authorization_id="generic-bootstrap-bridge",
+            repository="SecPal/.github",
+            delivery_issue=776,
+            pull_request=800,
+            draft_head_sha=cls.parent1,
+            current_main_sha=cls.parent2,
+            expected_signer=SIGNER,
+            signer_identity=AUTHORIZER,
+            signer=cls.sign,
+        )
+        cls.integration["authorization_digest"] = cls.integration["authorization"][
+            "authorization_digest"
+        ]
+        cls.receipt = integration.create_validation_receipt(
+            evidence=cls.integration,
+            registry=cls.binding,
+            successful_result=True,
+            receipt_id="generic-bootstrap-receipt",
+        )
+        cls.message = (
+            "generic bootstrap\n\nSecPal-Pre-Enrollment-Integration: "
+            + fast_path.digest_json(cls.integration)
+            + "\nSecPal-Pre-Enrollment-Validation-Receipt: "
+            + cls.receipt["receipt_digest"]
+        )
+        cls.head = cls.git(
+            "commit-tree",
+            cls.tree,
+            "-p",
+            cls.parent1,
+            "-p",
+            cls.parent2,
+            "-S",
+            "-m",
+            cls.message,
+        )
+        cls.attestation = integration.create_final_attestation(
+            evidence=cls.integration,
+            registry=cls.binding,
+            receipt=cls.receipt,
+            candidate_head_sha=cls.head,
+            candidate_parent_shas=[cls.parent1, cls.parent2],
+            candidate_tree_sha=cls.tree,
+            verified_signer=SIGNER,
+            signature_format="ssh",
+            attestation_id="generic-bootstrap-attestation",
+        )
+
+    @classmethod
+    def git(cls, *arguments: str) -> str:
+        return subprocess.check_output(
+            ["git", *arguments], cwd=cls.root, stderr=subprocess.PIPE, text=True
+        ).strip()
+
+    @classmethod
+    def sign(
+        cls, payload: bytes, domain: str, identity: str = AUTHORIZER
+    ) -> dict[str, str]:
+        result = subprocess.run(
+            ["ssh-keygen", "-Y", "sign", "-f", str(cls.key), "-n", domain],
+            input=payload,
+            capture_output=True,
+            check=True,
+        )
+        return {
+            "format": "ssh",
+            "signer_identity": identity,
+            "value": result.stdout.decode(),
+        }
+
+    def setUp(self) -> None:
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.patch(
+            bootstrap_source_admission, "_load_actions_helper", return_value=actions
+        )
+        self.main_guard = self.patch(
+            actions, "_require_accepted_main_bridge_source", return_value="f" * 40
+        )
+        self.patch(
+            lifecycle_authority, "_load_lifecycle_trust_policy", return_value=self.trust
+        )
+        self.patch(
+            lifecycle_authority,
+            "_load_delivery_signature_policy",
+            return_value=self.binding["signature_policy"],
+        )
+        self.central = self.patch(
+            fast_path, "_central_git_result", side_effect=self.central_read
+        )
+        self.github = self.patch(
+            actions, "_run_bridge_gh", side_effect=self.github_read
+        )
+
+    def patch(self, target, name, **kwargs):
+        return self.stack.enter_context(mock.patch.object(target, name, **kwargs))
+
+    def central_read(self, arguments, **_kwargs):
+        if arguments == ["rev-list", "--first-parent", "f" * 40]:
+            return 0, "f" * 40 + "\n" + self.parent2 + "\n"
+        if arguments == ["show", f"{self.parent2}:{fast_path.DELIVERY_REGISTRY_PATH}"]:
+            return 0, self.registry_raw
+        if arguments == [
+            "show",
+            f"{self.parent2}:{fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH}",
+        ]:
+            return 0, self.schema_raw
+        raise AssertionError(arguments)
+
+    def github_read(self, arguments):
+        head = arguments[3].rsplit("/", 1)[-1]
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "sha": head,
+                    "verification": {"verified": True, "reason": "valid"},
+                }
+            ),
+        )
+
+    def arguments(self):
+        return dict(
+            repository="SecPal/.github",
+            delivery_issue_number=776,
+            pull_request_number=800,
+            head_sha=self.head,
+            repository_root=self.root,
+            integration_evidence=copy.deepcopy(self.integration),
+            validation_receipt=copy.deepcopy(self.receipt),
+            final_attestation=copy.deepcopy(self.attestation),
+        )
+
+    def verify(self, **changes):
+        return fast_path.verify_pre_enrollment_validation_evidence(
+            **(self.arguments() | changes)
+        )
+
+    def test_real_signed_bootstrap_preserves_independent_adoption_history(self) -> None:
+        candidate = fast_path._authenticate_pre_enrollment_commit(
+            helper=actions,
+            repository_root=self.root,
+            repository="SecPal/.github",
+            head_sha=self.head,
+            expected_signer=SIGNER,
+            trust=self.trust,
+            signature_policy=self.binding["signature_policy"],
+        )
+        proof = integration.verify_final_attestation(
+            evidence=self.integration,
+            registry=self.binding,
+            receipt=self.receipt,
+            attestation=self.attestation,
+            verified_candidate=candidate,
+            commit_trailers={
+                "SecPal-Pre-Enrollment-Integration": fast_path.digest_json(
+                    self.integration
+                ),
+                "SecPal-Pre-Enrollment-Validation-Receipt": self.receipt[
+                    "receipt_digest"
+                ],
+            },
+        )
+        initialization = lifecycle_authority.create_delivery_initialization(
+            repository="SecPal/.github",
+            delivery_issue=776,
+            pull_request=800,
+            initial_head_sha=self.head,
+            validation_receipt_digest=self.receipt["receipt_digest"],
+            final_attestation_digest=self.attestation["attestation_digest"],
+            initial_head_proof=proof,
+            signer_identity=SIGNER,
+            signer=lambda payload, domain: self.sign(payload, domain, SIGNER),
+        )
+        self.assertEqual(initialization["schema_version"], "1.1")
+        self.assertEqual(
+            lifecycle_authority.initial_state()["unrestricted_review_count"], 0
+        )
+        self.assertEqual(lifecycle_authority.initial_state()["ready_history"], [])
+        self.assertFalse(fast_path.is_verified_validation_evidence(proof))
+        validation = self.verify()
+        self.assertTrue(fast_path.is_verified_validation_evidence(validation))
+        self.assertEqual(
+            validation.validation_receipt_digest, self.receipt["receipt_digest"]
+        )
+        self.assertEqual(
+            validation.final_attestation_digest, self.attestation["attestation_digest"]
+        )
+        self.assertNotEqual(
+            validation.source_validation_evidence_digest,
+            fast_path.digest_json(self.integration),
+        )
+        observed = [
+            {
+                "sequence": i,
+                "kind": kind,
+                "observed_at": f"2026-08-0{i}T00:00:00Z",
+                "head_sha": self.parent1,
+                "reviewed_head_sha": None,
+            }
+            for i, kind in enumerate(
+                (
+                    "PR_CREATED_DRAFT",
+                    "DRAFT_TO_READY_OBSERVED",
+                    "READY_TO_DRAFT_OBSERVED",
+                ),
+                1,
+            )
+        ]
+        observed.append(
+            {
+                "sequence": 4,
+                "kind": "HEAD_ADVANCED_OBSERVED",
+                "observed_at": "2026-08-04T00:00:00Z",
+                "head_sha": self.head,
+                "reviewed_head_sha": None,
+            }
+        )
+        state = lifecycle_authority.initial_state()
+        state.update(
+            unrestricted_review_count=1,
+            ready_transition_count=1,
+            ready_history=[
+                {
+                    "sequence": i,
+                    "transition_kind": kind,
+                    "observation_digest": fast_path.digest_json(observed[i]),
+                }
+                for i, kind in ((1, "DRAFT_TO_READY"), (2, "READY_TO_DRAFT"))
+            ],
+        )
+        commit = {
+            "oid": self.head,
+            "source": "USER",
+            "signer_identity": SIGNER,
+            "local_signature": {"verified": True, "state": "valid", "format": "ssh"},
+            "github_verification": {"verified": True, "reason": "valid"},
+        }
+        arguments = dict(
+            repository="SecPal/.github",
+            delivery_issue=776,
+            pull_request=800,
+            head_sha=self.head,
+            tree_sha=self.tree,
+            pull_request_state="OPEN",
+            commit_signature_evidence=commit,
+            validation_evidence=validation,
+            observed_pre_enrollment_history=observed,
+            intended_state=state,
+        )
+        # No provider review is fabricated to consume the historical budget.
+        with self.assertRaisesRegex(
+            lifecycle_authority.LifecycleAuthorityError,
+            "does not authenticate intended state",
+        ):
+            lifecycle_authority.authenticate_exact_state_adoption_external_evidence(
+                **arguments
+            )
+        admission = lifecycle_authority.create_pre_enrollment_review_budget_consumption_admission(
+            admission_id="generic-consumed-budget",
+            repository="SecPal/.github",
+            delivery_issue=776,
+            pull_request=800,
+            head_sha=self.head,
+            tree_sha=self.tree,
+            pull_request_state="OPEN",
+            commit_signature_evidence_digest=fast_path.digest_json(
+                fast_path.verify_commit_signatures(
+                    [commit], self.binding["signature_policy"]
+                )[0]
+            ),
+            validation_receipt_digest=validation.validation_receipt_digest,
+            source_validation_evidence_digest=validation.source_validation_evidence_digest,
+            adoption_source_evidence_digest=validation.final_attestation_digest,
+            observed_pre_enrollment_history=observed,
+            intended_state=state,
+            adoption_timestamp="2026-08-05T00:00:00Z",
+            signer_identity=SIGNER,
+            signer=lambda payload, domain: self.sign(payload, domain, SIGNER),
+        )
+        external = (
+            lifecycle_authority.authenticate_exact_state_adoption_external_evidence(
+                **arguments,
+                review_budget_consumption_admission=admission,
+            )
+        )
+        self.assertEqual(external.intended_state, state)
+        self.assertEqual(list(external.observed_pre_enrollment_history), observed)
+        adoption = lifecycle_authority.create_exact_state_adoption_evidence(
+            verified_external_evidence=external,
+            adoption_timestamp="2026-08-05T00:00:00Z",
+        )
+        self.assertEqual(adoption["proof_version"], "2.0")
+        self.assertEqual(
+            external.adoption_source_evidence_digest,
+            validation.final_attestation_digest,
+        )
+        self.assertEqual(self.main_guard.call_args.kwargs, {"expected_main": "f" * 40})
+
+    def test_raw_artifacts_and_delivery_identities_are_closed(self) -> None:
+        for field, value in (
+            ("repository", "Other/repository"),
+            ("delivery_issue_number", 777),
+            ("pull_request_number", 801),
+            ("head_sha", self.parent1),
+            ("delivery_issue_number", True),
+            ("validation_receipt", {}),
+            ("final_attestation", {}),
+            ("integration_evidence", {}),
+        ):
+            with self.subTest(field=field), self.assertRaises(
+                (ValueError, fast_path.SecurityBlocker)
+            ):
+                self.verify(**{field: value})
+        for field in (
+            "registry",
+            "command_set",
+            "signature_policy",
+            "current_main",
+            "initial_head_proof",
+        ):
+            with self.subTest(field=field), self.assertRaises(TypeError):
+                self.verify(**{field: {}})
+        for document, fields in {
+            "validation_receipt": (
+                "receipt_digest",
+                "integration_evidence_digest",
+                "registry_digest",
+                "command_set_digest",
+            ),
+            "final_attestation": (
+                "attestation_digest",
+                "validation_receipt_digest",
+                "integration_evidence_digest",
+                "candidate_tree_sha",
+            ),
+            "integration_evidence": (
+                "schema_version",
+                "kind",
+                "validated_tree_sha",
+                "mechanical_merge_tree_sha",
+                "authorization_digest",
+            ),
+        }.items():
+            for field in fields:
+                arguments = self.arguments()
+                arguments[document][field] = "0" * (40 if "tree" in field else 64)
+                with self.subTest(document=document, field=field), self.assertRaises(
+                    (ValueError, fast_path.SecurityBlocker)
+                ):
+                    fast_path.verify_pre_enrollment_validation_evidence(**arguments)
+
+    def test_seals_are_replayed_and_cannot_promote_proofs_or_other_families(
+        self,
+    ) -> None:
+        validation = self.verify()
+        for field in (
+            "repository",
+            "delivery_issue_number",
+            "pull_request_number",
+            "head_sha",
+            "tree_sha",
+            "validation_receipt_digest",
+            "final_attestation_digest",
+            "source_validation_evidence_digest",
+            "_verification_seal",
+        ):
+            forged = replace(
+                validation,
+                **{field: object() if field == "_verification_seal" else "forged"},
+            )
+            with self.subTest(field=field):
+                self.assertFalse(fast_path.is_verified_validation_evidence(forged))
+        provenance = json.loads(validation._verification_seal.provenance_json)
+        for field, replacement in (
+            ("kind", "ORDINARY"),
+            ("kind", "READY_INTEGRATION"),
+            ("schema_version", "0.0"),
+            ("schema_version", "2.0"),
+            ("validation_receipt", {}),
+            ("registry", {}),
+        ):
+            changed = copy.deepcopy(provenance)
+            changed[field] = replacement
+            seal = fast_path._VerifiedValidationEvidenceSeal(
+                fast_path.canonical_json_bytes(changed).decode()
+            )
+            self.assertFalse(
+                fast_path.is_verified_validation_evidence(
+                    replace(validation, _verification_seal=seal)
+                )
+            )
+        fabricated = integration.VerifiedInitialHeadProof(
+            integration.INITIAL_HEAD_PROOF_KIND,
+            "SecPal/.github",
+            776,
+            800,
+            self.head,
+            self.receipt["receipt_digest"],
+            self.attestation["attestation_digest"],
+            fast_path.digest_json(self.integration),
+            object(),
+        )
+        self.assertFalse(fast_path.is_verified_validation_evidence(fabricated))
+        self.assertFalse(
+            fast_path.is_verified_validation_evidence(
+                replace(
+                    fabricated, _verification_token=integration._VERIFIED_HEAD_TOKEN
+                )
+            )
+        )
+        self.main_guard.side_effect = fast_path.SecurityBlocker(
+            "candidate-local verifier"
+        )
+        self.assertFalse(fast_path.is_verified_validation_evidence(validation))
+
+    def test_ordered_parents_and_signed_trailers_are_reauthenticated(self) -> None:
+        for parents in (
+            [self.parent2, self.parent1],
+            [self.parent1],
+            [self.parent1, self.parent2, self.git("rev-parse", self.parent1 + "^")],
+            [self.parent1, self.git("rev-parse", self.parent2 + "^")],
+        ):
+            argv = ["commit-tree", self.tree, "-S", "-m", self.message]
+            for parent in parents:
+                argv.extend(["-p", parent])
+            head = self.git(*argv)
+            with self.subTest(parents=parents), self.assertRaises(ValueError):
+                self.verify(head_sha=head)
+        for message in (
+            "missing trailers",
+            self.message.replace(self.receipt["receipt_digest"], "0" * 64),
+        ):
+            head = self.git(
+                "commit-tree",
+                self.tree,
+                "-p",
+                self.parent1,
+                "-p",
+                self.parent2,
+                "-S",
+                "-m",
+                message,
+            )
+            attestation = copy.deepcopy(self.attestation)
+            attestation["candidate_head_sha"] = head
+            attestation["attestation_digest"] = fast_path.digest_json(
+                {k: v for k, v in attestation.items() if k != "attestation_digest"}
+            )
+            with self.subTest(message=message), self.assertRaisesRegex(
+                ValueError, "trailers"
+            ):
+                self.verify(head_sha=head, final_attestation=attestation)
+
+    def test_authorization_signature_registry_and_main_cannot_be_substituted(
+        self,
+    ) -> None:
+        for field, replacement in (
+            ("value", "invalid signature"),
+            ("signer_identity", "foreign@example.test"),
+        ):
+            changed = copy.deepcopy(self.integration)
+            changed["authorization"]["signature"][field] = replacement
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                self.verify(integration_evidence=changed)
+        changed = copy.deepcopy(self.integration)
+        changed["validation_execution"]["command_set_digest"] = fast_path.digest_json(
+            []
+        )
+        with self.assertRaisesRegex(ValueError, "command-set"):
+            self.verify(integration_evidence=changed)
+        self.central.side_effect = lambda arguments, **kwargs: (
+            (0, "f" * 40 + "\n")
+            if arguments[0] == "rev-list"
+            else self.central_read(arguments)
+        )
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "outside accepted protected-main history"
+        ):
+            self.verify()
+
+    def test_invalid_signature_and_wrong_maintained_signer_fail_closed(self) -> None:
+        unsigned = self.git(
+            "commit-tree",
+            self.tree,
+            "-p",
+            self.parent1,
+            "-p",
+            self.parent2,
+            "-m",
+            self.message,
+        )
+        with self.assertRaises(fast_path.SecurityBlocker):
+            self.verify(head_sha=unsigned)
+        self.github.side_effect = lambda arguments: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "sha": self.head,
+                    "verification": {"verified": False, "reason": "invalid"},
+                }
+            ),
+        )
+        with self.assertRaises(fast_path.SecurityBlocker):
+            self.verify()
+        self.github.side_effect = self.github_read
+        wrong_trust = replace(
+            self.trust, signers={AUTHORIZER: self.trust.signers[AUTHORIZER]}
+        )
+        with mock.patch.object(
+            lifecycle_authority,
+            "_load_lifecycle_trust_policy",
+            return_value=wrong_trust,
+        ):
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "signer is not maintained"
+            ):
+                self.verify()
+
+    def test_main_advance_preserves_immutable_evidence_epoch(self) -> None:
+        original = self.verify()
+        self.main_guard.return_value = "9" * 40
+
+        def advanced(arguments, **kwargs):
+            if arguments == ["rev-list", "--first-parent", "9" * 40]:
+                return 0, "9" * 40 + "\n" + "f" * 40 + "\n" + self.parent2 + "\n"
+            return self.central_read(arguments, **kwargs)
+
+        self.central.side_effect = advanced
+        advanced_validation = self.verify()
+        self.assertEqual(
+            fast_path._validation_evidence_binding(original),
+            fast_path._validation_evidence_binding(advanced_validation),
+        )
+        self.assertTrue(fast_path.is_verified_validation_evidence(original))
+        changed = copy.deepcopy(self.integration)
+        changed["current_main"]["sha"] = "9" * 40
+        changed["ordered_parent_shas"][1] = "9" * 40
+        # Even a newly authenticated tip cannot replace the signed evidence epoch.
+        with mock.patch.object(
+            fast_path, "_central_git_result", return_value=(0, "9" * 40 + "\n")
+        ), mock.patch.object(
+            fast_path,
+            "_validated_historical_registry_binding",
+            return_value=self.binding,
+        ), self.assertRaisesRegex(
+            ValueError, "authorization parent identity"
+        ):
+            self.verify(integration_evidence=changed)
+
+    def test_replay_rechecks_tree_boundary_and_rejects_third_tree_content(self) -> None:
+        # Fully self-consistent signed artifacts still cannot authorize a manual
+        # clean-path delta. Failure must reach the maintained tree verifier.
+        self.git("read-tree", self.tree)
+        (self.root / "third-tree.txt").write_text("not supplied by either parent\n")
+        self.git("add", "third-tree.txt")
+        wrong_tree = self.git("write-tree")
+        changed = copy.deepcopy(self.integration)
+        changed["validated_tree_sha"] = wrong_tree
+        receipt = integration.create_validation_receipt(
+            evidence=changed,
+            registry=self.binding,
+            successful_result=True,
+            receipt_id="wrong-tree",
+        )
+        message = (
+            "third tree\n\nSecPal-Pre-Enrollment-Integration: "
+            + fast_path.digest_json(changed)
+            + "\nSecPal-Pre-Enrollment-Validation-Receipt: "
+            + receipt["receipt_digest"]
+        )
+        head = self.git(
+            "commit-tree",
+            wrong_tree,
+            "-p",
+            self.parent1,
+            "-p",
+            self.parent2,
+            "-S",
+            "-m",
+            message,
+        )
+        attestation = integration.create_final_attestation(
+            evidence=changed,
+            registry=self.binding,
+            receipt=receipt,
+            candidate_head_sha=head,
+            candidate_parent_shas=[self.parent1, self.parent2],
+            candidate_tree_sha=wrong_tree,
+            verified_signer=SIGNER,
+            signature_format="ssh",
+            attestation_id="wrong-tree",
+        )
+        with self.assertRaisesRegex(
+            fast_path.SecurityBlocker, "manual conflict-resolution delta"
+        ):
+            self.verify(
+                head_sha=head,
+                integration_evidence=changed,
+                validation_receipt=receipt,
+                final_attestation=attestation,
+            )
+        validation = self.verify()
+        with mock.patch.object(
+            actions,
+            "_verify_integration_tree_delta",
+            side_effect=fast_path.SecurityBlocker("tree changed"),
+        ):
+            self.assertFalse(fast_path.is_verified_validation_evidence(validation))
+
+    def test_foreign_authorization_and_substituted_registry_are_rejected(self) -> None:
+        changed = copy.deepcopy(self.integration)
+        changed["authorization"] = integration.create_authorization(
+            authorization_id="foreign",
+            repository="SecPal/.github",
+            delivery_issue=777,
+            pull_request=800,
+            draft_head_sha=self.parent1,
+            current_main_sha=self.parent2,
+            expected_signer=SIGNER,
+            signer_identity=AUTHORIZER,
+            signer=self.sign,
+        )
+        changed["authorization_digest"] = changed["authorization"][
+            "authorization_digest"
+        ]
+        with self.assertRaisesRegex(ValueError, "authorization delivery identity"):
+            self.verify(integration_evidence=changed)
+        altered = copy.deepcopy(self.binding)
+        altered["validation"] = []
+        with mock.patch.object(
+            fast_path, "_validated_historical_registry_binding", return_value=altered
+        ):
+            with self.assertRaisesRegex(ValueError, "command-set identity"):
+                self.verify()
+        altered = copy.deepcopy(self.binding)
+        altered.pop("pre_enrollment_integration_policy")
+        with mock.patch.object(
+            fast_path, "_validated_historical_registry_binding", return_value=altered
+        ):
+            with self.assertRaisesRegex(fast_path.SecurityBlocker, "did not support"):
+                self.verify()
+
+    def test_bridge_rejects_mixed_loaded_module_origins(self) -> None:
+        for module in (
+            fast_path,
+            fast_path.evidence,
+            lifecycle_authority,
+            integration,
+            bootstrap_source_admission,
+        ):
+            with self.subTest(module=module.__name__), mock.patch.object(
+                module,
+                "__spec__",
+                SimpleNamespace(
+                    origin="/candidate-local/verifier.py", parent=module.__package__
+                ),
+            ), self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "mixed verifier provenance"
+            ):
+                self.verify()
+
+    def test_current_main_guard_authenticates_actual_candidate_bytes(self) -> None:
+        # Exercise the real maintained file check; remote observations alone do
+        # not let this unaccepted implementation act as accepted-main authority.
+        with self.assertRaises(actions.fast_path.SecurityBlocker):
+            actions._require_accepted_main_tooling_blobs(
+                ROOT, self.git("rev-parse", self.parent2)
+            )
 
 
 if __name__ == "__main__":

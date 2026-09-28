@@ -418,6 +418,35 @@ exceptional-continuation counters; Cycle 3 remains absent. Native genesis is
 then admitted and enrolled through the admission-first publication boundary.
 The integration itself is not a lifecycle transition.
 
+For a delivery with authenticated pre-enrollment lifecycle history, use
+Exact-State-Adoption. `verify_pre_enrollment_validation_evidence` supplies its
+source-validation input by replaying the raw integration evidence (including
+signed authorization), receipt, final attestation, signed commit, trailers and
+bounded tree resolution. `VerifiedInitialHeadProof` remains an initialization
+handoff and never supplies validation authority by itself.
+
+The bridge requires current authenticated protected-main verifier bytes and
+maintained trust credentials. The immutable integration parent 2 must be in
+that protected main's first-parent history; it selects the evidence-time
+registry and command set. Later main advancement does not replace parent 2 or
+invalidate the original validation epoch. No caller-selected registry, command
+set, signer, main tip or evidence-time policy is accepted. Replay authenticates
+immutable source evidence; it does not reauthorize a bootstrap against today's
+work graph or consume its one-use authorization again.
+
+The sealed validation provenance is version `1.0`, kind
+`PRE_ENROLLMENT_DRAFT_INTEGRATION`, and is independently replayed by
+`is_verified_validation_evidence`. Receipt and final-attestation digests retain
+their original meanings. The source-validation digest hashes a typed binding of
+repository, issue, PR, head, tree, ordered parents and the three original
+integration, receipt and attestation digests. It is not an alias for the
+integration digest. Existing adoption external evidence uses the original final
+attestation as its adoption-source identity; no adoption version changes.
+Exact-State-Adoption still exclusively authenticates chronology and finite state,
+including its existing review-budget consumption admission when no truthful
+provider-review observation is available. This bridge neither publishes adoption
+nor changes historical review consumption or tree resolution semantics.
+
 ## Pre-enrollment Draft current-main integration
 
 An open Draft delivery that has not entered lifecycle authority may use the
