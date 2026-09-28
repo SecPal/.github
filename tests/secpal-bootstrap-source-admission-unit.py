@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 from contextlib import contextmanager
 from dataclasses import replace
 import hashlib
@@ -121,6 +122,13 @@ HISTORICAL_787_ADMISSION_DIGEST = (
 )
 PRE_ENROLLMENT_SUBTYPE = "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE"
 PRE_ENROLLMENT_PURPOSE = "PRE_ENROLLMENT_IMPLEMENTATION_BOOTSTRAP"
+ADOPTION_ISSUE = 1014
+ADOPTION_PR = 1015
+ADOPTION_HEAD = "b0f60b83d70188dde1e43aaaf201521864bd3b3a"
+ADOPTION_TREE = "e1b28bc3daf0b791b0ec511f52c6d978f222df25"
+ADOPTION_BLOB = "a070833bd135daf99d5919e954cbf5e84d3eb5a3"
+ADOPTION_SUBTYPE = "PRE_ENROLLMENT_ADOPTION_AUTHENTICATION_SOURCE"
+ADOPTION_PURPOSE = "PRE_ENROLLMENT_ADOPTION_AUTHENTICATION"
 PROTECTED_MAIN_HEAD = "a5a7b0704645659a5db7df820b2d448de3859560"
 
 
@@ -1540,7 +1548,7 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
         self.assertEqual(len(self.trust.bootstrap_genesis_repairs), 1)
         repair = self.trust.bootstrap_genesis_repairs[0]
         self.assertEqual((repair.repair_issue, repair.delivery_issue), (774, 736))
-        self.assertEqual(len(self.trust.bootstrap_source_admissions), 3)
+        self.assertEqual(len(self.trust.bootstrap_source_admissions), 4)
         admission = next(
             item
             for item in self.trust.bootstrap_source_admissions
@@ -1596,6 +1604,16 @@ class BootstrapSourceAdmissionContractTests(unittest.TestCase):
             current_matches[0].admission_digest,
             HISTORICAL_787_ADMISSION_DIGEST,
         )
+
+    def test_exact_adoption_source_requires_accepted_admission(self) -> None:
+        _trust, policy = source._select_policy_from_trust(
+            self.trust, REPOSITORY, ADOPTION_ISSUE,
+            ADOPTION_SUBTYPE, ADOPTION_PURPOSE,
+        )
+        self.assertEqual(policy.pull_request, ADOPTION_PR)
+        self.assertEqual(policy.source_head_sha, ADOPTION_HEAD)
+        self.assertEqual(policy.source_tree_sha, ADOPTION_TREE)
+        self.assertEqual(policy.implementation_blob_oid, ADOPTION_BLOB)
 
     def test_no_generic_branch_execution_trust_exists(self) -> None:
         self.assertEqual(
@@ -3813,6 +3831,200 @@ class EvidenceHelperSourceAdmissionContractTests(unittest.TestCase):
             )
         self.assertIs(result, verified)
         execute.assert_not_called()
+
+
+class AdoptionSourceAdmissionContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.trust = source.authority._load_lifecycle_trust_policy(REPOSITORY)
+        _, self.policy = source._select_policy_from_trust(
+            self.trust, REPOSITORY, ADOPTION_ISSUE,
+            ADOPTION_SUBTYPE, ADOPTION_PURPOSE,
+        )
+
+    def test_exact_record_and_old_admissions_remain_distinct(self) -> None:
+        self.assertEqual(
+            (self.policy.pull_request, self.policy.source_head_sha,
+             self.policy.source_tree_sha, self.policy.implementation_blob_oid),
+            (ADOPTION_PR, ADOPTION_HEAD, ADOPTION_TREE, ADOPTION_BLOB),
+        )
+        self.assertEqual(
+            {item.subtype for item in self.trust.bootstrap_source_admissions},
+            {
+                source.ADMISSION_SUBTYPE,
+                source.EVIDENCE_HELPER_ADMISSION_SUBTYPE,
+                source.PRE_ENROLLMENT_ADMISSION_SUBTYPE,
+                ADOPTION_SUBTYPE,
+            },
+        )
+        with mock.patch.object(
+            source, "_load_protected_main_trust_policy", return_value=self.trust
+        ):
+            self.assertIs(source._select_adoption_policy()[1], self.policy)
+
+    def test_closed_parser_and_exact_selector_reject_mutations(self) -> None:
+        raw = json.loads(source.authority._TRUST_REGISTRY.read_bytes())
+        entry = next(item for item in raw["repositories"] if item["repository"] == REPOSITORY)
+        records = entry["lifecycle_authority_policy"]["bootstrap_source_admissions"]
+        index = next(i for i, item in enumerate(records) if item["subtype"] == ADOPTION_SUBTYPE)
+        mutations = {
+            "delivery_issue": 1013, "pull_request": 1014,
+            "source_head_sha": "f" * 40, "source_tree_sha": "f" * 40,
+            "source_parent_sha": "f" * 40,
+            "validation_receipt_digest": "f" * 64,
+            "final_attestation_digest": "f" * 64,
+            "source_signer_identity": "unmaintained@example.com",
+            "implementation_path": "scripts/other.py",
+            "implementation_blob_oid": "f" * 40,
+            "entrypoint": "other", "purpose": "OTHER",
+            "source_pr_state": "CLOSED", "source_pr_draft": True,
+            "source_base_ref": "other", "policy_source": "CALLER",
+        }
+        for field, replacement in mutations.items():
+            with self.subTest(field=field):
+                changed = copy.deepcopy(raw)
+                record = changed["repositories"][0]["lifecycle_authority_policy"]["bootstrap_source_admissions"][index]
+                record[field] = replacement
+                record["admission_digest"] = fast_path.digest_json(
+                    {key: value for key, value in record.items() if key != "admission_digest"}
+                )
+                try:
+                    altered = source.authority._parse_lifecycle_trust_policy(
+                        fast_path.canonical_json_bytes(changed), REPOSITORY
+                    )
+                except source.authority.LifecycleAuthorityError:
+                    continue
+                with mock.patch.object(
+                    source, "_load_protected_main_trust_policy", return_value=altered
+                ), self.assertRaises(source.BootstrapSourceAdmissionError):
+                    source._select_adoption_policy()
+        for change in ("missing", "unknown", "duplicate", "bad_digest", "unknown_subtype"):
+            with self.subTest(change=change):
+                changed = copy.deepcopy(raw)
+                rows = changed["repositories"][0]["lifecycle_authority_policy"]["bootstrap_source_admissions"]
+                record = rows[index]
+                if change == "missing":
+                    record.pop("entrypoint")
+                elif change == "unknown":
+                    record["extra"] = True
+                elif change == "duplicate":
+                    rows.append(copy.deepcopy(record))
+                elif change == "bad_digest":
+                    record["admission_digest"] = "f" * 64
+                else:
+                    record["subtype"] = "UNREGISTERED_SOURCE"
+                with self.assertRaises(source.authority.LifecycleAuthorityError):
+                    source.authority._parse_lifecycle_trust_policy(
+                        fast_path.canonical_json_bytes(changed), REPOSITORY
+                    )
+
+    def test_live_pr_can_advance_without_replacing_source(self) -> None:
+        facts = source.GitHubSourceFacts(
+            base_repository=REPOSITORY, base_ref="main",
+            head_repository=REPOSITORY, pull_request=ADOPTION_PR,
+            state="OPEN", draft=False, head_sha=ADOPTION_HEAD,
+            commit_sha=ADOPTION_HEAD, tree_sha=ADOPTION_TREE,
+            parent_shas=(self.policy.source_parent_sha,),
+            github_verified=True, github_verification_reason="valid",
+        )
+        source._admit_github_source(facts, self.policy)
+        source._admit_github_source(replace(facts, head_sha="e" * 40), self.policy)
+        for change in (
+            {"base_ref": "other"}, {"head_repository": "Other/repo"},
+            {"pull_request": ADOPTION_PR + 1}, {"state": "CLOSED"},
+            {"draft": True}, {"commit_sha": "e" * 40},
+            {"tree_sha": "e" * 40}, {"parent_shas": ("e" * 40,)},
+            {"github_verified": False}, {"github_verification_reason": "unsigned"},
+        ):
+            with self.subTest(change=change), self.assertRaises(source.BootstrapSourceAdmissionError):
+                source._admit_github_source(replace(facts, **change), self.policy)
+
+    def test_private_artifact_copy_rejects_symlinks_and_oversize(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in source._ADOPTION_ARTIFACT_LIMITS:
+                (root / name).write_bytes(b"{}")
+            with source._private_adoption_input(b"{}", root) as private:
+                self.assertEqual((private / "control.json").read_bytes(), b"{}")
+                self.assertEqual((private / "integration-evidence.json").read_bytes(), b"{}")
+            target = root / "integration-evidence.json"
+            target.unlink()
+            target.symlink_to(root / "validation-receipt.json")
+            with self.assertRaises(source.BootstrapSourceAdmissionError):
+                with source._private_adoption_input(b"{}", root):
+                    pass
+            target.unlink()
+            target.write_bytes(b"x" * (source._ADOPTION_ARTIFACT_LIMITS[target.name] + 1))
+            with self.assertRaises(source.BootstrapSourceAdmissionError):
+                with source._private_adoption_input(b"{}", root):
+                    pass
+            with self.assertRaises(source.BootstrapSourceAdmissionError):
+                with source._private_adoption_input(b"x" * (source._ADOPTION_CONTROL_BYTES + 1), root):
+                    pass
+            alias = root.parent / (root.name + "-alias")
+            alias.symlink_to(root, target_is_directory=True)
+            try:
+                with self.assertRaises(source.BootstrapSourceAdmissionError):
+                    with source._private_adoption_input(b"{}", alias):
+                        pass
+            finally:
+                alias.unlink()
+            target.unlink()
+            os.mkfifo(target)
+            with self.assertRaises(source.BootstrapSourceAdmissionError):
+                with source._private_adoption_input(b"{}", root):
+                    pass
+
+    def test_result_is_closed_and_never_a_validation_capability(self) -> None:
+        control = {"repository": REPOSITORY, "delivery_issue_number": 764,
+                   "pull_request_number": 773, "head_sha": "d" * 40}
+        result = {"status": "AUTHENTICATED_READ_ONLY", **control,
+                  "tree_sha": "a" * 40,
+                  "validation_receipt_digest": "1" * 64,
+                  "final_attestation_digest": "2" * 64,
+                  "source_validation_evidence_digest": "3" * 64,
+                  "observed_history_digest": "4" * 64,
+                  "intended_state_digest": "5" * 64}
+        encoded_control = fast_path.canonical_json_bytes(control)
+        selected = source._closed_adoption_result(
+            fast_path.canonical_json_bytes(result), encoded_control
+        )
+        self.assertFalse(fast_path.is_verified_validation_evidence(selected))
+        for changed in (
+            {**result, "extra": True},
+            {**result, "head_sha": "e" * 40},
+            {**result, "source_validation_evidence_digest": "bad"},
+        ):
+            with self.assertRaises(source.BootstrapSourceAdmissionError):
+                source._closed_adoption_result(
+                    fast_path.canonical_json_bytes(changed), encoded_control
+                )
+        with self.assertRaises(source.BootstrapSourceAdmissionError):
+            source._closed_adoption_result(
+                b'{"status":"REJECTED","diagnostic_identity":"/private/secret"}',
+                encoded_control,
+            )
+        with self.assertRaises(source.BootstrapSourceAdmissionError):
+            source._closed_adoption_result(
+                b'{"status":"REJECTED","diagnostic_identity":"INPUT_SCHEMA_REJECTED","extra":true}\n',
+                encoded_control,
+            )
+
+    def test_forged_runner_cannot_bypass_absent_accepted_policy(self) -> None:
+        old = replace(
+            self.trust,
+            bootstrap_source_admissions=tuple(
+                item for item in self.trust.bootstrap_source_admissions
+                if item.subtype != ADOPTION_SUBTYPE
+            ),
+        )
+        with mock.patch.object(
+            source, "_load_protected_main_trust_policy", return_value=old
+        ), mock.patch.object(source, "_run_isolated_python") as runner:
+            with self.assertRaises(source.BootstrapSourceAdmissionError):
+                source.execute_pre_enrollment_adoption_authentication(
+                    b"{}", "/unused", "/unused"
+                )
+            runner.assert_not_called()
 
 
 if __name__ == "__main__":

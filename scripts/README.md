@@ -729,7 +729,20 @@ This authorizes only execution of the admitted implementation; the downstream
 pre-enrollment verifier still owns candidate-tree, push, and initialization
 evidence.
 
-All source paths return a sealed `VerifiedBootstrapSource` with an explicit
+`PRE_ENROLLMENT_ADOPTION_AUTHENTICATION_SOURCE` fixes the signed #1015 source
+head, tree, sole parent, receipt, final attestation, signer, and exact
+`scripts/secpal_pr_review/fast_path.py` blob in accepted-main policy. The
+executor authenticates that source before importing it, then invokes only
+`authenticate_pre_enrollment_adoption` in the existing isolated Python
+boundary. It copies bounded artifact files into a private directory and passes
+a small closed control document. The child performs read-only bootstrap and
+Exact-State-Adoption authentication. Its closed result is a diagnostic or
+summary, never validation evidence or an adoption capability. The admitted
+commit remains fixed if the live #1015 head advances; delivery lifecycle state
+must still be authenticated separately by its consumer. This admission does
+not change the #1015 bridge or its pre-enrollment evidence versions.
+
+All source authentication paths return a sealed `VerifiedBootstrapSource` with an explicit
 historical evidence status. The #812-only evidence-loss recovery does not apply
 to the byte-only #819 subtype. Historical P2.1 remains rooted at commit
 `833eef2afc063ae777e7e2b64b2f252e3fe1e49e` and helper blob
