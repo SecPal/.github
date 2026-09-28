@@ -7,13 +7,15 @@ from __future__ import annotations
 import importlib.util
 import copy
 import json
+import os
+import shutil
 import subprocess
 import tempfile
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 from dataclasses import replace
 from pathlib import Path
 import sys
-from types import SimpleNamespace
+from types import SimpleNamespace, ModuleType
 from unittest import TestCase, main, mock
 
 from scripts.secpal_pr_review import fast_path
@@ -777,7 +779,7 @@ class PreEnrollmentIntegrationContractTests(TestCase):
 
 
 class BootstrapAdoptionBridgeTests(TestCase):
-    """Real signed Git objects; mock only remote/current-main observations."""
+    """Real signed evidence replay; process isolation is exercised separately below."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -789,7 +791,7 @@ class BootstrapAdoptionBridgeTests(TestCase):
             ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(cls.key)],
             check=True,
         )
-        cls.public = cls.key.with_suffix(".pub").read_text().strip()
+        cls.public = " ".join(cls.key.with_suffix(".pub").read_text().split()[:2])
         cls.git("init", "-q")
         for key, value in (
             ("user.name", "Fixture"),
@@ -799,6 +801,34 @@ class BootstrapAdoptionBridgeTests(TestCase):
         ):
             cls.git("config", key, value)
         cls.git("remote", "add", "origin", "https://github.com/SecPal/.github.git")
+        document = json.loads((ROOT / fast_path.DELIVERY_REGISTRY_PATH).read_text())
+        entry = next(
+            item
+            for item in document["repositories"]
+            if item["repository"] == "SecPal/.github"
+        )
+        policy = entry["lifecycle_authority_policy"]
+        for identity in (SIGNER, AUTHORIZER):
+            policy["signers"].append(
+                {
+                    "identity": identity,
+                    "ssh_public_keys": [cls.public],
+                    "openpgp_fingerprints": [],
+                }
+            )
+        policy["transition_signer_identities"].append(AUTHORIZER)
+        cls.registry_raw = json.dumps(document)
+        cls.schema_raw = (
+            ROOT / fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH
+        ).read_text()
+        for relative, raw in (
+            (fast_path.DELIVERY_REGISTRY_PATH, cls.registry_raw),
+            (fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH, cls.schema_raw),
+        ):
+            path = cls.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(raw)
+            cls.git("add", relative)
         (cls.root / "common.txt").write_text("common\n")
         cls.git("add", "common.txt")
         base = cls.git("commit-tree", cls.git("write-tree"), "-S", "-m", "base")
@@ -817,10 +847,6 @@ class BootstrapAdoptionBridgeTests(TestCase):
             cls.root, [cls.parent1, cls.parent2]
         )
         assert conflicts == []
-        cls.registry_raw = (ROOT / fast_path.DELIVERY_REGISTRY_PATH).read_text()
-        cls.schema_raw = (
-            ROOT / fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH
-        ).read_text()
         cls.binding = fast_path._validated_historical_registry_binding(
             registry_raw=cls.registry_raw,
             schema_raw=cls.schema_raw,
@@ -922,11 +948,32 @@ class BootstrapAdoptionBridgeTests(TestCase):
     def setUp(self) -> None:
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
+        self.real_isolated_runner = (
+            bootstrap_source_admission._run_bootstrap_validation_isolated
+        )
+        self.real_materializer = (
+            bootstrap_source_admission._isolated_bootstrap_validation_repository
+        )
+        self.patch(
+            bootstrap_source_admission,
+            "_isolated_bootstrap_validation_repository",
+            side_effect=lambda _head=None: nullcontext(self.root),
+        )
+        # Exercise the child replay directly for artifact/crypto failure isolation.
+        # BootstrapIsolationTests exercises the real process/materialization boundary.
+        self.patch(fast_path, "CENTRAL_REGISTRY_ROOT", new=self.root)
+        self.patch(
+            bootstrap_source_admission,
+            "_run_bootstrap_validation_isolated",
+            side_effect=lambda provenance: fast_path._validation_evidence_binding(
+                fast_path._replay_pre_enrollment_validation_unsealed(provenance)
+            ),
+        )
         self.patch(
             bootstrap_source_admission, "_load_actions_helper", return_value=actions
         )
         self.main_guard = self.patch(
-            actions, "_require_accepted_main_bridge_source", return_value="f" * 40
+            actions, "_require_accepted_main_bridge_source", return_value=self.parent2
         )
         self.patch(
             lifecycle_authority, "_load_lifecycle_trust_policy", return_value=self.trust
@@ -947,8 +994,6 @@ class BootstrapAdoptionBridgeTests(TestCase):
         return self.stack.enter_context(mock.patch.object(target, name, **kwargs))
 
     def central_read(self, arguments, **_kwargs):
-        if arguments == ["rev-list", "--first-parent", "f" * 40]:
-            return 0, "f" * 40 + "\n" + self.parent2 + "\n"
         if arguments == ["show", f"{self.parent2}:{fast_path.DELIVERY_REGISTRY_PATH}"]:
             return 0, self.registry_raw
         if arguments == [
@@ -1146,7 +1191,7 @@ class BootstrapAdoptionBridgeTests(TestCase):
             external.adoption_source_evidence_digest,
             validation.final_attestation_digest,
         )
-        self.assertEqual(self.main_guard.call_args.kwargs, {"expected_main": "f" * 40})
+        self.assertEqual(self.main_guard.call_args.kwargs, {"expected_main": self.parent2})
 
     def test_raw_artifacts_and_delivery_identities_are_closed(self) -> None:
         for field, value in (
@@ -1320,11 +1365,7 @@ class BootstrapAdoptionBridgeTests(TestCase):
         )
         with self.assertRaisesRegex(ValueError, "command-set"):
             self.verify(integration_evidence=changed)
-        self.central.side_effect = lambda arguments, **kwargs: (
-            (0, "f" * 40 + "\n")
-            if arguments[0] == "rev-list"
-            else self.central_read(arguments)
-        )
+        self.main_guard.return_value = self.parent1
         with self.assertRaisesRegex(
             fast_path.SecurityBlocker, "outside accepted protected-main history"
         ):
@@ -1368,16 +1409,132 @@ class BootstrapAdoptionBridgeTests(TestCase):
             ):
                 self.verify()
 
-    def test_main_advance_preserves_immutable_evidence_epoch(self) -> None:
-        original = self.verify()
-        self.main_guard.return_value = "9" * 40
+    def test_real_graft_cannot_admit_foreign_evidence_epoch(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        history_root = Path(directory.name)
+        actions._run_attestation_git(history_root, ["init", "--quiet"])
+        actions._run_attestation_git(
+            history_root,
+            [
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                str(self.root),
+                self.parent1,
+                self.parent2,
+            ],
+        )
+        self.main_guard.return_value = self.parent1
+        (history_root / ".git/info/grafts").write_text(
+            f"{self.parent1} {self.parent2}\n"
+        )
+        observed = actions._run_attestation_git(
+            history_root, ["rev-list", "--first-parent", self.parent1]
+        ).stdout.splitlines()
+        self.assertIn(self.parent2, observed)
 
-        def advanced(arguments, **kwargs):
-            if arguments == ["rev-list", "--first-parent", "9" * 40]:
-                return 0, "9" * 40 + "\n" + "f" * 40 + "\n" + self.parent2 + "\n"
+        def central(arguments, **kwargs):
+            if arguments[0] == "rev-list":
+                result = actions._run_attestation_git(history_root, arguments)
+                return result.returncode, result.stdout
             return self.central_read(arguments, **kwargs)
 
-        self.central.side_effect = advanced
+        self.central.side_effect = central
+        with mock.patch.object(fast_path, "CENTRAL_REGISTRY_ROOT", history_root):
+            with self.assertRaisesRegex(
+                fast_path.SecurityBlocker, "outside accepted protected-main history"
+            ):
+                self.verify()
+
+    def test_raw_history_rejects_replacement_refs_missing_objects_and_bounds(
+        self,
+    ) -> None:
+        replacement = self.git(
+            "commit-tree", self.tree, "-p", self.parent2, "-S", "-m", "replacement"
+        )
+        self.git("replace", self.parent1, replacement)
+        try:
+            # The Complete Validation harness disables replacement objects for
+            # all Git calls. Enable them only for this diagnostic comparison;
+            # the raw-object verifier below keeps its closed Git environment.
+            with mock.patch.dict(os.environ):
+                os.environ.pop("GIT_NO_REPLACE_OBJECTS", None)
+                self.assertIn(
+                    self.parent2,
+                    self.git("rev-list", "--first-parent", self.parent1).splitlines(),
+                )
+            with self.assertRaisesRegex(fast_path.SecurityBlocker, "outside accepted"):
+                fast_path._require_pre_enrollment_main_ancestor(
+                    self.parent1, self.parent2
+                )
+        finally:
+            self.git("replace", "-d", self.parent1)
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "unavailable"):
+            fast_path._require_pre_enrollment_main_ancestor("0" * 40, self.parent2)
+        with mock.patch.object(fast_path, "PRE_ENROLLMENT_MAIN_HISTORY_LIMIT", 1):
+            with self.assertRaisesRegex(fast_path.SecurityBlocker, "depth/count"):
+                fast_path._require_pre_enrollment_main_ancestor(
+                    replacement, self.parent2
+                )
+        with mock.patch.object(fast_path, "_PRE_ENROLLMENT_MAIN_HISTORY_BYTES", 1):
+            with self.assertRaisesRegex(fast_path.SecurityBlocker, "byte bound"):
+                fast_path._require_pre_enrollment_main_ancestor(
+                    self.parent2, self.parent2
+                )
+
+    def test_raw_history_rejects_malformed_topology_and_object_identity(self) -> None:
+        for headers in (
+            f"tree {self.tree}\nparent garbage",
+            f"tree {self.tree}\nparent\t{self.parent2}",
+            f"tree {self.tree}\nparent {self.parent2}\nparent {self.parent2}",
+            f"tree {self.tree}\nauthor x\nparent {self.parent2}",
+            f"tree {self.tree}\ntree {self.tree}",
+            f"parent {self.parent2}",
+        ):
+            raw = (headers + "\n\nmalformed\n").encode()
+            oid = (
+                subprocess.check_output(
+                    [
+                        "git",
+                        "hash-object",
+                        "--literally",
+                        "-w",
+                        "-t",
+                        "commit",
+                        "--stdin",
+                    ],
+                    cwd=self.root,
+                    input=raw,
+                )
+                .decode()
+                .strip()
+            )
+            with (
+                self.subTest(headers=headers),
+                self.assertRaises(fast_path.SecurityBlocker),
+            ):
+                fast_path._require_pre_enrollment_main_ancestor(oid, oid)
+        original = bootstrap_source_admission._git
+
+        def corrupt(root, arguments, **kwargs):
+            result = original(root, arguments, **kwargs)
+            if arguments[:2] == ["cat-file", "commit"]:
+                result.stdout = result.stdout.replace(b"main", b"fake")
+            return result
+
+        with mock.patch.object(bootstrap_source_admission, "_git", side_effect=corrupt):
+            with self.assertRaisesRegex(fast_path.SecurityBlocker, "identity changed"):
+                fast_path._require_pre_enrollment_main_ancestor(
+                    self.parent2, self.parent2
+                )
+
+    def test_main_advance_preserves_immutable_evidence_epoch(self) -> None:
+        original = self.verify()
+        new_main = self.git(
+            "commit-tree", self.tree, "-p", self.parent2, "-S", "-m", "advanced main"
+        )
+        self.main_guard.return_value = new_main
         advanced_validation = self.verify()
         self.assertEqual(
             fast_path._validation_evidence_binding(original),
@@ -1385,17 +1542,19 @@ class BootstrapAdoptionBridgeTests(TestCase):
         )
         self.assertTrue(fast_path.is_verified_validation_evidence(original))
         changed = copy.deepcopy(self.integration)
-        changed["current_main"]["sha"] = "9" * 40
-        changed["ordered_parent_shas"][1] = "9" * 40
+        changed["current_main"]["sha"] = new_main
+        changed["ordered_parent_shas"][1] = new_main
         # Even a newly authenticated tip cannot replace the signed evidence epoch.
-        with mock.patch.object(
-            fast_path, "_central_git_result", return_value=(0, "9" * 40 + "\n")
-        ), mock.patch.object(
-            fast_path,
-            "_validated_historical_registry_binding",
-            return_value=self.binding,
-        ), self.assertRaisesRegex(
-            ValueError, "authorization parent identity"
+        with (
+            mock.patch.object(
+                fast_path, "_central_git_result", return_value=(0, new_main + "\n")
+            ),
+            mock.patch.object(
+                fast_path,
+                "_validated_historical_registry_binding",
+                return_value=self.binding,
+            ),
+            self.assertRaisesRegex(ValueError, "authorization parent identity"),
         ):
             self.verify(integration_evidence=changed)
 
@@ -1492,24 +1651,155 @@ class BootstrapAdoptionBridgeTests(TestCase):
             with self.assertRaisesRegex(fast_path.SecurityBlocker, "did not support"):
                 self.verify()
 
-    def test_bridge_rejects_mixed_loaded_module_origins(self) -> None:
-        for module in (
-            fast_path,
-            fast_path.evidence,
-            lifecycle_authority,
-            integration,
-            bootstrap_source_admission,
+    def test_real_isolated_child_replays_signed_bootstrap_and_raw_history(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        source = Path(directory.name)
+        shutil.copytree(
+            ROOT / "scripts",
+            source / "scripts",
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+        shutil.copytree(ROOT / "docs/schemas", source / "docs/schemas")
+        for relative, raw in (
+            (fast_path.DELIVERY_REGISTRY_PATH, self.registry_raw),
+            (fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH, self.schema_raw),
+            (
+                "policies/legacy-enrolled-package-loss.json",
+                (ROOT / "policies/legacy-enrolled-package-loss.json").read_text(),
+            ),
         ):
-            with self.subTest(module=module.__name__), mock.patch.object(
-                module,
-                "__spec__",
-                SimpleNamespace(
-                    origin="/candidate-local/verifier.py", parent=module.__package__
-                ),
-            ), self.assertRaisesRegex(
-                fast_path.SecurityBlocker, "mixed verifier provenance"
-            ):
-                self.verify()
+            path = source / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(raw)
+        # Only provider transport is a fixture. All authority, registry, raw
+        # history, signature and tree checks execute unmodified in the child.
+        helper = source / "scripts/secpal-pr-review-actions.py"
+        with helper.open("a") as stream:
+            stream.write(
+                "\ndef _run_bridge_gh(arguments):\n"
+                "    endpoint = arguments[3]\n"
+                "    main = _run_attestation_git(REPOSITORY_ROOT, ['rev-parse', 'HEAD']).stdout.strip()\n"
+                "    if endpoint.endswith('/branches/main'):\n"
+                "        value = {'sha': main, 'protected': True}\n"
+                "    elif '/commits/' in endpoint:\n"
+                "        value = {'sha': endpoint.rsplit('/', 1)[1], 'verified': True, 'verification': {'verified': True, 'reason': 'valid'}}\n"
+                "        value.pop('verified' if '\"verification\":' in arguments[-1] else 'verification')\n"
+                "    else:\n"
+                "        value = {'full_name': 'SecPal/.github', 'default_branch': 'main'}\n"
+                "    return subprocess.CompletedProcess(arguments, 0, json.dumps(value), '')\n"
+            )
+
+        def git(*arguments):
+            return subprocess.check_output(
+                ["git", *arguments], cwd=source, stderr=subprocess.PIPE, text=True
+            ).strip()
+
+        git("init", "--quiet")
+        git("config", "user.name", "Fixture")
+        git("config", "user.email", SIGNER)
+        git("fetch", "--quiet", "--no-tags", str(self.root), self.parent2)
+        admission = source / "scripts/secpal_pr_review/bootstrap_source_admission.py"
+        with admission.open("a") as stream:
+            stream.write(
+                "\n_fixture_git = _git\n"
+                "def _git(root, arguments, **kwargs):\n"
+                "    if arguments[:3] == ['fetch', '--quiet', '--no-tags']:\n"
+                f"        arguments = [*arguments[:4], {str(self.root)!r}, *arguments[5:]]\n"
+                "    result = _fixture_git(root, arguments, **kwargs)\n"
+                "    return result\n"
+            )
+        git("add", "scripts", ".agents", "policies", "docs")
+        main_oid = git(
+            "commit-tree",
+            git("write-tree"),
+            "-p",
+            self.parent2,
+            "-m",
+            "accepted tooling",
+        )
+        git("update-ref", "refs/heads/main", main_oid)
+        original_git = bootstrap_source_admission._git
+
+        def transport(root, arguments, **kwargs):
+            if arguments == [
+                "remote",
+                "add",
+                "origin",
+                bootstrap_source_admission.PROTECTED_MAIN_REMOTE_URL,
+            ]:
+                arguments = ["remote", "add", "origin", str(source)]
+            return original_git(root, arguments, **kwargs)
+
+        # The child transports the exact candidate object from the same fixture
+        # remote, without inheriting the supplied candidate checkout's Git config.
+        git("fetch", "--quiet", "--no-tags", str(self.root), self.head)
+        observation = bootstrap_source_admission.ProtectedMainObservation(
+            json.dumps(
+                {
+                    "data": {
+                        "repository": {
+                            "nameWithOwner": "SecPal/.github",
+                            "defaultBranchRef": {
+                                "name": "main",
+                                "target": {"oid": main_oid},
+                            },
+                        }
+                    }
+                }
+            ).encode()
+        )
+        # Deliberately replace the operational path with a foreign checkout.
+        # Its configuration and import tree cannot become replay authority.
+        hostile = source / "candidate-context"
+        hostile.mkdir()
+        subprocess.run(["git", "init", "--quiet", str(hostile)], check=True)
+        (hostile / ".git/info/grafts").write_text(f"{self.parent1} {self.parent2}\n")
+        (hostile / ".git/info/attributes").write_text("* merge=foreign\n")
+        subprocess.run(
+            ["git", "-C", str(hostile), "config", "merge.foreign.driver", "false"],
+            check=True,
+        )
+        link = source / "candidate-path"
+        link.symlink_to(hostile, target_is_directory=True)
+        real_child = bootstrap_source_admission._run_isolated_python
+
+        def checked_child(*args, **kwargs):
+            result = real_child(*args, **kwargs)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            return result
+
+        with (
+            mock.patch.object(
+                bootstrap_source_admission,
+                "_isolated_bootstrap_validation_repository",
+                side_effect=self.real_materializer,
+            ),
+            mock.patch.object(
+                bootstrap_source_admission,
+                "_run_isolated_python",
+                side_effect=checked_child,
+            ),
+            mock.patch.object(
+                bootstrap_source_admission, "_git", side_effect=transport
+            ),
+            mock.patch.object(
+                bootstrap_source_admission,
+                "_observe_protected_main",
+                return_value=observation,
+            ),
+            mock.patch.object(
+                bootstrap_source_admission,
+                "_run_bootstrap_validation_isolated",
+                side_effect=self.real_isolated_runner,
+            ),
+        ):
+            validation = self.verify(repository_root=link)
+            self.assertTrue(fast_path.is_verified_validation_evidence(validation))
+            self.assertEqual(validation.head_sha, self.head)
+            hostile.rename(source / "replaced-candidate-context")
+            hostile.mkdir()
+            self.assertTrue(fast_path.is_verified_validation_evidence(validation))
 
     def test_current_main_guard_authenticates_actual_candidate_bytes(self) -> None:
         # Exercise the real maintained file check; remote observations alone do
@@ -1518,6 +1808,196 @@ class BootstrapAdoptionBridgeTests(TestCase):
             actions._require_accepted_main_tooling_blobs(
                 ROOT, self.git("rev-parse", self.parent2)
             )
+
+
+class BootstrapIsolationTests(TestCase):
+    """Real materialization and isolated interpreter; only the remote is a fixture.
+
+    The tiny accepted verifier is an import-boundary fixture, not evidence that
+    bootstrap cryptography succeeds. The signed-object tests above own replay.
+    """
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.source = self.root / "accepted"
+        self.source.mkdir()
+        self.git("init", "--quiet")
+        self.git("config", "user.name", "Fixture")
+        self.git("config", "user.email", "fixture@example.test")
+        package = self.source / "scripts/secpal_pr_review"
+        package.mkdir(parents=True)
+        (package / "bootstrap_source_admission.py").write_text(
+            "MAXIMUM_EVIDENCE_BYTES = 65536\n"
+        )
+        (package / "sibling.py").write_text('IDENTITY = "accepted"\n')
+        (package / "fast_path.py").write_text(
+            "import json, os, sys\n"
+            "from . import sibling\n"
+            "def canonical_json_bytes(value):\n"
+            " return (json.dumps(value, sort_keys=True, separators=(',', ':')) + '\\n').encode()\n"
+            "def _replay_pre_enrollment_validation_unsealed(value):\n"
+            " assert sibling.IDENTITY == 'accepted'\n"
+            " assert sys.flags.isolated and sys.flags.no_site and sys.dont_write_bytecode\n"
+            " assert all(key not in os.environ for key in ('PYTHONPATH', 'PYTHONHOME', 'PYTHONSTARTUP', 'PYTHONUSERBASE', 'VIRTUAL_ENV'))\n"
+            " assert 'sitecustomize' not in sys.modules and 'usercustomize' not in sys.modules\n"
+            " assert value == {'input': 'closed artifact'}\n"
+            " return {'verifier': 'accepted', 'pid': os.getpid()}\n"
+            "def _validation_evidence_binding(value):\n"
+            " return value\n"
+        )
+        self.main = self.commit()
+        original_git = bootstrap_source_admission._git
+
+        def remote_transport(root, arguments, **kwargs):
+            if arguments == [
+                "remote",
+                "add",
+                "origin",
+                bootstrap_source_admission.PROTECTED_MAIN_REMOTE_URL,
+            ]:
+                arguments = ["remote", "add", "origin", str(self.source)]
+            return original_git(root, arguments, **kwargs)
+
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(
+            mock.patch.object(
+                bootstrap_source_admission, "_git", side_effect=remote_transport
+            )
+        )
+        self.stack.enter_context(
+            mock.patch.object(
+                bootstrap_source_admission,
+                "_observe_protected_main",
+                side_effect=lambda: bootstrap_source_admission.ProtectedMainObservation(
+                    json.dumps(
+                        {
+                            "data": {
+                                "repository": {
+                                    "nameWithOwner": "SecPal/.github",
+                                    "defaultBranchRef": {
+                                        "name": "main",
+                                        "target": {"oid": self.main},
+                                    },
+                                }
+                            }
+                        }
+                    ).encode()
+                ),
+            )
+        )
+
+    def git(self, *arguments, input=None):
+        return subprocess.check_output(
+            ["git", *arguments],
+            cwd=self.source,
+            input=input,
+            stderr=subprocess.PIPE,
+            text=True,
+        ).strip()
+
+    def commit(self):
+        self.git("add", "scripts")
+        oid = self.git("commit-tree", self.git("write-tree"), "-m", "accepted fixture")
+        self.git("update-ref", "refs/heads/main", oid)
+        return oid
+
+    def verify(self):
+        result = bootstrap_source_admission._run_bootstrap_validation_isolated(
+            {"input": "closed artifact"}
+        )
+        self.assertEqual(result["verifier"], "accepted")
+        self.assertNotEqual(result["pid"], os.getpid())
+
+    def test_parent_module_cache_and_forged_metadata_are_irrelevant(self) -> None:
+        expected = str(ROOT / "scripts/secpal_pr_review/fast_path.py")
+        for name in (
+            "scripts.secpal_pr_review.fast_path",
+            "scripts.secpal_pr_review.sibling",
+            "secpal_bootstrap_source_accepted_main_actions",
+        ):
+            for metadata in (
+                {},
+                {"__file__": expected},
+                {"__spec__": SimpleNamespace(origin=expected)},
+                {"__file__": expected, "__spec__": SimpleNamespace(origin=expected)},
+            ):
+                foreign = ModuleType(name)
+                foreign.__dict__.update(metadata)
+                exec(
+                    compile(
+                        "raise_if_used = lambda *args: (_ for _ in ()).throw(AssertionError('candidate authority'))",
+                        "/candidate-local/verifier.py",
+                        "exec",
+                    ),
+                    foreign.__dict__,
+                )
+                foreign._require_accepted_main_bridge_source = foreign.raise_if_used
+                foreign._replay_pre_enrollment_validation_unsealed = (
+                    foreign.raise_if_used
+                )
+                with (
+                    self.subTest(name=name, metadata=tuple(metadata)),
+                    mock.patch.dict(sys.modules, {name: foreign}),
+                ):
+                    self.verify()
+
+    def test_candidate_pythonpath_startup_site_and_sibling_shadowing_are_irrelevant(
+        self,
+    ) -> None:
+        candidate = self.root / "candidate"
+        package = candidate / "scripts/secpal_pr_review"
+        package.mkdir(parents=True)
+        marker = self.root / "injected"
+        attack = f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\nraise AssertionError('candidate code')\n"
+        for relative in (
+            "sitecustomize.py",
+            "usercustomize.py",
+            "startup.py",
+            "scripts/__init__.py",
+            "scripts/secpal_pr_review/fast_path.py",
+            "scripts/secpal_pr_review/sibling.py",
+        ):
+            (candidate / relative).write_text(attack)
+        site = (
+            candidate
+            / f"lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages"
+        )
+        site.mkdir(parents=True)
+        (site / "sitecustomize.py").write_text(attack)
+        (site / "inject.pth").write_text("import sitecustomize\n")
+        with mock.patch.dict(
+            os.environ,
+            {
+                "PYTHONPATH": str(candidate) + os.pathsep + str(site),
+                "PYTHONHOME": str(candidate),
+                "PYTHONSTARTUP": str(candidate / "startup.py"),
+                "PYTHONUSERBASE": str(candidate),
+                "VIRTUAL_ENV": str(candidate),
+            },
+        ):
+            self.verify()
+        self.assertFalse(marker.exists())
+
+    def test_materialized_import_symlink_and_bytecode_are_rejected(self) -> None:
+        sibling = self.source / "scripts/secpal_pr_review/sibling.py"
+        sibling.unlink()
+        sibling.symlink_to("/candidate-local/sibling.py")
+        self.main = self.commit()
+        with self.assertRaisesRegex(
+            bootstrap_source_admission.BootstrapSourceAdmissionError, "import source"
+        ):
+            self.verify()
+        sibling.unlink()
+        sibling.write_text('IDENTITY = "accepted"\n')
+        (sibling.parent / "fast_path.pyc").write_bytes(b"foreign bytecode")
+        self.main = self.commit()
+        with self.assertRaisesRegex(
+            bootstrap_source_admission.BootstrapSourceAdmissionError, "import source"
+        ):
+            self.verify()
 
 
 if __name__ == "__main__":

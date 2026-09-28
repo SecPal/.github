@@ -425,14 +425,31 @@ signed authorization), receipt, final attestation, signed commit, trailers and
 bounded tree resolution. `VerifiedInitialHeadProof` remains an initialization
 handoff and never supplies validation authority by itself.
 
-The bridge requires current authenticated protected-main verifier bytes and
-maintained trust credentials. The immutable integration parent 2 must be in
-that protected main's first-parent history; it selects the evidence-time
-registry and command set. Later main advancement does not replace parent 2 or
-invalidate the original validation epoch. No caller-selected registry, command
-set, signer, main tip or evidence-time policy is accepted. Replay authenticates
-immutable source evidence; it does not reauthorize a bootstrap against today's
-work graph or consume its one-use authorization again.
+The bridge materializes current protected-main tooling from the canonical
+repository into a private checkout and uses the existing bounded Python runner
+with `-I -S -B` and a closed launcher environment. Only that fresh interpreter
+performs trust-producing replay; parent module caches, writable module metadata,
+candidate Python paths, startup files and site packages supply no governance
+imports. The child authenticates the live protected-main tip, its signature and
+exact tooling bytes before and after verification. Candidate objects are fetched
+by exact head from the canonical repository into a separate private database,
+without checkout. The persisted repository path is operational context, not
+object or import authority. Candidate-local configuration, attributes, grafts
+and replacement refs are not inherited. The child uses a private home for Git
+configuration while retaining provider credentials and the existing OpenPGP
+public-key directory.
+
+The immutable integration parent 2 selects the evidence-time registry and
+command set only after a bounded first-parent proof starting at authenticated
+current main. That proof reads and rehashes raw commit objects and follows their
+first parent headers; it never uses revision traversal as ancestry authority.
+Malformed or missing objects, ambiguous topology and exhausted count/byte bounds
+fail closed. Git grafts and replacement refs cannot authorize another epoch.
+Later main advancement does not substitute a newer parent for the original one.
+Current main continues to supply verifier and maintained signer/trust policy.
+No caller-selected registry, command set, signer or main tip is accepted.
+Replay authenticates immutable source evidence; it does not reauthorize a
+bootstrap against today's work graph or consume its one-use authorization again.
 
 The sealed validation provenance is version `1.0`, kind
 `PRE_ENROLLMENT_DRAFT_INTEGRATION`, and is independently replayed by

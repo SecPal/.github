@@ -6448,6 +6448,111 @@ def verify_validation_attestation(
     return _seal_validation_evidence(result, provenance)
 
 
+PRE_ENROLLMENT_MAIN_HISTORY_LIMIT = 4096
+_PRE_ENROLLMENT_MAIN_HISTORY_BYTES = 64 * 1024 * 1024
+
+
+def _require_pre_enrollment_main_ancestor(current_main: str, parent2: str) -> None:
+    """Authenticate a finite first-parent chain from raw, rehashed commit objects.
+
+    Revision walkers are not authority: local grafts can alter their topology
+    even when replacement objects are disabled. This runs inside accepted-main
+    isolation and never accepts a caller's ancestry observation.
+    """
+    from . import bootstrap_source_admission
+
+    cursor = _require_oid(current_main, "accepted protected main")
+    target = _require_oid(parent2, "evidence-time main")
+    visited: set[str] = set()
+    total = 0
+    for _ in range(PRE_ENROLLMENT_MAIN_HISTORY_LIMIT):
+        if cursor in visited:
+            raise SecurityBlocker("protected-main raw history repeats a commit")
+        visited.add(cursor)
+        try:
+            size = bootstrap_source_admission._git(
+                CENTRAL_REGISTRY_ROOT, ["cat-file", "-s", cursor]
+            ).stdout
+            if (
+                re.fullmatch(rb"[0-9]+\n", size) is None
+                or not 0
+                < int(size)
+                <= bootstrap_source_admission.MAXIMUM_EVIDENCE_BYTES
+                or total + int(size) > _PRE_ENROLLMENT_MAIN_HISTORY_BYTES
+            ):
+                raise SecurityBlocker(
+                    "protected-main raw history exceeds its byte bound"
+                )
+            raw = bootstrap_source_admission._git(
+                CENTRAL_REGISTRY_ROOT, ["cat-file", "commit", cursor]
+            ).stdout
+            header = b"commit " + str(len(raw)).encode("ascii") + b"\0"
+            actual = (
+                hashlib.sha1(header + raw).hexdigest()
+                if len(cursor) == 40
+                else hashlib.sha256(header + raw).hexdigest()
+            )
+            if len(raw) != int(size) or actual != cursor:
+                raise SecurityBlocker("protected-main raw commit identity changed")
+            total += len(raw)
+            headers, separator, _message = raw.partition(b"\n\n")
+            text = headers.decode("utf-8", errors="strict")
+            tree, parents = _commit_topology(text)
+            lines = text.split("\n")
+            if (
+                not separator
+                or "\r" in text
+                or lines[0] != "tree " + tree
+                or len(parents) > 32
+                or len(parents) != len(set(parents))
+                or any(len(oid) != len(cursor) for oid in (tree, *parents))
+                or lines[1 : 1 + len(parents)] != ["parent " + oid for oid in parents]
+                or any(
+                    line.startswith("parent")
+                    and line not in {"parent " + oid for oid in parents}
+                    for line in lines
+                )
+            ):
+                raise SecurityBlocker("protected-main raw commit topology is ambiguous")
+        except (
+            bootstrap_source_admission.BootstrapSourceAdmissionError,
+            UnicodeError,
+        ) as exc:
+            raise SecurityBlocker(
+                "protected-main raw commit is unavailable or malformed"
+            ) from exc
+        if cursor == target:
+            return
+        if not parents:
+            raise SecurityBlocker(
+                "pre-enrollment parent 2 is outside accepted protected-main history"
+            )
+        cursor = parents[0]
+    raise SecurityBlocker("protected-main raw history depth/count bound exhausted")
+
+
+def _verify_pre_enrollment_validation_unsealed(
+    provenance: dict[str, Any],
+) -> VerifiedValidationEvidence:
+    """Replay in a fresh accepted-main interpreter; caller modules are not authority."""
+    from . import bootstrap_source_admission
+
+    binding = bootstrap_source_admission._run_bootstrap_validation_isolated(provenance)
+    fields = {
+        "repository",
+        "delivery_issue_number",
+        "pull_request_number",
+        "head_sha",
+        "tree_sha",
+        "validation_receipt_digest",
+        "final_attestation_digest",
+        "source_validation_evidence_digest",
+    }
+    if not isinstance(binding, dict) or set(binding) != fields:
+        raise SecurityBlocker("isolated bootstrap validation result is malformed")
+    return _unregistered_validation_evidence(**binding)
+
+
 def _authenticate_pre_enrollment_commit(
     *,
     helper: Any,
@@ -6562,7 +6667,7 @@ def _authenticate_pre_enrollment_commit(
     )
 
 
-def _verify_pre_enrollment_validation_unsealed(
+def _replay_pre_enrollment_validation_unsealed(
     provenance: dict[str, Any],
 ) -> VerifiedValidationEvidence:
     """Replay immutable bootstrap evidence under current accepted-main authority.
@@ -6611,33 +6716,6 @@ def _verify_pre_enrollment_validation_unsealed(
     root = Path(provenance["repository_root"]).resolve(strict=True)
     helper = bootstrap_source_admission._load_actions_helper()
     try:
-        helper._require_bridge_import_provenance(
-            {
-                "fast_path": (__file__, __spec__.origin),
-                "evidence": (evidence.__file__, evidence.__spec__.origin),
-                "lifecycle_authority": (
-                    lifecycle_authority.__file__,
-                    lifecycle_authority.__spec__.origin,
-                ),
-                "pre_enrollment": (
-                    pre_enrollment_integration.__file__,
-                    pre_enrollment_integration.__spec__.origin,
-                ),
-                "bootstrap_source_admission": (
-                    bootstrap_source_admission.__file__,
-                    bootstrap_source_admission.__spec__.origin,
-                ),
-            },
-            {
-                "fast_path": helper.FAST_PATH_HELPER,
-                "evidence": helper.EVIDENCE_HELPER,
-                "lifecycle_authority": helper.LIFECYCLE_AUTHORITY_HELPER,
-                "pre_enrollment": helper.PRE_ENROLLMENT_INTEGRATION_HELPER,
-                "bootstrap_source_admission": helper.FAST_PATH_HELPER.with_name(
-                    "bootstrap_source_admission.py"
-                ),
-            },
-        )
         current_main = helper._require_accepted_main_bridge_source(
             CENTRAL_REGISTRY_REPOSITORY
         )
@@ -6646,11 +6724,7 @@ def _verify_pre_enrollment_validation_unsealed(
         if not isinstance(raw, dict) or not isinstance(raw.get("current_main"), dict):
             raise SecurityBlocker("pre-enrollment integration evidence is missing")
         parent2 = _require_oid(raw["current_main"].get("sha"), "evidence-time main")
-        _, history = _central_git_result(["rev-list", "--first-parent", current_main])
-        if parent2 not in history.splitlines():
-            raise SecurityBlocker(
-                "pre-enrollment parent 2 is outside accepted protected-main history"
-            )
+        _require_pre_enrollment_main_ancestor(current_main, parent2)
         _, registry_raw = _central_git_result(
             ["show", f"{parent2}:{DELIVERY_REGISTRY_PATH}"]
         )
@@ -6697,33 +6771,38 @@ def _verify_pre_enrollment_validation_unsealed(
                 is not None
             ),
         )
-        candidate = _authenticate_pre_enrollment_commit(
-            helper=helper,
-            repository_root=root,
-            repository=repository,
-            head_sha=head,
-            expected_signer=normalized["expected_signer"],
-            trust=trust,
-            signature_policy=lifecycle_authority._load_delivery_signature_policy(
-                repository
-            ),
-        )
-        trailers = {
-            key: helper._commit_trailer_digest(root, head, key)
-            for key in (
-                "SecPal-Pre-Enrollment-Integration",
-                "SecPal-Pre-Enrollment-Validation-Receipt",
+        with bootstrap_source_admission._isolated_bootstrap_validation_repository(
+            head
+        ) as objects:
+            candidate = _authenticate_pre_enrollment_commit(
+                helper=helper,
+                repository_root=objects,
+                repository=repository,
+                head_sha=head,
+                expected_signer=normalized["expected_signer"],
+                trust=trust,
+                signature_policy=lifecycle_authority._load_delivery_signature_policy(
+                    repository
+                ),
             )
-        }
-        proof = pre_enrollment_integration.verify_final_attestation(
-            evidence=normalized,
-            registry=registry,
-            receipt=provenance["validation_receipt"],
-            attestation=provenance["final_attestation"],
-            commit_trailers=trailers,
-            verified_candidate=candidate,
-        )
-        helper._verify_integration_tree_delta(root, normalized, candidate.tree_sha)
+            trailers = {
+                key: helper._commit_trailer_digest(objects, head, key)
+                for key in (
+                    "SecPal-Pre-Enrollment-Integration",
+                    "SecPal-Pre-Enrollment-Validation-Receipt",
+                )
+            }
+            proof = pre_enrollment_integration.verify_final_attestation(
+                evidence=normalized,
+                registry=registry,
+                receipt=provenance["validation_receipt"],
+                attestation=provenance["final_attestation"],
+                commit_trailers=trailers,
+                verified_candidate=candidate,
+            )
+            helper._verify_integration_tree_delta(
+                objects, normalized, candidate.tree_sha
+            )
         helper._require_accepted_main_bridge_source(
             CENTRAL_REGISTRY_REPOSITORY, expected_main=current_main
         )

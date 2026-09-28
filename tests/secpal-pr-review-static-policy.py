@@ -528,6 +528,7 @@ ALLOWED_IMPORTS = {
         "from . import lifecycle_authority, pre_enrollment_integration",
         "from . import bootstrap_source_admission, lifecycle_authority, pre_enrollment_integration",
         "from . import pre_enrollment_integration",
+        "from . import bootstrap_source_admission",
     },
     "exact_source_safety.py": {
         "from __future__ import annotations",
@@ -830,8 +831,6 @@ LOADED_MODULE_ATTRIBUTES = {
     },
     "fast_path.py": {
         "evidence": {
-            "__file__",
-            "__spec__",
             "CommandPolicyError",
             "ContractError",
             "_commit_signature_format",
@@ -2699,8 +2698,7 @@ def self_test() -> None:
         "from . import lifecycle_authority, pre_enrollment_integration\n"
         "from . import bootstrap_source_admission, lifecycle_authority, pre_enrollment_integration\n"
         "from . import pre_enrollment_integration\n"
-        "evidence.__file__\n"
-        "evidence.__spec__.origin\n"
+        "from . import bootstrap_source_admission\n"
         "import tempfile\n"
         "with tempfile.TemporaryDirectory(prefix='secpal-bootstrap-verification-') as root:\n"
         "    pass\n"
@@ -2709,6 +2707,8 @@ def self_test() -> None:
         raise SystemExit("maintained bootstrap bridge imports/temp directory were rejected")
 
     source_specific_unsafe = (
+        ("fast_path.py", "evidence.__file__\n"),
+        ("fast_path.py", "evidence.__spec__.origin\n"),
         ("fast_path.py", "evidence.__dict__['subprocess'].run(argv)\n"),
         ("fast_path.py", "from . import caller_selected_verifier\n"),
         ("fast_path.py", "import tempfile\ntempfile.TemporaryFile()\n"),
