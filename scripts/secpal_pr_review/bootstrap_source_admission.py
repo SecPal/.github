@@ -252,20 +252,6 @@ sys.path[:] = [*stdlib, str(source_root)]
 if mode == "MODULE":
     sys.argv = [target, *arguments]
     runpy.run_module(target, run_name="__main__", alter_sys=False)
-elif mode == "BOOTSTRAP_VALIDATION":
-    import json
-    from scripts.secpal_pr_review import fast_path, bootstrap_source_admission
-
-    raw = Path(target).read_bytes()
-    if not raw or len(raw) > bootstrap_source_admission.MAXIMUM_EVIDENCE_BYTES:
-        raise RuntimeError("bootstrap validation input exceeds its bound")
-    provenance = json.loads(raw)
-    if fast_path.canonical_json_bytes(provenance) != raw:
-        raise RuntimeError("bootstrap validation input is not canonical")
-    verified = fast_path._replay_pre_enrollment_validation_unsealed(provenance)
-    sys.stdout.buffer.write(fast_path.canonical_json_bytes(
-        fast_path._validation_evidence_binding(verified)
-    ))
 elif mode == "ENTRYPOINT":
     entrypoint = arguments.pop(0)
     expected = (source_root / target).resolve(strict=True)
@@ -1987,6 +1973,18 @@ def _execute_pre_enrollment_entrypoint(
     return {"status": "COMPLETE", "exit_status": 0}
 
 
+def _require_legacy_pre_enrollment_issuance() -> None:
+    """The fixed historical #776 source cannot issue the finite 1.1 family."""
+    facts = _normalize_protected_main(_observe_protected_main())
+    raw = _read_protected_main_registry(facts.head_sha)
+    document = _closed_json(raw, "protected-main registry")
+    entries = document.get("repositories")
+    selected = [row for row in entries if isinstance(row, dict)
+                and row.get("repository") == PROTECTED_MAIN_REPOSITORY] if isinstance(entries, list) else []
+    if (len(selected) != 1 or selected[0].get("pre_enrollment_integration_policy", {}).get("schema_version") != "1.0"):
+        raise BootstrapSourceAdmissionError("historical pre-enrollment source is read-only after finite cutover")
+
+
 def execute_pre_enrollment_implementation_bootstrap(
     repository: str,
     delivery_issue: int,
@@ -1994,6 +1992,7 @@ def execute_pre_enrollment_implementation_bootstrap(
 ) -> Mapping[str, Any]:
     """Execute the fixed #776 command only after accepted-main authentication."""
 
+    _require_legacy_pre_enrollment_issuance()
     trust, policy = _select_pre_enrollment_policy(repository, delivery_issue)
     _authenticate_live_github_source(policy)
     with _isolated_source_repository(trust, policy) as root:
@@ -2016,6 +2015,7 @@ def execute_pre_enrollment_implementation_bootstrap(
         helper = authority._load_trusted_command_helper()
         with _authenticated_work_graph_dependencies(root, helper) as dependency_environment:
             try:
+                _require_legacy_pre_enrollment_issuance()
                 result = _execute_pre_enrollment_entrypoint(
                     root,
                     policy,
@@ -2202,107 +2202,19 @@ def _closed_launcher_environment(helper: Any) -> dict[str, str]:
 
 
 @contextmanager
-def _isolated_bootstrap_validation_repository(
-    candidate_head: str | None = None,
-) -> Iterator[Path]:
-    """Materialize current protected-main bytes, never caller/candidate modules.
-
-    The child independently authenticates protection, signature, current tip and
-    exact tooling blobs before and after replay. Its private Git database has no
-    inherited grafts, replacement refs, alternates, configuration or bytecode.
-    """
-    main = (
-        _normalize_protected_main(_observe_protected_main()).head_sha
-        if candidate_head is None
-        else fast_path._require_oid(candidate_head, "bootstrap head")
-    )
-    with tempfile.TemporaryDirectory(
-        prefix="secpal-bootstrap-validation-"
-    ) as directory:
+def _isolated_bootstrap_validation_repository(candidate_head: str) -> Iterator[Path]:
+    """Fetch exact source objects as data; never check out or import their code."""
+    head = fast_path._require_oid(candidate_head, "bootstrap object head")
+    with tempfile.TemporaryDirectory(prefix="secpal-bootstrap-objects-") as directory:
         root = Path(directory).resolve()
         root.chmod(0o700)
         _git(root, ["init", "--quiet"])
         _git(root, ["remote", "add", "origin", PROTECTED_MAIN_REMOTE_URL])
-        _git(
-            root,
-            [
-                "fetch",
-                "--quiet",
-                "--no-tags",
-                f"--depth={fast_path.PRE_ENROLLMENT_MAIN_HISTORY_LIMIT}",
-                "origin",
-                main,
-            ],
-        )
-        if _git_text(root, ["rev-parse", "FETCH_HEAD"]).strip() != main:
-            raise BootstrapSourceAdmissionError(
-                "protected-main tooling identity changed"
-            )
-        if candidate_head is not None:
-            # Candidate objects are data: no checkout, local configuration,
-            # attributes, grafts, alternates or candidate executable is inherited.
-            yield root
-            return
-        _git(root, ["checkout", "--quiet", "--detach", main])
-        # Git checkout is from the canonical remote into a fresh private root.
-        # Reject import-path symlinks and bytecode before Python sees that root.
-        for path in (root / "scripts", root / "scripts/secpal_pr_review"):
-            if path.is_symlink() or not path.is_dir():
-                raise BootstrapSourceAdmissionError(
-                    "protected-main import root is invalid"
-                )
-        for path in (root / "scripts").rglob("*"):
-            if path.is_symlink() or path.suffix in {".pyc", ".pyo"}:
-                raise BootstrapSourceAdmissionError(
-                    "protected-main import source is invalid"
-                )
+        _git(root, ["fetch", "--quiet", "--no-tags",
+                    f"--depth={fast_path.PRE_ENROLLMENT_MAIN_HISTORY_LIMIT}", "origin", head])
+        if _git_text(root, ["rev-parse", "FETCH_HEAD"]).strip() != head:
+            raise BootstrapSourceAdmissionError("bootstrap object identity changed")
         yield root
-
-
-def _run_bootstrap_validation_isolated(provenance: dict[str, Any]) -> dict[str, Any]:
-    """Use the existing bounded runner for the fixed, read-only bridge operation."""
-    raw = fast_path.canonical_json_bytes(provenance)
-    if not raw or len(raw) > MAXIMUM_EVIDENCE_BYTES:
-        raise BootstrapSourceAdmissionError(
-            "bootstrap validation input exceeds its bound"
-        )
-    helper = authority._load_trusted_command_helper()
-    environment = _closed_launcher_environment(helper)
-    with _isolated_bootstrap_validation_repository() as root:
-        # Input is data outside the authenticated source package and import path.
-        with tempfile.TemporaryDirectory(prefix="secpal-bootstrap-input-") as directory:
-            # Keep provider credentials and retained OpenPGP public keys in their
-            # existing locations; Git must not read the caller's global config.
-            original_home = environment.get("HOME")
-            if original_home:
-                environment.setdefault(
-                    "GH_CONFIG_DIR", str(Path(original_home) / ".config/gh")
-                )
-                environment["GNUPGHOME"] = str(Path(original_home) / ".gnupg")
-            environment["HOME"] = directory
-            input_path = Path(directory) / "provenance.json"
-            input_path.write_bytes(raw)
-            result = _run_isolated_python(
-                _isolated_python_command(
-                    _ISOLATED_SOURCE_LAUNCHER,
-                    "BOOTSTRAP_VALIDATION",
-                    str(root),
-                    str(input_path),
-                ),
-                cwd=root,
-                timeout=120,
-                env=environment,
-            )
-        if result.returncode != 0:
-            raise BootstrapSourceAdmissionError(
-                "isolated bootstrap validation rejected"
-            )
-        binding = _closed_json(result.stdout, "isolated bootstrap validation result")
-        if fast_path.canonical_json_bytes(binding) != result.stdout:
-            raise BootstrapSourceAdmissionError(
-                "isolated bootstrap result is not canonical"
-            )
-        return binding
 
 
 def _closed_validation_environment(helper: Any, home: Path) -> dict[str, str]:

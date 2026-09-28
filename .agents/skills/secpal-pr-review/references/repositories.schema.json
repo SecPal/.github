@@ -501,18 +501,157 @@
         "maximum_pushes",
         "force_push",
         "automatic_retry",
-        "merge_pull_request"
+        "merge_pull_request",
+        "historical_sources"
       ],
       "properties": {
-        "schema_version": { "const": "1.0" },
-        "command": { "const": "integrate-pre-enrollment-draft" },
-        "topology_kind": { "const": "PRE_ENROLLMENT_DRAFT_INTEGRATION" },
-        "allowed_mutation": { "const": "NON_FORCE_PUSH_EXACT_PR_BRANCH" },
-        "maximum_candidates": { "const": 1 },
-        "maximum_pushes": { "const": 1 },
-        "force_push": { "const": false },
-        "automatic_retry": { "const": false },
-        "merge_pull_request": { "const": false }
+        "schema_version": {
+          "const": "1.1"
+        },
+        "command": {
+          "const": "integrate-pre-enrollment-draft"
+        },
+        "topology_kind": {
+          "const": "PRE_ENROLLMENT_DRAFT_INTEGRATION"
+        },
+        "allowed_mutation": {
+          "const": "NON_FORCE_PUSH_EXACT_PR_BRANCH"
+        },
+        "maximum_candidates": {
+          "const": 1
+        },
+        "maximum_pushes": {
+          "const": 1
+        },
+        "force_push": {
+          "const": false
+        },
+        "automatic_retry": {
+          "const": false
+        },
+        "merge_pull_request": {
+          "const": false
+        },
+        "historical_sources": {
+          "type": "array",
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "repository",
+              "delivery_issue",
+              "pull_request",
+              "head_sha",
+              "tree_sha",
+              "integration_evidence_digest",
+              "validation_receipt_digest",
+              "final_attestation_digest",
+              "artifact_sizes"
+            ],
+            "properties": {
+              "repository": {
+                "const": "SecPal/.github"
+              },
+              "delivery_issue": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "pull_request": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "head_sha": {
+                "type": "string",
+                "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+              },
+              "tree_sha": {
+                "type": "string",
+                "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+              },
+              "integration_evidence_digest": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "validation_receipt_digest": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "final_attestation_digest": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "artifact_sizes": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["integration", "receipt", "attestation"],
+                    "properties": {
+                      "integration": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["wire_bytes", "canonical_bytes"],
+                        "properties": {
+                          "wire_bytes": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 2147483647
+                          },
+                          "canonical_bytes": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 2147483647
+                          }
+                        }
+                      },
+                      "receipt": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["wire_bytes", "canonical_bytes"],
+                        "properties": {
+                          "wire_bytes": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 2147483647
+                          },
+                          "canonical_bytes": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 2147483647
+                          }
+                        }
+                      },
+                      "attestation": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["wire_bytes", "canonical_bytes"],
+                        "properties": {
+                          "wire_bytes": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 2147483647
+                          },
+                          "canonical_bytes": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 2147483647
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
       }
     },
     "final_eligibility_absence_recovery": {

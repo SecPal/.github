@@ -6452,7 +6452,7 @@ PRE_ENROLLMENT_MAIN_HISTORY_LIMIT = 4096
 _PRE_ENROLLMENT_MAIN_HISTORY_BYTES = 64 * 1024 * 1024
 
 
-def _require_pre_enrollment_main_ancestor(current_main: str, parent2: str) -> None:
+def _require_pre_enrollment_main_ancestor(current_main: str, parent2: str, *, repository_root: Path | None = None) -> None:
     """Authenticate a finite first-parent chain from raw, rehashed commit objects.
 
     Revision walkers are not authority: local grafts can alter their topology
@@ -6461,6 +6461,7 @@ def _require_pre_enrollment_main_ancestor(current_main: str, parent2: str) -> No
     """
     from . import bootstrap_source_admission
 
+    root = CENTRAL_REGISTRY_ROOT if repository_root is None else repository_root
     cursor = _require_oid(current_main, "accepted protected main")
     target = _require_oid(parent2, "evidence-time main")
     visited: set[str] = set()
@@ -6471,7 +6472,7 @@ def _require_pre_enrollment_main_ancestor(current_main: str, parent2: str) -> No
         visited.add(cursor)
         try:
             size = bootstrap_source_admission._git(
-                CENTRAL_REGISTRY_ROOT, ["cat-file", "-s", cursor]
+                root, ["cat-file", "-s", cursor]
             ).stdout
             if (
                 re.fullmatch(rb"[0-9]+\n", size) is None
@@ -6484,7 +6485,7 @@ def _require_pre_enrollment_main_ancestor(current_main: str, parent2: str) -> No
                     "protected-main raw history exceeds its byte bound"
                 )
             raw = bootstrap_source_admission._git(
-                CENTRAL_REGISTRY_ROOT, ["cat-file", "commit", cursor]
+                root, ["cat-file", "commit", cursor]
             ).stdout
             header = b"commit " + str(len(raw)).encode("ascii") + b"\0"
             actual = (
@@ -6529,28 +6530,6 @@ def _require_pre_enrollment_main_ancestor(current_main: str, parent2: str) -> No
             )
         cursor = parents[0]
     raise SecurityBlocker("protected-main raw history depth/count bound exhausted")
-
-
-def _verify_pre_enrollment_validation_unsealed(
-    provenance: dict[str, Any],
-) -> VerifiedValidationEvidence:
-    """Replay in a fresh accepted-main interpreter; caller modules are not authority."""
-    from . import bootstrap_source_admission
-
-    binding = bootstrap_source_admission._run_bootstrap_validation_isolated(provenance)
-    fields = {
-        "repository",
-        "delivery_issue_number",
-        "pull_request_number",
-        "head_sha",
-        "tree_sha",
-        "validation_receipt_digest",
-        "final_attestation_digest",
-        "source_validation_evidence_digest",
-    }
-    if not isinstance(binding, dict) or set(binding) != fields:
-        raise SecurityBlocker("isolated bootstrap validation result is malformed")
-    return _unregistered_validation_evidence(**binding)
 
 
 def _authenticate_pre_enrollment_commit(
@@ -6656,7 +6635,7 @@ def _authenticate_pre_enrollment_commit(
             raise SecurityBlocker("pre-enrollment commit fingerprint is not maintained")
     else:
         raise SecurityBlocker("pre-enrollment commit signature is unsupported")
-    return pre_enrollment_integration._seal_verified_candidate_commit(
+    candidate = pre_enrollment_integration._seal_verified_candidate_commit(
         {
             "head_sha": head_sha,
             "tree_sha": tree,
@@ -6666,209 +6645,223 @@ def _authenticate_pre_enrollment_commit(
         }
     )
 
+    return candidate, {"oid": head_sha, "source": "USER", "signer_identity": expected_signer, "local_signature": local, "github_verification": observed["verification"]}
+
+
+PRE_ENROLLMENT_ADOPTION_PURPOSE = "PRE_ENROLLMENT_ADOPTION_AUTHENTICATION"
+_PRE_ENROLLMENT_DIAGNOSTICS = frozenset({
+    "RESOURCE_CONTRACT_REJECTED", "INPUT_SCHEMA_REJECTED", "SOURCE_HISTORY_REJECTED",
+    "EVIDENCE_TIME_POLICY_REJECTED", "AUTHORIZATION_REJECTED", "COMMIT_SIGNATURE_REJECTED",
+    "ARTIFACT_BINDING_REJECTED", "TREE_REPLAY_REJECTED", "ADOPTION_COMPOSITION_REJECTED",
+    "RESULT_CONTRACT_REJECTED", "HISTORICAL_EVIDENCE_UNAVAILABLE",
+})
+
+
+class _PreEnrollmentBridgeRejected(SecurityBlocker):
+    def __init__(self, diagnostic: str) -> None:
+        if diagnostic not in _PRE_ENROLLMENT_DIAGNOSTICS:
+            diagnostic = "RESULT_CONTRACT_REJECTED"
+        self.diagnostic = diagnostic
+        super().__init__(diagnostic)
+
 
 def _replay_pre_enrollment_validation_unsealed(
-    provenance: dict[str, Any],
-) -> VerifiedValidationEvidence:
-    """Replay immutable bootstrap evidence under current accepted-main authority.
+    provenance: dict[str, Any], *, artifact_directory: Path | None = None,
+    adoption: dict[str, Any] | None = None,
+) -> Any:
+    """Execute only within an independently source-admitted interpreter.
 
-    Parent 2 selects the evidence-time registry only after first-parent history
-    authentication. Current protected main selects all executing verifier bytes
-    and trust credentials. Neither authority is a caller-selected policy.
+    This code authenticates data, not itself. It never launches a fetched Python
+    package or accepts a runner's success binding. No capability leaves the
+    public admitted entrypoint; internal validation and adoption stay together.
     """
-    from . import (
-        bootstrap_source_admission,
-        lifecycle_authority,
-        pre_enrollment_integration,
-    )
+    from . import bootstrap_source_admission, lifecycle_authority, pre_enrollment_integration
 
-    fields = {
-        "schema_version",
-        "kind",
-        "repository",
-        "delivery_issue_number",
-        "pull_request_number",
-        "head_sha",
-        "repository_root",
-        "integration_evidence",
-        "validation_receipt",
-        "final_attestation",
-    }
-    if (
-        set(provenance) != fields
-        or provenance["schema_version"] != "1.0"
-        or provenance["kind"] != pre_enrollment_integration.KIND
-    ):
-        raise SecurityBlocker("pre-enrollment validation provenance is unsupported")
-    repository = provenance["repository"]
-    # The maintained pre-enrollment executor is currently registered only here.
-    # Cross-repository policy selection must not infer a central evidence epoch.
-    if repository != CENTRAL_REGISTRY_REPOSITORY:
-        raise SecurityBlocker("pre-enrollment validation repository is not registered")
-    if any(
-        not isinstance(provenance[key], dict)
-        for key in ("integration_evidence", "validation_receipt", "final_attestation")
-    ):
-        raise SecurityBlocker(
-            "pre-enrollment validation requires raw canonical artifacts"
-        )
-    head = _require_oid(provenance["head_sha"], "pre-enrollment candidate head")
-    root = Path(provenance["repository_root"]).resolve(strict=True)
-    helper = bootstrap_source_admission._load_actions_helper()
+    stage = "INPUT_SCHEMA_REJECTED"
     try:
-        current_main = helper._require_accepted_main_bridge_source(
-            CENTRAL_REGISTRY_REPOSITORY
-        )
-        helper._require_distinct_candidate_repository_root(root)
-        raw = provenance["integration_evidence"]
-        if not isinstance(raw, dict) or not isinstance(raw.get("current_main"), dict):
-            raise SecurityBlocker("pre-enrollment integration evidence is missing")
-        parent2 = _require_oid(raw["current_main"].get("sha"), "evidence-time main")
-        _require_pre_enrollment_main_ancestor(current_main, parent2)
-        _, registry_raw = _central_git_result(
-            ["show", f"{parent2}:{DELIVERY_REGISTRY_PATH}"]
-        )
-        _, schema_raw = _central_git_result(
-            ["show", f"{parent2}:{DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH}"]
-        )
-        registry = _validated_historical_registry_binding(
-            registry_raw=registry_raw,
-            schema_raw=schema_raw,
-            repository=repository,
-        )
-        if (
-            registry.get("pre_enrollment_integration_policy", {}).get("topology_kind")
-            != pre_enrollment_integration.KIND
-        ):
-            raise SecurityBlocker(
-                "evidence-time policy did not support pre-enrollment integration"
-            )
-        normalized = pre_enrollment_integration.normalize_evidence(
-            raw, registry=registry
-        )
-        if (
-            normalized["delivery_issue"] != provenance["delivery_issue_number"]
-            or normalized["pull_request"] != provenance["pull_request_number"]
-            or isinstance(provenance["delivery_issue_number"], bool)
-            or isinstance(provenance["pull_request_number"], bool)
-        ):
-            raise SecurityBlocker(
-                "pre-enrollment validation does not bind the delivery"
-            )
-        trust = lifecycle_authority._load_lifecycle_trust_policy(repository)
-        pre_enrollment_integration.verify_authorization(
-            normalized["authorization"],
-            accepted_signers=trust.transition_signer_identities,
-            verifier=lambda payload, signature, signer, domain: (
-                lifecycle_authority._verify_signature(
-                    payload,
-                    signature,
-                    signer,
-                    domain,
-                    trust.transition_signer_identities,
-                    lifecycle_authority._policy_signature_verifier(trust),
-                )
-                is not None
-            ),
-        )
-        with bootstrap_source_admission._isolated_bootstrap_validation_repository(
-            head
-        ) as objects:
-            candidate = _authenticate_pre_enrollment_commit(
-                helper=helper,
-                repository_root=objects,
-                repository=repository,
-                head_sha=head,
-                expected_signer=normalized["expected_signer"],
-                trust=trust,
-                signature_policy=lifecycle_authority._load_delivery_signature_policy(
-                    repository
-                ),
-            )
-            trailers = {
-                key: helper._commit_trailer_digest(objects, head, key)
-                for key in (
-                    "SecPal-Pre-Enrollment-Integration",
-                    "SecPal-Pre-Enrollment-Validation-Receipt",
-                )
+        fields = {"schema_version", "kind", "repository", "delivery_issue_number",
+                  "pull_request_number", "head_sha", "integration_evidence",
+                  "validation_receipt", "final_attestation"}
+        if (not isinstance(provenance, dict) or set(provenance) != fields
+                or provenance["schema_version"] != "1.0"
+                or provenance["kind"] != pre_enrollment_integration.KIND
+                or provenance["repository"] != CENTRAL_REGISTRY_REPOSITORY):
+            raise SecurityBlocker("invalid bridge input")
+        repository = provenance["repository"]
+        issue = pre_enrollment_integration._positive(provenance["delivery_issue_number"], "issue")
+        pr = pre_enrollment_integration._positive(provenance["pull_request_number"], "PR")
+        head = _require_oid(provenance["head_sha"], "bootstrap head")
+        helper = bootstrap_source_admission._load_actions_helper()
+        stage = "SOURCE_HISTORY_REJECTED"
+        main = helper._observe_accepted_main_bridge_identity(repository)
+        with bootstrap_source_admission._isolated_bootstrap_validation_repository(main) as policy_objects:
+            # This fresh repository contains objects only. No checkout, module
+            # import, candidate Git configuration, or caller ancestry assertion.
+            _require_pre_enrollment_main_ancestor(main, main, repository_root=policy_objects)
+            stage = "EVIDENCE_TIME_POLICY_REJECTED"
+            def read_policy(commit: str) -> tuple[str, dict[str, Any]]:
+                raw = bootstrap_source_admission._git(policy_objects, ["show", f"{commit}:{DELIVERY_REGISTRY_PATH}"]).stdout.decode("utf-8")
+                schema = bootstrap_source_admission._git(policy_objects, ["show", f"{commit}:{DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH}"]).stdout.decode("utf-8")
+                return raw, _validated_historical_registry_binding(registry_raw=raw, schema_raw=schema, repository=repository)
+            current_raw, current_binding = read_policy(main)
+            current_policy = current_binding.get("pre_enrollment_integration_policy", {})
+            historical = pre_enrollment_integration._historical_source(current_policy, repository=repository,
+                delivery_issue=issue, pull_request=pr, head_sha=head)
+            trust = lifecycle_authority._parse_lifecycle_trust_policy(current_raw, repository)
+            stage = "INPUT_SCHEMA_REJECTED"
+            if artifact_directory is not None:
+                artifacts = pre_enrollment_integration._read_bridge_artifacts(artifact_directory, historical)
+                provenance = {**provenance, "integration_evidence": artifacts["integration"],
+                              "validation_receipt": artifacts["receipt"], "final_attestation": artifacts["attestation"]}
+            else:
+                artifacts = {"integration": provenance["integration_evidence"],
+                             "receipt": provenance["validation_receipt"], "attestation": provenance["final_attestation"]}
+                if historical is None:
+                    for kind, value in artifacts.items():
+                        pre_enrollment_integration.loads_artifact(canonical_json_bytes(value), kind)
+                else:
+                    if historical["artifact_sizes"] is None:
+                        raise pre_enrollment_integration.PreEnrollmentIntegrationError("HISTORICAL_EVIDENCE_UNAVAILABLE")
+                    for kind, value in artifacts.items():
+                        if (not isinstance(value, dict) or value.get("schema_version") != "1.0"
+                                or len(canonical_json_bytes(value)) != historical["artifact_sizes"][kind]["canonical_bytes"]):
+                            raise SecurityBlocker("historical artifact shape changed")
+                    pre_enrollment_integration._require_historical_artifacts(artifacts, historical)
+            raw = pre_enrollment_integration._closed(artifacts["integration"], pre_enrollment_integration.EVIDENCE_FIELDS, "integration")
+            stage = "SOURCE_HISTORY_REJECTED"
+            parent2 = _require_oid(raw["current_main"]["sha"], "evidence-time parent")
+            _require_pre_enrollment_main_ancestor(main, parent2, repository_root=policy_objects)
+            stage = "EVIDENCE_TIME_POLICY_REJECTED"
+            _, registry = read_policy(parent2)
+            if registry.get("pre_enrollment_integration_policy", {}).get("topology_kind") != pre_enrollment_integration.KIND:
+                raise SecurityBlocker("unregistered evidence epoch")
+            if raw["validation_execution"] != {"registry_digest": digest_json(registry), "command_set_digest": digest_json(registry["validation"])}:
+                raise SecurityBlocker("evidence-time command set changed")
+            stage = "INPUT_SCHEMA_REJECTED"
+            legacy = historical is not None
+            normalized = pre_enrollment_integration._normalize_evidence(raw, registry=registry, legacy=legacy)
+            stage = "ARTIFACT_BINDING_REJECTED"
+            if (normalized["delivery_issue"], normalized["pull_request"]) != (issue, pr):
+                raise SecurityBlocker("delivery identity changed")
+            stage = "AUTHORIZATION_REJECTED"
+            pre_enrollment_integration._verify_authorization(normalized["authorization"], legacy=legacy,
+                accepted_signers=trust.transition_signer_identities,
+                verifier=lambda payload, signature, signer, domain: lifecycle_authority._verify_signature(
+                    payload, signature, signer, domain, trust.transition_signer_identities,
+                    lifecycle_authority._policy_signature_verifier(trust)) is not None)
+            stage = "COMMIT_SIGNATURE_REJECTED"
+            with bootstrap_source_admission._isolated_bootstrap_validation_repository(head) as objects:
+                candidate, commit_signature = _authenticate_pre_enrollment_commit(
+                    helper=helper, repository_root=objects, repository=repository,
+                    head_sha=head, expected_signer=normalized["expected_signer"],
+                    trust=trust, signature_policy=current_binding["signature_policy"])
+                stage = "ARTIFACT_BINDING_REJECTED"
+                trailers = {key: helper._commit_trailer_digest(objects, head, key) for key in (
+                    "SecPal-Pre-Enrollment-Integration", "SecPal-Pre-Enrollment-Validation-Receipt")}
+                proof = pre_enrollment_integration._verify_final_attestation(evidence=normalized, registry=registry,
+                    receipt=artifacts["receipt"], attestation=artifacts["attestation"],
+                    commit_trailers=trailers, verified_candidate=candidate, legacy=legacy)
+                stage = "TREE_REPLAY_REJECTED"
+                helper._verify_integration_tree_delta(objects, normalized, candidate.tree_sha)
+            source_binding = {
+                "schema_version": "1.0", "kind": pre_enrollment_integration.KIND, "repository": repository,
+                "delivery_issue_number": issue, "pull_request_number": pr,
+                "head_sha": head, "tree_sha": candidate.tree_sha,
+                "ordered_parent_shas": list(candidate.parent_shas),
+                "integration_evidence_digest": proof.integration_evidence_digest,
+                "validation_receipt_digest": proof.validation_receipt_digest,
+                "final_attestation_digest": proof.final_attestation_digest,
             }
-            proof = pre_enrollment_integration.verify_final_attestation(
-                evidence=normalized,
-                registry=registry,
-                receipt=provenance["validation_receipt"],
-                attestation=provenance["final_attestation"],
-                commit_trailers=trailers,
-                verified_candidate=candidate,
-            )
-            helper._verify_integration_tree_delta(
-                objects, normalized, candidate.tree_sha
-            )
-        helper._require_accepted_main_bridge_source(
-            CENTRAL_REGISTRY_REPOSITORY, expected_main=current_main
-        )
-        # Source-validation identity is a typed binding of the complete verified
-        # source. The integration digest alone is not that identity.
-        source_binding = {
-            "schema_version": "1.0",
-            "kind": pre_enrollment_integration.KIND,
-            "repository": repository,
-            "delivery_issue_number": proof.delivery_issue,
-            "pull_request_number": proof.pull_request,
-            "head_sha": proof.initial_head_sha,
-            "tree_sha": candidate.tree_sha,
-            "ordered_parent_shas": list(candidate.parent_shas),
-            "integration_evidence_digest": proof.integration_evidence_digest,
-            "validation_receipt_digest": proof.validation_receipt_digest,
-            "final_attestation_digest": proof.final_attestation_digest,
-        }
-        return _unregistered_validation_evidence(
-            repository=repository,
-            delivery_issue_number=proof.delivery_issue,
-            pull_request_number=proof.pull_request,
-            head_sha=proof.initial_head_sha,
-            tree_sha=candidate.tree_sha,
-            validation_receipt_digest=proof.validation_receipt_digest,
-            final_attestation_digest=proof.final_attestation_digest,
-            source_validation_evidence_digest=digest_json(source_binding),
-        )
-    except (
-        helper.fast_path.SecurityBlocker,
-        helper.fast_path.RecoverableLocalError,
-    ) as exc:
-        # The actions loader may instantiate its own canonical fast-path module;
-        # normalize its boundary errors before predicate replay handles them.
-        raise SecurityBlocker(str(exc)) from exc
+            validation = _unregistered_validation_evidence(repository=repository,
+                delivery_issue_number=issue, pull_request_number=pr, head_sha=head,
+                tree_sha=candidate.tree_sha, validation_receipt_digest=proof.validation_receipt_digest,
+                final_attestation_digest=proof.final_attestation_digest,
+                source_validation_evidence_digest=digest_json(source_binding))
+            if adoption is not None:
+                stage = "ADOPTION_COMPOSITION_REJECTED"
+                sealed = _seal_validation_evidence(validation, provenance)
+                # Current policy was independently read from authenticated main.
+                # The existing public verifier continues to select installed
+                # policy; this private composition shares its exact semantics.
+                external = lifecycle_authority._authenticate_exact_state_adoption_external_evidence(
+                    repository=repository, delivery_issue=issue, pull_request=pr,
+                    head_sha=head, tree_sha=candidate.tree_sha,
+                    pull_request_state=adoption["pull_request_state"],
+                    commit_signature_evidence=commit_signature, validation_evidence=sealed,
+                    observed_pre_enrollment_history=adoption["observed_pre_enrollment_history"],
+                    intended_state=adoption["intended_state"],
+                    review_budget_consumption_admission=adoption["review_budget_consumption_admission"],
+                    signature_policy=current_binding["signature_policy"],
+                    review_budget_verifier=lambda *args, **kwargs: lifecycle_authority._verify_pre_enrollment_review_budget_consumption_admission(
+                        *args, **kwargs, policy=trust))
+                # Deliberately not an evidence/proof family or Python capability.
+                result = {"status": "AUTHENTICATED_READ_ONLY", **_validation_evidence_binding(validation),
+                          "observed_history_digest": digest_json(list(external.observed_pre_enrollment_history)),
+                          "intended_state_digest": digest_json(external.intended_state)}
+            else:
+                result = validation
+            stage = "SOURCE_HISTORY_REJECTED"
+            helper._observe_accepted_main_bridge_identity(repository, expected_main=main)
+            return result
+    except _PreEnrollmentBridgeRejected:
+        raise
+    except Exception as exc:
+        diagnostic = stage
+        if isinstance(exc, pre_enrollment_integration.PreEnrollmentIntegrationError) and str(exc) in _PRE_ENROLLMENT_DIAGNOSTICS:
+            diagnostic = str(exc)
+        if isinstance(exc, MemoryError):
+            diagnostic = "RESOURCE_CONTRACT_REJECTED"
+        raise _PreEnrollmentBridgeRejected(diagnostic) from exc
 
 
-def verify_pre_enrollment_validation_evidence(
-    *,
-    repository: str,
-    delivery_issue_number: int,
-    pull_request_number: int,
-    head_sha: str,
-    repository_root: Path | str,
-    integration_evidence: dict[str, Any],
-    validation_receipt: dict[str, Any],
-    final_attestation: dict[str, Any],
-) -> VerifiedValidationEvidence:
-    """Compose full bootstrap provenance, never an opaque initial-head proof."""
+def authenticate_pre_enrollment_adoption(control: bytes, artifact_directory: Path | str) -> dict[str, Any]:
+    """Read-only entrypoint for FUTURE independently accepted Source Admission.
+
+    This implementation cannot authenticate itself. The outer executor must
+    authenticate its exact source closure, interpreter and isolation first.
+    Returned summaries are NOT validation evidence, adoption proof or authority.
+    """
     from . import pre_enrollment_integration
 
-    provenance = {
-        "schema_version": "1.0",
-        "kind": pre_enrollment_integration.KIND,
-        "repository": repository,
-        "delivery_issue_number": delivery_issue_number,
-        "pull_request_number": pull_request_number,
-        "head_sha": head_sha,
-        "repository_root": str(Path(repository_root).resolve(strict=True)),
-        "integration_evidence": copy.deepcopy(integration_evidence),
-        "validation_receipt": copy.deepcopy(validation_receipt),
-        "final_attestation": copy.deepcopy(final_attestation),
-    }
-    return _seal_validation_evidence(
-        _verify_pre_enrollment_validation_unsealed(provenance), provenance
-    )
+    try:
+        if not isinstance(control, bytes) or len(control) > 65536:
+            raise _PreEnrollmentBridgeRejected("RESOURCE_CONTRACT_REJECTED")
+        pre_enrollment_integration._check_json_depth(control, 8)
+        value = pre_enrollment_integration.loads_closed_json(control)
+        expected = {"repository", "delivery_issue_number", "pull_request_number", "head_sha",
+                    "pull_request_state", "observed_pre_enrollment_history", "intended_state",
+                    "review_budget_consumption_admission"}
+        if not isinstance(value, dict) or set(value) != expected or canonical_json_bytes(value) != control:
+            raise _PreEnrollmentBridgeRejected("INPUT_SCHEMA_REJECTED")
+        provenance = {"schema_version": "1.0", "kind": pre_enrollment_integration.KIND,
+            **{key: value[key] for key in ("repository", "delivery_issue_number", "pull_request_number", "head_sha")},
+            "integration_evidence": None, "validation_receipt": None, "final_attestation": None}
+        result = _replay_pre_enrollment_validation_unsealed(provenance,
+            artifact_directory=Path(artifact_directory), adoption=value)
+        result_fields = {"status", "repository", "delivery_issue_number", "pull_request_number",
+                         "head_sha", "tree_sha", "validation_receipt_digest", "final_attestation_digest",
+                         "source_validation_evidence_digest", "observed_history_digest", "intended_state_digest"}
+        if (not isinstance(result, dict) or set(result) != result_fields
+                or result["status"] != "AUTHENTICATED_READ_ONLY"
+                or any(result[key] != value[key] for key in ("repository", "delivery_issue_number", "pull_request_number", "head_sha"))):
+            raise _PreEnrollmentBridgeRejected("RESULT_CONTRACT_REJECTED")
+        try:
+            _require_oid(result["tree_sha"], "summary tree")
+            for key in result_fields:
+                if key.endswith("_digest"):
+                    _require_digest(result[key], "summary digest")
+            if len(canonical_json_bytes(result)) > 65536:
+                raise SecurityBlocker("summary limit")
+        except (SecurityBlocker, ValueError, TypeError):
+            raise _PreEnrollmentBridgeRejected("RESULT_CONTRACT_REJECTED") from None
+        return result
+    except _PreEnrollmentBridgeRejected as exc:
+        return {"status": "REJECTED", "diagnostic_identity": exc.diagnostic}
+    except pre_enrollment_integration.PreEnrollmentIntegrationError as exc:
+        diagnostic = "RESOURCE_CONTRACT_REJECTED" if str(exc) == "RESOURCE_CONTRACT_REJECTED" else "INPUT_SCHEMA_REJECTED"
+        return {"status": "REJECTED", "diagnostic_identity": diagnostic}
+    except Exception:
+        return {"status": "REJECTED", "diagnostic_identity": "INPUT_SCHEMA_REJECTED"}
 
 
 def is_verified_validation_evidence(value: Any) -> bool:
@@ -6930,7 +6923,7 @@ def is_verified_validation_evidence(value: Any) -> bool:
                 signature_policy=provenance["signature_policy"],
             )
         elif kind == "PRE_ENROLLMENT_DRAFT_INTEGRATION":
-            verified = _verify_pre_enrollment_validation_unsealed(provenance)
+            verified = _replay_pre_enrollment_validation_unsealed(provenance)
         elif kind == "QUALIFIED_REMEDIATION_SUCCESSOR_LOSS":
             verified = qualified_remediation_successor_loss_validation_evidence(
                 provenance["admission"], provenance["safety_facts"]

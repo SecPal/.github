@@ -277,7 +277,7 @@ def registry() -> dict[str, object]:
         },
         "validation": [{"argv": ["./scripts/preflight.sh"]}],
         "pre_enrollment_integration_policy": {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "command": "integrate-pre-enrollment-draft",
             "topology_kind": integration.KIND,
             "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
@@ -286,6 +286,7 @@ def registry() -> dict[str, object]:
             "force_push": False,
             "automatic_retry": False,
             "merge_pull_request": False,
+            "historical_sources": [],
         },
     }
 
@@ -357,6 +358,185 @@ def evidence(*, conflict_path: str | None = None) -> dict[str, object]:
         "expected_signer": SIGNER,
     }
     return item
+
+
+class FinitePreEnrollmentContractTests(TestCase):
+    def test_historical_inventory_is_exact_and_has_no_guessed_sizes(self) -> None:
+        document = json.loads((ROOT / fast_path.DELIVERY_REGISTRY_PATH).read_text())
+        policy = next(row for row in document["repositories"] if row["repository"] == "SecPal/.github")["pre_enrollment_integration_policy"]
+        self.assertEqual(policy["schema_version"], "1.1")
+        self.assertEqual({row["pull_request"] for row in policy["historical_sources"]}, {773, 779, 848, 1007})
+        for row in policy["historical_sources"]:
+            arguments = dict(repository=row["repository"], delivery_issue=row["delivery_issue"], pull_request=row["pull_request"], head_sha=row["head_sha"])
+            self.assertEqual(integration._historical_source(policy, **arguments), row)
+            with self.assertRaises(integration.PreEnrollmentIntegrationError):
+                integration._historical_source(policy, **(arguments | {"pull_request": row["pull_request"] + 1}))
+            self.assertIsNone(integration._historical_source(policy, **(arguments | {"head_sha": "f" * 40})))
+            if row["pull_request"] != 773:
+                self.assertIsNone(row["artifact_sizes"])
+
+    def test_current_issuance_has_immutable_finite_version(self) -> None:
+        self.assertEqual(integration.SCHEMA_VERSION, "1.1")
+        for domain in (
+            integration.DOMAIN, integration.AUTHORIZATION_DOMAIN,
+            integration.RECEIPT_DOMAIN, integration.ATTESTATION_DOMAIN,
+        ):
+            self.assertTrue(domain.endswith("/v1.1"))
+
+    def test_identifiers_signature_and_numbers_reject_before_copy(self) -> None:
+        self.assertEqual(integration._identity("a" * 255, "id"), "a" * 255)
+        for value in ("a" * 256, "é" * 128):
+            with self.assertRaises(integration.PreEnrollmentIntegrationError):
+                integration._identity(value, "id")
+        self.assertEqual(integration._positive(2147483647, "issue"), 2147483647)
+        with self.assertRaises(integration.PreEnrollmentIntegrationError):
+            integration._positive(2147483648, "issue")
+        signature = {"format": "ssh", "signer_identity": SIGNER, "value": "a" * 16384}
+        integration._signature(signature, SIGNER)
+        signature["value"] += "a"
+        with mock.patch.object(integration.copy, "deepcopy", side_effect=AssertionError("copied oversized input")):
+            with self.assertRaises(integration.PreEnrollmentIntegrationError):
+                integration._signature(signature, SIGNER)
+
+    def test_paths_counts_and_utf8_are_bounded_before_normalization(self) -> None:
+        paths = [f"{i:02}" + "a" * 1022 for i in range(32)]
+        self.assertEqual(integration._paths(paths), paths)
+        integration._paths(["é" * 512])
+        for value in (["é" * 512 + "a"], ["a" * 1025], paths + [object()]):
+            with self.assertRaises(integration.PreEnrollmentIntegrationError):
+                integration._paths(value)
+
+    def test_raw_artifact_limits_are_shared_and_early(self) -> None:
+        limits = {"authorization": 99948, "integration": 240076,
+                  "receipt": 1141, "attestation": 140731}
+        self.assertEqual(integration.ARTIFACT_BYTE_LIMITS, limits)
+        self.assertEqual(sum(limits[k] for k in ("integration", "receipt", "attestation")), 381948)
+        for kind, limit in limits.items():
+            with mock.patch.object(integration.json, "loads", side_effect=AssertionError("decoded oversized input")):
+                with self.assertRaisesRegex(integration.PreEnrollmentIntegrationError, "^RESOURCE_CONTRACT_REJECTED$"):
+                    integration.loads_artifact(b" " * (limit + 1), kind)
+
+    def test_exact_raw_envelopes_and_file_limits(self) -> None:
+        for kind, limit in integration.ARTIFACT_BYTE_LIMITS.items():
+            # Test the raw byte gate separately from signature/schema semantics.
+            value = {"schema_version": "1.1", "padding": ""}
+            value["padding"] = "a" * (limit - len(fast_path.canonical_json_bytes(value)))
+            raw = fast_path.canonical_json_bytes(value)
+            self.assertEqual(len(raw), limit)
+            self.assertEqual(integration.loads_artifact(raw, kind), value)
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "artifact"
+                path.write_bytes(raw)
+                self.assertEqual(integration._read_artifact_file(path, limit), raw)
+                path.write_bytes(raw + b" ")
+                with self.assertRaisesRegex(integration.PreEnrollmentIntegrationError, "RESOURCE_CONTRACT_REJECTED"):
+                    integration._read_artifact_file(path, limit)
+            with self.assertRaisesRegex(integration.PreEnrollmentIntegrationError, "RESOURCE_CONTRACT_REJECTED"):
+                integration.loads_artifact(raw + b" ", kind)
+
+    def test_file_symlinks_nonregular_files_and_depth_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target"
+            target.write_bytes(b"{}")
+            path = root / "artifact"
+            path.symlink_to(target)
+            with self.assertRaises(OSError):
+                integration._read_artifact_file(path, 10)
+            path.unlink()
+            os.mkfifo(path)
+            with self.assertRaises(integration.PreEnrollmentIntegrationError):
+                integration._read_artifact_file(path, 10)
+        with self.assertRaisesRegex(integration.PreEnrollmentIntegrationError, "RESOURCE_CONTRACT_REJECTED"):
+            integration.loads_artifact(b"[" * 1000, "integration")
+
+    def test_full_conflict_cardinality_and_resolution_count(self) -> None:
+        value = evidence(conflict_path="a")
+        template = value["manual_conflict_resolution_delta"][0]
+        paths = [f"{i:02}" + "a" * 1022 for i in range(32)]
+        value["mechanical_conflict_paths"] = paths
+        value["manual_conflict_resolution_delta"] = [{**template, "path": path} for path in paths]
+        self.assertEqual(len(integration.normalize_evidence(value, registry=registry())["mechanical_conflict_paths"]), 32)
+        value["manual_conflict_resolution_delta"].pop()
+        with self.assertRaises(integration.PreEnrollmentIntegrationError):
+            integration.normalize_evidence(value, registry=registry())
+        value["mechanical_conflict_paths"].append(object())
+        with mock.patch.object(integration, "_delta", side_effect=AssertionError("normalized excess list")):
+            with self.assertRaisesRegex(integration.PreEnrollmentIntegrationError, "RESOURCE_CONTRACT_REJECTED"):
+                integration.normalize_evidence(value, registry=registry())
+
+    def test_legacy_shape_does_not_select_historical_authority(self) -> None:
+        identity = "x" * 1048576
+        self.assertEqual(integration._identity(identity, "legacy", legacy=True), identity)
+        with self.assertRaises(integration.PreEnrollmentIntegrationError):
+            integration._identity(identity, "current")
+        self.assertIsNone(integration._historical_source({"historical_sources": []}, repository="SecPal/.github", delivery_issue=776, pull_request=800, head_sha=CANDIDATE))
+
+    def test_historical_source_executor_cannot_issue_after_finite_cutover(self) -> None:
+        raw = (ROOT / fast_path.DELIVERY_REGISTRY_PATH).read_bytes()
+        with mock.patch.object(bootstrap_source_admission, "_normalize_protected_main", return_value=SimpleNamespace(head_sha=PARENT_2)), mock.patch.object(bootstrap_source_admission, "_observe_protected_main"), mock.patch.object(bootstrap_source_admission, "_read_protected_main_registry", return_value=raw):
+            with self.assertRaisesRegex(bootstrap_source_admission.BootstrapSourceAdmissionError, "historical.*read-only"):
+                bootstrap_source_admission._require_legacy_pre_enrollment_issuance()
+
+    def test_immutable_legacy_receipt_and_attestation_semantics(self) -> None:
+        value = evidence()
+        value["schema_version"] = "1.0"
+        value["domain"] = integration._domain(integration.DOMAIN, True)
+        authorization = value["authorization"]
+        authorization["schema_version"] = "1.0"
+        authorization["domain"] = integration._domain(integration.AUTHORIZATION_DOMAIN, True)
+        authorization["authorization_digest"] = fast_path.digest_json({k: v for k, v in authorization.items() if k != "authorization_digest"})
+        value["authorization_digest"] = authorization["authorization_digest"]
+        receipt = integration._reconstruct_receipt(evidence=value, registry=registry(), successful_result=True, receipt_id="old", legacy=True)
+        attestation = integration._reconstruct_attestation(evidence=value, registry=registry(), receipt=receipt, candidate_head_sha=CANDIDATE, candidate_parent_shas=[PARENT_1, PARENT_2], candidate_tree_sha=TREE, verified_signer=SIGNER, signature_format="ssh", attestation_id="a" * 1048576, legacy=True)
+        proof = integration._verify_final_attestation(evidence=value, registry=registry(), receipt=receipt, attestation=attestation, verified_candidate=verified_candidate(), commit_trailers={"SecPal-Pre-Enrollment-Integration": fast_path.digest_json(value), "SecPal-Pre-Enrollment-Validation-Receipt": receipt["receipt_digest"]}, legacy=True)
+        self.assertEqual(proof.final_attestation_digest, attestation["attestation_digest"])
+        self.assertGreater(len(fast_path.canonical_json_bytes(attestation)), 1048576)
+        # Pure legacy reconstruction is not admission or new issuance.
+        with self.assertRaises(integration.PreEnrollmentIntegrationError):
+            integration.create_validation_receipt(evidence=value, registry=registry(), successful_result=True, receipt_id="new")
+        with self.assertRaises(integration.PreEnrollmentIntegrationError):
+            integration.loads_artifact(fast_path.canonical_json_bytes(attestation), "attestation")
+        self.assertFalse(fast_path.is_verified_validation_evidence(proof))
+
+    def test_closed_schema_envelopes_derive_all_four_ceilings(self) -> None:
+        value = evidence(conflict_path="a")
+        receipt = integration.create_validation_receipt(evidence=value, registry=registry(), successful_result=True, receipt_id="r")
+        attestation = integration.create_final_attestation(evidence=value, registry=registry(), receipt=receipt, candidate_head_sha=CANDIDATE, candidate_parent_shas=[PARENT_1, PARENT_2], candidate_tree_sha=TREE, verified_signer=SIGNER, signature_format="ssh", attestation_id="a")
+        def envelope(item, key=""):
+            if isinstance(item, dict):
+                result = {k: envelope(v, k) for k, v in item.items()}
+                for field in ("mechanical_conflict_paths", "conflict_paths"):
+                    if field in result:
+                        result[field] = ['"' * 1024] * 32
+                for field in ("manual_conflict_resolution_delta", "conflict_resolution_delta"):
+                    if field in result:
+                        result[field] = [dict(path='"' * 1024, status="M", old_mode="100644", new_mode="100644", old_oid="f" * 64, new_oid="f" * 64)] * 32
+                return result
+            if isinstance(item, list):
+                return [envelope(v, key) for v in item]
+            if key in {"authorization_id", "expected_signer", "signer_identity", "receipt_id", "attestation_id"}:
+                return "a" * 255
+            if key == "value":
+                return "\x00" * 16384
+            if key == "format":
+                return "openpgp"
+            if type(item) is int:
+                return 2147483647
+            if isinstance(item, str) and len(item) in (40, 64) and set(item) <= set("0123456789abcdef"):
+                return "f" * 64
+            return item
+        artifacts = {"authorization": value["authorization"], "integration": value, "receipt": receipt, "attestation": attestation}
+        actual = {kind: len(fast_path.canonical_json_bytes(envelope(item))) for kind, item in artifacts.items()}
+        self.assertEqual(actual, integration.ARTIFACT_BYTE_LIMITS)
+        self.assertEqual(sum(actual[k] for k in integration.ARTIFACT_FILES), integration.BRIDGE_ARTIFACT_BYTES)
+
+    def test_current_issuance_cannot_select_legacy_version(self) -> None:
+        value = evidence()
+        value["schema_version"] = "1.0"
+        value["domain"] = "secpal.pre-enrollment-draft-integration/v1"
+        with self.assertRaises(integration.PreEnrollmentIntegrationError):
+            integration.create_validation_receipt(evidence=value, registry=registry(), successful_result=True, receipt_id="new")
 
 
 class PreEnrollmentIntegrationContractTests(TestCase):
@@ -792,6 +972,10 @@ class BootstrapAdoptionBridgeTests(TestCase):
             check=True,
         )
         cls.public = " ".join(cls.key.with_suffix(".pub").read_text().split()[:2])
+        cls.authorization_key = cls.root / "authorization-key"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(cls.authorization_key)], check=True)
+        cls.authorization_public = " ".join(cls.authorization_key.with_suffix(".pub").read_text().split()[:2])
+
         cls.git("init", "-q")
         for key, value in (
             ("user.name", "Fixture"),
@@ -812,11 +996,12 @@ class BootstrapAdoptionBridgeTests(TestCase):
             policy["signers"].append(
                 {
                     "identity": identity,
-                    "ssh_public_keys": [cls.public],
+                    "ssh_public_keys": [cls.authorization_public if identity == AUTHORIZER else cls.public],
                     "openpgp_fingerprints": [],
                 }
             )
         policy["transition_signer_identities"].append(AUTHORIZER)
+        policy["legacy_adoption_signer_identities"].append(SIGNER)
         cls.registry_raw = json.dumps(document)
         cls.schema_raw = (
             ROOT / fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH
@@ -859,7 +1044,7 @@ class BootstrapAdoptionBridgeTests(TestCase):
             authority_signer_identities=frozenset({AUTHORIZER}),
             legacy_adoption_signer_identities=frozenset({SIGNER}),
             signers={
-                identity: lifecycle_authority.TrustedSigner(identity, (cls.public,), ())
+                identity: lifecycle_authority.TrustedSigner(identity, (cls.authorization_public if identity == AUTHORIZER else cls.public,), ())
                 for identity in (SIGNER, AUTHORIZER)
             },
             initialization_anchors=(),
@@ -934,7 +1119,7 @@ class BootstrapAdoptionBridgeTests(TestCase):
         cls, payload: bytes, domain: str, identity: str = AUTHORIZER
     ) -> dict[str, str]:
         result = subprocess.run(
-            ["ssh-keygen", "-Y", "sign", "-f", str(cls.key), "-n", domain],
+            ["ssh-keygen", "-Y", "sign", "-f", str(cls.authorization_key if identity == AUTHORIZER else cls.key), "-n", domain],
             input=payload,
             capture_output=True,
             check=True,
@@ -948,32 +1133,17 @@ class BootstrapAdoptionBridgeTests(TestCase):
     def setUp(self) -> None:
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
-        self.real_isolated_runner = (
-            bootstrap_source_admission._run_bootstrap_validation_isolated
-        )
-        self.real_materializer = (
-            bootstrap_source_admission._isolated_bootstrap_validation_repository
-        )
-        self.patch(
-            bootstrap_source_admission,
-            "_isolated_bootstrap_validation_repository",
-            side_effect=lambda _head=None: nullcontext(self.root),
-        )
-        # Exercise the child replay directly for artifact/crypto failure isolation.
-        # BootstrapIsolationTests exercises the real process/materialization boundary.
+        self.materializer = bootstrap_source_admission._isolated_bootstrap_validation_repository
+        # The harness represents source already authenticated by the outer
+        # executor. Only Git/GitHub data transport is substituted here.
+        self.patch(bootstrap_source_admission, "_isolated_bootstrap_validation_repository",
+                   side_effect=lambda _head: nullcontext(self.root))
         self.patch(fast_path, "CENTRAL_REGISTRY_ROOT", new=self.root)
-        self.patch(
-            bootstrap_source_admission,
-            "_run_bootstrap_validation_isolated",
-            side_effect=lambda provenance: fast_path._validation_evidence_binding(
-                fast_path._replay_pre_enrollment_validation_unsealed(provenance)
-            ),
-        )
         self.patch(
             bootstrap_source_admission, "_load_actions_helper", return_value=actions
         )
         self.main_guard = self.patch(
-            actions, "_require_accepted_main_bridge_source", return_value=self.parent2
+            actions, "_observe_accepted_main_bridge_identity", return_value=self.parent2
         )
         self.patch(
             lifecycle_authority, "_load_lifecycle_trust_policy", return_value=self.trust
@@ -1021,19 +1191,20 @@ class BootstrapAdoptionBridgeTests(TestCase):
             delivery_issue_number=776,
             pull_request_number=800,
             head_sha=self.head,
-            repository_root=self.root,
             integration_evidence=copy.deepcopy(self.integration),
             validation_receipt=copy.deepcopy(self.receipt),
             final_attestation=copy.deepcopy(self.attestation),
         )
 
     def verify(self, **changes):
-        return fast_path.verify_pre_enrollment_validation_evidence(
-            **(self.arguments() | changes)
-        )
+        provenance = {"schema_version": "1.0", "kind": integration.KIND,
+                      **(self.arguments() | changes)}
+        verified = fast_path._replay_pre_enrollment_validation_unsealed(provenance)
+        # Internal composition only; the public operation exports no capability.
+        return fast_path._seal_validation_evidence(verified, provenance)
 
     def test_real_signed_bootstrap_preserves_independent_adoption_history(self) -> None:
-        candidate = fast_path._authenticate_pre_enrollment_commit(
+        candidate, _ = fast_path._authenticate_pre_enrollment_commit(
             helper=actions,
             repository_root=self.root,
             repository="SecPal/.github",
@@ -1192,6 +1363,87 @@ class BootstrapAdoptionBridgeTests(TestCase):
             validation.final_attestation_digest,
         )
         self.assertEqual(self.main_guard.call_args.kwargs, {"expected_main": self.parent2})
+        control = fast_path.canonical_json_bytes({
+            "repository": "SecPal/.github", "delivery_issue_number": 776,
+            "pull_request_number": 800, "head_sha": self.head,
+            "pull_request_state": "OPEN", "observed_pre_enrollment_history": observed,
+            "intended_state": state, "review_budget_consumption_admission": admission,
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            for kind, value in (("integration", self.integration), ("receipt", self.receipt), ("attestation", self.attestation)):
+                (Path(directory) / integration.ARTIFACT_FILES[kind]).write_bytes(fast_path.canonical_json_bytes(value))
+            summary = fast_path.authenticate_pre_enrollment_adoption(control, directory)
+        self.assertEqual(summary["status"], "AUTHENTICATED_READ_ONLY", summary)
+        self.assertEqual(summary["source_validation_evidence_digest"], validation.source_validation_evidence_digest)
+        self.assertFalse(fast_path.is_verified_validation_evidence(summary))
+        with self.assertRaises(lifecycle_authority.LifecycleAuthorityError):
+            lifecycle_authority.create_exact_state_adoption_evidence(verified_external_evidence=summary, adoption_timestamp="2026-08-05T00:00:00Z")
+
+
+    def test_fetched_python_is_data_and_never_imported(self) -> None:
+        marker = self.root / "unauthenticated-import"
+        self.git("read-tree", self.tree)
+        path = self.root / "scripts/secpal_pr_review/fast_path.py"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\n")
+        self.git("add", "scripts")
+        malicious = self.git("commit-tree", self.git("write-tree"), "-p", self.parent2, "-m", "untrusted fetched Python")
+        real_git = bootstrap_source_admission._git
+        def transport(root, arguments, **kwargs):
+            if arguments[:3] == ["remote", "add", "origin"]:
+                arguments = ["remote", "add", "origin", str(self.root)]
+            return real_git(root, arguments, **kwargs)
+        # Exercise the actual objects-only materializer, not the fixture seam.
+        with mock.patch.object(bootstrap_source_admission, "_git", side_effect=transport):
+            with self.materializer(malicious) as objects:
+                self.assertFalse((objects / "scripts").exists())
+                self.assertFalse(marker.exists())
+                fast_path._require_pre_enrollment_main_ancestor(malicious, self.parent2, repository_root=objects)
+        self.assertFalse(marker.exists())
+
+    def test_forged_runner_result_has_no_authority(self) -> None:
+        binding = fast_path._validation_evidence_binding(self.verify())
+        forged = {"status": "AUTHENTICATED_READ_ONLY", **binding,
+                  "observed_history_digest": "a" * 64, "intended_state_digest": "b" * 64}
+        self.assertFalse(hasattr(fast_path, "verify_pre_enrollment_validation_evidence"))
+        self.assertFalse(hasattr(bootstrap_source_admission, "_run_bootstrap_validation_isolated"))
+        runner = mock.Mock(return_value=forged)
+        with mock.patch.object(bootstrap_source_admission, "_run_isolated_python", runner):
+            validation = self.verify()
+            self.assertTrue(fast_path.is_verified_validation_evidence(validation))
+        runner.assert_not_called()
+        self.assertFalse(fast_path.is_verified_validation_evidence(forged))
+        with self.assertRaises(lifecycle_authority.LifecycleAuthorityError):
+            lifecycle_authority.create_exact_state_adoption_evidence(verified_external_evidence=forged, adoption_timestamp="2026-08-05T00:00:00Z")
+
+    def test_public_diagnostics_are_closed_and_do_not_expose_privileged_errors(self) -> None:
+        control = fast_path.canonical_json_bytes({
+            "repository": "SecPal/.github", "delivery_issue_number": 776,
+            "pull_request_number": 800, "head_sha": self.head,
+            "pull_request_state": "OPEN", "observed_pre_enrollment_history": [],
+            "intended_state": {}, "review_budget_consumption_admission": None,
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for kind, value in (("integration", self.integration), ("receipt", self.receipt), ("attestation", self.attestation)):
+                (root / integration.ARTIFACT_FILES[kind]).write_bytes(fast_path.canonical_json_bytes(value))
+            cases = (
+                (actions, "_observe_accepted_main_bridge_identity", "SOURCE_HISTORY_REJECTED"),
+                (fast_path, "_validated_historical_registry_binding", "EVIDENCE_TIME_POLICY_REJECTED"),
+                (integration, "_verify_authorization", "AUTHORIZATION_REJECTED"),
+                (fast_path, "_authenticate_pre_enrollment_commit", "COMMIT_SIGNATURE_REJECTED"),
+                (integration, "_verify_final_attestation", "ARTIFACT_BINDING_REJECTED"),
+                (actions, "_verify_integration_tree_delta", "TREE_REPLAY_REJECTED"),
+                (lifecycle_authority, "_authenticate_exact_state_adoption_external_evidence", "ADOPTION_COMPOSITION_REJECTED"),
+            )
+            for module, name, diagnostic in cases:
+                with self.subTest(diagnostic=diagnostic), mock.patch.object(module, name, side_effect=RuntimeError("/private/credential raw provider response")) as failed:
+                    result = fast_path.authenticate_pre_enrollment_adoption(control, root)
+                    self.assertEqual(result, {"status": "REJECTED", "diagnostic_identity": diagnostic})
+                    failed.assert_called()
+            (root / integration.ARTIFACT_FILES["receipt"]).write_bytes(b"x" * 1142)
+            self.assertEqual(fast_path.authenticate_pre_enrollment_adoption(control, root), {"status": "REJECTED", "diagnostic_identity": "RESOURCE_CONTRACT_REJECTED"})
+        self.assertEqual(fast_path.authenticate_pre_enrollment_adoption(b"{}", "/unused"), {"status": "REJECTED", "diagnostic_identity": "INPUT_SCHEMA_REJECTED"})
 
     def test_raw_artifacts_and_delivery_identities_are_closed(self) -> None:
         for field, value in (
@@ -1215,7 +1467,7 @@ class BootstrapAdoptionBridgeTests(TestCase):
             "current_main",
             "initial_head_proof",
         ):
-            with self.subTest(field=field), self.assertRaises(TypeError):
+            with self.subTest(field=field), self.assertRaises(fast_path.SecurityBlocker):
                 self.verify(**{field: {}})
         for document, fields in {
             "validation_receipt": (
@@ -1244,7 +1496,7 @@ class BootstrapAdoptionBridgeTests(TestCase):
                 with self.subTest(document=document, field=field), self.assertRaises(
                     (ValueError, fast_path.SecurityBlocker)
                 ):
-                    fast_path.verify_pre_enrollment_validation_evidence(**arguments)
+                    self.verify(**arguments)
 
     def test_seals_are_replayed_and_cannot_promote_proofs_or_other_families(
         self,
@@ -1321,7 +1573,7 @@ class BootstrapAdoptionBridgeTests(TestCase):
             for parent in parents:
                 argv.extend(["-p", parent])
             head = self.git(*argv)
-            with self.subTest(parents=parents), self.assertRaises(ValueError):
+            with self.subTest(parents=parents), self.assertRaises(fast_path.SecurityBlocker):
                 self.verify(head_sha=head)
         for message in (
             "missing trailers",
@@ -1344,7 +1596,7 @@ class BootstrapAdoptionBridgeTests(TestCase):
                 {k: v for k, v in attestation.items() if k != "attestation_digest"}
             )
             with self.subTest(message=message), self.assertRaisesRegex(
-                ValueError, "trailers"
+                fast_path.SecurityBlocker, "ARTIFACT_BINDING_REJECTED"
             ):
                 self.verify(head_sha=head, final_attestation=attestation)
 
@@ -1357,17 +1609,17 @@ class BootstrapAdoptionBridgeTests(TestCase):
         ):
             changed = copy.deepcopy(self.integration)
             changed["authorization"]["signature"][field] = replacement
-            with self.subTest(field=field), self.assertRaises(ValueError):
+            with self.subTest(field=field), self.assertRaises(fast_path.SecurityBlocker):
                 self.verify(integration_evidence=changed)
         changed = copy.deepcopy(self.integration)
         changed["validation_execution"]["command_set_digest"] = fast_path.digest_json(
             []
         )
-        with self.assertRaisesRegex(ValueError, "command-set"):
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "EVIDENCE_TIME_POLICY_REJECTED"):
             self.verify(integration_evidence=changed)
         self.main_guard.return_value = self.parent1
         with self.assertRaisesRegex(
-            fast_path.SecurityBlocker, "outside accepted protected-main history"
+            fast_path.SecurityBlocker, "SOURCE_HISTORY_REJECTED"
         ):
             self.verify()
 
@@ -1401,11 +1653,11 @@ class BootstrapAdoptionBridgeTests(TestCase):
         )
         with mock.patch.object(
             lifecycle_authority,
-            "_load_lifecycle_trust_policy",
+            "_parse_lifecycle_trust_policy",
             return_value=wrong_trust,
         ):
             with self.assertRaisesRegex(
-                fast_path.SecurityBlocker, "signer is not maintained"
+                fast_path.SecurityBlocker, "COMMIT_SIGNATURE_REJECTED"
             ):
                 self.verify()
 
@@ -1441,10 +1693,10 @@ class BootstrapAdoptionBridgeTests(TestCase):
             return self.central_read(arguments, **kwargs)
 
         self.central.side_effect = central
-        with mock.patch.object(fast_path, "CENTRAL_REGISTRY_ROOT", history_root):
-            with self.assertRaisesRegex(
-                fast_path.SecurityBlocker, "outside accepted protected-main history"
-            ):
+        with mock.patch.object(bootstrap_source_admission,
+                               "_isolated_bootstrap_validation_repository",
+                               side_effect=lambda _head: nullcontext(history_root)):
+            with self.assertRaisesRegex(fast_path.SecurityBlocker, "SOURCE_HISTORY_REJECTED"):
                 self.verify()
 
     def test_raw_history_rejects_replacement_refs_missing_objects_and_bounds(
@@ -1554,7 +1806,7 @@ class BootstrapAdoptionBridgeTests(TestCase):
                 "_validated_historical_registry_binding",
                 return_value=self.binding,
             ),
-            self.assertRaisesRegex(ValueError, "authorization parent identity"),
+            self.assertRaisesRegex(fast_path.SecurityBlocker, "INPUT_SCHEMA_REJECTED"),
         ):
             self.verify(integration_evidence=changed)
 
@@ -1602,7 +1854,7 @@ class BootstrapAdoptionBridgeTests(TestCase):
             attestation_id="wrong-tree",
         )
         with self.assertRaisesRegex(
-            fast_path.SecurityBlocker, "manual conflict-resolution delta"
+            fast_path.SecurityBlocker, "TREE_REPLAY_REJECTED"
         ):
             self.verify(
                 head_sha=head,
@@ -1634,172 +1886,22 @@ class BootstrapAdoptionBridgeTests(TestCase):
         changed["authorization_digest"] = changed["authorization"][
             "authorization_digest"
         ]
-        with self.assertRaisesRegex(ValueError, "authorization delivery identity"):
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "INPUT_SCHEMA_REJECTED"):
             self.verify(integration_evidence=changed)
         altered = copy.deepcopy(self.binding)
         altered["validation"] = []
         with mock.patch.object(
             fast_path, "_validated_historical_registry_binding", return_value=altered
         ):
-            with self.assertRaisesRegex(ValueError, "command-set identity"):
+            with self.assertRaisesRegex(fast_path.SecurityBlocker, "EVIDENCE_TIME_POLICY_REJECTED"):
                 self.verify()
         altered = copy.deepcopy(self.binding)
         altered.pop("pre_enrollment_integration_policy")
         with mock.patch.object(
             fast_path, "_validated_historical_registry_binding", return_value=altered
         ):
-            with self.assertRaisesRegex(fast_path.SecurityBlocker, "did not support"):
+            with self.assertRaisesRegex(fast_path.SecurityBlocker, "EVIDENCE_TIME_POLICY_REJECTED"):
                 self.verify()
-
-    def test_real_isolated_child_replays_signed_bootstrap_and_raw_history(self) -> None:
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        source = Path(directory.name)
-        shutil.copytree(
-            ROOT / "scripts",
-            source / "scripts",
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-        )
-        shutil.copytree(ROOT / "docs/schemas", source / "docs/schemas")
-        for relative, raw in (
-            (fast_path.DELIVERY_REGISTRY_PATH, self.registry_raw),
-            (fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH, self.schema_raw),
-            (
-                "policies/legacy-enrolled-package-loss.json",
-                (ROOT / "policies/legacy-enrolled-package-loss.json").read_text(),
-            ),
-        ):
-            path = source / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(raw)
-        # Only provider transport is a fixture. All authority, registry, raw
-        # history, signature and tree checks execute unmodified in the child.
-        helper = source / "scripts/secpal-pr-review-actions.py"
-        with helper.open("a") as stream:
-            stream.write(
-                "\ndef _run_bridge_gh(arguments):\n"
-                "    endpoint = arguments[3]\n"
-                "    main = _run_attestation_git(REPOSITORY_ROOT, ['rev-parse', 'HEAD']).stdout.strip()\n"
-                "    if endpoint.endswith('/branches/main'):\n"
-                "        value = {'sha': main, 'protected': True}\n"
-                "    elif '/commits/' in endpoint:\n"
-                "        value = {'sha': endpoint.rsplit('/', 1)[1], 'verified': True, 'verification': {'verified': True, 'reason': 'valid'}}\n"
-                "        value.pop('verified' if '\"verification\":' in arguments[-1] else 'verification')\n"
-                "    else:\n"
-                "        value = {'full_name': 'SecPal/.github', 'default_branch': 'main'}\n"
-                "    return subprocess.CompletedProcess(arguments, 0, json.dumps(value), '')\n"
-            )
-
-        def git(*arguments):
-            return subprocess.check_output(
-                ["git", *arguments], cwd=source, stderr=subprocess.PIPE, text=True
-            ).strip()
-
-        git("init", "--quiet")
-        git("config", "user.name", "Fixture")
-        git("config", "user.email", SIGNER)
-        git("fetch", "--quiet", "--no-tags", str(self.root), self.parent2)
-        admission = source / "scripts/secpal_pr_review/bootstrap_source_admission.py"
-        with admission.open("a") as stream:
-            stream.write(
-                "\n_fixture_git = _git\n"
-                "def _git(root, arguments, **kwargs):\n"
-                "    if arguments[:3] == ['fetch', '--quiet', '--no-tags']:\n"
-                f"        arguments = [*arguments[:4], {str(self.root)!r}, *arguments[5:]]\n"
-                "    result = _fixture_git(root, arguments, **kwargs)\n"
-                "    return result\n"
-            )
-        git("add", "scripts", ".agents", "policies", "docs")
-        main_oid = git(
-            "commit-tree",
-            git("write-tree"),
-            "-p",
-            self.parent2,
-            "-m",
-            "accepted tooling",
-        )
-        git("update-ref", "refs/heads/main", main_oid)
-        original_git = bootstrap_source_admission._git
-
-        def transport(root, arguments, **kwargs):
-            if arguments == [
-                "remote",
-                "add",
-                "origin",
-                bootstrap_source_admission.PROTECTED_MAIN_REMOTE_URL,
-            ]:
-                arguments = ["remote", "add", "origin", str(source)]
-            return original_git(root, arguments, **kwargs)
-
-        # The child transports the exact candidate object from the same fixture
-        # remote, without inheriting the supplied candidate checkout's Git config.
-        git("fetch", "--quiet", "--no-tags", str(self.root), self.head)
-        observation = bootstrap_source_admission.ProtectedMainObservation(
-            json.dumps(
-                {
-                    "data": {
-                        "repository": {
-                            "nameWithOwner": "SecPal/.github",
-                            "defaultBranchRef": {
-                                "name": "main",
-                                "target": {"oid": main_oid},
-                            },
-                        }
-                    }
-                }
-            ).encode()
-        )
-        # Deliberately replace the operational path with a foreign checkout.
-        # Its configuration and import tree cannot become replay authority.
-        hostile = source / "candidate-context"
-        hostile.mkdir()
-        subprocess.run(["git", "init", "--quiet", str(hostile)], check=True)
-        (hostile / ".git/info/grafts").write_text(f"{self.parent1} {self.parent2}\n")
-        (hostile / ".git/info/attributes").write_text("* merge=foreign\n")
-        subprocess.run(
-            ["git", "-C", str(hostile), "config", "merge.foreign.driver", "false"],
-            check=True,
-        )
-        link = source / "candidate-path"
-        link.symlink_to(hostile, target_is_directory=True)
-        real_child = bootstrap_source_admission._run_isolated_python
-
-        def checked_child(*args, **kwargs):
-            result = real_child(*args, **kwargs)
-            self.assertEqual(result.returncode, 0, result.stderr.decode())
-            return result
-
-        with (
-            mock.patch.object(
-                bootstrap_source_admission,
-                "_isolated_bootstrap_validation_repository",
-                side_effect=self.real_materializer,
-            ),
-            mock.patch.object(
-                bootstrap_source_admission,
-                "_run_isolated_python",
-                side_effect=checked_child,
-            ),
-            mock.patch.object(
-                bootstrap_source_admission, "_git", side_effect=transport
-            ),
-            mock.patch.object(
-                bootstrap_source_admission,
-                "_observe_protected_main",
-                return_value=observation,
-            ),
-            mock.patch.object(
-                bootstrap_source_admission,
-                "_run_bootstrap_validation_isolated",
-                side_effect=self.real_isolated_runner,
-            ),
-        ):
-            validation = self.verify(repository_root=link)
-            self.assertTrue(fast_path.is_verified_validation_evidence(validation))
-            self.assertEqual(validation.head_sha, self.head)
-            hostile.rename(source / "replaced-candidate-context")
-            hostile.mkdir()
-            self.assertTrue(fast_path.is_verified_validation_evidence(validation))
 
     def test_current_main_guard_authenticates_actual_candidate_bytes(self) -> None:
         # Exercise the real maintained file check; remote observations alone do
@@ -1810,194 +1912,47 @@ class BootstrapAdoptionBridgeTests(TestCase):
             )
 
 
-class BootstrapIsolationTests(TestCase):
-    """Real materialization and isolated interpreter; only the remote is a fixture.
 
-    The tiny accepted verifier is an import-boundary fixture, not evidence that
-    bootstrap cryptography succeeds. The signed-object tests above own replay.
-    """
 
-    def setUp(self) -> None:
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        self.root = Path(directory.name)
-        self.source = self.root / "accepted"
-        self.source.mkdir()
-        self.git("init", "--quiet")
-        self.git("config", "user.name", "Fixture")
-        self.git("config", "user.email", "fixture@example.test")
-        package = self.source / "scripts/secpal_pr_review"
-        package.mkdir(parents=True)
-        (package / "bootstrap_source_admission.py").write_text(
-            "MAXIMUM_EVIDENCE_BYTES = 65536\n"
-        )
-        (package / "sibling.py").write_text('IDENTITY = "accepted"\n')
-        (package / "fast_path.py").write_text(
-            "import json, os, sys\n"
-            "from . import sibling\n"
-            "def canonical_json_bytes(value):\n"
-            " return (json.dumps(value, sort_keys=True, separators=(',', ':')) + '\\n').encode()\n"
-            "def _replay_pre_enrollment_validation_unsealed(value):\n"
-            " assert sibling.IDENTITY == 'accepted'\n"
-            " assert sys.flags.isolated and sys.flags.no_site and sys.dont_write_bytecode\n"
-            " assert all(key not in os.environ for key in ('PYTHONPATH', 'PYTHONHOME', 'PYTHONSTARTUP', 'PYTHONUSERBASE', 'VIRTUAL_ENV'))\n"
-            " assert 'sitecustomize' not in sys.modules and 'usercustomize' not in sys.modules\n"
-            " assert value == {'input': 'closed artifact'}\n"
-            " return {'verifier': 'accepted', 'pid': os.getpid()}\n"
-            "def _validation_evidence_binding(value):\n"
-            " return value\n"
-        )
-        self.main = self.commit()
-        original_git = bootstrap_source_admission._git
+class SourceAdmittedExecutionAssumptionTests(TestCase):
+    """Hermetic outer-executor model; NOT an admission issued by candidate code."""
 
-        def remote_transport(root, arguments, **kwargs):
-            if arguments == [
-                "remote",
-                "add",
-                "origin",
-                bootstrap_source_admission.PROTECTED_MAIN_REMOTE_URL,
-            ]:
-                arguments = ["remote", "add", "origin", str(self.source)]
-            return original_git(root, arguments, **kwargs)
-
-        self.stack = ExitStack()
-        self.addCleanup(self.stack.close)
-        self.stack.enter_context(
-            mock.patch.object(
-                bootstrap_source_admission, "_git", side_effect=remote_transport
-            )
-        )
-        self.stack.enter_context(
-            mock.patch.object(
-                bootstrap_source_admission,
-                "_observe_protected_main",
-                side_effect=lambda: bootstrap_source_admission.ProtectedMainObservation(
-                    json.dumps(
-                        {
-                            "data": {
-                                "repository": {
-                                    "nameWithOwner": "SecPal/.github",
-                                    "defaultBranchRef": {
-                                        "name": "main",
-                                        "target": {"oid": self.main},
-                                    },
-                                }
-                            }
-                        }
-                    ).encode()
-                ),
-            )
-        )
-
-    def git(self, *arguments, input=None):
-        return subprocess.check_output(
-            ["git", *arguments],
-            cwd=self.source,
-            input=input,
-            stderr=subprocess.PIPE,
-            text=True,
-        ).strip()
-
-    def commit(self):
-        self.git("add", "scripts")
-        oid = self.git("commit-tree", self.git("write-tree"), "-m", "accepted fixture")
-        self.git("update-ref", "refs/heads/main", oid)
-        return oid
-
-    def verify(self):
-        result = bootstrap_source_admission._run_bootstrap_validation_isolated(
-            {"input": "closed artifact"}
-        )
-        self.assertEqual(result["verifier"], "accepted")
-        self.assertNotEqual(result["pid"], os.getpid())
-
-    def test_parent_module_cache_and_forged_metadata_are_irrelevant(self) -> None:
-        expected = str(ROOT / "scripts/secpal_pr_review/fast_path.py")
-        for name in (
-            "scripts.secpal_pr_review.fast_path",
-            "scripts.secpal_pr_review.sibling",
-            "secpal_bootstrap_source_accepted_main_actions",
-        ):
-            for metadata in (
-                {},
-                {"__file__": expected},
-                {"__spec__": SimpleNamespace(origin=expected)},
-                {"__file__": expected, "__spec__": SimpleNamespace(origin=expected)},
-            ):
-                foreign = ModuleType(name)
-                foreign.__dict__.update(metadata)
-                exec(
-                    compile(
-                        "raise_if_used = lambda *args: (_ for _ in ()).throw(AssertionError('candidate authority'))",
-                        "/candidate-local/verifier.py",
-                        "exec",
-                    ),
-                    foreign.__dict__,
-                )
-                foreign._require_accepted_main_bridge_source = foreign.raise_if_used
-                foreign._replay_pre_enrollment_validation_unsealed = (
-                    foreign.raise_if_used
-                )
-                with (
-                    self.subTest(name=name, metadata=tuple(metadata)),
-                    mock.patch.dict(sys.modules, {name: foreign}),
-                ):
-                    self.verify()
-
-    def test_candidate_pythonpath_startup_site_and_sibling_shadowing_are_irrelevant(
-        self,
-    ) -> None:
-        candidate = self.root / "candidate"
-        package = candidate / "scripts/secpal_pr_review"
-        package.mkdir(parents=True)
-        marker = self.root / "injected"
-        attack = f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\nraise AssertionError('candidate code')\n"
-        for relative in (
-            "sitecustomize.py",
-            "usercustomize.py",
-            "startup.py",
-            "scripts/__init__.py",
-            "scripts/secpal_pr_review/fast_path.py",
-            "scripts/secpal_pr_review/sibling.py",
-        ):
-            (candidate / relative).write_text(attack)
-        site = (
-            candidate
-            / f"lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages"
-        )
-        site.mkdir(parents=True)
-        (site / "sitecustomize.py").write_text(attack)
-        (site / "inject.pth").write_text("import sitecustomize\n")
-        with mock.patch.dict(
-            os.environ,
-            {
-                "PYTHONPATH": str(candidate) + os.pathsep + str(site),
-                "PYTHONHOME": str(candidate),
-                "PYTHONSTARTUP": str(candidate / "startup.py"),
-                "PYTHONUSERBASE": str(candidate),
-                "VIRTUAL_ENV": str(candidate),
-            },
-        ):
-            self.verify()
-        self.assertFalse(marker.exists())
-
-    def test_materialized_import_symlink_and_bytecode_are_rejected(self) -> None:
-        sibling = self.source / "scripts/secpal_pr_review/sibling.py"
-        sibling.unlink()
-        sibling.symlink_to("/candidate-local/sibling.py")
-        self.main = self.commit()
-        with self.assertRaisesRegex(
-            bootstrap_source_admission.BootstrapSourceAdmissionError, "import source"
-        ):
-            self.verify()
-        sibling.unlink()
-        sibling.write_text('IDENTITY = "accepted"\n')
-        (sibling.parent / "fast_path.pyc").write_bytes(b"foreign bytecode")
-        self.main = self.commit()
-        with self.assertRaisesRegex(
-            bootstrap_source_admission.BootstrapSourceAdmissionError, "import source"
-        ):
-            self.verify()
+    def test_fresh_authenticated_context_excludes_parent_and_startup_code(self) -> None:
+        import hashlib
+        # The test authority pins bytes before starting the child. The bridge
+        # never establishes this pin and cannot replace the outer executor.
+        source = ROOT / "scripts/secpal_pr_review/fast_path.py"
+        paths = [*sorted((ROOT / "scripts").rglob("*.py")), Path(__file__), ROOT / fast_path.DELIVERY_REGISTRY_PATH, ROOT / fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH]
+        expected = json.dumps({str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths})
+        launcher = """
+import hashlib, json, pathlib, sys, unittest
+root = pathlib.Path(sys.argv[1])
+for relative, expected in json.loads(sys.argv[2]).items():
+    source = root / relative
+    assert not source.is_symlink()
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == expected
+sys.path.insert(0, str(root))
+suite = unittest.defaultTestLoader.loadTestsFromName('tests.secpal-pre-enrollment-integration-unit.BootstrapAdoptionBridgeTests.test_real_signed_bootstrap_preserves_independent_adoption_history')
+result = unittest.TextTestRunner().run(suite)
+raise SystemExit(not result.wasSuccessful())
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory)
+            marker = candidate / "executed"
+            attack = f"from pathlib import Path\nPath({str(marker)!r}).write_text('untrusted')\nraise AssertionError('injection')\n"
+            for relative in ("sitecustomize.py", "usercustomize.py", "startup.py", "scripts/__init__.py", "scripts/secpal_pr_review/fast_path.py", "scripts/secpal_pr_review/sibling.py", "site-packages/sitecustomize.py"):
+                path = candidate / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(attack)
+            foreign = ModuleType("foreign")
+            foreign.__file__ = str(source)
+            foreign.__spec__ = SimpleNamespace(origin=str(source))
+            foreign._replay_pre_enrollment_validation_unsealed = lambda *a, **k: {"status": "AUTHENTICATED_READ_ONLY"}
+            poisoned = {name: foreign for name in ("scripts.secpal_pr_review.fast_path", "secpal_pr_review.fast_path", "secpal_bootstrap_source_accepted_main_actions")}
+            with mock.patch.dict(sys.modules, poisoned), mock.patch.dict(os.environ, {"PYTHONPATH": str(candidate), "PYTHONHOME": str(candidate), "PYTHONSTARTUP": str(candidate / "startup.py"), "PYTHONUSERBASE": str(candidate / "site-packages")}):
+                child = subprocess.run([sys.executable, "-I", "-S", "-B", "-c", launcher, str(ROOT), expected], cwd=candidate, env={"PATH": os.defpath, "LANG": "C.UTF-8", "HOME": directory}, capture_output=True, text=True, timeout=30)
+            self.assertEqual(child.returncode, 0, child.stderr)
+            self.assertFalse(marker.exists())
 
 
 if __name__ == "__main__":

@@ -205,7 +205,8 @@ pre_enrollment = _load_pre_enrollment_integration_helper()
 
 def _read_pre_enrollment_json(path: str, label: str) -> Any:
     try:
-        return pre_enrollment.loads_closed_json(Path(path).read_bytes())
+        kind = {"validation receipt": "receipt", "pre-enrollment integration evidence": "integration"}[label]
+        return pre_enrollment.read_artifact(Path(path), kind)
     except OSError as exc:
         raise fast_path.RecoverableLocalError(f"cannot read {label}") from exc
 
@@ -6910,12 +6911,12 @@ def _require_distinct_candidate_repository_root(candidate_root: Path) -> None:
         raise fast_path.SecurityBlocker("candidate repository root is unavailable") from exc
 
 
-def _require_accepted_main_bridge_source(
+def _observe_accepted_main_bridge_identity(
     repository: str,
     *,
     expected_main: str | None = None,
 ) -> str:
-    """Authenticate internally derived executing tooling as accepted main."""
+    """Observe protected-main identity as data, without importing its source."""
 
     repository_result = _run_bridge_gh(
         [
@@ -7001,6 +7002,14 @@ def _require_accepted_main_bridge_source(
         raise fast_path.SecurityBlocker(
             "accepted main changed during authority composition"
         )
+    return main
+
+
+def _require_accepted_main_bridge_source(
+    repository: str, *, expected_main: str | None = None,
+) -> str:
+    """Authenticate the installed maintained bridge used by existing consumers."""
+    main = _observe_accepted_main_bridge_identity(repository, expected_main=expected_main)
     _require_accepted_main_tooling_blobs(REPOSITORY_ROOT, main)
     _require_bridge_import_provenance(
         {
@@ -8574,25 +8583,8 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         raise fast_path.SecurityBlocker(
             "Ready and pre-enrollment integration kinds are mutually exclusive"
         )
-    if pre_enrollment_evidence_path and (
-        binding is None
-        or binding.get(
-            "pre_enrollment_integration_policy"
-        ) != {
-            "schema_version": "1.0",
-            "command": "integrate-pre-enrollment-draft",
-            "topology_kind": pre_enrollment.KIND,
-            "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
-            "maximum_candidates": 1,
-            "maximum_pushes": 1,
-            "force_push": False,
-            "automatic_retry": False,
-            "merge_pull_request": False,
-        }
-    ):
-        raise fast_path.SecurityBlocker(
-            "repository has no closed pre-enrollment integration policy"
-        )
+    if pre_enrollment_evidence_path:
+        pre_enrollment.require_current_policy(binding or {})
     if (
         integration_evidence_path
         and not arguments.bind_commit
@@ -9735,20 +9727,7 @@ def _command_integrate_pre_enrollment_draft(arguments: argparse.Namespace) -> in
     registry_value = load_registry(arguments.registry)
     entry = select_repository(registry_value, arguments.repo)
     binding = _fast_registry_binding(entry)
-    if binding.get("pre_enrollment_integration_policy") != {
-        "schema_version": "1.0",
-        "command": "integrate-pre-enrollment-draft",
-        "topology_kind": pre_enrollment.KIND,
-        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
-        "maximum_candidates": 1,
-        "maximum_pushes": 1,
-        "force_push": False,
-        "automatic_retry": False,
-        "merge_pull_request": False,
-    }:
-        raise fast_path.SecurityBlocker(
-            "repository has no closed pre-enrollment integration policy"
-        )
+    pre_enrollment.require_current_policy(binding)
     try:
         selected = pre_enrollment.normalize_evidence(
             _read_pre_enrollment_json(

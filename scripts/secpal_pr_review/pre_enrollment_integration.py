@@ -12,32 +12,238 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field
 import json
+import os
+from pathlib import Path
+import stat
 import re
 from typing import Any, Callable, Mapping, NamedTuple
 
 from .fast_path import canonical_json_bytes, digest_json
 
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
+HISTORICAL_SCHEMA_VERSION = "1.0"
 KIND = "PRE_ENROLLMENT_DRAFT_INTEGRATION"
-DOMAIN = "secpal.pre-enrollment-draft-integration/v1"
+DOMAIN = "secpal.pre-enrollment-draft-integration/v1.1"
 AUTHORIZATION_KIND = "PRE_ENROLLMENT_DRAFT_INTEGRATION_AUTHORIZATION"
-AUTHORIZATION_DOMAIN = "secpal.pre-enrollment-draft-integration-authorization/v1"
+AUTHORIZATION_DOMAIN = "secpal.pre-enrollment-draft-integration-authorization/v1.1"
 RECEIPT_KIND = "PRE_ENROLLMENT_DRAFT_INTEGRATION_VALIDATION_RECEIPT"
-RECEIPT_DOMAIN = "secpal.pre-enrollment-draft-integration-validation-receipt/v1"
+RECEIPT_DOMAIN = "secpal.pre-enrollment-draft-integration-validation-receipt/v1.1"
 ATTESTATION_KIND = "PRE_ENROLLMENT_DRAFT_INTEGRATION_FINAL_ATTESTATION"
-ATTESTATION_DOMAIN = "secpal.pre-enrollment-draft-integration-final-attestation/v1"
+ATTESTATION_DOMAIN = "secpal.pre-enrollment-draft-integration-final-attestation/v1.1"
 INITIAL_HEAD_PROOF_KIND = "AUTHENTICATED_PRE_ENROLLMENT_DRAFT_INTEGRATION_HEAD"
 
 _OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
-_IDENTITY = re.compile(r"[^\x00-\x20\x7f]+")
+_HISTORICAL_IDENTITY = re.compile(r"[^\x00-\x20\x7f]+")
+_IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@/+\-=]{0,254}")
 _PATH = re.compile(r"[^\x00-\x1f\x7f]+")
+
+# Derived closed-schema envelopes, including UTF-8 JSON escaping and final LF.
+# IDs reuse the lifecycle identity grammar; paths/counts reuse the maintained
+# 1024-byte/32-path correction profile. Signatures use the lifecycle 16-KiB cap.
+ARTIFACT_BYTE_LIMITS = {
+    "authorization": 99948,
+    "integration": 240076,
+    "receipt": 1141,
+    "attestation": 140731,
+}
+BRIDGE_ARTIFACT_BYTES = 381948
+ARTIFACT_FILES = {
+    "integration": "integration-evidence.json",
+    "receipt": "validation-receipt.json",
+    "attestation": "final-attestation.json",
+}
 
 
 class PreEnrollmentIntegrationError(ValueError):
     """The requested integration is stale, ambiguous, or unauthorized."""
+
+
+def require_current_policy(binding: Mapping[str, Any]) -> None:
+    policy = binding.get("pre_enrollment_integration_policy")
+    expected = {
+        "schema_version": SCHEMA_VERSION,
+        "command": "integrate-pre-enrollment-draft",
+        "topology_kind": KIND,
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1, "maximum_pushes": 1,
+        "force_push": False, "automatic_retry": False, "merge_pull_request": False,
+    }
+    if (binding.get("repository") != "SecPal/.github"
+            or binding.get("default_branch") != "main"
+            or not isinstance(policy, dict)
+            or set(policy) != set(expected) | {"historical_sources"}
+            or any(policy[key] != value for key, value in expected.items())
+            or not isinstance(policy["historical_sources"], list)):
+        raise PreEnrollmentIntegrationError("EVIDENCE_TIME_POLICY_REJECTED")
+
+
+def _domain(current: str, legacy: bool) -> str:
+    return current.removesuffix(".1") if legacy else current
+
+
+def _bounded_text(value: Any, maximum: int) -> None:
+    if not isinstance(value, str) or len(value) > maximum:
+        raise PreEnrollmentIntegrationError("RESOURCE_CONTRACT_REJECTED")
+    try:
+        size = len(value.encode("utf-8"))
+    except UnicodeError as exc:
+        raise PreEnrollmentIntegrationError("INPUT_SCHEMA_REJECTED") from exc
+    if size > maximum:
+        raise PreEnrollmentIntegrationError("RESOURCE_CONTRACT_REJECTED")
+
+
+def _bounded_result(value: dict[str, Any], kind: str) -> dict[str, Any]:
+    if len(canonical_json_bytes(value)) > ARTIFACT_BYTE_LIMITS[kind]:
+        raise PreEnrollmentIntegrationError("RESOURCE_CONTRACT_REJECTED")
+    return value
+
+
+def _check_json_depth(raw: bytes, maximum: int) -> None:
+    depth = 0
+    quoted = escaped = False
+    for char in raw:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == 92:
+                escaped = True
+            elif char == 34:
+                quoted = False
+        elif char == 34:
+            quoted = True
+        elif char in (91, 123):
+            depth += 1
+            if depth > maximum:
+                raise PreEnrollmentIntegrationError("RESOURCE_CONTRACT_REJECTED")
+        elif char in (93, 125):
+            depth -= 1
+
+
+def loads_artifact(raw: bytes, kind: str) -> dict[str, Any]:
+    """Read current finite canonical bytes; this never selects legacy authority."""
+    if kind not in ARTIFACT_BYTE_LIMITS or not isinstance(raw, bytes):
+        raise PreEnrollmentIntegrationError("INPUT_SCHEMA_REJECTED")
+    if len(raw) > ARTIFACT_BYTE_LIMITS[kind]:
+        raise PreEnrollmentIntegrationError("RESOURCE_CONTRACT_REJECTED")
+    _check_json_depth(raw, 3 if kind in {"integration", "attestation"} else 2)
+    try:
+        value = loads_closed_json(raw)
+        if not isinstance(value, dict) or canonical_json_bytes(value) != raw:
+            raise PreEnrollmentIntegrationError("INPUT_SCHEMA_REJECTED")
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise PreEnrollmentIntegrationError("INPUT_SCHEMA_REJECTED") from exc
+    if value.get("schema_version") != SCHEMA_VERSION:
+        raise PreEnrollmentIntegrationError("INPUT_SCHEMA_REJECTED")
+    return value
+
+
+def read_artifact(path: Path, kind: str) -> dict[str, Any]:
+    """Read current producer input with the same bound as its output."""
+    if kind not in ARTIFACT_BYTE_LIMITS:
+        raise PreEnrollmentIntegrationError("INPUT_SCHEMA_REJECTED")
+    return loads_artifact(_read_artifact_file(path, ARTIFACT_BYTE_LIMITS[kind]), kind)
+
+
+def _read_artifact_file(path: Path, limit: int) -> bytes:
+    """Bound the same regular descriptor before/after reading; never follow links."""
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
+            raise PreEnrollmentIntegrationError("RESOURCE_CONTRACT_REJECTED")
+        chunks = []
+        remaining = limit + 1
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 65536))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+        identity = lambda value: (
+            value.st_dev, value.st_ino, value.st_mode, value.st_size,
+            value.st_mtime_ns, value.st_ctime_ns,
+        )
+        if (
+            identity(before) != identity(after)
+            or identity(after) != identity(os.stat(path, follow_symlinks=False))
+            or remaining == 0
+        ):
+            raise PreEnrollmentIntegrationError("RESOURCE_CONTRACT_REJECTED")
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
+
+
+def _historical_source(policy: Mapping[str, Any], *, repository: str,
+                       delivery_issue: int, pull_request: int, head_sha: str) -> dict[str, Any] | None:
+    """Select from independently authenticated current policy, never input flags.
+
+    The admitted bridge owns policy authentication before calling this private
+    projection. This helper and its caller-held result confer no authority.
+    """
+    rows = policy.get("historical_sources", [])
+    if not isinstance(rows, list):
+        raise PreEnrollmentIntegrationError("EVIDENCE_TIME_POLICY_REJECTED")
+    matches = [row for row in rows if isinstance(row, dict) and row.get("head_sha") == head_sha]
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise PreEnrollmentIntegrationError("EVIDENCE_TIME_POLICY_REJECTED")
+    selected = matches[0]
+    if any(selected.get(key) != expected for key, expected in {
+        "repository": repository, "delivery_issue": delivery_issue,
+        "pull_request": pull_request, "head_sha": head_sha,
+    }.items()):
+        raise PreEnrollmentIntegrationError("ARTIFACT_BINDING_REJECTED")
+    return selected
+
+
+def _read_bridge_artifacts(directory: Path, historical: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Read only the three fixed data files from an outer-controlled directory."""
+    if directory.is_symlink() or not directory.is_dir():
+        raise PreEnrollmentIntegrationError("INPUT_SCHEMA_REJECTED")
+    original_root = directory.stat()
+    result = {}
+    limits = None if historical is None else historical.get("artifact_sizes")
+    if historical is not None and limits is None:
+        raise PreEnrollmentIntegrationError("HISTORICAL_EVIDENCE_UNAVAILABLE")
+    for kind, filename in ARTIFACT_FILES.items():
+        limit = ARTIFACT_BYTE_LIMITS[kind] if limits is None else limits[kind]["wire_bytes"]
+        raw = _read_artifact_file(directory / filename, limit)
+        if historical is None:
+            value = loads_artifact(raw, kind)
+        else:
+            _check_json_depth(raw, 3 if kind != "receipt" else 2)
+            value = loads_closed_json(raw)
+            if (
+                not isinstance(value, dict)
+                or value.get("schema_version") != HISTORICAL_SCHEMA_VERSION
+                or len(canonical_json_bytes(value)) != limits[kind]["canonical_bytes"]
+            ):
+                raise PreEnrollmentIntegrationError("ARTIFACT_BINDING_REJECTED")
+        result[kind] = value
+    final_root = directory.stat()
+    if directory.is_symlink() or (original_root.st_dev, original_root.st_ino) != (final_root.st_dev, final_root.st_ino):
+        raise PreEnrollmentIntegrationError("INPUT_SCHEMA_REJECTED")
+    if historical is not None:
+        _require_historical_artifacts(result, historical)
+    return result
+
+
+def _require_historical_artifacts(artifacts: Mapping[str, Any], historical: Mapping[str, Any]) -> None:
+    if (
+        digest_json(artifacts["integration"]) != historical["integration_evidence_digest"]
+        or artifacts["receipt"].get("receipt_digest") != historical["validation_receipt_digest"]
+        or artifacts["attestation"].get("attestation_digest") != historical["final_attestation_digest"]
+        or artifacts["attestation"].get("candidate_tree_sha") != historical["tree_sha"]
+    ):
+        raise PreEnrollmentIntegrationError("ARTIFACT_BINDING_REJECTED")
+    # Receipt/attestation digest fields are re-derived by their original verifier,
+    # not mistaken for whole-document byte hashes here.
 
 
 _VERIFIED_HEAD_TOKEN = object()
@@ -193,52 +399,56 @@ def _digest(value: Any, label: str) -> str:
     return value
 
 
-def _positive(value: Any, label: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+def _positive(value: Any, label: str, *, legacy: bool = False) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1 or (not legacy and value > 2147483647):
         raise PreEnrollmentIntegrationError(f"{label} must be a positive integer")
     return value
 
 
-def _identity(value: Any, label: str) -> str:
-    if not isinstance(value, str) or not _IDENTITY.fullmatch(value):
+def _identity(value: Any, label: str, *, legacy: bool = False) -> str:
+    if not legacy:
+        _bounded_text(value, 255)
+    if not isinstance(value, str) or not (_HISTORICAL_IDENTITY if legacy else _IDENTITY).fullmatch(value):
         raise PreEnrollmentIntegrationError(f"{label} is invalid")
     return value
 
 
-def _repository(value: Any) -> str:
-    if not isinstance(value, str) or not _REPOSITORY.fullmatch(value):
+def _repository(value: Any, *, legacy: bool = False) -> str:
+    if not isinstance(value, str) or (not legacy and value != "SecPal/.github") or not _REPOSITORY.fullmatch(value):
         raise PreEnrollmentIntegrationError("repository identity is invalid")
     return value
 
 
-def _signature(value: Any, signer: str) -> dict[str, str]:
+def _signature(value: Any, signer: str, *, legacy: bool = False) -> dict[str, str]:
     item = _closed(value, SIGNATURE_FIELDS, "authorization signature")
     if item["format"] not in {"ssh", "openpgp"}:
         raise PreEnrollmentIntegrationError("authorization signature format is unsupported")
     if item["signer_identity"] != signer or not isinstance(item["value"], str) or not item["value"]:
         raise PreEnrollmentIntegrationError("authorization signature identity is inconsistent")
+    if not legacy:
+        _bounded_text(item["value"], 16384)
     return copy.deepcopy(item)
 
 
-def normalize_authorization(value: Any) -> dict[str, Any]:
+def _normalize_authorization(value: Any, *, legacy: bool) -> dict[str, Any]:
     item = _closed(value, AUTHORIZATION_FIELDS, "pre-enrollment authorization")
-    if item["schema_version"] != SCHEMA_VERSION or item["kind"] != AUTHORIZATION_KIND or item["domain"] != AUTHORIZATION_DOMAIN:
+    if item["schema_version"] != (HISTORICAL_SCHEMA_VERSION if legacy else SCHEMA_VERSION) or item["kind"] != AUTHORIZATION_KIND or item["domain"] != _domain(AUTHORIZATION_DOMAIN, legacy):
         raise PreEnrollmentIntegrationError("pre-enrollment authorization kind is unsupported")
-    signer = _identity(item["signer_identity"], "authorization signer")
+    signer = _identity(item["signer_identity"], "authorization signer", legacy=legacy)
     fields = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": (HISTORICAL_SCHEMA_VERSION if legacy else SCHEMA_VERSION),
         "kind": AUTHORIZATION_KIND,
-        "domain": AUTHORIZATION_DOMAIN,
-        "authorization_id": _identity(item["authorization_id"], "authorization identity"),
-        "repository": _repository(item["repository"]),
-        "delivery_issue": _positive(item["delivery_issue"], "delivery issue"),
-        "pull_request": _positive(item["pull_request"], "pull request"),
+        "domain": _domain(AUTHORIZATION_DOMAIN, legacy),
+        "authorization_id": _identity(item["authorization_id"], "authorization identity", legacy=legacy),
+        "repository": _repository(item["repository"], legacy=legacy),
+        "delivery_issue": _positive(item["delivery_issue"], "delivery issue", legacy=legacy),
+        "pull_request": _positive(item["pull_request"], "pull request", legacy=legacy),
         "draft_head_sha": _oid(item["draft_head_sha"], "authorized Draft head"),
         "current_main_sha": _oid(item["current_main_sha"], "authorized current main"),
-        "expected_signer": _identity(item["expected_signer"], "candidate signer"),
+        "expected_signer": _identity(item["expected_signer"], "candidate signer", legacy=legacy),
         "signer_identity": signer,
     }
-    signed = {**fields, "signature": _signature(item["signature"], signer)}
+    signed = {**fields, "signature": _signature(item["signature"], signer, legacy=legacy)}
     if _digest(item["authorization_digest"], "authorization digest") != digest_json(signed):
         raise PreEnrollmentIntegrationError("authorization digest mismatch")
     return {**signed, "authorization_digest": digest_json(signed)}
@@ -270,28 +480,33 @@ def create_authorization(
         fields["signer_identity"],
     )
     signed = {**fields, "signature": signature}
-    return {**signed, "authorization_digest": digest_json(signed)}
+    return _bounded_result({**signed, "authorization_digest": digest_json(signed)}, "authorization")
 
 
-def verify_authorization(
+def _verify_authorization(
     authorization: Mapping[str, Any], *, accepted_signers: frozenset[str],
     verifier: Callable[[bytes, Mapping[str, str], str, str], bool],
+    legacy: bool,
 ) -> dict[str, Any]:
-    normalized = normalize_authorization(authorization)
+    normalized = _normalize_authorization(authorization, legacy=legacy)
     signer = normalized["signer_identity"]
     if signer not in accepted_signers or not verifier(
         canonical_json_bytes({k: copy.deepcopy(v) for k, v in normalized.items() if k not in {"signature", "authorization_digest"}}),
-        normalized["signature"], signer, AUTHORIZATION_DOMAIN,
+        normalized["signature"], signer, _domain(AUTHORIZATION_DOMAIN, legacy),
     ):
         raise PreEnrollmentIntegrationError("pre-enrollment authorization signature is not trusted")
     return normalized
 
 
-def _paths(value: Any) -> list[str]:
+def _paths(value: Any, *, legacy: bool = False) -> list[str]:
     if not isinstance(value, list):
         raise PreEnrollmentIntegrationError("conflict paths are malformed")
+    if not legacy and len(value) > 32:
+        raise PreEnrollmentIntegrationError("RESOURCE_CONTRACT_REJECTED")
     result = []
     for path in value:
+        if not legacy:
+            _bounded_text(path, 1024)
         if not isinstance(path, str) or not path or path.startswith("/") or "\\" in path or any(p in {"", ".", ".."} for p in path.split("/")) or not _PATH.fullmatch(path):
             raise PreEnrollmentIntegrationError("conflict path is unsafe")
         result.append(path)
@@ -300,13 +515,15 @@ def _paths(value: Any) -> list[str]:
     return result
 
 
-def _delta(value: Any) -> list[dict[str, str]]:
+def _delta(value: Any, *, legacy: bool = False) -> list[dict[str, str]]:
     if not isinstance(value, list):
         raise PreEnrollmentIntegrationError("conflict-resolution delta is malformed")
+    if not legacy and len(value) > 32:
+        raise PreEnrollmentIntegrationError("RESOURCE_CONTRACT_REJECTED")
     result = []
     for raw in value:
         item = _closed(raw, DELTA_FIELDS, "conflict-resolution delta")
-        path = _paths([item["path"]])[0]
+        path = _paths([item["path"]], legacy=legacy)[0]
         allowed_modes = {"000000", "100644", "100755", "120000", "160000"}
         if (
             item["status"] not in {"A", "D", "M", "T"}
@@ -322,16 +539,18 @@ def _delta(value: Any) -> list[dict[str, str]]:
     return result
 
 
-def normalize_evidence(value: Any, *, registry: Mapping[str, Any]) -> dict[str, Any]:
+def _normalize_evidence(value: Any, *, registry: Mapping[str, Any], legacy: bool) -> dict[str, Any]:
     item = _closed(value, EVIDENCE_FIELDS, "pre-enrollment integration evidence")
-    if item["schema_version"] != SCHEMA_VERSION or item["kind"] != KIND or item["domain"] != DOMAIN:
+    if item["schema_version"] != (HISTORICAL_SCHEMA_VERSION if legacy else SCHEMA_VERSION) or item["kind"] != KIND or item["domain"] != _domain(DOMAIN, legacy):
         raise PreEnrollmentIntegrationError("pre-enrollment topology kind is unsupported")
-    repository = _repository(item["repository"])
+    if not legacy:
+        require_current_policy(registry)
+    repository = _repository(item["repository"], legacy=legacy)
     if repository != registry.get("repository"):
         raise PreEnrollmentIntegrationError("repository is not registered")
-    issue = _positive(item["delivery_issue"], "delivery issue")
-    pr = _positive(item["pull_request"], "pull request")
-    authorization = normalize_authorization(item["authorization"])
+    issue = _positive(item["delivery_issue"], "delivery issue", legacy=legacy)
+    pr = _positive(item["pull_request"], "pull request", legacy=legacy)
+    authorization = _normalize_authorization(item["authorization"], legacy=legacy)
     if item["authorization_digest"] != authorization["authorization_digest"] or (authorization["repository"], authorization["delivery_issue"], authorization["pull_request"]) != (repository, issue, pr):
         raise PreEnrollmentIntegrationError("authorization delivery identity changed")
     draft = _closed(item["draft_pr"], frozenset({"state", "draft", "head_sha", "observation_digest"}), "Draft PR identity")
@@ -347,8 +566,8 @@ def normalize_evidence(value: Any, *, registry: Mapping[str, Any]) -> dict[str, 
         raise PreEnrollmentIntegrationError("pre-enrollment integration requires exact ordered Draft/current-main parents")
     if authorization["draft_head_sha"] != draft_head or authorization["current_main_sha"] != main_head:
         raise PreEnrollmentIntegrationError("authorization parent identity changed")
-    conflicts = _paths(item["mechanical_conflict_paths"])
-    delta = _delta(item["manual_conflict_resolution_delta"])
+    conflicts = _paths(item["mechanical_conflict_paths"], legacy=legacy)
+    delta = _delta(item["manual_conflict_resolution_delta"], legacy=legacy)
     if (not conflicts and delta) or (conflicts and [d["path"] for d in delta] != conflicts):
         raise PreEnrollmentIntegrationError("conflict resolution is omitted, extra, or outside the authenticated boundary")
     graph = _closed(item["work_graph"], frozenset({"leaf", "hard_dependencies_satisfied", "ready", "evidence_digest"}), "work-graph evidence")
@@ -361,13 +580,15 @@ def normalize_evidence(value: Any, *, registry: Mapping[str, Any]) -> dict[str, 
     expected_execution = {"registry_digest": digest_json(registry), "command_set_digest": digest_json(registry.get("validation", []))}
     if execution != expected_execution:
         raise PreEnrollmentIntegrationError("validation command-set identity is stale")
-    signer = _identity(item["expected_signer"], "expected candidate signer")
+    signer = _identity(item["expected_signer"], "expected candidate signer", legacy=legacy)
     if signer != authorization["expected_signer"]:
         raise PreEnrollmentIntegrationError("candidate signer differs from authorization")
-    normalized = copy.deepcopy(item)
-    normalized.update(authorization=authorization, draft_pr={**draft, "head_sha": draft_head}, current_main={**current, "sha": main_head}, ordered_parent_shas=[draft_head, main_head], mechanical_conflict_paths=conflicts, manual_conflict_resolution_delta=delta, validated_tree_sha=_oid(item["validated_tree_sha"], "validated tree"), mechanical_merge_tree_sha=_oid(item["mechanical_merge_tree_sha"], "mechanical merge tree"))
+    validated_tree = _oid(item["validated_tree_sha"], "validated tree")
+    mechanical_tree = _oid(item["mechanical_merge_tree_sha"], "mechanical merge tree")
     for field, label in ((draft["observation_digest"], "Draft observation"), (current["observation_digest"], "current-main observation"), (graph["evidence_digest"], "work-graph evidence"), (lifecycle["evidence_digest"], "lifecycle-absence evidence")):
         _digest(field, label)
+    normalized = copy.deepcopy(item)
+    normalized.update(authorization=authorization, draft_pr={**draft, "head_sha": draft_head}, current_main={**current, "sha": main_head}, ordered_parent_shas=[draft_head, main_head], mechanical_conflict_paths=conflicts, manual_conflict_resolution_delta=delta, validated_tree_sha=validated_tree, mechanical_merge_tree_sha=mechanical_tree)
     return normalized
 
 
@@ -391,11 +612,12 @@ def verify_combined_tree(evidence: Mapping[str, Any], *, mechanical_tree_sha: st
         raise PreEnrollmentIntegrationError("clean merge tree contains a manual delta")
 
 
-def create_validation_receipt(*, evidence: Mapping[str, Any], registry: Mapping[str, Any], successful_result: bool, receipt_id: str) -> dict[str, Any]:
-    normalized = normalize_evidence(evidence, registry=registry)
+def _reconstruct_receipt(*, evidence: Mapping[str, Any], registry: Mapping[str, Any], successful_result: bool, receipt_id: str, legacy: bool) -> dict[str, Any]:
+    _identity(receipt_id, "receipt identity", legacy=legacy)
+    normalized = _normalize_evidence(evidence, registry=registry, legacy=legacy)
     fields = {
-        "schema_version": SCHEMA_VERSION, "kind": RECEIPT_KIND, "domain": RECEIPT_DOMAIN,
-        "receipt_id": _identity(receipt_id, "receipt identity"), "repository": normalized["repository"],
+        "schema_version": (HISTORICAL_SCHEMA_VERSION if legacy else SCHEMA_VERSION), "kind": RECEIPT_KIND, "domain": _domain(RECEIPT_DOMAIN, legacy),
+        "receipt_id": _identity(receipt_id, "receipt identity", legacy=legacy), "repository": normalized["repository"],
         "delivery_issue": normalized["delivery_issue"], "pull_request": normalized["pull_request"],
         "ordered_parent_shas": copy.deepcopy(normalized["ordered_parent_shas"]),
         "validated_tree_sha": normalized["validated_tree_sha"], "integration_evidence_digest": digest_json(normalized),
@@ -407,9 +629,10 @@ def create_validation_receipt(*, evidence: Mapping[str, Any], registry: Mapping[
     return {**fields, "receipt_digest": digest_json(fields)}
 
 
-def create_final_attestation(*, evidence: Mapping[str, Any], registry: Mapping[str, Any], receipt: Mapping[str, Any], candidate_head_sha: str, candidate_parent_shas: list[str], candidate_tree_sha: str, verified_signer: str, signature_format: str, attestation_id: str) -> dict[str, Any]:
-    normalized = normalize_evidence(evidence, registry=registry)
-    expected_receipt = create_validation_receipt(evidence=normalized, registry=registry, successful_result=True, receipt_id=receipt.get("receipt_id"))
+def _reconstruct_attestation(*, evidence: Mapping[str, Any], registry: Mapping[str, Any], receipt: Mapping[str, Any], candidate_head_sha: str, candidate_parent_shas: list[str], candidate_tree_sha: str, verified_signer: str, signature_format: str, attestation_id: str, legacy: bool) -> dict[str, Any]:
+    _identity(attestation_id, "attestation identity", legacy=legacy)
+    normalized = _normalize_evidence(evidence, registry=registry, legacy=legacy)
+    expected_receipt = _reconstruct_receipt(evidence=normalized, registry=registry, successful_result=True, receipt_id=receipt.get("receipt_id"), legacy=legacy)
     if dict(receipt) != expected_receipt:
         raise PreEnrollmentIntegrationError("validation receipt is stale or belongs to another candidate")
     if candidate_parent_shas != normalized["ordered_parent_shas"] or _oid(candidate_tree_sha, "candidate tree") != normalized["validated_tree_sha"]:
@@ -417,8 +640,8 @@ def create_final_attestation(*, evidence: Mapping[str, Any], registry: Mapping[s
     if verified_signer != normalized["expected_signer"] or signature_format not in {"ssh", "openpgp"}:
         raise PreEnrollmentIntegrationError("candidate is unsigned or signed by the wrong identity")
     fields = {
-        "schema_version": SCHEMA_VERSION, "kind": ATTESTATION_KIND, "domain": ATTESTATION_DOMAIN,
-        "attestation_id": _identity(attestation_id, "attestation identity"), "repository": normalized["repository"],
+        "schema_version": (HISTORICAL_SCHEMA_VERSION if legacy else SCHEMA_VERSION), "kind": ATTESTATION_KIND, "domain": _domain(ATTESTATION_DOMAIN, legacy),
+        "attestation_id": _identity(attestation_id, "attestation identity", legacy=legacy), "repository": normalized["repository"],
         "delivery_issue": normalized["delivery_issue"], "pull_request": normalized["pull_request"],
         "candidate_head_sha": _oid(candidate_head_sha, "candidate head"), "candidate_tree_sha": normalized["validated_tree_sha"],
         "ordered_parent_shas": copy.deepcopy(normalized["ordered_parent_shas"]), "current_main": copy.deepcopy(normalized["current_main"]),
@@ -431,7 +654,7 @@ def create_final_attestation(*, evidence: Mapping[str, Any], registry: Mapping[s
     return {**fields, "attestation_digest": digest_json(fields)}
 
 
-def verify_final_attestation(*, evidence: Mapping[str, Any], registry: Mapping[str, Any], receipt: Mapping[str, Any], attestation: Mapping[str, Any], commit_trailers: Mapping[str, str], verified_candidate: VerifiedCandidateCommit) -> VerifiedInitialHeadProof:
+def _verify_final_attestation(*, evidence: Mapping[str, Any], registry: Mapping[str, Any], receipt: Mapping[str, Any], attestation: Mapping[str, Any], commit_trailers: Mapping[str, str], verified_candidate: VerifiedCandidateCommit, legacy: bool) -> VerifiedInitialHeadProof:
     if (
         not isinstance(verified_candidate, VerifiedCandidateCommit)
         or verified_candidate._verification_token is not _VERIFIED_CANDIDATE_TOKEN
@@ -439,7 +662,8 @@ def verify_final_attestation(*, evidence: Mapping[str, Any], registry: Mapping[s
         raise PreEnrollmentIntegrationError(
             "initial-head proof requires independently verified commit evidence"
         )
-    expected = create_final_attestation(
+    expected = _reconstruct_attestation(
+        legacy=legacy,
         evidence=evidence, registry=registry, receipt=receipt,
         candidate_head_sha=verified_candidate.head_sha,
         candidate_parent_shas=list(verified_candidate.parent_shas),
@@ -453,6 +677,30 @@ def verify_final_attestation(*, evidence: Mapping[str, Any], registry: Mapping[s
     if dict(commit_trailers) != {"SecPal-Pre-Enrollment-Integration": expected["integration_evidence_digest"], "SecPal-Pre-Enrollment-Validation-Receipt": expected["validation_receipt_digest"]}:
         raise PreEnrollmentIntegrationError("signed candidate trailers do not bind typed evidence")
     return VerifiedInitialHeadProof(INITIAL_HEAD_PROOF_KIND, expected["repository"], expected["delivery_issue"], expected["pull_request"], expected["candidate_head_sha"], expected["validation_receipt_digest"], expected["attestation_digest"], expected["integration_evidence_digest"], _VERIFIED_HEAD_TOKEN)
+
+
+def normalize_authorization(value: Any) -> dict[str, Any]:
+    return _bounded_result(_normalize_authorization(value, legacy=False), "authorization")
+
+
+def normalize_evidence(value: Any, *, registry: Mapping[str, Any]) -> dict[str, Any]:
+    return _bounded_result(_normalize_evidence(value, registry=registry, legacy=False), "integration")
+
+
+def verify_authorization(authorization: Mapping[str, Any], *, accepted_signers: frozenset[str], verifier: Callable[[bytes, Mapping[str, str], str, str], bool]) -> dict[str, Any]:
+    return _verify_authorization(authorization, accepted_signers=accepted_signers, verifier=verifier, legacy=False)
+
+
+def create_validation_receipt(*, evidence: Mapping[str, Any], registry: Mapping[str, Any], successful_result: bool, receipt_id: str) -> dict[str, Any]:
+    return _bounded_result(_reconstruct_receipt(evidence=evidence, registry=registry, successful_result=successful_result, receipt_id=receipt_id, legacy=False), "receipt")
+
+
+def create_final_attestation(*, evidence: Mapping[str, Any], registry: Mapping[str, Any], receipt: Mapping[str, Any], candidate_head_sha: str, candidate_parent_shas: list[str], candidate_tree_sha: str, verified_signer: str, signature_format: str, attestation_id: str) -> dict[str, Any]:
+    return _bounded_result(_reconstruct_attestation(evidence=evidence, registry=registry, receipt=receipt, candidate_head_sha=candidate_head_sha, candidate_parent_shas=candidate_parent_shas, candidate_tree_sha=candidate_tree_sha, verified_signer=verified_signer, signature_format=signature_format, attestation_id=attestation_id, legacy=False), "attestation")
+
+
+def verify_final_attestation(*, evidence: Mapping[str, Any], registry: Mapping[str, Any], receipt: Mapping[str, Any], attestation: Mapping[str, Any], commit_trailers: Mapping[str, str], verified_candidate: VerifiedCandidateCommit) -> VerifiedInitialHeadProof:
+    return _verify_final_attestation(evidence=evidence, registry=registry, receipt=receipt, attestation=attestation, commit_trailers=commit_trailers, verified_candidate=verified_candidate, legacy=False)
 
 
 def execute_once(
