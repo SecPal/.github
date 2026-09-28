@@ -85,6 +85,11 @@ _ADOPTION_ARTIFACT_LIMITS = {
     "validation-receipt.json": 1141,
     "final-attestation.json": 140731,
 }
+_ADOPTION_ARTIFACT_KINDS = {
+    "integration": "integration-evidence.json",
+    "receipt": "validation-receipt.json",
+    "attestation": "final-attestation.json",
+}
 _ADOPTION_DIAGNOSTICS = frozenset({
     "RESOURCE_CONTRACT_REJECTED", "INPUT_SCHEMA_REJECTED",
     "SOURCE_HISTORY_REJECTED", "EVIDENCE_TIME_POLICY_REJECTED",
@@ -2170,9 +2175,222 @@ def execute_pre_enrollment_implementation_bootstrap(
         }
 
 
+def _admitted_adoption_policy_bytes(
+    root: Path, policy: authority.BootstrapSourceAdmissionPolicy,
+) -> bytes:
+    """Read the fixed registry blob as data from the authenticated source tree."""
+
+    path = PROTECTED_MAIN_REGISTRY_PATH
+    record = _git_text(root, [
+        "ls-tree", "-z", "--full-tree", policy.source_tree_sha,
+        "--", f":(literal){path}",
+    ])
+    if not record.endswith("\x00") or record.count("\x00") != 1:
+        raise BootstrapSourceAdmissionError(
+            "admitted historical policy source is unavailable",
+            diagnostic_identity="EVIDENCE_TIME_POLICY_REJECTED",
+        )
+    metadata, separator, recorded_path = record[:-1].partition("\t")
+    fields = metadata.split()
+    if (
+        separator != "\t" or recorded_path != path or len(fields) != 3
+        or fields[0] != "100644" or fields[1] != "blob"
+        or not _OID.fullmatch(fields[2])
+    ):
+        raise BootstrapSourceAdmissionError(
+            "admitted historical policy is not a regular fixed-path blob",
+            diagnostic_identity="EVIDENCE_TIME_POLICY_REJECTED",
+        )
+    raw = _git(root, ["cat-file", "blob", fields[2]]).stdout
+    if not 0 < len(raw) <= MAXIMUM_EVIDENCE_BYTES:
+        raise BootstrapSourceAdmissionError(
+            "admitted historical policy exceeds its source bound",
+            diagnostic_identity="EVIDENCE_TIME_POLICY_REJECTED",
+        )
+    header = f"blob {len(raw)}\0".encode("ascii")
+    digest = hashlib.sha1 if len(fields[2]) == 40 else hashlib.sha256
+    if digest(header + raw).hexdigest() != fields[2]:
+        raise BootstrapSourceAdmissionError(
+            "admitted historical policy blob identity changed",
+            diagnostic_identity="EVIDENCE_TIME_POLICY_REJECTED",
+        )
+    return bytes(raw)
+
+
+def _adoption_transport_limits(
+    registry_raw: bytes, control: bytes,
+) -> dict[str, int]:
+    """Select only wire limits from a closed policy in the admitted source tree.
+
+    The caller must first authenticate and materialize that exact source. This
+    projection cannot establish historical semantic validity on its own.
+    """
+
+    if not isinstance(control, bytes) or not 0 < len(control) <= _ADOPTION_CONTROL_BYTES:
+        raise BootstrapSourceAdmissionError(
+            "adoption control exceeds its closed resource bound",
+            diagnostic_identity="RESOURCE_CONTRACT_REJECTED",
+        )
+    try:
+        requested = _closed_json(control, "adoption control")
+        canonical_control = fast_path.canonical_json_bytes(requested)
+    except (
+        BootstrapSourceAdmissionError, RecursionError, UnicodeError,
+        TypeError, ValueError,
+    ) as exc:
+        raise BootstrapSourceAdmissionError(
+            "adoption control is malformed",
+            diagnostic_identity="INPUT_SCHEMA_REJECTED",
+        ) from exc
+    expected_control = {
+        "repository", "delivery_issue_number", "pull_request_number", "head_sha",
+        "pull_request_state", "observed_pre_enrollment_history", "intended_state",
+        "review_budget_consumption_admission",
+    }
+    if (
+        set(requested) != expected_control
+        or canonical_control != control
+        or requested["repository"] != PROTECTED_MAIN_REPOSITORY
+        or any(
+            type(requested[field]) is not int
+            or not 0 < requested[field] <= 2147483647
+            for field in ("delivery_issue_number", "pull_request_number")
+        )
+        or not isinstance(requested["head_sha"], str)
+        or not _OID.fullmatch(requested["head_sha"])
+    ):
+        raise BootstrapSourceAdmissionError(
+            "adoption control identity is invalid",
+            diagnostic_identity="INPUT_SCHEMA_REJECTED",
+        )
+    try:
+        registry = _closed_json(registry_raw, "admitted historical policy registry")
+    except (BootstrapSourceAdmissionError, RecursionError) as exc:
+        raise BootstrapSourceAdmissionError(
+            "admitted historical policy is malformed",
+            diagnostic_identity="EVIDENCE_TIME_POLICY_REJECTED",
+        ) from exc
+    repositories = registry.get("repositories")
+    if not isinstance(repositories, list):
+        raise BootstrapSourceAdmissionError(
+            "admitted historical policy registry is malformed",
+            diagnostic_identity="EVIDENCE_TIME_POLICY_REJECTED",
+        )
+    entries = [
+        item for item in repositories
+        if isinstance(item, dict) and item.get("repository") == PROTECTED_MAIN_REPOSITORY
+    ]
+    if len(entries) != 1:
+        raise BootstrapSourceAdmissionError(
+            "admitted historical policy repository is not unique",
+            diagnostic_identity="EVIDENCE_TIME_POLICY_REJECTED",
+        )
+    binding = entries[0].get("pre_enrollment_integration_policy")
+    expected_policy = {
+        "schema_version": "1.1", "command": "integrate-pre-enrollment-draft",
+        "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1, "maximum_pushes": 1,
+        "force_push": False, "automatic_retry": False,
+        "merge_pull_request": False,
+    }
+    if (
+        not isinstance(binding, dict)
+        or set(binding) != set(expected_policy) | {"historical_sources"}
+        or any(
+            type(binding[key]) is not type(value) or binding[key] != value
+            for key, value in expected_policy.items()
+        )
+        or not isinstance(binding["historical_sources"], list)
+        or len(binding["historical_sources"]) > 4
+    ):
+        raise BootstrapSourceAdmissionError(
+            "admitted historical policy has invalid shape",
+            diagnostic_identity="EVIDENCE_TIME_POLICY_REJECTED",
+        )
+    rows = binding["historical_sources"]
+    required_row = {
+        "repository", "delivery_issue", "pull_request", "head_sha", "tree_sha",
+        "integration_evidence_digest", "validation_receipt_digest",
+        "final_attestation_digest", "artifact_sizes",
+    }
+    seen_heads: set[str] = set()
+    selected: dict[str, Any] | None = None
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != required_row:
+            raise BootstrapSourceAdmissionError(
+                "admitted historical inventory is malformed",
+                diagnostic_identity="EVIDENCE_TIME_POLICY_REJECTED",
+            )
+        if (
+            row["repository"] != PROTECTED_MAIN_REPOSITORY
+            or any(
+                type(row[field]) is not int or not 0 < row[field] <= 2147483647
+                for field in ("delivery_issue", "pull_request")
+            )
+            or any(
+                not isinstance(row[field], str) or not _OID.fullmatch(row[field])
+                for field in ("head_sha", "tree_sha")
+            )
+            or any(
+                not isinstance(row[field], str) or not _DIGEST.fullmatch(row[field])
+                for field in (
+                    "integration_evidence_digest", "validation_receipt_digest",
+                    "final_attestation_digest",
+                )
+            )
+            or row["head_sha"] in seen_heads
+        ):
+            raise BootstrapSourceAdmissionError(
+                "admitted historical inventory identity is invalid",
+                diagnostic_identity="EVIDENCE_TIME_POLICY_REJECTED",
+            )
+        seen_heads.add(row["head_sha"])
+        sizes = row["artifact_sizes"]
+        if sizes is not None and (
+            not isinstance(sizes, dict)
+            or set(sizes) != set(_ADOPTION_ARTIFACT_KINDS)
+            or any(
+                not isinstance(item, dict)
+                or set(item) != {"wire_bytes", "canonical_bytes"}
+                or any(type(value) is not int or not 0 < value <= 2147483647
+                       for value in item.values())
+                for item in sizes.values()
+            )
+        ):
+            raise BootstrapSourceAdmissionError(
+                "admitted historical artifact sizes are invalid",
+                diagnostic_identity="EVIDENCE_TIME_POLICY_REJECTED",
+            )
+        if row["head_sha"] == requested["head_sha"]:
+            selected = row
+    if selected is None:
+        return dict(_ADOPTION_ARTIFACT_LIMITS)
+    if any(selected[field] != requested[control_field] for field, control_field in (
+        ("repository", "repository"),
+        ("delivery_issue", "delivery_issue_number"),
+        ("pull_request", "pull_request_number"),
+    )):
+        raise BootstrapSourceAdmissionError(
+            "adoption control differs from selected historical delivery",
+            diagnostic_identity="ARTIFACT_BINDING_REJECTED",
+        )
+    sizes = selected["artifact_sizes"]
+    if sizes is None:
+        raise BootstrapSourceAdmissionError(
+            "selected historical artifact limits are unavailable",
+            diagnostic_identity="HISTORICAL_EVIDENCE_UNAVAILABLE",
+        )
+    return {
+        filename: sizes[kind]["wire_bytes"]
+        for kind, filename in _ADOPTION_ARTIFACT_KINDS.items()
+    }
+
+
 @contextmanager
 def _private_adoption_input(
     control: bytes, artifact_directory: Path | str,
+    *, limits: Mapping[str, int] | None = None,
 ) -> Iterator[Path]:
     """Copy closed caller data into private files before the admitted child runs."""
 
@@ -2180,6 +2398,18 @@ def _private_adoption_input(
         raise BootstrapSourceAdmissionError(
             "adoption control exceeds its closed resource bound",
             diagnostic_identity="RESOURCE_CONTRACT_REJECTED",
+        )
+    selected_limits = _ADOPTION_ARTIFACT_LIMITS if limits is None else limits
+    if (
+        set(selected_limits) != set(_ADOPTION_ARTIFACT_LIMITS)
+        or any(
+            type(value) is not int or not 0 < value <= 2147483647
+            for value in selected_limits.values()
+        )
+    ):
+        raise BootstrapSourceAdmissionError(
+            "adoption artifact limits are invalid",
+            diagnostic_identity="EVIDENCE_TIME_POLICY_REJECTED",
         )
     try:
         descriptor = os.open(
@@ -2192,7 +2422,7 @@ def _private_adoption_input(
         ) from exc
     try:
         originals: dict[str, bytes] = {}
-        for filename, limit in _ADOPTION_ARTIFACT_LIMITS.items():
+        for filename, limit in selected_limits.items():
             try:
                 item = os.open(
                     filename, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
@@ -2306,7 +2536,10 @@ def execute_pre_enrollment_adoption_authentication(
         if not is_verified_bootstrap_source(verified):
             raise BootstrapSourceAdmissionError("admitted adoption source was not retained")
         _verify_materialized_tree(root, policy)
-        with _private_adoption_input(control, artifact_directory) as private:
+        registry_raw = _admitted_adoption_policy_bytes(root, policy)
+        limits = _adoption_transport_limits(registry_raw, control)
+        _verify_materialized_tree(root, policy)
+        with _private_adoption_input(control, artifact_directory, limits=limits) as private:
             helper = authority._load_trusted_command_helper()
             environment = _closed_launcher_environment(helper)
             try:

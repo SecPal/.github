@@ -734,10 +734,15 @@ head, tree, sole parent, receipt, final attestation, signer, and exact
 `scripts/secpal_pr_review/fast_path.py` blob in accepted-main policy. The
 executor authenticates that source before importing it, then invokes only
 `authenticate_pre_enrollment_adoption` in the existing isolated Python
-boundary. It copies bounded artifact files into a private directory and passes
-a small closed control document. The child performs read-only bootstrap and
-Exact-State-Adoption authentication. Its closed result is a diagnostic or
-summary, never validation evidence or an adoption capability. The admitted
+boundary. Before copying artifact files, it reads the fixed historical policy
+as data from the authenticated #1015 source tree and selects wire-byte limits
+from the closed downstream delivery identity. Current schema-1.1 artifacts use
+the fixed finite limits; an exact inventory-selected historical schema-1.0
+delivery uses its authenticated wire limits. The admitted child remains
+responsible for canonical-byte, digest, and historical semantic verification.
+The executor passes a small closed control document. The child performs
+read-only bootstrap and Exact-State-Adoption authentication. Its closed result
+is a diagnostic or summary, never validation evidence or an adoption capability. The admitted
 commit remains fixed if the live #1015 head advances; delivery lifecycle state
 must still be authenticated separately by its consumer. This admission does
 not change the #1015 bridge or its pre-enrollment evidence versions.

@@ -3861,6 +3861,80 @@ class AdoptionSourceAdmissionContractTests(unittest.TestCase):
         ):
             self.assertIs(source._select_adoption_policy()[1], self.policy)
 
+    def test_historical_policy_data_is_bound_to_exact_source_tree_blob(self) -> None:
+        raw = b'{"repositories":[]}\n'
+        oid = hashlib.sha1(f"blob {len(raw)}\0".encode() + raw).hexdigest()
+        path = source.PROTECTED_MAIN_REGISTRY_PATH
+        record = f"100644 blob {oid}\t{path}\0"
+        with mock.patch.object(source, "_git_text", return_value=record) as ls_tree, mock.patch.object(
+            source, "_git", return_value=subprocess.CompletedProcess([], 0, raw, b"")
+        ) as cat_file:
+            self.assertEqual(source._admitted_adoption_policy_bytes(Path("/exact"), self.policy), raw)
+        self.assertEqual(ls_tree.call_args.args[1][3], self.policy.source_tree_sha)
+        self.assertEqual(cat_file.call_args.args[1], ["cat-file", "blob", oid])
+        for altered in (
+            f"100644 blob {oid}\t../repositories.json\0",
+            f"120000 blob {oid}\t{path}\0",
+            f"100644 blob {'f' * 40}\t{path}\0",
+        ):
+            with self.subTest(altered=altered), mock.patch.object(
+                source, "_git_text", return_value=altered
+            ), mock.patch.object(
+                source, "_git", return_value=subprocess.CompletedProcess([], 0, raw, b"")
+            ), self.assertRaises(source.BootstrapSourceAdmissionError):
+                source._admitted_adoption_policy_bytes(Path("/exact"), self.policy)
+
+    def test_admitted_source_precedes_policy_selection_and_artifact_copy(self) -> None:
+        # This checks ordering; source identity and signature are covered by the
+        # separate non-mocked admission tests.
+        sequence: list[str] = []
+        verified = object()
+
+        @contextmanager
+        def isolated(_trust, _policy):
+            yield Path("/exact-source")
+
+        @contextmanager
+        def copied(_control, _artifacts, *, limits):
+            self.assertEqual(sequence, ["authenticated", "policy", "limits"])
+            self.assertEqual(limits, source._ADOPTION_ARTIFACT_LIMITS)
+            sequence.append("copied")
+            yield Path("/private")
+
+        def authenticate(_root, _trust, _policy, _evidence):
+            sequence.append("authenticated")
+            return verified
+
+        def policy_data(_root, _policy):
+            self.assertEqual(sequence, ["authenticated"])
+            sequence.append("policy")
+            return b"{}"
+
+        def choose_limits(_raw, _control):
+            self.assertEqual(sequence, ["authenticated", "policy"])
+            sequence.append("limits")
+            return dict(source._ADOPTION_ARTIFACT_LIMITS)
+
+        with (
+            mock.patch.object(source, "_select_adoption_policy", return_value=(self.trust, self.policy)),
+            mock.patch.object(source, "_read_evidence", return_value=({}, {}, {})),
+            mock.patch.object(source, "_authenticate_live_github_source"),
+            mock.patch.object(source, "_isolated_source_repository", isolated),
+            mock.patch.object(source, "_authenticate_materialized_source", side_effect=authenticate),
+            mock.patch.object(source, "is_verified_bootstrap_source", return_value=True),
+            mock.patch.object(source, "_verify_materialized_tree"),
+            mock.patch.object(source, "_admitted_adoption_policy_bytes", side_effect=policy_data),
+            mock.patch.object(source, "_adoption_transport_limits", side_effect=choose_limits),
+            mock.patch.object(source, "_private_adoption_input", copied),
+            mock.patch.object(source.authority, "_load_trusted_command_helper"),
+            mock.patch.object(source, "_closed_launcher_environment", return_value={}),
+            mock.patch.object(source, "_isolated_python_command", return_value=["python3"]),
+            mock.patch.object(source, "_run_isolated_python", return_value=subprocess.CompletedProcess([], 0, b"{}", b"")),
+            mock.patch.object(source, "_closed_adoption_result", return_value={}),
+        ):
+            source.execute_pre_enrollment_adoption_authentication(b"{}", "/artifacts", "/source")
+        self.assertEqual(sequence, ["authenticated", "policy", "limits", "copied"])
+
     def test_closed_parser_and_exact_selector_reject_mutations(self) -> None:
         raw = json.loads(source.authority._TRUST_REGISTRY.read_bytes())
         entry = next(item for item in raw["repositories"] if item["repository"] == REPOSITORY)
@@ -3973,6 +4047,114 @@ class AdoptionSourceAdmissionContractTests(unittest.TestCase):
             with self.assertRaises(source.BootstrapSourceAdmissionError):
                 with source._private_adoption_input(b"{}", root):
                     pass
+
+    def test_historical_transport_uses_selected_wire_bound(self) -> None:
+        control = fast_path.canonical_json_bytes({
+            "repository": REPOSITORY, "delivery_issue_number": 764,
+            "pull_request_number": 773, "head_sha": "d" * 40,
+            "pull_request_state": {}, "observed_pre_enrollment_history": {},
+            "intended_state": {}, "review_budget_consumption_admission": {},
+        })
+        historical = {
+            "repository": REPOSITORY, "delivery_issue": 764,
+            "pull_request": 773, "head_sha": "d" * 40,
+            "tree_sha": "a" * 40,
+            "integration_evidence_digest": "1" * 64,
+            "validation_receipt_digest": "2" * 64,
+            "final_attestation_digest": "3" * 64,
+            "artifact_sizes": {
+                "integration": {"wire_bytes": 1048577, "canonical_bytes": 2},
+                "receipt": {"wire_bytes": 888, "canonical_bytes": 2},
+                "attestation": {"wire_bytes": 1791, "canonical_bytes": 2},
+            },
+        }
+        registry = {"repositories": [{
+            "repository": REPOSITORY,
+            "pre_enrollment_integration_policy": {
+                "schema_version": "1.1",
+                "command": "integrate-pre-enrollment-draft",
+                "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+                "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+                "maximum_candidates": 1, "maximum_pushes": 1,
+                "force_push": False, "automatic_retry": False,
+                "merge_pull_request": False,
+                "historical_sources": [historical],
+            },
+        }]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = root / "artifacts"
+            artifacts.mkdir()
+            (artifacts / "integration-evidence.json").write_bytes(
+                b"{}" + b" " * (1048577 - 2)
+            )
+            (artifacts / "validation-receipt.json").write_bytes(b"{}")
+            (artifacts / "final-attestation.json").write_bytes(b"{}")
+            limits = source._adoption_transport_limits(
+                fast_path.canonical_json_bytes(registry), control
+            )
+            self.assertEqual(limits["integration-evidence.json"], 1048577)
+            with source._private_adoption_input(control, artifacts, limits=limits) as private:
+                self.assertEqual(
+                    (private / "integration-evidence.json").stat().st_size, 1048577
+                )
+            (artifacts / "integration-evidence.json").write_bytes(b"x" * 1048578)
+            with self.assertRaises(source.BootstrapSourceAdmissionError):
+                with source._private_adoption_input(control, artifacts, limits=limits):
+                    pass
+            current = source._adoption_transport_limits(
+                fast_path.canonical_json_bytes(registry),
+                fast_path.canonical_json_bytes({**json.loads(control), "head_sha": "e" * 40}),
+            )
+            self.assertEqual(current, source._ADOPTION_ARTIFACT_LIMITS)
+            for field, changed in (
+                ("delivery_issue_number", 765), ("pull_request_number", 774),
+                ("repository", "Other/.github"),
+            ):
+                with self.subTest(field=field), self.assertRaises(
+                    source.BootstrapSourceAdmissionError
+                ):
+                    source._adoption_transport_limits(
+                        fast_path.canonical_json_bytes(registry),
+                        fast_path.canonical_json_bytes({**json.loads(control), field: changed}),
+                    )
+            for change in ("duplicate", "extra", "zero", "negative", "unknown_size"):
+                changed = copy.deepcopy(registry)
+                rows = changed["repositories"][0]["pre_enrollment_integration_policy"]["historical_sources"]
+                if change == "duplicate":
+                    rows.append(copy.deepcopy(rows[0]))
+                elif change == "extra":
+                    rows[0]["caller_selected"] = True
+                elif change == "zero":
+                    rows[0]["artifact_sizes"]["integration"]["wire_bytes"] = 0
+                elif change == "negative":
+                    rows[0]["artifact_sizes"]["receipt"]["wire_bytes"] = -1
+                else:
+                    rows[0]["artifact_sizes"]["unknown"] = {
+                        "wire_bytes": 1, "canonical_bytes": 1,
+                    }
+                with self.subTest(change=change), self.assertRaises(
+                    source.BootstrapSourceAdmissionError
+                ):
+                    source._adoption_transport_limits(
+                        fast_path.canonical_json_bytes(changed), control
+                    )
+            changed = copy.deepcopy(registry)
+            changed["repositories"][0]["pre_enrollment_integration_policy"]["historical_sources"][0]["artifact_sizes"] = None
+            with self.assertRaises(source.BootstrapSourceAdmissionError) as unavailable:
+                source._adoption_transport_limits(fast_path.canonical_json_bytes(changed), control)
+            self.assertEqual(unavailable.exception.diagnostic_identity, "HISTORICAL_EVIDENCE_UNAVAILABLE")
+            with self.assertRaises(source.BootstrapSourceAdmissionError):
+                source._adoption_transport_limits(
+                    fast_path.canonical_json_bytes(registry),
+                    fast_path.canonical_json_bytes({**json.loads(control), "historical": True}),
+                )
+            with self.assertRaises(source.BootstrapSourceAdmissionError) as malformed:
+                source._adoption_transport_limits(
+                    fast_path.canonical_json_bytes(registry),
+                    control[:-2] + b',"caller":"\\ud800"}\n',
+                )
+            self.assertEqual(malformed.exception.diagnostic_identity, "INPUT_SCHEMA_REJECTED")
 
     def test_result_is_closed_and_never_a_validation_capability(self) -> None:
         control = {"repository": REPOSITORY, "delivery_issue_number": 764,
