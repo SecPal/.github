@@ -1209,89 +1209,25 @@ def _reject_integration_conflict_markers(
     conflict_paths: list[str],
     *, run_git: Callable[..., Any],
 ) -> None:
-    # Git authenticates exact literal tree entries and immutable object sizes.
-    # Python reads only the bounded blobs and owns the sole conflict grammar.
-    blobs: list[tuple[str, str, int]] = []
-    aggregate_size = 0
-    for path in conflict_paths:
-        entry = run_git(
-            repository_root,
-            [
-                "ls-tree",
-                "-z",
-                "--full-tree",
-                validated_tree,
-                "--",
-                f":(literal){path}",
-            ],
-            allow_failure=True,
+    # Bulk observations preserve the same exact entries, aggregate byte bound,
+    # and marker grammar without one process per path or blob.
+    try:
+        states = _integration_path_states(
+            repository_root, validated_tree, conflict_paths, run_git=run_git,
         )
-        if entry.returncode != 0:
-            raise SecurityBlocker(
-                "resolved integration conflict content cannot be authenticated"
-            )
-        if entry.stdout == "":
-            continue
-        if not entry.stdout.endswith("\x00") or entry.stdout.count("\x00") != 1:
-            raise SecurityBlocker(
-                "resolved integration conflict content cannot be authenticated"
-            )
-        record = entry.stdout[:-1]
-        metadata, separator, observed_path = record.partition("\t")
-        parts = metadata.split()
-        if separator != "\t" or len(parts) != 3 or observed_path != path:
-            raise SecurityBlocker(
-                "resolved integration conflict content cannot be authenticated"
-            )
-        mode, object_type, object_oid = parts
-        if mode == "160000" and object_type == "commit":
-            continue
-        if (
-            mode not in {"100644", "100755", "120000"}
-            or object_type != "blob"
-            or not OID.fullmatch(object_oid)
-        ):
-            raise SecurityBlocker(
-                "resolved integration conflict content cannot be authenticated"
-            )
-        size_result = run_git(
-            repository_root,
-            ["cat-file", "-s", object_oid],
-            allow_failure=True,
-        )
-        size_text = size_result.stdout.strip()
-        if (
-            size_result.returncode != 0
-            or not size_text.isascii()
-            or not size_text.isdecimal()
-        ):
-            raise SecurityBlocker(
-                "resolved integration conflict content cannot be authenticated"
-            )
-        size = int(size_text)
-        aggregate_size += size
-        if aggregate_size > MAX_INTEGRATION_CONFLICT_CONTENT_BYTES:
-            raise SecurityBlocker(
-                "resolved integration conflict content exceeds the authenticated size bound"
-            )
-        blobs.append((path, object_oid.lower(), size))
-
-    for _path, object_oid, expected_size in blobs:
-        result = run_git(
-            repository_root,
-            ["cat-file", "blob", object_oid],
-            allow_failure=True,
-            raw_output=True,
-        )
-        if (
-            result.returncode != 0
-            or not isinstance(result.stdout, bytes)
-            or len(result.stdout) != expected_size
-        ):
-            raise SecurityBlocker(
-                "resolved integration conflict content cannot be authenticated"
-            )
-        raw_content = result.stdout
+        blob_oids = []
+        for state in states.values():
+            if state is None or state[:2] == ("160000", "commit"):
+                continue
+            if state[1] != "blob":
+                raise SecurityBlocker("integration marker path is not a blob")
+            blob_oids.append(state[2])
+        contents = _integration_blob_contents(repository_root, blob_oids, run_git=run_git)
+    except SecurityBlocker as exc:
+        raise SecurityBlocker(
+            "resolved integration conflict content cannot be authenticated: " + str(exc)
+        ) from exc
+    for raw_content in contents:
         # Match Git's established binary-file sniff: a NUL in the initial
         # 8,000-byte inspection window excludes the blob from text scanning.
         if b"\x00" in raw_content[:8000]:
@@ -1360,28 +1296,107 @@ def _integration_conflict_marker_kind(line: str) -> str | None:
 
 
 
-def _integration_path_state(
-    repository_root: Path, tree: str, path: str, *, run_git: Callable[..., Any],
-) -> tuple[str, str, str] | None:
-    result = run_git(repository_root, ["ls-tree", "-z", "--full-tree", tree,
-                                     "--", f":(literal){path}"], allow_failure=True)
-    if result.returncode != 0:
-        raise SecurityBlocker("integration path state is unavailable")
-    if result.stdout == "":
-        return None
-    record = result.stdout
-    metadata, separator, observed = record[:-1].partition("\t")
-    parts = metadata.split()
-    if (not record.endswith("\x00") or record.count("\x00") != 1
-            or separator != "\t" or observed != path or len(parts) != 3):
-        raise SecurityBlocker("integration path state is malformed")
-    mode, kind, oid = parts
-    if (mode, kind) not in {
-        ("100644", "blob"), ("100755", "blob"), ("120000", "blob"),
-        ("160000", "commit"), ("040000", "tree"),
-    } or not OID.fullmatch(oid):
-        raise SecurityBlocker("integration path mode, type or object is malformed")
-    return mode, kind, oid
+def _integration_chunks(values: list[str]) -> list[list[str]]:
+    """Bound both item count and command/input bytes per Git observation."""
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    size = 0
+    for value in values:
+        encoded_size = len(value.encode("utf-8")) + 16
+        if encoded_size > 32768:
+            raise SecurityBlocker("integration observation item exceeds the size bound")
+        if current and (len(current) == 128 or size + encoded_size > 32768):
+            chunks.append(current)
+            current, size = [], 0
+        current.append(value)
+        size += encoded_size
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _integration_path_states(
+    repository_root: Path, tree: str, paths: list[str], *, run_git: Callable[..., Any],
+) -> dict[str, tuple[str, str, str] | None]:
+    states: dict[str, tuple[str, str, str] | None] = dict.fromkeys(paths)
+    for chunk in _integration_chunks(paths):
+        result = run_git(repository_root, ["ls-tree", "-z", "-t", "--full-tree", tree,
+                        "--", *(f":(literal){path}" for path in chunk)], allow_failure=True)
+        if result.returncode != 0 or not isinstance(result.stdout, str):
+            raise SecurityBlocker("integration path state is unavailable")
+        if not result.stdout:
+            continue
+        if not result.stdout.endswith("\x00"):
+            raise SecurityBlocker("integration path state is malformed")
+        observed_paths = set()
+        for record in result.stdout[:-1].split("\x00"):
+            metadata, separator, path = record.partition("\t")
+            parts = metadata.split()
+            if (separator != "\t" or path in observed_paths or len(parts) != 3):
+                raise SecurityBlocker("integration path state is malformed")
+            mode, kind, oid = parts
+            if (mode, kind) not in {
+                ("100644", "blob"), ("100755", "blob"), ("120000", "blob"),
+                ("160000", "commit"), ("040000", "tree"),
+            } or not OID.fullmatch(oid):
+                raise SecurityBlocker("integration path mode, type or object is malformed")
+            observed_paths.add(path)
+            if path in chunk:
+                states[path] = (mode, kind, oid)
+            elif (mode, kind) != ("040000", "tree") or not any(
+                requested.startswith(path + "/") for requested in chunk
+            ):
+                raise SecurityBlocker("integration path state includes an unexpected entry")
+            # -t includes traversed ancestor trees. Authenticate their shape,
+            # but only requested exact paths contribute to the observation.
+    return states
+
+
+def _integration_blob_contents(
+    repository_root: Path, blob_oids: list[str], *, run_git: Callable[..., Any],
+) -> list[bytes]:
+    chunks = _integration_chunks(sorted(set(blob_oids)))
+    sizes: dict[str, int] = {}
+    for chunk in chunks:
+        result = run_git(repository_root,
+            ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
+            allow_failure=True, raw_output=True,
+            input_data=("\n".join(chunk) + "\n").encode("ascii"))
+        if result.returncode != 0 or not isinstance(result.stdout, bytes):
+            raise SecurityBlocker("integration blob sizes are unavailable")
+        records = result.stdout.splitlines()
+        if len(records) != len(chunk) or not result.stdout.endswith(b"\n"):
+            raise SecurityBlocker("integration blob sizes are malformed")
+        for oid, record in zip(chunk, records):
+            prefix = (oid + " blob ").encode("ascii")
+            size = record.removeprefix(prefix)
+            if not record.startswith(prefix) or not size.isdigit():
+                raise SecurityBlocker("integration blob size or identity is malformed")
+            sizes[oid] = int(size)
+    # Count repeated path contents as before, even though each object is read once.
+    if sum(sizes[oid] for oid in blob_oids) > MAX_INTEGRATION_CONFLICT_CONTENT_BYTES:
+        raise SecurityBlocker("integration conflict content exceeds the authenticated size bound")
+    contents = []
+    for chunk in chunks:
+        result = run_git(repository_root, ["cat-file", "--batch"],
+            allow_failure=True, raw_output=True,
+            input_data=("\n".join(chunk) + "\n").encode("ascii"))
+        if result.returncode != 0 or not isinstance(result.stdout, bytes):
+            raise SecurityBlocker("integration blob contents are unavailable")
+        offset = 0
+        for oid in chunk:
+            header = f"{oid} blob {sizes[oid]}\n".encode("ascii")
+            if result.stdout[offset:offset + len(header)] != header:
+                raise SecurityBlocker("integration blob content identity is malformed")
+            start = offset + len(header)
+            end = start + sizes[oid]
+            if result.stdout[end:end + 1] != b"\n":
+                raise SecurityBlocker("integration blob content length is malformed")
+            contents.append(result.stdout[start:end])
+            offset = end + 1
+        if offset != len(result.stdout):
+            raise SecurityBlocker("integration blob content has extra records")
+    return contents
 
 
 def classify_ready_integration_delta(
@@ -1455,13 +1470,12 @@ def derive_ready_integration_tree_evidence(
     ))
     observations = {}
     if preservation:
-        for item in delta:
-            path = item["path"]
-            if path not in conflicts:
-                observations[path] = tuple(
-                    _integration_path_state(repository_root, tree, path, run_git=run_git)
-                    for tree in (merge_base, *parents, mechanical, validated_tree)
-                )
+        paths = [item["path"] for item in delta if item["path"] not in conflicts]
+        tree_states = [
+            _integration_path_states(repository_root, tree, paths, run_git=run_git)
+            for tree in (merge_base, *parents, mechanical, validated_tree)
+        ]
+        observations = {path: tuple(states[path] for states in tree_states) for path in paths}
     classes = classify_ready_integration_delta(delta, conflicts, observations, preservation=preservation)
     _reject_integration_conflict_markers(
         repository_root, validated_tree, [item["path"] for item in delta], run_git=run_git,
@@ -1503,9 +1517,11 @@ def verify_ready_integration_tree(
 
 def _run_integration_tree_git(
     repository_root: Path, arguments: list[str], *, allow_failure: bool = False,
-    raw_output: bool = False,
+    raw_output: bool = False, input_data: bytes | None = None,
 ) -> Any:
-    result = _run_integration_commit_git(repository_root, arguments, raw_output=raw_output)
+    result = _run_integration_commit_git(
+        repository_root, arguments, raw_output=raw_output, input_data=input_data,
+    )
     if result.returncode != 0 and not allow_failure:
         raise SecurityBlocker("integration tree observation failed")
     return result
@@ -3625,6 +3641,7 @@ def _actual_signature_fingerprint(
 
 def _run_integration_commit_git(
     repository_root: Path, arguments: list[str], *, raw_output: bool = False,
+    input_data: bytes | None = None,
 ) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
     evidence = _load_evidence_helper()
     try:
@@ -3639,7 +3656,8 @@ def _run_integration_commit_git(
             [git_executable, *arguments],
             cwd=repository_root,
             check=False,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL if input_data is None else None,
+            input=input_data,
             capture_output=True,
             text=not raw_output,
             encoding=None if raw_output else "utf-8",

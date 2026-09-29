@@ -5795,6 +5795,88 @@ class ReadyIntegrationPreservationTests(TestCase):
         ))
         return value
 
+    def test_large_preservation_uses_bounded_bulk_git_reads(self) -> None:
+        self.git("checkout", "-q", self.base)
+        names = [f"bulk-{index:04}.txt" for index in range(130)]
+        for name in names:
+            (self.root / name).write_text("first\n" + self.middle + "last\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "bulk base")
+        base = self.git("rev-parse", "HEAD")
+        for name in names:
+            (self.root / name).write_text("left\n" + self.middle + "last\n")
+        self.git("commit", "-qam", "bulk left")
+        left = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-q", base)
+        for index, name in enumerate(names):
+            (self.root / name).write_text("first\n" + self.middle + f"right-{index}\n")
+        self.git("commit", "-qam", "bulk right")
+        right = self.git("rev-parse", "HEAD")
+        tree = self.git("rev-parse", "HEAD^{tree}")
+        calls = []
+
+        def observed_git(root, arguments, **kwargs):
+            calls.append(arguments)
+            return fast_path._run_integration_tree_git(root, arguments, **kwargs)
+
+        evidence = fast_path.derive_ready_integration_tree_evidence(
+            self.root, [left, right], tree, schema_version="1.3", run_git=observed_git,
+        )
+        self.assertEqual(len(evidence["path_classifications"]), len(names))
+        self.assertTrue(all(item["classification"] == "EXACT_PARENT2_PRESERVATION"
+                            for item in evidence["path_classifications"]))
+        # Two bounded chunks, five exact tree observations plus blob size/content.
+        self.assertLessEqual(len(calls), 19)
+        self.assertTrue(all(len(call) <= 140 for call in calls))
+
+    def test_bulk_blob_transport_authenticates_all_records_and_size_bound(self) -> None:
+        oid = "a" * 40
+        size = SimpleNamespace(returncode=0, stdout=f"{oid} blob 3\n".encode())
+        valid = f"{oid} blob 3\n".encode() + b"a\x00b\n"
+        for output in (valid[:-1], valid + b"extra", valid.replace(b"blob 3", b"blob 4"),
+                       valid.replace(oid.encode(), b"b" * 40)):
+            with self.subTest(output=output), self.assertRaises(fast_path.SecurityBlocker):
+                fast_path._integration_blob_contents(self.root, [oid], run_git=mock.Mock(
+                    side_effect=[size, SimpleNamespace(returncode=0, stdout=output)]))
+        runner = mock.Mock(side_effect=[size, SimpleNamespace(returncode=0, stdout=valid)])
+        self.assertEqual(fast_path._integration_blob_contents(self.root, [oid, oid], run_git=runner),
+                         [b"a\x00b"])
+        self.assertEqual(runner.call_count, 2)
+        bound = fast_path.MAX_INTEGRATION_CONFLICT_CONTENT_BYTES
+        runner = mock.Mock(return_value=SimpleNamespace(
+            returncode=0, stdout=f"{oid} blob {bound}\n".encode()))
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "size bound"):
+            fast_path._integration_blob_contents(self.root, [oid, oid], run_git=runner)
+        self.assertEqual(runner.call_count, 1, "Reject before reading oversized content")
+        for output in (f"{oid} blob 3\n{oid} blob 3\n".encode(),
+                       f"{oid} tree 3\n".encode(), f"{oid} blob 3".encode()):
+            with self.subTest(size_output=output), self.assertRaises(fast_path.SecurityBlocker):
+                fast_path._integration_blob_contents(self.root, [oid], run_git=mock.Mock(
+                    return_value=SimpleNamespace(returncode=0, stdout=output)))
+
+    def test_bulk_path_states_preserve_literal_paths_and_exact_missing_state(self) -> None:
+        for path in ("literal[1].txt", ":colon.txt", "nested/file.txt"):
+            target = self.root / path
+            target.parent.mkdir(exist_ok=True)
+            target.write_text(path)
+        self.git("add", ".")
+        tree = self.git("write-tree")
+        paths = ["literal[1].txt", ":colon.txt", "nested", "nested/file.txt", "missing.txt"]
+        states = fast_path._integration_path_states(
+            self.root, tree, paths, run_git=fast_path._run_integration_tree_git,
+        )
+        for path in paths[:-1]:
+            self.assertIsNotNone(states[path], path)
+        self.assertEqual(states["nested"][:2], ("040000", "tree"))
+        self.assertIsNone(states["missing.txt"])
+        oid = "a" * 40
+        record = f"100644 blob {oid}\t:colon.txt\x00"
+        for output in (record + record, record.replace(":colon.txt", "extra.txt"),
+                       record[:-1], record.replace("100644 blob", "100644 tree")):
+            with self.subTest(output=output), self.assertRaises(fast_path.SecurityBlocker):
+                fast_path._integration_path_states(self.root, tree, [":colon.txt"], run_git=mock.Mock(
+                    return_value=SimpleNamespace(returncode=0, stdout=output)))
+
     def test_mixed_conflict_and_preservation_round_trip(self) -> None:
         tree = self.tree()
         value = self.evidence(tree)
@@ -11223,10 +11305,10 @@ class FastPathTests(TestCase):
                 )
             commands = [call.args[1] for call in run_git.call_args_list]
             self.assertTrue(
-                any(command[:2] == ["cat-file", "-s"] for command in commands)
+                any(command[:2] == ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"] for command in commands)
             )
             self.assertFalse(
-                any(command[:2] == ["cat-file", "blob"] for command in commands)
+                any(command[:2] == ["cat-file", "--batch"] for command in commands)
             )
 
     def test_prior_771_resolved_tree_accepts_authenticated_separator_lines(

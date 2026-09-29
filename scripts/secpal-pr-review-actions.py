@@ -5828,6 +5828,7 @@ def _run_attestation_git(
     *,
     allow_failure: bool = False,
     raw_output: bool = False,
+    input_data: bytes | None = None,
 ) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
     try:
         git_executable = evidence.resolve_trusted_executable("git")
@@ -5841,7 +5842,8 @@ def _run_attestation_git(
             [git_executable, *arguments],
             cwd=repository_root,
             check=False,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL if input_data is None else None,
+            input=input_data,
             capture_output=True,
             text=not raw_output,
             encoding=None if raw_output else "utf-8",
