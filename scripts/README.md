@@ -1234,7 +1234,7 @@ bash scripts/check-system-requirements.sh --repo=android
 
 **What It Checks For Android:**
 
-1. Node.js 24 LTS and `npm`
+1. Node.js 26 (Current) and `npm`
 2. Java 21 plus `javac`
 3. Android command-line tools via `sdkmanager`
 4. Android platform-tools via `adb`
