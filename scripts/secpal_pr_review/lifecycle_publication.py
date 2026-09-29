@@ -2353,6 +2353,95 @@ def verify_current_lifecycle_authority(
     )
 
 
+def derive_ready_source_recovery_current_head_trailers(
+    recovery: VerifiedReadySourceRecovery,
+    current: VerifiedLifecyclePublication,
+) -> tuple[str, ...]:
+    """Project exact commit trailer state from verified source history."""
+
+    if (
+        type(recovery) is not VerifiedReadySourceRecovery
+        or type(current) is not VerifiedLifecyclePublication
+        or recovery.current_publication_oid != current.publication_oid
+        or recovery.current_publication_digest != current.publication_digest
+        or recovery.current_authority_digest != current.lifecycle.authority_digest
+        or recovery.repository != current.lifecycle.repository
+        or recovery.delivery_issue != current.lifecycle.delivery_issue
+        or recovery.pull_request != current.lifecycle.pull_request
+        or recovery.head_sha != current.lifecycle.head_sha
+        or current.serialized_lifecycle_evidence is None
+    ):
+        raise LifecyclePublicationError(
+            "Ready-source recovery trailer source is invalid or stale"
+        )
+    try:
+        bundle = authority.loads_closed_json(current.serialized_lifecycle_evidence)
+        if bundle.get("enrollment_mode") != "EXACT_STATE_ADOPTION":
+            return (recovery.historical_validation_receipt_digest,)
+        proof = bundle["exact_state_adoption_proof"]
+        verified = authority.verify_exact_state_adoption_proof(proof)
+        if (
+            verified.repository != recovery.repository
+            or verified.delivery_issue != recovery.delivery_issue
+            or verified.pull_request != recovery.pull_request
+            or verified.lifecycle_id != current.lifecycle.lifecycle_id
+        ):
+            raise LifecyclePublicationError(
+                "Ready-source recovery historical source changed"
+            )
+        if verified.head_sha != recovery.head_sha:
+            # A later authenticated lifecycle transition owns this head. The
+            # adoption loss record does not assert its trailer placement.
+            return (recovery.historical_validation_receipt_digest,)
+        if proof["tree_sha"] != recovery.tree_sha:
+            raise LifecyclePublicationError(
+                "Ready-source recovery historical tree changed"
+            )
+        if (
+            proof["validation_receipt_digest"]
+            != recovery.historical_validation_receipt_digest
+        ):
+            raise LifecyclePublicationError(
+                "Ready-source recovery historical receipt changed"
+            )
+        if proof["proof_version"] == authority.EXACT_ADOPTION_LOSS_VERSION:
+            from . import validation_evidence_loss
+
+            loss = proof["validation_evidence_loss_admission"]
+            if (
+                loss["historical_validation_receipt_digest"] is not None
+                and loss["historical_validation_receipt_digest"]
+                != recovery.historical_validation_receipt_digest
+            ):
+                raise LifecyclePublicationError(
+                    "Ready-source recovery historical receipt changed"
+                )
+            return validation_evidence_loss.current_head_validation_receipt_trailers(
+                loss
+            )
+        if (
+            proof["proof_version"]
+            == authority.EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION
+        ):
+            historical = authority.normalize_exact_state_adoption_historical_evidence(
+                proof["historical_evidence"]
+            )
+            if historical["state"] == "ABSENT_NEVER_ISSUED":
+                return ()
+            if (
+                historical["validation_receipt_digest"]
+                != recovery.historical_validation_receipt_digest
+            ):
+                raise LifecyclePublicationError(
+                    "Ready-source recovery historical receipt changed"
+                )
+        return (recovery.historical_validation_receipt_digest,)
+    except (KeyError, TypeError, ValueError, authority.LifecycleAuthorityError) as exc:
+        raise LifecyclePublicationError(
+            "Ready-source recovery historical trailer authority is invalid"
+        ) from exc
+
+
 def verify_invalid_review_consumption_correction(
     authorization: Mapping[str, Any],
 ) -> VerifiedLifecyclePublication:

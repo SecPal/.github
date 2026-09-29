@@ -3071,6 +3071,12 @@ class LifecycleAuthorityTests(TestCase):
 
 
 class ValidationEvidenceLossTests(TestCase):
+    def test_legacy_loss_keeps_same_head_validation_receipt(self) -> None:
+        self.assertEqual(
+            self.loss.current_head_validation_receipt_trailers(self.document),
+            (self.document["historical_validation_receipt_digest"],),
+        )
+
     def commit_fixture(self, root: Path) -> str:
         subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
         subprocess.run(["git", "-C", str(root), "add", "."], check=True)
@@ -3816,10 +3822,26 @@ printf 'Usage: fixture\\n'
             self.loss._verify_document(successor), successor,
             "registered Ready deliveries need a distinct immutable successor schema",
         )
+        self.assertEqual(
+            self.loss.current_head_validation_receipt_trailers(successor), ()
+        )
+        for field, value in (
+            ("historical_receipt_head_sha", successor["head_sha"]),
+            ("historical_validation_receipt_digest", "9" * 64),
+            ("historical_bytes_reconstructed", True),
+        ):
+            with self.subTest(field=field):
+                changed = copy.deepcopy(successor)
+                changed[field] = value
+                with self.assertRaises(authority.LifecycleAuthorityError):
+                    self.loss.current_head_validation_receipt_trailers(changed)
 
     def test_zero_receipt_successor_authenticates_exact_signed_ready_history(self) -> None:
         document = self.zero_receipt_document()
         self.assertEqual(self.loss._verify_document(document), document)
+        self.assertEqual(
+            self.loss.current_head_validation_receipt_trailers(document), ()
+        )
         self.assertIsNone(document["historical_receipt_head_sha"])
         self.assertIsNone(document["historical_validation_receipt_digest"])
         self.assertEqual(
@@ -3847,6 +3869,10 @@ printf 'Usage: fixture\\n'
     def test_current_receipt_successor_authenticates_exact_signed_ready_history(self) -> None:
         document = self.current_receipt_document()
         self.assertEqual(self.loss._verify_document(document), document)
+        self.assertEqual(
+            self.loss.current_head_validation_receipt_trailers(document),
+            (document["historical_validation_receipt_digest"],),
+        )
         self.assertEqual(
             document["historical_receipt_head_sha"], document["head_sha"]
         )
