@@ -403,6 +403,46 @@ READY_INTEGRATION_KEYS = frozenset(
 )
 READY_INTEGRATION_V12_KEYS = READY_INTEGRATION_KEYS | {"reviewed_head_sha"}
 
+# Immutable family authority. Historical rows retain their issued meanings.
+# The collision inventory reads these closed declarations without execution.
+READY_INTEGRATION_KEYS_BY_VERSION = {
+    "1.1": READY_INTEGRATION_KEYS,
+    "1.2": READY_INTEGRATION_V12_KEYS,
+    "1.3": READY_INTEGRATION_V12_KEYS | {"path_classifications"},
+}
+READY_INTEGRATION_ATTESTATION_BY_VERSION = {
+    ("1.1", False): ("1.1", "READY_INTEGRATION_VALIDATION_ATTESTATION"),
+    ("1.1", True): ("1.2", "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"),
+    ("1.2", False): ("1.1", "READY_INTEGRATION_VALIDATION_ATTESTATION"),
+    ("1.2", True): ("1.2", "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"),
+    ("1.3", False): ("1.3", "READY_INTEGRATION_VALIDATION_ATTESTATION"),
+    ("1.3", True): ("1.4", "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"),
+}
+
+
+def ready_integration_attestation_matches(
+    attestation: Any, integration: Any, *, eligibility_bound: bool,
+) -> bool:
+    """Select the same immutable identity at every admission boundary."""
+    if not isinstance(attestation, dict) or not isinstance(integration, dict):
+        return False
+    version = integration.get("schema_version")
+    if not isinstance(version, str):
+        return False
+    return READY_INTEGRATION_ATTESTATION_BY_VERSION.get((version, eligibility_bound)) == (
+        attestation.get("schema_version"), attestation.get("kind"),
+    )
+
+
+def ready_integration_has_preservation(version: str) -> bool:
+    if not isinstance(version, str):
+        raise SecurityBlocker("Ready integration topology kind or version is unsupported")
+    keys = READY_INTEGRATION_KEYS_BY_VERSION.get(version)
+    if keys is None:
+        raise SecurityBlocker("Ready integration topology kind or version is unsupported")
+    return "path_classifications" in keys
+
+
 READY_INTEGRATION_PRIOR_AUTHORITY_KEYS = frozenset(
     {
         "schema_version",
@@ -1062,6 +1102,429 @@ def _require_positive_integer(value: Any, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise SecurityBlocker(f"{label} is not a positive integer")
     return value
+
+
+# Bound authenticated candidate blob content before Git emits it.
+MAX_INTEGRATION_CONFLICT_CONTENT_BYTES = 4 * 1024 * 1024
+
+
+def _integration_tree_delta(
+    repository_root: Path,
+    mechanical_tree: str,
+    validated_tree: str,
+    *, run_git: Callable[..., Any],
+) -> list[dict[str, str]]:
+    result = run_git(
+        repository_root,
+        [
+            "diff-tree",
+            "--raw",
+            "-r",
+            "--no-abbrev",
+            "-z",
+            "--no-renames",
+            mechanical_tree,
+            validated_tree,
+        ],
+        allow_failure=True,
+    )
+    if result.returncode != 0:
+        raise SecurityBlocker(
+            "mechanical integration tree is unavailable or invalid"
+        )
+    fields = result.stdout.split("\x00")
+    if fields and fields[-1] == "":
+        fields.pop()
+    if len(fields) % 2:
+        raise SecurityBlocker(
+            "mechanical integration tree delta is malformed"
+        )
+    delta: list[dict[str, str]] = []
+    for index in range(0, len(fields), 2):
+        header = fields[index]
+        path = fields[index + 1]
+        parts = header[1:].split() if header.startswith(":") else []
+        if len(parts) != 5:
+            raise SecurityBlocker(
+                "mechanical integration tree delta is malformed"
+            )
+        old_mode, new_mode, old_oid, new_oid, status = parts
+        delta.append(
+            {
+                "path": path,
+                "status": status,
+                "old_mode": old_mode,
+                "new_mode": new_mode,
+                "old_oid": old_oid.lower(),
+                "new_oid": new_oid.lower(),
+            }
+        )
+    return sorted(delta, key=lambda item: item["path"])
+
+
+def _mechanical_integration_result(
+    repository_root: Path,
+    ordered_parents: list[str],
+    *, run_git: Callable[..., Any],
+) -> tuple[str, list[str]]:
+    result = run_git(
+        repository_root,
+        [
+            "merge-tree",
+            "--write-tree",
+            "--no-messages",
+            "--name-only",
+            "-z",
+            *ordered_parents,
+        ],
+        allow_failure=True,
+    )
+    fields = result.stdout.split("\x00")
+    if fields and fields[-1] == "":
+        fields.pop()
+    if (
+        result.returncode not in {0, 1}
+        or not fields
+        or not OID.fullmatch(fields[0])
+    ):
+        raise SecurityBlocker(
+            "mechanical integration tree cannot be derived from the authorized parents"
+        )
+    conflict_paths = fields[1:]
+    if (
+        (result.returncode == 0 and conflict_paths)
+        or (result.returncode == 1 and not conflict_paths)
+        or conflict_paths != sorted(conflict_paths)
+        or len(conflict_paths) != len(set(conflict_paths))
+    ):
+        raise SecurityBlocker(
+            "mechanical integration conflict evidence is malformed"
+        )
+    return fields[0].lower(), conflict_paths
+
+
+def _reject_integration_conflict_markers(
+    repository_root: Path,
+    validated_tree: str,
+    conflict_paths: list[str],
+    *, run_git: Callable[..., Any],
+) -> None:
+    # Bulk observations preserve the same exact entries, aggregate byte bound,
+    # and marker grammar without one process per path or blob.
+    try:
+        states = _integration_path_states(
+            repository_root, validated_tree, conflict_paths, run_git=run_git,
+        )
+        blob_oids = []
+        for state in states.values():
+            if state is None or state[:2] == ("160000", "commit"):
+                continue
+            if state[1] != "blob":
+                raise SecurityBlocker("integration marker path is not a blob")
+            blob_oids.append(state[2])
+        contents = _integration_blob_contents(repository_root, blob_oids, run_git=run_git)
+    except SecurityBlocker as exc:
+        raise SecurityBlocker(
+            "resolved integration conflict content cannot be authenticated: " + str(exc)
+        ) from exc
+    for raw_content in contents:
+        # Match Git's established binary-file sniff: a NUL in the initial
+        # 8,000-byte inspection window excludes the blob from text scanning.
+        if b"\x00" in raw_content[:8000]:
+            continue
+        content = raw_content.decode("utf-8", "replace")
+        state = "OUTSIDE"
+        for line in content.split("\n"):
+            marker = _integration_conflict_marker_kind(line)
+            if marker is None:
+                continue
+            if state == "OUTSIDE":
+                if marker == "OPEN":
+                    state = "OURS"
+                elif marker == "BASE":
+                    state = "TRUNCATED_BASE"
+                elif marker == "SEPARATOR":
+                    state = "TRUNCATED_THEIRS"
+                continue
+            if state == "TRUNCATED_BASE":
+                if marker == "BASE":
+                    continue
+                if marker == "SEPARATOR":
+                    state = "TRUNCATED_THEIRS"
+                    continue
+            elif state == "TRUNCATED_THEIRS":
+                if marker == "SEPARATOR":
+                    continue
+                if marker == "CLOSE":
+                    raise SecurityBlocker(
+                        "resolved integration tree retains Git conflict markers"
+                    )
+            if state == "OURS":
+                if marker == "BASE":
+                    state = "BASE"
+                    continue
+                if marker == "SEPARATOR":
+                    state = "THEIRS"
+                    continue
+            elif state == "BASE" and marker == "SEPARATOR":
+                state = "THEIRS"
+                continue
+            elif state == "THEIRS" and marker == "CLOSE":
+                raise SecurityBlocker(
+                    "resolved integration tree retains Git conflict markers"
+                )
+            raise SecurityBlocker(
+                "resolved integration tree retains Git conflict markers"
+            )
+        if state in {"OURS", "BASE", "THEIRS"}:
+            raise SecurityBlocker(
+                "resolved integration tree retains Git conflict markers"
+            )
+
+
+def _integration_conflict_marker_kind(line: str) -> str | None:
+    line = line.removesuffix("\r")
+    for character, kind in (("<", "OPEN"), ("|", "BASE"), (">", "CLOSE")):
+        run_length = len(line) - len(line.lstrip(character))
+        if run_length >= 7 and (
+            run_length == len(line) or line[run_length] == " "
+        ):
+            return kind
+    if len(line) >= 7 and not line.strip("="):
+        return "SEPARATOR"
+    return None
+
+
+
+def _integration_chunks(values: list[str]) -> list[list[str]]:
+    """Bound both item count and command/input bytes per Git observation."""
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    size = 0
+    for value in values:
+        encoded_size = len(value.encode("utf-8")) + 16
+        if encoded_size > 32768:
+            raise SecurityBlocker("integration observation item exceeds the size bound")
+        if current and (len(current) == 128 or size + encoded_size > 32768):
+            chunks.append(current)
+            current, size = [], 0
+        current.append(value)
+        size += encoded_size
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _integration_path_states(
+    repository_root: Path, tree: str, paths: list[str], *, run_git: Callable[..., Any],
+) -> dict[str, tuple[str, str, str] | None]:
+    states: dict[str, tuple[str, str, str] | None] = dict.fromkeys(paths)
+    for chunk in _integration_chunks(paths):
+        result = run_git(repository_root, ["ls-tree", "-z", "-t", "--full-tree", tree,
+                        "--", *(f":(literal){path}" for path in chunk)], allow_failure=True)
+        if result.returncode != 0 or not isinstance(result.stdout, str):
+            raise SecurityBlocker("integration path state is unavailable")
+        if not result.stdout:
+            continue
+        if not result.stdout.endswith("\x00"):
+            raise SecurityBlocker("integration path state is malformed")
+        observed_paths = set()
+        for record in result.stdout[:-1].split("\x00"):
+            metadata, separator, path = record.partition("\t")
+            parts = metadata.split()
+            if (separator != "\t" or path in observed_paths or len(parts) != 3):
+                raise SecurityBlocker("integration path state is malformed")
+            mode, kind, oid = parts
+            if (mode, kind) not in {
+                ("100644", "blob"), ("100755", "blob"), ("120000", "blob"),
+                ("160000", "commit"), ("040000", "tree"),
+            } or not OID.fullmatch(oid):
+                raise SecurityBlocker("integration path mode, type or object is malformed")
+            observed_paths.add(path)
+            if path in chunk:
+                states[path] = (mode, kind, oid)
+            elif (mode, kind) != ("040000", "tree") or not any(
+                requested.startswith(path + "/") for requested in chunk
+            ):
+                raise SecurityBlocker("integration path state includes an unexpected entry")
+            # -t includes traversed ancestor trees. Authenticate their shape,
+            # but only requested exact paths contribute to the observation.
+    return states
+
+
+def _integration_blob_contents(
+    repository_root: Path, blob_oids: list[str], *, run_git: Callable[..., Any],
+) -> list[bytes]:
+    chunks = _integration_chunks(sorted(set(blob_oids)))
+    sizes: dict[str, int] = {}
+    for chunk in chunks:
+        result = run_git(repository_root,
+            ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
+            allow_failure=True, raw_output=True,
+            input_data=("\n".join(chunk) + "\n").encode("ascii"))
+        if result.returncode != 0 or not isinstance(result.stdout, bytes):
+            raise SecurityBlocker("integration blob sizes are unavailable")
+        records = result.stdout.splitlines()
+        if len(records) != len(chunk) or not result.stdout.endswith(b"\n"):
+            raise SecurityBlocker("integration blob sizes are malformed")
+        for oid, record in zip(chunk, records):
+            prefix = (oid + " blob ").encode("ascii")
+            size = record.removeprefix(prefix)
+            if not record.startswith(prefix) or not size.isdigit():
+                raise SecurityBlocker("integration blob size or identity is malformed")
+            sizes[oid] = int(size)
+    # Count repeated path contents as before, even though each object is read once.
+    if sum(sizes[oid] for oid in blob_oids) > MAX_INTEGRATION_CONFLICT_CONTENT_BYTES:
+        raise SecurityBlocker("integration conflict content exceeds the authenticated size bound")
+    contents = []
+    for chunk in chunks:
+        result = run_git(repository_root, ["cat-file", "--batch"],
+            allow_failure=True, raw_output=True,
+            input_data=("\n".join(chunk) + "\n").encode("ascii"))
+        if result.returncode != 0 or not isinstance(result.stdout, bytes):
+            raise SecurityBlocker("integration blob contents are unavailable")
+        offset = 0
+        for oid in chunk:
+            header = f"{oid} blob {sizes[oid]}\n".encode("ascii")
+            if result.stdout[offset:offset + len(header)] != header:
+                raise SecurityBlocker("integration blob content identity is malformed")
+            start = offset + len(header)
+            end = start + sizes[oid]
+            if result.stdout[end:end + 1] != b"\n":
+                raise SecurityBlocker("integration blob content length is malformed")
+            contents.append(result.stdout[start:end])
+            offset = end + 1
+        if offset != len(result.stdout):
+            raise SecurityBlocker("integration blob content has extra records")
+    return contents
+
+
+def classify_ready_integration_delta(
+    delta: list[dict[str, str]], conflict_paths: list[str],
+    path_states: dict[str, tuple[Any, Any, Any, Any, Any]],
+    *, preservation: bool,
+) -> list[dict[str, str]]:
+    """Pure admission: conflict membership wins; preservation is exact equality.
+
+    Observations are ordered base, parent 1, parent 2, mechanical, candidate.
+    A caller's claimed classification is never an input to this decision.
+    """
+    paths = [item["path"] for item in delta]
+    if not preservation:
+        if not conflict_paths and delta:
+            raise SecurityBlocker("clean mechanical integration cannot authorize a manual delta")
+        if paths != conflict_paths:
+            raise SecurityBlocker("every unresolved mechanical conflict must be explicitly resolved")
+    elif not set(conflict_paths).issubset(paths):
+        raise SecurityBlocker("every unresolved mechanical conflict must be explicitly resolved")
+    classifications = []
+    for path in paths:
+        if path in conflict_paths:
+            classification = "CONFLICT_RESOLUTION"
+        else:
+            states = path_states.get(path)
+            if not preservation or states is None:
+                raise SecurityBlocker("integration preservation observations are missing")
+            base, parent1, parent2, mechanical, candidate = states
+            if (candidate != parent2 or parent1 == base or parent2 == base
+                    or mechanical == candidate):
+                raise SecurityBlocker("integration delta is not exact dual-change parent-2 preservation")
+            classification = "EXACT_PARENT2_PRESERVATION"
+        classifications.append({"path": path, "classification": classification})
+    return classifications
+
+
+def derive_ready_integration_tree_evidence(
+    repository_root: Path, ordered_parents: list[str], validated_tree: str,
+    *, schema_version: str, kind: str = READY_INTEGRATION_KIND,
+    run_git: Callable[..., Any] | None = None,
+) -> dict[str, Any]:
+    """Produce tree evidence from Git; callers cannot choose paths or classes."""
+    if run_git is None:
+        run_git = _run_integration_tree_git
+    version = schema_version
+    if kind not in {READY_INTEGRATION_KIND, "PRE_ENROLLMENT_DRAFT_INTEGRATION"}:
+        raise SecurityBlocker("integration evidence family is unsupported")
+    # The Draft family shares only historical conflict mechanics, never the
+    # Ready version namespace or preservation authority.
+    preservation = (
+        False if kind == "PRE_ENROLLMENT_DRAFT_INTEGRATION"
+        else ready_integration_has_preservation(version)
+    )
+    parents = ordered_parents
+    if (not isinstance(parents, list) or len(parents) != 2
+            or any(not isinstance(parent, str) or not OID.fullmatch(parent) for parent in parents)
+            or parents[0] == parents[1]):
+        raise SecurityBlocker("Ready integration requires two distinct ordered parents")
+    _require_oid(validated_tree, "integration candidate tree")
+    merge_base = None
+    if preservation:
+        result = run_git(repository_root, ["merge-base", "--all", *parents], allow_failure=True)
+        bases = result.stdout.splitlines()
+        if result.returncode != 0 or len(bases) != 1 or not OID.fullmatch(bases[0]):
+            raise SecurityBlocker("Ready integration requires one unambiguous merge base")
+        merge_base = bases[0]
+    mechanical, conflicts = _mechanical_integration_result(repository_root, parents, run_git=run_git)
+    delta = _ready_integration_delta(_integration_tree_delta(
+        repository_root, mechanical, validated_tree, run_git=run_git,
+    ))
+    observations = {}
+    if preservation:
+        paths = [item["path"] for item in delta if item["path"] not in conflicts]
+        tree_states = [
+            _integration_path_states(repository_root, tree, paths, run_git=run_git)
+            for tree in (merge_base, *parents, mechanical, validated_tree)
+        ]
+        observations = {path: tuple(states[path] for states in tree_states) for path in paths}
+    classes = classify_ready_integration_delta(delta, conflicts, observations, preservation=preservation)
+    _reject_integration_conflict_markers(
+        repository_root, validated_tree, [item["path"] for item in delta], run_git=run_git,
+    )
+    result = {
+        "mechanical_merge_tree_sha": mechanical,
+        "mechanical_conflict_paths": conflicts,
+        "manual_conflict_resolution_delta": delta,
+    }
+    if preservation:
+        result["path_classifications"] = classes
+    return result
+
+
+def verify_ready_integration_tree(
+    repository_root: Path, integration_evidence: dict[str, Any], validated_tree: str,
+    *, run_git: Callable[..., Any] | None = None,
+) -> None:
+    """Read-back consumes the producer's exact independently derived contract."""
+    kind = (
+        integration_evidence["kind"] if "kind" in integration_evidence
+        else READY_INTEGRATION_KIND
+    )
+    observed = derive_ready_integration_tree_evidence(
+        repository_root, integration_evidence["ordered_parent_shas"], validated_tree,
+        schema_version=integration_evidence["schema_version"],
+        kind=kind, run_git=run_git,
+    )
+    messages = {
+        "mechanical_merge_tree_sha": "mechanical integration tree does not match the authorized parents",
+        "mechanical_conflict_paths": "mechanical integration conflict paths are not authenticated",
+        "manual_conflict_resolution_delta": "integration manual conflict-resolution delta is not authenticated",
+        "path_classifications": "integration path classifications are not independently derived",
+    }
+    for key, value in observed.items():
+        if integration_evidence.get(key) != value:
+            raise SecurityBlocker(messages[key])
+
+
+def _run_integration_tree_git(
+    repository_root: Path, arguments: list[str], *, allow_failure: bool = False,
+    raw_output: bool = False, input_data: bytes | None = None,
+) -> Any:
+    result = _run_integration_commit_git(
+        repository_root, arguments, raw_output=raw_output, input_data=input_data,
+    )
+    if result.returncode != 0 and not allow_failure:
+        raise SecurityBlocker("integration tree observation failed")
+    return result
 
 
 def _ready_integration_delta(value: Any) -> list[dict[str, str]]:
@@ -1820,14 +2283,12 @@ def normalize_ready_integration_evidence(
     if any(SECRET_VALUE.search(item) for item in _all_strings(value)):
         raise SecurityBlocker("Ready integration evidence contains secret-like text")
     schema_version = value.get("schema_version")
-    expected_keys = (
-        READY_INTEGRATION_V12_KEYS
-        if schema_version == "1.2"
-        else READY_INTEGRATION_KEYS
-    )
+    if not isinstance(schema_version, str):
+        raise SecurityBlocker("Ready integration topology kind or version is unsupported")
+    expected_keys = READY_INTEGRATION_KEYS_BY_VERSION.get(schema_version)
     if set(value) != expected_keys:
         raise SecurityBlocker("Ready integration evidence is malformed or ambiguous")
-    if schema_version not in {"1.1", "1.2"} or value.get("kind") != READY_INTEGRATION_KIND:
+    if expected_keys is None or value.get("kind") != READY_INTEGRATION_KIND:
         raise SecurityBlocker("Ready integration topology kind or version is unsupported")
     normalized_repository = _require_string(value.get("repository"), "integration repository")
     if normalized_repository != repository or reviewed_state.repository != repository:
@@ -1848,7 +2309,7 @@ def normalize_ready_integration_evidence(
     )
     reviewed_head = (
         prior_head
-        if schema_version == "1.1"
+        if "reviewed_head_sha" not in expected_keys
         else _require_oid(value.get("reviewed_head_sha"), "integration reviewed head")
     )
     if reviewed_head != reviewed_state.head_sha:
@@ -2044,8 +2505,26 @@ def normalize_ready_integration_evidence(
         },
         "eligibility": copy.deepcopy(eligibility),
     }
-    if schema_version == "1.2":
+    if "reviewed_head_sha" in expected_keys:
         normalized["reviewed_head_sha"] = reviewed_head
+    if ready_integration_has_preservation(schema_version):
+        classifications = value.get("path_classifications")
+        delta = normalized["manual_conflict_resolution_delta"]
+        if (
+            not isinstance(classifications, list)
+            or len(classifications) != len(delta)
+            or any(
+                not isinstance(item, dict)
+                or set(item) != {"path", "classification"}
+                or item.get("path") != change["path"]
+                or item.get("classification") not in {
+                    "CONFLICT_RESOLUTION", "EXACT_PARENT2_PRESERVATION",
+                }
+                for item, change in zip(classifications, delta)
+            )
+        ):
+            raise SecurityBlocker("integration path classifications are malformed")
+        normalized["path_classifications"] = copy.deepcopy(classifications)
     return normalized
 
 
@@ -3161,8 +3640,9 @@ def _actual_signature_fingerprint(
 
 
 def _run_integration_commit_git(
-    repository_root: Path, arguments: list[str]
-) -> subprocess.CompletedProcess[str]:
+    repository_root: Path, arguments: list[str], *, raw_output: bool = False,
+    input_data: bytes | None = None,
+) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
     evidence = _load_evidence_helper()
     try:
         git_executable = evidence.resolve_trusted_executable("git")
@@ -3176,11 +3656,12 @@ def _run_integration_commit_git(
             [git_executable, *arguments],
             cwd=repository_root,
             check=False,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL if input_data is None else None,
+            input=input_data,
             capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+            text=not raw_output,
+            encoding=None if raw_output else "utf-8",
+            errors=None if raw_output else "replace",
             env=environment,
             timeout=EXTERNAL_COMMAND_TIMEOUT_SECONDS,
         )
@@ -6067,13 +6548,10 @@ def create_ready_integration_attestation(
         raise SecurityBlocker("validation receipt does not bind the Ready integration evidence")
     eligibility_digest = ordinary.get("eligibility_evidence_digest")
     eligibility_bound = eligibility_digest is not None
+    attestation_version, attestation_kind = READY_INTEGRATION_ATTESTATION_BY_VERSION[(normalized["schema_version"], eligibility_bound)]
     fields = {
-        "schema_version": "1.2" if eligibility_bound else "1.1",
-        "kind": (
-            "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"
-            if eligibility_bound
-            else "READY_INTEGRATION_VALIDATION_ATTESTATION"
-        ),
+        "schema_version": attestation_version,
+        "kind": attestation_kind,
         "repository": normalized["repository"],
         "delivery_issue_number": normalized["delivery_issue_number"],
         "pull_request_number": normalized["pull_request_number"],
@@ -6104,6 +6582,8 @@ def create_ready_integration_attestation(
         "eligibility": copy.deepcopy(normalized["eligibility"]),
         "successful_result": True,
     }
+    if "path_classifications" in normalized:
+        fields["path_classifications"] = copy.deepcopy(normalized["path_classifications"])
     if eligibility_bound:
         fields["manual_gate_evidence"] = copy.deepcopy(
             ordinary["manual_gate_evidence"]
@@ -6133,9 +6613,9 @@ def verify_eligibility_bound_ready_integration_attestation(
 
     if (
         not isinstance(attestation, dict)
-        or attestation.get("schema_version") != "1.2"
-        or attestation.get("kind")
-        != "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"
+        or not ready_integration_attestation_matches(
+            attestation, integration_evidence, eligibility_bound=True,
+        )
         or not isinstance(attestation.get("eligibility_evidence_digest"), str)
         or not DIGEST.fullmatch(attestation["eligibility_evidence_digest"])
     ):
@@ -6251,6 +6731,7 @@ def _verify_ready_integration_attestation_unsealed(
         signature_policy=signature_policy,
     ):
         raise SecurityBlocker("authenticated integration commit is required")
+    verify_ready_integration_tree(Path(repository_root), normalized, commit_tree_sha)
     return _unregistered_validation_evidence(
         repository=normalized["repository"],
         delivery_issue_number=normalized["delivery_issue_number"],

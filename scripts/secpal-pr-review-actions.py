@@ -69,9 +69,6 @@ FAST_BATCH_SCHEMA_PATH = (
 )
 EXTERNAL_COMMAND_TIMEOUT_SECONDS = 30
 LOCAL_VALIDATION_TIMEOUT_SECONDS = 600
-# Conflict-bearing integration paths are governance source intended for human
-# review. Bound their aggregate authenticated blob content before Git emits it.
-MAX_INTEGRATION_CONFLICT_CONTENT_BYTES = 4 * 1024 * 1024
 BRIDGE_BYTECODE_CACHE = tempfile.TemporaryDirectory(
     prefix="secpal-accepted-main-bytecode-"
 )
@@ -5831,6 +5828,7 @@ def _run_attestation_git(
     *,
     allow_failure: bool = False,
     raw_output: bool = False,
+    input_data: bytes | None = None,
 ) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
     try:
         git_executable = evidence.resolve_trusted_executable("git")
@@ -5844,7 +5842,8 @@ def _run_attestation_git(
             [git_executable, *arguments],
             cwd=repository_root,
             check=False,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL if input_data is None else None,
+            input=input_data,
             capture_output=True,
             text=not raw_output,
             encoding=None if raw_output else "utf-8",
@@ -6002,299 +6001,38 @@ def _commit_integration_evidence_digest(
 
 
 def _integration_tree_delta(
-    repository_root: Path,
-    mechanical_tree: str,
-    validated_tree: str,
+    repository_root: Path, mechanical_tree: str, validated_tree: str,
 ) -> list[dict[str, str]]:
-    result = _run_attestation_git(
-        repository_root,
-        [
-            "diff-tree",
-            "--raw",
-            "-r",
-            "--no-abbrev",
-            "-z",
-            "--no-renames",
-            mechanical_tree,
-            validated_tree,
-        ],
-        allow_failure=True,
+    return fast_path._integration_tree_delta(
+        repository_root, mechanical_tree, validated_tree, run_git=_run_attestation_git,
     )
-    if result.returncode != 0:
-        raise fast_path.SecurityBlocker(
-            "mechanical integration tree is unavailable or invalid"
-        )
-    fields = result.stdout.split("\x00")
-    if fields and fields[-1] == "":
-        fields.pop()
-    if len(fields) % 2:
-        raise fast_path.SecurityBlocker(
-            "mechanical integration tree delta is malformed"
-        )
-    delta: list[dict[str, str]] = []
-    for index in range(0, len(fields), 2):
-        header = fields[index]
-        path = fields[index + 1]
-        parts = header[1:].split() if header.startswith(":") else []
-        if len(parts) != 5:
-            raise fast_path.SecurityBlocker(
-                "mechanical integration tree delta is malformed"
-            )
-        old_mode, new_mode, old_oid, new_oid, status = parts
-        delta.append(
-            {
-                "path": path,
-                "status": status,
-                "old_mode": old_mode,
-                "new_mode": new_mode,
-                "old_oid": old_oid.lower(),
-                "new_oid": new_oid.lower(),
-            }
-        )
-    return sorted(delta, key=lambda item: item["path"])
 
 
 def _mechanical_integration_result(
-    repository_root: Path,
-    ordered_parents: list[str],
+    repository_root: Path, ordered_parents: list[str],
 ) -> tuple[str, list[str]]:
-    result = _run_attestation_git(
-        repository_root,
-        [
-            "merge-tree",
-            "--write-tree",
-            "--no-messages",
-            "--name-only",
-            "-z",
-            *ordered_parents,
-        ],
-        allow_failure=True,
+    return fast_path._mechanical_integration_result(
+        repository_root, ordered_parents, run_git=_run_attestation_git,
     )
-    fields = result.stdout.split("\x00")
-    if fields and fields[-1] == "":
-        fields.pop()
-    if (
-        result.returncode not in {0, 1}
-        or not fields
-        or not OID_PATTERN.fullmatch(fields[0])
-    ):
-        raise fast_path.SecurityBlocker(
-            "mechanical integration tree cannot be derived from the authorized parents"
-        )
-    conflict_paths = fields[1:]
-    if (
-        (result.returncode == 0 and conflict_paths)
-        or (result.returncode == 1 and not conflict_paths)
-        or conflict_paths != sorted(conflict_paths)
-        or len(conflict_paths) != len(set(conflict_paths))
-    ):
-        raise fast_path.SecurityBlocker(
-            "mechanical integration conflict evidence is malformed"
-        )
-    return fields[0].lower(), conflict_paths
 
 
-def _mechanical_integration_tree(
-    repository_root: Path,
-    ordered_parents: list[str],
-) -> str:
+def _mechanical_integration_tree(repository_root: Path, ordered_parents: list[str]) -> str:
     return _mechanical_integration_result(repository_root, ordered_parents)[0]
 
 
 def _reject_integration_conflict_markers(
-    repository_root: Path,
-    validated_tree: str,
-    conflict_paths: list[str],
+    repository_root: Path, validated_tree: str, conflict_paths: list[str],
 ) -> None:
-    # Git authenticates exact literal tree entries and immutable object sizes.
-    # Python reads only the bounded blobs and owns the sole conflict grammar.
-    blobs: list[tuple[str, str, int]] = []
-    aggregate_size = 0
-    for path in conflict_paths:
-        entry = _run_attestation_git(
-            repository_root,
-            [
-                "ls-tree",
-                "-z",
-                "--full-tree",
-                validated_tree,
-                "--",
-                f":(literal){path}",
-            ],
-            allow_failure=True,
-        )
-        if entry.returncode != 0:
-            raise fast_path.SecurityBlocker(
-                "resolved integration conflict content cannot be authenticated"
-            )
-        if entry.stdout == "":
-            continue
-        if not entry.stdout.endswith("\x00") or entry.stdout.count("\x00") != 1:
-            raise fast_path.SecurityBlocker(
-                "resolved integration conflict content cannot be authenticated"
-            )
-        record = entry.stdout[:-1]
-        metadata, separator, observed_path = record.partition("\t")
-        parts = metadata.split()
-        if separator != "\t" or len(parts) != 3 or observed_path != path:
-            raise fast_path.SecurityBlocker(
-                "resolved integration conflict content cannot be authenticated"
-            )
-        mode, object_type, object_oid = parts
-        if mode == "160000" and object_type == "commit":
-            continue
-        if (
-            mode not in {"100644", "100755", "120000"}
-            or object_type != "blob"
-            or not OID_PATTERN.fullmatch(object_oid)
-        ):
-            raise fast_path.SecurityBlocker(
-                "resolved integration conflict content cannot be authenticated"
-            )
-        size_result = _run_attestation_git(
-            repository_root,
-            ["cat-file", "-s", object_oid],
-            allow_failure=True,
-        )
-        size_text = size_result.stdout.strip()
-        if (
-            size_result.returncode != 0
-            or not size_text.isascii()
-            or not size_text.isdecimal()
-        ):
-            raise fast_path.SecurityBlocker(
-                "resolved integration conflict content cannot be authenticated"
-            )
-        size = int(size_text)
-        aggregate_size += size
-        if aggregate_size > MAX_INTEGRATION_CONFLICT_CONTENT_BYTES:
-            raise fast_path.SecurityBlocker(
-                "resolved integration conflict content exceeds the authenticated size bound"
-            )
-        blobs.append((path, object_oid.lower(), size))
-
-    for _path, object_oid, expected_size in blobs:
-        result = _run_attestation_git(
-            repository_root,
-            ["cat-file", "blob", object_oid],
-            allow_failure=True,
-            raw_output=True,
-        )
-        if (
-            result.returncode != 0
-            or not isinstance(result.stdout, bytes)
-            or len(result.stdout) != expected_size
-        ):
-            raise fast_path.SecurityBlocker(
-                "resolved integration conflict content cannot be authenticated"
-            )
-        raw_content = result.stdout
-        # Match Git's established binary-file sniff: a NUL in the initial
-        # 8,000-byte inspection window excludes the blob from text scanning.
-        if b"\x00" in raw_content[:8000]:
-            continue
-        content = raw_content.decode("utf-8", "replace")
-        state = "OUTSIDE"
-        for line in content.split("\n"):
-            marker = _integration_conflict_marker_kind(line)
-            if marker is None:
-                continue
-            if state == "OUTSIDE":
-                if marker == "OPEN":
-                    state = "OURS"
-                elif marker == "BASE":
-                    state = "TRUNCATED_BASE"
-                elif marker == "SEPARATOR":
-                    state = "TRUNCATED_THEIRS"
-                continue
-            if state == "TRUNCATED_BASE":
-                if marker == "BASE":
-                    continue
-                if marker == "SEPARATOR":
-                    state = "TRUNCATED_THEIRS"
-                    continue
-            elif state == "TRUNCATED_THEIRS":
-                if marker == "SEPARATOR":
-                    continue
-                if marker == "CLOSE":
-                    raise fast_path.SecurityBlocker(
-                        "resolved integration tree retains Git conflict markers"
-                    )
-            if state == "OURS":
-                if marker == "BASE":
-                    state = "BASE"
-                    continue
-                if marker == "SEPARATOR":
-                    state = "THEIRS"
-                    continue
-            elif state == "BASE" and marker == "SEPARATOR":
-                state = "THEIRS"
-                continue
-            elif state == "THEIRS" and marker == "CLOSE":
-                raise fast_path.SecurityBlocker(
-                    "resolved integration tree retains Git conflict markers"
-                )
-            raise fast_path.SecurityBlocker(
-                "resolved integration tree retains Git conflict markers"
-            )
-        if state in {"OURS", "BASE", "THEIRS"}:
-            raise fast_path.SecurityBlocker(
-                "resolved integration tree retains Git conflict markers"
-            )
-
-
-def _integration_conflict_marker_kind(line: str) -> str | None:
-    line = line.removesuffix("\r")
-    for character, kind in (("<", "OPEN"), ("|", "BASE"), (">", "CLOSE")):
-        run_length = len(line) - len(line.lstrip(character))
-        if run_length >= 7 and (
-            run_length == len(line) or line[run_length] == " "
-        ):
-            return kind
-    if len(line) >= 7 and not line.strip("="):
-        return "SEPARATOR"
-    return None
+    fast_path._reject_integration_conflict_markers(
+        repository_root, validated_tree, conflict_paths, run_git=_run_attestation_git,
+    )
 
 
 def _verify_integration_tree_delta(
-    repository_root: Path,
-    integration_evidence: dict[str, Any],
-    validated_tree: str,
+    repository_root: Path, integration_evidence: dict[str, Any], validated_tree: str,
 ) -> None:
-    mechanical_tree, conflict_paths = _mechanical_integration_result(
-        repository_root,
-        integration_evidence["ordered_parent_shas"],
-    )
-    if mechanical_tree != integration_evidence["mechanical_merge_tree_sha"]:
-        raise fast_path.SecurityBlocker(
-            "mechanical integration tree does not match the authorized parents"
-        )
-    if conflict_paths != integration_evidence["mechanical_conflict_paths"]:
-        raise fast_path.SecurityBlocker(
-            "mechanical integration conflict paths are not authenticated"
-        )
-    delta = _integration_tree_delta(
-        repository_root,
-        integration_evidence["mechanical_merge_tree_sha"],
-        validated_tree,
-    )
-    if delta != integration_evidence["manual_conflict_resolution_delta"]:
-        raise fast_path.SecurityBlocker(
-            "integration manual conflict-resolution delta is not authenticated"
-        )
-    delta_paths = [item["path"] for item in delta]
-    if not conflict_paths:
-        if delta:
-            raise fast_path.SecurityBlocker(
-                "clean mechanical integration cannot authorize a manual delta"
-            )
-        return
-    if delta_paths != conflict_paths:
-        raise fast_path.SecurityBlocker(
-            "every unresolved mechanical conflict must be explicitly resolved"
-        )
-    _reject_integration_conflict_markers(
-        repository_root, validated_tree, conflict_paths
+    fast_path.verify_ready_integration_tree(
+        repository_root, integration_evidence, validated_tree, run_git=_run_attestation_git,
     )
 
 
@@ -8149,7 +7887,7 @@ def _verify_ready_integration_prior_authority(
             raise fast_path.SecurityBlocker(
                 "prior delivery pull-request identity changed"
             )
-        if integration_evidence["schema_version"] == "1.2" and (
+        if "reviewed_head_sha" in integration_evidence and (
             reviewed.state_digest != integration_evidence["reviewed_state_digest"]
             or reviewed.feedback_digest
             != integration_evidence["reviewed_feedback_digest"]

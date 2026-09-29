@@ -352,6 +352,7 @@ def verified_validation_evidence(
     pull_request: int = PR,
     ready_integration: bool = False,
     delivery_issue: int = ISSUE,
+    integration_version: str = "1.1",
 ) -> fast_path.VerifiedValidationEvidence:
     reviewed = fast_path.StableFeedbackState(
         repository=REPOSITORY, pull_request_number=pull_request, head_sha=parent,
@@ -419,6 +420,8 @@ def verified_validation_evidence(
                 "cycle_3": False,
             },
         }
+    if integration is not None and integration_version == "1.3":
+        integration.update(schema_version="1.3", reviewed_head_sha=parent, path_classifications=[])
     receipt = fast_path.create_validation_receipt(
         repository=REPOSITORY, head_sha=parent, validated_tree_sha=tree,
         registry=registry, command_set=[], successful_result=True,
@@ -463,6 +466,12 @@ def verified_validation_evidence(
                 "",
             ),
         ]
+        if integration_version == "1.3":
+            git_results.append(subprocess.CompletedProcess([], 0, "8" * 40 + "\n", ""))
+        git_results.extend([
+            subprocess.CompletedProcess([], 0, tree + "\x00", ""),
+            subprocess.CompletedProcess([], 0, "", ""),
+        ])
         with patch.object(
             fast_path, "_run_integration_commit_git", side_effect=git_results
         ):
@@ -3076,6 +3085,13 @@ class LifecyclePublicationTests(TestCase):
         )
 
 
+    def test_exact_preservation_version_publishes_and_reads_back_head_advanced(self) -> None:
+        original = verified_validation_evidence
+        def preservation_evidence(**kwargs: Any) -> fast_path.VerifiedValidationEvidence:
+            return original(**kwargs, integration_version="1.3")
+        with patch.dict(globals(), {"verified_validation_evidence": preservation_evidence}):
+            self.test_exact_adoption_enrolls_once_and_uses_normal_successor_path()
+
     def test_exact_adoption_enrolls_once_and_uses_normal_successor_path(self) -> None:
         self.assertIn(
             "current_head_evidence",
@@ -3150,6 +3166,12 @@ class LifecyclePublicationTests(TestCase):
                     "",
                 ),
             ]
+            if integration["schema_version"] == "1.3":
+                git_results.append(subprocess.CompletedProcess([], 0, "8" * 40 + "\n", ""))
+            git_results.extend([
+                subprocess.CompletedProcess([], 0, integration["mechanical_merge_tree_sha"] + "\x00", ""),
+                subprocess.CompletedProcess([], 0, "", ""),
+            ])
             with patch.object(
                 fast_path,
                 "_run_integration_commit_git",

@@ -1435,8 +1435,20 @@ already verified final delivery attestation and does not create a new receipt.
 
 Ordinary remediation and recovery continue to require one parent. A separately
 user-authorized mechanical integration into an already-Ready delivery PR uses
-`attest-validation --integration-evidence` and the closed version-1.1 or
-version-1.2 `TWO_PARENT_READY_INTEGRATION` topology. Version 1.1 retains the
+`attest-validation --integration-evidence` and the closed
+`TWO_PARENT_READY_INTEGRATION` topology. Its immutable version authority is
+`READY_INTEGRATION_KEYS_BY_VERSION` together with
+`READY_INTEGRATION_ATTESTATION_BY_VERSION` in `fast_path.py`. Producers,
+normalization, action admission, attestation verification, resolver admission,
+and lifecycle publication/read-back consume those mappings.
+
+| Evidence | Tree semantics                                      | Reviewed head                                   | Ordinary attestation | Eligibility-bound attestation |
+| -------- | --------------------------------------------------- | ----------------------------------------------- | -------------------- | ----------------------------- |
+| 1.1      | Historical clean/conflict-only                      | Same as parent 1                                | 1.1                  | 1.2                           |
+| 1.2      | Historical clean/conflict-only                      | Distinct authenticated predecessor              | 1.1                  | 1.2                           |
+| 1.3      | Conflict resolution and exact parent-2 preservation | Explicit authenticated same head or predecessor | 1.3                  | 1.4                           |
+
+Historical evidence and attestation meanings remain unchanged. Version 1.1 retains the
 same-head reviewed snapshot. Version 1.2 requires and separately binds a
 distinct reviewed predecessor so
 an already-attested remediation successor can remain parent 1 without
@@ -1494,16 +1506,45 @@ expected signer identity, stable-feedback and validation-execution digests,
 explicit eligibility, and the exact raw delta between the authenticated
 mechanical merge tree and the validated tree. Every permitted manual conflict-
 resolution path, mode, status, old object, and new object must appear exactly in
-that canonical delta; unlisted file drift fails closed. Exit-zero merge-tree
+that canonical delta; unlisted file drift fails closed. For historical versions, exit-zero merge-tree
 output must have no conflict paths or manual delta. Exit-one output must name a
 canonical non-empty conflict set; every path must be changed or deleted, no
 other path may change, and retained text conflict markers are rejected. The
 synthetic conflict tree itself is never accepted as a resolved candidate.
 
+Version 1.3 extends only Ready integration. The producer
+`derive_ready_integration_tree_evidence` derives the mechanical tree, complete
+raw delta, and ordered `path_classifications` from immutable Git objects.
+The historical `manual_conflict_resolution_delta` field holds that entire raw
+delta in this version. Each path is classified exactly once: an authenticated
+mechanical conflict is `CONFLICT_RESOLUTION`; every other changed path must be
+`EXACT_PARENT2_PRESERVATION`. Callers cannot nominate preservation paths or
+select a class. Action admission and the independent fast-path verifier rerun
+that same derivation, including before sealed evidence is reused for lifecycle
+publication/read-back.
+
+Preservation requires one verifier-derived merge base, both parents' path
+states different from that base, candidate state exactly equal to parent 2,
+and mechanical state different from that candidate. Path state includes
+existence, mode, object type, and exact object identity. Missing or ambiguous
+bases, third values, incomplete or extra deltas, mismatched classifications,
+and retained conflict markers fail closed. Historical clean integrations still
+permit no manual delta; historical conflict integrations still permit exactly
+the conflict paths. `PRE_ENROLLMENT_DRAFT_INTEGRATION` continues to use only
+those historical conflict mechanics.
+
+The collision inventory's existing non-executing mapped-declaration reader
+observes the same authority. Historical collision validation epochs and
+successor-feedback evidence retain their own immutable source and version
+bindings. Adoption and recovered-Ready prior authority keep their separate
+schema ownership; neither selects the new Ready evidence version nor grants
+preservation authority.
+
 Every newly produced Ready integration validation must supply
 `--eligibility-evidence` with `--integration-evidence`. The receipt
-binds both digests and binding emits the distinct version-1.2
-`ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION`. The guarded
+binds both digests and binding emits the mapped
+`ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION`: version 1.2 for
+historical evidence 1.1/1.2, or version 1.4 for evidence 1.3. The guarded
 resolver accepts that kind only with the canonical integration artifact and
 only after the integration-specific verifier authenticates the ordered parents,
 tree, both trailers, reviewed state, expected signer, and eligibility. The

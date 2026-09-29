@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-09-29 - Unify Exact Parent-2 Ready Integration
+
+**Fixed:**
+
+- Centralize Ready-integration evidence and attestation version mappings across
+  production, admission, verification, and lifecycle read-back.
+- Add immutable evidence 1.3 for independently derived conflict resolution and
+  exact dual-change parent-2 preservation, with attestations 1.3/1.4. Verify the
+  unique merge base and complete raw delta without admitting arbitrary third
+  values or changing historical evidence and pre-enrollment Draft semantics.
+
 ## 2026-09-20 - Prepare Locked Complete Validation Dependencies
 
 **Fixed:**

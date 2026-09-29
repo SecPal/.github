@@ -247,13 +247,14 @@ current entry, and historical evidence continues to use its immutable
 evidence-time entry.
 When exact thread resolution is required on the integration head,
 `attest-validation` may additionally consume the canonical eligibility
-artifact. That closed combination emits the version-1.2
-`ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION`; its receipt and
+artifact. That closed combination emits the centrally mapped
+`ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION` (1.2 for evidence
+1.1/1.2; 1.4 for exact-preservation evidence 1.3); its receipt and
 attestation bind the same eligibility digest. Historical version-1.1
 integration attestations remain valid for their original integration purpose
 but are not thread-resolution authority.
 
-Successful verification of either supported Ready-integration attestation version
+Successful verification of each supported Ready-integration attestation version
 returns the existing verifier-sealed current-head validation evidence only after
 the canonical verifier has run trusted `git verify-commit` itself and the actual
 integration commit signature, signer identity, format, and fingerprint have
@@ -266,6 +267,13 @@ to the complete normalized integration package, including delivery, topology,
 current-main, receipt, reviewed-state, expected signer, kind, and version
 identities; actual signer authentication is the additional precondition for
 issuing that compatible sealed result.
+`fast_path.py` owns the immutable evidence/attestation mappings and shared tree
+admission. Evidence 1.3 adds independently derived `path_classifications` for
+conflict resolution or exact dual-change parent-2 preservation. The producer,
+action helper, verifier and publication read-back use the same raw-delta and
+exact path-state rules; historical evidence and Draft integration remain
+unchanged. See [Ready integration](../docs/secpal-pr-review-workflow.md#explicit-ready-head-integration-evidence).
+
 Exact-state-adopted `HEAD_ADVANCED` may consume it, but all independent lifecycle
 authorization and publication preconditions remain mandatory.
 

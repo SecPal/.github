@@ -146,6 +146,12 @@ class FakeGit:
                 )
             else:
                 stdout = f"[GNUPG:] VALIDSIG {self.signer_fingerprint} 2026-01-01\n"
+        elif call == ("merge-base", "--all", self.reviewed_head, self.second_parent):
+            stdout = "8" * 40 + "\n"
+        elif call == ("merge-tree", "--write-tree", "--no-messages", "--name-only", "-z", self.reviewed_head, self.second_parent):
+            stdout = self.tree + "\x00"
+        elif call == ("diff-tree", "--raw", "-r", "--no-abbrev", "-z", "--no-renames", self.tree, self.tree):
+            stdout = ""
         elif call == ("config", "--global", "--get", "gpg.format"):
             stdout = f"{self.signature_format}\n"
         elif call == ("config", "--global", "--get", "user.signingkey"):
@@ -850,6 +856,7 @@ def integration_validation_payloads(
     *,
     expected_head: str,
     delivery_issue: int = 673,
+    version: str = "1.1",
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     binding = MODULE._validation_registry_binding(
         MODULE._load_repository_entry(reviewed["repository"])
@@ -905,9 +912,17 @@ def integration_validation_payloads(
             "cycle_3": False,
         },
     }
+    if version != "1.1":
+        integration["schema_version"] = version
+        integration["reviewed_head_sha"] = reviewed["head_sha"]
+        if version == "1.2":
+            integration["prior_delivery_head_sha"] = "9" * 40
+            integration["ordered_parent_shas"][0] = "9" * 40
+        else:
+            integration["path_classifications"] = []
     receipt = MODULE.fast_path.create_validation_receipt(
         repository=reviewed["repository"],
-        head_sha=reviewed["head_sha"],
+        head_sha=integration["prior_delivery_head_sha"],
         validated_tree_sha=tree,
         registry=binding,
         command_set=binding["validation"],
@@ -2564,7 +2579,7 @@ class ResolveFixedThreadsTests(TestCase):
         self._integration_git_patch = mock.patch.object(
             MODULE.fast_path,
             "_run_integration_commit_git",
-            side_effect=lambda root, arguments: MODULE._run_git(
+            side_effect=lambda root, arguments, **options: MODULE._run_git(
                 root, tuple(arguments), allow_failure=True
             ),
         )
@@ -5299,61 +5314,62 @@ class ResolveFixedThreadsTests(TestCase):
             )
 
     def test_eligibility_bound_ready_integration_authorizes_exact_thread(self) -> None:
-        thread_id = "PRRT_INTEGRATION_ELIGIBLE"
-        comment = ("PRRC_INTEGRATION_ROOT", "Intentional protocol body.", None)
-        reviewed = reviewed_state_payload(thread_id, [comment])
-        eligibility = eligibility_payload(reviewed, (thread_id,))
-        eligibility_digest = MODULE._digest_json(eligibility)
-        head = "c" * 40
-        integration, receipt, attestation = integration_validation_payloads(
-            reviewed, eligibility_digest, expected_head=head
-        )
-        github = FakeGh(
-            [
-                target_response(
-                    thread_id,
-                    head=head,
-                    comments=[comment],
-                )
-            ]
-        )
-        git = FakeGit(
-            expected_head=head,
-            reviewed_head=reviewed["head_sha"],
-            second_parent=reviewed["base_sha"],
-            tree=attestation["validated_tree_sha"],
-            receipt_digest=receipt["receipt_digest"],
-            integration_digest=MODULE.fast_path.digest_json(integration),
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for name, value in (
-                ("reviewed.json", reviewed),
-                ("validation.json", attestation),
-                ("eligibility.json", eligibility),
-                ("integration.json", integration),
-            ):
-                (root / name).write_text(json.dumps(value), encoding="utf-8")
-            with (
-                mock.patch.object(MODULE, "_run_git", git),
-                mock.patch.object(MODULE, "_run_gh", github),
-            ):
-                result = MODULE.resolve_threads(
-                    "SecPal/api",
-                    123,
-                    head,
-                    (thread_id,),
-                    apply=False,
-                    repository_root=root,
-                    reviewed_state_path=root / "reviewed.json",
-                    expected_reviewed_state_digest=reviewed["state_digest"],
-                    validation_evidence_path=root / "validation.json",
-                    eligibility_evidence_path=root / "eligibility.json",
-                    integration_evidence_path=root / "integration.json",
-                )
+        for version in ("1.1", "1.2", "1.3"):
+            thread_id = "PRRT_INTEGRATION_ELIGIBLE"
+            comment = ("PRRC_INTEGRATION_ROOT", "Intentional protocol body.", None)
+            reviewed = reviewed_state_payload(thread_id, [comment])
+            eligibility = eligibility_payload(reviewed, (thread_id,))
+            eligibility_digest = MODULE._digest_json(eligibility)
+            head = "c" * 40
+            integration, receipt, attestation = integration_validation_payloads(
+                reviewed, eligibility_digest, expected_head=head, version=version
+            )
+            github = FakeGh(
+                [
+                    target_response(
+                        thread_id,
+                        head=head,
+                        comments=[comment],
+                    )
+                ]
+            )
+            git = FakeGit(
+                expected_head=head,
+                reviewed_head=integration["prior_delivery_head_sha"],
+                second_parent=reviewed["base_sha"],
+                tree=attestation["validated_tree_sha"],
+                receipt_digest=receipt["receipt_digest"],
+                integration_digest=MODULE.fast_path.digest_json(integration),
+            )
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                for name, value in (
+                    ("reviewed.json", reviewed),
+                    ("validation.json", attestation),
+                    ("eligibility.json", eligibility),
+                    ("integration.json", integration),
+                ):
+                    (root / name).write_text(json.dumps(value), encoding="utf-8")
+                with (
+                    mock.patch.object(MODULE, "_run_git", git),
+                    mock.patch.object(MODULE, "_run_gh", github),
+                ):
+                    result = MODULE.resolve_threads(
+                        "SecPal/api",
+                        123,
+                        head,
+                        (thread_id,),
+                        apply=False,
+                        repository_root=root,
+                        reviewed_state_path=root / "reviewed.json",
+                        expected_reviewed_state_digest=reviewed["state_digest"],
+                        validation_evidence_path=root / "validation.json",
+                        eligibility_evidence_path=root / "eligibility.json",
+                        integration_evidence_path=root / "integration.json",
+                    )
 
-        self.assertEqual(result["pending"], [thread_id])
-        self.assertEqual(result["status"], "success")
+            self.assertEqual(result["pending"], [thread_id])
+            self.assertEqual(result["status"], "success")
 
     def test_ready_integration_translates_recoverable_authenticator_failure(
         self,
