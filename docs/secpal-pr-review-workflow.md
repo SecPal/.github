@@ -796,6 +796,19 @@ are identities only; they cannot mint matching documents. This source authority
 sets `thread_resolution_authority=0` and consumes no Recovery, so it cannot
 resolve, classify, or confer eligibility on any issue-792 review thread.
 
+An already-enrolled native Ready delivery may use the same package-loss
+authentication and prior-authority kind when a separate accepted-main record
+pins its exact protected CURRENT, signed native initialization and event chain,
+signed source head/tree/parent, every PR source commit, receipt-trailer identity,
+and bounded maintained-store survey. The single provider head is derived from
+the authenticated Ready event, never supplied by a caller or candidate. Current
+feedback is recaptured and every source must match an accepted-main technical
+decision; a new or blocking source fails closed. Historical receipt and
+initialization attestation digests remain provenance rather than recreated
+package bytes. The later Ready head's final-attestation field stays null; the
+initialization attestation digest is identified only as enrollment provenance.
+The resulting manifest grants no thread-resolution authority.
+
 For a later head-changing ordinary successor, the immutable adoption proof
 remains the genesis while the signed successor authority binds verifier-derived
 current-head tree, receipt, final attestation, and source-evidence identity.
