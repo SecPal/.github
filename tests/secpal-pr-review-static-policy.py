@@ -525,6 +525,10 @@ ALLOWED_IMPORTS = {
         "from pathlib import Path",
         "from typing import Any, Callable, TypeVar",
         "from . import qualified_remediation_successor_loss as successor_loss",
+        "from . import lifecycle_authority, pre_enrollment_integration",
+        "from . import bootstrap_source_admission, lifecycle_authority, pre_enrollment_integration",
+        "from . import pre_enrollment_integration",
+        "from . import bootstrap_source_admission",
     },
     "exact_source_safety.py": {
         "from __future__ import annotations",
@@ -689,7 +693,7 @@ DIRECT_MODULE_ATTRIBUTES = {
         "importlib": {"util"},
         "subprocess": {"DEVNULL", "TimeoutExpired", "run"},
         "sys": {"modules"},
-        "tempfile": {"mkstemp"},
+        "tempfile": {"TemporaryDirectory", "mkstemp"},
     },
     "exact_source_safety.py": {
         "os": {"fdopen", "fsync", "replace"},
@@ -810,7 +814,8 @@ LOADED_MODULE_ATTRIBUTES = {
             "create_final_attestation",
             "create_validation_receipt",
             "execute_once",
-            "loads_closed_json",
+            "read_artifact",
+            "require_current_policy",
             "normalize_evidence",
             "verify_authorization",
         },
@@ -2690,7 +2695,24 @@ def self_test() -> None:
                 f"{name}: {findings}"
             )
 
+    bridge_imports = (
+        "from . import lifecycle_authority, pre_enrollment_integration\n"
+        "from . import bootstrap_source_admission, lifecycle_authority, pre_enrollment_integration\n"
+        "from . import pre_enrollment_integration\n"
+        "from . import bootstrap_source_admission\n"
+        "import tempfile\n"
+        "with tempfile.TemporaryDirectory(prefix='secpal-bootstrap-verification-') as root:\n"
+        "    pass\n"
+    )
+    if inspect_source(bridge_imports, "fast_path.py", ()):
+        raise SystemExit("maintained bootstrap bridge imports/temp directory were rejected")
+
     source_specific_unsafe = (
+        ("fast_path.py", "evidence.__file__\n"),
+        ("fast_path.py", "evidence.__spec__.origin\n"),
+        ("fast_path.py", "evidence.__dict__['subprocess'].run(argv)\n"),
+        ("fast_path.py", "from . import caller_selected_verifier\n"),
+        ("fast_path.py", "import tempfile\ntempfile.TemporaryFile()\n"),
         (
             "secpal-pr-review.py",
             "import sys\nlauncher = sys.modules['subprocess'].run\nlauncher(argv)\n",

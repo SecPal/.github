@@ -38,6 +38,7 @@ MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 REAL_SUBPROCESS_RUN = subprocess.run
+CENTRAL_HISTORY_FIXTURE_ROOT: Path | None = None
 
 from secpal_work_graph import acceptance_criteria as work_graph_acceptance_criteria  # noqa: E402
 from secpal_work_graph import github as work_graph_github  # noqa: E402
@@ -175,6 +176,12 @@ def _current_registry_git(
 def _current_registry_git_result(
     arguments: list[str], *, allow_failure: bool = False
 ) -> tuple[int, str]:
+    if CENTRAL_HISTORY_FIXTURE_ROOT is not None:
+        result = REAL_SUBPROCESS_RUN(
+            ["git", *arguments], cwd=CENTRAL_HISTORY_FIXTURE_ROOT,
+            check=not allow_failure, capture_output=True, text=True,
+        )
+        return result.returncode, result.stdout
     if arguments == ["rev-parse", "HEAD"]:
         merge_head = _current_registry_git(
             ROOT, ["rev-parse", "--verify", "MERGE_HEAD"], allow_failure=True
@@ -1736,6 +1743,35 @@ def recovered_ready_source_fixture(
 
 
 class ResolveFixedThreadsTests(TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        # The old fixture issued receipts from mutable worktree policy but
+        # searched only committed history. Keep its policy epoch immutable even
+        # before a policy-changing candidate has been committed.
+        global CENTRAL_HISTORY_FIXTURE_ROOT
+        temporary = tempfile.TemporaryDirectory(prefix="resolver-policy-history-")
+        cls.addClassCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        def git(*arguments):
+            return REAL_SUBPROCESS_RUN(["git", *arguments], cwd=root, check=True,
+                                       capture_output=True, text=True).stdout.strip()
+        git("clone", "--quiet", "--shared", "--no-checkout", str(ROOT), ".")
+        git("remote", "set-url", "origin", "https://github.com/SecPal/.github.git")
+        parent = git("rev-parse", "HEAD")
+        git("read-tree", parent)
+        for relative in (MODULE.fast_path.DELIVERY_REGISTRY_PATH, MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH):
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes((ROOT / relative).read_bytes())
+            git("add", "--", relative)
+        head = git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit-tree", git("write-tree"), "-p", parent, "-m", "immutable policy fixture")
+        git("update-ref", "HEAD", head)
+        CENTRAL_HISTORY_FIXTURE_ROOT = root
+        def clear():
+            global CENTRAL_HISTORY_FIXTURE_ROOT
+            CENTRAL_HISTORY_FIXTURE_ROOT = None
+        cls.addClassCleanup(clear)
+
     def test_qualified_remediation_late_disposition_accepts_only_exact_boundary(
         self,
     ) -> None:
@@ -2371,7 +2407,7 @@ class ResolveFixedThreadsTests(TestCase):
             if item["repository"] == "SecPal/.github"
         )
         entry["pre_enrollment_integration_policy"] = {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "command": "integrate-pre-enrollment-draft",
             "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
             "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
@@ -2380,6 +2416,7 @@ class ResolveFixedThreadsTests(TestCase):
             "force_push": False,
             "automatic_retry": False,
             "merge_pull_request": False,
+            "historical_sources": [],
         }
         with tempfile.TemporaryDirectory() as directory:
             registry_path = Path(directory) / "repositories.json"

@@ -2735,9 +2735,11 @@ class LifecycleOrchestrationTests(TestCase):
                 current_entry
             )
             self.assertEqual(len(current_binding["validation"]), 19)
+            # Current policy includes bounded pre-enrollment v1.1 and its exact
+            # historical inventory; the authenticated collision epoch stays pinned.
             self.assertEqual(
                 fast_path.digest_json(current_binding),
-                "0c54567c91ee3cbd4bd17bdcafcc652e5c08aaf330e5ca5b74237b6d93195742",
+                "7b40a3cd51f7981be6c03afeb0ccbb1e43790422c66bcc56493b073fd80ab8dd",
             )
             self.assertEqual(
                 fast_path.digest_json(current_binding["validation"]),

@@ -2286,6 +2286,7 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
     def test_authentication_failure_executes_no_candidate_command(self) -> None:
         executed = mock.Mock()
         with (
+            mock.patch.object(source, "_require_legacy_pre_enrollment_issuance"),
             mock.patch.object(
                 source,
                 "_select_pre_enrollment_policy",
@@ -2322,6 +2323,7 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
             yield {"NODE_OPTIONS": "--require=/authenticated/runtime-guard.cjs"}
 
         with (
+            mock.patch.object(source, "_require_legacy_pre_enrollment_issuance"),
             mock.patch.object(
                 source,
                 "_select_pre_enrollment_policy",

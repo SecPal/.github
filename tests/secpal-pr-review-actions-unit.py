@@ -4131,7 +4131,7 @@ class RegistryTests(TestCase):
             if item["repository"] == "SecPal/.github"
         )
         entry["pre_enrollment_integration_policy"] = {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "command": "integrate-pre-enrollment-draft",
             "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
             "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
@@ -4140,6 +4140,7 @@ class RegistryTests(TestCase):
             "force_push": False,
             "automatic_retry": False,
             "merge_pull_request": False,
+            "historical_sources": [],
         }
 
         validated = actions.validate_registry(registry)
@@ -4150,6 +4151,9 @@ class RegistryTests(TestCase):
             ],
             entry["pre_enrollment_integration_policy"],
         )
+        entry["pre_enrollment_integration_policy"]["schema_version"] = "1.0"
+        with self.assertRaises(actions.RegistryError):
+            actions.validate_registry(registry)
 
     def test_registry_cases_61_to_69(self) -> None:
         registry = {

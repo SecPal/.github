@@ -200,7 +200,7 @@
         "accepted_formats": ["ssh", "openpgp"]
       },
       "pre_enrollment_integration_policy": {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "command": "integrate-pre-enrollment-draft",
         "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
         "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
@@ -208,7 +208,66 @@
         "maximum_pushes": 1,
         "force_push": false,
         "automatic_retry": false,
-        "merge_pull_request": false
+        "merge_pull_request": false,
+        "historical_sources": [
+          {
+            "repository": "SecPal/.github",
+            "delivery_issue": 764,
+            "pull_request": 773,
+            "head_sha": "d9c9884f06ab549a4336a0a4d730dbd599f0bf1f",
+            "tree_sha": "da34345aa226d874dd070edb2f926c3cfc1e5434",
+            "integration_evidence_digest": "eb241c76b6704c581e950d2d5171550cbd5d374e2f7fe5bf17a2709178e967a1",
+            "validation_receipt_digest": "a3bf136434dc2044a239d99d60716c855a80a4489519b0a724e6a86f737015e1",
+            "final_attestation_digest": "ff06c982cd704bff75252c935bf4d9a3d337277fc30331c8253a11f764ec43e8",
+            "artifact_sizes": {
+              "integration": {
+                "wire_bytes": 3209,
+                "canonical_bytes": 2823
+              },
+              "receipt": {
+                "wire_bytes": 888,
+                "canonical_bytes": 888
+              },
+              "attestation": {
+                "wire_bytes": 1791,
+                "canonical_bytes": 1791
+              }
+            }
+          },
+          {
+            "repository": "SecPal/.github",
+            "delivery_issue": 776,
+            "pull_request": 779,
+            "head_sha": "e95b1c854a436fd69d659ea968dd9f4c6960da7b",
+            "tree_sha": "e447560c3a53b502efe58063ff8d2c4e4c9e8397",
+            "integration_evidence_digest": "e882ab78a1b9fd05a48c45c0f5fac74c834cfac4fb1bf32b35c4cfdfe2213b76",
+            "validation_receipt_digest": "f7240dcd07920f6130af2752488d3990afd69a7a3f2cae7de100c1316b99cbd1",
+            "final_attestation_digest": "9c45672da95bc96ad8387b7c1a7043b682f9f4b7304dc87beca99471f85432fc",
+            "artifact_sizes": null
+          },
+          {
+            "repository": "SecPal/.github",
+            "delivery_issue": 847,
+            "pull_request": 848,
+            "head_sha": "cea0dfa1ecbb80905b0246376e5ddfafbc1a7ea8",
+            "tree_sha": "ff96ab643993a40209676d1e2c1c868fa734d011",
+            "integration_evidence_digest": "d21812115b991c436633cc0d03bf533d8635534a629bb83c0786566dedb18e50",
+            "validation_receipt_digest": "83e6d9879ca9f8f6eacfbbd99b3bc3bf0dc954cdf14582025c197f3d02308494",
+            "final_attestation_digest": "1db1f57a8589132a066761413df55d060f2295f2376fd57e1100c12fae7199a4",
+            "artifact_sizes": null
+          },
+          {
+            "repository": "SecPal/.github",
+            "delivery_issue": 1006,
+            "pull_request": 1007,
+            "head_sha": "0416da590e89ac1ce6fda7ae74b8e837542f17f4",
+            "tree_sha": "104b5799efa99465ecbf5bbb09fc057f5ea9f8ca",
+            "integration_evidence_digest": "47f0894d3e1b4fa07b98118ce9e88be81487a99c7c2ad70c15c426dfc6f95543",
+            "validation_receipt_digest": "1ba9a2c66da86a7651e6c6029f2825d5b42ef617a23ed88f3556b51151728d05",
+            "final_attestation_digest": "ceeb0442f84d197fe4eb7deafe63a55d455c3fa83d89b676ec37700f591698f6",
+            "artifact_sizes": null
+          }
+        ]
       },
       "lifecycle_authority_policy": {
         "schema_version": "1.0",

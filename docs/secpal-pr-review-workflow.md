@@ -418,6 +418,121 @@ exceptional-continuation counters; Cycle 3 remains absent. Native genesis is
 then admitted and enrolled through the admission-first publication boundary.
 The integration itself is not a lifecycle transition.
 
+For a delivery with authenticated pre-enrollment lifecycle history, use
+Exact-State-Adoption. The source-admittable entrypoint is
+`fast_path.authenticate_pre_enrollment_adoption`, in
+`scripts/secpal_pr_review/fast_path.py`, for purpose
+`PRE_ENROLLMENT_ADOPTION_AUTHENTICATION`.
+
+**The bridge implementation acquires authority only when its exact immutable
+source is admitted by accepted protected-main Source Admission. It cannot
+authenticate itself.** This candidate does not install that admission. The outer
+accepted executor must authenticate the source head/tree, parent, signer,
+implementation path, entrypoint, purpose, receipt and attestation before loading
+any of its Python code. It owns materialization of the authenticated import
+closure, private tooling roots, isolated interpreter and closed environment.
+The existing three fixed source admissions do not authorize this entrypoint.
+
+Inside that future authenticated invocation, the bridge replays the raw bootstrap
+artifacts, creates internal validation evidence, and calls the existing
+Exact-State-Adoption external-evidence authenticator before returning. No parent
+runner binding is accepted or sealed. The returned closed read-only summary is
+neither `VerifiedValidationEvidence` nor adoption evidence/proof, and cannot be
+passed to their existing consumers as authority. `VerifiedInitialHeadProof`
+remains an initialization handoff. This operation neither signs nor publishes
+adoption, initializes lifecycle state, nor changes counters.
+
+The bridge reads current policy and historical registry/schema as Git data. It
+never checks out or imports fetched main Python modules. Bootstrap and main
+objects are fetched from the canonical repository into private object databases;
+no caller repository path is retained in validation provenance. Module metadata,
+a parent module cache, and a claimed launcher result do not establish source
+admission. Isolation belongs to the independently accepted outer executor.
+
+The immutable integration parent 2 selects the evidence-time registry and
+command set only after a bounded first-parent proof starting at authenticated
+current main. That proof reads and rehashes raw commit objects and follows their
+first parent headers; it never uses revision traversal as ancestry authority.
+Malformed or missing objects, ambiguous topology and exhausted count/byte bounds
+fail closed. Git grafts and replacement refs cannot authorize another epoch.
+Later main advancement does not substitute a newer parent for the original one.
+The admitted immutable source supplies verifier code; current protected main
+supplies maintained signer/trust policy data.
+No caller-selected registry, command set, signer or main tip is accepted.
+Replay authenticates immutable source evidence; it does not reauthorize a
+bootstrap against today's work graph or consume its one-use authorization again.
+
+New issuance uses pre-enrollment schema **1.1** exclusively. Authorization,
+integration evidence, receipt and attestation use their respective immutable
+`/v1.1` domains. Initialization 1.1, the initial-head proof kind, and adoption
+versions 1/2/3/4 remain unchanged. The historical #776 source executor cannot
+issue new unbounded evidence after protected-main policy selects 1.1.
+
+The resource contract has these UTF-8 byte/cardinality limits:
+
+| Dimension                                         |                      Limit |
+| ------------------------------------------------- | -------------------------: |
+| Operation, receipt and attestation identity       | 255 ASCII-compatible bytes |
+| Encoded signature                                 |               16,384 bytes |
+| Conflict path                                     |                1,024 bytes |
+| Conflict paths / corresponding resolution entries |  32 / exactly one per path |
+| Issue and PR                                      |    1 through 2,147,483,647 |
+| Authorization canonical file                      |               99,948 bytes |
+| Integration canonical file                        |              240,076 bytes |
+| Receipt canonical file                            |                1,141 bytes |
+| Final attestation canonical file                  |              140,731 bytes |
+| Integration + receipt + attestation               |              381,948 bytes |
+
+Signer roles retain maintained constraints. Identity grammar reuses lifecycle
+identities; path/count limits reuse the maintained correction profile; signatures
+reuse the lifecycle 16-KiB bound, and GitHub issue/PR numbers use signed 32-bit
+integers. This producer is registered only for `SecPal/.github` and `main`.
+The aggregate envelopes account for 64-hex OIDs, every repeated field, 32 maximal
+paths and deltas, two-byte JSON escaping for permitted path quotes, six-byte
+escaping for signature control characters, compact sorted UTF-8 JSON and final
+newline. Conservative envelopes may exceed the largest cryptographically valid
+artifact. They are shared producer/reader ceilings, not independent transport caps.
+
+The outer executor supplies controlled regular artifact files, rejecting symlinks
+and unsafe paths before execution. Fixed filenames are `integration-evidence.json`,
+`validation-receipt.json`, and `final-attestation.json`. The bridge also checks
+regular-file identity before/after bounded reads, raw byte limits before decoding,
+JSON nesting, cardinalities and lengths before normalization, and canonical size.
+The separate canonical control message is at most 65,536 bytes (nesting depth 8).
+Thus current bridge input totals at most 447,484 bytes; the standalone authorization
+is already embedded in integration evidence. Stdout must contain only the small
+closed result, never complete artifacts.
+
+Schema 1.0 remains immutable historical read compatibility. Only the inventory
+read from authenticated protected main selects it; a caller version or historical
+flag does not. The inventory anchors exact source head/tree and three semantic
+digests for #764/773, #776/779, #847/848, and #1006/original PR #1007. Replacement
+PR #1008 does not rebind #1007's original artifacts. #773's canonical artifact sizes
+are 2,823 / 888 / 1,791 bytes, with original wire read limits 3,209 / 888 / 1,791.
+Other inventory entries retain unknown size metadata and fail closed before reads
+with `HISTORICAL_EVIDENCE_UNAVAILABLE` until accepted policy authenticates sizes.
+No synthetic or newly fabricated v1.0 document gains historical status.
+
+The result exposes only closed semantic diagnostics: `RESOURCE_CONTRACT_REJECTED`,
+`INPUT_SCHEMA_REJECTED`, `SOURCE_HISTORY_REJECTED`, `EVIDENCE_TIME_POLICY_REJECTED`,
+`AUTHORIZATION_REJECTED`, `COMMIT_SIGNATURE_REJECTED`, `ARTIFACT_BINDING_REJECTED`,
+`TREE_REPLAY_REJECTED`, `ADOPTION_COMPOSITION_REJECTED`, `RESULT_CONTRACT_REJECTED`,
+and `HISTORICAL_EVIDENCE_UNAVAILABLE`. Raw exceptions, stderr, provider responses,
+and filesystem paths never cross this result boundary.
+
+The sealed validation provenance is version `1.0`, kind
+`PRE_ENROLLMENT_DRAFT_INTEGRATION`, and is independently replayed by
+`is_verified_validation_evidence`. Receipt and final-attestation digests retain
+their original meanings. The source-validation digest hashes a typed binding of
+repository, issue, PR, head, tree, ordered parents and the three original
+integration, receipt and attestation digests. It is not an alias for the
+integration digest. Existing adoption external evidence uses the original final
+attestation as its adoption-source identity; no adoption version changes.
+Exact-State-Adoption still exclusively authenticates chronology and finite state,
+including its existing review-budget consumption admission when no truthful
+provider-review observation is available. This bridge neither publishes adoption
+nor changes historical review consumption or tree resolution semantics.
+
 ## Pre-enrollment Draft current-main integration
 
 An open Draft delivery that has not entered lifecycle authority may use the

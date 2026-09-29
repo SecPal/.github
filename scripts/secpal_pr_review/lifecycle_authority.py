@@ -3394,6 +3394,45 @@ def verify_pre_enrollment_review_budget_consumption_admission(
     intended_state_digest: str,
     adoption_timestamp: str,
 ) -> VerifiedPreEnrollmentReviewBudgetConsumptionAdmission:
+    """Use installed maintained policy for the existing public verifier."""
+
+    return _verify_pre_enrollment_review_budget_consumption_admission(
+        value,
+        repository=repository,
+        delivery_issue=delivery_issue,
+        pull_request=pull_request,
+        head_sha=head_sha,
+        tree_sha=tree_sha,
+        pull_request_state=pull_request_state,
+        commit_signature_evidence_digest=commit_signature_evidence_digest,
+        validation_receipt_digest=validation_receipt_digest,
+        source_validation_evidence_digest=source_validation_evidence_digest,
+        adoption_source_evidence_digest=adoption_source_evidence_digest,
+        observed_history_digest=observed_history_digest,
+        intended_state_digest=intended_state_digest,
+        adoption_timestamp=adoption_timestamp,
+        policy=None,
+    )
+
+
+def _verify_pre_enrollment_review_budget_consumption_admission(
+    value: Any,
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    head_sha: str,
+    tree_sha: str,
+    pull_request_state: str,
+    commit_signature_evidence_digest: str,
+    validation_receipt_digest: str,
+    source_validation_evidence_digest: str,
+    adoption_source_evidence_digest: str,
+    observed_history_digest: str,
+    intended_state_digest: str,
+    adoption_timestamp: str,
+    policy: LifecycleTrustPolicy | None,
+) -> VerifiedPreEnrollmentReviewBudgetConsumptionAdmission:
     """Verify the sole review-count input accepted by exact adoption v1.1."""
 
     admission = _require_closed(
@@ -3455,7 +3494,8 @@ def verify_pre_enrollment_review_budget_consumption_admission(
         raise LifecycleAuthorityError(
             "pre-enrollment review-budget admission digest mismatch"
         )
-    policy = _load_lifecycle_trust_policy(context["repository"])
+    if policy is None:
+        policy = _load_lifecycle_trust_policy(context["repository"])
     _verify_signature(
         canonical_json_bytes(
             _unsigned(admission, "admission_digest", "signature")
@@ -3758,6 +3798,45 @@ def authenticate_exact_state_adoption_external_evidence(
     validation_evidence_loss_admission: Any = None,
     governance_amendment_authorization: Any = None,
 ) -> VerifiedExactStateAdoptionExternalEvidence:
+    """Use installed maintained policy for the existing public verifier."""
+
+    return _authenticate_exact_state_adoption_external_evidence(
+        repository=repository,
+        delivery_issue=delivery_issue,
+        pull_request=pull_request,
+        head_sha=head_sha,
+        tree_sha=tree_sha,
+        pull_request_state=pull_request_state,
+        commit_signature_evidence=commit_signature_evidence,
+        validation_evidence=validation_evidence,
+        observed_pre_enrollment_history=observed_pre_enrollment_history,
+        intended_state=intended_state,
+        review_budget_consumption_admission=review_budget_consumption_admission,
+        validation_evidence_loss_admission=validation_evidence_loss_admission,
+        governance_amendment_authorization=governance_amendment_authorization,
+        signature_policy=None,
+        review_budget_verifier=verify_pre_enrollment_review_budget_consumption_admission,
+    )
+
+
+def _authenticate_exact_state_adoption_external_evidence(
+    *,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    head_sha: str,
+    tree_sha: str,
+    pull_request_state: str,
+    commit_signature_evidence: Mapping[str, Any],
+    validation_evidence: VerifiedValidationEvidence | None,
+    observed_pre_enrollment_history: Sequence[Mapping[str, Any]],
+    intended_state: Mapping[str, Any],
+    review_budget_consumption_admission: Mapping[str, Any] | None = None,
+    validation_evidence_loss_admission: Any = None,
+    signature_policy: Mapping[str, Any] | None,
+    review_budget_verifier: Callable[..., Any],
+    governance_amendment_authorization: Any = None,
+) -> VerifiedExactStateAdoptionExternalEvidence:
     """Authenticate external artifacts before any adoption proof is assembled."""
 
     repository = _require_repository(repository)
@@ -3838,7 +3917,7 @@ def authenticate_exact_state_adoption_external_evidence(
     commit = copy.deepcopy(dict(commit_signature_evidence))
     try:
         verified_commits = verify_commit_signatures(
-            [commit], _load_delivery_signature_policy(repository)
+            [commit], _load_delivery_signature_policy(repository) if signature_policy is None else signature_policy
         )
     except SecurityBlocker as exc:
         raise LifecycleAuthorityError(
@@ -3880,7 +3959,7 @@ def authenticate_exact_state_adoption_external_evidence(
     verified_review_budget_admission = None
     if review_budget_consumption_admission is not None:
         verified_review_budget_admission = (
-            verify_pre_enrollment_review_budget_consumption_admission(
+            review_budget_verifier(
                 review_budget_consumption_admission,
                 repository=repository,
                 delivery_issue=issue,
