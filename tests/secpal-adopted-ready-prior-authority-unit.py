@@ -327,6 +327,7 @@ def legacy_loss_authentication() -> dict[str, object]:
         "recovery_consumed": False,
         "successful_result": True,
     }
+
     safety["current_safety_digest"] = fast_path.digest_json(safety)
     return {
         "schema_version": "1.0",
@@ -371,6 +372,133 @@ def legacy_loss_authentication() -> dict[str, object]:
         "authentication_digest": "f" * 64,
     }
 
+
+def generic_native_record() -> dict[str, object]:
+    initialization_digest = "d" * 64
+    history = [
+        {"head_sha": "0" * 40, "tree_sha": "1" * 40, "parent_sha": "2" * 40},
+        {"head_sha": "5" * 40, "tree_sha": "3" * 40, "parent_sha": "0" * 40},
+        {"head_sha": "6" * 40, "tree_sha": "4" * 40, "parent_sha": "5" * 40},
+        {"head_sha": "a" * 40, "tree_sha": "b" * 40, "parent_sha": "6" * 40},
+    ]
+    record: dict[str, object] = {
+        "schema_version": "1.0",
+        "kind": legacy_loss.KIND,
+        "repository": REPOSITORY,
+        "delivery_issue": 4242,
+        "pull_request": 4243,
+        "lifecycle_id": canonical_lifecycle_authority.delivery_initialization_lifecycle_id(
+            initialization_digest
+        ),
+        "historical_proof_mode": "native_lifecycle",
+        "proof_version": "1.0",
+        "current_publication_oid": "e" * 40,
+        "current_publication_digest": "f" * 64,
+        "current_authority_digest": "2" * 64,
+        "initialization_digest": initialization_digest,
+        "initial_head_sha": "5" * 40,
+        "initial_validation_receipt_digest": "3" * 64,
+        "initial_final_attestation_digest": "4" * 64,
+        "head_sha": "a" * 40,
+        "tree_sha": "b" * 40,
+        "parent_sha": "6" * 40,
+        "source_signer_identity": SIGNER,
+        "commit_signature_evidence_digest": "5" * 64,
+        "historical_provider_summary_digest": "6" * 64,
+        "evidence_time_registry_digest": "7" * 64,
+        "historical_command_set_digest": "8" * 64,
+        "historical_validation_receipt_digest": "9" * 64,
+        "feedback_digest": "a" * 64,
+        "technical_decisions": [],
+        "source_history": history,
+        "persistence_contract": {
+            "historical_output_scope": "CALLER_SELECTED_GITIGNORED_LOCAL_SESSION",
+            "local_package_directory": ".context/",
+            "artifact_basenames": [
+                "final-attestation.json", "validation-receipt.json",
+            ],
+            "maintained_durable_stores": [
+                "DELIVERY_SOURCE_HISTORY", "PROTECTED_LIFECYCLE_PUBLICATION",
+            ],
+            "unsurveyed_maintained_stores": [],
+            "retained_local_store": "NO_MAINTAINED_RETAINED_STORE",
+        },
+        "historical_package_status": "UNAVAILABLE",
+        "historical_bytes_reconstructed": False,
+        "package_store_survey_digest": "c" * 64,
+    }
+    record["record_digest"] = legacy_loss.authority.digest_json(record)
+    return record
+
+
+def generic_native_current(record: dict[str, object]) -> SimpleNamespace:
+    events = [
+        ("INITIALIZED_DRAFT", "5" * 40, "8" * 64),
+        ("UNRESTRICTED_REVIEW_CONSUMED", "5" * 40, "9" * 64),
+        ("REMEDIATION_COMPLETED", "6" * 40, "a" * 64),
+        ("DRAFT_TO_READY", "6" * 40, READY_EVENT),
+        ("REMEDIATION_COMPLETED", "a" * 40, "b" * 64),
+    ]
+    authorizations = [
+        {
+            "repository": record["repository"],
+            "delivery_issue": record["delivery_issue"],
+            "pull_request": record["pull_request"],
+            "lifecycle_id": record["lifecycle_id"],
+            "transition_kind": kind,
+            "resulting_head_sha": head,
+            "event_digest": digest,
+        }
+        for kind, head, digest in events
+    ]
+    bundle = {
+        "enrollment_mode": "NATIVE_LIFECYCLE",
+        "legacy_adoption_checkpoint": None,
+        "lifecycle_evidence": {
+            "delivery_initialization": {
+                "repository": record["repository"],
+                "delivery_issue": record["delivery_issue"],
+                "pull_request": record["pull_request"],
+                "initial_head_sha": record["initial_head_sha"],
+                "initialization_digest": record["initialization_digest"],
+                "validation_receipt_digest": record[
+                    "initial_validation_receipt_digest"
+                ],
+                "final_attestation_digest": record[
+                    "initial_final_attestation_digest"
+                ],
+            },
+            "transition_authorizations": authorizations,
+            "authority_chain": [
+                {
+                    "event_authorization_digest": event["event_digest"],
+                    "head_sha": event["resulting_head_sha"],
+                    "authority_digest": (
+                        record["current_authority_digest"]
+                        if index == 4 else str(index + 1) * 64
+                    ),
+                }
+                for index, event in enumerate(authorizations)
+            ],
+        },
+    }
+    return SimpleNamespace(
+        publication_oid=record["current_publication_oid"],
+        publication_digest=record["current_publication_digest"],
+        serialized_lifecycle_evidence=json.dumps(bundle).encode(),
+        lifecycle=SimpleNamespace(
+            repository=record["repository"],
+            delivery_issue=record["delivery_issue"],
+            pull_request=record["pull_request"],
+            lifecycle_id=record["lifecycle_id"],
+            initialization_evidence_digest=record["initialization_digest"],
+            authority_digest=record["current_authority_digest"],
+            head_sha=record["head_sha"],
+            tree_sha=None,
+            historical_proof_mode="native_lifecycle",
+            state=state(),
+        ),
+    )
 
 def qualified_loss_record() -> dict[str, object]:
     return {
@@ -473,6 +601,499 @@ def rebound_publications() -> tuple[SimpleNamespace, SimpleNamespace, SimpleName
 
 
 class AdoptedReadyPriorAuthorityTests(TestCase):
+    def test_package_loss_policy_rejects_modified_helper_dependency(self) -> None:
+        main_sha = "a" * 40
+        inspected: list[str] = []
+
+        def git_text(_root: Path, args: list[str]) -> str:
+            if args == ["rev-parse", "HEAD"]:
+                return main_sha
+            if args == ["status", "--porcelain=v2", "--untracked-files=all"]:
+                return ""
+            if args[0] == "hash-object":
+                inspected.append(args[-1])
+                return "b" * 40 if args[-1].endswith("validation_evidence_loss.py") else "c" * 40
+            if args[0] == "rev-parse":
+                return "c" * 40
+            self.fail(f"unexpected git call: {args}")
+
+        with (
+            mock.patch.object(
+                legacy_loss, "_gh_projection",
+                return_value=json.dumps({"sha": main_sha, "protected": True}).encode(),
+            ),
+            mock.patch.object(
+                legacy_loss.validation_evidence_loss,
+                "_accepted_main_commit_metadata",
+                return_value={"sha": main_sha, "verified": True},
+            ),
+            mock.patch.object(legacy_loss.transport, "_git_text", side_effect=git_text),
+        ):
+            with self.assertRaisesRegex(
+                legacy_loss.authority.LifecycleAuthorityError,
+                "accepted-main legacy package-loss code or policy changed",
+            ):
+                legacy_loss._accepted_policy(REPOSITORY, ISSUE)
+        self.assertIn("scripts/secpal_pr_review/validation_evidence_loss.py", inspected)
+
+    def test_native_policy_requires_exact_loss_and_source_identity(self) -> None:
+        record = generic_native_record()
+        self.assertEqual(legacy_loss._validate_record(record), record)
+        changes = {
+            "repository": "SecPal/other",
+            "lifecycle_id": "lifecycle:other",
+            "historical_proof_mode": "exact_state_adoption",
+            "head_sha": "0" * 40,
+            "tree_sha": "0" * 40,
+            "parent_sha": "0" * 40,
+            "historical_package_status": "AVAILABLE",
+            "historical_bytes_reconstructed": True,
+        }
+        for field, replacement in changes.items():
+            altered = copy.deepcopy(record)
+            altered[field] = replacement
+            altered["record_digest"] = legacy_loss.authority.digest_json({
+                key: value for key, value in altered.items()
+                if key != "record_digest"
+            })
+            with self.subTest(field=field), self.assertRaises(
+                canonical_lifecycle_authority.LifecycleAuthorityError
+            ):
+                legacy_loss._validate_record(altered)
+        altered = copy.deepcopy(record)
+        altered["source_history"][0]["parent_sha"] = "f" * 40
+        altered["source_history"][1]["parent_sha"] = "f" * 40
+        altered["record_digest"] = legacy_loss.authority.digest_json({
+            key: value for key, value in altered.items()
+            if key != "record_digest"
+        })
+        with self.assertRaises(canonical_lifecycle_authority.LifecycleAuthorityError):
+            legacy_loss._validate_record(altered)
+
+    def test_native_current_fails_closed_on_identity_and_counter_churn(self) -> None:
+        record = generic_native_record()
+        current = generic_native_current(record)
+        legacy_loss._admit_current(current, record)
+        changes = {
+            "repository": lambda value: setattr(value.lifecycle, "repository", "SecPal/other"),
+            "issue": lambda value: setattr(value.lifecycle, "delivery_issue", 4244),
+            "PR": lambda value: setattr(value.lifecycle, "pull_request", 4245),
+            "lifecycle": lambda value: setattr(value.lifecycle, "lifecycle_id", "lifecycle:other"),
+            "CURRENT": lambda value: setattr(value, "publication_oid", "0" * 40),
+            "CURRENT digest": lambda value: setattr(value, "publication_digest", "0" * 64),
+            "authority": lambda value: setattr(value.lifecycle, "authority_digest", "0" * 64),
+            "head": lambda value: setattr(value.lifecycle, "head_sha", "0" * 40),
+            "tree": lambda value: setattr(value.lifecycle, "tree_sha", "0" * 40),
+            "Draft": lambda value: value.lifecycle.state.update(draft=True),
+            "Ready": lambda value: value.lifecycle.state.update(ready=False),
+            "review": lambda value: value.lifecycle.state.update(unrestricted_review_count=0),
+            "remediation": lambda value: value.lifecycle.state.update(remediation_cycle_count=3),
+            "Ready transitions": lambda value: value.lifecycle.state.update(ready_transition_count=2),
+            "recovery": lambda value: value.lifecycle.state.update(exceptional_recovery_count=1),
+            "continuation": lambda value: value.lifecycle.state.update(exceptional_continuation_count=1),
+            "Cycle 3": lambda value: value.lifecycle.state.update(cycle_3_absent=False),
+            "Ready churn": lambda value: value.lifecycle.state["ready_history"].append(
+                {"sequence": 2, "transition_kind": "READY_TO_DRAFT", "event_authorization_digest": "0" * 64}
+            ),
+        }
+        for label, mutate in changes.items():
+            altered = copy.deepcopy(current)
+            mutate(altered)
+            with self.subTest(label=label), self.assertRaises(
+                canonical_lifecycle_authority.LifecycleAuthorityError
+            ):
+                legacy_loss._admit_current(altered, record)
+
+    def test_native_provider_head_is_derived_from_ready_event(self) -> None:
+        record = generic_native_record()
+        current = generic_native_current(record)
+        provider = legacy_loss._provider_head_binding(current, record)
+        self.assertEqual(provider.provider_head_sha, "6" * 40)
+        altered = copy.deepcopy(current)
+        bundle = json.loads(altered.serialized_lifecycle_evidence)
+        bundle["lifecycle_evidence"]["transition_authorizations"][3][
+            "resulting_head_sha"
+        ] = "5" * 40
+        altered.serialized_lifecycle_evidence = json.dumps(bundle).encode()
+        with self.assertRaises(canonical_lifecycle_authority.LifecycleAuthorityError):
+            legacy_loss._provider_head_binding(altered, record)
+
+    def test_native_provider_history_covers_all_pr_commits(self) -> None:
+        record = generic_native_record()
+        facts = legacy_loss.ProviderFacts(
+            pull_request={
+                "number": record["pull_request"], "state": "open",
+                "draft": False, "merged": False,
+                "head_sha": record["head_sha"],
+                "head_repository": REPOSITORY,
+                "base_repository": REPOSITORY, "base_ref": "main",
+            },
+            issue={"number": record["delivery_issue"], "state": "open"},
+            commit={
+                "sha": record["head_sha"], "tree_sha": record["tree_sha"],
+                "parents": [record["parent_sha"]], "verified": True,
+            },
+            chronology=(legacy_loss.validation_evidence_loss.ChronologyEvent(
+                identity="ready-event", kind="ready_for_review",
+                occurred_at="2026-09-01T00:00:00Z",
+            ),),
+            source_commits=tuple(
+                item["head_sha"] for item in record["source_history"]
+            ),
+        )
+        legacy_loss._admit_provider(facts, record)
+        for label, changed in (
+            ("omitted early commit", facts.source_commits[1:]),
+            ("arbitrary ancestor", ("f" * 40, *facts.source_commits[1:])),
+        ):
+            altered = copy.deepcopy(facts)
+            altered = legacy_loss.ProviderFacts(
+                altered.pull_request, altered.issue, altered.commit,
+                altered.chronology, changed,
+            )
+            with self.subTest(label=label), self.assertRaises(
+                canonical_lifecycle_authority.LifecycleAuthorityError
+            ):
+                legacy_loss._admit_provider(altered, record)
+
+    def test_native_store_survey_rejects_available_bytes_and_wrong_trailer(self) -> None:
+        record = generic_native_record()
+        current = SimpleNamespace(
+            publication_oid=record["current_publication_oid"],
+            publication_digest=record["current_publication_digest"],
+        )
+        survey = {
+            "repository": record["repository"],
+            "delivery_issue": record["delivery_issue"],
+            "pull_request": record["pull_request"],
+            "current_publication": {
+                "object_oid": current.publication_oid,
+                "publication_digest": current.publication_digest,
+            },
+            "historical_companion_digests": {
+                "initial_validation_receipt_digest": record[
+                    "initial_validation_receipt_digest"
+                ],
+                "initial_final_attestation_digest": record[
+                    "initial_final_attestation_digest"
+                ],
+                "historical_validation_receipt_digest": record[
+                    "historical_validation_receipt_digest"
+                ],
+            },
+            "source_history": record["source_history"],
+            "persistence_contract": record["persistence_contract"],
+            "result": "UNAVAILABLE",
+            "historical_bytes_reconstructed": False,
+        }
+        record["package_store_survey_digest"] = legacy_loss.authority.digest_json(survey)
+        record["record_digest"] = legacy_loss.authority.digest_json({
+            key: value for key, value in record.items()
+            if key != "record_digest"
+        })
+
+        def git_projection(_root: Path, arguments: list[str], _label: str) -> str:
+            if arguments == ["remote", "get-url", "origin"]:
+                return "git@github.com:SecPal/.github.git\n"
+            if arguments[0] == "show":
+                return ".context/\n"
+            head = arguments[-1].split("^", 1)[0]
+            history = next(item for item in record["source_history"] if item["head_sha"] == head)
+            if arguments[0] == "rev-parse":
+                return history["tree_sha"] + "\n"
+            if arguments[0] == "rev-list":
+                return f'{head} {history["parent_sha"]}\n'
+            if arguments[0] == "ls-tree":
+                return ".gitignore\nAGENTS.md\n"
+            raise AssertionError(arguments)
+
+        with (
+            mock.patch.object(legacy_loss, "_git_text", side_effect=git_projection),
+            mock.patch.object(legacy_loss.authority, "_load_lifecycle_trust_policy", return_value=object()),
+            mock.patch.object(legacy_loss.validation_evidence_loss, "_commit_signature", return_value="5" * 64),
+            mock.patch.object(legacy_loss.validation_evidence_loss, "_optional_validation_receipt_trailer", side_effect=["3" * 64, "9" * 64]),
+        ):
+            self.assertEqual(
+                legacy_loss._survey_package_stores(ROOT, record, current)["result"],
+                "UNAVAILABLE",
+            )
+        with (
+            mock.patch.object(legacy_loss, "_git_text", side_effect=git_projection),
+            mock.patch.object(legacy_loss.authority, "_load_lifecycle_trust_policy", return_value=object()),
+            mock.patch.object(legacy_loss.validation_evidence_loss, "_commit_signature", return_value="5" * 64),
+            mock.patch.object(legacy_loss.validation_evidence_loss, "_optional_validation_receipt_trailer", side_effect=["3" * 64, "0" * 64]),
+            self.assertRaisesRegex(canonical_lifecycle_authority.LifecycleAuthorityError, "trailer"),
+        ):
+            legacy_loss._survey_package_stores(ROOT, record, current)
+
+        def available_artifact(root: Path, arguments: list[str], label: str) -> str:
+            result = git_projection(root, arguments, label)
+            if arguments[0] == "ls-tree":
+                return result + ".context/validation-receipt.json\n"
+            return result
+
+        with (
+            mock.patch.object(legacy_loss, "_git_text", side_effect=available_artifact),
+            self.assertRaisesRegex(canonical_lifecycle_authority.LifecycleAuthorityError, "bytes exist"),
+        ):
+            legacy_loss._survey_package_stores(ROOT, record, current)
+
+
+    def test_native_current_safety_requires_source_complete_feedback(self) -> None:
+        record = generic_native_record()
+        registry = fast_path.validate_repository_registry_structure(json.loads(
+            (ROOT / legacy_loss.REGISTRY_PATH).read_text()
+        ))
+        entry = next(
+            item for item in registry["repositories"]
+            if item["repository"] == REPOSITORY
+        )
+        empty_feedback = {
+            "pull_request_reactions": [],
+            "reviews": [],
+            "conversation_comments": [],
+            "threads": [],
+        }
+
+        def reviewed(feedback: dict[str, object]) -> fast_path.StableFeedbackState:
+            return fast_path.StableFeedbackState(
+                repository=REPOSITORY,
+                pull_request_number=record["pull_request"],
+                head_sha=record["head_sha"],
+                base_ref="main",
+                base_sha="0" * 40,
+                pr_state="OPEN",
+                feedback=feedback,
+            )
+
+        no_findings = reviewed(empty_feedback)
+        record["feedback_digest"] = no_findings.feedback_digest
+        safety = legacy_loss._current_safety(
+            accepted_main="7" * 40,
+            entry=entry,
+            record=record,
+            reviewed=no_findings,
+        )
+        self.assertEqual(
+            safety["current_feedback_decisions_digest"],
+            fast_path.digest_json([]),
+        )
+        actor = {"login": "reviewer", "node_id": "actor", "database_id": 1}
+        comment = {
+            "node_id": "new-comment", "body_digest": "a" * 64,
+            "actor": actor, "reply_to_id": None,
+            "updated_at": None, "reactions": [],
+        }
+        new_feedback = reviewed({
+            **empty_feedback, "conversation_comments": [comment],
+        })
+        record["feedback_digest"] = new_feedback.feedback_digest
+        with self.assertRaisesRegex(
+            canonical_lifecycle_authority.LifecycleAuthorityError,
+            "incomplete or changed",
+        ):
+            legacy_loss._current_safety(
+                accepted_main="7" * 40,
+                entry=entry,
+                record=record,
+                reviewed=new_feedback,
+            )
+
+    def test_native_enrolled_package_loss_enters_existing_ready_composition(self) -> None:
+        """An authenticated native CURRENT must not be mistaken for a rebound."""
+
+        native_issue = 4242
+        native_pr = 4243
+        native_head = "a" * 40
+        native_tree = "b" * 40
+        native_parent = "c" * 40
+        native_initialization = "d" * 64
+        native_lifecycle = canonical_lifecycle_authority.delivery_initialization_lifecycle_id(
+            native_initialization
+        )
+        native_state = state()
+        event_rows = [
+            ("INITIALIZED_DRAFT", "5" * 40, "8" * 64),
+            ("UNRESTRICTED_REVIEW_CONSUMED", "5" * 40, "9" * 64),
+            ("REMEDIATION_COMPLETED", "6" * 40, "a" * 64),
+            ("DRAFT_TO_READY", "6" * 40, READY_EVENT),
+            ("REMEDIATION_COMPLETED", native_head, "b" * 64),
+        ]
+        native_events = [
+            {
+                "repository": REPOSITORY,
+                "delivery_issue": native_issue,
+                "pull_request": native_pr,
+                "lifecycle_id": native_lifecycle,
+                "transition_kind": kind,
+                "resulting_head_sha": head,
+                "event_digest": digest,
+            }
+            for kind, head, digest in event_rows
+        ]
+        current = SimpleNamespace(
+            publication_oid="e" * 40,
+            publication_digest="f" * 64,
+            predecessor_publication_oid="1" * 40,
+            lifecycle=SimpleNamespace(
+                repository=REPOSITORY,
+                delivery_issue=native_issue,
+                pull_request=native_pr,
+                lifecycle_id=native_lifecycle,
+                head_sha=native_head,
+                tree_sha=None,
+                historical_proof_mode="native_lifecycle",
+                initialization_evidence_digest=native_initialization,
+                authority_digest="2" * 64,
+                state=native_state,
+            ),
+            serialized_lifecycle_evidence=json.dumps({
+                "enrollment_mode": "NATIVE_LIFECYCLE",
+                "lifecycle_evidence": {
+                    "delivery_initialization": {
+                        "repository": REPOSITORY,
+                        "delivery_issue": native_issue,
+                        "pull_request": native_pr,
+                        "initialization_digest": native_initialization,
+                        "validation_receipt_digest": "3" * 64,
+                        "final_attestation_digest": "4" * 64,
+                    },
+                    "transition_authorizations": native_events,
+                    "authority_chain": [
+                        {
+                            "event_authorization_digest": event["event_digest"],
+                            "head_sha": event["resulting_head_sha"],
+                            "authority_digest": (
+                                "2" * 64 if index == 4 else str(index + 1) * 64
+                            ),
+                        }
+                        for index, event in enumerate(native_events)
+                    ],
+                },
+            }).encode(),
+        )
+        native_safety = copy.deepcopy(legacy_loss_authentication()["current_safety"])
+        native_safety["accepted_main_sha"] = "7" * 40
+        native_safety["current_feedback_inventory_digest"] = fast_path.digest_json({})
+        native_safety["current_feedback_decisions_digest"] = fast_path.digest_json([])
+        native_safety["current_safety_digest"] = fast_path.digest_json({
+            key: value for key, value in native_safety.items()
+            if key != "current_safety_digest"
+        })
+        native_loss = {
+            "schema_version": "1.0",
+            "kind": legacy_loss.KIND,
+            "domain": legacy_loss.DOMAIN,
+            "authority_temporality": "AUTHENTICATED_NOW_NOT_HISTORICAL",
+            "repository": REPOSITORY,
+            "delivery_issue": native_issue,
+            "pull_request": native_pr,
+            "lifecycle_id": native_lifecycle,
+            "historical_proof_mode": "native_lifecycle",
+            "proof_version": "1.0",
+            "initialization_digest": native_initialization,
+            "initial_validation_receipt_digest": "3" * 64,
+            "initial_final_attestation_digest": "4" * 64,
+            "current_authority_digest": "2" * 64,
+            "current_publication_oid": "e" * 40,
+            "current_publication_digest": "f" * 64,
+            "head_sha": native_head,
+            "tree_sha": native_tree,
+            "parent_sha": native_parent,
+            "source_signer_identity": SIGNER,
+            "commit_signature_evidence_digest": "5" * 64,
+            "historical_provider_summary_digest": "6" * 64,
+            "provider_head_sha": "6" * 40,
+            "evidence_time_registry_digest": "7" * 64,
+            "historical_command_set_digest": "8" * 64,
+            "historical_validation_receipt_digest": "9" * 64,
+            "current_feedback_digest": REVIEWED_FEEDBACK,
+            "current_feedback_decisions_digest": native_safety[
+                "current_feedback_decisions_digest"
+            ],
+            "accepted_main_sha": "7" * 40,
+            "loss_policy_record_digest": "a" * 64,
+            "package_store_survey_digest": "b" * 64,
+            "historical_package_status": "UNAVAILABLE",
+            "historical_bytes_reconstructed": False,
+            "current_safety": native_safety,
+            "thread_resolution_authority": 0,
+            "recovery_consumed": False,
+            "authentication_digest": "c" * 64,
+        }
+        with (
+            mock.patch.object(actions, "_require_accepted_main_bridge_source", return_value="7" * 40),
+            mock.patch.object(actions, "_load_lifecycle_publication_helpers", return_value=(lifecycle_authority, lifecycle_publication)),
+            mock.patch.object(lifecycle_publication, "verify_current_lifecycle_authority", return_value=current),
+            mock.patch.object(actions, "_derive_qualified_loss_rebound_ready_prior_authority", side_effect=AssertionError("native source entered rebound path")),
+            mock.patch.object(lifecycle_authority, "authenticate_legacy_enrolled_validation_evidence_loss", return_value=object()),
+            mock.patch.object(lifecycle_authority, "legacy_enrolled_validation_evidence_loss_binding", return_value=native_loss),
+            mock.patch.object(actions, "_verified_prior_delivery_commit", return_value={
+                "parent_sha": native_parent,
+                "tree_sha": native_tree,
+                "signer": {"kind": "SSH_PRINCIPAL", "identity": SIGNER},
+            }),
+        ):
+            manifest = actions._derive_exact_state_adoption_ready_prior_authority(
+                repository_root=ROOT.parent,
+                repository=REPOSITORY,
+                delivery_issue=native_issue,
+                pull_request=native_pr,
+                binding={"signature_policy": {"accepted_formats": ["ssh"]}},
+                reviewed_state_digest=REVIEWED_STATE,
+                reviewed_feedback_digest=REVIEWED_FEEDBACK,
+            )
+        self.assertEqual(manifest["kind"], "READY_INTEGRATION_PRIOR_AUTHORITY")
+        self.assertEqual(manifest["prior_delivery_head_sha"], native_head)
+        self.assertEqual(manifest["prior_delivery_tree_sha"], native_tree)
+        self.assertIsNone(manifest["prior_final_attestation_digest"])
+        self.assertEqual(
+            manifest["source_authority"]["initial_final_attestation_provenance_digest"],
+            "4" * 64,
+        )
+        self.assertEqual(manifest["source_authority"]["source_parent_sha"], native_parent)
+        self.assertEqual(manifest["source_authority"]["thread_resolution_authority"], 0)
+        arguments = SimpleNamespace(
+            repo=REPOSITORY,
+            delivery_issue=native_issue,
+            prior_authority="native-prior.json",
+            prior_reviewed_state=None,
+            prior_receipt=None,
+            prior_attestation=None,
+            prior_authority_tag_ref=actions._canonical_ready_prior_authority_tag_ref(
+                manifest
+            ),
+            expected_prior_authority_signer=SIGNER,
+        )
+        integration = {
+            "pull_request_number": native_pr,
+            "prior_delivery_head_sha": native_head,
+            "prior_authority_digest": fast_path.digest_json(manifest),
+            "reviewed_state_digest": REVIEWED_STATE,
+            "reviewed_feedback_digest": REVIEWED_FEEDBACK,
+        }
+        with (
+            mock.patch.object(actions, "_read_json", return_value=manifest),
+            mock.patch.object(actions, "_derive_exact_state_adoption_ready_prior_authority", return_value=manifest),
+            mock.patch.object(actions, "_verify_prior_authority_tag"),
+            mock.patch.object(actions, "_verify_ready_integration_lifecycle_authority"),
+        ):
+            self.assertEqual(actions._verify_ready_integration_prior_authority(
+                arguments=arguments,
+                repository_root=ROOT,
+                binding={"signature_policy": {"accepted_formats": ["ssh"]}},
+                integration_evidence=integration,
+                live_observation=None,
+            ), manifest)
+        altered = copy.deepcopy(manifest)
+        altered["source_authority"]["thread_resolution_authority"] = 1
+        with self.assertRaises(fast_path.SecurityBlocker):
+            fast_path.normalize_ready_integration_prior_authority(altered)
+        altered = copy.deepcopy(manifest)
+        altered["source_authority"]["provider_head_sha"] = "5" * 40
+        with self.assertRaises(fast_path.SecurityBlocker):
+            actions._require_exact_adopted_ready_manifest(altered, manifest)
+
     def test_authority_imports_ignore_repository_bytecode_caches(self) -> None:
         cache_root = Path(actions.sys.pycache_prefix).resolve(strict=True)
         self.assertFalse(cache_root.is_relative_to(ROOT))
@@ -1087,7 +1708,7 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             current_authority_digest=LEGACY_PROOF,
             current_publication_oid=LEGACY_CURRENT_OID,
             current_publication_digest=LEGACY_CURRENT_DIGEST,
-            adoption_proof_digest=LEGACY_PROOF,
+            source_provenance_digest=LEGACY_PROOF,
             historical_provider_summary_digest=fast_path.digest_text(body),
         )
         with mock.patch.object(

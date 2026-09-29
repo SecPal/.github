@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Authenticate one accepted-main legacy-enrolled package-loss fact."""
+"""Authenticate one accepted-main enrolled Ready package-loss fact."""
 
 from __future__ import annotations
 
@@ -40,6 +40,21 @@ RECORD_FIELDS = frozenset({
     "historical_bytes_reconstructed", "package_store_survey_digest",
     "record_digest",
 })
+NATIVE_RECORD_FIELDS = frozenset({
+    "schema_version", "kind", "repository", "delivery_issue", "pull_request",
+    "lifecycle_id", "historical_proof_mode", "proof_version",
+    "current_publication_oid", "current_publication_digest",
+    "current_authority_digest", "initialization_digest", "initial_head_sha",
+    "initial_validation_receipt_digest", "initial_final_attestation_digest",
+    "head_sha", "tree_sha", "parent_sha", "source_signer_identity",
+    "commit_signature_evidence_digest", "historical_provider_summary_digest",
+    "evidence_time_registry_digest", "historical_command_set_digest",
+    "historical_validation_receipt_digest", "source_history",
+    "feedback_digest", "technical_decisions",
+    "persistence_contract", "historical_package_status",
+    "historical_bytes_reconstructed", "package_store_survey_digest",
+    "record_digest",
+})
 HISTORY_FIELDS = frozenset({"head_sha", "tree_sha", "parent_sha"})
 PERSISTENCE_FIELDS = frozenset({
     "historical_output_scope", "local_package_directory",
@@ -61,6 +76,7 @@ class ProviderObservation:
     issue: bytes
     commit: bytes
     chronology: validation_evidence_loss.ChronologyObservation
+    source_commits: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -69,6 +85,7 @@ class ProviderFacts:
     issue: dict[str, Any]
     commit: dict[str, Any]
     chronology: tuple[validation_evidence_loss.ChronologyEvent, ...]
+    source_commits: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -88,7 +105,7 @@ class VerifiedLegacyProviderHeadBinding:
     current_authority_digest: str
     current_publication_oid: str
     current_publication_digest: str
-    adoption_proof_digest: str
+    source_provenance_digest: str
     historical_provider_summary_digest: str
 
     def _reauthenticate(self) -> None:
@@ -208,6 +225,15 @@ def _observe_provider(record: Mapping[str, Any]) -> ProviderObservation:
         chronology=validation_evidence_loss._observe_chronology(
             repository, pull_request
         ),
+        source_commits=(
+            _gh_projection(
+                f"repos/{repository}/pulls/{pull_request}/commits?per_page=100",
+                "[.[].sha]",
+                "source-commits",
+            )
+            if record["historical_proof_mode"] == "native_lifecycle"
+            else None
+        ),
     )
 
 
@@ -247,7 +273,23 @@ def _normalize_provider(
     chronology = validation_evidence_loss._normalize_chronology(
         observation.chronology, record["repository"], record["pull_request"]
     )
-    return ProviderFacts(pull_request, issue, commit, chronology)
+    source_commits = None
+    if record["historical_proof_mode"] == "native_lifecycle":
+        raw_commits = authority.loads_closed_json(observation.source_commits)
+        if (
+            not isinstance(raw_commits, list)
+            or not raw_commits
+            or len(raw_commits) >= 100
+            or len(raw_commits) != len(set(raw_commits))
+        ):
+            raise authority.LifecycleAuthorityError(
+                "native package-loss PR commit history is incomplete"
+            )
+        source_commits = tuple(
+            authority._require_oid(head, "native PR source head")
+            for head in raw_commits
+        )
+    return ProviderFacts(pull_request, issue, commit, chronology, source_commits)
 
 
 def _admit_provider(facts: ProviderFacts, record: Mapping[str, Any]) -> None:
@@ -279,6 +321,12 @@ def _admit_provider(facts: ProviderFacts, record: Mapping[str, Any]) -> None:
         or commit.get("verified") is not True
         or len(ready) != 1
         or draft
+        or (
+            record["historical_proof_mode"] == "native_lifecycle"
+            and facts.source_commits != tuple(
+                item["head_sha"] for item in record["source_history"]
+            )
+        )
     ):
         raise authority.LifecycleAuthorityError(
             "legacy package-loss live delivery identity or Ready history changed"
@@ -316,6 +364,8 @@ def _validate_persistence_contract(value: Any) -> dict[str, Any]:
 
 
 def _validate_record(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping) and value.get("historical_proof_mode") == "native_lifecycle":
+        return _validate_native_record(value)
     record = copy.deepcopy(
         authority._require_closed(value, RECORD_FIELDS, "legacy package-loss record")
     )
@@ -387,6 +437,72 @@ def _validate_record(value: Any) -> dict[str, Any]:
     return record
 
 
+def _validate_native_record(value: Any) -> dict[str, Any]:
+    """Keep native source identities distinct from adoption-only evidence."""
+
+    record = copy.deepcopy(authority._require_closed(
+        value, NATIVE_RECORD_FIELDS, "native enrolled package-loss record"
+    ))
+    if (
+        record["schema_version"] != "1.0"
+        or record["kind"] != KIND
+        or record["repository"] != "SecPal/.github"
+        or record["historical_proof_mode"] != "native_lifecycle"
+        or record["proof_version"] != "1.0"
+        or record["historical_package_status"] != "UNAVAILABLE"
+        or record["historical_bytes_reconstructed"] is not False
+        or record["lifecycle_id"] != authority.delivery_initialization_lifecycle_id(
+            record["initialization_digest"]
+        )
+    ):
+        raise authority.LifecycleAuthorityError(
+            "native package-loss record cannot backdate or reconstruct authority"
+        )
+    authority._require_repository(record["repository"])
+    for field in ("delivery_issue", "pull_request"):
+        authority._require_positive_int(record[field], field)
+    for field in (
+        "current_publication_oid", "initial_head_sha", "head_sha",
+        "tree_sha", "parent_sha",
+    ):
+        authority._require_oid(record[field], field)
+    for field in (
+        "current_publication_digest", "current_authority_digest",
+        "initialization_digest", "initial_validation_receipt_digest",
+        "initial_final_attestation_digest", "commit_signature_evidence_digest",
+        "historical_provider_summary_digest", "evidence_time_registry_digest",
+        "historical_command_set_digest", "historical_validation_receipt_digest",
+        "feedback_digest", "package_store_survey_digest", "record_digest",
+    ):
+        authority._require_digest(record[field], field)
+    authority._require_identity(record["source_signer_identity"], "source signer")
+    validation_evidence_loss._decisions(record["technical_decisions"])
+    history = record["source_history"]
+    if not isinstance(history, list) or not history:
+        raise authority.LifecycleAuthorityError("native package source history is unavailable")
+    for index, item in enumerate(history):
+        authority._require_closed(item, HISTORY_FIELDS, "native package source")
+        for field in HISTORY_FIELDS:
+            authority._require_oid(item[field], field)
+        if index and item["parent_sha"] != history[index - 1]["head_sha"]:
+            raise authority.LifecycleAuthorityError("native package source topology changed")
+    if (
+        [item["head_sha"] for item in history].count(record["initial_head_sha"]) != 1
+        or history[-1] != {
+            "head_sha": record["head_sha"],
+            "tree_sha": record["tree_sha"],
+            "parent_sha": record["parent_sha"],
+        }
+    ):
+        raise authority.LifecycleAuthorityError("native package source boundary changed")
+    record["persistence_contract"] = _validate_persistence_contract(
+        record["persistence_contract"]
+    )
+    if authority.digest_json({k: v for k, v in record.items() if k != "record_digest"}) != record["record_digest"]:
+        raise authority.LifecycleAuthorityError("native package-loss policy digest changed")
+    return record
+
+
 def _accepted_policy(
     repository: str, delivery_issue: int,
 ) -> tuple[str, dict[str, Any], dict[str, Any]]:
@@ -426,10 +542,10 @@ def _accepted_policy(
         REGISTRY_PATH,
         REGISTRY_SCHEMA_PATH,
         "scripts/secpal-pr-review-actions.py",
-        "scripts/secpal_pr_review/fast_path.py",
-        "scripts/secpal_pr_review/legacy_enrolled_package_loss.py",
-        "scripts/secpal_pr_review/lifecycle_authority.py",
-        "scripts/secpal_pr_review/lifecycle_publication.py",
+        *(
+            str(path.relative_to(ROOT))
+            for path in (ROOT / "scripts/secpal_pr_review").glob("*.py")
+        ),
     }
     for relative in sorted(trusted_paths):
         actual = transport._git_text(
@@ -498,9 +614,130 @@ def _proof_bundle(current: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     return bundle, proof
 
 
+def _native_bundle(current: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Project only the anchored native chain returned by the CURRENT verifier."""
+
+    raw = getattr(current, "serialized_lifecycle_evidence", None)
+    if raw is None:
+        raise authority.LifecycleAuthorityError(
+            "native package-loss CURRENT lifecycle evidence is unavailable"
+        )
+    wrapper = authority.loads_closed_json(raw)
+    if (
+        not isinstance(wrapper, dict)
+        or wrapper.get("enrollment_mode") != "NATIVE_LIFECYCLE"
+        or wrapper.get("legacy_adoption_checkpoint") is not None
+        or not isinstance(wrapper.get("lifecycle_evidence"), dict)
+    ):
+        raise authority.LifecycleAuthorityError(
+            "native package-loss lifecycle provenance is invalid"
+        )
+    return wrapper["lifecycle_evidence"], wrapper["lifecycle_evidence"]["delivery_initialization"]
+
+
+def _admit_native_current(
+    current: Any, record: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Bind anchored native identity and its finite event chronology to policy."""
+
+    bundle, initialization = _native_bundle(current)
+    events = bundle.get("transition_authorizations")
+    chain = bundle.get("authority_chain")
+    state = current.lifecycle.state
+    ready_history = state.get("ready_history") if isinstance(state, dict) else None
+    if not isinstance(events, list) or not isinstance(chain, list):
+        raise authority.LifecycleAuthorityError("native package-loss history is unavailable")
+    kinds = [event.get("transition_kind") for event in events if isinstance(event, dict)]
+    if len(kinds) != len(events):
+        raise authority.LifecycleAuthorityError("native package-loss history is malformed")
+    remediation_count = state.get("remediation_cycle_count")
+    source_heads = [record["initial_head_sha"]] + [
+        event.get("resulting_head_sha") for event in events
+        if event.get("transition_kind") == "REMEDIATION_COMPLETED"
+    ]
+    if (
+        current.lifecycle.historical_proof_mode != "native_lifecycle"
+        or current.lifecycle.repository != record["repository"]
+        or current.lifecycle.delivery_issue != record["delivery_issue"]
+        or current.lifecycle.pull_request != record["pull_request"]
+        or current.lifecycle.lifecycle_id != record["lifecycle_id"]
+        or current.lifecycle.initialization_evidence_digest != record["initialization_digest"]
+        or current.lifecycle.authority_digest != record["current_authority_digest"]
+        or current.lifecycle.head_sha != record["head_sha"]
+        or current.lifecycle.tree_sha is not None
+        or current.publication_oid != record["current_publication_oid"]
+        or current.publication_digest != record["current_publication_digest"]
+        or initialization.get("repository") != record["repository"]
+        or initialization.get("delivery_issue") != record["delivery_issue"]
+        or initialization.get("pull_request") != record["pull_request"]
+        or initialization.get("initial_head_sha") != record["initial_head_sha"]
+        or initialization.get("initialization_digest") != record["initialization_digest"]
+        or initialization.get("validation_receipt_digest") != record["initial_validation_receipt_digest"]
+        or initialization.get("final_attestation_digest") != record["initial_final_attestation_digest"]
+        or len(events) != len(chain)
+        or kinds.count("INITIALIZED_DRAFT") != 1
+        or kinds[0] != "INITIALIZED_DRAFT"
+        or kinds.count("UNRESTRICTED_REVIEW_CONSUMED") != 1
+        or kinds.count("DRAFT_TO_READY") != 1
+        or kinds.count("REMEDIATION_COMPLETED") != remediation_count
+        or any(kind not in {
+            "INITIALIZED_DRAFT", "UNRESTRICTED_REVIEW_CONSUMED",
+            "DRAFT_TO_READY", "REMEDIATION_COMPLETED",
+        } for kind in kinds)
+        or kinds.index("UNRESTRICTED_REVIEW_CONSUMED") > kinds.index("DRAFT_TO_READY")
+        or [item["head_sha"] for item in record["source_history"]][
+            [item["head_sha"] for item in record["source_history"]].index(
+                record["initial_head_sha"]
+            ):
+        ] != source_heads
+        or events[-1].get("resulting_head_sha") != record["head_sha"]
+        or chain[-1].get("authority_digest") != current.lifecycle.authority_digest
+        or state.get("draft") is not False
+        or state.get("ready") is not True
+        or state.get("unrestricted_review_count") != 1
+        or isinstance(state.get("unrestricted_review_count"), bool)
+        or isinstance(remediation_count, bool)
+        or not isinstance(remediation_count, int)
+        or not 0 <= remediation_count <= 2
+        or state.get("ready_transition_count") != 1
+        or isinstance(state.get("ready_transition_count"), bool)
+        or not isinstance(ready_history, list)
+        or len(ready_history) != 1
+        or ready_history[0].get("transition_kind") != "DRAFT_TO_READY"
+        or ready_history[0].get("sequence") != 1
+        or ready_history[0].get("event_authorization_digest")
+        != events[kinds.index("DRAFT_TO_READY")].get("event_digest")
+        or state.get("exceptional_recovery_count") != 0
+        or state.get("exceptional_recovery_history") != []
+        or state.get("exceptional_continuation_count") != 0
+        or state.get("exceptional_continuation_history") != []
+        or state.get("cycle_3_absent") is not True
+    ):
+        raise authority.LifecycleAuthorityError(
+            "native package-loss CURRENT or historical authority changed"
+        )
+    for event, snapshot in zip(events, chain):
+        if (
+            event.get("repository") != record["repository"]
+            or event.get("delivery_issue") != record["delivery_issue"]
+            or event.get("pull_request") != record["pull_request"]
+            or event.get("lifecycle_id") != record["lifecycle_id"]
+            or snapshot.get("event_authorization_digest") != event.get("event_digest")
+            or snapshot.get("head_sha") != event.get("resulting_head_sha")
+        ):
+            raise authority.LifecycleAuthorityError(
+                "native package-loss signed event identity changed"
+            )
+    if initialization.get("initial_head_sha") != events[0].get("resulting_head_sha"):
+        raise authority.LifecycleAuthorityError("native package-loss genesis head changed")
+    return bundle, initialization
+
+
 def _admit_current(
     current: Any, record: Mapping[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    if record["historical_proof_mode"] == "native_lifecycle":
+        return _admit_native_current(current, record)
     bundle, proof = _proof_bundle(current)
     state = current.lifecycle.state
     ready_history = state.get("ready_history") if isinstance(state, dict) else None
@@ -582,20 +819,31 @@ def _admit_current(
 def _provider_head_binding(
     current: Any, record: Mapping[str, Any]
 ) -> VerifiedLegacyProviderHeadBinding:
-    _bundle, proof = _proof_bundle(current)
-    history = proof.get("observed_pre_enrollment_history")
-    reviews = [
-        item for item in history or []
-        if isinstance(item, dict) and item.get("kind") == "REVIEW_SUBMITTED"
-    ]
-    if (
-        not isinstance(history, list)
-        or len(reviews) != 1
-        or reviews[0].get("reviewed_head_sha") is None
-    ):
-        raise fast_path.SecurityBlocker(
-            "legacy enrolled provider-head authority is unavailable"
-        )
+    if record["historical_proof_mode"] == "native_lifecycle":
+        bundle, initialization = _admit_native_current(current, record)
+        ready = [
+            event for event in bundle["transition_authorizations"]
+            if event["transition_kind"] == "DRAFT_TO_READY"
+        ]
+        provider_head = ready[0]["resulting_head_sha"]
+        provenance_digest = initialization["initialization_digest"]
+    else:
+        _bundle, proof = _proof_bundle(current)
+        history = proof.get("observed_pre_enrollment_history")
+        reviews = [
+            item for item in history or []
+            if isinstance(item, dict) and item.get("kind") == "REVIEW_SUBMITTED"
+        ]
+        if (
+            not isinstance(history, list)
+            or len(reviews) != 1
+            or reviews[0].get("reviewed_head_sha") is None
+        ):
+            raise fast_path.SecurityBlocker(
+                "legacy enrolled provider-head authority is unavailable"
+            )
+        provider_head = reviews[0]["reviewed_head_sha"]
+        provenance_digest = proof["proof_digest"]
     return VerifiedLegacyProviderHeadBinding(
         repository=current.lifecycle.repository,
         delivery_issue=current.lifecycle.delivery_issue,
@@ -603,12 +851,12 @@ def _provider_head_binding(
         lifecycle_id=current.lifecycle.lifecycle_id,
         current_head_sha=current.lifecycle.head_sha,
         provider_head_sha=authority._require_oid(
-            reviews[0]["reviewed_head_sha"], "legacy reviewed head"
+            provider_head, "enrolled reviewed head"
         ),
         current_authority_digest=current.lifecycle.authority_digest,
         current_publication_oid=current.publication_oid,
         current_publication_digest=current.publication_digest,
-        adoption_proof_digest=proof["proof_digest"],
+        source_provenance_digest=provenance_digest,
         historical_provider_summary_digest=record[
             "historical_provider_summary_digest"
         ],
@@ -645,6 +893,8 @@ def _survey_package_stores(
             "legacy package-loss source repository identity changed"
         )
     artifacts = set(record["persistence_contract"]["artifact_basenames"])
+    native = record["historical_proof_mode"] == "native_lifecycle"
+    trust = authority._load_lifecycle_trust_policy(record["repository"]) if native else None
     for expected in record["source_history"]:
         head = expected["head_sha"]
         tree = _git_text(root, ["rev-parse", f"{head}^{{tree}}"], "source tree").strip()
@@ -670,15 +920,34 @@ def _survey_package_stores(
             raise authority.LifecycleAuthorityError(
                 "historical package bytes exist or a maintained store is unsurveyed"
             )
-    survey = {
-        "repository": record["repository"],
-        "delivery_issue": record["delivery_issue"],
-        "pull_request": record["pull_request"],
-        "current_publication": {
-            "object_oid": current.publication_oid,
-            "publication_digest": current.publication_digest,
-        },
-        "historical_companion_digests": {
+        if native:
+            validation_evidence_loss._commit_signature(
+                root, head, record["source_signer_identity"], trust
+            )
+    if native:
+        initial = validation_evidence_loss._optional_validation_receipt_trailer(
+            root, record["initial_head_sha"]
+        )
+        final = validation_evidence_loss._optional_validation_receipt_trailer(
+            root, record["head_sha"]
+        )
+        if (
+            initial != record["initial_validation_receipt_digest"]
+            or final != record["historical_validation_receipt_digest"]
+        ):
+            raise authority.LifecycleAuthorityError(
+                "native historical receipt trailer provenance changed"
+            )
+    companion_digests = (
+        {
+            "initial_validation_receipt_digest": record["initial_validation_receipt_digest"],
+            "initial_final_attestation_digest": record["initial_final_attestation_digest"],
+            "historical_validation_receipt_digest": record[
+                "historical_validation_receipt_digest"
+            ],
+        }
+        if record["historical_proof_mode"] == "native_lifecycle"
+        else {
             "source_validation_evidence_digest": record[
                 "source_validation_evidence_digest"
             ],
@@ -688,7 +957,17 @@ def _survey_package_stores(
             "historical_final_attestation_digest": record[
                 "historical_final_attestation_digest"
             ],
+        }
+    )
+    survey = {
+        "repository": record["repository"],
+        "delivery_issue": record["delivery_issue"],
+        "pull_request": record["pull_request"],
+        "current_publication": {
+            "object_oid": current.publication_oid,
+            "publication_digest": current.publication_digest,
         },
+        "historical_companion_digests": companion_digests,
         "source_history": copy.deepcopy(record["source_history"]),
         "persistence_contract": copy.deepcopy(record["persistence_contract"]),
         "result": "UNAVAILABLE",
@@ -734,6 +1013,29 @@ def _current_safety(
         "recovery_consumed": False,
         "successful_result": True,
     }
+    if record["historical_proof_mode"] == "native_lifecycle":
+        sources = fast_path._classified_feedback_sources(
+            reviewed, include_resolved=True
+        )
+        decisions = validation_evidence_loss._decisions(
+            record["technical_decisions"]
+        )
+        expected = {
+            f"{kind}:{identity}": source[0]
+            for (kind, identity), source in sources.items()
+        }
+        if (
+            reviewed.feedback_digest != record["feedback_digest"]
+            or {
+                item["source_id"]: item["source_digest"]
+                for item in decisions
+            } != expected
+        ):
+            raise authority.LifecycleAuthorityError(
+                "native package-loss current feedback is incomplete or changed"
+            )
+        facts["current_feedback_inventory_digest"] = authority.digest_json(expected)
+        facts["current_feedback_decisions_digest"] = authority.digest_json(decisions)
     return {**facts, "current_safety_digest": authority.digest_json(facts)}
 
 
@@ -788,6 +1090,68 @@ def _assemble(
         "intended_state_digest": proof["intended_state_digest"],
         "head_advanced_count": proof["head_advanced_count"],
         "head_advanced_history_digest": proof["head_advanced_history_digest"],
+        "accepted_main_sha": accepted_main,
+        "loss_policy_record_digest": record["record_digest"],
+        "package_store_survey_digest": authority.digest_json(store_survey),
+        "historical_package_status": "UNAVAILABLE",
+        "historical_bytes_reconstructed": False,
+        "current_safety": copy.deepcopy(current_safety),
+        "thread_resolution_authority": 0,
+        "recovery_consumed": False,
+    }
+    return {**fields, "authentication_digest": authority.digest_json(fields)}
+
+
+def _assemble_native(
+    *, accepted_main: str, record: Mapping[str, Any], current: Any,
+    store_survey: Mapping[str, Any], current_safety: Mapping[str, Any],
+    provider_head_sha: str,
+) -> dict[str, Any]:
+    fields = {
+        "schema_version": "1.0",
+        "kind": KIND,
+        "domain": DOMAIN,
+        "authority_temporality": "AUTHENTICATED_NOW_NOT_HISTORICAL",
+        "repository": record["repository"],
+        "delivery_issue": record["delivery_issue"],
+        "pull_request": record["pull_request"],
+        "lifecycle_id": record["lifecycle_id"],
+        "historical_proof_mode": "native_lifecycle",
+        "proof_version": record["proof_version"],
+        "initialization_digest": record["initialization_digest"],
+        "initial_validation_receipt_digest": record[
+            "initial_validation_receipt_digest"
+        ],
+        "initial_final_attestation_digest": record[
+            "initial_final_attestation_digest"
+        ],
+        "current_authority_digest": current.lifecycle.authority_digest,
+        "current_publication_oid": current.publication_oid,
+        "current_publication_digest": current.publication_digest,
+        "head_sha": record["head_sha"],
+        "tree_sha": record["tree_sha"],
+        "parent_sha": record["parent_sha"],
+        "source_signer_identity": record["source_signer_identity"],
+        "commit_signature_evidence_digest": record[
+            "commit_signature_evidence_digest"
+        ],
+        "historical_provider_summary_digest": record[
+            "historical_provider_summary_digest"
+        ],
+        "provider_head_sha": provider_head_sha,
+        "evidence_time_registry_digest": record[
+            "evidence_time_registry_digest"
+        ],
+        "historical_command_set_digest": record[
+            "historical_command_set_digest"
+        ],
+        "historical_validation_receipt_digest": record[
+            "historical_validation_receipt_digest"
+        ],
+        "current_feedback_digest": record["feedback_digest"],
+        "current_feedback_decisions_digest": authority.digest_json(
+            record["technical_decisions"]
+        ),
         "accepted_main_sha": accepted_main,
         "loss_policy_record_digest": record["record_digest"],
         "package_store_survey_digest": authority.digest_json(store_survey),
@@ -872,14 +1236,24 @@ def authenticate(
         raise authority.LifecycleAuthorityError(
             "legacy package-loss authority changed during authentication"
         )
-    authentication = _assemble(
-        accepted_main=accepted_main,
-        record=record,
-        current=current,
-        proof=proof,
-        store_survey=store_survey,
-        current_safety=safety,
-    )
+    if record["historical_proof_mode"] == "native_lifecycle":
+        authentication = _assemble_native(
+            accepted_main=accepted_main,
+            record=record,
+            current=current,
+            store_survey=store_survey,
+            current_safety=safety,
+            provider_head_sha=provider_binding.provider_head_sha,
+        )
+    else:
+        authentication = _assemble(
+            accepted_main=accepted_main,
+            record=record,
+            current=current,
+            proof=proof,
+            store_survey=store_survey,
+            current_safety=safety,
+        )
     return VerifiedLegacyEnrolledPackageLoss(authentication, _VERIFIED)
 
 

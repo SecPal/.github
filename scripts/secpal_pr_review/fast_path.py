@@ -1699,6 +1699,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             if source_mode in {
                 "EXACT_STATE_ADOPTION_V3",
                 "EXISTING_AUTHORITY_COMPOSITION",
+                "NATIVE_ENROLLED_LOSS",
             }
             else {"sequence", "transition_kind", "observation_digest"}
             if source_mode == "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS"
@@ -1708,7 +1709,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             lifecycle.get("historical_proof_mode")
             != (
                 "native_lifecycle"
-                if source_mode == "EXISTING_AUTHORITY_COMPOSITION"
+                if source_mode in {"EXISTING_AUTHORITY_COMPOSITION", "NATIVE_ENROLLED_LOSS"}
                 else "exact_state_adoption"
             )
             or isinstance(lifecycle.get("ready_transition_count"), bool)
@@ -1725,6 +1726,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
                     if source_mode in {
                         "EXACT_STATE_ADOPTION_V3",
                         "EXISTING_AUTHORITY_COMPOSITION",
+                        "NATIVE_ENROLLED_LOSS",
                     }
                     else "observation_digest"
                 ),
@@ -1828,6 +1830,12 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         return normalized
     if source_mode == "EXISTING_AUTHORITY_COMPOSITION":
         return _normalize_existing_authority_composition_ready_source(
+            normalized,
+            value.get("source_authority"),
+            value.get("historical_companions"),
+        )
+    if source_mode == "NATIVE_ENROLLED_LOSS":
+        return _normalize_native_enrolled_ready_source(
             normalized,
             value.get("source_authority"),
             value.get("historical_companions"),
@@ -2118,6 +2126,69 @@ def normalize_exact_state_adoption_historical_evidence(
                 "unavailable historical evidence cannot claim an attestation"
             )
     return result
+
+
+def _normalize_native_enrolled_ready_source(
+    normalized: dict[str, Any], source: Any, companions: Any,
+) -> dict[str, Any]:
+    """Normalize only the native variant of enrolled package-loss authority."""
+
+    source_keys = {
+        "proof_version", "source_parent_sha", "source_signer_identity",
+        "commit_signature_evidence_digest", "historical_provider_summary_digest",
+        "provider_head_sha", "evidence_time_registry_digest",
+        "historical_command_set_digest", "historical_receipt_provenance_digest",
+        "initialization_receipt_provenance_digest",
+        "initial_final_attestation_provenance_digest", "current_safety_digest",
+        "current_feedback_digest", "current_feedback_decisions_digest",
+        "loss_authentication_digest", "loss_policy_record_digest",
+        "package_store_survey_digest", "accepted_main_sha",
+        "initialization_digest", "enrollment_publication",
+        "ready_transition_event_digest", "thread_resolution_authority",
+        "recovery_consumed",
+    }
+    expected_companions = {
+        "reviewed_state_bytes": "UNAVAILABLE",
+        "validation_receipt_bytes": "UNAVAILABLE",
+        "final_attestation_bytes": "UNAVAILABLE",
+        "historical_bytes_reconstructed": False,
+    }
+    if not isinstance(source, dict) or set(source) != source_keys:
+        raise SecurityBlocker("native enrolled Ready source authority is malformed")
+    if companions != expected_companions:
+        raise SecurityBlocker("native enrolled Ready companion status is invalid")
+    enrollment = source.get("enrollment_publication")
+    if (
+        source.get("proof_version") != "1.0"
+        or source.get("thread_resolution_authority") != 0
+        or source.get("recovery_consumed") is not False
+        or source.get("source_signer_identity")
+        != normalized["expected_signer"]["identity"]
+        or source.get("historical_receipt_provenance_digest")
+        != normalized["prior_validation_receipt_digest"]
+        or normalized["prior_final_attestation_digest"] is not None
+        or source.get("ready_transition_event_digest")
+        != normalized["lifecycle"]["ready_history"][0]["event_authorization_digest"]
+        or enrollment != normalized["publication"]
+        or source.get("source_parent_sha")
+        == normalized["prior_delivery_head_sha"]
+    ):
+        raise SecurityBlocker("native enrolled Ready source authority is invalid")
+    _require_oid(source.get("source_parent_sha"), "native source parent")
+    _require_oid(source.get("provider_head_sha"), "native provider head")
+    _require_oid(source.get("accepted_main_sha"), "accepted main")
+    for field in source_keys - {
+        "proof_version", "source_parent_sha", "source_signer_identity",
+        "provider_head_sha", "enrollment_publication", "accepted_main_sha",
+        "thread_resolution_authority", "recovery_consumed",
+    }:
+        _require_digest(source.get(field), f"native enrolled {field}")
+    normalized.update(
+        source_authority_mode="NATIVE_ENROLLED_LOSS",
+        source_authority=copy.deepcopy(source),
+        historical_companions=copy.deepcopy(companions),
+    )
+    return normalized
 
 
 def _normalize_legacy_enrolled_ready_source(
