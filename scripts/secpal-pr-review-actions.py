@@ -7130,6 +7130,44 @@ def _derive_exact_state_adoption_ready_prior_authority(
             and current.lifecycle.pull_request == pull_request
             and current.lifecycle.tree_sha is None
         ):
+            native_wrapper = lifecycle_authority.loads_closed_json(
+                current.serialized_lifecycle_evidence
+            )
+            native_evidence = native_wrapper.get("lifecycle_evidence", {})
+            native_events = native_evidence.get("transition_authorizations", [])
+            if (
+                native_wrapper.get("enrollment_mode") == "NATIVE_LIFECYCLE"
+                and isinstance(native_events, list)
+                and not any(
+                    isinstance(event, dict)
+                    and event.get("transition_kind") == "PR_REBOUND"
+                    for event in native_events
+                )
+            ):
+                manifest = _derive_native_enrolled_loss_ready_prior_authority(
+                    accepted_main=accepted_main,
+                    repository_root=repository_root,
+                    repository=repository,
+                    delivery_issue=delivery_issue,
+                    pull_request=pull_request,
+                    binding=binding,
+                    lifecycle_authority=lifecycle_authority,
+                    current=current,
+                    bundle=native_evidence,
+                    reviewed_state_digest=reviewed_state_digest,
+                    reviewed_feedback_digest=reviewed_feedback_digest,
+                )
+                _require_accepted_main_bridge_source(
+                    repository, expected_main=accepted_main
+                )
+                return fast_path.normalize_ready_integration_prior_authority(
+                    manifest
+                )
+        if (
+            current.lifecycle.historical_proof_mode == "native_lifecycle"
+            and current.lifecycle.pull_request == pull_request
+            and current.lifecycle.tree_sha is None
+        ):
             manifest = _derive_qualified_loss_rebound_ready_prior_authority(
                 repository_root=repository_root,
                 repository=repository,
@@ -7408,6 +7446,49 @@ def _derive_exact_state_adoption_ready_prior_authority(
     return normalized
 
 
+def _verified_enrolled_loss_current_safety(
+    loss: Any, accepted_main: str,
+) -> dict[str, Any]:
+    """Apply the shared accepted-main and current-safety boundary once."""
+
+    if not isinstance(loss, dict):
+        raise fast_path.SecurityBlocker("enrolled package-loss binding is malformed")
+    safety = loss.get("current_safety")
+    if (
+        loss.get("schema_version") != "1.0"
+        or loss.get("kind")
+        != "SECPAL_LEGACY_ENROLLED_PACKAGE_LOSS_AUTHENTICATION"
+        or loss.get("domain")
+        != "secpal.legacy-enrolled-package-loss-authentication/v1"
+        or loss.get("authority_temporality")
+        != "AUTHENTICATED_NOW_NOT_HISTORICAL"
+        or loss.get("accepted_main_sha") != accepted_main
+        or loss.get("historical_package_status") != "UNAVAILABLE"
+        or loss.get("historical_bytes_reconstructed") is not False
+        or loss.get("thread_resolution_authority") != 0
+        or loss.get("recovery_consumed") is not False
+        or not isinstance(safety, dict)
+        or safety.get("current_safety_digest")
+        != fast_path.digest_json({
+            key: value for key, value in safety.items()
+            if key != "current_safety_digest"
+        })
+        or safety.get("accepted_main_sha") != accepted_main
+        or safety.get("operation") != "READY_INTEGRATION_PRIOR_AUTHORITY"
+        or safety.get("trust_source") != "AUTHENTICATED_PROTECTED_MAIN"
+        or safety.get("integration_transition") != "HEAD_ADVANCED"
+        or safety.get("thread_resolution_authority") != 0
+        or safety.get("recovery_consumed") is not False
+        or safety.get("successful_result") is not True
+        or safety.get("ready_prior_authority_schema_version") != "1.2"
+        or safety.get("ready_integration_schema_version") != "1.2"
+    ):
+        raise fast_path.SecurityBlocker(
+            "enrolled package-loss current safety is invalid"
+        )
+    return safety
+
+
 def _derive_legacy_enrolled_loss_ready_prior_authority(
     *,
     accepted_main: str,
@@ -7450,7 +7531,7 @@ def _derive_legacy_enrolled_loss_ready_prior_authority(
     state = current.lifecycle.state
     ready_history = state.get("ready_history") if isinstance(state, dict) else None
     authorization = proof.get("authorization")
-    current_safety = loss.get("current_safety")
+    current_safety = _verified_enrolled_loss_current_safety(loss, accepted_main)
     exact_loss_bindings = {
         "repository": repository,
         "delivery_issue": delivery_issue,
@@ -7492,35 +7573,6 @@ def _derive_legacy_enrolled_loss_ready_prior_authority(
     if (
         not isinstance(loss, dict)
         or any(loss.get(key) != value for key, value in exact_loss_bindings.items())
-        or loss.get("schema_version") != "1.0"
-        or loss.get("kind")
-        != "SECPAL_LEGACY_ENROLLED_PACKAGE_LOSS_AUTHENTICATION"
-        or loss.get("domain")
-        != "secpal.legacy-enrolled-package-loss-authentication/v1"
-        or loss.get("authority_temporality")
-        != "AUTHENTICATED_NOW_NOT_HISTORICAL"
-        or loss.get("accepted_main_sha") != accepted_main
-        or loss.get("historical_package_status") != "UNAVAILABLE"
-        or loss.get("historical_bytes_reconstructed") is not False
-        or loss.get("thread_resolution_authority") != 0
-        or loss.get("recovery_consumed") is not False
-        or not isinstance(current_safety, dict)
-        or current_safety.get("current_safety_digest")
-        != fast_path.digest_json({
-            key: value
-            for key, value in current_safety.items()
-            if key != "current_safety_digest"
-        })
-        or current_safety.get("accepted_main_sha") != accepted_main
-        or current_safety.get("operation")
-        != "READY_INTEGRATION_PRIOR_AUTHORITY"
-        or current_safety.get("trust_source") != "AUTHENTICATED_PROTECTED_MAIN"
-        or current_safety.get("integration_transition") != "HEAD_ADVANCED"
-        or current_safety.get("thread_resolution_authority") != 0
-        or current_safety.get("recovery_consumed") is not False
-        or current_safety.get("successful_result") is not True
-        or current_safety.get("ready_prior_authority_schema_version") != "1.2"
-        or current_safety.get("ready_integration_schema_version") != "1.2"
         or bundle.get("transition_authorizations") != []
         or bundle.get("authority_chain") != []
         or verified_proof != current.lifecycle
@@ -7674,6 +7726,225 @@ def _derive_legacy_enrolled_loss_ready_prior_authority(
     return manifest
 
 
+def _derive_native_enrolled_loss_ready_prior_authority(
+    *,
+    accepted_main: str,
+    repository_root: Path,
+    repository: str,
+    delivery_issue: int,
+    pull_request: int,
+    binding: dict[str, Any],
+    lifecycle_authority: Any,
+    current: Any,
+    bundle: dict[str, Any],
+    reviewed_state_digest: str | None,
+    reviewed_feedback_digest: str | None,
+) -> dict[str, Any]:
+    """Compose independently authenticated native loss into the Ready kind."""
+
+    try:
+        verified_loss = (
+            lifecycle_authority.authenticate_legacy_enrolled_validation_evidence_loss(
+                repository, delivery_issue, repository_root
+            )
+        )
+        loss = lifecycle_authority.legacy_enrolled_validation_evidence_loss_binding(
+            verified_loss
+        )
+    except (
+        ImportError, OSError, TypeError, ValueError,
+        lifecycle_authority.LifecycleAuthorityError,
+    ) as exc:
+        raise fast_path.SecurityBlocker(
+            "native enrolled package-loss authentication is invalid"
+        ) from exc
+    if not isinstance(loss, dict):
+        raise fast_path.SecurityBlocker("native enrolled package-loss binding is malformed")
+    state = current.lifecycle.state
+    ready_history = state.get("ready_history") if isinstance(state, dict) else None
+    events = bundle.get("transition_authorizations")
+    initialization = bundle.get("delivery_initialization")
+    if not isinstance(events, list) or not isinstance(initialization, dict):
+        raise fast_path.SecurityBlocker("native enrolled lifecycle history is malformed")
+    ready_events = [
+        event for event in events
+        if isinstance(event, dict) and event.get("transition_kind") == "DRAFT_TO_READY"
+    ]
+    provider_head = (
+        ready_events[0].get("resulting_head_sha")
+        if len(ready_events) == 1 else None
+    )
+    current_safety = _verified_enrolled_loss_current_safety(loss, accepted_main)
+    exact_loss_bindings = {
+        "repository": repository,
+        "delivery_issue": delivery_issue,
+        "pull_request": pull_request,
+        "lifecycle_id": current.lifecycle.lifecycle_id,
+        "historical_proof_mode": "native_lifecycle",
+        "proof_version": "1.0",
+        "initialization_digest": initialization.get("initialization_digest"),
+        "initial_validation_receipt_digest": initialization.get(
+            "validation_receipt_digest"
+        ),
+        "initial_final_attestation_digest": initialization.get(
+            "final_attestation_digest"
+        ),
+        "current_authority_digest": current.lifecycle.authority_digest,
+        "current_publication_oid": current.publication_oid,
+        "current_publication_digest": current.publication_digest,
+        "head_sha": current.lifecycle.head_sha,
+        "provider_head_sha": provider_head,
+        "current_feedback_digest": current_safety.get("reviewed_feedback_digest"),
+        "current_feedback_decisions_digest": current_safety.get(
+            "current_feedback_decisions_digest"
+        ),
+    }
+    if (
+        any(loss.get(key) != value for key, value in exact_loss_bindings.items())
+        or current.lifecycle.repository != repository
+        or current.lifecycle.delivery_issue != delivery_issue
+        or current.lifecycle.pull_request != pull_request
+        or current.lifecycle.historical_proof_mode != "native_lifecycle"
+        or current.lifecycle.initialization_evidence_digest
+        != initialization.get("initialization_digest")
+        or current.lifecycle.tree_sha is not None
+        or state.get("draft") is not False
+        or state.get("ready") is not True
+        or state.get("unrestricted_review_count") != 1
+        or isinstance(state.get("unrestricted_review_count"), bool)
+        or isinstance(state.get("remediation_cycle_count"), bool)
+        or not isinstance(state.get("remediation_cycle_count"), int)
+        or not 0 <= state.get("remediation_cycle_count") <= 2
+        or state.get("ready_transition_count") != 1
+        or isinstance(state.get("ready_transition_count"), bool)
+        or len(ready_events) != 1
+        or not isinstance(ready_history, list)
+        or len(ready_history) != 1
+        or ready_history[0].get("event_authorization_digest")
+        != ready_events[0].get("event_digest")
+        or state.get("exceptional_recovery_count") != 0
+        or state.get("exceptional_recovery_history") != []
+        or state.get("exceptional_continuation_count") != 0
+        or state.get("exceptional_continuation_history") != []
+        or state.get("cycle_3_absent") is not True
+    ):
+        raise fast_path.SecurityBlocker("native enrolled Ready source authority is invalid")
+    if (reviewed_state_digest is None) != (reviewed_feedback_digest is None):
+        raise fast_path.SecurityBlocker(
+            "adopted Ready reviewed-state selectors are incomplete"
+        )
+    if reviewed_state_digest is not None and (
+        current_safety.get("reviewed_state_digest") != reviewed_state_digest
+        or current_safety.get("reviewed_feedback_digest")
+        != reviewed_feedback_digest
+    ):
+        raise fast_path.SecurityBlocker(
+            "integration reviewed predecessor differs from authenticated native Ready safety"
+        )
+    source_commit = _verified_prior_delivery_commit(
+        repository_root,
+        current.lifecycle.head_sha,
+        loss.get("source_signer_identity"),
+        binding,
+    )
+    if (
+        source_commit["parent_sha"] != loss.get("parent_sha")
+        or source_commit["tree_sha"] != loss.get("tree_sha")
+        or source_commit["signer"]["identity"]
+        != loss.get("source_signer_identity")
+    ):
+        raise fast_path.SecurityBlocker("native enrolled Ready source commit changed")
+    manifest = {
+        "schema_version": "1.2",
+        "kind": "READY_INTEGRATION_PRIOR_AUTHORITY",
+        "repository": repository,
+        "delivery_issue_number": delivery_issue,
+        "pull_request_number": pull_request,
+        "prior_delivery_head_sha": current.lifecycle.head_sha,
+        "prior_delivery_tree_sha": source_commit["tree_sha"],
+        "prior_validation_receipt_digest": loss[
+            "historical_validation_receipt_digest"
+        ],
+        "prior_final_attestation_digest": None,
+        "expected_signer": source_commit["signer"],
+        "lifecycle": {
+            "identity": current.lifecycle.lifecycle_id,
+            "current_authority_digest": current.lifecycle.authority_digest,
+            "historical_proof_mode": "native_lifecycle",
+            "draft": False,
+            "ready": True,
+            "ready_transition": False,
+            "unrestricted_reviews": 1,
+            "remediation_cycles": state["remediation_cycle_count"],
+            "exceptional_recoveries": 0,
+            "exceptional_continuations": 0,
+            "cycle_3": False,
+            "ready_transition_count": 1,
+            "ready_history": copy.deepcopy(ready_history),
+            "exceptional_recovery_history": [],
+            "exceptional_continuation_history": [],
+        },
+        "publication": {
+            "object_oid": current.publication_oid,
+            "publication_digest": current.publication_digest,
+        },
+        "source_authority_mode": "NATIVE_ENROLLED_LOSS",
+        "source_authority": {
+            "proof_version": "1.0",
+            "source_parent_sha": source_commit["parent_sha"],
+            "source_signer_identity": loss["source_signer_identity"],
+            "commit_signature_evidence_digest": loss[
+                "commit_signature_evidence_digest"
+            ],
+            "historical_provider_summary_digest": loss[
+                "historical_provider_summary_digest"
+            ],
+            "provider_head_sha": provider_head,
+            "evidence_time_registry_digest": loss[
+                "evidence_time_registry_digest"
+            ],
+            "historical_command_set_digest": loss[
+                "historical_command_set_digest"
+            ],
+            "historical_receipt_provenance_digest": loss[
+                "historical_validation_receipt_digest"
+            ],
+            "initialization_receipt_provenance_digest": loss[
+                "initial_validation_receipt_digest"
+            ],
+            "initial_final_attestation_provenance_digest": loss[
+                "initial_final_attestation_digest"
+            ],
+            "current_safety_digest": current_safety["current_safety_digest"],
+            "current_feedback_digest": loss["current_feedback_digest"],
+            "current_feedback_decisions_digest": loss[
+                "current_feedback_decisions_digest"
+            ],
+            "loss_authentication_digest": loss["authentication_digest"],
+            "loss_policy_record_digest": loss["loss_policy_record_digest"],
+            "package_store_survey_digest": loss[
+                "package_store_survey_digest"
+            ],
+            "accepted_main_sha": accepted_main,
+            "initialization_digest": initialization["initialization_digest"],
+            "enrollment_publication": {
+                "object_oid": current.publication_oid,
+                "publication_digest": current.publication_digest,
+            },
+            "ready_transition_event_digest": ready_events[0]["event_digest"],
+            "thread_resolution_authority": 0,
+            "recovery_consumed": False,
+        },
+        "historical_companions": {
+            "reviewed_state_bytes": "UNAVAILABLE",
+            "validation_receipt_bytes": "UNAVAILABLE",
+            "final_attestation_bytes": "UNAVAILABLE",
+            "historical_bytes_reconstructed": False,
+        },
+    }
+    return manifest
+
+
 def _require_exact_adopted_ready_manifest(
     supplied: dict[str, Any], derived: dict[str, Any]
 ) -> dict[str, Any]:
@@ -7788,6 +8059,7 @@ def _verify_ready_integration_prior_authority(
         "EXACT_STATE_ADOPTION_V3",
         "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS",
         "EXISTING_AUTHORITY_COMPOSITION",
+        "NATIVE_ENROLLED_LOSS",
     }
     historical_paths = required_paths[1:4]
     caller_signer = required_paths[5]

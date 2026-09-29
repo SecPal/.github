@@ -637,8 +637,8 @@ The #787 bootstrap and existing role credential selection remain separate.
 
 ### `secpal_pr_review/legacy_enrolled_package_loss.py`
 
-Owns the accepted-main-selected authentication for the single legacy-enrolled
-Ready package-loss case. Unlike pre-enrollment loss admission, it authenticates
+Owns accepted-main-selected authentication for enrolled Ready package loss.
+Unlike pre-enrollment loss admission, it authenticates
 the bounded historical loss now and does not sign, mutate or backdate the
 historical lifecycle. It reopens exact-state-adoption CURRENT, verifies the
 source signature and sole-parent topology, reauthenticates the evidence-time
@@ -655,6 +655,16 @@ bytes stay `UNAVAILABLE`; authenticated receipt and final-attestation digests
 remain identities rather than reconstruction material. The mode grants zero
 thread-resolution authority, consumes no Recovery, and cannot be selected by a
 caller-created mapping.
+
+The same verifier admits an independently authenticated native lifecycle through
+the `NATIVE_ENROLLED_LOSS` provenance branch. It binds signed native initialization,
+one Ready transition, finite review and remediation events, exact CURRENT and
+source history, receipt trailers, the bounded store survey, and a provider head
+derived from the signed Ready event. The native record pins every current
+feedback source and its accepted-main technical disposition; new or
+undispositioned feedback blocks the projection. It emits the existing
+`READY_INTEGRATION_PRIOR_AUTHORITY` kind with zero thread authority and keeps
+historical package digests distinct from unavailable bytes.
 
 ### `secpal_pr_review/bootstrap_source_admission.py`
 
