@@ -1295,6 +1295,9 @@ def _parse_lifecycle_trust_policy(
             "validation_result_digest", "admission_digest",
         }
     )
+    adoption_source_fields = source_common_fields | frozenset(
+        {"implementation_blob_oid", "entrypoint", "policy_source"}
+    )
     source_recovery_field = "evidence_loss_recovery"
     raw_sources = policy["bootstrap_source_admissions"]
     if not isinstance(raw_sources, list):
@@ -1314,6 +1317,8 @@ def _parse_lifecycle_trust_policy(
             }
         elif subtype == "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE":
             source_fields = pre_enrollment_source_fields
+        elif subtype == "PRE_ENROLLMENT_ADOPTION_AUTHENTICATION_SOURCE":
+            source_fields = adoption_source_fields
         else:
             raise LifecycleAuthorityError("bootstrap source admission subtype is unknown")
         allowed_fields = {source_fields}
@@ -1341,9 +1346,12 @@ def _parse_lifecycle_trust_policy(
         pre_enrollment_source = (
             subtype == "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE"
         )
+        adoption_source = (
+            subtype == "PRE_ENROLLMENT_ADOPTION_AUTHENTICATION_SOURCE"
+        )
         implementation_blob = (
             _require_oid(item["implementation_blob_oid"], "source implementation blob")
-            if byte_source or pre_enrollment_source else None
+            if byte_source or pre_enrollment_source or adoption_source else None
         )
         validation_commands = item.get("validation_command_set", [])
         validation_results = item.get("validation_results", [])
@@ -1435,14 +1443,30 @@ def _parse_lifecycle_trust_policy(
                     != digest_json(validation_results)
                 )
             )
+            or (
+                adoption_source
+                and (
+                    item["implementation_path"]
+                    != "scripts/secpal_pr_review/fast_path.py"
+                    or item["entrypoint"]
+                    != "authenticate_pre_enrollment_adoption"
+                    or item["purpose"]
+                    != "PRE_ENROLLMENT_ADOPTION_AUTHENTICATION"
+                    or item["policy_source"]
+                    != "ACCEPTED_MAIN_REPOSITORY_REGISTRY"
+                    or item["source_signer_identity"] not in transition_signers
+                )
+            )
             or item["source_pr_state"] != "OPEN"
             or (
                 (executable_source or pre_enrollment_source)
                 and item["source_pr_draft"] is not True
             )
             or (
-                byte_source
-                and type(item["source_pr_draft"]) is not bool
+                byte_source and type(item["source_pr_draft"]) is not bool
+            )
+            or (
+                adoption_source and item["source_pr_draft"] is not False
             )
             or item["source_base_ref"] != "main"
             or admission_digest != digest_json(unsigned)
@@ -1632,7 +1656,7 @@ def _parse_lifecycle_trust_policy(
                 implementation_blob_oid=implementation_blob,
                 entrypoint=(
                     item["entrypoint"]
-                    if executable_source or pre_enrollment_source else None
+                    if executable_source or pre_enrollment_source or adoption_source else None
                 ),
                 purpose=item["purpose"],
                 source_pr_state=item["source_pr_state"],
@@ -1640,7 +1664,7 @@ def _parse_lifecycle_trust_policy(
                 source_base_ref=item["source_base_ref"],
                 policy_source=(
                     item["policy_source"]
-                    if byte_source or pre_enrollment_source else None
+                    if byte_source or pre_enrollment_source or adoption_source else None
                 ),
                 signer_policy_identity=item.get("signer_policy_identity"),
                 command=item.get("command"),

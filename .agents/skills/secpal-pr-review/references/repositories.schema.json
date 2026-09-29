@@ -250,6 +250,60 @@
         "admission_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       }
     },
+    "preEnrollmentAdoptionAuthenticationSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "subtype",
+        "repository",
+        "delivery_issue",
+        "pull_request",
+        "source_head_sha",
+        "source_tree_sha",
+        "source_parent_sha",
+        "validation_receipt_digest",
+        "final_attestation_digest",
+        "source_signer_identity",
+        "implementation_path",
+        "implementation_blob_oid",
+        "entrypoint",
+        "purpose",
+        "source_pr_state",
+        "source_pr_draft",
+        "source_base_ref",
+        "policy_source",
+        "admission_digest"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "kind": { "const": "BOOTSTRAP_SOURCE_ADMISSION" },
+        "subtype": { "const": "PRE_ENROLLMENT_ADOPTION_AUTHENTICATION_SOURCE" },
+        "repository": { "const": "SecPal/.github" },
+        "delivery_issue": { "const": 1014 },
+        "pull_request": { "const": 1015 },
+        "source_head_sha": { "const": "b0f60b83d70188dde1e43aaaf201521864bd3b3a" },
+        "source_tree_sha": { "const": "e1b28bc3daf0b791b0ec511f52c6d978f222df25" },
+        "source_parent_sha": { "const": "7bd8bcfccb0aa71a195985a432c21e90b7ac2a8e" },
+        "validation_receipt_digest": {
+          "const": "9277afd5f80c0b434e8949fa7d9400f1f697890b0292e60f8a8822f022f3f630"
+        },
+        "final_attestation_digest": {
+          "const": "86e7da78186244fa05e93acbbb4472903ca20079604858fefba299c11eff60fa"
+        },
+        "source_signer_identity": { "const": "aroviqen@secpal.app" },
+        "implementation_path": { "const": "scripts/secpal_pr_review/fast_path.py" },
+        "implementation_blob_oid": { "const": "a070833bd135daf99d5919e954cbf5e84d3eb5a3" },
+        "entrypoint": { "const": "authenticate_pre_enrollment_adoption" },
+        "purpose": { "const": "PRE_ENROLLMENT_ADOPTION_AUTHENTICATION" },
+        "source_pr_state": { "const": "OPEN" },
+        "source_pr_draft": { "const": false },
+        "source_base_ref": { "const": "main" },
+        "policy_source": { "const": "ACCEPTED_MAIN_REPOSITORY_REGISTRY" },
+        "admission_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
     "preEnrollmentDraftIntegrationSource": {
       "type": "object",
       "additionalProperties": false,
@@ -832,7 +886,8 @@
             "oneOf": [
               { "$ref": "#/$defs/firstReadyExecutorBootstrapSource" },
               { "$ref": "#/$defs/prReviewEvidenceHelperSource" },
-              { "$ref": "#/$defs/preEnrollmentDraftIntegrationSource" }
+              { "$ref": "#/$defs/preEnrollmentDraftIntegrationSource" },
+              { "$ref": "#/$defs/preEnrollmentAdoptionAuthenticationSource" }
             ]
           }
         },

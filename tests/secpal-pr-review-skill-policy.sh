@@ -1147,6 +1147,30 @@ assert pre_enrollment_source["purpose"] == "PRE_ENROLLMENT_IMPLEMENTATION_BOOTST
 assert pre_enrollment_source["command"] == "integrate-pre-enrollment-draft"
 assert pre_enrollment_source["policy_source"] == "ACCEPTED_MAIN_REPOSITORY_REGISTRY"
 assert pre_enrollment_source["historical_evidence_status"] == "HISTORICAL_EVIDENCE_UNAVAILABLE"
+adoption_source = publication_policy["bootstrap_source_admissions"][3]
+assert adoption_source == {
+    "schema_version": "1.0",
+    "kind": "BOOTSTRAP_SOURCE_ADMISSION",
+    "subtype": "PRE_ENROLLMENT_ADOPTION_AUTHENTICATION_SOURCE",
+    "repository": "SecPal/.github",
+    "delivery_issue": 1014,
+    "pull_request": 1015,
+    "source_head_sha": "b0f60b83d70188dde1e43aaaf201521864bd3b3a",
+    "source_tree_sha": "e1b28bc3daf0b791b0ec511f52c6d978f222df25",
+    "source_parent_sha": "7bd8bcfccb0aa71a195985a432c21e90b7ac2a8e",
+    "validation_receipt_digest": "9277afd5f80c0b434e8949fa7d9400f1f697890b0292e60f8a8822f022f3f630",
+    "final_attestation_digest": "86e7da78186244fa05e93acbbb4472903ca20079604858fefba299c11eff60fa",
+    "source_signer_identity": "aroviqen@secpal.app",
+    "implementation_path": "scripts/secpal_pr_review/fast_path.py",
+    "implementation_blob_oid": "a070833bd135daf99d5919e954cbf5e84d3eb5a3",
+    "entrypoint": "authenticate_pre_enrollment_adoption",
+    "purpose": "PRE_ENROLLMENT_ADOPTION_AUTHENTICATION",
+    "source_pr_state": "OPEN",
+    "source_pr_draft": False,
+    "source_base_ref": "main",
+    "policy_source": "ACCEPTED_MAIN_REPOSITORY_REGISTRY",
+    "admission_digest": "d9dcc088442fda8b190c05660b0d8ba9d04aa653cecef535bde6f72489833b26",
+}
 source_variants = schema["$defs"]["lifecycle_authority_policy"]["properties"][
     "bootstrap_source_admissions"
 ]["items"]["oneOf"]
@@ -1154,6 +1178,7 @@ assert source_variants == [
     {"$ref": "#/$defs/firstReadyExecutorBootstrapSource"},
     {"$ref": "#/$defs/prReviewEvidenceHelperSource"},
     {"$ref": "#/$defs/preEnrollmentDraftIntegrationSource"},
+    {"$ref": "#/$defs/preEnrollmentAdoptionAuthenticationSource"},
 ]
 assert "entrypoint" in schema["$defs"]["firstReadyExecutorBootstrapSource"]["required"]
 assert "entrypoint" not in schema["$defs"]["prReviewEvidenceHelperSource"]["properties"]
