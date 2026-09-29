@@ -615,7 +615,7 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
                 return "b" * 40 if args[-1].endswith("validation_evidence_loss.py") else "c" * 40
             if args[0] == "rev-parse":
                 return "c" * 40
-            self.fail(f"unexpected git call: {args}")
+            raise AssertionError(f"unexpected git call: {args}")
 
         with (
             mock.patch.object(
