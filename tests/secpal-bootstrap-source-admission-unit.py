@@ -2392,6 +2392,9 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
         )
 
     def test_authenticated_lock_derives_only_the_markdown_parser_closure(self) -> None:
+        authenticated_version = json.loads(Path("package.json").read_text())[
+            "devDependencies"
+        ]["markdown-it"]
         package, lock, names = source._locked_work_graph_dependency_plan(
             Path.cwd()
         )
@@ -2402,7 +2405,16 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
                 "mdurl", "punycode.js", "uc.micro",
             ),
         )
-        self.assertEqual(package["dependencies"], {"markdown-it": "14.3.0"})
+        self.assertEqual(
+            package["dependencies"], {"markdown-it": authenticated_version}
+        )
+        self.assertEqual(
+            lock["packages"][""]["dependencies"], package["dependencies"]
+        )
+        self.assertEqual(
+            lock["packages"]["node_modules/markdown-it"]["version"],
+            authenticated_version,
+        )
         self.assertEqual(
             set(lock["packages"]),
             {"", *(f"node_modules/{name}" for name in names)},
@@ -2410,22 +2422,56 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
         self.assertNotIn("markdownlint", names)
         self.assertNotIn("prettier", names)
 
-        mutations = (
-            lambda manifest, _lock: manifest["devDependencies"].update(
-                {"markdown-it": "14.2.0"}
+        mutations = {
+            "manifest is public": lambda manifest, _lock: manifest.update(
+                {"private": False}
             ),
-            lambda _manifest, value: value["packages"][
+            "package missing": lambda manifest, _lock: manifest[
+                "devDependencies"
+            ].pop("markdown-it"),
+            "manifest version mismatch": lambda manifest, _lock: manifest[
+                "devDependencies"
+            ].update({"markdown-it": "14.2.0"}),
+            "version range": lambda manifest, _lock: manifest[
+                "devDependencies"
+            ].update({"markdown-it": "^14.3.2"}),
+            "lock root mismatch": lambda _manifest, lock: lock["packages"][""][
+                "devDependencies"
+            ].update({"markdown-it": "14.2.0"}),
+            "lock root package missing": lambda _manifest, lock: lock["packages"][
+                ""
+            ]["devDependencies"].pop("markdown-it"),
+            "resolved version mismatch": lambda _manifest, lock: lock["packages"][
                 "node_modules/markdown-it"
             ].update({"version": "14.2.0"}),
-            lambda _manifest, value: value["packages"][
+            "resolved package missing": lambda _manifest, lock: lock["packages"].pop(
+                "node_modules/markdown-it"
+            ),
+            "untrusted registry": lambda _manifest, lock: lock["packages"][
+                "node_modules/markdown-it"
+            ].update({"resolved": "https://untrusted.example/markdown-it.tgz"}),
+            "substituted package": lambda _manifest, lock: lock["packages"][
+                "node_modules/markdown-it"
+            ].update({
+                "resolved": "https://registry.npmjs.org/other/-/other-14.3.2.tgz"
+            }),
+            "malformed integrity": lambda _manifest, lock: lock["packages"][
                 "node_modules/markdown-it"
             ].update({"integrity": "sha512-!!!"}),
-            lambda _manifest, value: value["packages"].pop(
+            "short integrity digest": lambda _manifest, lock: lock["packages"][
+                "node_modules/markdown-it"
+            ].update({"integrity": "sha512-YWJj"}),
+            "incomplete closure": lambda _manifest, lock: lock["packages"].pop(
                 "node_modules/uc.micro"
             ),
-        )
-        for mutate in mutations:
-            with self.subTest(mutation=mutate), tempfile.TemporaryDirectory() as directory:
+            "substituted transitive package": lambda _manifest, lock: lock[
+                "packages"
+            ]["node_modules/entities"].update({
+                "resolved": "https://registry.npmjs.org/other/-/other-4.5.0.tgz"
+            }),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
                 fixture = Path(directory)
                 self._copy_dependency_manifests(fixture)
                 manifest = json.loads((fixture / "package.json").read_text())
@@ -2435,6 +2481,35 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
                 (fixture / "package-lock.json").write_text(json.dumps(locked))
                 with self.assertRaises(source.BootstrapSourceAdmissionError):
                     source._locked_work_graph_dependency_plan(fixture)
+
+    def test_authenticated_exact_version_advances_without_bootstrap_version_edit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            self._copy_dependency_manifests(fixture)
+            manifest = json.loads((fixture / "package.json").read_text())
+            lock = json.loads((fixture / "package-lock.json").read_text())
+            manifest["devDependencies"]["markdown-it"] = "14.3.3"
+            lock["packages"][""]["devDependencies"]["markdown-it"] = "14.3.3"
+            package = lock["packages"]["node_modules/markdown-it"]
+            package["version"] = "14.3.3"
+            package["resolved"] = (
+                "https://registry.npmjs.org/markdown-it/-/markdown-it-14.3.3.tgz"
+            )
+            (fixture / "package.json").write_text(json.dumps(manifest))
+            (fixture / "package-lock.json").write_text(json.dumps(lock))
+            generated_package, generated_lock, _ = (
+                source._locked_work_graph_dependency_plan(fixture)
+            )
+            self.assertEqual(generated_package["dependencies"], {"markdown-it": "14.3.3"})
+            self.assertEqual(
+                generated_lock["packages"]["node_modules/markdown-it"]["version"],
+                "14.3.3",
+            )
+        self.assertEqual(
+            tuple(inspect.signature(source._locked_work_graph_dependency_plan).parameters),
+            ("root",),
+        )
+        self.assertFalse(hasattr(source, "_WORK_GRAPH_NODE_PACKAGE_VERSION"))
 
     def test_dependency_acquisition_is_locked_scriptless_and_credential_free(self) -> None:
         helper = SimpleNamespace(
@@ -2518,6 +2593,15 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
             (modules / "markdown-it").symlink_to("/tmp/node_modules")
             with self.assertRaisesRegex(
                 source.BootstrapSourceAdmissionError, "symlink"
+            ):
+                source._dependency_file_snapshot(modules)
+
+        with tempfile.TemporaryDirectory() as directory:
+            modules = Path(directory) / "node_modules"
+            modules.mkdir()
+            os.mkfifo(modules / "unexpected")
+            with self.assertRaisesRegex(
+                source.BootstrapSourceAdmissionError, "special file"
             ):
                 source._dependency_file_snapshot(modules)
 

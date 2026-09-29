@@ -11,6 +11,8 @@ Downstream typed evidence remains the sole candidate and mutation authority.
 from __future__ import annotations
 
 import ast
+import base64
+import binascii
 from contextlib import contextmanager
 import copy
 from dataclasses import dataclass, replace
@@ -99,9 +101,11 @@ _ADOPTION_DIAGNOSTICS = frozenset({
     "HISTORICAL_EVIDENCE_UNAVAILABLE",
 })
 _WORK_GRAPH_NODE_PACKAGE = "markdown-it"
-_WORK_GRAPH_NODE_PACKAGE_VERSION = "14.3.0"
 _NPM_REGISTRY = "https://registry.npmjs.org/"
 _NPM_INTEGRITY = re.compile(r"sha512-[A-Za-z0-9+/]+={0,2}")
+_NPM_EXACT_VERSION = re.compile(
+    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+)
 _NPM_PACKAGE_NAME = re.compile(
     r"(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*"
 )
@@ -2783,6 +2787,15 @@ def _node_dependency_candidates(importer: str, dependency: str) -> tuple[str, ..
     return tuple(dict.fromkeys(candidates))
 
 
+def _valid_npm_integrity(value: Any) -> bool:
+    if not isinstance(value, str) or _NPM_INTEGRITY.fullmatch(value) is None:
+        return False
+    try:
+        return len(base64.b64decode(value[7:], validate=True)) == 64
+    except binascii.Error:
+        return False
+
+
 def _locked_work_graph_dependency_plan(
     root: Path,
 ) -> tuple[dict[str, Any], dict[str, Any], tuple[str, ...]]:
@@ -2791,18 +2804,24 @@ def _locked_work_graph_dependency_plan(
     _, manifest = _read_authenticated_dependency_json(root, "package.json")
     _, lock = _read_authenticated_dependency_json(root, "package-lock.json")
     root_dependencies = manifest.get("devDependencies")
+    manifest_version = (
+        root_dependencies.get(_WORK_GRAPH_NODE_PACKAGE)
+        if isinstance(root_dependencies, dict)
+        else None
+    )
     lock_packages = lock.get("packages")
     lock_root = lock_packages.get("") if isinstance(lock_packages, dict) else None
+    lock_root_dependencies = (
+        lock_root.get("devDependencies") if isinstance(lock_root, dict) else None
+    )
     if (
         manifest.get("private") is not True
-        or not isinstance(root_dependencies, dict)
-        or root_dependencies.get(_WORK_GRAPH_NODE_PACKAGE)
-        != _WORK_GRAPH_NODE_PACKAGE_VERSION
+        or not isinstance(manifest_version, str)
+        or _NPM_EXACT_VERSION.fullmatch(manifest_version) is None
         or lock.get("lockfileVersion") != 3
         or lock.get("requires") is not True
-        or not isinstance(lock_root, dict)
-        or (lock_root.get("devDependencies") or {}).get(_WORK_GRAPH_NODE_PACKAGE)
-        != _WORK_GRAPH_NODE_PACKAGE_VERSION
+        or not isinstance(lock_root_dependencies, dict)
+        or lock_root_dependencies.get(_WORK_GRAPH_NODE_PACKAGE) != manifest_version
     ):
         raise BootstrapSourceAdmissionError(
             "authenticated Work-Graph dependency identity is invalid"
@@ -2824,14 +2843,19 @@ def _locked_work_graph_dependency_plan(
         resolved = metadata.get("resolved")
         integrity = metadata.get("integrity")
         dependencies = metadata.get("dependencies", {})
+        package_name = key.rsplit("node_modules/", 1)[-1]
+        tarball_name = package_name.rsplit("/", 1)[-1]
         if (
-            not isinstance(version, str)
+            _NPM_PACKAGE_NAME.fullmatch(package_name) is None
+            or not isinstance(version, str)
             or not version
-            or (key == package_key and version != _WORK_GRAPH_NODE_PACKAGE_VERSION)
+            or (key == package_key and version != manifest_version)
             or not isinstance(resolved, str)
-            or not resolved.startswith(_NPM_REGISTRY)
-            or not isinstance(integrity, str)
-            or _NPM_INTEGRITY.fullmatch(integrity) is None
+            or resolved != (
+                f"{_NPM_REGISTRY}{package_name}/-/{tarball_name}-{version}.tgz"
+            )
+            or not _valid_npm_integrity(integrity)
+            or metadata.get("name", package_name) != package_name
             or not isinstance(dependencies, dict)
             or any(
                 not isinstance(name, str)
@@ -2864,7 +2888,7 @@ def _locked_work_graph_dependency_plan(
     package_document = {
         "name": "secpal-authenticated-work-graph-runtime",
         "private": True,
-        "dependencies": {_WORK_GRAPH_NODE_PACKAGE: _WORK_GRAPH_NODE_PACKAGE_VERSION},
+        "dependencies": {_WORK_GRAPH_NODE_PACKAGE: manifest_version},
     }
     lock_document = {
         "name": package_document["name"],
