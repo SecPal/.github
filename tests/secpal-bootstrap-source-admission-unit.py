@@ -2402,7 +2402,7 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
                 "mdurl", "punycode.js", "uc.micro",
             ),
         )
-        self.assertEqual(package["dependencies"], {"markdown-it": "14.3.0"})
+        self.assertEqual(package["dependencies"], {"markdown-it": "14.3.2"})
         self.assertEqual(
             set(lock["packages"]),
             {"", *(f"node_modules/{name}" for name in names)},

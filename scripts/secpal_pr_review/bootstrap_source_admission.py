@@ -99,7 +99,7 @@ _ADOPTION_DIAGNOSTICS = frozenset({
     "HISTORICAL_EVIDENCE_UNAVAILABLE",
 })
 _WORK_GRAPH_NODE_PACKAGE = "markdown-it"
-_WORK_GRAPH_NODE_PACKAGE_VERSION = "14.3.0"
+_WORK_GRAPH_NODE_PACKAGE_VERSION = "14.3.2"
 _NPM_REGISTRY = "https://registry.npmjs.org/"
 _NPM_INTEGRITY = re.compile(r"sha512-[A-Za-z0-9+/]+={0,2}")
 _NPM_PACKAGE_NAME = re.compile(
