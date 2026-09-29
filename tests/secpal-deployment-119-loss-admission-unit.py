@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import copy
+import importlib.util
 import json
 from pathlib import Path
 import unittest
@@ -20,6 +21,46 @@ PARENT = "7e7a6e316007de919166c2d296e6918cfd353063"
 
 
 class Deployment119AdmissionTests(unittest.TestCase):
+    def test_workload_schema_cannot_claim_pg16_or_production(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "deployment_119_safety",
+            ROOT / "tests/pre-enrollment-deployment-119-current-safety.py",
+        )
+        self.assertIsNotNone(spec)
+        assert spec is not None and spec.loader is not None
+        harness = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(harness)
+        schema = {
+            "$defs": {
+                "workloadEvidence": {
+                    "additionalProperties": False,
+                    "required": ["claim_scope", "database_scope"],
+                    "properties": {
+                        "claim_scope": {
+                            "const": "disposable-rootless-application-integration"
+                        },
+                        "database_scope": {
+                            "const": "disposable-postgresql-18-fixture"
+                        },
+                    },
+                },
+            },
+        }
+        self.assertTrue(harness._closed_scope_schema(schema))
+        for field, value in (
+            ("claim_scope", "production-application"),
+            ("database_scope", "production-postgresql-16-container"),
+        ):
+            with self.subTest(field=field):
+                changed = copy.deepcopy(schema)
+                changed["$defs"]["workloadEvidence"]["properties"][field][
+                    "const"
+                ] = value
+                self.assertFalse(harness._closed_scope_schema(changed))
+        changed = copy.deepcopy(schema)
+        changed["$defs"]["workloadEvidence"]["additionalProperties"] = True
+        self.assertFalse(harness._closed_scope_schema(changed))
+
     @staticmethod
     def record() -> dict:
         policy = json.loads((ROOT / loss.POLICY_PATH).read_text(encoding="utf-8"))

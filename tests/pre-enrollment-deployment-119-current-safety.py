@@ -53,6 +53,30 @@ def _rejects(collector, valid: dict, change, invariant: str) -> bool:
     return invariant in collector.workload_admission_failures(changed)
 
 
+def _closed_scope_schema(schema: object) -> bool:
+    if not isinstance(schema, dict):
+        return False
+    definitions = schema.get("$defs")
+    workload = (
+        definitions.get("workloadEvidence")
+        if isinstance(definitions, dict) else None
+    )
+    if not isinstance(workload, dict):
+        return False
+    properties = workload.get("properties")
+    required = workload.get("required")
+    return (
+        workload.get("additionalProperties") is False
+        and isinstance(properties, dict)
+        and isinstance(required, list)
+        and {"claim_scope", "database_scope"} <= set(required)
+        and properties.get("claim_scope")
+        == {"const": "disposable-rootless-application-integration"}
+        and properties.get("database_scope")
+        == {"const": "disposable-postgresql-18-fixture"}
+    )
+
+
 def _semantic_safety() -> bool:
     collector = _load(COLLECTOR, "accepted_deployment_119_collector")
     runtime = _load(RUNTIME, "accepted_deployment_119_runtime")
@@ -177,7 +201,7 @@ def _static_safety() -> bool:
     collector = COLLECTOR.read_text(encoding="utf-8")
     validator = VALIDATOR.read_text(encoding="utf-8")
     if (
-        not isinstance(schema, dict)
+        not _closed_scope_schema(schema)
         or "Rocky Linux 10.2" not in document
         or "SELinux" not in document
         or "Quadlet" not in document
