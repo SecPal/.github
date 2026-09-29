@@ -40,10 +40,17 @@ REGISTERED_CURRENT_SAFETY_PATH = (
 NO_RECEIPT_CURRENT_SAFETY_PATH = (
     "tests/pre-enrollment-github-711-current-safety.py"
 )
+DEPLOYMENT_119_CURRENT_SAFETY_PATH = (
+    "tests/pre-enrollment-deployment-119-current-safety.py"
+)
 NO_RECEIPT_REGISTERED_VALIDATION_PATHS = (
     "tests/secpal-trivy-repository-scan-unit.py",
     "tests/fixtures/trivy-repository-scan/malformed.txt",
     "tests/fixtures/trivy-repository-scan/stale-database.json",
+)
+DEPLOYMENT_119_REGISTERED_VALIDATION_PATHS = (
+    "tests/ci-cloud-workload-evidence.py",
+    "tests/fixtures/podman-5.4.2-rootless-userns.json",
 )
 CURRENT_RECEIPT_SAFETY_PATH = "tests/pre-enrollment-github-948-current-safety.py"
 CURRENT_RECEIPT_NODE_TEST_PATH = "tests/node-baseline-governance.test.mjs"
@@ -839,8 +846,10 @@ def _accepted_policy(repository: str, issue: int) -> tuple[str, dict[str, Any], 
     if "registered_validation_projection" in records[0]:
         if (
             record_version != NO_RECEIPT_SCHEMA_VERSION
-            or repository != "SecPal/.github"
-            or issue != 711
+            or (repository, issue, records[0].get("pull_request")) not in {
+                ("SecPal/.github", 711, 951),
+                ("SecPal/deployment", 119, 250),
+            }
         ):
             raise authority.LifecycleAuthorityError(
                 "registered validation projection is not maintained"
@@ -902,6 +911,12 @@ def _accepted_policy(repository: str, issue: int) -> tuple[str, dict[str, Any], 
         NO_RECEIPT_SCHEMA_VERSION: NO_RECEIPT_CURRENT_SAFETY_PATH,
         CURRENT_RECEIPT_SCHEMA_VERSION: CURRENT_RECEIPT_SAFETY_PATH,
     }.get(record_version)
+    if (
+        record_version == NO_RECEIPT_SCHEMA_VERSION
+        and (repository, issue, record["pull_request"])
+        == ("SecPal/deployment", 119, 250)
+    ):
+        maintained_harness = DEPLOYMENT_119_CURRENT_SAFETY_PATH
     if maintained_harness is not None and (
         record["current_safety_harness_path"] != maintained_harness
     ):
@@ -1594,10 +1609,24 @@ def _registered_current_safety_profile(main: str) -> dict[str, Any]:
 def _zero_receipt_current_safety_profile(
     main: str, record: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    deployment_119 = (
+        record is not None
+        and (record.get("repository"), record.get("delivery_issue"),
+             record.get("pull_request"))
+        == ("SecPal/deployment", 119, 250)
+    )
+    harness_path = (
+        DEPLOYMENT_119_CURRENT_SAFETY_PATH
+        if deployment_119 else NO_RECEIPT_CURRENT_SAFETY_PATH
+    )
+    if record is not None and record.get("current_safety_harness_path") != harness_path:
+        raise authority.LifecycleAuthorityError(
+            "zero-receipt current-safety harness is not maintained"
+        )
     profile = exact_source_safety.build_profile(
         ROOT, main,
         policy=NO_RECEIPT_CURRENT_SAFETY_POLICY,
-        harness_paths=(NO_RECEIPT_CURRENT_SAFETY_PATH,),
+        harness_paths=(harness_path,),
         purpose="Validate exact zero-receipt adoption current safety",
         required_invariants=REGISTERED_CURRENT_SAFETY_INVARIANTS,
     )
@@ -1617,7 +1646,10 @@ def _zero_receipt_current_safety_profile(
                 item.get("path") if isinstance(item, Mapping) else None
                 for item in projection.get("files", [])
             )
-            != NO_RECEIPT_REGISTERED_VALIDATION_PATHS
+            != (
+                DEPLOYMENT_119_REGISTERED_VALIDATION_PATHS
+                if deployment_119 else NO_RECEIPT_REGISTERED_VALIDATION_PATHS
+            )
         ):
             raise authority.LifecycleAuthorityError(
                 "registered validation projection is not the maintained exact source"
@@ -1651,7 +1683,10 @@ def _current_safety_profile_for_record(
             return _registered_current_safety_profile(main)
         if (
             _record_version(record) == NO_RECEIPT_SCHEMA_VERSION
-            and path == NO_RECEIPT_CURRENT_SAFETY_PATH
+            and path in {
+                NO_RECEIPT_CURRENT_SAFETY_PATH,
+                DEPLOYMENT_119_CURRENT_SAFETY_PATH,
+            }
         ):
             return _zero_receipt_current_safety_profile(main, record)
     if (
