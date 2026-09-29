@@ -78,15 +78,21 @@ The command verifies only the invariants required for this operation:
 - PR is open;
 - current PR head equals the caller-provided expected current head OID;
 - the reviewed-state file equals the caller-provided captured state digest;
-- successful validation evidence binds that reviewed state to the exact
-  verified fix commit through a final attestation and the signed commit's
-  matching validation-receipt trailer; the signed receipt also authenticates
-  the canonical eligibility-manifest digest;
+- ordinary fix-commit validation evidence binds that reviewed state through a
+  final attestation and the signed commit's matching validation-receipt
+  trailer; the signed receipt also authenticates the canonical
+  eligibility-manifest digest;
 - the local repository has the exact registered origin and expected `HEAD`, the
   commit tree equals the validated tree, and the commit has a locally verified
   accepted signature;
 - a new fix commit has exactly the reviewed head as its parent and exactly one
   matching `SecPal-Validation-Receipt` trailer;
+- an unchanged recovered Ready source uses authenticated historical placement
+  to require its exact current-head trailer state: a sole ancestor receipt or
+  `ABSENT_NEVER_ISSUED` requires no trailer, while a same-head receipt requires
+  that exact digest. Fresh recovery validation never becomes a commit trailer.
+  Source authentication alone grants no thread authority; exact signed
+  detached classification and disposition remain required;
 - the eligibility manifest binds the repository, PR, reviewed head,
   reviewed-state digest, and every requested thread exactly; each thread has an
   allowed classification/disposition, finding IDs, and evidence digest, and

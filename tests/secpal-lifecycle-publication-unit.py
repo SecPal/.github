@@ -1833,6 +1833,76 @@ class LifecyclePublicationTests(TestCase):
                     publication.derive_ready_source_recovery_current_head_trailers(
                         replace(recovery, **substitution), current
                     )
+            amendment_proof = copy.deepcopy(proof)
+            amendment_proof.pop("validation_evidence_loss_admission")
+            amendment_proof.update(
+                proof_version=authority.EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION,
+                validation_receipt_digest=None,
+                historical_evidence={
+                    "state": "ABSENT_NEVER_ISSUED",
+                    "validation_receipt_digest": None,
+                    "source_validation_evidence_digest": None,
+                    "final_attestation_digest": None,
+                    "bytes_reconstructed": False,
+                },
+            )
+            amendment_bundle = copy.deepcopy(bundle)
+            amendment_bundle["exact_state_adoption_proof"] = amendment_proof
+            amendment_current = replace(
+                current,
+                serialized_lifecycle_evidence=authority.canonical_json_bytes(
+                    amendment_bundle
+                ),
+            )
+            self.assertEqual(
+                publication.derive_ready_source_recovery_current_head_trailers(
+                    recovery, amendment_current
+                ),
+                (),
+            )
+            contradictory = copy.deepcopy(amendment_bundle)
+            contradictory["exact_state_adoption_proof"]["historical_evidence"][
+                "bytes_reconstructed"
+            ] = True
+            with self.assertRaises(publication.LifecyclePublicationError):
+                publication.derive_ready_source_recovery_current_head_trailers(
+                    recovery,
+                    replace(
+                        amendment_current,
+                        serialized_lifecycle_evidence=authority.canonical_json_bytes(
+                            contradictory
+                        ),
+                    ),
+                )
+            rebound_lifecycle = replace(
+                current.lifecycle,
+                pull_request=PR + 1,
+                head_sha=HEADS[4],
+                tree_sha=HEADS[5],
+                validation_receipt_digest="c" * 64,
+            )
+            rebound_current = replace(current, lifecycle=rebound_lifecycle)
+            rebound_recovery = replace(
+                recovery,
+                pull_request=PR + 1,
+                head_sha=HEADS[4],
+                tree_sha=HEADS[5],
+                historical_validation_receipt_digest="c" * 64,
+            )
+            self.assertEqual(
+                publication.derive_ready_source_recovery_current_head_trailers(
+                    rebound_recovery, rebound_current
+                ),
+                ("c" * 64,),
+            )
+            with self.assertRaises(publication.LifecyclePublicationError):
+                publication.derive_ready_source_recovery_current_head_trailers(
+                    replace(
+                        rebound_recovery,
+                        historical_validation_receipt_digest="0" * 64,
+                    ),
+                    rebound_current,
+                )
 
     def test_exact_adoption_requires_authenticated_v11_loss_provenance(self) -> None:
         from scripts.secpal_pr_review import validation_evidence_loss as loss

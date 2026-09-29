@@ -2383,7 +2383,6 @@ def derive_ready_source_recovery_current_head_trailers(
         if (
             verified.repository != recovery.repository
             or verified.delivery_issue != recovery.delivery_issue
-            or verified.pull_request != recovery.pull_request
             or verified.lifecycle_id != current.lifecycle.lifecycle_id
         ):
             raise LifecyclePublicationError(
@@ -2392,11 +2391,36 @@ def derive_ready_source_recovery_current_head_trailers(
         if verified.head_sha != recovery.head_sha:
             # A later authenticated lifecycle transition owns this head. The
             # adoption loss record does not assert its trailer placement.
-            return (recovery.historical_validation_receipt_digest,)
+            receipt = authority._require_digest(
+                current.lifecycle.validation_receipt_digest,
+                "Ready-source successor validation receipt",
+            )
+            if receipt != recovery.historical_validation_receipt_digest:
+                raise LifecyclePublicationError(
+                    "Ready-source recovery successor receipt changed"
+                )
+            return (receipt,)
         if proof["tree_sha"] != recovery.tree_sha:
             raise LifecyclePublicationError(
                 "Ready-source recovery historical tree changed"
             )
+        if (
+            proof["proof_version"]
+            == authority.EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION
+        ):
+            historical = authority.normalize_exact_state_adoption_historical_evidence(
+                proof["historical_evidence"]
+            )
+            if historical["state"] == "ABSENT_NEVER_ISSUED":
+                return ()
+            if (
+                historical["validation_receipt_digest"]
+                != recovery.historical_validation_receipt_digest
+            ):
+                raise LifecyclePublicationError(
+                    "Ready-source recovery historical receipt changed"
+                )
+            return (historical["validation_receipt_digest"],)
         if (
             proof["validation_receipt_digest"]
             != recovery.historical_validation_receipt_digest
@@ -2419,22 +2443,6 @@ def derive_ready_source_recovery_current_head_trailers(
             return validation_evidence_loss.current_head_validation_receipt_trailers(
                 loss
             )
-        if (
-            proof["proof_version"]
-            == authority.EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION
-        ):
-            historical = authority.normalize_exact_state_adoption_historical_evidence(
-                proof["historical_evidence"]
-            )
-            if historical["state"] == "ABSENT_NEVER_ISSUED":
-                return ()
-            if (
-                historical["validation_receipt_digest"]
-                != recovery.historical_validation_receipt_digest
-            ):
-                raise LifecyclePublicationError(
-                    "Ready-source recovery historical receipt changed"
-                )
         return (recovery.historical_validation_receipt_digest,)
     except (KeyError, TypeError, ValueError, authority.LifecycleAuthorityError) as exc:
         raise LifecyclePublicationError(
