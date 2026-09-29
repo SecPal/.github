@@ -91,12 +91,12 @@ check_node_version() {
     node_version="$(node --version | sed 's/^v//')"
     major_version="$(echo "$node_version" | cut -d. -f1)"
 
-    if [[ "$major_version" =~ ^[0-9]+$ ]] && [ "$major_version" -ge "$REQUIRED_NODE_MAJOR" ]; then
-      echo -e "${GREEN}✓${NC} Node.js v$node_version (minimum >= ${REQUIRED_NODE_MAJOR}.x; canonical baseline: Node ${REQUIRED_NODE_MAJOR} LTS)"
+    if [[ "$major_version" =~ ^[0-9]+$ ]] && [ "$major_version" -eq "$REQUIRED_NODE_MAJOR" ]; then
+      echo -e "${GREEN}✓${NC} Node.js v$node_version (required major: ${REQUIRED_NODE_MAJOR}.x; canonical baseline: Node ${REQUIRED_NODE_MAJOR})"
       OK_COUNT=$((OK_COUNT + 1))
     else
-      echo -e "${RED}✗${NC} Node.js v$node_version ${RED}(>= ${REQUIRED_NODE_MAJOR}.x required; canonical baseline: Node ${REQUIRED_NODE_MAJOR} LTS)${NC}"
-      echo -e "  ${YELLOW}→${NC} Update Node.js to canonical Node ${REQUIRED_NODE_MAJOR} LTS"
+      echo -e "${RED}✗${NC} Node.js v$node_version ${RED}(${REQUIRED_NODE_MAJOR}.x required; canonical baseline: Node ${REQUIRED_NODE_MAJOR})${NC}"
+      echo -e "  ${YELLOW}→${NC} Use canonical Node ${REQUIRED_NODE_MAJOR}"
       increment_critical_missing
     fi
   else

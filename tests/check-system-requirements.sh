@@ -33,8 +33,10 @@ chmod +x "$workspace/.github/scripts/check-system-requirements.sh"
 
 required_node_major="$(tr -d '[:space:]' <"$REPO_ROOT/.nvmrc")"
 below_node_version="v$((required_node_major - 1)).15.0"
+older_node_version="v$((required_node_major - 2)).21.0"
 canonical_node_version="v${required_node_major}.0.0"
 later_patch_node_version="v${required_node_major}.99.0"
+future_node_version="v$((required_node_major + 1)).0.0"
 
 cat >"$workspace/android/package.json" <<'JSON'
 {
@@ -382,7 +384,17 @@ for repo in frontend contracts android; do
   fi
 
   grep -Fq "Node.js $below_node_version" "$old_node_output"
-  grep -Fq ">= ${required_node_major}.x required; canonical baseline: Node ${required_node_major} LTS" "$old_node_output"
+  grep -Fq "${required_node_major}.x required; canonical baseline: Node ${required_node_major}" "$old_node_output"
+done
+
+for unsupported_node_version in "$older_node_version" "$future_node_version"; do
+  unsupported_node_output="$sandbox/node-unsupported-${unsupported_node_version}.txt"
+  if TEST_NODE_VERSION="$unsupported_node_version" run_check "$unsupported_node_output" --repo=contracts; then
+    cat "$unsupported_node_output"
+    echo "requirements check unexpectedly accepted unsupported Node $unsupported_node_version" >&2
+    exit 1
+  fi
+  grep -Fq "Node.js $unsupported_node_version" "$unsupported_node_output"
 done
 
 canonical_node_output="$sandbox/node-canonical.txt"
@@ -392,7 +404,7 @@ if ! TEST_NODE_VERSION="$canonical_node_version" run_check "$canonical_node_outp
   exit 1
 fi
 grep -Fq "Node.js $canonical_node_version" "$canonical_node_output"
-grep -Fq "canonical baseline: Node ${required_node_major} LTS" "$canonical_node_output"
+grep -Fq "canonical baseline: Node ${required_node_major}" "$canonical_node_output"
 
 later_patch_node_output="$sandbox/node-later-patch.txt"
 if ! TEST_NODE_VERSION="$later_patch_node_version" run_check "$later_patch_node_output" --repo=contracts; then
@@ -431,7 +443,7 @@ fi
 grep -Fq '3. Frontend Repository (React + TypeScript + Node)' "$all_repos_old_node_output"
 grep -Fq '5. Android Repository (Capacitor + Native Android Toolchain)' "$all_repos_old_node_output"
 grep -Fq "Node.js $below_node_version" "$all_repos_old_node_output"
-grep -Fq ">= ${required_node_major}.x required; canonical baseline: Node ${required_node_major} LTS" "$all_repos_old_node_output"
+grep -Fq "${required_node_major}.x required; canonical baseline: Node ${required_node_major}" "$all_repos_old_node_output"
 
 mv "$workspace/android" "$workspace/android-hidden"
 
