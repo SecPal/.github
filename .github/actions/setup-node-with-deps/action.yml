@@ -11,7 +11,7 @@ inputs:
   node-version:
     description: Node.js version to use.
     required: false
-    default: "24.x"
+    default: "26.x"
   global-package:
     description: npm package to install globally when no package.json exists.
     required: false
