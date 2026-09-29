@@ -1753,6 +1753,157 @@ class LifecyclePublicationTests(TestCase):
             proof["validation_evidence_loss_admission"]
         )
 
+    def test_recovered_head_trailer_derives_only_from_bound_adoption(self) -> None:
+        from scripts.secpal_pr_review import validation_evidence_loss as loss
+
+        current, proof, _historical = self.exact_adoption_current()
+        proof.update(
+            proof_version=authority.EXACT_ADOPTION_LOSS_VERSION,
+            tree_sha=current.lifecycle.tree_sha,
+            validation_receipt_digest="5" * 64,
+        )
+        proof["validation_evidence_loss_admission"].update(
+            historical_validation_receipt_digest="5" * 64,
+        )
+        bundle = json.loads(current.serialized_lifecycle_evidence)
+        bundle["exact_state_adoption_proof"] = proof
+        current = replace(
+            current,
+            serialized_lifecycle_evidence=authority.canonical_json_bytes(bundle),
+        )
+        recovery = publication.VerifiedReadySourceRecovery(
+            publication_oid="1" * 40,
+            publication_digest="2" * 64,
+            publication_branch=BRANCH,
+            journal_predecessor_oid=None,
+            repository=REPOSITORY,
+            delivery_issue=ISSUE,
+            pull_request=PR,
+            head_sha=current.lifecycle.head_sha,
+            tree_sha=current.lifecycle.tree_sha,
+            parent_shas=(HEADS[1],),
+            expected_target_base_ref="main",
+            expected_target_base_sha=HEADS[9],
+            expected_commit_signer={"kind": "SSH_PRINCIPAL", "identity": SIGNER},
+            commit_signature_evidence_digest="3" * 64,
+            lifecycle_id=current.lifecycle.lifecycle_id,
+            current_authority_digest=current.lifecycle.authority_digest,
+            current_publication_oid=current.publication_oid,
+            current_publication_digest=current.publication_digest,
+            authorization_id="fixture",
+            authorization_digest="4" * 64,
+            reviewed_state_digest="6" * 64,
+            reviewed_feedback_digest="7" * 64,
+            feedback_assessment_digest="8" * 64,
+            fresh_validation_receipt_digest="9" * 64,
+            historical_validation_receipt_digest="5" * 64,
+            historical_final_attestation_digest="a" * 64,
+            historical_evidence_loss_proof_digest="b" * 64,
+            lifecycle_state=current.lifecycle.state,
+            recovery_safety_facts={},
+        )
+        with patch.object(
+            authority, "verify_exact_state_adoption_proof",
+            return_value=current.lifecycle,
+        ), patch.object(
+            loss, "current_head_validation_receipt_trailers", return_value=(),
+        ) as placement:
+            self.assertEqual(
+                publication.derive_ready_source_recovery_current_head_trailers(
+                    recovery, current
+                ),
+                (),
+            )
+            placement.assert_called_once_with(
+                proof["validation_evidence_loss_admission"]
+            )
+            for substitution in (
+                {"current_publication_oid": "0" * 40},
+                {"current_publication_digest": "0" * 64},
+                {"repository": "SecPal/other"},
+                {"delivery_issue": ISSUE + 1},
+                {"pull_request": PR + 1},
+                {"head_sha": HEADS[3]},
+                {"tree_sha": HEADS[4]},
+                {"historical_validation_receipt_digest": "0" * 64},
+            ):
+                with self.subTest(substitution=substitution), self.assertRaises(
+                    publication.LifecyclePublicationError
+                ):
+                    publication.derive_ready_source_recovery_current_head_trailers(
+                        replace(recovery, **substitution), current
+                    )
+            amendment_proof = copy.deepcopy(proof)
+            amendment_proof.pop("validation_evidence_loss_admission")
+            amendment_proof.update(
+                proof_version=authority.EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION,
+                validation_receipt_digest=None,
+                historical_evidence={
+                    "state": "ABSENT_NEVER_ISSUED",
+                    "validation_receipt_digest": None,
+                    "source_validation_evidence_digest": None,
+                    "final_attestation_digest": None,
+                    "bytes_reconstructed": False,
+                },
+            )
+            amendment_bundle = copy.deepcopy(bundle)
+            amendment_bundle["exact_state_adoption_proof"] = amendment_proof
+            amendment_current = replace(
+                current,
+                serialized_lifecycle_evidence=authority.canonical_json_bytes(
+                    amendment_bundle
+                ),
+            )
+            self.assertEqual(
+                publication.derive_ready_source_recovery_current_head_trailers(
+                    recovery, amendment_current
+                ),
+                (),
+            )
+            contradictory = copy.deepcopy(amendment_bundle)
+            contradictory["exact_state_adoption_proof"]["historical_evidence"][
+                "bytes_reconstructed"
+            ] = True
+            with self.assertRaises(publication.LifecyclePublicationError):
+                publication.derive_ready_source_recovery_current_head_trailers(
+                    recovery,
+                    replace(
+                        amendment_current,
+                        serialized_lifecycle_evidence=authority.canonical_json_bytes(
+                            contradictory
+                        ),
+                    ),
+                )
+            rebound_lifecycle = replace(
+                current.lifecycle,
+                pull_request=PR + 1,
+                head_sha=HEADS[4],
+                tree_sha=HEADS[5],
+                validation_receipt_digest="c" * 64,
+            )
+            rebound_current = replace(current, lifecycle=rebound_lifecycle)
+            rebound_recovery = replace(
+                recovery,
+                pull_request=PR + 1,
+                head_sha=HEADS[4],
+                tree_sha=HEADS[5],
+                historical_validation_receipt_digest="c" * 64,
+            )
+            self.assertEqual(
+                publication.derive_ready_source_recovery_current_head_trailers(
+                    rebound_recovery, rebound_current
+                ),
+                ("c" * 64,),
+            )
+            with self.assertRaises(publication.LifecyclePublicationError):
+                publication.derive_ready_source_recovery_current_head_trailers(
+                    replace(
+                        rebound_recovery,
+                        historical_validation_receipt_digest="0" * 64,
+                    ),
+                    rebound_current,
+                )
+
     def test_exact_adoption_requires_authenticated_v11_loss_provenance(self) -> None:
         from scripts.secpal_pr_review import validation_evidence_loss as loss
 

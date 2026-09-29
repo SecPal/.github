@@ -528,6 +528,24 @@ def _verified_document(value: Any) -> dict[str, Any]:
     return _verify_document(value.canonical_admission)
 
 
+def current_head_validation_receipt_trailers(value: Any) -> tuple[str, ...]:
+    """Derive the exact head trailer from authenticated historical placement.
+
+    The sole receipt in ancestor and zero-receipt source histories is not a
+    trailer on the current head. A same-head admission requires its one digest.
+    """
+
+    doc = _verify_document(value)
+    version = doc["schema_version"]
+    if version in {ANCESTOR_SCHEMA_VERSION, NO_RECEIPT_SCHEMA_VERSION}:
+        return ()
+    if version in {"1.0", CURRENT_RECEIPT_SCHEMA_VERSION}:
+        return (doc["historical_validation_receipt_digest"],)
+    raise authority.LifecycleAuthorityError(
+        "historical receipt placement is unsupported"
+    )
+
+
 def verify(serialized: bytes | str) -> VerifiedPreEnrollmentValidationEvidenceLossAdmission:
     doc = _verify_document(authority.loads_closed_json(serialized))
     _reauthenticate(doc)

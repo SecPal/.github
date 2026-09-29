@@ -1687,6 +1687,9 @@ def recovered_ready_source_fixture(
     publication = SimpleNamespace(
         verify_current_ready_source_recovery=mock.Mock(return_value=recovery),
         verify_current_lifecycle_authority=mock.Mock(return_value=current),
+        derive_ready_source_recovery_current_head_trailers=mock.Mock(
+            return_value=(recovery.historical_validation_receipt_digest,)
+        ),
         derive_ready_source_recovery_provider_binding=mock.Mock(
             return_value=provider
         ),
@@ -1736,6 +1739,73 @@ def recovered_ready_source_fixture(
 
 
 class ResolveFixedThreadsTests(TestCase):
+    def test_recovered_ready_ancestor_receipt_requires_exact_head_absence(self) -> None:
+        # Deployment #235's signed loss admission places 44a7bd5e... on an
+        # ancestor; its unchanged Ready head has no validation-receipt trailer.
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = recovered_ready_source_fixture(directory)
+            fixture.recovery.historical_validation_receipt_digest = (
+                "44a7bd5ebac363fe90a5c4296907385d02c0178076793f1fc4804b4dc056fdd5"
+            )
+            fixture.git.receipt_digest = ""
+            fixture.publication.derive_ready_source_recovery_current_head_trailers.return_value = ()
+            with (
+                mock.patch.object(MODULE, "lifecycle_publication", fixture.publication),
+                mock.patch.object(
+                    MODULE.fast_path,
+                    "verify_ready_source_recovery_safety_facts",
+                    return_value=fixture.recovery.recovery_safety_facts,
+                ),
+                mock.patch.object(
+                    MODULE, "_immutable_delivery_registry_binding",
+                    return_value=fixture.binding,
+                ),
+            ):
+                boundary = load_final_feedback_boundary(
+                    repository_root=fixture.delivery,
+                    repository="SecPal/api",
+                    delivery_issue=724,
+                    number=123,
+                    expected_head=fixture.reviewed["head_sha"],
+                    final_reviewed_state_path=fixture.delivery / "reviewed.json",
+                    expected_final_reviewed_state_digest=fixture.reviewed["state_digest"],
+                    final_validation_evidence_path=None,
+                    final_eligibility_evidence_path=None,
+                    ready_source_recovery_publication_oid=fixture.recovery.publication_oid,
+                )
+                with (
+                    mock.patch.object(MODULE, "_run_git", fixture.git),
+                    mock.patch.object(
+                        MODULE.fast_path,
+                        "authenticate_integration_commit",
+                        return_value=fixture.authenticated_commit,
+                    ),
+                ):
+                    MODULE.verify_local_fix_commit(
+                        fixture.delivery,
+                        "SecPal/api",
+                        fixture.reviewed["head_sha"],
+                        boundary.reviewed,
+                        boundary.validation,
+                    )
+                    for substituted in (
+                        fixture.recovery.historical_validation_receipt_digest,
+                        fixture.recovery.fresh_validation_receipt_digest,
+                    ):
+                        with self.subTest(substituted=substituted):
+                            fixture.git.receipt_digest = substituted
+                            with self.assertRaisesRegex(
+                                MODULE.ResolutionError,
+                                "fix commit validation-receipt trailer does not match evidence",
+                            ):
+                                MODULE.verify_local_fix_commit(
+                                    fixture.delivery,
+                                    "SecPal/api",
+                                    fixture.reviewed["head_sha"],
+                                    boundary.reviewed,
+                                    boundary.validation,
+                                )
+
     def test_qualified_remediation_late_disposition_accepts_only_exact_boundary(
         self,
     ) -> None:

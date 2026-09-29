@@ -414,6 +414,7 @@ class ValidationEvidence:
     registry_binding: dict[str, Any] | None = None
     ready_source_recovery: Any | None = None
     ready_source_recovery_verification_seal: object | None = None
+    current_head_validation_receipt_trailers: tuple[str, ...] | None = None
     qualified_remediation_admission: dict[str, Any] | None = None
     qualified_remediation_verification_seal: object | None = None
 
@@ -1457,6 +1458,26 @@ def verify_local_fix_commit(
         or not isinstance(validation.validation_receipt_digest, str)
         or not DIGEST.fullmatch(validation.validation_receipt_digest)
         or (
+            validation.kind == "ready-source-recovery"
+            and (
+                type(validation.current_head_validation_receipt_trailers)
+                is not tuple
+                or len(validation.current_head_validation_receipt_trailers) > 1
+                or (
+                    len(validation.current_head_validation_receipt_trailers) == 1
+                    and (
+                        not isinstance(
+                            validation.current_head_validation_receipt_trailers[0],
+                            str,
+                        )
+                        or not DIGEST.fullmatch(
+                            validation.current_head_validation_receipt_trailers[0]
+                        )
+                    )
+                )
+            )
+        )
+        or (
             validation.kind
             in {
                 "final-eligibility-absence-attestation",
@@ -1566,16 +1587,12 @@ def verify_local_fix_commit(
         for value in trailer_output.rstrip("\n").split("\x00")
         if value.strip()
     ]
-    expected_trailer_digest = (
-        validation.ready_source_recovery.historical_validation_receipt_digest
-        if validation.kind == "ready-source-recovery"
-        and validation.ready_source_recovery is not None
-        else validation.validation_receipt_digest
-    )
     expected_trailers = (
         []
         if validation.kind == "qualified-remediation-successor-loss"
-        else [expected_trailer_digest]
+        else list(validation.current_head_validation_receipt_trailers)
+        if validation.kind == "ready-source-recovery"
+        else [validation.validation_receipt_digest]
     )
     if trailers != expected_trailers:
         raise ResolutionError(
@@ -2546,6 +2563,10 @@ def _load_recovered_ready_source_validation(
         safety = fast_path.verify_ready_source_recovery_safety_facts(
             recovery.recovery_safety_facts
         )
+        head_trailers = (
+            lifecycle_publication
+            .derive_ready_source_recovery_current_head_trailers(recovery, current)
+        )
     except (
         AttributeError,
         TypeError,
@@ -2634,6 +2655,7 @@ def _load_recovered_ready_source_validation(
         ready_source_recovery_verification_seal=(
             _VERIFIED_READY_SOURCE_RECOVERY
         ),
+        current_head_validation_receipt_trailers=head_trailers,
     )
 
 
