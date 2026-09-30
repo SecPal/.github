@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import copy
+from contextlib import nullcontext
 import importlib.util
 import json
 from pathlib import Path
@@ -605,6 +606,95 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             "ABSENT_NEVER_ISSUED",
         )
         self.assertEqual(manifest["recovery_publication"]["object_oid"], recovery.publication_oid)
+
+    def test_recovered_root_journal_walk_preserves_unrelated_absence(self) -> None:
+        current, recovery = recovered_root()
+        root = json.loads(current.serialized_lifecycle_evidence)
+        publication_document = {
+            "operation": "ENROLL_EXISTING_LIFECYCLE",
+            "repository": REPOSITORY,
+            "delivery_issue": ISSUE,
+            "pull_request": PR,
+            "head_sha": HEAD,
+            "lifecycle_id": current.lifecycle.lifecycle_id,
+            "terminal_authority_digest": PROOF,
+            "initialization_evidence_digest": "1" * 64,
+            "historical_proof_mode": "exact_state_adoption",
+            "legacy_adoption_checkpoint_digest": None,
+            "signer_identity": SIGNER,
+            "publication_digest": CURRENT_DIGEST,
+            "predecessor_publication_oid": None,
+            "journal_predecessor_oid": None,
+            "lifecycle_evidence": root,
+        }
+        authorization = {
+            key: list(value) if isinstance(value, tuple) else copy.deepcopy(value)
+            for key, value in vars(recovery).items()
+            if key not in {"publication_oid", "publication_digest"}
+        }
+        fields = lifecycle_publication._ready_source_recovery_fields(
+            authorization,
+            publication_branch="refs/heads/secpal-lifecycle-publications",
+            journal_predecessor_oid=CURRENT_OID,
+            signer_identity=SIGNER,
+        )
+        signed = {
+            **fields,
+            "signature": {"format": "ssh", "signer_identity": SIGNER, "value": "fixture"},
+        }
+        raw_recovery = lifecycle_authority.canonical_json_bytes({
+            **signed,
+            "publication_digest": lifecycle_authority.digest_json(signed),
+        })
+        raw_publication = lifecycle_authority.canonical_json_bytes({
+            "kind": lifecycle_publication.PUBLICATION_KIND,
+        })
+        objects = {
+            CURRENT_OID: (raw_publication, None),
+            recovery.publication_oid: (raw_recovery, CURRENT_OID),
+        }
+        policy = SimpleNamespace(
+            repository=REPOSITORY,
+            publication_branch="refs/heads/secpal-lifecycle-publications",
+            publication_remote_url="unused",
+            publication_signer_identities=frozenset({SIGNER}),
+        )
+
+        def verify_recovery(value: dict[str, object], **binding: object) -> dict[str, object]:
+            lifecycle_authority.recovered_adoption_root_historical_evidence(
+                binding["current_lifecycle"],
+                binding["current_lifecycle_evidence"],
+                binding["predecessor_publication_oid"],
+            )
+            return value
+
+        with (
+            mock.patch.object(lifecycle_authority, "_load_lifecycle_trust_policy", return_value=policy),
+            mock.patch.object(lifecycle_publication, "_verify_live_protection"),
+            mock.patch.object(lifecycle_publication, "_isolated_repository", return_value=nullcontext((ROOT, {}))),
+            mock.patch.object(lifecycle_publication, "_observe_remote_current_once", return_value=recovery.publication_oid),
+            mock.patch.object(lifecycle_publication, "_read_publication_object", side_effect=lambda _, oid: objects[oid]),
+            mock.patch.object(lifecycle_publication, "_verify_publication_envelope", return_value=publication_document),
+            mock.patch.object(lifecycle_authority, "verify_exact_state_adoption_proof", return_value=current.lifecycle),
+            mock.patch.object(lifecycle_authority, "_verify_lifecycle_authority_for_journal", return_value=current.lifecycle) as verify_full,
+            mock.patch.object(lifecycle_authority, "verify_ready_source_recovery_authorization", side_effect=verify_recovery),
+            mock.patch.object(lifecycle_authority, "_verify_signature"),
+            mock.patch.object(lifecycle_authority, "_policy_signature_verifier"),
+        ):
+            absence = lifecycle_publication.verify_pre_enrollment_absence(
+                REPOSITORY, ISSUE + 1, policy=policy,
+            )
+            verify_full.assert_called_once_with(
+                lifecycle_authority.canonical_json_bytes(root)
+            )
+            wrong_tree = copy.deepcopy(current.lifecycle)
+            wrong_tree.tree_sha = "f" * 40
+            verify_full.return_value = wrong_tree
+            with self.assertRaises(lifecycle_publication.LifecyclePublicationError):
+                lifecycle_publication.verify_pre_enrollment_absence(
+                    REPOSITORY, ISSUE + 1, policy=policy,
+                )
+        self.assertEqual(absence.observed_tip_oid, recovery.publication_oid)
 
     def test_recovered_root_rejects_non_root_or_historical_receipt(self) -> None:
         for label in (

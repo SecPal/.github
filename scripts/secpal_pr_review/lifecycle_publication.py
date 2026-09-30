@@ -1443,6 +1443,19 @@ def _verify_ready_source_recovery_document(
                 "legacy_adoption_checkpoint_digest"
             ],
         )
+        if (
+            current_document["historical_proof_mode"] == "exact_state_adoption"
+            and recovery_authorization.get("historical_validation_receipt_digest") is None
+        ):
+            try:
+                # The identity-only projection lacks the root's tree and proof digests.
+                current_lifecycle = authority._verify_lifecycle_authority_for_journal(
+                    canonical_json_bytes(current_document["lifecycle_evidence"])
+                )
+            except (authority.LifecycleAuthorityError, TypeError, ValueError) as exc:
+                raise LifecyclePublicationError(
+                    "Ready-source recovery adoption lifecycle is invalid"
+                ) from exc
     if (
         document["schema_version"] != SCHEMA_VERSION
         or document["kind"] != READY_SOURCE_RECOVERY_KIND
