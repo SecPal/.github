@@ -966,7 +966,11 @@ successful receipt.
 The sole-parent rule above remains authoritative for remediation and recovery.
 `attest-validation --integration-evidence` is the distinct, explicitly selected
 exception for one already-authorized Ready-PR integration candidate. Its closed
-version-1.1 and version-1.2 evidence kind is `TWO_PARENT_READY_INTEGRATION`.
+historical version-1.1 and version-1.2 evidence kind is
+`TWO_PARENT_READY_INTEGRATION`. The maintained family, including evidence 1.3,
+is selected exclusively by `READY_INTEGRATION_KEYS_BY_VERSION` and
+`READY_INTEGRATION_ATTESTATION_BY_VERSION` in `fast_path.py`; every producer,
+verifier, action admission, and lifecycle read-back consumes that authority.
 Version 1.1 binds reviewed feedback at parent 1. Version 1.2 requires a distinct
 reviewed predecessor and binds its exact state and feedback digests through
 parent 1's independently verified ordinary receipt and final attestation. It
@@ -979,17 +983,27 @@ finite lifecycle continuity. The candidate also carries exactly one signed
 `SecPal-Integration-Evidence` digest trailer in addition to its validation-
 receipt trailer. The final integration attestation binds both trailers, the new
 head, ordered parents, validated and mechanical tree identities, and the exact
-raw tree delta allowed for manual conflict resolution. A clean merge requires
+raw tree delta allowed for manual conflict resolution. For historical versions,
+a clean merge requires
 exit status zero and an empty conflict set and delta. Exit status one is
 conflict-bearing evidence: the exact sorted conflict paths are authenticated,
 every path must be explicitly changed or deleted in the candidate, no other
 path may change, and retained text conflict markers fail closed.
 
+Evidence 1.3 independently classifies each raw delta as conflict resolution or
+exact dual-change parent-2 preservation. The shared producer/verifier derives
+one unambiguous merge base and compares existence, mode, type, and object
+identity; caller-selected paths/classes and third values fail closed. Its
+ordinary/eligibility-bound attestations are 1.3/1.4. Historical evidence and
+`PRE_ENROLLMENT_DRAFT_INTEGRATION` retain their original conflict-only rules.
+The [maintained Ready-integration contract](../../../../docs/secpal-pr-review-workflow.md#explicit-ready-head-integration-evidence)
+describes the same canonical owner and complete path.
+
 If exact thread resolution is part of the frozen integration feedback
 boundary, the typed integration invocation may also select canonical
 eligibility evidence. The receipt binds both evidence digests and the binder
-emits the distinct version-1.2
-`ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION`. The guarded
+emits the mapped `ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION`
+(version 1.2 for evidence 1.1/1.2, or version 1.4 for evidence 1.3). The guarded
 resolver accepts it only through the integration-specific verifier and only
 with the canonical integration artifact. That verifier authenticates the exact
 ordered parents, combined tree, both commit trailers, reviewed state, expected
@@ -1004,8 +1018,8 @@ only when its exact original receipt and attestation both omit
 authenticated final Stable Feedback derives `REVIEWED_BUT_INELIGIBLE` or
 `ABSENT_FROM_BOTH`; separately signed late classification and disposition then
 supply the only thread authority. New Ready-integration validation requires
-canonical eligibility and therefore emits version 1.2 rather than minting more
-unbound version-1.1 evidence.
+canonical eligibility and therefore emits the mapped eligibility-bound
+attestation, never another unbound integration attestation.
 
 Parent 1 and its Ready/lifecycle claims are not caller assertions. A distinct
 closed `READY_INTEGRATION_PRIOR_AUTHORITY` manifest binds the prior delivery

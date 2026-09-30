@@ -414,6 +414,7 @@ class ValidationEvidence:
     registry_binding: dict[str, Any] | None = None
     ready_source_recovery: Any | None = None
     ready_source_recovery_verification_seal: object | None = None
+    current_head_validation_receipt_trailers: tuple[str, ...] | None = None
     qualified_remediation_admission: dict[str, Any] | None = None
     qualified_remediation_verification_seal: object | None = None
 
@@ -1225,15 +1226,13 @@ def load_validation_evidence(
             )
         historical_source = (
             payload.get("kind") == "READY_INTEGRATION_VALIDATION_ATTESTATION"
-            and payload.get("schema_version") == "1.1"
             and "eligibility_evidence_digest" not in payload
         )
         eligibility_bound = (
             payload.get("kind")
             == "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"
-            and payload.get("schema_version") == "1.2"
             and isinstance(payload.get("eligibility_evidence_digest"), str)
-            and DIGEST.fullmatch(payload["eligibility_evidence_digest"])
+            and DIGEST.fullmatch(payload["eligibility_evidence_digest"]) is not None
         )
         if not historical_source and not eligibility_bound:
             raise ResolutionError(
@@ -1261,6 +1260,10 @@ def load_validation_evidence(
                     validated_tree_sha=payload.get("validated_tree_sha"),
                 )
             )
+            if not fast_path.ready_integration_attestation_matches(
+                payload, integration_evidence, eligibility_bound=eligibility_bound,
+            ):
+                raise ResolutionError("integration attestation version mapping changed")
             supplied_receipt = None
             if historical_source:
                 if integration_validation_receipt_path is None:
@@ -1285,7 +1288,7 @@ def load_validation_evidence(
                 )
             receipt = fast_path.create_validation_receipt(
                 repository=repository,
-                head_sha=reviewed.head_sha,
+                head_sha=integration_evidence["prior_delivery_head_sha"],
                 validated_tree_sha=payload.get("validated_tree_sha"),
                 registry=registry_binding,
                 command_set=registry_binding["validation"],
@@ -1457,6 +1460,26 @@ def verify_local_fix_commit(
         or not isinstance(validation.validation_receipt_digest, str)
         or not DIGEST.fullmatch(validation.validation_receipt_digest)
         or (
+            validation.kind == "ready-source-recovery"
+            and (
+                type(validation.current_head_validation_receipt_trailers)
+                is not tuple
+                or len(validation.current_head_validation_receipt_trailers) > 1
+                or (
+                    len(validation.current_head_validation_receipt_trailers) == 1
+                    and (
+                        not isinstance(
+                            validation.current_head_validation_receipt_trailers[0],
+                            str,
+                        )
+                        or not DIGEST.fullmatch(
+                            validation.current_head_validation_receipt_trailers[0]
+                        )
+                    )
+                )
+            )
+        )
+        or (
             validation.kind
             in {
                 "final-eligibility-absence-attestation",
@@ -1566,16 +1589,12 @@ def verify_local_fix_commit(
         for value in trailer_output.rstrip("\n").split("\x00")
         if value.strip()
     ]
-    expected_trailer_digest = (
-        validation.ready_source_recovery.historical_validation_receipt_digest
-        if validation.kind == "ready-source-recovery"
-        and validation.ready_source_recovery is not None
-        else validation.validation_receipt_digest
-    )
     expected_trailers = (
         []
         if validation.kind == "qualified-remediation-successor-loss"
-        else [expected_trailer_digest]
+        else list(validation.current_head_validation_receipt_trailers)
+        if validation.kind == "ready-source-recovery"
+        else [validation.validation_receipt_digest]
     )
     if trailers != expected_trailers:
         raise ResolutionError(
@@ -2181,9 +2200,9 @@ def _require_valid_final_feedback_boundary(
             or boundary.validation.kind != "ready-integration-source"
             or not isinstance(boundary.validation.integration_evidence, dict)
             or boundary.validation.eligibility_evidence_digest is not None
-            or attestation.get("schema_version") != "1.1"
-            or attestation.get("kind")
-            != "READY_INTEGRATION_VALIDATION_ATTESTATION"
+            or not fast_path.ready_integration_attestation_matches(
+                attestation, boundary.validation.integration_evidence, eligibility_bound=False,
+            )
             or "eligibility_evidence_digest" in attestation
             or "eligibility_evidence_digest" in receipt
         ):
@@ -2546,6 +2565,10 @@ def _load_recovered_ready_source_validation(
         safety = fast_path.verify_ready_source_recovery_safety_facts(
             recovery.recovery_safety_facts
         )
+        head_trailers = (
+            lifecycle_publication
+            .derive_ready_source_recovery_current_head_trailers(recovery, current)
+        )
     except (
         AttributeError,
         TypeError,
@@ -2634,6 +2657,7 @@ def _load_recovered_ready_source_validation(
         ready_source_recovery_verification_seal=(
             _VERIFIED_READY_SOURCE_RECOVERY
         ),
+        current_head_validation_receipt_trailers=head_trailers,
     )
 
 

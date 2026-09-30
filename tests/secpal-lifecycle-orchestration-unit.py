@@ -4166,10 +4166,14 @@ def historical_v12_fixture():
                 ):
                     importer.transfer(parent, "tree", import_blobs=False)
 
-    def test_collision_owner_model_matches_maintained_ready_declarations(self) -> None:
+    def test_collision_owner_model_preserves_historical_ready_declarations(self) -> None:
         from scripts.secpal_pr_review import version_collision
 
-        source = Path(fast_path.__file__).read_bytes()
+        # The legacy owner profile is immutable historical compatibility.
+        source = subprocess.run(
+            ["git", "show", "43e6e51ca20e6e7be4b1f5f19de240c682311533:" + version_collision.SOURCE_PATH],
+            cwd=Path(__file__).resolve().parents[1], check=True, capture_output=True,
+        ).stdout
         text = source.decode("utf-8", errors="strict")
         module = ast.parse(text)
         starts = [0]

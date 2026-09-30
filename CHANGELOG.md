@@ -9,16 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
-## 2026-09-20 - Compose Recovered Adoption Root Into Ready Prior Authority
+## 2026-09-29 - Unify Exact Parent-2 Ready Integration
 
 **Fixed:**
 
-- Authenticate an Exact-State-Adoption v3 enrollment root together with its
-  exact protected Ready-source recovery when historical validation evidence is
-  truthfully `ABSENT_NEVER_ISSUED`, preserving the current-safety receipt as
-  current evidence while the historical receipt remains null.
-- Preserve the signed canonical tag as the immutable consumption marker without
-  treating its legacy-shaped manifest digest as Ready prior authority.
+- Centralize Ready-integration evidence and attestation version mappings across
+  production, admission, verification, and lifecycle read-back.
+- Add immutable evidence 1.3 for independently derived conflict resolution and
+  exact dual-change parent-2 preservation, with attestations 1.3/1.4. Verify the
+  unique merge base and complete raw delta without admitting arbitrary third
+  values or changing historical evidence and pre-enrollment Draft semantics.
 
 ## 2026-09-20 - Prepare Locked Complete Validation Dependencies
 

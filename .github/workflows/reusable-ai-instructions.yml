@@ -18,7 +18,7 @@ on:
         description: "Node.js version used for markdownlint-cli"
         required: false
         type: string
-        default: "24"
+        default: "26"
 
 permissions:
   contents: read

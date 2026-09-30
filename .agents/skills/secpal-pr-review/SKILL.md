@@ -37,8 +37,9 @@ Feedback verifier. Recovered Ready capture must reauthenticate protected
 `CURRENT` and derive the provider head through the maintained Ready-source
 binding; it never accepts a caller-selected provider head.
 For an eligibility-bound typed Ready integration, also supply the canonical
-integration evidence. The resolver accepts only the closed version-1.2
-integration-resolution attestation and verifies its ordered two-parent
+integration evidence. The resolver requires the eligibility-bound attestation
+selected by the canonical Ready-integration mapping in `fast_path.py` and
+verifies its ordered two-parent
 topology, tree, receipt and integration trailers, signer, reviewed state, and
 eligibility digest through the integration-specific verifier. Never treat a
 historical integration attestation as an ordinary sole-parent attestation.

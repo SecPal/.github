@@ -126,6 +126,8 @@ TRANSITIONS = frozenset(
         "EXCEPTIONAL_CONTINUATION",
         "PR_REBOUND",
         "ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED",
+        "INVALID_REVIEW_CONSUMPTION_CORRECTED",
+        "INVALID_REVIEW_DERIVED_READY_CORRECTED",
     }
 )
 
@@ -133,6 +135,9 @@ _OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@/+\-=]{0,254}")
 _REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+_GITHUB_LOGIN = re.compile(
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,98}[A-Za-z0-9])?(?:\[bot\])?"
+)
 
 Signature = Mapping[str, Any]
 Signer = Callable[[bytes, str], Signature]
@@ -411,6 +416,46 @@ EVENT_FIELDS = frozenset(
         "event_digest",
     }
 )
+INVALID_REVIEW_CORRECTION_FIELDS = frozenset(
+    {
+        "current_publication_oid",
+        "current_publication_digest",
+        "current_authority_digest",
+        "current_tree_sha",
+        "invalid_event_id",
+        "invalid_event_digest",
+        "invalid_event_predecessor_authority_digest",
+        "operation",
+        "reason",
+        "bounded_uses",
+    }
+)
+INVALID_REVIEW_CORRECTION_REASON = (
+    "INVALID_INDEPENDENCE_CLAIM_AUTHOR_LOCAL_ARTIFACT"
+)
+INVALID_REVIEW_DERIVED_READY_CORRECTION_FIELDS = frozenset(
+    {
+        "current_publication_oid",
+        "current_publication_digest",
+        "current_authority_digest",
+        "current_tree_sha",
+        "invalid_review_event_id",
+        "invalid_review_event_digest",
+        "unauthorized_ready_event_id",
+        "unauthorized_ready_event_digest",
+        "unauthorized_ready_predecessor_authority_digest",
+        "github_ready_event_database_id",
+        "github_ready_event_node_id",
+        "github_ready_event_actor",
+        "github_ready_event_created_at",
+        "operation",
+        "reason",
+        "bounded_uses",
+    }
+)
+INVALID_REVIEW_DERIVED_READY_CORRECTION_REASON = (
+    "POST_INTERRUPT_CHILD_EXECUTED_CONDITIONALLY_UNAUTHORIZED_READY_TRANSITION"
+)
 AUTHORITY_FIELDS = frozenset(
     {
         "schema_version",
@@ -680,6 +725,14 @@ def _require_closed(value: Any, fields: frozenset[str], label: str) -> dict[str,
 def _require_identity(value: Any, label: str) -> str:
     if not isinstance(value, str) or not _IDENTITY.fullmatch(value):
         raise LifecycleAuthorityError(f"{label} is invalid")
+    return value
+
+
+def _require_github_login(value: Any, label: str) -> str:
+    """Validate one provider login without applying lifecycle-ID grammar."""
+
+    if not isinstance(value, str) or _GITHUB_LOGIN.fullmatch(value) is None:
+        raise LifecycleAuthorityError(f"{label} is malformed")
     return value
 
 
@@ -1242,6 +1295,9 @@ def _parse_lifecycle_trust_policy(
             "validation_result_digest", "admission_digest",
         }
     )
+    adoption_source_fields = source_common_fields | frozenset(
+        {"implementation_blob_oid", "entrypoint", "policy_source"}
+    )
     source_recovery_field = "evidence_loss_recovery"
     raw_sources = policy["bootstrap_source_admissions"]
     if not isinstance(raw_sources, list):
@@ -1261,6 +1317,8 @@ def _parse_lifecycle_trust_policy(
             }
         elif subtype == "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE":
             source_fields = pre_enrollment_source_fields
+        elif subtype == "PRE_ENROLLMENT_ADOPTION_AUTHENTICATION_SOURCE":
+            source_fields = adoption_source_fields
         else:
             raise LifecycleAuthorityError("bootstrap source admission subtype is unknown")
         allowed_fields = {source_fields}
@@ -1288,9 +1346,12 @@ def _parse_lifecycle_trust_policy(
         pre_enrollment_source = (
             subtype == "PRE_ENROLLMENT_DRAFT_INTEGRATION_SOURCE"
         )
+        adoption_source = (
+            subtype == "PRE_ENROLLMENT_ADOPTION_AUTHENTICATION_SOURCE"
+        )
         implementation_blob = (
             _require_oid(item["implementation_blob_oid"], "source implementation blob")
-            if byte_source or pre_enrollment_source else None
+            if byte_source or pre_enrollment_source or adoption_source else None
         )
         validation_commands = item.get("validation_command_set", [])
         validation_results = item.get("validation_results", [])
@@ -1382,14 +1443,30 @@ def _parse_lifecycle_trust_policy(
                     != digest_json(validation_results)
                 )
             )
+            or (
+                adoption_source
+                and (
+                    item["implementation_path"]
+                    != "scripts/secpal_pr_review/fast_path.py"
+                    or item["entrypoint"]
+                    != "authenticate_pre_enrollment_adoption"
+                    or item["purpose"]
+                    != "PRE_ENROLLMENT_ADOPTION_AUTHENTICATION"
+                    or item["policy_source"]
+                    != "ACCEPTED_MAIN_REPOSITORY_REGISTRY"
+                    or item["source_signer_identity"] not in transition_signers
+                )
+            )
             or item["source_pr_state"] != "OPEN"
             or (
                 (executable_source or pre_enrollment_source)
                 and item["source_pr_draft"] is not True
             )
             or (
-                byte_source
-                and type(item["source_pr_draft"]) is not bool
+                byte_source and type(item["source_pr_draft"]) is not bool
+            )
+            or (
+                adoption_source and item["source_pr_draft"] is not False
             )
             or item["source_base_ref"] != "main"
             or admission_digest != digest_json(unsigned)
@@ -1579,7 +1656,7 @@ def _parse_lifecycle_trust_policy(
                 implementation_blob_oid=implementation_blob,
                 entrypoint=(
                     item["entrypoint"]
-                    if executable_source or pre_enrollment_source else None
+                    if executable_source or pre_enrollment_source or adoption_source else None
                 ),
                 purpose=item["purpose"],
                 source_pr_state=item["source_pr_state"],
@@ -1587,7 +1664,7 @@ def _parse_lifecycle_trust_policy(
                 source_base_ref=item["source_base_ref"],
                 policy_source=(
                     item["policy_source"]
-                    if byte_source or pre_enrollment_source else None
+                    if byte_source or pre_enrollment_source or adoption_source else None
                 ),
                 signer_policy_identity=item.get("signer_policy_identity"),
                 command=item.get("command"),
@@ -2084,6 +2161,53 @@ def _derive_state(
         if state["unrestricted_review_count"] >= MAX_UNRESTRICTED_REVIEWS:
             raise LifecycleAuthorityError("unrestricted-review budget is exhausted")
         state["unrestricted_review_count"] += 1
+    elif transition_kind == "INVALID_REVIEW_CONSUMPTION_CORRECTED":
+        if allow_adopted_observations:
+            raise LifecycleAuthorityError(
+                "invalid review correction requires a native lifecycle"
+            )
+        if (
+            state["unrestricted_review_count"] != MAX_UNRESTRICTED_REVIEWS
+            or state["remediation_cycle_count"] != 0
+            or state["draft"] is not True
+            or state["ready"] is not False
+            or state["ready_transition_count"] != 0
+            or state["ready_history"]
+            or state["exceptional_recovery_count"] != 0
+            or state["exceptional_recovery_history"]
+            or state["exceptional_continuation_count"] != 0
+            or state["exceptional_continuation_history"]
+        ):
+            raise LifecycleAuthorityError(
+                "invalid review correction is not eligible"
+            )
+        state["unrestricted_review_count"] = 0
+    elif transition_kind == "INVALID_REVIEW_DERIVED_READY_CORRECTED":
+        if allow_adopted_observations:
+            raise LifecycleAuthorityError(
+                "invalid review-derived Ready correction requires a native lifecycle"
+            )
+        if (
+            state["unrestricted_review_count"] != MAX_UNRESTRICTED_REVIEWS
+            or state["remediation_cycle_count"] != 0
+            or state["draft"] is not False
+            or state["ready"] is not True
+            or state["ready_transition_count"] != 1
+            or len(state["ready_history"]) != 1
+            or state["ready_history"][0]["transition_kind"] != "DRAFT_TO_READY"
+            or state["exceptional_recovery_count"] != 0
+            or state["exceptional_recovery_history"]
+            or state["exceptional_continuation_count"] != 0
+            or state["exceptional_continuation_history"]
+        ):
+            raise LifecycleAuthorityError(
+                "invalid review-derived Ready correction is not eligible"
+            )
+        state["unrestricted_review_count"] = 0
+        state["draft"] = True
+        state["ready"] = False
+        state["ready_transition_count"] = 0
+        state["ready_history"] = []
     elif transition_kind == "REMEDIATION_COMPLETED":
         if state["unrestricted_review_count"] != MAX_UNRESTRICTED_REVIEWS:
             raise LifecycleAuthorityError("remediation requires the unrestricted review")
@@ -2175,6 +2299,13 @@ def create_transition_authorization(
     """Create independently signed authorization for one exact transition."""
 
     transition_kind = _require_transition_kind(transition_kind)
+    if transition_kind in {
+        "INVALID_REVIEW_CONSUMPTION_CORRECTED",
+        "INVALID_REVIEW_DERIVED_READY_CORRECTED",
+    }:
+        raise LifecycleAuthorityError(
+            "invalid review correction requires its specialized constructor"
+        )
     fields: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "kind": EVENT_KIND,
@@ -2192,6 +2323,174 @@ def create_transition_authorization(
         "initialization_evidence_digest": _require_digest(
             initialization_evidence_digest, "initialization evidence"
         ),
+        "signer_identity": _require_identity(signer_identity, "event signer"),
+    }
+    _validate_event_semantics(fields)
+    signature = _normalize_signature(
+        signer(canonical_json_bytes(fields), EVENT_DOMAIN), fields["signer_identity"]
+    )
+    signed = {**fields, "signature": signature}
+    return {**signed, "event_digest": digest_json(signed)}
+
+
+def create_invalid_review_consumption_correction_authorization(
+    *,
+    event_id: str,
+    repository: str,
+    delivery_issue: int,
+    lifecycle_id: str,
+    pull_request: int,
+    predecessor_authority_digest: str,
+    head_sha: str,
+    initialization_evidence_digest: str,
+    current_publication_oid: str,
+    current_publication_digest: str,
+    current_tree_sha: str,
+    invalid_event_id: str,
+    invalid_event_digest: str,
+    invalid_event_predecessor_authority_digest: str,
+    signer_identity: str,
+    signer: Signer,
+) -> dict[str, Any]:
+    """Authorize one exact, bounded correction of an author-local review claim."""
+
+    fields: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": EVENT_KIND,
+        "domain": EVENT_DOMAIN,
+        "event_id": _require_identity(event_id, "event identity"),
+        "repository": _require_repository(repository),
+        "delivery_issue": _require_positive_int(delivery_issue, "delivery issue"),
+        "lifecycle_id": _require_identity(lifecycle_id, "lifecycle identity"),
+        "pull_request": _require_positive_int(pull_request, "pull request"),
+        "predecessor_authority_digest": _require_digest(
+            predecessor_authority_digest, "predecessor authority digest"
+        ),
+        "predecessor_head_sha": _require_oid(head_sha, "predecessor head"),
+        "resulting_head_sha": _require_oid(head_sha, "resulting head"),
+        "transition_kind": "INVALID_REVIEW_CONSUMPTION_CORRECTED",
+        "replacement_pull_request": None,
+        "initialization_evidence_digest": _require_digest(
+            initialization_evidence_digest, "initialization evidence"
+        ),
+        "current_publication_oid": _require_oid(
+            current_publication_oid, "CURRENT publication"
+        ),
+        "current_publication_digest": _require_digest(
+            current_publication_digest, "CURRENT publication"
+        ),
+        "current_authority_digest": _require_digest(
+            predecessor_authority_digest, "CURRENT authority"
+        ),
+        "current_tree_sha": _require_oid(current_tree_sha, "CURRENT tree"),
+        "invalid_event_id": _require_identity(invalid_event_id, "invalid event"),
+        "invalid_event_digest": _require_digest(
+            invalid_event_digest, "invalid event"
+        ),
+        "invalid_event_predecessor_authority_digest": _require_digest(
+            invalid_event_predecessor_authority_digest,
+            "invalid event predecessor authority",
+        ),
+        "operation": "INVALID_REVIEW_CONSUMPTION_CORRECTED",
+        "reason": INVALID_REVIEW_CORRECTION_REASON,
+        "bounded_uses": 1,
+        "signer_identity": _require_identity(signer_identity, "event signer"),
+    }
+    _validate_event_semantics(fields)
+    signature = _normalize_signature(
+        signer(canonical_json_bytes(fields), EVENT_DOMAIN), fields["signer_identity"]
+    )
+    signed = {**fields, "signature": signature}
+    return {**signed, "event_digest": digest_json(signed)}
+
+
+def create_invalid_review_derived_ready_correction_authorization(
+    *,
+    event_id: str,
+    repository: str,
+    delivery_issue: int,
+    lifecycle_id: str,
+    pull_request: int,
+    predecessor_authority_digest: str,
+    head_sha: str,
+    initialization_evidence_digest: str,
+    current_publication_oid: str,
+    current_publication_digest: str,
+    current_tree_sha: str,
+    invalid_review_event_id: str,
+    invalid_review_event_digest: str,
+    unauthorized_ready_event_id: str,
+    unauthorized_ready_event_digest: str,
+    unauthorized_ready_predecessor_authority_digest: str,
+    github_ready_event_database_id: int,
+    github_ready_event_node_id: str,
+    github_ready_event_actor: str,
+    github_ready_event_created_at: str,
+    signer_identity: str,
+    signer: Signer,
+) -> dict[str, Any]:
+    """Authorize one bounded compensation for Ready derived from an invalid review."""
+
+    fields: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": EVENT_KIND,
+        "domain": EVENT_DOMAIN,
+        "event_id": _require_identity(event_id, "event identity"),
+        "repository": _require_repository(repository),
+        "delivery_issue": _require_positive_int(delivery_issue, "delivery issue"),
+        "lifecycle_id": _require_identity(lifecycle_id, "lifecycle identity"),
+        "pull_request": _require_positive_int(pull_request, "pull request"),
+        "predecessor_authority_digest": _require_digest(
+            predecessor_authority_digest, "predecessor authority digest"
+        ),
+        "predecessor_head_sha": _require_oid(head_sha, "predecessor head"),
+        "resulting_head_sha": _require_oid(head_sha, "resulting head"),
+        "transition_kind": "INVALID_REVIEW_DERIVED_READY_CORRECTED",
+        "replacement_pull_request": None,
+        "initialization_evidence_digest": _require_digest(
+            initialization_evidence_digest, "initialization evidence"
+        ),
+        "current_publication_oid": _require_oid(
+            current_publication_oid, "CURRENT publication"
+        ),
+        "current_publication_digest": _require_digest(
+            current_publication_digest, "CURRENT publication"
+        ),
+        "current_authority_digest": _require_digest(
+            predecessor_authority_digest, "CURRENT authority"
+        ),
+        "current_tree_sha": _require_oid(current_tree_sha, "CURRENT tree"),
+        "invalid_review_event_id": _require_identity(
+            invalid_review_event_id, "invalid review event"
+        ),
+        "invalid_review_event_digest": _require_digest(
+            invalid_review_event_digest, "invalid review event"
+        ),
+        "unauthorized_ready_event_id": _require_identity(
+            unauthorized_ready_event_id, "unauthorized Ready event"
+        ),
+        "unauthorized_ready_event_digest": _require_digest(
+            unauthorized_ready_event_digest, "unauthorized Ready event"
+        ),
+        "unauthorized_ready_predecessor_authority_digest": _require_digest(
+            unauthorized_ready_predecessor_authority_digest,
+            "unauthorized Ready predecessor authority",
+        ),
+        "github_ready_event_database_id": _require_positive_int(
+            github_ready_event_database_id, "GitHub Ready event database ID"
+        ),
+        "github_ready_event_node_id": _require_identity(
+            github_ready_event_node_id, "GitHub Ready event node"
+        ),
+        "github_ready_event_actor": _require_github_login(
+            github_ready_event_actor, "GitHub Ready event actor"
+        ),
+        "github_ready_event_created_at": _require_adoption_timestamp(
+            github_ready_event_created_at, "GitHub Ready event timestamp"
+        ),
+        "operation": "INVALID_REVIEW_DERIVED_READY_CORRECTED",
+        "reason": INVALID_REVIEW_DERIVED_READY_CORRECTION_REASON,
+        "bounded_uses": 1,
         "signer_identity": _require_identity(signer_identity, "event signer"),
     }
     _validate_event_semantics(fields)
@@ -2239,6 +2538,8 @@ def _validate_event_semantics(event: Mapping[str, Any]) -> None:
         "READY_TO_DRAFT",
         "PR_REBOUND",
         "ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED",
+        "INVALID_REVIEW_CONSUMPTION_CORRECTED",
+        "INVALID_REVIEW_DERIVED_READY_CORRECTED",
     } and predecessor_head is not None and event["resulting_head_sha"] != predecessor_head:
         raise LifecycleAuthorityError("selected transition cannot advance the delivery head")
     if transition in {"HEAD_ADVANCED", "REMEDIATION_COMPLETED"} and (
@@ -2253,7 +2554,27 @@ def _verify_transition_authorization(
     accepted_signers: frozenset[str],
     signature_verifier: SignatureVerifier,
 ) -> dict[str, Any]:
-    event = _require_closed(value, EVENT_FIELDS, "transition authorization")
+    review_correction = (
+        isinstance(value, Mapping)
+        and value.get("transition_kind")
+        == "INVALID_REVIEW_CONSUMPTION_CORRECTED"
+    )
+    ready_correction = (
+        isinstance(value, Mapping)
+        and value.get("transition_kind")
+        == "INVALID_REVIEW_DERIVED_READY_CORRECTED"
+    )
+    correction_fields = (
+        INVALID_REVIEW_CORRECTION_FIELDS
+        if review_correction
+        else INVALID_REVIEW_DERIVED_READY_CORRECTION_FIELDS
+        if ready_correction
+        else frozenset()
+    )
+    event = _require_closed(
+        value, EVENT_FIELDS | correction_fields,
+        "transition authorization",
+    )
     if event["schema_version"] != SCHEMA_VERSION:
         raise LifecycleAuthorityError("unknown transition-authorization version")
     if event["kind"] != EVENT_KIND or event["domain"] != EVENT_DOMAIN:
@@ -2268,6 +2589,62 @@ def _verify_transition_authorization(
     _require_digest(event["initialization_evidence_digest"], "initialization evidence")
     signer_identity = _require_identity(event["signer_identity"], "event signer")
     _validate_event_semantics(event)
+    if review_correction:
+        if (
+            event["operation"] != "INVALID_REVIEW_CONSUMPTION_CORRECTED"
+            or event["reason"] != INVALID_REVIEW_CORRECTION_REASON
+            or event["bounded_uses"] != 1
+            or isinstance(event["bounded_uses"], bool)
+            or event["current_authority_digest"]
+            != event["predecessor_authority_digest"]
+        ):
+            raise LifecycleAuthorityError("invalid review correction scope is invalid")
+        _require_oid(event["current_publication_oid"], "CURRENT publication")
+        _require_digest(event["current_publication_digest"], "CURRENT publication")
+        _require_oid(event["current_tree_sha"], "CURRENT tree")
+        _require_identity(event["invalid_event_id"], "invalid event")
+        _require_digest(event["invalid_event_digest"], "invalid event")
+        _require_digest(
+            event["invalid_event_predecessor_authority_digest"],
+            "invalid event predecessor authority",
+        )
+    elif ready_correction:
+        if (
+            event["operation"] != "INVALID_REVIEW_DERIVED_READY_CORRECTED"
+            or event["reason"]
+            != INVALID_REVIEW_DERIVED_READY_CORRECTION_REASON
+            or event["bounded_uses"] != 1
+            or isinstance(event["bounded_uses"], bool)
+            or event["current_authority_digest"]
+            != event["predecessor_authority_digest"]
+        ):
+            raise LifecycleAuthorityError(
+                "invalid review-derived Ready correction scope is invalid"
+            )
+        _require_oid(event["current_publication_oid"], "CURRENT publication")
+        _require_digest(event["current_publication_digest"], "CURRENT publication")
+        _require_oid(event["current_tree_sha"], "CURRENT tree")
+        _require_identity(event["invalid_review_event_id"], "invalid review event")
+        _require_digest(event["invalid_review_event_digest"], "invalid review event")
+        _require_identity(
+            event["unauthorized_ready_event_id"], "unauthorized Ready event"
+        )
+        _require_digest(
+            event["unauthorized_ready_event_digest"], "unauthorized Ready event"
+        )
+        _require_digest(
+            event["unauthorized_ready_predecessor_authority_digest"],
+            "unauthorized Ready predecessor authority",
+        )
+        _require_positive_int(
+            event["github_ready_event_database_id"],
+            "GitHub Ready event database ID",
+        )
+        _require_identity(event["github_ready_event_node_id"], "GitHub Ready event node")
+        _require_github_login(event["github_ready_event_actor"], "GitHub Ready event actor")
+        _require_adoption_timestamp(
+            event["github_ready_event_created_at"], "GitHub Ready event timestamp"
+        )
     signed = {key: copy.deepcopy(item) for key, item in event.items() if key != "event_digest"}
     if _require_digest(event["event_digest"], "event digest") != digest_json(signed):
         raise LifecycleAuthorityError("transition-authorization digest mismatch")
@@ -2281,6 +2658,63 @@ def _verify_transition_authorization(
         signature_verifier,
     )
     return copy.deepcopy(event)
+
+
+def _require_invalid_review_correction_suffix(
+    events: Sequence[Mapping[str, Any]],
+    authorities: Sequence[Mapping[str, Any]],
+    correction: Mapping[str, Any],
+) -> None:
+    if (
+        len(events) != 2
+        or len(authorities) != 2
+        or events[0]["transition_kind"] != "INITIALIZED_DRAFT"
+        or events[1]["transition_kind"] != "UNRESTRICTED_REVIEW_CONSUMED"
+        or correction["invalid_event_id"] != events[1]["event_id"]
+        or correction["invalid_event_digest"] != events[1]["event_digest"]
+        or correction["invalid_event_predecessor_authority_digest"]
+        != events[1]["predecessor_authority_digest"]
+        or events[1]["predecessor_authority_digest"]
+        != authorities[0]["authority_digest"]
+        or correction["current_authority_digest"]
+        != authorities[1]["authority_digest"]
+        or events[0]["resulting_head_sha"] != events[1]["resulting_head_sha"]
+        or events[1]["resulting_head_sha"] != correction["resulting_head_sha"]
+    ):
+        raise LifecycleAuthorityError(
+            "invalid review correction does not follow the exact genesis-review suffix"
+        )
+
+
+def _require_invalid_review_derived_ready_correction_suffix(
+    events: Sequence[Mapping[str, Any]],
+    authorities: Sequence[Mapping[str, Any]],
+    correction: Mapping[str, Any],
+) -> None:
+    if (
+        len(events) != 3
+        or len(authorities) != 3
+        or [event["transition_kind"] for event in events]
+        != ["INITIALIZED_DRAFT", "UNRESTRICTED_REVIEW_CONSUMED", "DRAFT_TO_READY"]
+        or correction["invalid_review_event_id"] != events[1]["event_id"]
+        or correction["invalid_review_event_digest"] != events[1]["event_digest"]
+        or correction["unauthorized_ready_event_id"] != events[2]["event_id"]
+        or correction["unauthorized_ready_event_digest"] != events[2]["event_digest"]
+        or correction["unauthorized_ready_predecessor_authority_digest"]
+        != events[2]["predecessor_authority_digest"]
+        or events[1]["predecessor_authority_digest"]
+        != authorities[0]["authority_digest"]
+        or events[2]["predecessor_authority_digest"]
+        != authorities[1]["authority_digest"]
+        or correction["current_authority_digest"]
+        != authorities[2]["authority_digest"]
+        or len({event["resulting_head_sha"] for event in events}) != 1
+        or events[2]["resulting_head_sha"] != correction["resulting_head_sha"]
+    ):
+        raise LifecycleAuthorityError(
+            "invalid review-derived Ready correction does not follow the exact "
+            "genesis-review-Ready suffix"
+        )
 
 
 def _authority_unsigned_fields(
@@ -2356,6 +2790,14 @@ def issue_lifecycle_authority(
             != predecessor_chain[-1]["initialization_evidence_digest"]
         ):
             raise LifecycleAuthorityError("transition authorization does not continue exact predecessor")
+        if event["transition_kind"] == "INVALID_REVIEW_CONSUMPTION_CORRECTED":
+            _require_invalid_review_correction_suffix(
+                transition_authorizations, predecessor_chain, event
+            )
+        elif event["transition_kind"] == "INVALID_REVIEW_DERIVED_READY_CORRECTED":
+            _require_invalid_review_derived_ready_correction_suffix(
+                transition_authorizations, predecessor_chain, event
+            )
         state = derive_state(
             verified.state, event["transition_kind"], event["event_digest"]
         )
@@ -2554,6 +2996,14 @@ def _verify_lifecycle_authority_objects(
             derived = derive_state(
                 current_state, item["transition_kind"], item["event_authorization_digest"]
             )
+            if item["transition_kind"] == "INVALID_REVIEW_CONSUMPTION_CORRECTED":
+                _require_invalid_review_correction_suffix(
+                    events[:index], authority_chain[:index], event
+                )
+            elif item["transition_kind"] == "INVALID_REVIEW_DERIVED_READY_CORRECTED":
+                _require_invalid_review_derived_ready_correction_suffix(
+                    events[:index], authority_chain[:index], event
+                )
         if (
             event["repository"] != item["repository"]
             or event["delivery_issue"] != item["delivery_issue"]
@@ -3243,15 +3693,6 @@ def _exact_adoption_loss_receipt_digest(loss: Mapping[str, Any]) -> str:
     )
 
 
-def normalize_exact_state_adoption_historical_evidence(
-    value: Any,
-) -> dict[str, Any]:
-    """Normalize the closed schema-aware historical receipt identity."""
-
-    try:
-        return normalize_historical_evidence(value)
-    except SecurityBlocker as exc:
-        raise LifecycleAuthorityError(str(exc)) from exc
 def authenticate_governance_amendment_issuance(
     repository: str, delivery_issue: int, inputs: Mapping[str, Any]
 ) -> Any:
@@ -3555,14 +3996,16 @@ def _sign_ready_source_recovery_authorization(
     current_publication_digest: str,
     recovery_safety_facts: Mapping[str, Any],
     commit_signature_evidence: Mapping[str, Any],
-    historical_validation_receipt_digest: str,
-    historical_final_attestation_digest: str,
+    historical_validation_receipt_digest: str | None,
+    historical_final_attestation_digest: str | None,
     historical_evidence_loss_proof_digest: str,
     authorization_id: str,
     bounded_uses: int,
     expected_commit_signer: Mapping[str, Any],
     signer_identity: str,
     signer: Signer,
+    current_lifecycle_evidence: Mapping[str, Any] | None = None,
+    predecessor_publication_oid: str | None = None,
 ) -> dict[str, Any]:
     """Sign one bounded recovery without claiming historical-byte reconstruction."""
 
@@ -3620,6 +4063,20 @@ def _sign_ready_source_recovery_authorization(
         raise LifecycleAuthorityError(
             "Ready-source recovery commit signature evidence is ambiguous"
         )
+    zero_receipt_root = (
+        historical_validation_receipt_digest is None
+        and historical_final_attestation_digest is None
+    )
+    if zero_receipt_root:
+        recovered_adoption_root_historical_evidence(
+            current_lifecycle, current_lifecycle_evidence,
+            predecessor_publication_oid,
+        )
+    elif (
+        historical_validation_receipt_digest is None
+        or historical_final_attestation_digest is None
+    ):
+        raise LifecycleAuthorityError("partial historical recovery evidence is invalid")
     fields = {
         "schema_version": SCHEMA_VERSION,
         "kind": READY_SOURCE_RECOVERY_AUTHORIZATION_KIND,
@@ -3662,13 +4119,17 @@ def _sign_ready_source_recovery_authorization(
         "fresh_validation_receipt_digest": (
             safety["fresh_validation_receipt_digest"]
         ),
-        "historical_validation_receipt_digest": _require_digest(
-            historical_validation_receipt_digest,
-            "historical validation-receipt provenance",
+        "historical_validation_receipt_digest": (
+            None if zero_receipt_root else _require_digest(
+                historical_validation_receipt_digest,
+                "historical validation-receipt provenance",
+            )
         ),
-        "historical_final_attestation_digest": _require_digest(
-            historical_final_attestation_digest,
-            "historical final-attestation provenance",
+        "historical_final_attestation_digest": (
+            None if zero_receipt_root else _require_digest(
+                historical_final_attestation_digest,
+                "historical final-attestation provenance",
+            )
         ),
         "historical_evidence_loss_proof_digest": _require_digest(
             historical_evidence_loss_proof_digest,
@@ -3701,6 +4162,8 @@ def verify_ready_source_recovery_authorization(
     current_lifecycle: VerifiedLifecycleAuthority,
     current_publication_oid: str,
     current_publication_digest: str,
+    current_lifecycle_evidence: Mapping[str, Any] | None = None,
+    predecessor_publication_oid: str | None = None,
 ) -> dict[str, Any]:
     """Authenticate a recovery authorization against exact published CURRENT authority."""
 
@@ -3721,6 +4184,20 @@ def verify_ready_source_recovery_authorization(
     )
     signer = item.get("expected_commit_signer")
     parents = item.get("parent_shas")
+    zero_receipt_root = (
+        item["historical_validation_receipt_digest"] is None
+        and item["historical_final_attestation_digest"] is None
+    )
+    if zero_receipt_root:
+        recovered_adoption_root_historical_evidence(
+            current_lifecycle, current_lifecycle_evidence,
+            predecessor_publication_oid,
+        )
+    elif (
+        item["historical_validation_receipt_digest"] is None
+        or item["historical_final_attestation_digest"] is None
+    ):
+        raise LifecycleAuthorityError("partial historical recovery evidence is invalid")
     if (
         item["schema_version"] != SCHEMA_VERSION
         or item["kind"] != READY_SOURCE_RECOVERY_AUTHORIZATION_KIND
@@ -3750,12 +4227,14 @@ def verify_ready_source_recovery_authorization(
         or safety["fresh_validation_receipt_digest"]
         != item["fresh_validation_receipt_digest"]
         or (
-            current_lifecycle.validation_receipt_digest is not None
+            not zero_receipt_root
+            and current_lifecycle.validation_receipt_digest is not None
             and item["historical_validation_receipt_digest"]
             != current_lifecycle.validation_receipt_digest
         )
         or (
-            current_lifecycle.adoption_source_evidence_digest is not None
+            not zero_receipt_root
+            and current_lifecycle.adoption_source_evidence_digest is not None
             and item["historical_final_attestation_digest"]
             != current_lifecycle.adoption_source_evidence_digest
         )
@@ -3790,11 +4269,15 @@ def verify_ready_source_recovery_authorization(
         "current_publication_digest", "reviewed_state_digest",
         "reviewed_feedback_digest", "feedback_assessment_digest",
         "fresh_validation_receipt_digest",
-        "historical_validation_receipt_digest",
-        "historical_final_attestation_digest",
         "historical_evidence_loss_proof_digest", "authorization_digest",
     ):
         _require_digest(item[field], field)
+    if not zero_receipt_root:
+        for field in (
+            "historical_validation_receipt_digest",
+            "historical_final_attestation_digest",
+        ):
+            _require_digest(item[field], field)
     _require_identity(item["authorization_id"], "Ready-source recovery authorization")
     authorization_signer = _require_identity(
         item["signer_identity"], "Ready-source recovery authorization signer"
@@ -4155,6 +4638,78 @@ def exact_state_adoption_historical_evidence(value: Any) -> dict[str, Any]:
             "bytes_reconstructed": False,
         }
     return normalize_exact_state_adoption_historical_evidence(result)
+
+
+def recovered_adoption_root_historical_evidence(
+    current_lifecycle: VerifiedLifecycleAuthority,
+    lifecycle_evidence: Mapping[str, Any] | None,
+    predecessor_publication_oid: str | None,
+) -> dict[str, Any]:
+    """Authenticate the one zero-receipt v3 enrollment-root projection."""
+
+    if (
+        not isinstance(lifecycle_evidence, Mapping)
+        or predecessor_publication_oid is not None
+        or current_lifecycle.historical_proof_mode != "exact_state_adoption"
+        or lifecycle_evidence.get("transition_authorizations") != []
+        or lifecycle_evidence.get("authority_chain") != []
+    ):
+        raise LifecycleAuthorityError("zero-receipt recovery is not an adoption root")
+    proof = lifecycle_evidence.get("exact_state_adoption_proof")
+    if not isinstance(proof, Mapping):
+        raise LifecycleAuthorityError("zero-receipt adoption proof is missing")
+    verified = verify_exact_state_adoption_proof(proof)
+    loss = proof.get("validation_evidence_loss_admission")
+    state = current_lifecycle.state
+    if (
+        proof.get("schema_version") != "3.0"
+        or proof.get("proof_version") != "3.0"
+        or proof.get("historical_proof_mode") != "exact_state_adoption"
+        or not isinstance(loss, Mapping)
+        or loss.get("schema_version") != "1.2"
+        or loss.get("historical_package_status") != "UNAVAILABLE"
+        or proof.get("intended_state") != state
+        or verified.repository != current_lifecycle.repository
+        or verified.delivery_issue != current_lifecycle.delivery_issue
+        or verified.pull_request != current_lifecycle.pull_request
+        or verified.lifecycle_id != current_lifecycle.lifecycle_id
+        or verified.head_sha != current_lifecycle.head_sha
+        or verified.tree_sha != current_lifecycle.tree_sha
+        or proof.get("proof_digest") != current_lifecycle.authority_digest
+        or state.get("draft") is not False
+        or state.get("ready") is not True
+        or state.get("unrestricted_review_count") != 1
+        or isinstance(state.get("remediation_cycle_count"), bool)
+        or not isinstance(state.get("remediation_cycle_count"), int)
+        or not 0 <= state["remediation_cycle_count"] <= 2
+        or state.get("ready_transition_count") != 1
+        or state.get("exceptional_recovery_count") != 0
+        or state.get("exceptional_recovery_history") != []
+        or state.get("exceptional_continuation_count") != 0
+        or state.get("exceptional_continuation_history") != []
+        or state.get("cycle_3_absent") is not True
+        or not isinstance(state.get("ready_history"), list)
+        or len(state["ready_history"]) != 1
+        or not isinstance(state["ready_history"][0], Mapping)
+        or set(state["ready_history"][0])
+        != {"sequence", "transition_kind", "observation_digest"}
+        or state["ready_history"][0].get("sequence") != 1
+        or state["ready_history"][0].get("transition_kind") != "DRAFT_TO_READY"
+        or loss.get("repository") != current_lifecycle.repository
+        or loss.get("delivery_issue") != current_lifecycle.delivery_issue
+        or loss.get("pull_request") != current_lifecycle.pull_request
+        or loss.get("head_sha") != current_lifecycle.head_sha
+        or loss.get("tree_sha") != current_lifecycle.tree_sha
+    ):
+        raise LifecycleAuthorityError("zero-receipt adoption-root binding changed")
+    historical = normalize_exact_state_adoption_historical_evidence({
+        "state": "ABSENT_NEVER_ISSUED",
+        "validation_receipt_digest": loss.get("historical_validation_receipt_digest"),
+        "source_validation_evidence_digest": None,
+        "final_attestation_digest": loss.get("historical_final_attestation_digest"),
+        "bytes_reconstructed": loss.get("historical_bytes_reconstructed"),
+    })
+    return historical
 
 
 def create_exact_state_adoption_authorization(

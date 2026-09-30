@@ -247,13 +247,14 @@ current entry, and historical evidence continues to use its immutable
 evidence-time entry.
 When exact thread resolution is required on the integration head,
 `attest-validation` may additionally consume the canonical eligibility
-artifact. That closed combination emits the version-1.2
-`ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION`; its receipt and
+artifact. That closed combination emits the centrally mapped
+`ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION` (1.2 for evidence
+1.1/1.2; 1.4 for exact-preservation evidence 1.3); its receipt and
 attestation bind the same eligibility digest. Historical version-1.1
 integration attestations remain valid for their original integration purpose
 but are not thread-resolution authority.
 
-Successful verification of either supported Ready-integration attestation version
+Successful verification of each supported Ready-integration attestation version
 returns the existing verifier-sealed current-head validation evidence only after
 the canonical verifier has run trusted `git verify-commit` itself and the actual
 integration commit signature, signer identity, format, and fingerprint have
@@ -266,6 +267,13 @@ to the complete normalized integration package, including delivery, topology,
 current-main, receipt, reviewed-state, expected signer, kind, and version
 identities; actual signer authentication is the additional precondition for
 issuing that compatible sealed result.
+`fast_path.py` owns the immutable evidence/attestation mappings and shared tree
+admission. Evidence 1.3 adds independently derived `path_classifications` for
+conflict resolution or exact dual-change parent-2 preservation. The producer,
+action helper, verifier and publication read-back use the same raw-delta and
+exact path-state rules; historical evidence and Draft integration remain
+unchanged. See [Ready integration](../docs/secpal-pr-review-workflow.md#explicit-ready-head-integration-evidence).
+
 Exact-state-adopted `HEAD_ADVANCED` may consume it, but all independent lifecycle
 authorization and publication preconditions remain mandatory.
 
@@ -315,19 +323,6 @@ stale, dirty, symlinked, preloaded, or mixed provenance. Candidate Git objects
 come from a required distinct repository root whose implementation bytes may
 legitimately differ from main. Ordinary schema `1.1` and the single two-parent
 integration verifier are unchanged.
-
-The same `EXACT_STATE_ADOPTION_V3` mode accepts the original enrollment-root
-shape only when its predecessor is null, both transition arrays are empty, and
-the protected journal authenticates the exact current Ready-source recovery.
-For a schema-1.2 loss admission whose historical state is
-`ABSENT_NEVER_ISSUED`, the enrollment current-safety receipt remains current
-safety and the prior historical receipt stays null. The recovery's publication,
-authorization, source signature, reviewed state, head, tree, lifecycle and
-CURRENT bindings enter the derived authority. An already published canonical
-tag for that head remains the immutable signed consumption marker, but its
-legacy-shaped manifest digest is not accepted as the corrected authority.
-Non-root v3 chains and `PRESENT` / `UNAVAILABLE` historical evidence retain
-their existing rules.
 
 After an explicitly authenticated cycle-limit blocker, a separate user
 authorization may select `--exceptional-recovery-evidence` with exact recovery
@@ -742,7 +737,25 @@ This authorizes only execution of the admitted implementation; the downstream
 pre-enrollment verifier still owns candidate-tree, push, and initialization
 evidence.
 
-All source paths return a sealed `VerifiedBootstrapSource` with an explicit
+`PRE_ENROLLMENT_ADOPTION_AUTHENTICATION_SOURCE` fixes the signed #1015 source
+head, tree, sole parent, receipt, final attestation, signer, and exact
+`scripts/secpal_pr_review/fast_path.py` blob in accepted-main policy. The
+executor authenticates that source before importing it, then invokes only
+`authenticate_pre_enrollment_adoption` in the existing isolated Python
+boundary. Before copying artifact files, it reads the fixed historical policy
+as data from the authenticated #1015 source tree and selects wire-byte limits
+from the closed downstream delivery identity. Current schema-1.1 artifacts use
+the fixed finite limits; an exact inventory-selected historical schema-1.0
+delivery uses its authenticated wire limits. The admitted child remains
+responsible for canonical-byte, digest, and historical semantic verification.
+The executor passes a small closed control document. The child performs
+read-only bootstrap and Exact-State-Adoption authentication. Its closed result
+is a diagnostic or summary, never validation evidence or an adoption capability. The admitted
+commit remains fixed if the live #1015 head advances; delivery lifecycle state
+must still be authenticated separately by its consumer. This admission does
+not change the #1015 bridge or its pre-enrollment evidence versions.
+
+All source authentication paths return a sealed `VerifiedBootstrapSource` with an explicit
 historical evidence status. The #812-only evidence-loss recovery does not apply
 to the byte-only #819 subtype. Historical P2.1 remains rooted at commit
 `833eef2afc063ae777e7e2b64b2f252e3fe1e49e` and helper blob
@@ -1221,7 +1234,7 @@ bash scripts/check-system-requirements.sh --repo=android
 
 **What It Checks For Android:**
 
-1. Node.js 24 LTS and `npm`
+1. Node.js 26 (Current) and `npm`
 2. Java 21 plus `javac`
 3. Android command-line tools via `sdkmanager`
 4. Android platform-tools via `adb`

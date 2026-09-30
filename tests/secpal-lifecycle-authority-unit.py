@@ -29,6 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.secpal_pr_review import lifecycle_authority as authority
+from scripts.secpal_pr_review import lifecycle_publication as publication
 from scripts.secpal_pr_review import fast_path
 from scripts.secpal_pr_review import (
     qualified_remediation_successor_loss as qualified_loss,
@@ -134,6 +135,48 @@ class Chain:
             signature_verifier=verify_signature,
             expected=expected,
         )
+
+    def append_invalid_review_correction(
+        self, **changes: Any
+    ) -> dict[str, Any]:
+        invalid = self.events[-1]
+        values = {
+            "event_id": "correction-1",
+            "repository": REPOSITORY,
+            "delivery_issue": ISSUE,
+            "lifecycle_id": LIFECYCLE,
+            "pull_request": self.pull_request,
+            "predecessor_authority_digest": self.authorities[-1]["authority_digest"],
+            "head_sha": self.head,
+            "initialization_evidence_digest": INITIALIZATION_DIGEST,
+            "current_publication_oid": HEADS[8],
+            "current_publication_digest": "8" * 64,
+            "current_tree_sha": HEADS[9],
+            "invalid_event_id": invalid["event_id"],
+            "invalid_event_digest": invalid["event_digest"],
+            "invalid_event_predecessor_authority_digest": invalid[
+                "predecessor_authority_digest"
+            ],
+            "signer_identity": SIGNER,
+            "signer": signer_for(),
+        }
+        values.update(changes)
+        event = authority.create_invalid_review_consumption_correction_authorization(
+            **values
+        )
+        snapshot = authority.issue_lifecycle_authority(
+            predecessor_chain=self.authorities,
+            transition_authorizations=self.events,
+            authorization=event,
+            signer_identity=SIGNER,
+            authority_signer=signer_for(),
+            accepted_event_signers=frozenset({SIGNER}),
+            accepted_authority_signers=frozenset({SIGNER}),
+            signature_verifier=verify_signature,
+        )
+        self.events.append(event)
+        self.authorities.append(snapshot)
+        return snapshot
 
 
 def genesis_chain() -> Chain:
@@ -298,7 +341,418 @@ def authenticated_external_evidence(
         )
 
 
+class NormalReviewAuthorityBoundaryRegressionTests(TestCase):
+    def test_review_budget_uses_only_the_signed_lifecycle_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            assertion = Path(directory) / "author-local-review.json"
+            assertion.write_text(
+                json.dumps(
+                    {
+                        "unrestricted_review_count": 1,
+                        "verifier_result": "PASS",
+                        "credentials_absent": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            chain = genesis_chain()
+            self.assertEqual(chain.verify().state["unrestricted_review_count"], 0)
+            self.assertTrue(assertion.is_file())
+            self.assertEqual(authority.MAX_UNRESTRICTED_REVIEWS, 1)
+
+            chain.append("UNRESTRICTED_REVIEW_CONSUMED")
+            self.assertEqual(chain.verify().state["unrestricted_review_count"], 1)
+            self.assertEqual(set(chain.events[-1]), authority.EVENT_FIELDS)
+            with self.assertRaisesRegex(
+                authority.LifecycleAuthorityError, "budget is exhausted"
+            ):
+                chain.append("UNRESTRICTED_REVIEW_CONSUMED")
+
+    def test_candidate_local_verifier_assertions_have_no_authority(self) -> None:
+        chain = reviewed_chain()
+        forged = copy.deepcopy(chain.events[-1])
+        forged["candidate_verifier_assertion"] = {
+            "result": "PASS",
+            "credentials_absent": True,
+        }
+        forged = resign_event(forged)
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "schema is not closed"
+        ):
+            verify_raw(chain.authorities, [chain.events[0], forged])
+
+    def test_lifecycle_verification_has_no_openhands_metadata_surface(self) -> None:
+        for name in (
+            "AuthenticatedNormalReviewQualification",
+            "VerifiedNormalReviewAdmission",
+            "authenticate_openhands_normal_review",
+            "issue_openhands_normal_review_admission",
+            "verify_normal_review_admission",
+            "create_normal_review_transition_authorization",
+            "NORMAL_REVIEW_EVENT_FIELDS",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(authority, name))
+
+        source = "\n".join(
+            inspect.getsource(module)
+            for module in (authority, publication)
+        )
+        for forbidden in (
+            "OpenHands",
+            "control_plane_root",
+            "credential_reference",
+            "verifier_runtime_credential_bindings",
+            "mutation_mcp_count",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
+
+
 class LifecycleAuthorityTests(TestCase):
+    def _append_invalid_review_derived_ready_correction(
+        self, chain: Chain, **changes: Any
+    ) -> dict[str, Any]:
+        invalid_review, unauthorized_ready = chain.events[1:3]
+        values = {
+            "event_id": "ready-correction-1",
+            "repository": REPOSITORY,
+            "delivery_issue": ISSUE,
+            "lifecycle_id": LIFECYCLE,
+            "pull_request": chain.pull_request,
+            "predecessor_authority_digest": chain.authorities[-1][
+                "authority_digest"
+            ],
+            "head_sha": chain.head,
+            "initialization_evidence_digest": INITIALIZATION_DIGEST,
+            "current_publication_oid": HEADS[8],
+            "current_publication_digest": "8" * 64,
+            "current_tree_sha": HEADS[9],
+            "invalid_review_event_id": invalid_review["event_id"],
+            "invalid_review_event_digest": invalid_review["event_digest"],
+            "unauthorized_ready_event_id": unauthorized_ready["event_id"],
+            "unauthorized_ready_event_digest": unauthorized_ready["event_digest"],
+            "unauthorized_ready_predecessor_authority_digest": (
+                unauthorized_ready["predecessor_authority_digest"]
+            ),
+            "github_ready_event_database_id": 31627413421,
+            "github_ready_event_node_id": (
+                "RFRE_lADOQFR1MM8AAAABSTyF988AAAAHXSQHrQ"
+            ),
+            "github_ready_event_actor": "aroviqen",
+            "github_ready_event_created_at": "2026-09-22T19:51:55Z",
+            "signer_identity": SIGNER,
+            "signer": signer_for(),
+        }
+        values.update(changes)
+        event = (
+            authority.create_invalid_review_derived_ready_correction_authorization(
+                **values
+            )
+        )
+        snapshot = authority.issue_lifecycle_authority(
+            predecessor_chain=chain.authorities,
+            transition_authorizations=chain.events,
+            authorization=event,
+            signer_identity=SIGNER,
+            authority_signer=signer_for(),
+            accepted_event_signers=frozenset({SIGNER}),
+            accepted_authority_signers=frozenset({SIGNER}),
+            signature_verifier=verify_signature,
+        )
+        chain.events.append(event)
+        chain.authorities.append(snapshot)
+        return snapshot
+
+    def test_invalid_review_derived_ready_is_append_only_corrected(self) -> None:
+        chain = reviewed_chain()
+        chain.append("DRAFT_TO_READY")
+        preserved_events = copy.deepcopy(chain.events)
+        before = copy.deepcopy(chain.authorities[-1]["state_after"])
+
+        corrected = self._append_invalid_review_derived_ready_correction(chain)
+
+        expected = copy.deepcopy(before)
+        expected.update(
+            unrestricted_review_count=0,
+            draft=True,
+            ready=False,
+            ready_transition_count=0,
+            ready_history=[],
+        )
+        self.assertEqual(chain.events[:3], preserved_events)
+        self.assertEqual(corrected["state_after"], expected)
+        self.assertEqual(chain.verify().state, expected)
+        self.assertEqual(
+            chain.events[-1]["reason"],
+            "POST_INTERRUPT_CHILD_EXECUTED_CONDITIONALLY_UNAUTHORIZED_READY_TRANSITION",
+        )
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            self._append_invalid_review_derived_ready_correction(chain)
+
+    def test_invalid_review_derived_ready_correction_fails_closed(self) -> None:
+        mutations = (
+            ("repository", "Other/repository"),
+            ("delivery_issue", ISSUE + 1),
+            ("pull_request", PR + 1),
+            ("lifecycle_id", "lifecycle:" + "9" * 64),
+            ("head_sha", HEADS[1]),
+            ("invalid_review_event_id", "review:wrong"),
+            ("invalid_review_event_digest", "7" * 64),
+            ("unauthorized_ready_event_id", "authorization:wrong"),
+            ("unauthorized_ready_event_digest", "7" * 64),
+            ("unauthorized_ready_predecessor_authority_digest", "7" * 64),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field):
+                chain = reviewed_chain()
+                chain.append("DRAFT_TO_READY")
+                with self.assertRaises(authority.LifecycleAuthorityError):
+                    self._append_invalid_review_derived_ready_correction(
+                        chain, **{field: value}
+                    )
+
+        for transition, kwargs in (
+            ("REMEDIATION_COMPLETED", {"head": HEADS[1]}),
+            ("READY_TO_DRAFT", {}),
+            ("PR_REBOUND", {"replacement_pull_request": PR + 1}),
+            ("EXCEPTIONAL_RECOVERY", {}),
+            ("EXCEPTIONAL_CONTINUATION", {}),
+        ):
+            with self.subTest(transition=transition):
+                chain = reviewed_chain()
+                if transition == "REMEDIATION_COMPLETED":
+                    chain.append(transition, **kwargs)
+                    chain.append("DRAFT_TO_READY")
+                else:
+                    chain.append("DRAFT_TO_READY")
+                    chain.append(transition, **kwargs)
+                with self.assertRaises(authority.LifecycleAuthorityError):
+                    self._append_invalid_review_derived_ready_correction(chain)
+
+        chain = reviewed_chain()
+        chain.append("DRAFT_TO_READY")
+        with self.assertRaisesRegex(authority.LifecycleAuthorityError, "caller-supplied"):
+            authority.derive_state(
+                chain.authorities[-1]["state_after"],
+                "INVALID_REVIEW_DERIVED_READY_CORRECTED",
+                "1" * 64,
+                ready=False,
+            )
+
+    def test_invalid_author_local_review_consumption_is_corrected_once(self) -> None:
+        chain = reviewed_chain()
+        before = copy.deepcopy(chain.authorities[-1]["state_after"])
+        corrected = chain.append_invalid_review_correction()
+
+        expected = copy.deepcopy(before)
+        expected["unrestricted_review_count"] = 0
+        self.assertEqual(corrected["state_after"], expected)
+        self.assertEqual(chain.verify().state, expected)
+
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "exact genesis-review suffix"
+        ):
+            chain.append_invalid_review_correction()
+
+        chain.append("UNRESTRICTED_REVIEW_CONSUMED")
+        self.assertEqual(chain.verify().state["unrestricted_review_count"], 1)
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "budget is exhausted"
+        ):
+            chain.append("UNRESTRICTED_REVIEW_CONSUMED")
+
+    def test_invalid_review_correction_fails_closed_for_identity_and_history(self) -> None:
+        for field, value in (
+            ("repository", "Other/repository"),
+            ("delivery_issue", ISSUE + 1),
+            ("pull_request", PR + 1),
+            ("lifecycle_id", "lifecycle:" + "9" * 64),
+            ("head_sha", HEADS[1]),
+            ("invalid_event_id", "review:substituted"),
+            ("invalid_event_digest", "9" * 64),
+            ("invalid_event_predecessor_authority_digest", "9" * 64),
+        ):
+            with self.subTest(field=field):
+                chain = reviewed_chain()
+                with self.assertRaises(authority.LifecycleAuthorityError):
+                    chain.append_invalid_review_correction(**{field: value})
+
+        for transition, kwargs in (
+            ("REMEDIATION_COMPLETED", {"head": HEADS[1]}),
+            ("DRAFT_TO_READY", {}),
+            ("PR_REBOUND", {"replacement_pull_request": PR + 1}),
+            ("EXCEPTIONAL_RECOVERY", {}),
+            ("EXCEPTIONAL_CONTINUATION", {}),
+        ):
+            with self.subTest(transition=transition):
+                chain = reviewed_chain()
+                if transition == "DRAFT_TO_READY":
+                    chain.append(transition)
+                else:
+                    chain.append(transition, **kwargs)
+                with self.assertRaises(authority.LifecycleAuthorityError):
+                    chain.append_invalid_review_correction()
+
+    def test_invalid_review_correction_rejects_caller_state(self) -> None:
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "caller-supplied"
+        ):
+            authority.derive_state(
+                reviewed_chain().authorities[-1]["state_after"],
+                "INVALID_REVIEW_CONSUMPTION_CORRECTED",
+                "1" * 64,
+                unrestricted_review_count=0,
+            )
+
+    def test_invalid_review_correction_rejects_generic_and_adopted_paths(self) -> None:
+        chain = reviewed_chain()
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "specialized constructor"
+        ):
+            authority.create_transition_authorization(
+                event_id="generic-correction",
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                lifecycle_id=LIFECYCLE,
+                pull_request=PR,
+                predecessor_authority_digest=chain.authorities[-1][
+                    "authority_digest"
+                ],
+                predecessor_head_sha=chain.head,
+                resulting_head_sha=chain.head,
+                transition_kind="INVALID_REVIEW_CONSUMPTION_CORRECTED",
+                replacement_pull_request=None,
+                initialization_evidence_digest=INITIALIZATION_DIGEST,
+                signer_identity=SIGNER,
+                signer=signer_for(),
+            )
+
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "requires a native lifecycle"
+        ):
+            authority._derive_state(
+                chain.authorities[-1]["state_after"],
+                "INVALID_REVIEW_CONSUMPTION_CORRECTED",
+                "1" * 64,
+                allow_adopted_observations=True,
+            )
+
+    def test_correction_verifier_binds_authenticated_current_and_tree(self) -> None:
+        chain = reviewed_chain()
+        lifecycle = replace(chain.verify(), tree_sha=HEADS[9])
+        current = publication.VerifiedLifecyclePublication(
+            HEADS[8], "8" * 64, "refs/heads/secpal-lifecycle-publications",
+            HEADS[7], HEADS[6], lifecycle,
+            authority.canonical_json_bytes({
+                "transition_authorizations": chain.events,
+                "authority_chain": chain.authorities,
+            }),
+        )
+
+        def correction(**changes: Any) -> dict[str, Any]:
+            invalid = chain.events[-1]
+            fields = {
+                "event_id": "correction-1", "repository": REPOSITORY,
+                "delivery_issue": ISSUE, "lifecycle_id": LIFECYCLE,
+                "pull_request": PR,
+                "predecessor_authority_digest": lifecycle.authority_digest,
+                "head_sha": lifecycle.head_sha,
+                "initialization_evidence_digest": INITIALIZATION_DIGEST,
+                "current_publication_oid": current.publication_oid,
+                "current_publication_digest": current.publication_digest,
+                "current_tree_sha": lifecycle.tree_sha,
+                "invalid_event_id": invalid["event_id"],
+                "invalid_event_digest": invalid["event_digest"],
+                "invalid_event_predecessor_authority_digest": invalid[
+                    "predecessor_authority_digest"
+                ],
+                "signer_identity": SIGNER, "signer": signer_for(),
+            }
+            fields.update(changes)
+            return authority.create_invalid_review_consumption_correction_authorization(
+                **fields
+            )
+
+        policy = SimpleNamespace(transition_signer_identities=frozenset({SIGNER}))
+        with (
+            patch.object(authority, "_load_lifecycle_trust_policy", return_value=policy),
+            patch.object(authority, "_policy_signature_verifier", return_value=verify_signature),
+            patch.object(publication, "verify_current_lifecycle_authority", return_value=current),
+            patch.object(publication, "_resolve_delivery_head_tree", return_value=HEADS[9]),
+            patch.object(
+                publication,
+                "_observe_pre_enrollment_pull_request",
+                return_value={
+                    "repository": REPOSITORY,
+                    "pull_request": PR,
+                    "state": "OPEN",
+                    "draft": True,
+                    "head_sha": lifecycle.head_sha,
+                },
+            ),
+        ):
+            self.assertIs(
+                publication.verify_invalid_review_consumption_correction(correction()),
+                current,
+            )
+            for field, value in (
+                ("current_publication_oid", HEADS[5]),
+                ("current_publication_digest", "5" * 64),
+                ("current_tree_sha", HEADS[5]),
+            ):
+                with self.subTest(field=field), self.assertRaises(
+                    publication.LifecyclePublicationError
+                ):
+                    publication.verify_invalid_review_consumption_correction(
+                        correction(**{field: value})
+                    )
+            for field, value in (
+                ("reason", "REAL_INDEPENDENT_REVIEW"),
+                ("operation", "UNRESTRICTED_REVIEW_CONSUMED"),
+                ("bounded_uses", 2),
+            ):
+                with self.subTest(field=field), self.assertRaises(
+                    publication.LifecyclePublicationError
+                ):
+                    changed = correction()
+                    changed[field] = value
+                    publication.verify_invalid_review_consumption_correction(
+                        resign_event(changed)
+                    )
+            with (
+                patch.object(
+                    publication,
+                    "_observe_pre_enrollment_pull_request",
+                    return_value={
+                        "repository": REPOSITORY,
+                        "pull_request": PR,
+                        "state": "OPEN",
+                        "draft": False,
+                        "head_sha": lifecycle.head_sha,
+                    },
+                ),
+                self.assertRaises(publication.LifecyclePublicationError),
+            ):
+                publication.verify_invalid_review_consumption_correction(correction())
+
+            non_native = replace(
+                current.lifecycle,
+                historical_proof_mode=authority.EXACT_ADOPTION_PROOF_MODE,
+            )
+            with (
+                patch.object(
+                    publication,
+                    "verify_current_lifecycle_authority",
+                    return_value=replace(current, lifecycle=non_native),
+                ),
+                self.assertRaisesRegex(
+                    publication.LifecyclePublicationError, "exact eligible CURRENT"
+                ),
+            ):
+                publication.verify_invalid_review_consumption_correction(correction())
+
     def test_qualified_remediation_evidence_verifies_and_issues_successor(
         self,
     ) -> None:
@@ -2617,6 +3071,12 @@ class LifecycleAuthorityTests(TestCase):
 
 
 class ValidationEvidenceLossTests(TestCase):
+    def test_legacy_loss_keeps_same_head_validation_receipt(self) -> None:
+        self.assertEqual(
+            self.loss.current_head_validation_receipt_trailers(self.document),
+            (self.document["historical_validation_receipt_digest"],),
+        )
+
     def commit_fixture(self, root: Path) -> str:
         subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
         subprocess.run(["git", "-C", str(root), "add", "."], check=True)
@@ -3362,10 +3822,26 @@ printf 'Usage: fixture\\n'
             self.loss._verify_document(successor), successor,
             "registered Ready deliveries need a distinct immutable successor schema",
         )
+        self.assertEqual(
+            self.loss.current_head_validation_receipt_trailers(successor), ()
+        )
+        for field, value in (
+            ("historical_receipt_head_sha", successor["head_sha"]),
+            ("historical_validation_receipt_digest", "9" * 64),
+            ("historical_bytes_reconstructed", True),
+        ):
+            with self.subTest(field=field):
+                changed = copy.deepcopy(successor)
+                changed[field] = value
+                with self.assertRaises(authority.LifecycleAuthorityError):
+                    self.loss.current_head_validation_receipt_trailers(changed)
 
     def test_zero_receipt_successor_authenticates_exact_signed_ready_history(self) -> None:
         document = self.zero_receipt_document()
         self.assertEqual(self.loss._verify_document(document), document)
+        self.assertEqual(
+            self.loss.current_head_validation_receipt_trailers(document), ()
+        )
         self.assertIsNone(document["historical_receipt_head_sha"])
         self.assertIsNone(document["historical_validation_receipt_digest"])
         self.assertEqual(
@@ -3393,6 +3869,10 @@ printf 'Usage: fixture\\n'
     def test_current_receipt_successor_authenticates_exact_signed_ready_history(self) -> None:
         document = self.current_receipt_document()
         self.assertEqual(self.loss._verify_document(document), document)
+        self.assertEqual(
+            self.loss.current_head_validation_receipt_trailers(document),
+            (document["historical_validation_receipt_digest"],),
+        )
         self.assertEqual(
             document["historical_receipt_head_sha"], document["head_sha"]
         )
