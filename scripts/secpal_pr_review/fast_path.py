@@ -474,6 +474,9 @@ READY_INTEGRATION_ADOPTED_PRIOR_AUTHORITY_KEYS = frozenset(
     READY_INTEGRATION_PRIOR_AUTHORITY_KEYS
     | {"source_authority_mode", "source_authority", "historical_companions"}
 )
+READY_INTEGRATION_RECOVERED_ADOPTED_PRIOR_AUTHORITY_KEYS = (
+    READY_INTEGRATION_ADOPTED_PRIOR_AUTHORITY_KEYS | {"recovery_publication"}
+)
 
 
 class SecurityBlocker(RuntimeError):
@@ -1615,6 +1618,9 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         else "ADOPTED"
         if schema_version == "1.2"
         and keys == READY_INTEGRATION_ADOPTED_PRIOR_AUTHORITY_KEYS
+        else "ADOPTED_RECOVERED"
+        if schema_version == "1.2"
+        and keys == READY_INTEGRATION_RECOVERED_ADOPTED_PRIOR_AUTHORITY_KEYS
         else None
     )
     if authority_mode is None:
@@ -1650,7 +1656,11 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         "cycle_3",
     }
     source_mode = value.get("source_authority_mode")
-    if authority_mode == "ADOPTED":
+    recovered_root = (
+        authority_mode == "ADOPTED_RECOVERED"
+        and source_mode == "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT"
+    )
+    if authority_mode in {"ADOPTED", "ADOPTED_RECOVERED"}:
         lifecycle_keys |= {
             "ready_transition_count",
             "ready_history",
@@ -1692,7 +1702,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         or not 0 <= continuations <= 1
     ):
         raise SecurityBlocker("Ready integration prior lifecycle authority is invalid")
-    if authority_mode == "ADOPTED":
+    if authority_mode in {"ADOPTED", "ADOPTED_RECOVERED"}:
         ready_history = lifecycle.get("ready_history")
         ready_history_keys = (
             {"sequence", "transition_kind", "event_authorization_digest"}
@@ -1701,7 +1711,10 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
                 "EXISTING_AUTHORITY_COMPOSITION",
             }
             else {"sequence", "transition_kind", "observation_digest"}
-            if source_mode == "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS"
+            if source_mode in {
+                "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS",
+                "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT",
+            }
             else None
         )
         if (
@@ -1754,7 +1767,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         "prior_delivery_tree_sha": _require_oid(value.get("prior_delivery_tree_sha"), "prior authority tree"),
         "prior_validation_receipt_digest": (
             None
-            if source_mode == "EXISTING_AUTHORITY_COMPOSITION"
+            if (source_mode == "EXISTING_AUTHORITY_COMPOSITION" or recovered_root)
             and value.get("prior_validation_receipt_digest") is None
             else _require_digest(
                 value.get("prior_validation_receipt_digest"),
@@ -1766,7 +1779,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
                 value.get("prior_final_attestation_digest"),
                 "prior final attestation",
             )
-            if authority_mode != "ADOPTED"
+            if authority_mode not in {"ADOPTED", "ADOPTED_RECOVERED"}
             or source_mode == "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS"
             else value.get("prior_final_attestation_digest")
         ),
@@ -1785,7 +1798,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
     }
     if authority_mode == "ORDINARY":
         return normalized
-    if authority_mode == "RECOVERED":
+    if authority_mode in {"RECOVERED", "ADOPTED_RECOVERED"}:
         recovery = value.get("recovery_publication")
         if (
             not isinstance(recovery, dict)
@@ -1825,7 +1838,10 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             ),
             "historical_bytes_reconstructed": False,
         }
-        return normalized
+        if authority_mode == "RECOVERED":
+            return normalized
+        if not recovered_root:
+            raise SecurityBlocker("recovered adopted Ready source mode is unsupported")
     if source_mode == "EXISTING_AUTHORITY_COMPOSITION":
         return _normalize_existing_authority_composition_ready_source(
             normalized,
@@ -1841,14 +1857,19 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         )
     if source_mode not in {
         "EXACT_STATE_ADOPTION_V3",
+        "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT",
         "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS",
     }:
         raise SecurityBlocker("adopted Ready source authority mode is unsupported")
     companions = value.get("historical_companions")
     expected_companions = {
         "reviewed_state_bytes": "UNAVAILABLE",
-        "validation_receipt_bytes": "UNAVAILABLE",
-        "final_attestation_bytes": "UNAVAILABLE",
+        "validation_receipt_bytes": (
+            "ABSENT_NEVER_ISSUED" if recovered_root else "UNAVAILABLE"
+        ),
+        "final_attestation_bytes": (
+            "ABSENT_NEVER_ISSUED" if recovered_root else "UNAVAILABLE"
+        ),
         "historical_bytes_reconstructed": False,
     }
     if companions != expected_companions:
@@ -1879,6 +1900,8 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         "enrollment_publication",
         "ready_transition",
     }
+    if recovered_root:
+        source_keys.add("historical_evidence")
     if not isinstance(source, dict) or set(source) != source_keys:
         raise SecurityBlocker("adopted Ready source authority is malformed")
     enrollment = source.get("enrollment_publication")
@@ -1887,10 +1910,10 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
     }:
         raise SecurityBlocker("adopted Ready enrollment publication is malformed")
     transition = source.get("ready_transition")
-    if not isinstance(transition, dict) or set(transition) != {
+    if not recovered_root and (not isinstance(transition, dict) or set(transition) != {
         "event_id", "event_digest", "predecessor_authority_digest",
         "predecessor_head_sha", "resulting_head_sha",
-    }:
+    }):
         raise SecurityBlocker("adopted Ready transition authority is malformed")
     head_advanced_count = source.get("head_advanced_count")
     if (
@@ -1928,6 +1951,24 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
     _require_digest(
         enrollment.get("publication_digest"), "adopted enrollment publication"
     )
+    if recovered_root:
+        historical = normalize_exact_state_adoption_historical_evidence(
+            source["historical_evidence"]
+        )
+        if (
+            transition is not None
+            or enrollment != normalized["publication"]
+            or historical["state"] != "ABSENT_NEVER_ISSUED"
+            or normalized["prior_validation_receipt_digest"] is not None
+            or normalized["prior_final_attestation_digest"] is not None
+        ):
+            raise SecurityBlocker("recovered adoption root historical identity is invalid")
+        normalized.update(
+            source_authority_mode=source_mode,
+            source_authority=copy.deepcopy(source),
+            historical_companions=copy.deepcopy(companions),
+        )
+        return normalized
     _require_string(transition.get("event_id"), "adopted Ready transition")
     for field, label in (
         ("event_digest", "adopted Ready event"),
@@ -2079,45 +2120,6 @@ def _normalize_existing_authority_composition_ready_source(
         historical_companions=copy.deepcopy(companions),
     )
     return normalized
-
-
-def normalize_exact_state_adoption_historical_evidence(
-    value: Any,
-) -> dict[str, Any]:
-    """Normalize the closed schema-aware historical receipt identity."""
-
-    fields = {
-        "state",
-        "validation_receipt_digest",
-        "source_validation_evidence_digest",
-        "final_attestation_digest",
-        "bytes_reconstructed",
-    }
-    if not isinstance(value, dict) or set(value) != fields:
-        raise SecurityBlocker("exact-state historical evidence is malformed")
-    result = copy.deepcopy(value)
-    state = result["state"]
-    if (
-        state not in {"PRESENT", "UNAVAILABLE", "ABSENT_NEVER_ISSUED"}
-        or result["bytes_reconstructed"] is not False
-    ):
-        raise SecurityBlocker("exact-state historical evidence state is unknown")
-    receipt = result["validation_receipt_digest"]
-    source = result["source_validation_evidence_digest"]
-    attestation = result["final_attestation_digest"]
-    if state == "ABSENT_NEVER_ISSUED":
-        if any(item is not None for item in (receipt, source, attestation)):
-            raise SecurityBlocker("absent historical evidence cannot claim a digest")
-    else:
-        _require_digest(receipt, "historical validation receipt")
-        _require_digest(source, "historical source validation")
-        if state == "PRESENT":
-            _require_digest(attestation, "historical final attestation")
-        elif attestation is not None:
-            raise SecurityBlocker(
-                "unavailable historical evidence cannot claim an attestation"
-            )
-    return result
 
 
 def _normalize_legacy_enrolled_ready_source(

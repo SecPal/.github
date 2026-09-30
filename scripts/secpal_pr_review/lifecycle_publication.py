@@ -198,8 +198,8 @@ class VerifiedReadySourceRecovery:
     reviewed_feedback_digest: str
     feedback_assessment_digest: str
     fresh_validation_receipt_digest: str
-    historical_validation_receipt_digest: str
-    historical_final_attestation_digest: str
+    historical_validation_receipt_digest: str | None
+    historical_final_attestation_digest: str | None
     historical_evidence_loss_proof_digest: str
     lifecycle_state: dict[str, Any]
     recovery_safety_facts: dict[str, Any]
@@ -1443,6 +1443,19 @@ def _verify_ready_source_recovery_document(
                 "legacy_adoption_checkpoint_digest"
             ],
         )
+        if (
+            current_document["historical_proof_mode"] == "exact_state_adoption"
+            and recovery_authorization.get("historical_validation_receipt_digest") is None
+        ):
+            try:
+                # The identity-only projection lacks the root's tree and proof digests.
+                current_lifecycle = authority._verify_lifecycle_authority_for_journal(
+                    canonical_json_bytes(current_document["lifecycle_evidence"])
+                )
+            except (authority.LifecycleAuthorityError, TypeError, ValueError) as exc:
+                raise LifecyclePublicationError(
+                    "Ready-source recovery adoption lifecycle is invalid"
+                ) from exc
     if (
         document["schema_version"] != SCHEMA_VERSION
         or document["kind"] != READY_SOURCE_RECOVERY_KIND
@@ -1468,6 +1481,10 @@ def _verify_ready_source_recovery_document(
             current_lifecycle=current_lifecycle,
             current_publication_oid=current_oid,
             current_publication_digest=current_document["publication_digest"],
+            current_lifecycle_evidence=current_document["lifecycle_evidence"],
+            predecessor_publication_oid=current_document[
+                "predecessor_publication_oid"
+            ],
         )
     except authority.LifecycleAuthorityError as exc:
         raise LifecyclePublicationError(
@@ -2203,6 +2220,10 @@ def publish_ready_source_recovery(
                     current_publication_digest=current_document[
                         "publication_digest"
                     ],
+                    current_lifecycle_evidence=current_document["lifecycle_evidence"],
+                    predecessor_publication_oid=current_document[
+                        "predecessor_publication_oid"
+                    ],
                 )
             )
         except authority.LifecycleAuthorityError as exc:
@@ -2421,6 +2442,21 @@ def derive_ready_source_recovery_current_head_trailers(
                     "Ready-source recovery historical receipt changed"
                 )
             return (historical["validation_receipt_digest"],)
+        if proof["proof_version"] == authority.EXACT_ADOPTION_LOSS_VERSION:
+            from . import validation_evidence_loss
+
+            loss = proof["validation_evidence_loss_admission"]
+            if (
+                loss.get("schema_version") == "1.2"
+                and recovery.historical_validation_receipt_digest is None
+                and recovery.historical_final_attestation_digest is None
+            ):
+                authority.recovered_adoption_root_historical_evidence(
+                    current.lifecycle, bundle, current.predecessor_publication_oid
+                )
+                return validation_evidence_loss.current_head_validation_receipt_trailers(
+                    loss
+                )
         if (
             proof["validation_receipt_digest"]
             != recovery.historical_validation_receipt_digest
