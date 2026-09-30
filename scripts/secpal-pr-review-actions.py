@@ -4947,6 +4947,7 @@ def build_parser() -> argparse.ArgumentParser:
     attestation_parser.add_argument("--manual-gate-evidence")
     attestation_parser.add_argument("--eligibility-evidence")
     attestation_parser.add_argument("--integration-evidence")
+    attestation_parser.add_argument("--ready-integration-provenance-output")
     attestation_parser.add_argument("--pre-enrollment-integration-evidence")
     attestation_parser.add_argument("--validation-receipt-id")
     attestation_parser.add_argument("--final-attestation-id")
@@ -8271,6 +8272,17 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             "reviewed feedback repository does not match --repo"
         )
     integration_evidence_path = getattr(arguments, "integration_evidence", None)
+    provenance_output = getattr(
+        arguments, "ready_integration_provenance_output", None
+    )
+    if provenance_output and (not arguments.bind_commit or not integration_evidence_path):
+        raise fast_path.RecoverableLocalError(
+            "typed provenance export requires bound Ready integration evidence"
+        )
+    if provenance_output and Path(provenance_output).resolve() == Path(arguments.output).resolve():
+        raise fast_path.RecoverableLocalError(
+            "typed provenance export must have a distinct output path"
+        )
     if (
         not arguments.bind_commit
         and not integration_evidence_path
@@ -8423,6 +8435,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             "exceptional continuation requires its explicit selectors and eligibility evidence"
         )
     if arguments.bind_commit:
+        provenance_package = None
         if not arguments.receipt:
             raise fast_path.RecoverableLocalError("--bind-commit requires --receipt")
         if status.strip():
@@ -8793,6 +8806,28 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 validation_receipt=receipt,
                 integration_evidence=integration_evidence,
             )
+            if provenance_output:
+                sealed = fast_path.verify_ready_integration_attestation(
+                    attestation,
+                    repository=arguments.repo,
+                    head_sha=head,
+                    registry=binding,
+                    command_set=binding["validation"],
+                    reviewed_state=reviewed,
+                    validation_receipt=receipt,
+                    integration_evidence=integration_evidence,
+                    commit_parent_shas=parents,
+                    commit_tree_sha=tree,
+                    commit_validation_receipt_digest=receipt["receipt_digest"],
+                    commit_integration_evidence_digest=fast_path.digest_json(
+                        integration_evidence
+                    ),
+                    repository_root=repository_root,
+                    signature_policy=binding["signature_policy"],
+                )
+                provenance_package = fast_path.export_ready_integration_provenance(
+                    sealed
+                )
         elif pre_enrollment_evidence is not None:
             commit_object = _run_attestation_git(
                 repository_root, ["cat-file", "commit", head], allow_failure=True
@@ -8869,6 +8904,10 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 validation_receipt=receipt,
             )
         _write_fast_report(arguments.output, attestation)
+        if provenance_package is not None:
+            fast_path.atomic_write_json(
+                Path(provenance_output), provenance_package
+            )
         return 0
     if arguments.receipt:
         raise fast_path.RecoverableLocalError(
@@ -9353,10 +9392,15 @@ def _derive_resolve_batch_ready_provider_lineage_binding(
     """Authenticate typed integration packages and protected CURRENT together."""
 
     accepted_main = _require_accepted_main_bridge_source(repository)
-    _, publication = _load_lifecycle_publication_helpers()
-    current = publication.verify_current_lifecycle_authority(
-        repository, delivery_issue
-    )
+    try:
+        _, publication = _load_lifecycle_publication_helpers()
+        current = publication.verify_current_lifecycle_authority(
+            repository, delivery_issue
+        )
+    except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        raise fast_path.SecurityBlocker(
+            "Ready provider lineage lifecycle authority is invalid"
+        ) from exc
     if (
         current.lifecycle.repository != repository
         or current.lifecycle.delivery_issue != delivery_issue
@@ -9374,9 +9418,14 @@ def _derive_resolve_batch_ready_provider_lineage_binding(
         )
         for path in integration_paths
     )
-    provider = publication.derive_ready_source_recovery_provider_binding(
-        current, verified_integrations=validations
-    )
+    try:
+        provider = publication.derive_ready_source_recovery_provider_binding(
+            current, verified_integrations=validations
+        )
+    except (TypeError, ValueError) as exc:
+        raise fast_path.SecurityBlocker(
+            "Ready provider lineage successor authority is invalid"
+        ) from exc
     if (
         provider.repository != repository
         or provider.delivery_issue != delivery_issue

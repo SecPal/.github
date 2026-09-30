@@ -7058,6 +7058,11 @@ def verify_ready_integration_provenance(
     ):
         raise SecurityBlocker("typed Ready integration provenance is malformed")
     try:
+        trusted_root = Path(repository_root).resolve(strict=True)
+        if value["repository_root"] != ".":
+            raise SecurityBlocker(
+                "typed Ready integration provenance selects a repository root"
+            )
         reviewed = StableFeedbackState.from_payload(value["reviewed_state"])
         return verify_ready_integration_attestation(
             value["attestation"],
@@ -7072,11 +7077,27 @@ def verify_ready_integration_provenance(
             commit_tree_sha=value["commit_tree_sha"],
             commit_validation_receipt_digest=value["commit_validation_receipt_digest"],
             commit_integration_evidence_digest=value["commit_integration_evidence_digest"],
-            repository_root=repository_root,
+            repository_root=trusted_root,
             signature_policy=value["signature_policy"],
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise SecurityBlocker("typed Ready integration provenance is malformed") from exc
+
+
+def export_ready_integration_provenance(
+    value: VerifiedValidationEvidence,
+) -> dict[str, Any]:
+    """Export a verified typed package without a caller-selected local source path."""
+
+    if not is_verified_validation_evidence(value):
+        raise SecurityBlocker("typed Ready integration evidence is not verified")
+    try:
+        provenance = json.loads(value._verification_seal.provenance_json)
+        if provenance.get("kind") != "READY_INTEGRATION":
+            raise SecurityBlocker("typed Ready integration evidence is required")
+        return {**provenance, "repository_root": "."}
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise SecurityBlocker("typed Ready integration evidence is malformed") from exc
 
 
 def verified_validation_review_context(

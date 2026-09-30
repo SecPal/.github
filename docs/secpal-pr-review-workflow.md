@@ -171,6 +171,12 @@ review at the derived provider head and every subsequent transition. Historical
 provider terminality does not claim that the provider reviewed integration
 bytes or grant thread-resolution authority.
 
+The integration commit-binding command exports that re-verifiable package with
+`--ready-integration-provenance-output PATH`. Capture consumes it against the
+trusted local repository root. Exact-State-Adoption uses its verified observed
+review head as the provider head when that head precedes an adopted remediation
+baseline; later signed successors remain independently authenticated.
+
 This exception changes only provider-summary head binding. The same bounded
 read still captures all current-head feedback. Every later material,
 actionable, security, authentication, integrity, unclassified, or otherwise

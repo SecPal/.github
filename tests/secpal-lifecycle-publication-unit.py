@@ -1699,7 +1699,17 @@ class LifecyclePublicationTests(TestCase):
             fast_path, "_run_integration_commit_git", side_effect=git_results
         ):
             self.assertTrue(fast_path.is_verified_validation_evidence(integration))
-        portable = {**provenance, "repository_root": "/untrusted/candidate"}
+        with patch.object(
+            fast_path, "_run_integration_commit_git", side_effect=git_results
+        ):
+            exported = fast_path.export_ready_integration_provenance(integration)
+        self.assertEqual(exported["repository_root"], ".")
+        portable = exported
+        with self.assertRaises(fast_path.SecurityBlocker):
+            fast_path.verify_ready_integration_provenance(
+                {**portable, "repository_root": "/untrusted/candidate"},
+                repository_root=Path(__file__).resolve().parents[1],
+            )
         with patch.object(
             fast_path, "_run_integration_commit_git", side_effect=git_results
         ):
@@ -2100,7 +2110,7 @@ class LifecyclePublicationTests(TestCase):
         ), patch.object(
             loss, "authenticate_historical_provider_binding"
         ) as verify_loss, self.assertRaisesRegex(
-            publication.LifecyclePublicationError, "remediation lineage"
+            publication.LifecyclePublicationError, "adoption chronology"
         ):
             publication.derive_ready_source_recovery_provider_binding(current)
         verify_loss.assert_not_called()
@@ -3253,6 +3263,8 @@ class LifecyclePublicationTests(TestCase):
     def test_exact_preservation_version_publishes_and_reads_back_head_advanced(self) -> None:
         original = verified_validation_evidence
         def preservation_evidence(**kwargs: Any) -> fast_path.VerifiedValidationEvidence:
+            if kwargs.get("ready_integration"):
+                kwargs["reviewed_head"] = HEADS[0]
             return original(**kwargs, integration_version="1.3")
         with patch.dict(globals(), {"verified_validation_evidence": preservation_evidence}):
             self.test_exact_adoption_enrolls_once_and_uses_normal_successor_path()
@@ -3299,6 +3311,8 @@ class LifecyclePublicationTests(TestCase):
         current_validation = verified_validation_evidence(
             head=HEADS[4], tree=HEADS[5], parent=HEADS[2],
             ready_integration=True,
+            lifecycle_identity=enrolled.lifecycle.lifecycle_id,
+            prior_authority_digest=enrolled.lifecycle.authority_digest,
         )
 
         def issue_successor(**kwargs: Any) -> dict[str, Any]:
@@ -3394,6 +3408,34 @@ class LifecyclePublicationTests(TestCase):
             enrolled.lifecycle.adoption_source_evidence_digest,
         )
         self.assertEqual(advanced.lifecycle.state, enrolled.lifecycle.state)
+        integration_package = json.loads(
+            current_validation._verification_seal.provenance_json
+        )
+        if integration_package["integration_evidence"]["schema_version"] == "1.3":
+            integration = integration_package["integration_evidence"]
+            git_results = [
+                subprocess.CompletedProcess([], 0, "https://github.com/SecPal/.github.git\n", ""),
+                subprocess.CompletedProcess(
+                    [], 0,
+                    f"tree {HEADS[5]}\nparent {HEADS[2]}\nparent {HEADS[0]}\n"
+                    "gpgsig -----BEGIN SSH SIGNATURE-----\n\n", "",
+                ),
+                subprocess.CompletedProcess(
+                    [], 0,
+                    f'Good "git" signature for {SIGNER} with ED25519 key SHA256:test\n',
+                    "SHA256:test\n",
+                ),
+                subprocess.CompletedProcess([], 0, "8" * 40 + "\n", ""),
+                subprocess.CompletedProcess([], 0, integration["mechanical_merge_tree_sha"] + "\x00", ""),
+                subprocess.CompletedProcess([], 0, "", ""),
+            ]
+            with patch.object(
+                fast_path, "_run_integration_commit_git", side_effect=git_results
+            ):
+                provider = publication.derive_ready_source_recovery_provider_binding(
+                    advanced, verified_integrations=(current_validation,)
+                )
+            self.assertEqual(provider.provider_head_sha, HEADS[0])
         self.assertEqual(
             publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE)
             .lifecycle.authority_digest,

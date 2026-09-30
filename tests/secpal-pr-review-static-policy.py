@@ -802,6 +802,8 @@ LOADED_MODULE_ATTRIBUTES = {
             "_reject_integration_conflict_markers",
             "verify_ready_integration_tree",
             "verify_ready_integration_provenance",
+            "verify_ready_integration_attestation",
+            "export_ready_integration_provenance",
             "ready_integration_attestation_matches",
             "READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS",
         },
@@ -1160,6 +1162,10 @@ SAFE_GETATTR_CALLS = {
         DynamicImportCall(
             ("_command_attest_validation",),
             "getattr(arguments, 'integration_evidence', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
+            "getattr(arguments, 'ready_integration_provenance_output', None)",
         ),
         DynamicImportCall(
             ("_command_attest_validation",),

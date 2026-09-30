@@ -34,6 +34,7 @@ JOURNAL_KINDS = frozenset(
     {PUBLICATION_KIND, GENESIS_ADMISSION_KIND, READY_SOURCE_RECOVERY_KIND}
 )
 ORDINARY_REMEDIATION_SUFFIX = "ORDINARY_REMEDIATION_SUFFIX"
+EXACT_ADOPTION_REVIEW_OBSERVATION = "EXACT_ADOPTION_REVIEW_OBSERVATION"
 READY_REVIEW_PRESERVING_SUCCESSORS = frozenset(
     {"REMEDIATION_COMPLETED", "HEAD_ADVANCED"}
 )
@@ -2787,6 +2788,7 @@ def _derive_ordinary_ready_source_provider_binding(
     current: VerifiedLifecyclePublication,
     bundle: Mapping[str, Any],
     verified_integrations: tuple[fast_path.VerifiedValidationEvidence, ...],
+    adopted_provider_head: str | None,
 ) -> tuple[str, list[str], list[str]] | None:
     """Derive one complete authenticated Ready review-preserving suffix."""
 
@@ -2856,6 +2858,19 @@ def _derive_ordinary_ready_source_provider_binding(
             "Ready-source provider lifecycle is not the exact finite Ready remediation"
         )
     predecessor = first_event.get("predecessor_head_sha")
+    adoption_proof = bundle.get("exact_state_adoption_proof")
+    if (
+        frozenset(bundle) == authority.EXACT_ADOPTION_PUBLICATION_FIELDS
+        and adopted_provider_head is None
+        and (
+            not isinstance(adoption_proof, Mapping)
+            or adoption_proof.get("validation_evidence_loss_admission") is None
+        )
+    ):
+        raise LifecyclePublicationError(
+            "Ready-source provider adopted reviewed head is unavailable"
+        )
+    provider_head = adopted_provider_head or predecessor
     expected_head = predecessor
     remediation_digests: list[str] = []
     integration_digests: list[str] = []
@@ -2881,7 +2896,7 @@ def _derive_ordinary_ready_source_provider_binding(
         if event["transition_kind"] == "HEAD_ADVANCED":
             validation = next(integrations, None)
             _verify_provider_head_advanced(
-                current, event, snapshot, validation, predecessor
+                current, event, snapshot, validation, provider_head
             )
             integration_digests.append(event.get("event_digest"))
         else:
@@ -2923,7 +2938,75 @@ def _derive_ordinary_ready_source_provider_binding(
             raise LifecyclePublicationError(
                 "Ready-source provider reviewed head is not uniquely authenticated"
             )
-    return predecessor, remediation_digests, integration_digests
+    return provider_head, remediation_digests, integration_digests
+
+
+def _derive_exact_adoption_reviewed_provider_head(
+    current: VerifiedLifecyclePublication,
+    bundle: Mapping[str, Any],
+) -> str | None:
+    """Project the unique reviewed head already authenticated by adoption."""
+
+    if frozenset(bundle) != authority.EXACT_ADOPTION_PUBLICATION_FIELDS:
+        return None
+    proof = bundle.get("exact_state_adoption_proof")
+    if (
+        not isinstance(proof, Mapping)
+        or proof.get("validation_evidence_loss_admission") is not None
+    ):
+        return None
+    try:
+        adopted = authority.verify_exact_state_adoption_proof(proof)
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecyclePublicationError(
+            "Ready-source provider exact-state adoption proof is invalid"
+        ) from exc
+    if (
+        not isinstance(proof, Mapping)
+        or adopted.repository != current.lifecycle.repository
+        or adopted.delivery_issue != current.lifecycle.delivery_issue
+        or adopted.pull_request != current.lifecycle.pull_request
+        or adopted.lifecycle_id != current.lifecycle.lifecycle_id
+        or current.lifecycle.state.get("unrestricted_review_count") != 1
+        or current.lifecycle.state.get("ready") is not True
+        or current.lifecycle.state.get("draft") is not False
+        or current.lifecycle.state.get("cycle_3_absent") is not True
+        or current.lifecycle.state.get("exceptional_recovery_count") != 0
+        or current.lifecycle.state.get("exceptional_continuation_count") != 0
+    ):
+        raise LifecyclePublicationError(
+            "Ready-source provider adoption scope or finite state changed"
+        )
+    if proof.get("review_budget_consumption_admission") is not None:
+        return None
+    history = proof.get("observed_pre_enrollment_history")
+    if not isinstance(history, list):
+        raise LifecyclePublicationError(
+            "Ready-source provider adoption chronology is malformed"
+        )
+    reviews = [
+        (index, item) for index, item in enumerate(history)
+        if isinstance(item, Mapping) and item.get("kind") == "REVIEW_SUBMITTED"
+    ]
+    if len(reviews) != 1:
+        raise LifecyclePublicationError(
+            "Ready-source provider adoption review is not unique"
+        )
+    index, review = reviews[0]
+    reviewed_head = review.get("reviewed_head_sha")
+    if (
+        reviewed_head != review.get("head_sha")
+        or not isinstance(reviewed_head, str)
+        or not _OID.fullmatch(reviewed_head)
+        or any(
+            item.get("kind") != "REMEDIATION_HEAD_OBSERVED"
+            for item in history[index + 1:]
+        )
+    ):
+        raise LifecyclePublicationError(
+            "Ready-source provider adoption review lineage is not preserving"
+        )
+    return reviewed_head
 
 
 def _derive_exact_adoption_historical_provider_binding(
@@ -3063,8 +3146,11 @@ def derive_ready_source_recovery_provider_binding(
         raise LifecyclePublicationError(
             "Ready-source provider lifecycle shape is unsupported"
         )
+    adopted_provider_head = _derive_exact_adoption_reviewed_provider_head(
+        current, bundle
+    )
     ordinary = _derive_ordinary_ready_source_provider_binding(
-        current, bundle, verified_integrations
+        current, bundle, verified_integrations, adopted_provider_head
     )
     historical = _derive_exact_adoption_historical_provider_binding(
         current, bundle
@@ -3073,6 +3159,7 @@ def derive_ready_source_recovery_provider_binding(
         item
         for item in (
             ordinary[0] if ordinary is not None else None,
+            adopted_provider_head,
             historical.provider_head_sha if historical is not None else None,
         )
         if item is not None
@@ -3091,6 +3178,10 @@ def derive_ready_source_recovery_provider_binding(
         source
         for source, present in (
             (ORDINARY_REMEDIATION_SUFFIX, ordinary is not None),
+            (
+                EXACT_ADOPTION_REVIEW_OBSERVATION,
+                adopted_provider_head is not None and historical is None,
+            ),
             (
                 EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING,
                 historical is not None,
