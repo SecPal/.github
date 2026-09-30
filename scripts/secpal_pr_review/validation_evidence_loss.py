@@ -43,6 +43,9 @@ NO_RECEIPT_CURRENT_SAFETY_PATH = (
 DEPLOYMENT_119_CURRENT_SAFETY_PATH = (
     "tests/pre-enrollment-deployment-119-current-safety.py"
 )
+SECPAL_APP_352_CURRENT_SAFETY_PATH = (
+    "tests/pre-enrollment-secpal-app-352-current-safety.py"
+)
 NO_RECEIPT_REGISTERED_VALIDATION_PATHS = (
     "tests/secpal-trivy-repository-scan-unit.py",
     "tests/fixtures/trivy-repository-scan/malformed.txt",
@@ -51,6 +54,23 @@ NO_RECEIPT_REGISTERED_VALIDATION_PATHS = (
 DEPLOYMENT_119_REGISTERED_VALIDATION_PATHS = (
     "tests/ci-cloud-workload-evidence.py",
     "tests/fixtures/podman-5.4.2-rootless-userns.json",
+)
+SECPAL_APP_352_REGISTERED_VALIDATION_PATHS = (
+    "tests/android-distribution.test.mjs",
+    "tests/cta-section.test.mjs",
+    "tests/development-status.test.mjs",
+    "tests/features-section.test.mjs",
+    "tests/locale-redirect.test.mjs",
+    "tests/mobile-safe-area.test.mjs",
+    "tests/navigation-structure.test.mjs",
+    "tests/outcomes-section.test.mjs",
+    "tests/preflight-changed-files.test.mjs",
+    "tests/preflight-large-pr.test.mjs",
+    "tests/privacy-pages.test.mjs",
+    "tests/retired-domain.test.mjs",
+    "tests/roadmap-copy.test.mjs",
+    "tests/workflow-action-pins.test.mjs",
+    "tests/workflow-section.test.mjs",
 )
 CURRENT_RECEIPT_SAFETY_PATH = "tests/pre-enrollment-github-948-current-safety.py"
 CURRENT_RECEIPT_NODE_TEST_PATH = "tests/node-baseline-governance.test.mjs"
@@ -242,13 +262,43 @@ class HistoricalProviderBinding:
             or fast_path.digest_text(body) != self.summary_digest
             or body.count(fast_path.CODEX_REVIEW_SUMMARY_MARKER) != 1
             or len(code_rows) != 1
-            or security_rows
-            or "✅ **Completed**" not in code_rows[0]
-            or f"`{self.provider_head_sha[:7]}`" not in code_rows[0]
+            or len(security_rows) > 1
         ):
             raise fast_path.SecurityBlocker(
                 "historical review-provider summary is invalid"
             )
+        for label, rows in (("Code Review", code_rows), ("Security Review", security_rows)):
+            if not rows:
+                continue
+            cells = rows[0].split("|")
+            if (
+                len(cells) not in {5, 6}
+                or cells[0].strip() or cells[-1].strip()
+                or cells[1].strip() not in fast_path.CODEX_REVIEW_LABELS[label]
+                or not (
+                    cells[2].strip() == "✅ **Completed**"
+                    or fast_path._is_codex_completed_status(cells[2].strip())
+                )
+                or cells[3].strip() != f"`{self.provider_head_sha[:7]}`"
+            ):
+                raise fast_path.SecurityBlocker(
+                    "historical review-provider summary is invalid"
+                )
+        if security_rows:
+            if body.count("<!-- codex-security-review:v1") != 1:
+                raise fast_path.SecurityBlocker(
+                    "historical review-provider summary is invalid"
+                )
+            try:
+                fast_path.verify_codex_provider_summary(
+                    body, head_sha=self.provider_head_sha,
+                    repository=self.repository,
+                    pull_request_number=self.pull_request,
+                )
+            except fast_path.SecurityBlocker as exc:
+                raise fast_path.SecurityBlocker(
+                    "historical review-provider summary is invalid"
+                ) from exc
 
 
 @dataclass(frozen=True)
@@ -849,6 +899,7 @@ def _accepted_policy(repository: str, issue: int) -> tuple[str, dict[str, Any], 
             or (repository, issue, records[0].get("pull_request")) not in {
                 ("SecPal/.github", 711, 951),
                 ("SecPal/deployment", 119, 250),
+                ("SecPal/secpal.app", 352, 353),
             }
         ):
             raise authority.LifecycleAuthorityError(
@@ -917,6 +968,12 @@ def _accepted_policy(repository: str, issue: int) -> tuple[str, dict[str, Any], 
         == ("SecPal/deployment", 119, 250)
     ):
         maintained_harness = DEPLOYMENT_119_CURRENT_SAFETY_PATH
+    if (
+        record_version == NO_RECEIPT_SCHEMA_VERSION
+        and (repository, issue, record["pull_request"])
+        == ("SecPal/secpal.app", 352, 353)
+    ):
+        maintained_harness = SECPAL_APP_352_CURRENT_SAFETY_PATH
     if maintained_harness is not None and (
         record["current_safety_harness_path"] != maintained_harness
     ):
@@ -1106,10 +1163,10 @@ def _historical_provider_binding_for_ready(
     *,
     observed_ready_head: str | None = None,
 ) -> HistoricalProviderBinding:
-    """Derive the v1.1 provider head from one authenticated Ready instant."""
+    """Derive the reviewed head from authenticated finite Ready remediation."""
 
-    provider_head = _effective_source_head(commits, ready_at)
-    if observed_ready_head is not None and provider_head != observed_ready_head:
+    ready_head = _effective_source_head(commits, ready_at)
+    if observed_ready_head is not None and ready_head != observed_ready_head:
         raise authority.LifecycleAuthorityError(
             "loss source Ready head changed"
         )
@@ -1117,12 +1174,61 @@ def _historical_provider_binding_for_ready(
     if (
         not source_heads
         or source_heads[-1] != record["head_sha"]
-        or source_heads.count(provider_head) != 1
-        or source_heads.index(provider_head) >= len(source_heads) - 1
+        or len(source_heads) != len(set(source_heads))
+        or source_heads.count(ready_head) != 1
+        or source_heads.index(ready_head) >= len(source_heads) - 1
     ):
         raise authority.LifecycleAuthorityError(
             "historical review-provider head is not an ancestor"
         )
+    provider_head = ready_head
+    if (
+        _record_version(record) == NO_RECEIPT_SCHEMA_VERSION
+        and record["intended_state"]["remediation_cycle_count"]
+        > authority.MAX_REMEDIATION_CYCLES
+    ):
+        raise authority.LifecycleAuthorityError(
+            "loss source exceeds finite remediation maximum"
+        )
+    if (
+        _record_version(record) == NO_RECEIPT_SCHEMA_VERSION
+        and record["intended_state"]["remediation_cycle_count"] == 2
+    ):
+        state = record["intended_state"]
+        history = record["observed_pre_enrollment_history"]
+        ready_events = [
+            item for item in history if item["kind"] == "DRAFT_TO_READY_OBSERVED"
+        ]
+        ready_index = history.index(ready_events[0]) if len(ready_events) == 1 else -1
+        following = history[ready_index + 1:] if ready_index >= 0 else []
+        ready_source_index = source_heads.index(ready_head)
+        if (
+            len(ready_events) != 1
+            or ready_events[0]["head_sha"] != ready_head
+            or any(item["kind"] == "READY_TO_DRAFT_OBSERVED" for item in history)
+            or len(following) != 2
+            or [item["kind"] for item in following]
+            != ["REMEDIATION_HEAD_OBSERVED"] * 2
+            or [item["head_sha"] for item in following]
+            != source_heads[ready_source_index + 1:]
+            or len(source_heads) != ready_source_index + 3
+            or any(
+                len(commits[index].parent_shas) != 1
+                or commits[index].parent_shas[0] != commits[index - 1].head_sha
+                for index in range(ready_source_index + 1, len(commits))
+            )
+            or state["unrestricted_review_count"] != 1
+            or state["ready_transition_count"] != 1
+            or state["ready"] is not True
+            or state["draft"] is not False
+            or state["cycle_3_absent"] is not True
+            or state["exceptional_recovery_count"] != 0
+            or state["exceptional_continuation_count"] != 0
+        ):
+            raise authority.LifecycleAuthorityError(
+                "loss source two-remediation chronology is ambiguous"
+            )
+        provider_head = source_heads[-2]
     return HistoricalProviderBinding(
         repository=record["repository"],
         pull_request=record["pull_request"],
@@ -1196,7 +1302,7 @@ def authenticate_historical_provider_binding(
         for item in document["source_history"]
     )
     return _historical_provider_binding_for_ready(
-        document,
+        record,
         commits,
         ready[0]["observed_at"],
         observed_ready_head=ready[0]["head_sha"],
@@ -1615,9 +1721,16 @@ def _zero_receipt_current_safety_profile(
              record.get("pull_request"))
         == ("SecPal/deployment", 119, 250)
     )
+    secpal_app_352 = (
+        record is not None
+        and (record.get("repository"), record.get("delivery_issue"),
+             record.get("pull_request"))
+        == ("SecPal/secpal.app", 352, 353)
+    )
     harness_path = (
-        DEPLOYMENT_119_CURRENT_SAFETY_PATH
-        if deployment_119 else NO_RECEIPT_CURRENT_SAFETY_PATH
+        SECPAL_APP_352_CURRENT_SAFETY_PATH if secpal_app_352
+        else DEPLOYMENT_119_CURRENT_SAFETY_PATH if deployment_119
+        else NO_RECEIPT_CURRENT_SAFETY_PATH
     )
     if record is not None and record.get("current_safety_harness_path") != harness_path:
         raise authority.LifecycleAuthorityError(
@@ -1629,6 +1742,7 @@ def _zero_receipt_current_safety_profile(
         harness_paths=(harness_path,),
         purpose="Validate exact zero-receipt adoption current safety",
         required_invariants=REGISTERED_CURRENT_SAFETY_INVARIANTS,
+        timeout_seconds=600 if secpal_app_352 else 120,
     )
     if record is not None and "registered_validation_projection" in record:
         projection = record["registered_validation_projection"]
@@ -1647,8 +1761,9 @@ def _zero_receipt_current_safety_profile(
                 for item in projection.get("files", [])
             )
             != (
-                DEPLOYMENT_119_REGISTERED_VALIDATION_PATHS
-                if deployment_119 else NO_RECEIPT_REGISTERED_VALIDATION_PATHS
+                SECPAL_APP_352_REGISTERED_VALIDATION_PATHS if secpal_app_352
+                else DEPLOYMENT_119_REGISTERED_VALIDATION_PATHS if deployment_119
+                else NO_RECEIPT_REGISTERED_VALIDATION_PATHS
             )
         ):
             raise authority.LifecycleAuthorityError(
@@ -1686,6 +1801,7 @@ def _current_safety_profile_for_record(
             and path in {
                 NO_RECEIPT_CURRENT_SAFETY_PATH,
                 DEPLOYMENT_119_CURRENT_SAFETY_PATH,
+                SECPAL_APP_352_CURRENT_SAFETY_PATH,
             }
         ):
             return _zero_receipt_current_safety_profile(main, record)
