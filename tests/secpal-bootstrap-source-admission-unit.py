@@ -2469,6 +2469,21 @@ class PreEnrollmentSourceAdmissionContractTests(unittest.TestCase):
             ]["node_modules/entities"].update({
                 "resolved": "https://registry.npmjs.org/other/-/other-4.5.0.tgz"
             }),
+            "transitive path-like version": lambda _manifest, lock: lock[
+                "packages"
+            ]["node_modules/entities"].update({
+                "version": "x/../../../other/-/other-1.0.0",
+                "resolved": (
+                    "https://registry.npmjs.org/entities/-/"
+                    "entities-x/../../../other/-/other-1.0.0.tgz"
+                ),
+            }),
+            "transitive version range": lambda _manifest, lock: lock[
+                "packages"
+            ]["node_modules/entities"].update({
+                "version": "^4.5.0",
+                "resolved": "https://registry.npmjs.org/entities/-/entities-^4.5.0.tgz",
+            }),
         }
         for name, mutate in mutations.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:

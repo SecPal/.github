@@ -2848,7 +2848,7 @@ def _locked_work_graph_dependency_plan(
         if (
             _NPM_PACKAGE_NAME.fullmatch(package_name) is None
             or not isinstance(version, str)
-            or not version
+            or _NPM_EXACT_VERSION.fullmatch(version) is None
             or (key == package_key and version != manifest_version)
             or not isinstance(resolved, str)
             or resolved != (
