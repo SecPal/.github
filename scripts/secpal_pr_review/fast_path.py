@@ -7008,6 +7008,77 @@ def is_verified_validation_evidence(value: Any) -> bool:
         return False
 
 
+def verified_ready_integration_context(value: Any) -> dict[str, Any]:
+    """Project only the typed integration inputs of a reverified sealed result."""
+
+    if not is_verified_validation_evidence(value):
+        raise SecurityBlocker("Ready integration evidence is not verifier-authenticated")
+    try:
+        provenance = json.loads(value._verification_seal.provenance_json)
+        if provenance.get("kind") != "READY_INTEGRATION":
+            raise SecurityBlocker("typed Ready integration evidence is required")
+        return {
+            "integration_evidence": copy.deepcopy(provenance["integration_evidence"]),
+            "validation_receipt": copy.deepcopy(provenance["validation_receipt"]),
+            "attestation": copy.deepcopy(provenance["attestation"]),
+            "reviewed_state": StableFeedbackState.from_payload(
+                provenance["reviewed_state"]
+            ),
+        }
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise SecurityBlocker("typed Ready integration evidence is malformed") from exc
+
+
+def verify_ready_integration_provenance(
+    value: Any, *, repository_root: Path | str
+) -> VerifiedValidationEvidence:
+    """Reverify existing typed integration inputs at a trusted local Git source."""
+
+    expected = {
+        "kind",
+        "attestation",
+        "repository",
+        "head_sha",
+        "registry",
+        "command_set",
+        "reviewed_state",
+        "validation_receipt",
+        "integration_evidence",
+        "commit_parent_shas",
+        "commit_tree_sha",
+        "commit_validation_receipt_digest",
+        "commit_integration_evidence_digest",
+        "repository_root",
+        "signature_policy",
+    }
+    if (
+        not isinstance(value, dict)
+        or set(value) != expected
+        or value.get("kind") != "READY_INTEGRATION"
+    ):
+        raise SecurityBlocker("typed Ready integration provenance is malformed")
+    try:
+        reviewed = StableFeedbackState.from_payload(value["reviewed_state"])
+        return verify_ready_integration_attestation(
+            value["attestation"],
+            repository=value["repository"],
+            head_sha=value["head_sha"],
+            registry=value["registry"],
+            command_set=value["command_set"],
+            reviewed_state=reviewed,
+            validation_receipt=value["validation_receipt"],
+            integration_evidence=value["integration_evidence"],
+            commit_parent_shas=value["commit_parent_shas"],
+            commit_tree_sha=value["commit_tree_sha"],
+            commit_validation_receipt_digest=value["commit_validation_receipt_digest"],
+            commit_integration_evidence_digest=value["commit_integration_evidence_digest"],
+            repository_root=repository_root,
+            signature_policy=value["signature_policy"],
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SecurityBlocker("typed Ready integration provenance is malformed") from exc
+
+
 def verified_validation_review_context(
     value: Any,
 ) -> tuple[StableFeedbackState, str | None]:

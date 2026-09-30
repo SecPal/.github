@@ -801,6 +801,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "_mechanical_integration_result",
             "_reject_integration_conflict_markers",
             "verify_ready_integration_tree",
+            "verify_ready_integration_provenance",
             "ready_integration_attestation_matches",
             "READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS",
         },
@@ -1140,6 +1141,10 @@ DYNAMIC_IMPORT_CALLS = {
 }
 SAFE_GETATTR_CALLS = {
     "secpal-pr-review-actions.py": {
+        DynamicImportCall(
+            ("_command_resolve_batch",),
+            "getattr(arguments, 'ready_provider_lineage_integration', None)",
+        ),
         DynamicImportCall(
             ("_load_fast_path_helper",),
             "getattr(loaded, '__file__', None)",

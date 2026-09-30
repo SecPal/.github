@@ -153,6 +153,16 @@ fixed-thread resolver accepts the resulting optional provider-request history
 only when the complete Stable Feedback document is canonical and its feedback
 and state digests match.
 
+For a Ready CURRENT that follows authenticated remediation and typed
+`HEAD_ADVANCED`, capture the same Stable Feedback with
+`resolve-batch --capture-reviewed-state --delivery-issue` and one
+`--ready-provider-lineage-integration` per typed successor. Each input is the
+existing integration verifier's complete provenance package. The maintained
+command re-verifies the typed package against the local Git objects, protected
+CURRENT, and accepted-main helper source, then derives the only provider head
+from the signed lifecycle history. It reads current feedback independently and
+grants no thread-resolution authority.
+
 Ordinary Ready remediation has one corresponding finite composition for
 provider feedback that arrived after the canonical Stable Feedback capture of
 the already-consumed reviewed head. The verifier reopens the first ordinary
