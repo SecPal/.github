@@ -162,12 +162,27 @@ Recovery, or Continuation are reverified from the complete signed lifecycle.
 The maintained current-head final attestation and recovery authorization remain
 independently binding; the provider result is not persisted as evidence.
 
+The same verifier-owned derivation may traverse a later `HEAD_ADVANCED` only
+when its exact typed Ready-integration package is reverified and agrees with
+the signed protected CURRENT snapshot. The closed successor set is
+`REMEDIATION_COMPLETED` and `HEAD_ADVANCED`; each event must preserve Ready and
+the finite review budget. Native history must authenticate the sole consumed
+review at the derived provider head and every subsequent transition. Historical
+provider terminality does not claim that the provider reviewed integration
+bytes or grant thread-resolution authority.
+
+The integration commit-binding command exports that re-verifiable package with
+`--ready-integration-provenance-output PATH`. Capture consumes it against the
+trusted local repository root. Exact-State-Adoption uses its verified observed
+review head as the provider head when that head precedes an adopted remediation
+baseline; later signed successors remain independently authenticated.
+
 This exception changes only provider-summary head binding. The same bounded
 read still captures all current-head feedback. Every later material,
 actionable, security, authentication, integrity, unclassified, or otherwise
 blocking source must be dispositioned under the existing current-feedback
-rules. Ordinary capture and Ready integration continue to require exact-head
-provider terminality.
+rules. Ordinary capture requires exact-head provider terminality unless the
+maintained Ready review-preserving lineage is authenticated.
 
 A current recovered Ready source uses the same Stable Feedback projection. Its
 capture-only invocation supplies the exact delivery issue and recovery

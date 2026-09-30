@@ -10389,6 +10389,7 @@ class FastPathTests(TestCase):
                 "--reviewed-state", str(root / "reviewed.json"), "--repo-root", str(repository),
                 "--receipt", str(root / "receipt.json"), "--bind-commit",
                 "--output", str(root / "attestation.json"),
+                "--ready-integration-provenance-output", str(root / "package.json"),
                 "--integration-evidence", str(root / "integration.json"),
                 "--delivery-issue", "9", "--integration-authorization-id", integration["authorization_id"],
                 "--expected-integration-signer", principal,
@@ -10419,6 +10420,14 @@ class FastPathTests(TestCase):
             ):
                 self.assertEqual(actions.main(argv), 0)
             observe.assert_called_once_with("SecPal/.github", 746)
+            package = json.loads((root / "package.json").read_text())
+            self.assertEqual(package["repository_root"], ".")
+            self.assertEqual(
+                fast_path.verify_ready_integration_provenance(
+                    package, repository_root=repository
+                ).head_sha,
+                candidate,
+            )
 
             substituted_parent_observation = {
                 **observation,
@@ -10496,6 +10505,7 @@ class FastPathTests(TestCase):
             manual_gate_evidence=None,
             eligibility_evidence="eligibility.json",
             integration_evidence="integration.json",
+            ready_integration_provenance_output="package.json",
             delivery_issue=9,
             integration_authorization_id="ready-integration-authorization-001",
             expected_integration_signer="aroviqen",
@@ -10566,7 +10576,7 @@ class FastPathTests(TestCase):
             mock.patch.object(
                 fast_path,
                 "_run_integration_commit_git",
-                side_effect=lambda root, command: git_result(root, command),
+                side_effect=lambda root, command, **_kwargs: git_result(root, command),
             ),
             mock.patch.object(
                 actions,
@@ -10589,12 +10599,15 @@ class FastPathTests(TestCase):
                 return_value=eligibility_digest,
             ),
             mock.patch.object(actions, "_write_fast_report") as write_report,
+            mock.patch.object(fast_path, "atomic_write_json") as write_package,
         ):
             self.assertEqual(actions._command_attest_validation(arguments), 0)
         observe.assert_called_once_with(
             "SecPal/.github", reviewed.pull_request_number
         )
         write_report.assert_called_once()
+        self.assertEqual(write_package.call_args.args[0], Path("package.json"))
+        self.assertEqual(write_package.call_args.args[1]["repository_root"], ".")
         self.assertEqual(
             write_report.call_args.args[1]["kind"],
             "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION",
@@ -14219,6 +14232,155 @@ class FastPathTests(TestCase):
             "SecPal/.github", 1
         )
         write.assert_called_once_with(Path("reviewed.json"), reviewed.to_dict())
+
+    def test_ready_provider_lineage_capture_uses_exact_current_and_typed_package(
+        self,
+    ) -> None:
+        binding = self._ready_source_provider_binding(
+            current_head=p21.HEAD, pull_request=1
+        )
+        current = SimpleNamespace(lifecycle=SimpleNamespace(
+            repository="SecPal/.github", delivery_issue=911, pull_request=1,
+            head_sha=p21.HEAD, state={"ready": True, "draft": False},
+        ))
+        publication = SimpleNamespace(
+            verify_current_lifecycle_authority=mock.Mock(return_value=current),
+            derive_ready_source_recovery_provider_binding=mock.Mock(
+                return_value=binding
+            ),
+        )
+        typed = object()
+        with (
+            mock.patch.object(
+                actions, "_require_accepted_main_bridge_source",
+                return_value="a" * 40,
+            ) as source,
+            mock.patch.object(
+                actions, "_load_lifecycle_publication_helpers",
+                return_value=(SimpleNamespace(), publication),
+            ),
+            mock.patch.object(actions, "_read_json", return_value={"kind": "READY_INTEGRATION"}),
+            mock.patch.object(
+                fast_path, "verify_ready_integration_provenance",
+                return_value=typed,
+            ) as verified,
+        ):
+            result = actions._derive_resolve_batch_ready_provider_lineage_binding(
+                repository="SecPal/.github", delivery_issue=911,
+                pull_request=1, repository_root=REPO_ROOT,
+                integration_paths=["integration.json"],
+            )
+        self.assertIs(result, binding)
+        source.assert_any_call("SecPal/.github", expected_main="a" * 40)
+        publication.verify_current_lifecycle_authority.assert_called_once_with(
+            "SecPal/.github", 911
+        )
+        verified.assert_called_once_with(
+            {"kind": "READY_INTEGRATION"}, repository_root=REPO_ROOT
+        )
+        publication.derive_ready_source_recovery_provider_binding.assert_called_once_with(
+            current, verified_integrations=(typed,)
+        )
+
+    def test_ready_provider_lineage_lifecycle_failure_is_security_block(self) -> None:
+        publication = SimpleNamespace(
+            verify_current_lifecycle_authority=mock.Mock(
+                side_effect=ValueError("invalid protected CURRENT")
+            ),
+        )
+        with (
+            mock.patch.object(
+                actions, "_require_accepted_main_bridge_source",
+                return_value="a" * 40,
+            ),
+            mock.patch.object(
+                actions, "_load_lifecycle_publication_helpers",
+                return_value=(SimpleNamespace(), publication),
+            ),
+            self.assertRaises(fast_path.SecurityBlocker),
+        ):
+            actions._derive_resolve_batch_ready_provider_lineage_binding(
+                repository="SecPal/.github", delivery_issue=911,
+                pull_request=1, repository_root=REPO_ROOT,
+                integration_paths=[],
+            )
+        current = SimpleNamespace(lifecycle=SimpleNamespace(
+            repository="SecPal/.github", delivery_issue=911, pull_request=1,
+            head_sha=p21.HEAD, state={"ready": True, "draft": False},
+        ))
+        publication.verify_current_lifecycle_authority.side_effect = None
+        publication.verify_current_lifecycle_authority.return_value = current
+        publication.derive_ready_source_recovery_provider_binding = mock.Mock(
+            side_effect=ValueError("invalid signed HEAD_ADVANCED")
+        )
+        with (
+            mock.patch.object(
+                actions, "_require_accepted_main_bridge_source",
+                return_value="a" * 40,
+            ),
+            mock.patch.object(
+                actions, "_load_lifecycle_publication_helpers",
+                return_value=(SimpleNamespace(), publication),
+            ),
+            self.assertRaises(fast_path.SecurityBlocker),
+        ):
+            actions._derive_resolve_batch_ready_provider_lineage_binding(
+                repository="SecPal/.github", delivery_issue=911,
+                pull_request=1, repository_root=REPO_ROOT,
+                integration_paths=[],
+            )
+
+    def test_ready_provider_lineage_capture_keeps_current_feedback_authoritative(
+        self,
+    ) -> None:
+        binding = self._ready_source_provider_binding()
+        reviewed = fast_feedback()
+        gateway = SimpleNamespace(
+            capture_stable_feedback=mock.Mock(return_value=reviewed)
+        )
+        arguments = SimpleNamespace(
+            repo_root=str(REPO_ROOT), registry=None, repo="SecPal/.github", pr=1,
+            ready_remediation_provider_binding=None,
+            ready_source_recovery_publication=None,
+            ready_provider_lineage_integration=["integration.json"],
+            delivery_issue=911, capture_reviewed_state="reviewed.json",
+            apply=False, request=None, reviewed_state=None, attestation=None,
+            output=None,
+        )
+        with (
+            mock.patch.object(actions, "load_registry", return_value={}),
+            mock.patch.object(
+                actions, "select_repository",
+                return_value=registry_entry("SecPal/.github"),
+            ),
+            mock.patch.object(
+                actions, "_derive_resolve_batch_ready_provider_lineage_binding",
+                return_value=binding,
+            ) as derive,
+            mock.patch.object(actions, "FastPathGateway", return_value=gateway) as factory,
+            mock.patch.object(fast_path, "atomic_write_json") as write,
+        ):
+            self.assertEqual(actions._command_resolve_batch(arguments), 0)
+        derive.assert_called_once_with(
+            repository="SecPal/.github", delivery_issue=911, pull_request=1,
+            repository_root=REPO_ROOT, integration_paths=["integration.json"],
+        )
+        self.assertIs(factory.call_args.kwargs["ready_source_provider_binding"], binding)
+        gateway.capture_stable_feedback.assert_called_once_with("SecPal/.github", 1)
+        write.assert_called_once_with(Path("reviewed.json"), reviewed.to_dict())
+
+        arguments.capture_reviewed_state = None
+        with (
+            mock.patch.object(actions, "load_registry", return_value={}),
+            mock.patch.object(
+                actions, "select_repository",
+                return_value=registry_entry("SecPal/.github"),
+            ),
+            self.assertRaisesRegex(
+                fast_path.RecoverableLocalError, "capture-only"
+            ),
+        ):
+            actions._command_resolve_batch(arguments)
 
     def test_ready_source_accepts_exact_v11_historical_provider_summary(self) -> None:
         binding = replace(

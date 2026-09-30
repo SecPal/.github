@@ -126,7 +126,8 @@ class Chain:
         self.checkpoint: dict[str, Any] | None = None
 
     def append(self, transition: str, *, head: str | None = None,
-               replacement_pull_request: int | None = None) -> None:
+               replacement_pull_request: int | None = None,
+               current_head_evidence: fast_path.VerifiedValidationEvidence | None = None) -> None:
         resulting_head = head or self.head
         event = authority.create_transition_authorization(
             event_id=(f"genesis:{self.initialization['initialization_digest']}"
@@ -148,6 +149,7 @@ class Chain:
             accepted_event_signers=frozenset({SIGNER}),
             accepted_authority_signers=frozenset({SIGNER}),
             signature_verifier=verify_signature,
+            current_head_evidence=current_head_evidence,
         )
         self.events.append(event)
         self.authorities.append(snapshot)
@@ -228,7 +230,8 @@ def recovered_ready_chain(issue: int = ISSUE) -> Chain:
 
 
 def exact_adoption_evidence(
-    *, admit_review_budget: bool = False
+    *, admit_review_budget: bool = False,
+    observed_history: list[dict[str, Any]] | None = None,
 ) -> tuple[bytes, dict[str, Any]]:
     if admit_review_budget:
         history = [
@@ -257,6 +260,8 @@ def exact_adoption_evidence(
              "observed_at": "2026-08-05T00:00:00Z", "head_sha": HEADS[2],
              "reviewed_head_sha": None},
         ]
+    if observed_history is not None:
+        history = observed_history
     state = authority.initial_state()
     state.update(
         unrestricted_review_count=1,
@@ -266,7 +271,9 @@ def exact_adoption_evidence(
         ready_transition_count=0 if admit_review_budget else 1,
         ready_history=[] if admit_review_budget else [{
             "sequence": 1, "transition_kind": "DRAFT_TO_READY",
-            "observation_digest": authority.digest_json(history[1]),
+            "observation_digest": authority.digest_json(next(
+                item for item in history if item["kind"] == "DRAFT_TO_READY_OBSERVED"
+            )),
         }],
     )
     validation = verified_validation_evidence(
@@ -353,9 +360,14 @@ def verified_validation_evidence(
     ready_integration: bool = False,
     delivery_issue: int = ISSUE,
     integration_version: str = "1.1",
+    lifecycle_identity: str = "lifecycle-1",
+    remediation_cycles: int = 2,
+    prior_authority_digest: str = "6" * 64,
+    reviewed_head: str | None = None,
 ) -> fast_path.VerifiedValidationEvidence:
     reviewed = fast_path.StableFeedbackState(
-        repository=REPOSITORY, pull_request_number=pull_request, head_sha=parent,
+        repository=REPOSITORY, pull_request_number=pull_request,
+        head_sha=reviewed_head or parent,
         base_ref="main", base_sha=HEADS[0], pr_state="OPEN",
         feedback={"pull_request_reactions": [], "reviews": [],
                   "conversation_comments": [], "threads": []},
@@ -378,7 +390,7 @@ def verified_validation_evidence(
             "delivery_issue_number": delivery_issue,
             "pull_request_number": pull_request,
             "prior_delivery_head_sha": parent,
-            "prior_authority_digest": "6" * 64,
+            "prior_authority_digest": prior_authority_digest,
             "prior_authority_tag_object_sha": "7" * 40,
             "target_base": {
                 "ref": "main",
@@ -402,7 +414,7 @@ def verified_validation_evidence(
             },
             "eligibility": {
                 "eligible": True,
-                "lifecycle_identity": "lifecycle-1",
+                "lifecycle_identity": lifecycle_identity,
                 "draft_before": False,
                 "draft_after": False,
                 "ready_before": True,
@@ -411,8 +423,8 @@ def verified_validation_evidence(
                 "review_requested": False,
                 "unrestricted_reviews_before": 1,
                 "unrestricted_reviews_after": 1,
-                "remediation_cycles_before": 2,
-                "remediation_cycles_after": 2,
+                "remediation_cycles_before": remediation_cycles,
+                "remediation_cycles_after": remediation_cycles,
                 "exceptional_recoveries_before": 0,
                 "exceptional_recoveries_after": 0,
                 "exceptional_continuations_before": 0,
@@ -421,7 +433,7 @@ def verified_validation_evidence(
             },
         }
     if integration is not None and integration_version == "1.3":
-        integration.update(schema_version="1.3", reviewed_head_sha=parent, path_classifications=[])
+        integration.update(schema_version="1.3", reviewed_head_sha=reviewed.head_sha, path_classifications=[])
     receipt = fast_path.create_validation_receipt(
         repository=REPOSITORY, head_sha=parent, validated_tree_sha=tree,
         registry=registry, command_set=[], successful_result=True,
@@ -1612,6 +1624,62 @@ class LifecyclePublicationTests(TestCase):
         )
         return current, proof, historical
 
+    def test_adopted_provider_lineage_accepts_observed_ready_after_review(self) -> None:
+        _, baseline = exact_adoption_evidence()
+        history = copy.deepcopy(baseline["observed_pre_enrollment_history"])
+        history[1], history[2] = history[2], history[1]
+        for index, item in enumerate(history, 1):
+            item["sequence"] = index
+            item["observed_at"] = f"2026-08-0{index}T00:00:00Z"
+        serialized, proof = exact_adoption_evidence(observed_history=history)
+        lifecycle = authority.verify_exact_state_adoption_proof(proof)
+        current = publication.VerifiedLifecyclePublication(
+            "a" * 40, "b" * 64, BRANCH, None, None, lifecycle, serialized,
+        )
+        self.assertEqual(
+            publication._derive_exact_adoption_reviewed_provider_head(
+                current, json.loads(serialized)
+            ),
+            HEADS[0],
+        )
+
+    def test_adopted_provider_lineage_rejects_disconnected_review_head(self) -> None:
+        _, baseline = exact_adoption_evidence()
+        history = copy.deepcopy(baseline["observed_pre_enrollment_history"])
+        history[2]["head_sha"] = HEADS[6]
+        history[2]["reviewed_head_sha"] = HEADS[6]
+        serialized, proof = exact_adoption_evidence(observed_history=history)
+        lifecycle = authority.verify_exact_state_adoption_proof(proof)
+        current = publication.VerifiedLifecyclePublication(
+            "a" * 40, "b" * 64, BRANCH, None, None, lifecycle, serialized,
+        )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "review lineage is not preserving"
+        ):
+            publication._derive_exact_adoption_reviewed_provider_head(
+                current, json.loads(serialized)
+            )
+
+    def test_adopted_provider_lineage_rejects_disconnected_ready_observation(self) -> None:
+        _, baseline = exact_adoption_evidence()
+        history = copy.deepcopy(baseline["observed_pre_enrollment_history"])
+        history[1], history[2] = history[2], history[1]
+        for index, item in enumerate(history, 1):
+            item["sequence"] = index
+            item["observed_at"] = f"2026-08-0{index}T00:00:00Z"
+        history[2]["head_sha"] = HEADS[6]
+        serialized, proof = exact_adoption_evidence(observed_history=history)
+        lifecycle = authority.verify_exact_state_adoption_proof(proof)
+        current = publication.VerifiedLifecyclePublication(
+            "a" * 40, "b" * 64, BRANCH, None, None, lifecycle, serialized,
+        )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "review lineage is not preserving"
+        ):
+            publication._derive_exact_adoption_reviewed_provider_head(
+                current, json.loads(serialized)
+            )
+
     def test_ready_source_provider_binding_derives_attested_ready_predecessor(self) -> None:
         chain = Chain()
         chain.append("INITIALIZED_DRAFT")
@@ -1646,6 +1714,174 @@ class LifecyclePublicationTests(TestCase):
                 replace(binding, provider_head_sha=HEADS[0]),
                 repository=REPOSITORY,
                 pull_request=PR,
+                current_head_sha=HEADS[2],
+            )
+
+    def test_ready_provider_lineage_crosses_typed_head_advanced(self) -> None:
+        chain = Chain(ISSUE + 21)
+        chain.append("INITIALIZED_DRAFT")
+        chain.append("UNRESTRICTED_REVIEW_CONSUMED")
+        chain.append("DRAFT_TO_READY")
+        remediation = verified_validation_evidence(
+            head=HEADS[1], tree=HEADS[3], parent=HEADS[0],
+            delivery_issue=chain.issue,
+        )
+        chain.append(
+            "REMEDIATION_COMPLETED", head=HEADS[1],
+            current_head_evidence=remediation,
+        )
+        integration = verified_validation_evidence(
+            head=HEADS[2], tree=HEADS[4], parent=HEADS[1],
+            delivery_issue=chain.issue, ready_integration=True,
+            integration_version="1.3", lifecycle_identity=chain.lifecycle_id,
+            remediation_cycles=1,
+            prior_authority_digest=chain.authorities[-1]["authority_digest"],
+            reviewed_head=HEADS[0],
+        )
+        provenance = json.loads(integration._verification_seal.provenance_json)
+        integration_evidence = provenance["integration_evidence"]
+        git_results = [
+            subprocess.CompletedProcess([], 0, "https://github.com/SecPal/.github.git\n", ""),
+            subprocess.CompletedProcess(
+                [], 0,
+                f"tree {HEADS[4]}\nparent {HEADS[1]}\nparent {HEADS[0]}\n"
+                "gpgsig -----BEGIN SSH SIGNATURE-----\n\n", "",
+            ),
+            subprocess.CompletedProcess(
+                [], 0,
+                f'Good "git" signature for {SIGNER} with ED25519 key SHA256:test\n',
+                "SHA256:test\n",
+            ),
+            subprocess.CompletedProcess([], 0, "8" * 40 + "\n", ""),
+            subprocess.CompletedProcess([], 0, HEADS[4] + "\x00", ""),
+            subprocess.CompletedProcess([], 0, "", ""),
+        ]
+        with patch.object(
+            fast_path, "_run_integration_commit_git", side_effect=git_results
+        ):
+            self.assertTrue(fast_path.is_verified_validation_evidence(integration))
+        with patch.object(
+            fast_path, "_run_integration_commit_git", side_effect=git_results
+        ):
+            exported = fast_path.export_ready_integration_provenance(integration)
+        self.assertEqual(exported["repository_root"], ".")
+        portable = exported
+        with self.assertRaises(fast_path.SecurityBlocker):
+            fast_path.verify_ready_integration_provenance(
+                {**portable, "repository_root": "/untrusted/candidate"},
+                repository_root=Path(__file__).resolve().parents[1],
+            )
+        with patch.object(
+            fast_path, "_run_integration_commit_git", side_effect=git_results
+        ):
+            replayed = fast_path.verify_ready_integration_provenance(
+                portable, repository_root=Path(__file__).resolve().parents[1]
+            )
+        self.assertEqual(
+            replayed.source_validation_evidence_digest,
+            integration.source_validation_evidence_digest,
+        )
+        changed_receipt = copy.deepcopy(portable)
+        changed_receipt["validation_receipt"]["receipt_digest"] = "0" * 64
+        with self.assertRaises(fast_path.SecurityBlocker):
+            fast_path.verify_ready_integration_provenance(
+                changed_receipt, repository_root=Path(__file__).resolve().parents[1]
+            )
+        with patch.object(
+            fast_path, "_run_integration_commit_git", side_effect=git_results
+        ):
+            chain.append(
+                "HEAD_ADVANCED", head=HEADS[2],
+                current_head_evidence=integration,
+            )
+        _, current = self.enroll(chain)
+        summary = (
+            "<!-- codex-pull-request-review-summary -->\n"
+            "<!-- codex-security-review:v1 "
+            + json.dumps({
+                "headSha": HEADS[0], "repository": REPOSITORY,
+                "pullRequestNumber": PR, "status": "completed",
+            }, separators=(",", ":"))
+            + " -->\n"
+            f"| 📝 **Code Review** | **Completed** | `{HEADS[0][:7]}` | Ready |\n"
+            f"| 🔒 **Security Review** | **Completed** | `{HEADS[0][:7]}` | Ready |\n"
+        )
+        fast_path.verify_codex_provider_summary(
+            summary, head_sha=HEADS[0], repository=REPOSITORY,
+            pull_request_number=PR,
+        )
+        current_feedback = fast_path.StableFeedbackState(
+            repository=REPOSITORY, pull_request_number=PR,
+            head_sha=HEADS[2], base_ref="main", base_sha=HEADS[0],
+            pr_state="OPEN", feedback={
+                "pull_request_reactions": [], "reviews": [],
+                "conversation_comments": [], "threads": [],
+            },
+        )
+        self.assertEqual(current_feedback.head_sha, HEADS[2])
+        self.assertEqual(integration_evidence["ordered_parent_shas"], [HEADS[1], HEADS[0]])
+        with patch.object(
+            fast_path, "_run_integration_commit_git", side_effect=git_results
+        ):
+            binding = publication.derive_ready_source_recovery_provider_binding(
+                current, verified_integrations=(integration,)
+            )
+        self.assertEqual(binding.provider_head_sha, HEADS[0])
+        self.assertEqual(binding.current_head_sha, HEADS[2])
+        actions = load_actions()
+        provider_state = {
+            "headRefOid": HEADS[2], "isDraft": False,
+            "comments": {"nodes": [{
+                "author": {"login": "chatgpt-codex-connector"},
+                "body": summary,
+            }], "pageInfo": {"hasNextPage": False}},
+            "reviewRequests": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+        }
+        with patch.object(
+            fast_path, "_run_integration_commit_git", side_effect=git_results
+        ):
+            actions._require_review_providers_terminal(
+                provider_state, repository=REPOSITORY, pull_request_number=PR,
+                ready_source_provider_binding=binding,
+            )
+        stale_provider = copy.deepcopy(provider_state)
+        stale_provider["comments"]["nodes"][0]["body"] = summary.replace(
+            HEADS[0], HEADS[1]
+        )
+        with patch.object(
+            fast_path, "_run_integration_commit_git", side_effect=git_results
+        ), self.assertRaises(actions.MutationBlocked):
+            actions._require_review_providers_terminal(
+                stale_provider, repository=REPOSITORY, pull_request_number=PR,
+                ready_source_provider_binding=binding,
+            )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "lacks typed integration"
+        ):
+            publication.derive_ready_source_recovery_provider_binding(current)
+        wrong_issue = verified_validation_evidence(
+            head=HEADS[2], tree=HEADS[4], parent=HEADS[1],
+            delivery_issue=chain.issue + 1, ready_integration=True,
+            integration_version="1.3", lifecycle_identity=chain.lifecycle_id,
+            remediation_cycles=1,
+            prior_authority_digest=chain.authorities[-2]["authority_digest"],
+            reviewed_head=HEADS[0],
+        )
+        with patch.object(
+            fast_path, "_run_integration_commit_git", side_effect=git_results
+        ), self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "differs from CURRENT"
+        ):
+            publication.derive_ready_source_recovery_provider_binding(
+                current, verified_integrations=(wrong_issue,)
+            )
+        with patch.object(
+            fast_path, "_run_integration_commit_git", side_effect=git_results
+        ), self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "stale or substituted"
+        ):
+            replace(binding, provider_head_sha=HEADS[1]).provider_head(
+                repository=REPOSITORY, pull_request=PR,
                 current_head_sha=HEADS[2],
             )
 
@@ -1935,7 +2171,7 @@ class LifecyclePublicationTests(TestCase):
         ), patch.object(
             loss, "authenticate_historical_provider_binding"
         ) as verify_loss, self.assertRaisesRegex(
-            publication.LifecyclePublicationError, "remediation lineage"
+            publication.LifecyclePublicationError, "adoption chronology"
         ):
             publication.derive_ready_source_recovery_provider_binding(current)
         verify_loss.assert_not_called()
@@ -3088,6 +3324,8 @@ class LifecyclePublicationTests(TestCase):
     def test_exact_preservation_version_publishes_and_reads_back_head_advanced(self) -> None:
         original = verified_validation_evidence
         def preservation_evidence(**kwargs: Any) -> fast_path.VerifiedValidationEvidence:
+            if kwargs.get("ready_integration"):
+                kwargs["reviewed_head"] = HEADS[0]
             return original(**kwargs, integration_version="1.3")
         with patch.dict(globals(), {"verified_validation_evidence": preservation_evidence}):
             self.test_exact_adoption_enrolls_once_and_uses_normal_successor_path()
@@ -3134,6 +3372,8 @@ class LifecyclePublicationTests(TestCase):
         current_validation = verified_validation_evidence(
             head=HEADS[4], tree=HEADS[5], parent=HEADS[2],
             ready_integration=True,
+            lifecycle_identity=enrolled.lifecycle.lifecycle_id,
+            prior_authority_digest=enrolled.lifecycle.authority_digest,
         )
 
         def issue_successor(**kwargs: Any) -> dict[str, Any]:
@@ -3229,6 +3469,34 @@ class LifecyclePublicationTests(TestCase):
             enrolled.lifecycle.adoption_source_evidence_digest,
         )
         self.assertEqual(advanced.lifecycle.state, enrolled.lifecycle.state)
+        integration_package = json.loads(
+            current_validation._verification_seal.provenance_json
+        )
+        if integration_package["integration_evidence"]["schema_version"] == "1.3":
+            integration = integration_package["integration_evidence"]
+            git_results = [
+                subprocess.CompletedProcess([], 0, "https://github.com/SecPal/.github.git\n", ""),
+                subprocess.CompletedProcess(
+                    [], 0,
+                    f"tree {HEADS[5]}\nparent {HEADS[2]}\nparent {HEADS[0]}\n"
+                    "gpgsig -----BEGIN SSH SIGNATURE-----\n\n", "",
+                ),
+                subprocess.CompletedProcess(
+                    [], 0,
+                    f'Good "git" signature for {SIGNER} with ED25519 key SHA256:test\n',
+                    "SHA256:test\n",
+                ),
+                subprocess.CompletedProcess([], 0, "8" * 40 + "\n", ""),
+                subprocess.CompletedProcess([], 0, integration["mechanical_merge_tree_sha"] + "\x00", ""),
+                subprocess.CompletedProcess([], 0, "", ""),
+            ]
+            with patch.object(
+                fast_path, "_run_integration_commit_git", side_effect=git_results
+            ):
+                provider = publication.derive_ready_source_recovery_provider_binding(
+                    advanced, verified_integrations=(current_validation,)
+                )
+            self.assertEqual(provider.provider_head_sha, HEADS[0])
         self.assertEqual(
             publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE)
             .lifecycle.authority_digest,
