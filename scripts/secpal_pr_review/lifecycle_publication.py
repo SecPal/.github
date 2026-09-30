@@ -2994,14 +2994,30 @@ def _derive_exact_adoption_reviewed_provider_head(
         )
     index, review = reviews[0]
     reviewed_head = review.get("reviewed_head_sha")
+    effective_head = None
+    for item in history[:index + 1]:
+        if item.get("kind") in {
+            "PR_CREATED_DRAFT", "REMEDIATION_HEAD_OBSERVED",
+            "EXCEPTIONAL_RECOVERY_OBSERVED",
+            "EXCEPTIONAL_CONTINUATION_OBSERVED", "HEAD_ADVANCED_OBSERVED",
+        }:
+            effective_head = item.get("head_sha")
+    preserving_head = reviewed_head
+    preserving_suffix = True
+    for item in history[index + 1:]:
+        kind = item.get("kind")
+        if kind == "DRAFT_TO_READY_OBSERVED":
+            preserving_suffix &= item.get("head_sha") == preserving_head
+        elif kind == "REMEDIATION_HEAD_OBSERVED":
+            preserving_head = item.get("head_sha")
+        else:
+            preserving_suffix = False
     if (
         reviewed_head != review.get("head_sha")
+        or reviewed_head != effective_head
         or not isinstance(reviewed_head, str)
         or not _OID.fullmatch(reviewed_head)
-        or any(
-            item.get("kind") != "REMEDIATION_HEAD_OBSERVED"
-            for item in history[index + 1:]
-        )
+        or not preserving_suffix
     ):
         raise LifecyclePublicationError(
             "Ready-source provider adoption review lineage is not preserving"

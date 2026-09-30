@@ -230,7 +230,8 @@ def recovered_ready_chain(issue: int = ISSUE) -> Chain:
 
 
 def exact_adoption_evidence(
-    *, admit_review_budget: bool = False
+    *, admit_review_budget: bool = False,
+    observed_history: list[dict[str, Any]] | None = None,
 ) -> tuple[bytes, dict[str, Any]]:
     if admit_review_budget:
         history = [
@@ -259,6 +260,8 @@ def exact_adoption_evidence(
              "observed_at": "2026-08-05T00:00:00Z", "head_sha": HEADS[2],
              "reviewed_head_sha": None},
         ]
+    if observed_history is not None:
+        history = observed_history
     state = authority.initial_state()
     state.update(
         unrestricted_review_count=1,
@@ -268,7 +271,9 @@ def exact_adoption_evidence(
         ready_transition_count=0 if admit_review_budget else 1,
         ready_history=[] if admit_review_budget else [{
             "sequence": 1, "transition_kind": "DRAFT_TO_READY",
-            "observation_digest": authority.digest_json(history[1]),
+            "observation_digest": authority.digest_json(next(
+                item for item in history if item["kind"] == "DRAFT_TO_READY_OBSERVED"
+            )),
         }],
     )
     validation = verified_validation_evidence(
@@ -1618,6 +1623,62 @@ class LifecyclePublicationTests(TestCase):
             summary_digest="e" * 64,
         )
         return current, proof, historical
+
+    def test_adopted_provider_lineage_accepts_observed_ready_after_review(self) -> None:
+        _, baseline = exact_adoption_evidence()
+        history = copy.deepcopy(baseline["observed_pre_enrollment_history"])
+        history[1], history[2] = history[2], history[1]
+        for index, item in enumerate(history, 1):
+            item["sequence"] = index
+            item["observed_at"] = f"2026-08-0{index}T00:00:00Z"
+        serialized, proof = exact_adoption_evidence(observed_history=history)
+        lifecycle = authority.verify_exact_state_adoption_proof(proof)
+        current = publication.VerifiedLifecyclePublication(
+            "a" * 40, "b" * 64, BRANCH, None, None, lifecycle, serialized,
+        )
+        self.assertEqual(
+            publication._derive_exact_adoption_reviewed_provider_head(
+                current, json.loads(serialized)
+            ),
+            HEADS[0],
+        )
+
+    def test_adopted_provider_lineage_rejects_disconnected_review_head(self) -> None:
+        _, baseline = exact_adoption_evidence()
+        history = copy.deepcopy(baseline["observed_pre_enrollment_history"])
+        history[2]["head_sha"] = HEADS[6]
+        history[2]["reviewed_head_sha"] = HEADS[6]
+        serialized, proof = exact_adoption_evidence(observed_history=history)
+        lifecycle = authority.verify_exact_state_adoption_proof(proof)
+        current = publication.VerifiedLifecyclePublication(
+            "a" * 40, "b" * 64, BRANCH, None, None, lifecycle, serialized,
+        )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "review lineage is not preserving"
+        ):
+            publication._derive_exact_adoption_reviewed_provider_head(
+                current, json.loads(serialized)
+            )
+
+    def test_adopted_provider_lineage_rejects_disconnected_ready_observation(self) -> None:
+        _, baseline = exact_adoption_evidence()
+        history = copy.deepcopy(baseline["observed_pre_enrollment_history"])
+        history[1], history[2] = history[2], history[1]
+        for index, item in enumerate(history, 1):
+            item["sequence"] = index
+            item["observed_at"] = f"2026-08-0{index}T00:00:00Z"
+        history[2]["head_sha"] = HEADS[6]
+        serialized, proof = exact_adoption_evidence(observed_history=history)
+        lifecycle = authority.verify_exact_state_adoption_proof(proof)
+        current = publication.VerifiedLifecyclePublication(
+            "a" * 40, "b" * 64, BRANCH, None, None, lifecycle, serialized,
+        )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "review lineage is not preserving"
+        ):
+            publication._derive_exact_adoption_reviewed_provider_head(
+                current, json.loads(serialized)
+            )
 
     def test_ready_source_provider_binding_derives_attested_ready_predecessor(self) -> None:
         chain = Chain()
