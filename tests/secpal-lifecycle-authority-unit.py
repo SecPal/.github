@@ -3077,6 +3077,16 @@ class ValidationEvidenceLossTests(TestCase):
             (self.document["historical_validation_receipt_digest"],),
         )
 
+    def test_current_safety_invariant_registry_matches_harness(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-B", str(REPO_ROOT / self.loss.CURRENT_SAFETY_PATH)],
+            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+        )
+        reported = json.loads(result.stdout)
+        self.assertEqual(
+            sorted(reported), sorted(self.loss.CURRENT_SAFETY_INVARIANTS)
+        )
+
     def commit_fixture(self, root: Path) -> str:
         subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
         subprocess.run(["git", "-C", str(root), "add", "."], check=True)
