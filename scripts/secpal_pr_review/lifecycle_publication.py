@@ -33,6 +33,9 @@ JOURNAL_KINDS = frozenset(
     {PUBLICATION_KIND, GENESIS_ADMISSION_KIND, READY_SOURCE_RECOVERY_KIND}
 )
 ORDINARY_REMEDIATION_SUFFIX = "ORDINARY_REMEDIATION_SUFFIX"
+EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION = (
+    "EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION"
+)
 EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING = (
     "EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING"
 )
@@ -222,6 +225,7 @@ class VerifiedReadySourceRecoveryProviderBinding:
     lifecycle_evidence_digest: str
     provider_binding_sources: tuple[str, ...] = (ORDINARY_REMEDIATION_SUFFIX,)
     historical_provider_binding: Any = None
+    adopted_remediation_observation_digest: str | None = None
 
     def provider_head(
         self, *, repository: str, pull_request: int, current_head_sha: str
@@ -2720,6 +2724,9 @@ def _ready_source_provider_binding_fields(
         "lifecycle_evidence_digest": value.lifecycle_evidence_digest,
         "provider_binding_sources": list(value.provider_binding_sources),
         "historical_provider_binding": historical_fields,
+        "adopted_remediation_observation_digest": (
+            value.adopted_remediation_observation_digest
+        ),
     }
 
 
@@ -2867,13 +2874,13 @@ def _derive_exact_adoption_historical_provider_binding(
         or verified.head_sha != current.lifecycle.head_sha
     ):
         return None
+    loss_admission = proof.get("validation_evidence_loss_admission")
+    if loss_admission is None:
+        return None
     if verified != current.lifecycle:
         raise LifecyclePublicationError(
             "Ready-source provider exact-state adoption differs from CURRENT"
         )
-    loss_admission = proof.get("validation_evidence_loss_admission")
-    if loss_admission is None:
-        return None
     from . import validation_evidence_loss
 
     try:
@@ -2901,6 +2908,140 @@ def _derive_exact_adoption_historical_provider_binding(
             "Ready-source provider v1.1 historical provenance is invalid"
         ) from exc
     return historical
+
+
+def _derive_provider_backed_adopted_ready_remediation(
+    current: VerifiedLifecyclePublication,
+    bundle: Mapping[str, Any],
+) -> tuple[str, str] | None:
+    """Compose one signed adopted remediation with its direct Ready successor."""
+
+    if frozenset(bundle) != authority.EXACT_ADOPTION_PUBLICATION_FIELDS:
+        return None
+    events = bundle.get("transition_authorizations")
+    # Ordinary post-enrollment suffixes retain their existing derivation.
+    if (
+        not isinstance(events, list) or len(events) != 1
+        or not isinstance(events[0], dict)
+        or events[0].get("transition_kind") != "DRAFT_TO_READY"
+    ):
+        return None
+    proof = bundle.get("exact_state_adoption_proof")
+    if (
+        not isinstance(proof, Mapping)
+        or proof.get("proof_version") != authority.SCHEMA_VERSION
+        or proof.get("validation_evidence_loss_admission") is not None
+    ):
+        return None
+    try:
+        adoption = authority.verify_exact_state_adoption_proof(proof)
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecyclePublicationError(
+            "Ready-source provider exact-state adoption proof is invalid"
+        ) from exc
+    if (
+        current.predecessor_publication_oid is None
+        or adoption.repository != current.lifecycle.repository
+        or adoption.delivery_issue != current.lifecycle.delivery_issue
+        or adoption.pull_request != current.lifecycle.pull_request
+        or adoption.lifecycle_id != current.lifecycle.lifecycle_id
+        or adoption.head_sha != current.lifecycle.head_sha
+        or any(proof.get(field) != getattr(adoption, field) for field in (
+            "repository", "delivery_issue", "pull_request", "lifecycle_id",
+            "head_sha",
+        ))
+    ):
+        raise LifecyclePublicationError(
+            "Ready-source provider adopted remediation scope changed"
+        )
+    transition = _verify_historical_lifecycle_transition(
+        current.lifecycle.repository,
+        current.lifecycle.delivery_issue,
+        current.predecessor_publication_oid,
+        expected_current_publication_oid=current.publication_oid,
+    )
+    root = transition.predecessor
+    if (
+        root.publication_oid != current.predecessor_publication_oid
+        or root.predecessor_publication_oid is not None
+        or root.publication_branch != current.publication_branch
+        or root.lifecycle != adoption
+        or root.lifecycle.repository != current.lifecycle.repository
+        or root.lifecycle.delivery_issue != current.lifecycle.delivery_issue
+        or root.lifecycle.pull_request != current.lifecycle.pull_request
+        or root.lifecycle.lifecycle_id != current.lifecycle.lifecycle_id
+        or root.lifecycle.head_sha != current.lifecycle.head_sha
+        or transition.successor != current
+        or transition.transition_kind != "DRAFT_TO_READY"
+        or transition.pull_request != current.lifecycle.pull_request
+        or transition.predecessor_authority_digest != adoption.authority_digest
+        or transition.predecessor_head_sha != current.lifecycle.head_sha
+        or transition.resulting_head_sha != current.lifecycle.head_sha
+        or transition.initialization_evidence_digest
+        != current.lifecycle.initialization_evidence_digest
+    ):
+        raise LifecyclePublicationError(
+            "Ready-source provider adoption is not the direct same-head Ready predecessor"
+        )
+    snapshots = bundle.get("authority_chain")
+    if (
+        not isinstance(events, list) or len(events) != 1
+        or not isinstance(snapshots, list) or len(snapshots) != 1
+        or events[0].get("transition_kind") != "DRAFT_TO_READY"
+        or events[0].get("event_digest") != transition.event_digest
+        or snapshots[0].get("state_before") != adoption.state
+        or snapshots[0].get("state_after") != current.lifecycle.state
+    ):
+        raise LifecyclePublicationError(
+            "Ready-source provider adopted Ready transition is invalid"
+        )
+    root_state = adoption.state
+    expected = copy.deepcopy(root_state)
+    expected.update(draft=False, ready=True, ready_transition_count=1)
+    expected["ready_history"] = [{
+        "sequence": 1, "transition_kind": "DRAFT_TO_READY",
+        "event_authorization_digest": transition.event_digest,
+    }]
+    if (
+        root_state.get("unrestricted_review_count") != 1
+        or root_state.get("remediation_cycle_count") != 1
+        or root_state.get("draft") is not True
+        or root_state.get("ready") is not False
+        or root_state.get("ready_transition_count") != 0
+        or root_state.get("ready_history") != []
+        or root_state.get("cycle_3_absent") is not True
+        or root_state.get("exceptional_recovery_count") != 0
+        or root_state.get("exceptional_continuation_count") != 0
+        or current.lifecycle.state != expected
+    ):
+        raise LifecyclePublicationError(
+            "Ready-source provider adopted Ready state delta is invalid"
+        )
+    history = proof.get("observed_pre_enrollment_history")
+    if (
+        not isinstance(history, list) or len(history) != 3
+        or [item.get("kind") for item in history] != [
+            "PR_CREATED_DRAFT", "REVIEW_SUBMITTED", "REMEDIATION_HEAD_OBSERVED"
+        ]
+        or proof.get("observed_history_digest") != digest_json(history)
+    ):
+        raise LifecyclePublicationError(
+            "Ready-source provider adopted remediation chronology is invalid"
+        )
+    created, review, remediation = history
+    provider_head = review.get("reviewed_head_sha")
+    if (
+        not isinstance(provider_head, str) or not _OID.fullmatch(provider_head)
+        or created.get("head_sha") != provider_head
+        or review.get("head_sha") != provider_head
+        or remediation.get("head_sha") != adoption.head_sha
+        or remediation.get("reviewed_head_sha") is not None
+        or provider_head == adoption.head_sha
+    ):
+        raise LifecyclePublicationError(
+            "Ready-source provider adopted remediation heads are invalid"
+        )
+    return provider_head, digest_json(remediation)
 
 
 def derive_ready_source_recovery_provider_binding(
@@ -2955,11 +3096,13 @@ def derive_ready_source_recovery_provider_binding(
     historical = _derive_exact_adoption_historical_provider_binding(
         current, bundle
     )
+    adopted = _derive_provider_backed_adopted_ready_remediation(current, bundle)
     candidates = [
         item
         for item in (
             ordinary[0] if ordinary is not None else None,
             historical.provider_head_sha if historical is not None else None,
+            adopted[0] if adopted is not None else None,
         )
         if item is not None
     ]
@@ -2980,6 +3123,7 @@ def derive_ready_source_recovery_provider_binding(
                 EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING,
                 historical is not None,
             ),
+            (EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION, adopted is not None),
         )
         if present
     )
@@ -2997,6 +3141,9 @@ def derive_ready_source_recovery_provider_binding(
         "lifecycle_evidence_digest": digest_json(parsed),
         "provider_binding_sources": sources,
         "historical_provider_binding": historical,
+        "adopted_remediation_observation_digest": (
+            adopted[1] if adopted is not None else None
+        ),
     }
     return VerifiedReadySourceRecoveryProviderBinding(
         **{**fields, "remediation_event_digests": tuple(event_digests)},
@@ -3086,6 +3233,8 @@ def _verify_historical_lifecycle_transition(
     repository: str,
     delivery_issue: int,
     predecessor_publication_oid: str,
+    *,
+    expected_current_publication_oid: str | None = None,
 ) -> VerifiedLifecyclePublicationTransition:
     """Verify one exact historical successor through protected journal ancestry."""
 
@@ -3096,6 +3245,10 @@ def _verify_historical_lifecycle_transition(
     predecessor_publication_oid = authority._require_oid(
         predecessor_publication_oid, "predecessor publication"
     )
+    if expected_current_publication_oid is not None:
+        expected_current_publication_oid = authority._require_oid(
+            expected_current_publication_oid, "CURRENT publication"
+        )
     policy = authority._load_lifecycle_trust_policy(repository)
     _verify_live_protection(policy)
     with _isolated_repository(policy, write=False) as (root, credential_environment):
@@ -3109,7 +3262,14 @@ def _verify_historical_lifecycle_transition(
             raise LifecyclePublicationError(
                 "current lifecycle publication is unavailable"
             )
-        entries, _, _ = _walk_journal(root, tip, policy.publication_branch)
+        entries, latest, _ = _walk_journal(root, tip, policy.publication_branch)
+
+    if expected_current_publication_oid is not None:
+        selected = latest.get((repository, delivery_issue))
+        if selected is None or selected[0] != expected_current_publication_oid:
+            raise LifecyclePublicationError(
+                "historical lifecycle successor is no longer CURRENT"
+            )
 
     delivery_entries = [
         item

@@ -2131,6 +2131,42 @@ class LifecycleOrchestrationTests(TestCase):
                 predecessor_eligibility_evidence=predecessor_eligibility,
                 eligibility_evidence=eligibility,
             )
+        adopted_binding = replace(
+            provider_binding,
+            remediation_event_digests=(),
+            provider_binding_sources=(
+                publication.EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION,
+            ),
+            adopted_remediation_observation_digest="e" * 64,
+        )
+        with (
+            mock.patch.object(
+                fast_path,
+                "verified_validation_review_context",
+                side_effect=[
+                    (reviewed, fast_path.digest_json(predecessor_eligibility)),
+                    (resulting, fast_path.digest_json(eligibility)),
+                ],
+            ),
+            mock.patch.object(
+                publication,
+                "derive_ready_source_recovery_provider_binding",
+                return_value=adopted_binding,
+            ),
+            mock.patch.object(
+                orchestration,
+                "_capture_current_stable_feedback",
+                return_value=resulting,
+            ),
+        ):
+            adopted = orchestration.verify_ready_remediation_provider_growth_authority(
+                current,
+                predecessor_validation=predecessor_validation,
+                candidate_validation=candidate_validation,
+                predecessor_eligibility_evidence=predecessor_eligibility,
+                eligibility_evidence=eligibility,
+            )
+        self.assertEqual(adopted.provider_head_sha, reviewed.head_sha)
         scope = orchestration.ordinary_ready_remediation_authorization_scope(
             verified
         )

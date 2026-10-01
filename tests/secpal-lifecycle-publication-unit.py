@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import copy
+from contextlib import nullcontext
 from dataclasses import replace
 import hashlib
 import importlib.util
@@ -1677,6 +1678,236 @@ class LifecyclePublicationTests(TestCase):
         binding = publication.derive_ready_source_recovery_provider_binding(current)
 
         self.assertEqual(binding.provider_head_sha, HEADS[0])
+
+    def test_provider_backed_adoption_direct_ready_successor_derives_review_head(self) -> None:
+        h0 = "ff85970362d3cd889e6418ba34b69930506e9b0d"
+        h1 = "79f0467d70ec0933f063fb3587144b49483bfefd"
+        adoption_oid = "2c5d4510a2cb38a2eb1996fd541fb171b996e560"
+        current_oid = "aaec941e67b7f77743ec98a71a1c06491d616224"
+        event_digest = "1" * 64
+        root_state = authority.initial_state()
+        root_state.update(unrestricted_review_count=1, remediation_cycle_count=1)
+        ready_state = copy.deepcopy(root_state)
+        ready_state.update(draft=False, ready=True, ready_transition_count=1)
+        ready_state["ready_history"] = [{
+            "sequence": 1, "transition_kind": "DRAFT_TO_READY",
+            "event_authorization_digest": event_digest,
+        }]
+        root_lifecycle = authority.VerifiedLifecycleAuthority(
+            authority_digest="2" * 64, repository=REPOSITORY,
+            delivery_issue=ISSUE, lifecycle_id="lifecycle-adoption:" + "3" * 64,
+            initialization_evidence_digest="3" * 64, pull_request=PR,
+            head_sha=h1, state=root_state,
+            authority_signer_identity=LEGACY_SIGNER,
+            historical_proof_mode=authority.EXACT_ADOPTION_PROOF_MODE,
+            legacy_adoption_checkpoint_digest="4" * 64, tree_sha="5" * 40,
+        )
+        lifecycle = replace(root_lifecycle, authority_digest="6" * 64, state=ready_state)
+        history = [
+            {"sequence": 1, "kind": "PR_CREATED_DRAFT", "head_sha": h0,
+             "reviewed_head_sha": None, "observed_at": "2026-10-01T10:58:51Z"},
+            {"sequence": 2, "kind": "REVIEW_SUBMITTED", "head_sha": h0,
+             "reviewed_head_sha": h0, "observed_at": "2026-10-01T11:09:15Z"},
+            {"sequence": 3, "kind": "REMEDIATION_HEAD_OBSERVED", "head_sha": h1,
+             "reviewed_head_sha": None, "observed_at": "2026-10-01T16:04:58Z"},
+        ]
+        proof = {
+            "repository": REPOSITORY, "delivery_issue": ISSUE,
+            "pull_request": PR, "head_sha": h1,
+            "lifecycle_id": lifecycle.lifecycle_id,
+            "observed_pre_enrollment_history": history,
+            "observed_history_digest": fast_path.digest_json(history),
+            "proof_digest": "e58d81679fd42a257e5c445b8761ccf7b21a9fabf41db1e49ddbf37a7d59f851",
+            "proof_version": "1.0", "validation_evidence_loss_admission": None,
+        }
+        event = {
+            "transition_kind": "DRAFT_TO_READY", "event_digest": event_digest,
+            "predecessor_head_sha": h1, "resulting_head_sha": h1,
+        }
+        bundle = {
+            "schema_version": "1.0",
+            "kind": "SECPAL_EXACT_STATE_ADOPTION_PUBLICATION_EVIDENCE",
+            "domain": "secpal.exact-state-adoption-publication-evidence/v1",
+            "enrollment_mode": "EXACT_STATE_ADOPTION",
+            "exact_state_adoption_proof": proof,
+            "transition_authorizations": [event],
+            "authority_chain": [{"state_before": root_state,
+                                 "state_after": ready_state,
+                                 "predecessor_head_sha": h1, "head_sha": h1}],
+        }
+        root = publication.VerifiedLifecyclePublication(
+            adoption_oid, "7" * 64, BRANCH, "8" * 40, None,
+            root_lifecycle, None,
+        )
+        current = publication.VerifiedLifecyclePublication(
+            current_oid, "9" * 64, BRANCH, "a" * 40, adoption_oid,
+            lifecycle, authority.canonical_json_bytes(bundle),
+        )
+        transition = publication.VerifiedLifecyclePublicationTransition(
+            root, current, "ready", event_digest, "DRAFT_TO_READY",
+            LEGACY_SIGNER, PR, root_lifecycle.authority_digest,
+            h1, h1, lifecycle.initialization_evidence_digest,
+        )
+        def derive(
+            candidate: publication.VerifiedLifecyclePublication = current,
+            adopted: authority.VerifiedLifecycleAuthority = root_lifecycle,
+            successor: publication.VerifiedLifecyclePublicationTransition = transition,
+        ) -> publication.VerifiedReadySourceRecoveryProviderBinding:
+            with patch.object(
+                authority, "_verify_lifecycle_authority_for_journal",
+                return_value=candidate.lifecycle,
+            ), patch.object(
+                authority, "verify_exact_state_adoption_proof",
+                return_value=adopted,
+            ), patch.object(
+                publication, "_verify_historical_lifecycle_transition",
+                return_value=successor,
+            ) as verify_transition:
+                result = publication.derive_ready_source_recovery_provider_binding(
+                    candidate
+                )
+                verify_transition.assert_called_once_with(
+                    REPOSITORY, ISSUE, candidate.predecessor_publication_oid,
+                    expected_current_publication_oid=candidate.publication_oid,
+                )
+                return result
+
+        binding = derive()
+        self.assertEqual(binding.provider_head_sha, h0)
+        self.assertEqual(binding.current_head_sha, h1)
+        self.assertEqual(
+            binding.adopted_remediation_observation_digest,
+            fast_path.digest_json(history[-1]),
+        )
+        self.assertIn("EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION", binding.provider_binding_sources)
+        with patch.object(
+            publication, "verify_current_lifecycle_authority", return_value=current
+        ), patch.object(
+            publication, "derive_ready_source_recovery_provider_binding",
+            return_value=binding,
+        ):
+            self.assertEqual(binding.provider_head(
+                repository=REPOSITORY, pull_request=PR, current_head_sha=h1
+            ), h0)
+            with self.assertRaisesRegex(
+                publication.LifecyclePublicationError, "stale or substituted"
+            ):
+                replace(
+                    binding, adopted_remediation_observation_digest="f" * 64
+                ).provider_head(
+                    repository=REPOSITORY, pull_request=PR, current_head_sha=h1
+                )
+        for field, value in (
+            ("repository", "Other/repository"),
+            ("delivery_issue", ISSUE + 1),
+            ("pull_request", PR + 1),
+            ("lifecycle_id", "lifecycle-adoption:" + "b" * 64),
+            ("head_sha", h0),
+        ):
+            changed = replace(root_lifecycle, **{field: value})
+            with self.subTest(field=field), self.assertRaises(
+                publication.LifecyclePublicationError
+            ):
+                derive(adopted=changed, successor=replace(
+                    transition, predecessor=replace(root, lifecycle=changed)
+                ))
+        for label, candidate, successor in (
+            ("non-direct", replace(current, predecessor_publication_oid="b" * 40), transition),
+            ("hidden successor", current, replace(
+                transition, successor=replace(current, publication_oid="c" * 40)
+            )),
+            ("intermediate predecessor", current, replace(
+                transition, predecessor=replace(root, predecessor_publication_oid="d" * 40)
+            )),
+            ("head-changing", current, replace(
+                transition, predecessor_head_sha=h0
+            )),
+            ("wrong transition", current, replace(
+                transition, transition_kind="READY_TO_DRAFT"
+            )),
+        ):
+            with self.subTest(label=label), self.assertRaises(
+                publication.LifecyclePublicationError
+            ):
+                derive(candidate=candidate, successor=successor)
+        for field, value in (
+            ("unrestricted_review_count", 0),
+            ("remediation_cycle_count", 0),
+            ("ready_transition_count", 1),
+            ("exceptional_recovery_count", 1),
+        ):
+            changed_state = copy.deepcopy(root_state)
+            changed_state[field] = value
+            changed = replace(root_lifecycle, state=changed_state)
+            with self.subTest(state=field), self.assertRaises(
+                publication.LifecyclePublicationError
+            ):
+                derive(adopted=changed, successor=replace(
+                    transition, predecessor=replace(root, lifecycle=changed)
+                ))
+        for label, changed_history in (
+            ("missing review", [history[0], history[2]]),
+            ("duplicate review", [history[0], history[1], history[1], history[2]]),
+            ("missing remediation", history[:2]),
+            ("duplicate remediation", history + [history[2]]),
+            ("null reviewed head", [history[0], {
+                **history[1], "reviewed_head_sha": None
+            }, history[2]]),
+            ("wrong reviewed head", [history[0], {
+                **history[1], "reviewed_head_sha": "d" * 40
+            }, history[2]]),
+        ):
+            changed_bundle = copy.deepcopy(bundle)
+            changed_bundle["exact_state_adoption_proof"]["observed_pre_enrollment_history"] = (
+                changed_history
+            )
+            changed_bundle["exact_state_adoption_proof"]["observed_history_digest"] = (
+                fast_path.digest_json(changed_history)
+            )
+            changed_current = replace(
+                current,
+                serialized_lifecycle_evidence=authority.canonical_json_bytes(
+                    changed_bundle
+                ),
+            )
+            with self.subTest(history=label), self.assertRaises(
+                publication.LifecyclePublicationError
+            ):
+                derive(candidate=changed_current, successor=replace(
+                    transition, successor=changed_current
+                ))
+
+    def test_historical_transition_rejects_successor_no_longer_current(self) -> None:
+        policy = SimpleNamespace(
+            publication_remote_url="https://example.invalid/repository.git",
+            publication_branch=BRANCH,
+        )
+        adoption = "a" * 40
+        successor = "b" * 40
+        later = "c" * 40
+        entries = [
+            (oid, {"repository": REPOSITORY, "delivery_issue": ISSUE}, None)
+            for oid in (adoption, successor, later)
+        ]
+        with patch.object(
+            authority, "_load_lifecycle_trust_policy", return_value=policy
+        ), patch.object(
+            publication, "_verify_live_protection"
+        ), patch.object(
+            publication, "_isolated_repository",
+            return_value=nullcontext((Path("."), {})),
+        ), patch.object(
+            publication, "_observe_remote_current_once", return_value=later
+        ), patch.object(
+            publication, "_walk_journal",
+            return_value=(entries, {(REPOSITORY, ISSUE): entries[-1]}, {}),
+        ), self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "no longer CURRENT"
+        ):
+            publication._verify_historical_lifecycle_transition(
+                REPOSITORY, ISSUE, adoption,
+                expected_current_publication_oid=successor,
+            )
 
     def test_ready_source_provider_binding_rejects_nonexact_lifecycle_shapes(self) -> None:
         missing_remediation = Chain(ISSUE + 1)
