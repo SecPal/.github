@@ -951,12 +951,16 @@ attempt before either protected publication write. Ordinary Ready execution
 still converges GitHub state and CURRENT through authenticated read-back.
 
 After the first Ready transition,
-`scripts/secpal-publish-review-consumption.py` records the one independent
-review with explicit `--repository`, `--delivery-issue`, and `--apply` options.
-It checks the exact Ready head, PR author, review identity and submission time
-against authenticated CURRENT, stable feedback, and the GitHub Ready timeline.
+`scripts/secpal-publish-review-consumption.py` records the one bounded
+independent review cycle with explicit `--repository`, `--delivery-issue`, and
+`--apply` options. The maintained feedback skill invokes it after terminal
+Stable Feedback on a new Ready Review 0/1 lifecycle and requires CURRENT
+Review 1/1 before remediation. It binds every qualifying review identity and
+submission time on the exact Ready head to authenticated CURRENT, complete
+stable feedback, and the GitHub Ready timeline.
 It signs the existing transition family, publishes through the protected
-journal CAS, and verifies CURRENT read-back. A second review consumption fails
+journal CAS, and reconciles ambiguous writes through exact successor CURRENT
+read-back. A second review consumption fails
 the finite budget. Historical publication read-back uses pure signed-chain
 derivation, so old review-before-Ready edges remain verifiable.
 

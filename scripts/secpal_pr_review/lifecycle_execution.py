@@ -525,36 +525,70 @@ def _review_consumption_scope(
             )
             if draft_at.tzinfo is None or draft_at >= ready_at:
                 raise LifecycleExecutionError("review consumption has no current Ready event")
+        requests = feedback.feedback.get("provider_review_requests", [])
+        if len(requests) > 1:
+            raise LifecycleExecutionError("review cycle spans multiple provider requests")
+        if requests:
+            requested_at = datetime.fromisoformat(
+                requests[0]["created_at"].replace("Z", "+00:00")
+            )
+            if requested_at.tzinfo is None or requested_at <= ready_at:
+                raise LifecycleExecutionError("review request is outside the Ready cycle")
         reviews = []
         for review in feedback.feedback["reviews"]:
             submitted_at = review.get("submitted_at")
             if not isinstance(submitted_at, str):
+                if review.get("state") in {"COMMENTED", "APPROVED", "CHANGES_REQUESTED"}:
+                    raise LifecycleExecutionError("submitted review lacks chronology")
                 continue
             submitted = datetime.fromisoformat(submitted_at.replace("Z", "+00:00"))
             actor = review.get("actor")
             login = actor.get("login") if isinstance(actor, dict) else None
+            if submitted.tzinfo is None:
+                raise ValueError("review timestamp lacks timezone")
+            if submitted <= ready_at:
+                continue
+            if review.get("state") not in {"COMMENTED", "APPROVED", "CHANGES_REQUESTED"}:
+                continue
             if (
-                submitted.tzinfo is not None
-                and submitted > ready_at
-                and review.get("commit_oid") == lifecycle.head_sha
-                and review.get("state") in {"COMMENTED", "APPROVED", "CHANGES_REQUESTED"}
-                and isinstance(login, str)
-                and login != author
+                review.get("commit_oid") != lifecycle.head_sha
+                or not isinstance(login, str)
+                or login == author
             ):
-                authority._require_github_login(login, "reviewer")
-                reviews.append(review)
+                raise LifecycleExecutionError("review cycle contains a different head or reviewer")
+            authority._require_github_login(login, "reviewer")
+            reviews.append(review)
     except (ValueError, TypeError, authority.LifecycleAuthorityError) as exc:
         raise LifecycleExecutionError("review chronology is malformed") from exc
-    if len(reviews) != 1:
-        raise LifecycleExecutionError("exactly one independent Ready-head review is required")
-    review = reviews[0]
+    if not reviews or any(
+        item.get("transition_kind") == "ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED"
+        for item in events
+    ):
+        raise LifecycleExecutionError("one bounded independent Ready-head review cycle is required")
+    if requests and any(
+        datetime.fromisoformat(review["submitted_at"].replace("Z", "+00:00"))
+        <= requested_at for review in reviews
+    ):
+        raise LifecycleExecutionError("review predates the bounded provider request")
+    if len({review["node_id"] for review in reviews}) != len(reviews):
+        raise LifecycleExecutionError("review cycle repeats a review identity")
+    cycle = [
+        {
+            "node_id": review["node_id"],
+            "body_digest": review["body_digest"],
+            "actor": review["actor"],
+            "state": review["state"],
+            "commit_oid": review["commit_oid"],
+            "submitted_at": review["submitted_at"],
+        }
+        for review in sorted(reviews, key=lambda item: (item["submitted_at"], item["node_id"]))
+    ]
     return {
         "pull_request": lifecycle.pull_request,
         "head_sha": lifecycle.head_sha,
         "ready_event_node_id": ready_events[-1].node_id,
-        "review_node_id": review["node_id"],
-        "review_body_digest": review["body_digest"],
-        "review_submitted_at": review["submitted_at"],
+        "review_cycle": cycle,
+        "review_cycle_digest": authority.digest_json(cycle),
         "feedback_state_digest": feedback.state_digest,
     }
 
@@ -638,10 +672,14 @@ def _validate_transition_delta(
             serialized_authorization,
             event_id=transition.event_id,
             operation=authorization["operation"],
-            expected_scope={
-                "pull_request": authorization["pull_request"],
-                "head_sha": authorization["head_sha"],
-            },
+            expected_scope=(
+                authorization["scope"]
+                if authorization["operation"] == "UNRESTRICTED_REVIEW_CONSUMED"
+                else {
+                    "pull_request": authorization["pull_request"],
+                    "head_sha": authorization["head_sha"],
+                }
+            ),
             observed=predecessor,
             lifecycle=predecessor.lifecycle,
             verifier=orchestration._verify_user_authorization,
@@ -2018,7 +2056,7 @@ def publish_review_consumption(
     )
     signers = _production_signing_authorities(repository, signer_identity)
     authorization_raw = orchestration.create_user_authorization(
-        authorization_id=f"review:{scope['review_node_id']}",
+        authorization_id=f"review:{scope['review_cycle_digest']}",
         repository=repository,
         delivery_issue=delivery_issue,
         lifecycle=lifecycle,
@@ -2048,14 +2086,27 @@ def publish_review_consumption(
     )
     if not _same_publication(before, current) or latest_scope != scope:
         raise LifecycleExecutionError("review or CURRENT changed before publication")
-    published = publication.advance_current_terminal(
-        successor,
-        signer_identity=signers.publication_identity,
-        signer=signers.publication_signer,
-    )
+    try:
+        published = publication.advance_current_terminal(
+            successor,
+            signer_identity=signers.publication_identity,
+            signer=signers.publication_signer,
+        )
+    except Exception:
+        # A protected CAS can succeed even when the transport reports failure.
+        # The same exact-successor proof used by Ready/Draft execution decides
+        # whether this one-shot review publication completed.
+        published = None
     readback = publication.verify_current_lifecycle_authority(repository, delivery_issue)
+    if _same_publication(readback, before):
+        raise LifecycleExecutionError("review publication remains pending")
+    transition = _authenticate_target(
+        readback, authorization_raw, authorization,
+        publication._verify_historical_lifecycle_transition,
+    )
     if (
-        not _same_publication(published, readback)
+        (published is not None and not _same_publication(published, readback))
+        or transition.successor.serialized_lifecycle_evidence != successor
         or readback.lifecycle.state["unrestricted_review_count"] != 1
         or readback.lifecycle.state["ready"] is not True
         or readback.lifecycle.head_sha != lifecycle.head_sha

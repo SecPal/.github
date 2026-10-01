@@ -465,12 +465,13 @@ class LifecycleExecutionTests(TestCase):
         scope = execution._review_consumption_scope(
             current, live, feedback(review), (ready_event,)
         )
-        self.assertEqual(scope["review_node_id"], "REVIEW_1")
+        self.assertEqual(scope["review_cycle"][0]["node_id"], "REVIEW_1")
         for candidate_live, candidate_review in (
             (replace(live, draft=True), review),
             (live, {**review, "actor": {"login": "author", "node_id": "ACTOR_1", "database_id": 5}}),
             (live, {**review, "commit_oid": "c" * 40}),
             (live, {**review, "submitted_at": "2026-09-30T23:00:00Z"}),
+            (live, {**review, "submitted_at": None}),
         ):
             with self.subTest(candidate=candidate_review), self.assertRaises(
                 execution.LifecycleExecutionError
@@ -478,6 +479,145 @@ class LifecycleExecutionTests(TestCase):
                 execution._review_consumption_scope(
                     current, candidate_live, feedback(candidate_review), (ready_event,)
                 )
+
+    def test_post_ready_review_cycle_binds_every_review_on_one_head(self) -> None:
+        current = self.ready_harness().current
+        live = execution.LivePullRequest(REPOSITORY, PR, "OPEN", HEAD, False, "author")
+        ready = publication.GitHubPullRequestTimelineEvent(
+            "READY_FOR_REVIEW", 1, "READY_EVENT", "author",
+            "2026-10-01T00:00:00Z",
+        )
+        first = {
+            "node_id": "REVIEW_1", "body_digest": "a" * 64,
+            "actor": {"login": "copilot", "node_id": "ACTOR_1", "database_id": 5},
+            "state": "COMMENTED", "commit_oid": HEAD,
+            "submitted_at": "2026-10-01T01:00:00Z", "reactions": [],
+        }
+        second = {
+            **first, "node_id": "REVIEW_2", "body_digest": "b" * 64,
+            "actor": {"login": "codex", "node_id": "ACTOR_2", "database_id": 6},
+            "submitted_at": "2026-10-01T02:00:00Z",
+        }
+
+        def feedback(
+            reviews: list[dict[str, Any]], requests: list[dict[str, Any]] | None = None
+        ) -> fast_path.StableFeedbackState:
+            return fast_path.StableFeedbackState(
+                repository=REPOSITORY, pull_request_number=PR, head_sha=HEAD,
+                base_ref="main", base_sha="b" * 40, pr_state="OPEN",
+                feedback={"pull_request_reactions": [], "reviews": reviews,
+                          "conversation_comments": [], "threads": [],
+                          "provider_review_requests": requests or []},
+            )
+
+        scope = execution._review_consumption_scope(
+            current, live, feedback([first, second]), (ready,)
+        )
+        self.assertEqual(
+            [item["node_id"] for item in scope["review_cycle"]],
+            ["REVIEW_1", "REVIEW_2"],
+        )
+        with self.assertRaises(execution.LifecycleExecutionError):
+            execution._review_consumption_scope(
+                current, live,
+                feedback([first, {**second, "commit_oid": "c" * 40}]),
+                (ready,),
+            )
+        with self.assertRaises(fast_path.SecurityBlocker):
+            feedback([first, first])
+        request = {
+            "node_id": "REQUEST_1", "created_at": "2026-10-01T00:30:00Z",
+            "actor": {"login": "author", "node_id": "ACTOR_3", "database_id": 7},
+            "requested_reviewer": fast_path.COPILOT_REVIEW_PROVIDER,
+        }
+        with self.assertRaises(execution.LifecycleExecutionError):
+            execution._review_consumption_scope(
+                current, live,
+                feedback([first, second], [request, {**request, "node_id": "REQUEST_2"}]),
+                (ready,),
+            )
+        extra_epoch = Chain()
+        extra_epoch.append("DRAFT_TO_READY")
+        extra_epoch.append("ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED")
+        with self.assertRaises(execution.LifecycleExecutionError):
+            execution._review_consumption_scope(
+                Harness(extra_epoch).current, live, feedback([first, second]), (ready,)
+            )
+
+    def test_review_publication_reconciles_ambiguous_remote_success(self) -> None:
+        harness = self.ready_harness()
+        harness.publication_mode = "AMBIGUOUS_TARGET"
+        live = execution.LivePullRequest(REPOSITORY, PR, "OPEN", HEAD, False, "author")
+        review = {
+            "node_id": "REVIEW_1", "body_digest": "a" * 64,
+            "actor": {"login": "independent", "node_id": "ACTOR_1", "database_id": 5},
+            "state": "COMMENTED", "commit_oid": HEAD,
+            "submitted_at": "2026-10-01T01:00:00Z", "reactions": [],
+        }
+        feedback = fast_path.StableFeedbackState(
+            repository=REPOSITORY, pull_request_number=PR, head_sha=HEAD,
+            base_ref="main", base_sha="b" * 40, pr_state="OPEN",
+            feedback={"pull_request_reactions": [], "reviews": [review],
+                      "conversation_comments": [], "threads": []},
+        )
+        timeline = (publication.GitHubPullRequestTimelineEvent(
+            "READY_FOR_REVIEW", 1, "READY_EVENT", "author",
+            "2026-10-01T00:00:00Z",
+        ),)
+        with (
+            mock.patch.object(publication, "verify_current_lifecycle_authority", side_effect=harness.current_reader),
+            mock.patch.object(publication, "advance_current_terminal", side_effect=harness.publisher),
+            mock.patch.object(publication, "_verify_historical_lifecycle_transition", side_effect=harness.historical_reader),
+            mock.patch.object(publication, "_observe_pull_request_lifecycle_timeline", return_value=timeline),
+            mock.patch.object(execution, "_read_live_github", return_value=live),
+            mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=feedback),
+            mock.patch.object(execution, "_production_signing_authorities", return_value=fixture_signing_authorities()),
+        ):
+            result = execution.publish_review_consumption(REPOSITORY, ISSUE)
+            self.assertEqual(result.lifecycle.state["unrestricted_review_count"], 1)
+            self.assertEqual(len(harness.publication_writes), 1)
+
+    def test_review_publication_rejects_unrelated_current_after_ambiguous_write(self) -> None:
+        harness = self.ready_harness()
+        harness.publication_mode = "AMBIGUOUS_TARGET"
+        live = execution.LivePullRequest(REPOSITORY, PR, "OPEN", HEAD, False, "author")
+        review = {
+            "node_id": "REVIEW_1", "body_digest": "a" * 64,
+            "actor": {"login": "independent", "node_id": "ACTOR_1", "database_id": 5},
+            "state": "COMMENTED", "commit_oid": HEAD,
+            "submitted_at": "2026-10-01T01:00:00Z", "reactions": [],
+        }
+        feedback = fast_path.StableFeedbackState(
+            repository=REPOSITORY, pull_request_number=PR, head_sha=HEAD,
+            base_ref="main", base_sha="b" * 40, pr_state="OPEN",
+            feedback={"pull_request_reactions": [], "reviews": [review],
+                      "conversation_comments": [], "threads": []},
+        )
+        timeline = (publication.GitHubPullRequestTimelineEvent(
+            "READY_FOR_REVIEW", 1, "READY_EVENT", "author",
+            "2026-10-01T00:00:00Z",
+        ),)
+
+        def ambiguous_wrong_current(raw: bytes, **kwargs: Any) -> Any:
+            try:
+                harness.publisher(raw, **kwargs)
+            except publication.LifecyclePublicationError:
+                assert harness.target is not None
+                harness.current = replace(harness.target, publication_oid="f" * 40)
+                raise
+
+        with (
+            mock.patch.object(publication, "verify_current_lifecycle_authority", side_effect=harness.current_reader),
+            mock.patch.object(publication, "advance_current_terminal", side_effect=ambiguous_wrong_current),
+            mock.patch.object(publication, "_verify_historical_lifecycle_transition", side_effect=harness.historical_reader),
+            mock.patch.object(publication, "_observe_pull_request_lifecycle_timeline", return_value=timeline),
+            mock.patch.object(execution, "_read_live_github", return_value=live),
+            mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=feedback),
+            mock.patch.object(execution, "_production_signing_authorities", return_value=fixture_signing_authorities()),
+        ):
+            with self.assertRaises(execution.LifecycleExecutionError):
+                execution.publish_review_consumption(REPOSITORY, ISSUE)
+        self.assertEqual(len(harness.publication_writes), 1)
 
     def test_post_ready_review_is_published_once_then_remediation_is_allowed(self) -> None:
         harness = self.ready_harness()
@@ -492,6 +632,11 @@ class LifecycleExecutionTests(TestCase):
                     "actor": {"login": "independent", "node_id": "ACTOR_1", "database_id": 5},
                     "state": "COMMENTED", "commit_oid": HEAD,
                     "submitted_at": "2026-10-01T01:00:00Z", "reactions": [],
+                }, {
+                    "node_id": "REVIEW_2", "body_digest": "b" * 64,
+                    "actor": {"login": "second", "node_id": "ACTOR_2", "database_id": 6},
+                    "state": "APPROVED", "commit_oid": HEAD,
+                    "submitted_at": "2026-10-01T02:00:00Z", "reactions": [],
                 }],
             },
         )
@@ -504,6 +649,7 @@ class LifecycleExecutionTests(TestCase):
         with (
             mock.patch.object(publication, "verify_current_lifecycle_authority", side_effect=harness.current_reader),
             mock.patch.object(publication, "advance_current_terminal", side_effect=harness.publisher),
+            mock.patch.object(publication, "_verify_historical_lifecycle_transition", side_effect=harness.historical_reader),
             mock.patch.object(publication, "_observe_pull_request_lifecycle_timeline", return_value=timeline),
             mock.patch.object(execution, "_read_live_github", return_value=live),
             mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=feedback),
