@@ -192,15 +192,19 @@ manifest.
 
 The verifier derives, rather than accepts, the feedback delta between those
 states. The candidate capture authenticates exactly one Copilot request-history
-event, the later Copilot review committed to H0, their provider chronology, and
-each added top-level comment's parent-review identity. Every added thread must
-therefore belong to that one consumed assessment. The first remediation's
+event and every added provider review. The historical single-Copilot H0 form
+remains valid. A Ready-head assessment instead binds the complete added Copilot
+and Codex review set to H1, authenticates the terminal H1 Codex Code/Security
+summary when Codex participates, and retains each top-level comment's actual
+parent-review and provider identity. Several GitHub review objects can represent
+one bounded assessment without consuming another lifecycle review. The first
+remediation's
 commit-bound eligibility manifest derives the only predecessor threads allowed
 to have become resolved; all other predecessor feedback is immutable apart
 from already-supported monotonic outdated-state and schema-enrichment
 observation. The set of added threads must equal the complete ordinary
 `VALID_ACTIONABLE + CORRECTED_AND_VERIFIED` eligibility set; deletion,
-substitution, replies, unrelated actors or sources, wrong-head feedback, a
+substitution, replies, unrelated actors or sources, mixed review heads, a
 second provider request, and a caller-selected subset fail closed.
 The authority verifier independently repeats the maintained live Stable
 Feedback capture at H1 and requires exact equality with the candidate-bound
@@ -208,7 +212,11 @@ state, so candidate-local evidence cannot create provider history.
 The candidate-bound capture uses the dedicated read-only
 `resolve-batch --ready-remediation-provider-binding FILE` form. The authority
 verifier derives that ephemeral file from protected CURRENT, and the form is
-valid only with `--capture-reviewed-state`; its output alone grants no
+valid only with `--capture-reviewed-state`. A paired read-only provider-summary
+output carries the terminal body and review database identities from the same
+bounded observation; its body digest must match the canonical Stable Feedback
+source. Review database identities stay outside the historical Stable Feedback
+digest projection. These outputs alone grant no
 remediation or mutation authority.
 
 The target base ref remains exact. Its tip may advance monotonically while the

@@ -2727,6 +2727,25 @@ class LiveGitHub:
             "pr_state": pull_request.get("state"),
             "is_draft": pull_request.get("isDraft"),
             "review_decision": pull_request.get("reviewDecision"),
+            "provider_summary_body": next(
+                (
+                    item.get("body")
+                    for item in comments
+                    if fast_path.CODEX_REVIEW_SUMMARY_MARKER
+                    in str(item.get("body") or "")
+                ),
+                None,
+            ),
+            "provider_review_database_ids": sorted(
+                (
+                    {
+                        "node_id": item.get("id"),
+                        "database_id": item.get("databaseId"),
+                    }
+                    for item in reviews
+                ),
+                key=lambda item: str(item["node_id"]),
+            ),
             "feedback": {
                 "pull_request_reactions": _live_reactions(
                     pull_request.get("reactions"), "pull-request reactions"
@@ -4973,6 +4992,7 @@ def build_parser() -> argparse.ArgumentParser:
     batch_parser.add_argument("--repo-root", default=".")
     batch_parser.add_argument("--registry")
     batch_parser.add_argument("--capture-reviewed-state")
+    batch_parser.add_argument("--capture-provider-summary")
     batch_parser.add_argument("--ready-remediation-provider-binding")
     batch_parser.add_argument("--ready-source-recovery-publication")
     batch_parser.add_argument("--delivery-issue", type=_positive_integer)
@@ -9736,14 +9756,55 @@ def _command_resolve_batch(arguments: argparse.Namespace) -> int:
             raise fast_path.RecoverableLocalError(
                 "feedback capture cannot be combined with batch-application arguments"
             )
-        try:
-            reviewed = gateway.capture_stable_feedback(arguments.repo, arguments.pr)
-        except fast_path.TransientReadFailure:
-            reviewed = gateway.capture_stable_feedback(arguments.repo, arguments.pr)
+        def capture() -> tuple[fast_path.StableFeedbackState, str | None, Any]:
+            observation = gateway.observe_stable_feedback(arguments.repo, arguments.pr)
+            reviewed = fast_path.StableFeedbackState.from_payload(
+                {
+                    "repository": arguments.repo,
+                    "pull_request_number": arguments.pr,
+                    **observation,
+                }
+            )
+            return (
+                reviewed,
+                observation.get("provider_summary_body"),
+                observation.get("provider_review_database_ids"),
+            )
+
+        if arguments.capture_provider_summary:
+            try:
+                reviewed, provider_summary_body, review_database_ids = capture()
+            except fast_path.TransientReadFailure:
+                reviewed, provider_summary_body, review_database_ids = capture()
+        else:
+            try:
+                reviewed = gateway.capture_stable_feedback(arguments.repo, arguments.pr)
+            except fast_path.TransientReadFailure:
+                reviewed = gateway.capture_stable_feedback(arguments.repo, arguments.pr)
+            provider_summary_body = None
+            review_database_ids = None
         fast_path.atomic_write_json(
             Path(arguments.capture_reviewed_state), reviewed.to_dict()
         )
+        if arguments.capture_provider_summary:
+            if not isinstance(provider_summary_body, str) or not isinstance(
+                review_database_ids, list
+            ):
+                raise fast_path.SecurityBlocker(
+                    "captured provider assessment is unavailable"
+                )
+            fast_path.atomic_write_json(
+                Path(arguments.capture_provider_summary),
+                {
+                    "body": provider_summary_body,
+                    "review_database_ids": review_database_ids,
+                },
+            )
         return 0
+    if arguments.capture_provider_summary:
+        raise fast_path.RecoverableLocalError(
+            "provider summary output requires feedback capture"
+        )
     if not arguments.apply:
         raise fast_path.RecoverableLocalError(
             "resolve-batch requires --apply outside feedback-capture mode"

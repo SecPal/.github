@@ -159,14 +159,20 @@ the already-consumed reviewed head. The verifier reopens the first ordinary
 remediation's sealed validation evidence to authenticate that original capture,
 derives the reviewed predecessor from protected CURRENT, and compares it with
 the sealed reviewed state and eligibility for the candidate second
-remediation. It derives the one exact Copilot review and every added Copilot
-thread, authenticates the unique Copilot request event and review chronology,
-and binds every top-level comment to that review; callers cannot provide a
-delta or subset. An independent maintained live capture must equal the
+remediation. It derives the complete added provider review set and every added
+finding thread, authenticates the unique Copilot request event and provider
+chronology, and binds every top-level comment to its actual parent review;
+callers cannot provide a delta or subset. The historical single-Copilot H0
+form remains valid. A current Ready-head set must bind every review to H1;
+Codex participation additionally requires the canonical terminal H1
+Code/Security summary from the same bounded live observation. An independent
+maintained live capture must equal the
 candidate-bound H1 state. The capture-only
 `resolve-batch --ready-remediation-provider-binding FILE` form receives an
 ephemeral projection derived from protected CURRENT and cannot be combined
-with mutation. The
+with mutation. Its paired `--capture-provider-summary FILE` output supplies
+the verified summary body and review database identities without adding them
+to signed Stable Feedback. The
 first remediation's authenticated eligibility derives any
 permitted predecessor thread resolution. Only complete
 `VALID_ACTIONABLE + CORRECTED_AND_VERIFIED` ordinary eligibility for all added
