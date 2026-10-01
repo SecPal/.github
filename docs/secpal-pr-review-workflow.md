@@ -895,6 +895,10 @@ optional remediation → merge. First Ready changes only Draft/Ready and Ready
 history. New review consumption while Draft, or remediation before the review,
 fails closed. A later separately authorized Ready → Draft → Ready preserves
 the existing finite counters and history.
+The maintained post-Ready review publisher authenticates one independent
+review on the exact Ready head after GitHub's Ready event before advancing the
+existing `UNRESTRICTED_REVIEW_CONSUMED` transition. Its CURRENT read-back and
+protected publication recheck the same forward policy.
 
 Replacement uses `PR_REBOUND` and cannot create another lifecycle root.
 An already-authorized normal remediation commit advances the head with

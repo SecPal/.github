@@ -950,6 +950,16 @@ review 0/1 cannot use it to skip the finite review. Forward policy rejects that
 attempt before either protected publication write. Ordinary Ready execution
 still converges GitHub state and CURRENT through authenticated read-back.
 
+After the first Ready transition,
+`scripts/secpal-publish-review-consumption.py` records the one independent
+review with explicit `--repository`, `--delivery-issue`, and `--apply` options.
+It checks the exact Ready head, PR author, review identity and submission time
+against authenticated CURRENT, stable feedback, and the GitHub Ready timeline.
+It signs the existing transition family, publishes through the protected
+journal CAS, and verifies CURRENT read-back. A second review consumption fails
+the finite budget. Historical publication read-back uses pure signed-chain
+derivation, so old review-before-Ready edges remain verifiable.
+
 ### `secpal_pr_review/lifecycle_publication.py`
 
 Publishes lifecycle authority on one protected, append-only global journal
@@ -977,7 +987,9 @@ CAS prevents concurrent writer races; live branch protection independently
 prevents rollback and deletion.
 
 New native delivery publication is a two-CAS sequence: admission first, then
-enrollment after re-verifying the reachable admission. A branch-local static
+enrollment after re-verifying the reachable admission. Both writes require a
+genesis-only signed bundle; later transitions use CURRENT advancement and its
+canonical forward policy. A branch-local static
 anchor cannot publish. A separate closed historical-compatibility registry
 binds every retained pre-#774 exception to its repository, issue, PR, initial
 head, initialization digest, proof mode, exact enrollment object OID, and signed

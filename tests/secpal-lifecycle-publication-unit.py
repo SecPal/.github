@@ -510,6 +510,41 @@ def verified_validation_evidence(
 
 
 class LifecyclePublicationTests(TestCase):
+    def test_native_genesis_publication_cannot_import_legacy_order(self) -> None:
+        chain = Chain()
+        chain.append("INITIALIZED_DRAFT")
+        anchor = authority.InitializationAnchor(
+            ISSUE, PR, HEADS[0], chain.initialization["initialization_digest"],
+            PR, chain.head, chain.authorities[-1]["authority_digest"],
+        )
+        policy = replace(self.policy, initialization_anchors=(anchor,))
+        with patch.object(authority, "_load_lifecycle_trust_policy", return_value=policy):
+            genesis = chain.raw()
+            chain.append("UNRESTRICTED_REVIEW_CONSUMED")
+            with self.assertRaisesRegex(
+                publication.LifecyclePublicationError, "native enrollment requires genesis only"
+            ):
+                publication.admit_native_genesis(
+                    chain.raw(), signer_identity=SIGNER, signer=signer_for()
+                )
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "--git-dir", str(self.remote), "show-ref", "--verify", "--quiet", BRANCH],
+                    check=False,
+                ).returncode,
+                1,
+            )
+            admitted = publication.admit_native_genesis(
+                genesis, signer_identity=SIGNER, signer=signer_for()
+            )
+            with self.assertRaisesRegex(
+                publication.LifecyclePublicationError, "native enrollment requires genesis only"
+            ):
+                publication.enroll_existing_lifecycle(
+                    chain.raw(), signer_identity=SIGNER, signer=signer_for()
+                )
+            self.assertEqual(self.remote_tip(), admitted.admission_oid)
+
     def test_new_draft_review_is_rejected_before_publication_mutation(self) -> None:
         chain = Chain()
         chain.append("INITIALIZED_DRAFT")

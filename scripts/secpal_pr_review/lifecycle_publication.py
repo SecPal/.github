@@ -857,6 +857,22 @@ def _native_bundle(value: Mapping[str, Any]) -> Mapping[str, Any]:
     return value
 
 
+def _require_native_genesis_only(bundle: Mapping[str, Any]) -> None:
+    """Do not import unissued transitions through native admission or enrollment."""
+
+    events = bundle.get("transition_authorizations")
+    snapshots = bundle.get("authority_chain")
+    if (
+        not isinstance(events, list)
+        or not isinstance(snapshots, list)
+        or len(events) != 1
+        or len(snapshots) != 1
+        or not isinstance(events[0], dict)
+        or events[0].get("transition_kind") != "INITIALIZED_DRAFT"
+    ):
+        raise LifecyclePublicationError("native enrollment requires genesis only")
+
+
 def _verify_genesis_admission_document(
     raw: bytes,
     *,
@@ -1776,6 +1792,7 @@ def admit_native_genesis(
     native = _native_bundle(bundle)
     native_raw = canonical_json_bytes(native)
     verified = authority.verify_native_lifecycle_for_genesis_admission(native_raw)
+    _require_native_genesis_only(native)
     initialization = native.get("delivery_initialization")
     if not isinstance(initialization, dict):
         raise LifecyclePublicationError("native lifecycle initialization is malformed")
@@ -1932,6 +1949,8 @@ def enroll_existing_lifecycle(
         if is_native
         else authority.verify_lifecycle_authority_for_publication(bundle_raw)
     )
+    if is_native:
+        _require_native_genesis_only(_native_bundle(bundle))
     if exact_adoption and bundle["exact_state_adoption_proof"].get("proof_version") == authority.EXACT_ADOPTION_LOSS_VERSION:
         authority.verify_pre_enrollment_validation_evidence_loss_admission(
             canonical_json_bytes(bundle["exact_state_adoption_proof"]["validation_evidence_loss_admission"])
