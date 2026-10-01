@@ -871,10 +871,13 @@ signature, and enrollment publication. It is allowed to follow that existing
 enrollment, appends without rewriting history, and selects no terminal. See
 [Native Lifecycle Genesis Admission](native-lifecycle-genesis-admission.md).
 
-Publication does not derive lifecycle state, orchestrate lifecycle events, or
-implement two-parent integration. Those remain owned by #750, #692, and #745
-respectively. Repositories with no enrolled publication remain valid, while a
-consumer explicitly requesting published authority fails closed.
+Publication rechecks the #750 forward transition policy against authenticated
+CURRENT before writing a successor. Historical signed chains that consumed
+review before Ready remain independently verifiable, but cannot be newly issued
+or published in that order. Orchestration and two-parent integration remain
+owned by #692 and #745 respectively. Repositories with no enrolled publication
+remain valid, while a consumer explicitly requesting published authority fails
+closed.
 
 ## Finite lifecycle orchestration
 
@@ -885,6 +888,13 @@ feedback event. The decision contains the unchanged persistent lifecycle ID,
 finite counters, explicit Cycle-3 absence, Ready history, and exceptional-event
 counts. It selects at most one typed lifecycle transition and performs no
 mutation itself.
+
+The ordinary delivery order follows the canonical Work-Graph contract:
+Draft → PRE_READY → first Ready at review 0/1 → one finite review at Ready →
+optional remediation → merge. First Ready changes only Draft/Ready and Ready
+history. New review consumption while Draft, or remediation before the review,
+fails closed. A later separately authorized Ready → Draft → Ready preserves
+the existing finite counters and history.
 
 Replacement uses `PR_REBOUND` and cannot create another lifecycle root.
 An already-authorized normal remediation commit advances the head with

@@ -141,14 +141,19 @@ class Chain:
             initialization_evidence_digest=self.initialization["initialization_digest"],
             signer_identity=SIGNER, signer=signer_for(),
         )
-        snapshot = authority.issue_lifecycle_authority(
-            predecessor_chain=self.authorities, transition_authorizations=self.events,
-            authorization=event, signer_identity=SIGNER,
-            authority_signer=signer_for(),
-            accepted_event_signers=frozenset({SIGNER}),
-            accepted_authority_signers=frozenset({SIGNER}),
-            signature_verifier=verify_signature,
-        )
+        # This fixture can reconstruct a signed historical chain; publication
+        # of a new successor still checks canonical forward policy separately.
+        with patch.object(
+            authority, "require_forward_transition", side_effect=authority.derive_state
+        ):
+            snapshot = authority.issue_lifecycle_authority(
+                predecessor_chain=self.authorities, transition_authorizations=self.events,
+                authorization=event, signer_identity=SIGNER,
+                authority_signer=signer_for(),
+                accepted_event_signers=frozenset({SIGNER}),
+                accepted_authority_signers=frozenset({SIGNER}),
+                signature_verifier=verify_signature,
+            )
         self.events.append(event)
         self.authorities.append(snapshot)
         self.head = resulting_head
@@ -505,6 +510,31 @@ def verified_validation_evidence(
 
 
 class LifecyclePublicationTests(TestCase):
+    def test_new_draft_review_is_rejected_before_publication_mutation(self) -> None:
+        chain = Chain()
+        chain.append("INITIALIZED_DRAFT")
+        anchor = authority.InitializationAnchor(
+            ISSUE, PR, HEADS[0], chain.initialization["initialization_digest"],
+            PR, chain.head, chain.authorities[-1]["authority_digest"],
+        )
+        policy = replace(self.policy, initialization_anchors=(anchor,))
+        with patch.object(authority, "_load_lifecycle_trust_policy", return_value=policy):
+            publication.admit_native_genesis(
+                chain.raw(), signer_identity=SIGNER, signer=signer_for()
+            )
+            enrolled = publication.enroll_existing_lifecycle(
+                chain.raw(), signer_identity=SIGNER, signer=signer_for()
+            )
+            chain.append("UNRESTRICTED_REVIEW_CONSUMED")
+            with self.assertRaisesRegex(
+                publication.LifecyclePublicationError,
+                "canonical forward lifecycle order",
+            ):
+                publication.advance_current_terminal(
+                    chain.raw(), signer_identity=SIGNER, signer=signer_for()
+                )
+            self.assertEqual(self.remote_tip(), enrolled.publication_oid)
+
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory(prefix="lifecycle-publication-")
         base = Path(self.directory.name)
@@ -592,9 +622,14 @@ class LifecyclePublicationTests(TestCase):
                 chain.raw(), signer_identity=SIGNER, signer=signer_for()
             )
             chain.append("UNRESTRICTED_REVIEW_CONSUMED")
-            current = publication.advance_current_terminal(
-                chain.raw(), signer_identity=SIGNER, signer=signer_for()
-            )
+            # Reconstruct a protected publication made before forward policy
+            # changed; the real signed chain remains independently verified.
+            with patch.object(
+                authority, "require_forward_transition", side_effect=authority._derive_state
+            ):
+                current = publication.advance_current_terminal(
+                    chain.raw(), signer_identity=SIGNER, signer=signer_for()
+                )
         invalid = chain.events[-1]
         correction = (
             authority.create_invalid_review_consumption_correction_authorization(
@@ -654,13 +689,16 @@ class LifecyclePublicationTests(TestCase):
                 chain.raw(), signer_identity=SIGNER, signer=signer_for()
             )
             chain.append("UNRESTRICTED_REVIEW_CONSUMED")
-            publication.advance_current_terminal(
-                chain.raw(), signer_identity=SIGNER, signer=signer_for()
-            )
-            chain.append("DRAFT_TO_READY")
-            current = publication.advance_current_terminal(
-                chain.raw(), signer_identity=SIGNER, signer=signer_for()
-            )
+            with patch.object(
+                authority, "require_forward_transition", side_effect=authority._derive_state
+            ):
+                publication.advance_current_terminal(
+                    chain.raw(), signer_identity=SIGNER, signer=signer_for()
+                )
+                chain.append("DRAFT_TO_READY")
+                current = publication.advance_current_terminal(
+                    chain.raw(), signer_identity=SIGNER, signer=signer_for()
+                )
         invalid_review = chain.events[1]
         unauthorized_ready = chain.events[2]
         correction = authority.create_invalid_review_derived_ready_correction_authorization(
@@ -1263,8 +1301,10 @@ class LifecyclePublicationTests(TestCase):
             self.assertGreaterEqual(github_observation.call_count, 1)
             github_write.assert_not_called()
 
-            review = authority.create_transition_authorization(
-                event_id="independent-review-after-correction",
+            events = bundle["transition_authorizations"]
+            snapshots = bundle["authority_chain"]
+            first_ready = authority.create_transition_authorization(
+                event_id="first-ready-after-correction",
                 repository=REPOSITORY,
                 delivery_issue=ISSUE,
                 lifecycle_id=chain.lifecycle_id,
@@ -1272,6 +1312,40 @@ class LifecyclePublicationTests(TestCase):
                 predecessor_authority_digest=corrected.lifecycle.authority_digest,
                 predecessor_head_sha=corrected.lifecycle.head_sha,
                 resulting_head_sha=corrected.lifecycle.head_sha,
+                transition_kind="DRAFT_TO_READY",
+                replacement_pull_request=None,
+                initialization_evidence_digest=chain.initialization[
+                    "initialization_digest"
+                ],
+                signer_identity=SIGNER,
+                signer=signer_for(),
+            )
+            ready_snapshot = authority.issue_lifecycle_authority(
+                predecessor_chain=snapshots,
+                transition_authorizations=events,
+                authorization=first_ready,
+                signer_identity=SIGNER,
+                authority_signer=signer_for(),
+                accepted_event_signers=policy.transition_signer_identities,
+                accepted_authority_signers=policy.authority_signer_identities,
+                signature_verifier=verify_signature,
+            )
+            events.append(first_ready)
+            snapshots.append(ready_snapshot)
+            ready_again = publication.advance_current_terminal(
+                authority.canonical_json_bytes(bundle),
+                signer_identity=SIGNER,
+                signer=signer_for(),
+            )
+            review = authority.create_transition_authorization(
+                event_id="independent-review-after-correction",
+                repository=REPOSITORY,
+                delivery_issue=ISSUE,
+                lifecycle_id=chain.lifecycle_id,
+                pull_request=PR,
+                predecessor_authority_digest=ready_again.lifecycle.authority_digest,
+                predecessor_head_sha=ready_again.lifecycle.head_sha,
+                resulting_head_sha=ready_again.lifecycle.head_sha,
                 transition_kind="UNRESTRICTED_REVIEW_CONSUMED",
                 replacement_pull_request=None,
                 initialization_evidence_digest=chain.initialization[
@@ -1280,8 +1354,6 @@ class LifecyclePublicationTests(TestCase):
                 signer_identity=SIGNER,
                 signer=signer_for(),
             )
-            events = bundle["transition_authorizations"]
-            snapshots = bundle["authority_chain"]
             review_snapshot = authority.issue_lifecycle_authority(
                 predecessor_chain=snapshots,
                 transition_authorizations=events,
@@ -1310,7 +1382,7 @@ class LifecyclePublicationTests(TestCase):
                 },
                 {
                     key: value
-                    for key, value in expected.items()
+                    for key, value in ready_again.lifecycle.state.items()
                     if key != "unrestricted_review_count"
                 },
             )
@@ -4470,10 +4542,10 @@ class ContractsLifecyclePolicyTests(TestCase):
 
         predecessor = enrolled
         for transition, head in (
+            ("DRAFT_TO_READY", None),
             ("UNRESTRICTED_REVIEW_CONSUMED", None),
             ("REMEDIATION_COMPLETED", HEADS[1]),
             ("REMEDIATION_COMPLETED", HEADS[2]),
-            ("DRAFT_TO_READY", None),
         ):
             chain.append(transition, head=head)
             ready = publication.advance_current_terminal(

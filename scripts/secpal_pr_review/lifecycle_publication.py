@@ -2059,10 +2059,25 @@ def advance_current_terminal(
             },
         )
         successor_events = lifecycle_bundle.get("transition_authorizations")
+        if not isinstance(successor_events, list) or not successor_events:
+            raise LifecyclePublicationError("successor transition is unavailable")
+        latest_event = successor_events[-1]
+        try:
+            authority.require_forward_transition(
+                predecessor.state,
+                latest_event["transition_kind"],
+                latest_event["event_digest"],
+                allow_adopted_observations=(
+                    predecessor.historical_proof_mode
+                    == authority.EXACT_ADOPTION_PROOF_MODE
+                ),
+            )
+        except authority.LifecycleAuthorityError as exc:
+            raise LifecyclePublicationError(
+                "successor violates canonical forward lifecycle order"
+            ) from exc
         if (
-            isinstance(successor_events, list)
-            and successor_events
-            and successor_events[-1].get("transition_kind")
+            successor_events[-1].get("transition_kind")
             in {
                 "INVALID_REVIEW_CONSUMPTION_CORRECTED",
                 "INVALID_REVIEW_DERIVED_READY_CORRECTED",

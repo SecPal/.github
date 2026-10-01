@@ -107,16 +107,21 @@ class Chain:
             signer_identity=event_signer,
             signer=signer_for(event_signer),
         )
-        snapshot = authority.issue_lifecycle_authority(
-            predecessor_chain=self.authorities,
-            transition_authorizations=self.events,
-            authorization=event,
-            signer_identity=authority_signer,
-            authority_signer=signer_for(authority_signer),
-            accepted_event_signers=frozenset({SIGNER, event_signer}),
-            accepted_authority_signers=frozenset({SIGNER, authority_signer}),
-            signature_verifier=verify_signature,
-        )
+        # The general fixture reconstructs immutable chains signed under the
+        # earlier order. Forward issuance is tested separately against policy.
+        with patch.object(
+            authority, "require_forward_transition", side_effect=authority.derive_state
+        ):
+            snapshot = authority.issue_lifecycle_authority(
+                predecessor_chain=self.authorities,
+                transition_authorizations=self.events,
+                authorization=event,
+                signer_identity=authority_signer,
+                authority_signer=signer_for(authority_signer),
+                accepted_event_signers=frozenset({SIGNER, event_signer}),
+                accepted_authority_signers=frozenset({SIGNER, authority_signer}),
+                signature_verifier=verify_signature,
+            )
         self.events.append(event)
         self.authorities.append(snapshot)
         self.head = resulting_head
@@ -339,6 +344,92 @@ def authenticated_external_evidence(
         return authority.authenticate_exact_state_adoption_external_evidence(
             **arguments
         )
+
+
+class CanonicalForwardOrderTests(TestCase):
+    def test_issuer_refuses_new_review_before_ready(self) -> None:
+        chain = genesis_chain()
+        event = authority.create_transition_authorization(
+            event_id="new-review-before-ready",
+            repository=REPOSITORY,
+            delivery_issue=ISSUE,
+            lifecycle_id=LIFECYCLE,
+            pull_request=PR,
+            predecessor_authority_digest=chain.authorities[-1]["authority_digest"],
+            predecessor_head_sha=chain.head,
+            resulting_head_sha=chain.head,
+            transition_kind="UNRESTRICTED_REVIEW_CONSUMED",
+            replacement_pull_request=None,
+            initialization_evidence_digest=INITIALIZATION_DIGEST,
+            signer_identity=SIGNER,
+            signer=signer_for(),
+        )
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "new unrestricted review requires Ready"
+        ):
+            authority.issue_lifecycle_authority(
+                predecessor_chain=chain.authorities,
+                transition_authorizations=chain.events,
+                authorization=event,
+                signer_identity=SIGNER,
+                authority_signer=signer_for(),
+                accepted_event_signers=frozenset({SIGNER}),
+                accepted_authority_signers=frozenset({SIGNER}),
+                signature_verifier=verify_signature,
+            )
+
+    def test_deployment_279_shaped_first_ready_then_review(self) -> None:
+        draft = authority.initial_state()
+        ready = authority.require_forward_transition(
+            draft, "DRAFT_TO_READY", "1" * 64
+        )
+        self.assertEqual(
+            (ready["draft"], ready["ready"], ready["ready_transition_count"],
+             ready["unrestricted_review_count"], ready["remediation_cycle_count"]),
+            (False, True, 1, 0, 0),
+        )
+        reviewed = authority.require_forward_transition(
+            ready, "UNRESTRICTED_REVIEW_CONSUMED", "2" * 64
+        )
+        self.assertEqual(reviewed["unrestricted_review_count"], 1)
+        self.assertEqual(reviewed["ready_history"], ready["ready_history"])
+        remediated = authority.require_forward_transition(
+            reviewed, "REMEDIATION_COMPLETED", "3" * 64
+        )
+        self.assertEqual(remediated["remediation_cycle_count"], 1)
+        for state, transition in (
+            (draft, "UNRESTRICTED_REVIEW_CONSUMED"),
+            (draft, "REMEDIATION_COMPLETED"),
+            (ready, "REMEDIATION_COMPLETED"),
+            (reviewed, "UNRESTRICTED_REVIEW_CONSUMED"),
+            (ready, "DRAFT_TO_READY"),
+        ):
+            with self.subTest(transition=transition):
+                with self.assertRaises(authority.LifecycleAuthorityError):
+                    authority.require_forward_transition(state, transition, "4" * 64)
+
+    def test_explicit_re_ready_keeps_finite_counters(self) -> None:
+        ready = authority.require_forward_transition(
+            authority.initial_state(), "DRAFT_TO_READY", "1" * 64
+        )
+        reviewed = authority.require_forward_transition(
+            ready, "UNRESTRICTED_REVIEW_CONSUMED", "2" * 64
+        )
+        draft_again = authority.require_forward_transition(
+            reviewed, "READY_TO_DRAFT", "3" * 64
+        )
+        ready_again = authority.require_forward_transition(
+            draft_again, "DRAFT_TO_READY", "4" * 64
+        )
+        self.assertEqual(ready_again["unrestricted_review_count"], 1)
+        self.assertEqual(ready_again["ready_transition_count"], 2)
+
+    def test_signed_review_before_ready_history_still_verifies(self) -> None:
+        historical = genesis_chain()
+        historical.append("UNRESTRICTED_REVIEW_CONSUMED")
+        historical.append("DRAFT_TO_READY")
+        historical.append("REMEDIATION_COMPLETED", head=HEADS[1])
+        self.assertEqual(historical.verify().state["remediation_cycle_count"], 1)
 
 
 class NormalReviewAuthorityBoundaryRegressionTests(TestCase):
@@ -1730,14 +1821,12 @@ class LifecycleAuthorityTests(TestCase):
             ],
         )
 
-        # The ordinary engine truthfully rejects this chronology: Ready cannot
-        # be derived before review.  Adoption must not "correct" that history.
-        with self.assertRaisesRegex(
-            authority.LifecycleAuthorityError, "Draft-to-Ready transition"
-        ):
-            authority.derive_state(
-                authority.initial_state(), "DRAFT_TO_READY", "1" * 64
-            )
+        # Ready before review is the canonical order. Adoption still preserves
+        # its exact independently authenticated external chronology.
+        canonical_ready = authority.require_forward_transition(
+            authority.initial_state(), "DRAFT_TO_READY", "1" * 64
+        )
+        self.assertEqual(canonical_ready["unrestricted_review_count"], 0)
 
         evidence = authority.create_exact_state_adoption_evidence(
             verified_external_evidence=authenticated_external_evidence(
@@ -2290,16 +2379,19 @@ class LifecycleAuthorityTests(TestCase):
                 signer_identity=SIGNER,
                 signer=real_signer,
             )
-            review_snapshot = authority.issue_lifecycle_authority(
-                predecessor_chain=[snapshot],
-                transition_authorizations=[event],
-                authorization=review_event,
-                signer_identity=SIGNER,
-                authority_signer=real_signer,
-                accepted_event_signers=policy.transition_signer_identities,
-                accepted_authority_signers=policy.authority_signer_identities,
-                signature_verifier=verifier,
-            )
+            with patch.object(
+                authority, "require_forward_transition", side_effect=authority.derive_state
+            ):
+                review_snapshot = authority.issue_lifecycle_authority(
+                    predecessor_chain=[snapshot],
+                    transition_authorizations=[event],
+                    authorization=review_event,
+                    signer_identity=SIGNER,
+                    authority_signer=real_signer,
+                    accepted_event_signers=policy.transition_signer_identities,
+                    accepted_authority_signers=policy.authority_signer_identities,
+                    signature_verifier=verifier,
+                )
             ready_event = authority.create_transition_authorization(
                 event_id="same-head-ready",
                 repository=REPOSITORY,
@@ -2315,16 +2407,19 @@ class LifecycleAuthorityTests(TestCase):
                 signer_identity=SIGNER,
                 signer=real_signer,
             )
-            ready_snapshot = authority.issue_lifecycle_authority(
-                predecessor_chain=[snapshot, review_snapshot],
-                transition_authorizations=[event, review_event],
-                authorization=ready_event,
-                signer_identity=SIGNER,
-                authority_signer=real_signer,
-                accepted_event_signers=policy.transition_signer_identities,
-                accepted_authority_signers=policy.authority_signer_identities,
-                signature_verifier=verifier,
-            )
+            with patch.object(
+                authority, "require_forward_transition", side_effect=authority.derive_state
+            ):
+                ready_snapshot = authority.issue_lifecycle_authority(
+                    predecessor_chain=[snapshot, review_snapshot],
+                    transition_authorizations=[event, review_event],
+                    authorization=ready_event,
+                    signer_identity=SIGNER,
+                    authority_signer=real_signer,
+                    accepted_event_signers=policy.transition_signer_identities,
+                    accepted_authority_signers=policy.authority_signer_identities,
+                    signature_verifier=verifier,
+                )
             rebound_event = authority.create_transition_authorization(
                 event_id="same-head-rebound",
                 repository=REPOSITORY,

@@ -4917,7 +4917,7 @@ def _prove_transition_is_finite(
         {"event_id": event_id, "transition_kind": transition}
     )
     try:
-        authority.derive_state(state, transition, event_digest)
+        authority.require_forward_transition(state, transition, event_digest)
     except authority.LifecycleAuthorityError as exc:
         raise LifecycleOrchestrationError(str(exc)) from exc
 

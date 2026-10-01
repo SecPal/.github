@@ -2215,7 +2215,7 @@ def _derive_state(
             raise LifecycleAuthorityError("remediation budget is exhausted; Cycle 3 is forbidden")
         state["remediation_cycle_count"] += 1
     elif transition_kind == "DRAFT_TO_READY":
-        if state["ready"] or state["unrestricted_review_count"] != MAX_UNRESTRICTED_REVIEWS:
+        if state["ready"]:
             raise LifecycleAuthorityError("Draft-to-Ready transition is not permitted")
         state["draft"] = False
         state["ready"] = True
@@ -2277,6 +2277,55 @@ def derive_state(
         transition_kind,
         event_authorization_digest,
         allow_adopted_observations=False,
+    )
+
+
+def require_forward_transition(
+    predecessor_state: Mapping[str, Any],
+    transition_kind: str,
+    event_authorization_digest: str,
+    *,
+    allow_adopted_observations: bool = False,
+) -> dict[str, Any]:
+    """Authorize a new transition; signed older chains use derivation only."""
+
+    state = _validate_state(
+        predecessor_state, allow_adopted_observations=allow_adopted_observations
+    )
+    if transition_kind == "DRAFT_TO_READY":
+        if state["ready_transition_count"] == 0:
+            if (
+                state["draft"] is not True
+                or state["ready"] is not False
+                or state["ready_history"]
+                or state["unrestricted_review_count"] != 0
+                or state["remediation_cycle_count"] != 0
+                or state["exceptional_recovery_count"] != 0
+                or state["exceptional_continuation_count"] != 0
+            ):
+                raise LifecycleAuthorityError(
+                    "first Draft-to-Ready requires the unreviewed initial Draft"
+                )
+        elif (
+            state["draft"] is not True
+            or state["ready"] is not False
+            or not state["ready_history"]
+            or state["ready_history"][-1]["transition_kind"] != "READY_TO_DRAFT"
+        ):
+            raise LifecycleAuthorityError("later Draft-to-Ready requires Ready history")
+    elif transition_kind == "UNRESTRICTED_REVIEW_CONSUMED":
+        if (
+            state["draft"] is not False
+            or state["ready"] is not True
+            or state["ready_transition_count"] < 1
+        ):
+            raise LifecycleAuthorityError("new unrestricted review requires Ready")
+    elif transition_kind == "REMEDIATION_COMPLETED":
+        if state["draft"] is not False or state["ready"] is not True:
+            raise LifecycleAuthorityError("new remediation requires Ready")
+    return _derive_state(
+        state, transition_kind, event_authorization_digest,
+        allow_adopted_observations=allow_adopted_observations,
     )
 
 
@@ -2798,7 +2847,7 @@ def issue_lifecycle_authority(
             _require_invalid_review_derived_ready_correction_suffix(
                 transition_authorizations, predecessor_chain, event
             )
-        state = derive_state(
+        state = require_forward_transition(
             verified.state, event["transition_kind"], event["event_digest"]
         )
     fields = _authority_unsigned_fields(event=event, predecessor=predecessor, state=state)
@@ -5130,7 +5179,7 @@ def issue_exact_state_adoption_successor_authority(
         raise LifecycleAuthorityError(
             "transition authorization does not continue adopted predecessor"
         )
-    state = _derive_state(
+    state = require_forward_transition(
         predecessor.state,
         event["transition_kind"],
         event["event_digest"],

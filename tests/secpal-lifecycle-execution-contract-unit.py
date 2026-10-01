@@ -103,7 +103,6 @@ class Chain:
         self.authorities: list[dict[str, Any]] = []
         self.head = HEAD
         self.append("INITIALIZED_DRAFT")
-        self.append("UNRESTRICTED_REVIEW_CONSUMED")
 
     def append(self, transition: str, *, head: str | None = None) -> None:
         predecessor = self.authorities[-1] if self.authorities else None
@@ -455,46 +454,24 @@ class LifecycleExecutionTests(TestCase):
                 source_commit_authenticator=lambda *_args, **_kwargs: commit,
             )
 
-    def test_failing_first_pending_ready_converges_across_one_remediation(self) -> None:
+    def test_pending_ready_cannot_skip_review_before_remediation(self) -> None:
         harness, ready, remediation, validation, commit, history = convergence_fixture()
 
         with self.assertRaisesRegex(
             execution.LifecycleExecutionError, "head|identity or state changed"
         ):
             harness.execute(ready)
-
-        result = self.converge_fixture(
-            harness, ready, remediation, validation, commit, history
-        )
-
-        self.assertEqual(result.status, "COMPLETE")
-        self.assertEqual(result.observed_case, "COMPOSED_HEAD_ADVANCEMENT")
-        self.assertEqual(result.head_sha, validation.head_sha)
-        self.assertEqual(result.github_write_attempts, 0)
-        self.assertEqual(result.publication_write_attempts, 2)
-        self.assertEqual(
-            [
-                transition.successor.lifecycle.state
-                for transition in harness.transitions.values()
-            ][-1]["remediation_cycle_count"],
-            1,
-        )
-        self.assertEqual(
-            [
-                transition.transition_kind
-                for transition in harness.transitions.values()
-            ],
-            ["DRAFT_TO_READY", "REMEDIATION_COMPLETED"],
-        )
+        with self.assertRaisesRegex(
+            execution.LifecycleExecutionError,
+            "remediation source-change authorization is invalid",
+        ):
+            self.converge_fixture(
+                harness, ready, remediation, validation, commit, history
+            )
         self.assertEqual(harness.github_writes, [])
-        replay = self.converge_fixture(
-            harness, ready, remediation, validation, commit, history
-        )
-        self.assertEqual(replay.status, "COMPLETE")
-        self.assertEqual(replay.publication_write_attempts, 0)
-        self.assertEqual(len(harness.publication_writes), 2)
+        self.assertEqual(harness.publication_writes, [])
 
-    def test_composed_midpoint_resumes_and_complete_replay_is_zero_write(self) -> None:
+    def test_pending_ready_midpoint_still_requires_review(self) -> None:
         harness, ready, remediation, validation, commit, history = convergence_fixture()
         ready_fields = orchestration._verify_signed_user_authorization(
             ready, REPOSITORY
@@ -505,64 +482,26 @@ class LifecycleExecutionTests(TestCase):
             fixture_signing_authorities(),
         )
         harness.publisher(ready_raw)
+        with self.assertRaisesRegex(
+            execution.LifecycleExecutionError,
+            "remediation source-change authorization is invalid",
+        ):
+            self.converge_fixture(
+                harness, ready, remediation, validation, commit, history
+            )
+        self.assertEqual(len(harness.publication_writes), 1)
 
-        result = self.converge_fixture(
-            harness, ready, remediation, validation, commit, history
-        )
-        self.assertEqual(result.status, "COMPLETE")
-        self.assertEqual(result.publication_write_attempts, 1)
-        self.assertEqual(len(harness.publication_writes), 2)
-
-    def test_composed_partial_publication_resumes_only_from_exact_state(self) -> None:
+    def test_pending_ready_partial_publication_still_requires_review(self) -> None:
         harness, ready, remediation, validation, commit, history = convergence_fixture()
         harness.publication_mode = "AMBIGUOUS_PREDECESSOR"
-        first = self.converge_fixture(
-            harness, ready, remediation, validation, commit, history
-        )
-        self.assertEqual(first.status, "PUBLICATION_PENDING")
-        self.assertEqual(first.publication_write_attempts, 1)
-        self.assertEqual(harness.current, harness.predecessor)
-
-        harness.publication_mode = "SUCCESS"
-        completed = self.converge_fixture(
-            harness, ready, remediation, validation, commit, history
-        )
-        self.assertEqual(completed.status, "COMPLETE")
-        self.assertEqual(completed.publication_write_attempts, 2)
-
-        midpoint, ready, remediation, validation, commit, history = convergence_fixture()
-        ready_fields = orchestration._verify_signed_user_authorization(
-            ready, REPOSITORY
-        )
-        midpoint.publisher(
-            execution._append_successor_evidence(
-                midpoint.predecessor,
-                ready_fields,
-                fixture_signing_authorities(),
+        with self.assertRaisesRegex(
+            execution.LifecycleExecutionError,
+            "remediation source-change authorization is invalid",
+        ):
+            self.converge_fixture(
+                harness, ready, remediation, validation, commit, history
             )
-        )
-        midpoint.publication_mode = "AMBIGUOUS_PREDECESSOR"
-        pending = self.converge_fixture(
-            midpoint, ready, remediation, validation, commit, history
-        )
-        self.assertEqual(pending.status, "PUBLICATION_PENDING")
-        self.assertEqual(pending.publication_write_attempts, 1)
-        self.assertTrue(midpoint.current.lifecycle.state["ready"])
-        self.assertEqual(midpoint.current.lifecycle.state["remediation_cycle_count"], 0)
-
-        midpoint.publication_mode = "SUCCESS"
-        completed = self.converge_fixture(
-            midpoint, ready, remediation, validation, commit, history
-        )
-        self.assertEqual(completed.status, "COMPLETE")
-        self.assertEqual(completed.publication_write_attempts, 1)
-        self.assertEqual(midpoint.current.lifecycle.state["remediation_cycle_count"], 1)
-
-        replay = self.converge_fixture(
-            harness, ready, remediation, validation, commit, history
-        )
-        self.assertEqual(replay.publication_write_attempts, 0)
-        self.assertEqual(len(harness.publication_writes), 3)
+        self.assertEqual(harness.publication_writes, [])
 
     def test_composed_chronology_ambiguity_fails_before_publication(self) -> None:
         mutations = {
@@ -923,9 +862,10 @@ class LifecycleExecutionTests(TestCase):
 
     def test_case_20_later_ready_preserves_exhausted_counters_and_history(self) -> None:
         chain = Chain()
+        chain.append("DRAFT_TO_READY")
+        chain.append("UNRESTRICTED_REVIEW_CONSUMED")
         chain.append("REMEDIATION_COMPLETED", head="b" * 40)
         chain.append("REMEDIATION_COMPLETED", head="c" * 40)
-        chain.append("DRAFT_TO_READY")
         chain.append("READY_TO_DRAFT")
         harness = Harness(chain)
         before = copy.deepcopy(harness.current.lifecycle.state)

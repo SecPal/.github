@@ -751,7 +751,7 @@ def _derive_transition_state(
         copy.deepcopy(lifecycle.state),
         allow_adopted_observations=adopted,
     )
-    return authority._derive_state(
+    return authority.require_forward_transition(
         state,
         transition_kind,
         event_digest,
