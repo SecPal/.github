@@ -8110,6 +8110,13 @@ def _authenticated_source_validation_delivery_issue(
             raise fast_path.SecurityBlocker(
                 "protected CURRENT selects no unique source validation form"
             )
+        if (
+            "exceptional_continuation_evidence_digest" in attestation
+            and matches[0] is None
+        ):
+            raise fast_path.SecurityBlocker(
+                "Continuation source validation cannot use the historical unbound form"
+            )
         return matches[0]
 
     if "exceptional_continuation_evidence_digest" in attestation:
