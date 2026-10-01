@@ -171,7 +171,8 @@ candidate-bound H1 state. The capture-only
 `resolve-batch --ready-remediation-provider-binding FILE` form receives an
 ephemeral projection derived from protected CURRENT and cannot be combined
 with mutation. Its paired `--capture-provider-summary FILE` output supplies
-the verified summary body without adding it to signed Stable Feedback. The
+the verified summary body and review database identities without adding them
+to signed Stable Feedback. The
 first remediation's authenticated eligibility derives any
 permitted predecessor thread resolution. Only complete
 `VALID_ACTIONABLE + CORRECTED_AND_VERIFIED` ordinary eligibility for all added

@@ -1741,7 +1741,6 @@ def multi_provider_ready_growth() -> tuple[
     current.feedback["reviews"] = [
         {
             "node_id": review_id,
-            "database_id": database_id,
             "body_digest": fast_path.digest_text(review_id),
             "actor": actor,
             "state": "COMMENTED",
@@ -1777,6 +1776,10 @@ def multi_provider_ready_growth() -> tuple[
     ]
     reviewed.refresh_digests()
     current.refresh_digests()
+    current.review_database_ids = [
+        {"node_id": review_id, "database_id": database_id}
+        for review_id, database_id, _actor, _submitted_at in review_specs
+    ]
     predecessor_eligibility.update(
         pull_request_number=1041,
         reviewed_head_sha=reviewed.head_sha,
@@ -1936,6 +1939,26 @@ def _provider_feedback_response(
         }
     }
 class LifecycleOrchestrationTests(TestCase):
+    def test_review_database_observation_preserves_historical_feedback_digest(
+        self,
+    ) -> None:
+        _reviewed, current, _predecessor, _eligibility = (
+            ordinary_ready_provider_growth()
+        )
+        enriched = copy.deepcopy(current.feedback)
+        enriched["reviews"][0]["database_id"] = 5382263332
+        replayed = fast_path.StableFeedbackState(
+            repository=current.repository,
+            pull_request_number=current.pull_request_number,
+            head_sha=current.head_sha,
+            base_ref=current.base_ref,
+            base_sha=current.base_sha,
+            pr_state=current.pr_state,
+            feedback=enriched,
+        )
+        self.assertEqual(replayed.feedback_digest, current.feedback_digest)
+        self.assertEqual(replayed.state_digest, current.state_digest)
+
     def test_multi_provider_ready_growth_binds_four_h1_findings(self) -> None:
         reviewed, current, predecessor_eligibility, eligibility, summary = (
             multi_provider_ready_growth()
@@ -1947,6 +1970,7 @@ class LifecycleOrchestrationTests(TestCase):
             predecessor_eligibility_evidence=predecessor_eligibility,
             eligibility_evidence=eligibility,
             provider_summary_body=summary,
+            review_database_ids=current.review_database_ids,
         )
         self.assertEqual(
             verified.thread_ids,
@@ -1963,6 +1987,7 @@ class LifecycleOrchestrationTests(TestCase):
             predecessor_eligibility_evidence=predecessor_eligibility,
             eligibility_evidence=eligibility,
             provider_summary_body=summary,
+            review_database_ids=current.review_database_ids,
         )
         self.assertEqual(verified.growth_digest, repeated.growth_digest)
 
@@ -1988,6 +2013,7 @@ class LifecycleOrchestrationTests(TestCase):
                     predecessor_eligibility_evidence=predecessor_eligibility,
                     eligibility_evidence=eligibility,
                     provider_summary_body=summary,
+                    review_database_ids=current.review_database_ids,
                 )
 
         def review(current, index):
@@ -2002,6 +2028,9 @@ class LifecycleOrchestrationTests(TestCase):
             ("cross-PR review", lambda r, c, e, s: setattr(c, "pull_request_number", 1042)),
             ("stale review", lambda r, c, e, s: review(c, 0).update(commit_oid="7" * 40)),
             ("duplicate review node", lambda r, c, e, s: review(c, 1).update(node_id=review(c, 0)["node_id"])),
+            ("missing review database identity", lambda r, c, e, s: c.review_database_ids.__delitem__(-1)),
+            ("duplicate review database identity", lambda r, c, e, s: c.review_database_ids[1].update(database_id=c.review_database_ids[0]["database_id"])),
+            ("invented review database identity", lambda r, c, e, s: c.review_database_ids.append({"node_id": "PRR_INVENTED", "database_id": 1})),
             ("omitted qualifying review", lambda r, c, e, s: c.feedback["reviews"].pop()),
             ("caller-invented review", lambda r, c, e, s: c.feedback["reviews"].append({**copy.deepcopy(review(c, 1)), "node_id": "PRR_CALLER_INVENTED"})),
             ("parent outside set", lambda r, c, e, s: thread(c, 1)["comments"][0].update(review_id="PRR_OTHER")),
@@ -2038,6 +2067,7 @@ class LifecycleOrchestrationTests(TestCase):
             predecessor_eligibility_evidence=predecessor_eligibility,
             eligibility_evidence=eligibility,
             provider_summary_body=summary,
+            review_database_ids=current.review_database_ids,
         )
         self.assertEqual(len(growth.provider_review_bindings), 2)
         self.assertEqual(lifecycle.state, before)
@@ -2056,6 +2086,10 @@ class LifecycleOrchestrationTests(TestCase):
             item for item in current.feedback["reviews"]
             if item["actor"] == fast_path.COPILOT_REVIEW_PROVIDER
         ]
+        current.review_database_ids = [
+            item for item in current.review_database_ids
+            if item["node_id"] == current.feedback["reviews"][0]["node_id"]
+        ]
         current.feedback["threads"] = current.feedback["threads"][:2]
         current.refresh_digests()
         eligibility["eligible_threads"] = eligibility["eligible_threads"][:1]
@@ -2067,6 +2101,7 @@ class LifecycleOrchestrationTests(TestCase):
             predecessor_eligibility_evidence=predecessor_eligibility,
             eligibility_evidence=eligibility,
             provider_summary_body=summary,
+            review_database_ids=current.review_database_ids,
         )
         self.assertEqual(len(verified.provider_review_bindings), 1)
         with self.assertRaises(fast_path.SecurityBlocker):
@@ -2303,21 +2338,6 @@ class LifecycleOrchestrationTests(TestCase):
     ) -> None:
         reviewed, resulting, predecessor_eligibility, eligibility = (
             ordinary_ready_provider_growth()
-        )
-        enriched_capture = copy.deepcopy(resulting)
-        enriched_capture.feedback["reviews"][0]["database_id"] = 5382263332
-        enriched_capture.refresh_digests()
-        self.assertTrue(
-            orchestration._matches_provider_growth_capture(
-                resulting, enriched_capture
-            )
-        )
-        enriched_capture.feedback["reviews"][0]["state"] = "APPROVED"
-        enriched_capture.refresh_digests()
-        self.assertFalse(
-            orchestration._matches_provider_growth_capture(
-                resulting, enriched_capture
-            )
         )
         lifecycle = replace(
             current_lifecycle(
@@ -6434,7 +6454,11 @@ def create_ready_integration_attestation(normalized, eligibility_bound):
             captured_provider_binding.update(json.loads(binding_path.read_text()))
             output.write_bytes(authority.canonical_json_bytes(reviewed))
             summary = Path(command[command.index("--capture-provider-summary") + 1])
-            summary.write_bytes(authority.canonical_json_bytes({"body": "summary"}))
+            summary.write_bytes(
+                authority.canonical_json_bytes(
+                    {"body": "summary", "review_database_ids": []}
+                )
+            )
             return SimpleNamespace(returncode=0)
 
         with mock.patch.object(
@@ -6452,6 +6476,7 @@ def create_ready_integration_attestation(normalized, eligibility_bound):
         options = call.call_args.kwargs
         self.assertEqual(captured.state_digest, reviewed["state_digest"])
         self.assertEqual(captured.provider_summary_body, "summary")
+        self.assertEqual(captured.review_database_ids, [])
         self.assertIn("-I", command)
         self.assertIn("-B", command)
         root = str(REPO_ROOT.resolve())

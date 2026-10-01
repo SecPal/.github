@@ -213,8 +213,10 @@ The candidate-bound capture uses the dedicated read-only
 `resolve-batch --ready-remediation-provider-binding FILE` form. The authority
 verifier derives that ephemeral file from protected CURRENT, and the form is
 valid only with `--capture-reviewed-state`. A paired read-only provider-summary
-output carries the terminal body from the same bounded observation; its digest
-must match the canonical Stable Feedback source. These outputs alone grant no
+output carries the terminal body and review database identities from the same
+bounded observation; its body digest must match the canonical Stable Feedback
+source. Review database identities stay outside the historical Stable Feedback
+digest projection. These outputs alone grant no
 remediation or mutation authority.
 
 The target base ref remains exact. Its tip may advance monotonically while the

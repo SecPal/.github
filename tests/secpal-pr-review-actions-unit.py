@@ -14225,6 +14225,7 @@ class FastPathTests(TestCase):
         reviewed = fast_feedback()
         observation = reviewed.to_dict()
         observation["provider_summary_body"] = "terminal summary"
+        observation["provider_review_database_ids"] = []
         gateway = SimpleNamespace(
             observe_stable_feedback=mock.Mock(return_value=observation)
         )
@@ -14260,7 +14261,10 @@ class FastPathTests(TestCase):
             write.call_args_list,
             [
                 mock.call(Path("reviewed.json"), reviewed.to_dict()),
-                mock.call(Path("summary.json"), {"body": "terminal summary"}),
+                mock.call(
+                    Path("summary.json"),
+                    {"body": "terminal summary", "review_database_ids": []},
+                ),
             ],
         )
 

@@ -3174,15 +3174,6 @@ def _feedback_projection(payload: dict[str, Any]) -> dict[str, Any]:
         reviews.append(
             {
                 "node_id": _require_string(item.get("node_id"), "review identity"),
-                **(
-                    {
-                        "database_id": _require_positive_integer(
-                            item.get("database_id"), "review database identity"
-                        )
-                    }
-                    if "database_id" in item
-                    else {}
-                ),
                 "body_digest": _require_digest(item.get("body_digest"), "review body digest"),
                 "actor": _actor(item.get("actor"), "review", allow_deleted=True),
                 "state": _require_string(item.get("state"), "review state"),
@@ -4946,8 +4937,6 @@ def _verify_predecessor_preservation(
                     and "submitted_at" not in expected
                 ):
                     comparable.pop("submitted_at", None)
-                if category == "reviews" and "database_id" not in expected:
-                    comparable.pop("database_id", None)
                 comparable["reactions"] = expected["reactions"]
                 if comparable != expected:
                     raise SecurityBlocker(
@@ -5494,6 +5483,7 @@ def verify_ordinary_ready_remediation_provider_growth(
     predecessor_eligibility_evidence: Any,
     eligibility_evidence: Any,
     provider_summary_body: str | None = None,
+    review_database_ids: Any = None,
 ) -> VerifiedOrdinaryReadyProviderGrowth:
     """Derive one complete same-assessment provider delta for ordinary remediation.
 
@@ -5579,13 +5569,36 @@ def verify_ordinary_ready_remediation_provider_growth(
     assessment_head_sha = provider_head_sha if legacy_h0 else current.head_sha
     if assessment_heads != {assessment_head_sha}:
         raise SecurityBlocker("ordinary Ready provider review set mixes assessed heads")
+    captured_review_ids: dict[str, int] = {}
+    if not legacy_h0:
+        if not isinstance(review_database_ids, list):
+            raise SecurityBlocker("ordinary Ready review database identities are missing")
+        current_review_ids = {
+            item["node_id"] for item in current.feedback["reviews"]
+        }
+        for item in review_database_ids:
+            if not isinstance(item, dict) or set(item) != {"node_id", "database_id"}:
+                raise SecurityBlocker("ordinary Ready review database identity is malformed")
+            node_id = item["node_id"]
+            database_id = item["database_id"]
+            if (
+                not isinstance(node_id, str)
+                or node_id not in current_review_ids
+                or node_id in captured_review_ids
+                or not isinstance(database_id, int)
+                or isinstance(database_id, bool)
+                or database_id < 1
+                or database_id in captured_review_ids.values()
+            ):
+                raise SecurityBlocker("ordinary Ready review database identity is unbound")
+            captured_review_ids[node_id] = database_id
     review_by_id: dict[str, dict[str, Any]] = {}
     provider_logins: set[str] = set()
     review_bindings: list[tuple[str, int | None, str, str, int, str, str, str, str]] = []
     for provider_review in added_reviews:
         actor = provider_review.get("actor")
         review_id = provider_review.get("node_id")
-        database_id = provider_review.get("database_id")
+        database_id = captured_review_ids.get(review_id)
         submitted_at = _require_github_timestamp(
             provider_review.get("submitted_at"), "provider review submission"
         )
