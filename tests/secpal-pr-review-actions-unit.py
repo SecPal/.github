@@ -14179,6 +14179,7 @@ class FastPathTests(TestCase):
             ready_source_recovery_publication="9" * 40,
             delivery_issue=911,
             capture_reviewed_state="reviewed.json",
+            capture_provider_summary=None,
             apply=False,
             request=None,
             reviewed_state=None,
@@ -14219,6 +14220,49 @@ class FastPathTests(TestCase):
             "SecPal/.github", 1
         )
         write.assert_called_once_with(Path("reviewed.json"), reviewed.to_dict())
+
+    def test_resolve_batch_captures_summary_with_same_feedback_observation(self) -> None:
+        reviewed = fast_feedback()
+        observation = reviewed.to_dict()
+        observation["provider_summary_body"] = "terminal summary"
+        gateway = SimpleNamespace(
+            observe_stable_feedback=mock.Mock(return_value=observation)
+        )
+        arguments = SimpleNamespace(
+            repo_root=str(REPO_ROOT),
+            registry=None,
+            repo="SecPal/.github",
+            pr=1,
+            ready_remediation_provider_binding=None,
+            ready_source_recovery_publication=None,
+            delivery_issue=None,
+            capture_reviewed_state="reviewed.json",
+            capture_provider_summary="summary.json",
+            apply=False,
+            request=None,
+            reviewed_state=None,
+            attestation=None,
+            output=None,
+        )
+        with (
+            mock.patch.object(actions, "load_registry", return_value={}),
+            mock.patch.object(
+                actions,
+                "select_repository",
+                return_value=registry_entry("SecPal/.github"),
+            ),
+            mock.patch.object(actions, "FastPathGateway", return_value=gateway),
+            mock.patch.object(fast_path, "atomic_write_json") as write,
+        ):
+            self.assertEqual(actions._command_resolve_batch(arguments), 0)
+        gateway.observe_stable_feedback.assert_called_once_with("SecPal/.github", 1)
+        self.assertEqual(
+            write.call_args_list,
+            [
+                mock.call(Path("reviewed.json"), reviewed.to_dict()),
+                mock.call(Path("summary.json"), {"body": "terminal summary"}),
+            ],
+        )
 
     def test_ready_source_accepts_exact_v11_historical_provider_summary(self) -> None:
         binding = replace(

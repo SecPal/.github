@@ -194,6 +194,10 @@ CODEX_REACTION_PROVIDER = {
     "node_id": "BOT_kgDOC98s_g",
     "database_id": 199175422,
 }
+CODEX_REVIEW_PROVIDER = {
+    **CODEX_REACTION_PROVIDER,
+    "login": CODEX_PROVIDER_LOGIN,
+}
 CODEX_REVIEW_SUMMARY_MARKER = "<!-- codex-pull-request-review-summary -->"
 CODEX_REVIEW_STATUS = re.compile(
     r"<!--\s*codex-security-review:v1\s+(\{.*?\})\s*-->", re.DOTALL
@@ -3170,6 +3174,15 @@ def _feedback_projection(payload: dict[str, Any]) -> dict[str, Any]:
         reviews.append(
             {
                 "node_id": _require_string(item.get("node_id"), "review identity"),
+                **(
+                    {
+                        "database_id": _require_positive_integer(
+                            item.get("database_id"), "review database identity"
+                        )
+                    }
+                    if "database_id" in item
+                    else {}
+                ),
                 "body_digest": _require_digest(item.get("body_digest"), "review body digest"),
                 "actor": _actor(item.get("actor"), "review", allow_deleted=True),
                 "state": _require_string(item.get("state"), "review state"),
@@ -3439,9 +3452,9 @@ class VerifiedOrdinaryReadyProviderGrowth:
     resulting_state_digest: str
     resulting_feedback_digest: str
     provider_head_sha: str
+    assessment_head_sha: str
     provider_request_node_id: str
-    provider_review_node_id: str
-    provider_review_body_digest: str
+    provider_review_bindings: tuple[tuple[str, int | None, str, str, int, str, str, str, str], ...]
     thread_ids: tuple[str, ...]
     finding_ids: tuple[str, ...]
     source_bindings: tuple[tuple[str, str, str, str | None], ...]
@@ -4933,6 +4946,8 @@ def _verify_predecessor_preservation(
                     and "submitted_at" not in expected
                 ):
                     comparable.pop("submitted_at", None)
+                if category == "reviews" and "database_id" not in expected:
+                    comparable.pop("database_id", None)
                 comparable["reactions"] = expected["reactions"]
                 if comparable != expected:
                     raise SecurityBlocker(
@@ -5478,11 +5493,12 @@ def verify_ordinary_ready_remediation_provider_growth(
     provider_head_sha: str,
     predecessor_eligibility_evidence: Any,
     eligibility_evidence: Any,
+    provider_summary_body: str | None = None,
 ) -> VerifiedOrdinaryReadyProviderGrowth:
     """Derive one complete same-assessment provider delta for ordinary remediation.
 
     The caller supplies no delta or finding subset.  The exact added provider
-    review and threads are derived from the two canonical Stable Feedback
+    reviews and threads are derived from the two canonical Stable Feedback
     states, while the existing eligibility boundary supplies only the ordinary
     corrected/material decision for every derived thread.
     """
@@ -5552,25 +5568,84 @@ def verify_ordinary_ready_remediation_provider_growth(
         for item in current.feedback["reviews"]
         if ("REVIEW", item["node_id"]) in added_keys
     ]
-    if len(added_reviews) != 1:
+    if not added_reviews:
         raise SecurityBlocker(
             "ordinary Ready provider review is missing or ambiguous"
         )
-    provider_review = added_reviews[0]
-    provider_review_key = ("REVIEW", provider_review["node_id"])
-    if (
-        provider_review.get("actor") != COPILOT_REVIEW_PROVIDER
-        or not isinstance(provider_review.get("node_id"), str)
-        or not IDENTITY.fullmatch(provider_review["node_id"])
-        or provider_review.get("state") != "COMMENTED"
-        or provider_review.get("commit_oid") != provider_head_sha
-        or not isinstance(provider_review.get("submitted_at"), str)
-        or provider_request["created_at"] >= provider_review["submitted_at"]
-        or provider_review.get("reactions") != []
-    ):
-        raise SecurityBlocker(
-            "ordinary Ready provider review is not bound to the consumed assessment"
+    assessment_heads = {item.get("commit_oid") for item in added_reviews}
+    # The original #954 form captured a late single Copilot review of H0. A
+    # Ready-head assessment instead comprises every new provider review of H1.
+    legacy_h0 = len(added_reviews) == 1 and assessment_heads == {provider_head_sha}
+    assessment_head_sha = provider_head_sha if legacy_h0 else current.head_sha
+    if assessment_heads != {assessment_head_sha}:
+        raise SecurityBlocker("ordinary Ready provider review set mixes assessed heads")
+    review_by_id: dict[str, dict[str, Any]] = {}
+    provider_logins: set[str] = set()
+    review_bindings: list[tuple[str, int | None, str, str, int, str, str, str, str]] = []
+    for provider_review in added_reviews:
+        actor = provider_review.get("actor")
+        review_id = provider_review.get("node_id")
+        database_id = provider_review.get("database_id")
+        submitted_at = _require_github_timestamp(
+            provider_review.get("submitted_at"), "provider review submission"
         )
+        if (
+            actor not in (COPILOT_REVIEW_PROVIDER, CODEX_REVIEW_PROVIDER)
+            or (legacy_h0 and actor != COPILOT_REVIEW_PROVIDER)
+            or not isinstance(review_id, str)
+            or not IDENTITY.fullmatch(review_id)
+            or provider_review.get("state") != "COMMENTED"
+            or provider_request["created_at"] >= submitted_at
+            or provider_review.get("reactions") != []
+            or (
+                not legacy_h0
+                and (not isinstance(database_id, int) or isinstance(database_id, bool) or database_id < 1)
+            )
+            or actor["login"] in provider_logins
+            or review_id in review_by_id
+        ):
+            raise SecurityBlocker(
+                "ordinary Ready provider review is not bound to the consumed assessment"
+            )
+        provider_logins.add(actor["login"])
+        review_by_id[review_id] = provider_review
+        review_bindings.append(
+            (
+                review_id,
+                database_id,
+                actor["login"],
+                actor["node_id"],
+                actor["database_id"],
+                assessment_head_sha,
+                provider_review["state"],
+                submitted_at,
+                provider_review["body_digest"],
+            )
+        )
+    if COPILOT_REVIEW_PROVIDER["login"] not in provider_logins:
+        raise SecurityBlocker("ordinary Ready assessment has no requested Copilot review")
+
+    summary_key: tuple[str, str] | None = None
+    admitted_updates: set[tuple[str, str]] = set()
+    if not legacy_h0:
+        verify_codex_provider_summary(
+            provider_summary_body,
+            head_sha=assessment_head_sha,
+            repository=current.repository,
+            pull_request_number=current.pull_request_number,
+        )
+        summary_candidates = [
+            item for item in current.feedback["conversation_comments"]
+            if item.get("actor") == CODEX_REVIEW_PROVIDER
+            and item.get("body_digest") == digest_text(provider_summary_body)
+        ]
+        if len(summary_candidates) != 1:
+            raise SecurityBlocker("ordinary Ready Codex summary source is ambiguous")
+        summary_key = ("CONVERSATION_COMMENT", summary_candidates[0]["node_id"])
+        if summary_key in reviewed_sources:
+            if reviewed_sources[summary_key][0] == current_sources[summary_key][0]:
+                raise SecurityBlocker("ordinary Ready Codex summary did not advance")
+            admitted_updates.add(summary_key)
 
     reviewed_thread_ids = {
         item["node_id"] for item in reviewed.feedback["threads"]
@@ -5592,16 +5667,23 @@ def verify_ordinary_ready_remediation_provider_growth(
             digest_json(provider_request),
             None,
         ),
-        (
-            "REVIEW",
-            provider_review["node_id"],
-            provider_review["body_digest"],
-            None,
-        )
     ]
-    admitted_additions = {provider_review_key}
+    source_bindings.extend(
+        ("REVIEW", item["node_id"], item["body_digest"], None)
+        for item in added_reviews
+    )
+    admitted_additions = {("REVIEW", item["node_id"]) for item in added_reviews}
     if provider_request_key in added_keys:
         admitted_additions.add(provider_request_key)
+    if summary_key in added_keys:
+        admitted_additions.add(summary_key)
+        source_bindings.append(
+            (summary_key[0], summary_key[1], current_sources[summary_key][0], None)
+        )
+    elif summary_key is not None:
+        source_bindings.append(
+            (summary_key[0], summary_key[1], current_sources[summary_key][0], None)
+        )
     eligible_by_thread = {
         item["thread_id"]: item for item in eligibility["eligible_threads"]
     }
@@ -5632,9 +5714,10 @@ def verify_ordinary_ready_remediation_provider_growth(
         comment_id = comment.get("node_id")
         comment_digest = comment.get("body_digest")
         comment_key = ("THREAD_COMMENT", comment_id)
+        parent_review = review_by_id.get(comment.get("review_id"))
         if (
-            comment.get("actor") != COPILOT_REVIEW_PROVIDER
-            or comment.get("review_id") != provider_review["node_id"]
+            parent_review is None
+            or comment.get("actor") != parent_review["actor"]
             or comment.get("reply_to_id") is not None
             or comment.get("reactions") != []
             or not isinstance(comment_id, str)
@@ -5669,7 +5752,7 @@ def verify_ordinary_ready_remediation_provider_growth(
             item["thread_id"]
             for item in predecessor_eligibility["eligible_threads"]
         },
-        admitted_updates=set(),
+        admitted_updates=admitted_updates,
     )
     if len(finding_ids) != len(set(finding_ids)):
         raise SecurityBlocker(
@@ -5690,22 +5773,29 @@ def verify_ordinary_ready_remediation_provider_growth(
         "resulting_state_digest": current.state_digest,
         "resulting_feedback_digest": current.feedback_digest,
         "provider_request_node_id": provider_request["node_id"],
-        "provider_review_node_id": provider_review["node_id"],
-        "provider_review_body_digest": provider_review["body_digest"],
         "thread_ids": list(ordered_threads),
         "finding_ids": list(ordered_findings),
         "source_bindings": [list(item) for item in ordered_sources],
         "eligibility_evidence_digest": eligibility_digest,
     }
+    if legacy_h0:
+        projection["provider_review_node_id"] = added_reviews[0]["node_id"]
+        projection["provider_review_body_digest"] = added_reviews[0]["body_digest"]
+    else:
+        projection["domain"] = "secpal.ordinary-ready-provider-growth/v2"
+        projection["assessment_head_sha"] = assessment_head_sha
+        projection["provider_review_bindings"] = [
+            list(item) for item in sorted(review_bindings)
+        ]
     return VerifiedOrdinaryReadyProviderGrowth(
         predecessor_state_digest=reviewed.state_digest,
         predecessor_feedback_digest=reviewed.feedback_digest,
         resulting_state_digest=current.state_digest,
         resulting_feedback_digest=current.feedback_digest,
         provider_head_sha=provider_head_sha,
+        assessment_head_sha=assessment_head_sha,
         provider_request_node_id=provider_request["node_id"],
-        provider_review_node_id=provider_review["node_id"],
-        provider_review_body_digest=provider_review["body_digest"],
+        provider_review_bindings=tuple(sorted(review_bindings)),
         thread_ids=ordered_threads,
         finding_ids=ordered_findings,
         source_bindings=ordered_sources,

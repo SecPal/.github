@@ -1228,7 +1228,7 @@ def verify_ready_remediation_provider_growth_authority(
         or resulting.repository != lifecycle.repository
         or resulting.pull_request_number != lifecycle.pull_request
         or resulting.head_sha != lifecycle.head_sha
-        or live_resulting.to_dict() != resulting.to_dict()
+        or not _matches_provider_growth_capture(resulting, live_resulting)
         or reviewed.repository != lifecycle.repository
         or reviewed.pull_request_number != lifecycle.pull_request
         or provider.repository != lifecycle.repository
@@ -1273,6 +1273,9 @@ def verify_ready_remediation_provider_growth_authority(
             provider_head_sha=provider.provider_head_sha,
             predecessor_eligibility_evidence=predecessor_eligibility_document,
             eligibility_evidence=eligibility,
+            provider_summary_body=getattr(
+                live_resulting, "provider_summary_body", None
+            ),
         )
     except fast_path.SecurityBlocker as exc:
         raise LifecycleOrchestrationError(
@@ -1310,6 +1313,29 @@ def verify_ready_remediation_provider_growth_authority(
         finding_authority_digest=digest,
         _verification_seal=_ORDINARY_READY_REMEDIATION_FINDING_AUTHORITY_SEAL,
     )
+
+
+def _matches_provider_growth_capture(
+    expected: fast_path.StableFeedbackState,
+    observed: fast_path.StableFeedbackState,
+) -> bool:
+    """Allow only new review database IDs absent from an older sealed capture."""
+
+    if observed.to_dict() == expected.to_dict():
+        return True
+    projection = observed.to_dict()
+    expected_reviews = {
+        item["node_id"]: item for item in expected.feedback["reviews"]
+    }
+    for review in projection["reviews"]:
+        prior = expected_reviews.get(review["node_id"])
+        if prior is not None and "database_id" not in prior:
+            review.pop("database_id", None)
+    try:
+        comparable = fast_path.StableFeedbackState.from_payload(projection)
+    except fast_path.SecurityBlocker:
+        return False
+    return comparable.to_dict() == expected.to_dict()
 
 
 def ordinary_ready_remediation_authorization_scope(
@@ -1815,6 +1841,7 @@ def _capture_current_stable_feedback(
             prefix="secpal-continuation-feedback-"
         ) as directory:
             output = Path(directory) / "reviewed-state.json"
+            summary_output = Path(directory) / "provider-summary.json"
             provider_binding = Path(directory) / "provider-binding.json"
             arguments = [
                 bootstrap_source_admission._trusted_python(),
@@ -1848,6 +1875,9 @@ def _capture_current_stable_feedback(
                         str(provider_binding),
                     ]
                 )
+                arguments.extend(
+                    ["--capture-provider-summary", str(summary_output)]
+                )
             result = bootstrap_source_admission._run_isolated_python(
                 arguments,
                 cwd=repository_root,
@@ -1858,9 +1888,17 @@ def _capture_current_stable_feedback(
                 raise LifecycleOrchestrationError(
                     "current stable feedback could not be authenticated"
                 )
-            return fast_path.verify_reviewed_state_evidence(
+            captured = fast_path.verify_reviewed_state_evidence(
                 authority.loads_closed_json(output.read_bytes())
             )
+            if ready_remediation_provider_binding is not None:
+                summary = authority.loads_closed_json(summary_output.read_bytes())
+                if not isinstance(summary, dict) or set(summary) != {"body"}:
+                    raise LifecycleOrchestrationError(
+                        "current provider summary is malformed"
+                    )
+                captured.provider_summary_body = summary["body"]
+            return captured
     except (
         OSError,
         authority.LifecycleAuthorityError,
