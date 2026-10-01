@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import copy
+from contextlib import nullcontext
 from dataclasses import replace
 import hashlib
 import importlib.util
@@ -1761,10 +1762,15 @@ class LifecyclePublicationTests(TestCase):
             ), patch.object(
                 publication, "_verify_historical_lifecycle_transition",
                 return_value=successor,
-            ):
-                return publication.derive_ready_source_recovery_provider_binding(
+            ) as verify_transition:
+                result = publication.derive_ready_source_recovery_provider_binding(
                     candidate
                 )
+                verify_transition.assert_called_once_with(
+                    REPOSITORY, ISSUE, candidate.predecessor_publication_oid,
+                    expected_current_publication_oid=candidate.publication_oid,
+                )
+                return result
 
         binding = derive()
         self.assertEqual(binding.provider_head_sha, h0)
@@ -1870,6 +1876,38 @@ class LifecyclePublicationTests(TestCase):
                 derive(candidate=changed_current, successor=replace(
                     transition, successor=changed_current
                 ))
+
+    def test_historical_transition_rejects_successor_no_longer_current(self) -> None:
+        policy = SimpleNamespace(
+            publication_remote_url="https://example.invalid/repository.git",
+            publication_branch=BRANCH,
+        )
+        adoption = "a" * 40
+        successor = "b" * 40
+        later = "c" * 40
+        entries = [
+            (oid, {"repository": REPOSITORY, "delivery_issue": ISSUE}, None)
+            for oid in (adoption, successor, later)
+        ]
+        with patch.object(
+            authority, "_load_lifecycle_trust_policy", return_value=policy
+        ), patch.object(
+            publication, "_verify_live_protection"
+        ), patch.object(
+            publication, "_isolated_repository",
+            return_value=nullcontext((Path("."), {})),
+        ), patch.object(
+            publication, "_observe_remote_current_once", return_value=later
+        ), patch.object(
+            publication, "_walk_journal",
+            return_value=(entries, {(REPOSITORY, ISSUE): entries[-1]}, {}),
+        ), self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "no longer CURRENT"
+        ):
+            publication._verify_historical_lifecycle_transition(
+                REPOSITORY, ISSUE, adoption,
+                expected_current_publication_oid=successor,
+            )
 
     def test_ready_source_provider_binding_rejects_nonexact_lifecycle_shapes(self) -> None:
         missing_remediation = Chain(ISSUE + 1)

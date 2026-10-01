@@ -2958,6 +2958,7 @@ def _derive_provider_backed_adopted_ready_remediation(
         current.lifecycle.repository,
         current.lifecycle.delivery_issue,
         current.predecessor_publication_oid,
+        expected_current_publication_oid=current.publication_oid,
     )
     root = transition.predecessor
     if (
@@ -3232,6 +3233,8 @@ def _verify_historical_lifecycle_transition(
     repository: str,
     delivery_issue: int,
     predecessor_publication_oid: str,
+    *,
+    expected_current_publication_oid: str | None = None,
 ) -> VerifiedLifecyclePublicationTransition:
     """Verify one exact historical successor through protected journal ancestry."""
 
@@ -3242,6 +3245,10 @@ def _verify_historical_lifecycle_transition(
     predecessor_publication_oid = authority._require_oid(
         predecessor_publication_oid, "predecessor publication"
     )
+    if expected_current_publication_oid is not None:
+        expected_current_publication_oid = authority._require_oid(
+            expected_current_publication_oid, "CURRENT publication"
+        )
     policy = authority._load_lifecycle_trust_policy(repository)
     _verify_live_protection(policy)
     with _isolated_repository(policy, write=False) as (root, credential_environment):
@@ -3255,7 +3262,14 @@ def _verify_historical_lifecycle_transition(
             raise LifecyclePublicationError(
                 "current lifecycle publication is unavailable"
             )
-        entries, _, _ = _walk_journal(root, tip, policy.publication_branch)
+        entries, latest, _ = _walk_journal(root, tip, policy.publication_branch)
+
+    if expected_current_publication_oid is not None:
+        selected = latest.get((repository, delivery_issue))
+        if selected is None or selected[0] != expected_current_publication_oid:
+            raise LifecyclePublicationError(
+                "historical lifecycle successor is no longer CURRENT"
+            )
 
     delivery_entries = [
         item
