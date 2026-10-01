@@ -1239,9 +1239,24 @@ def verify_ready_remediation_provider_growth_authority(
         or provider.current_authority_digest != lifecycle.authority_digest
         or provider.current_publication_oid != current.publication_oid
         or provider.current_publication_digest != current.publication_digest
-        or publication.ORDINARY_REMEDIATION_SUFFIX
-        not in provider.provider_binding_sources
-        or len(provider.remediation_event_digests) != 1
+        or not (
+            (
+                publication.ORDINARY_REMEDIATION_SUFFIX
+                in provider.provider_binding_sources
+                and len(provider.remediation_event_digests) == 1
+            )
+            or (
+                publication.EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION
+                in provider.provider_binding_sources
+                and not provider.remediation_event_digests
+                and isinstance(
+                    provider.adopted_remediation_observation_digest, str
+                )
+                and authority._DIGEST.fullmatch(
+                    provider.adopted_remediation_observation_digest
+                )
+            )
+        )
         or reviewed.head_sha != provider.provider_head_sha
         or predecessor_eligibility
         != fast_path.digest_json(predecessor_eligibility_document)
