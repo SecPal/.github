@@ -8420,24 +8420,40 @@ def _verify_ready_integration_prior_authority(
         )
         if published.lifecycle.historical_proof_mode == "exact_state_adoption":
             issue = authority["delivery_issue_number"]
-            candidates = {
-                form: fast_path.verify_validation_attestation(
-                    attestation, **validation_arguments,
-                    delivery_issue_number=form,
+            if "exceptional_continuation_evidence_digest" in attestation:
+                selected = _authenticated_source_validation_delivery_issue(
+                    authority, attestation
                 )
-                for form in (None, issue)
-            }
-            selected = _authenticated_source_validation_delivery_issue(
-                authority, attestation,
-                published_source_digest=(
-                    published.lifecycle.source_validation_evidence_digest
-                ),
-                canonical_digests={
-                    form: candidate.source_validation_evidence_digest
-                    for form, candidate in candidates.items()
-                },
-            )
-            verified_validation = candidates[selected]
+                verified_validation = fast_path.verify_validation_attestation(
+                    attestation, **validation_arguments,
+                    delivery_issue_number=selected,
+                )
+                if (
+                    verified_validation.source_validation_evidence_digest
+                    != published.lifecycle.source_validation_evidence_digest
+                ):
+                    raise fast_path.SecurityBlocker(
+                        "Continuation source validation cannot use the historical unbound form"
+                    )
+            else:
+                candidates = {
+                    form: fast_path.verify_validation_attestation(
+                        attestation, **validation_arguments,
+                        delivery_issue_number=form,
+                    )
+                    for form in (None, issue)
+                }
+                selected = _authenticated_source_validation_delivery_issue(
+                    authority, attestation,
+                    published_source_digest=(
+                        published.lifecycle.source_validation_evidence_digest
+                    ),
+                    canonical_digests={
+                        form: candidate.source_validation_evidence_digest
+                        for form, candidate in candidates.items()
+                    },
+                )
+                verified_validation = candidates[selected]
         else:
             verified_validation = fast_path.verify_validation_attestation(
                 attestation, **validation_arguments,

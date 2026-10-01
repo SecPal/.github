@@ -11728,6 +11728,7 @@ class FastPathTests(TestCase):
     def _assert_ready_integration_prior_receipt(
         self, *, form: str, protected_source_digest: str | None = None,
         force_unbound_current: bool = False,
+        forbid_unbound_verification: bool = False,
     ) -> None:
         continuation = form == "continuation"
         prior_reviewed = fast_feedback(head_sha="e" * 40)
@@ -11883,6 +11884,13 @@ class FastPathTests(TestCase):
             ),
             LifecyclePublicationError=ValueError,
         )
+        canonical_verifier = fast_path.verify_validation_attestation
+
+        def verify_selected_form(*args: Any, **kwargs: Any) -> Any:
+            if forbid_unbound_verification and kwargs.get("delivery_issue_number") is None:
+                raise AssertionError("Continuation attempted unbound validation")
+            return canonical_verifier(*args, **kwargs)
+
         with (
             mock.patch.object(actions, "_read_json", side_effect=read_json),
             mock.patch.object(
@@ -11914,6 +11922,10 @@ class FastPathTests(TestCase):
                 actions,
                 "_load_lifecycle_publication_helpers",
                 return_value=(lifecycle_authority, lifecycle_publication),
+            ),
+            mock.patch.object(
+                fast_path, "verify_validation_attestation",
+                side_effect=verify_selected_form,
             ),
         ):
             if protected_source_digest is None:
@@ -11949,7 +11961,9 @@ class FastPathTests(TestCase):
         )
 
     def test_ready_integration_accepts_continuation_bound_prior_receipt(self) -> None:
-        self._assert_ready_integration_prior_receipt(form="continuation")
+        self._assert_ready_integration_prior_receipt(
+            form="continuation", forbid_unbound_verification=True,
+        )
 
     def test_ready_integration_accepts_ordinary_issue_bound_prior_receipt(self) -> None:
         self._assert_ready_integration_prior_receipt(form="ordinary_issue_bound")
