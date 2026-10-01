@@ -6334,13 +6334,11 @@ def _verify_ready_integration_lifecycle_authority(
         )
 
 
-def _verify_ready_integration_published_authority(
+def _authenticated_ready_integration_publication(
     authority_manifest: dict[str, Any],
     integration_evidence: dict[str, Any],
-    *,
-    verified_source_validation_evidence_digest: str | None = None,
-) -> None:
-    """Bind integration eligibility to the maintained live #750/#752 authority."""
+) -> Any:
+    """Read and bind protected CURRENT before selecting source evidence form."""
 
     try:
         lifecycle_authority, lifecycle_publication = (
@@ -6390,6 +6388,22 @@ def _verify_ready_integration_published_authority(
     ):
         raise fast_path.SecurityBlocker(
             "Ready integration lifecycle publication binding changed"
+        )
+    return published
+
+
+def _verify_ready_integration_published_authority(
+    authority_manifest: dict[str, Any],
+    integration_evidence: dict[str, Any],
+    *,
+    verified_source_validation_evidence_digest: str | None = None,
+    published: Any = None,
+) -> None:
+    """Bind integration eligibility to the maintained live #750/#752 authority."""
+
+    if published is None:
+        published = _authenticated_ready_integration_publication(
+            authority_manifest, integration_evidence
         )
     recovered_root = (
         authority_manifest.get("source_authority_mode")
@@ -8064,9 +8078,39 @@ def _verify_prior_authority_tag(
 
 
 def _authenticated_source_validation_delivery_issue(
-    authority: dict[str, Any], attestation: dict[str, Any]
+    authority: dict[str, Any], attestation: dict[str, Any],
+    *,
+    published_source_digest: str | None = None,
+    canonical_digests: dict[int | None, str] | None = None,
 ) -> int | None:
-    """Select the issue-bound form introduced with Continuation evidence."""
+    """Select one existing source form from authenticated protected CURRENT."""
+
+    if canonical_digests is not None:
+        issue = authority["delivery_issue_number"]
+        if (
+            type(issue) is not int or issue <= 0
+            or not isinstance(canonical_digests, dict)
+            or set(canonical_digests) != {None, issue}
+            or not isinstance(published_source_digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", published_source_digest) is None
+            or any(
+                not isinstance(digest, str)
+                or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                for digest in canonical_digests.values()
+            )
+        ):
+            raise fast_path.SecurityBlocker(
+                "source validation form authority is malformed"
+            )
+        matches = [
+            issue for issue, digest in canonical_digests.items()
+            if digest == published_source_digest
+        ]
+        if len(matches) != 1:
+            raise fast_path.SecurityBlocker(
+                "protected CURRENT selects no unique source validation form"
+            )
+        return matches[0]
 
     if "exceptional_continuation_evidence_digest" in attestation:
         return authority["delivery_issue_number"]
@@ -8303,20 +8347,6 @@ def _verify_ready_integration_prior_authority(
             != attestation.get("validation_receipt_digest")
         ):
             raise fast_path.SecurityBlocker("prior delivery receipt identity changed")
-        verified_validation = fast_path.verify_validation_attestation(
-            attestation,
-            repository=arguments.repo,
-            head_sha=head,
-            registry=prior_binding,
-            command_set=prior_binding["validation"],
-            reviewed_state=reviewed,
-            commit_parent_sha=parent,
-            commit_tree_sha=tree,
-            commit_validation_receipt_digest=trailer,
-            delivery_issue_number=_authenticated_source_validation_delivery_issue(
-                authority, attestation
-            ),
-        )
     commit_object = _run_attestation_git(repository_root, ["cat-file", "commit", head], allow_failure=True)
     verified_commit = _run_attestation_git(repository_root, ["verify-commit", "--raw", head], allow_failure=True)
     local_signature = evidence.interpret_local_signature(
@@ -8368,12 +8398,53 @@ def _verify_ready_integration_prior_authority(
             commit_signature_binding_digest=recovery_signature_binding_digest,
         )
     else:
+        published = _authenticated_ready_integration_publication(
+            authority, integration_evidence
+        )
+        validation_arguments = dict(
+            repository=arguments.repo,
+            head_sha=head,
+            registry=prior_binding,
+            command_set=prior_binding["validation"],
+            reviewed_state=reviewed,
+            commit_parent_sha=parent,
+            commit_tree_sha=tree,
+            commit_validation_receipt_digest=trailer,
+        )
+        if published.lifecycle.historical_proof_mode == "exact_state_adoption":
+            issue = authority["delivery_issue_number"]
+            candidates = {
+                form: fast_path.verify_validation_attestation(
+                    attestation, **validation_arguments,
+                    delivery_issue_number=form,
+                )
+                for form in (None, issue)
+            }
+            selected = _authenticated_source_validation_delivery_issue(
+                authority, attestation,
+                published_source_digest=(
+                    published.lifecycle.source_validation_evidence_digest
+                ),
+                canonical_digests={
+                    form: candidate.source_validation_evidence_digest
+                    for form, candidate in candidates.items()
+                },
+            )
+            verified_validation = candidates[selected]
+        else:
+            verified_validation = fast_path.verify_validation_attestation(
+                attestation, **validation_arguments,
+                delivery_issue_number=_authenticated_source_validation_delivery_issue(
+                    authority, attestation
+                ),
+            )
         _verify_ready_integration_published_authority(
             authority,
             integration_evidence,
             verified_source_validation_evidence_digest=(
                 verified_validation.source_validation_evidence_digest
             ),
+            published=published,
         )
     _verify_ready_integration_lifecycle_authority(authority, integration_evidence)
     if live_observation is not None:
