@@ -288,6 +288,244 @@ def observation_inputs(value: dict[str, object]) -> dict[str, object]:
 
 
 class GovernanceAmendmentTests(TestCase):
+    def test_target_work_graph_failure_is_bound_to_native_prerequisite(self) -> None:
+        statuses = [{
+            "context": "Work-Graph PR Gate", "state": "failure",
+            "sha": HEAD,
+            "description": "Current canonical work-graph evidence blocked delivery",
+        }]
+        graph = {"data": {"repository": {"issue": {"blockedBy": {
+            "pageInfo": {"hasNextPage": False},
+            "nodes": [{"number": 1059, "state": "OPEN"}],
+        }}}}}
+        with mock.patch.object(amendment, "_github_json", return_value=graph):
+            proof = amendment._reviewed_target_work_graph_blocker(
+                "SecPal/.github", 1053, HEAD, statuses
+            )
+        self.assertEqual(proof["blocking_issue"], 1059)
+        changed = copy.deepcopy(statuses)
+        changed[0]["description"] = "tests failed"
+        with mock.patch.object(amendment, "_github_json", return_value=graph):
+            with self.assertRaises(amendment.GovernanceAmendmentError):
+                amendment._reviewed_target_work_graph_blocker(
+                    "SecPal/.github", 1053, HEAD, changed
+                )
+
+    def test_reviewed_ready_history_uses_one_complete_provider_phase(self) -> None:
+        response = {"data": {"repository": {"pullRequest": {
+            "createdAt": "2026-10-02T10:50:21Z", "headRefOid": HEAD,
+            "timelineItems": {
+                "pageInfo": {"hasNextPage": False},
+                "nodes": [
+                    {"__typename": "PullRequestCommit", "commit": {"oid": HEAD}},
+                    {"__typename": "ReadyForReviewEvent",
+                     "createdAt": "2026-10-02T10:55:08Z"},
+                    {"__typename": "PullRequestReview", "id": "R1",
+                     "state": "COMMENTED", "submittedAt": "2026-10-02T10:59:59Z",
+                     "commit": {"oid": HEAD}},
+                    {"__typename": "PullRequestReview", "id": "R2",
+                     "state": "COMMENTED", "submittedAt": "2026-10-02T11:02:47Z",
+                     "commit": {"oid": HEAD}},
+                ],
+            },
+        }}}}
+        with mock.patch.object(amendment, "_github_json", return_value=response):
+            history = amendment._live_reviewed_ready_history(
+                "SecPal/.github", 1055, HEAD
+            )
+        self.assertEqual([item["kind"] for item in history], [
+            "PR_CREATED_DRAFT", "DRAFT_TO_READY_OBSERVED", "REVIEW_SUBMITTED",
+        ])
+        self.assertEqual(history[-1]["reviewed_head_sha"], HEAD)
+        poisoned = copy.deepcopy(response)
+        poisoned["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"][3]["commit"]["oid"] = PARENT
+        with mock.patch.object(amendment, "_github_json", return_value=poisoned):
+            with self.assertRaises(amendment.GovernanceAmendmentError):
+                amendment._live_reviewed_ready_history(
+                    "SecPal/.github", 1055, HEAD
+                )
+
+    def test_reviewed_ready_policy_is_selected_only_from_accepted_main(self) -> None:
+        original = proposed_policy()
+        value = authorization()
+        record = copy.deepcopy(original)
+        record["delivery_issue"] = 1053
+        record["pull_request"] = 1055
+        record["allowed_path_prefixes"] = amendment.REVIEWED_READY_PATH_PREFIXES
+        record["accepted_main_sha"] = PARENT
+        record["qualified_source"] = copy.deepcopy(value["qualified_source"])
+        record["qualified_source"].update(
+            head_sha=HEAD, tree_sha=TREE, ordered_parent_shas=[PARENT],
+            material_finding_ids=["finding-thread"],
+        )
+        qualified = record["qualified_source"]
+        qualified["qualification_digest"] = authority.digest_json({
+            "conversation_id": qualified["verifier_conversation_id"],
+            "workspace": qualified["verifier_workspace"],
+            "head_sha": HEAD, "tree_sha": TREE,
+            "result": "PASS", "material_finding_ids": ["finding-thread"],
+        })
+        observed = [
+            {"sequence": 1, "kind": "PR_CREATED_DRAFT",
+             "observed_at": "2026-09-18T10:00:00Z", "head_sha": HEAD,
+             "reviewed_head_sha": None},
+            {"sequence": 2, "kind": "DRAFT_TO_READY_OBSERVED",
+             "observed_at": "2026-09-18T10:30:00Z", "head_sha": HEAD,
+             "reviewed_head_sha": None},
+            {"sequence": 3, "kind": "REVIEW_SUBMITTED",
+             "observed_at": "2026-09-18T11:00:00Z", "head_sha": HEAD,
+             "reviewed_head_sha": HEAD},
+        ]
+        record["observed_pre_enrollment_history"] = observed
+        record["feedback"] = {
+            "state_digest": "1" * 64, "feedback_digest": "2" * 64,
+            "thread_inventory_digest": "3" * 64,
+            "material_finding_ids": ["finding-thread"],
+        }
+        state = authority.initial_state()
+        state.update(unrestricted_review_count=1, draft=False, ready=True,
+                     ready_transition_count=1, ready_history=[{
+                         "sequence": 1, "transition_kind": "DRAFT_TO_READY",
+                         "observation_digest": authority.digest_json(observed[1]),
+                     }])
+        record["intended_state"] = state
+        record["human_authority_identity"] = amendment.REVIEWED_READY_AUTHORITY_IDENTITY
+        record["human_authorization_digest"] = authority.digest_json({
+            "authority_identity": record["human_authority_identity"],
+            "repository": "SecPal/.github", "delivery_issue": 1053,
+            "pull_request": 1055, "purpose": amendment.PURPOSE,
+            "qualified_source_digest": qualified["qualification_digest"],
+            "accepted_main_sha": PARENT, "decision": "APPROVED",
+            "bounded_uses": 1,
+        })
+        record["authorization_id"] = "governance-amendment:SecPal/.github:1053:1055"
+        registry = {"schema_version": "1.0", "repositories": [{
+            "repository": "SecPal/.github",
+            "governance_amendment_policy": {
+                "path": amendment.POLICY_PATH, "kind": amendment.KIND,
+                "purpose": amendment.PURPOSE,
+            },
+        }]}
+        policy = {"schema_version": "1.0", "amendments": [original, record]}
+        accepted = "d" * 40
+
+        def read(_root, arguments):
+            revision, path = arguments[1].split(":", 1)
+            self.assertEqual(revision, accepted)
+            payload = registry if path == amendment.REGISTRY_PATH else policy
+            return SimpleNamespace(returncode=0, stdout=json.dumps(payload).encode())
+
+        with mock.patch.object(amendment, "_run_git", side_effect=read), mock.patch.object(
+            amendment, "_git_oid", return_value=TREE
+        ):
+            self.assertEqual(amendment._registered_bootstrap_policy(
+                Path("."), HEAD, "SecPal/.github", 1053, 1055, PARENT,
+                registration_sha=accepted,
+            ), record)
+            policy["amendments"][0]["authorization_id"] = "changed"
+            with self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError,
+                "original governance registration changed",
+            ):
+                amendment._registered_bootstrap_policy(
+                    Path("."), HEAD, "SecPal/.github", 1053, 1055, PARENT,
+                    registration_sha=accepted,
+                )
+
+    def test_reviewed_ready_registration_preserves_material_feedback(self) -> None:
+        value = authorization()
+        value["delivery_issue"] = 1053
+        value["pull_request"] = 1055
+        value["governance_path_prefixes"] = amendment.REVIEWED_READY_PATH_PREFIXES
+        value["human_authority_identity"] = amendment.REVIEWED_READY_AUTHORITY_IDENTITY
+        value["authorization_id"] = "governance-amendment:SecPal/.github:1053:1055"
+        reviewed = value["qualified_source"]
+        reviewed["head_sha"] = HEAD
+        reviewed["tree_sha"] = TREE
+        reviewed["material_finding_ids"] = ["finding-thread"]
+        reviewed["qualification_digest"] = authority.digest_json({
+            "conversation_id": reviewed["verifier_conversation_id"],
+            "workspace": reviewed["verifier_workspace"],
+            "head_sha": HEAD, "tree_sha": TREE,
+            "result": "PASS", "material_finding_ids": ["finding-thread"],
+        })
+        value["feedback"]["material_finding_ids"] = ["finding-thread"]
+        observed = [
+            {"sequence": 1, "kind": "PR_CREATED_DRAFT",
+             "observed_at": "2026-09-18T10:00:00Z", "head_sha": HEAD,
+             "reviewed_head_sha": None},
+            {"sequence": 2, "kind": "DRAFT_TO_READY_OBSERVED",
+             "observed_at": "2026-09-18T10:30:00Z", "head_sha": HEAD,
+             "reviewed_head_sha": None},
+            {"sequence": 3, "kind": "REVIEW_SUBMITTED",
+             "observed_at": "2026-09-18T11:00:00Z", "head_sha": HEAD,
+             "reviewed_head_sha": HEAD},
+        ]
+        value["observed_pre_enrollment_history"] = observed
+        value["intended_state"] = authority.initial_state()
+        value["intended_state"].update(
+            unrestricted_review_count=1, draft=False, ready=True,
+            ready_transition_count=1,
+            ready_history=[{
+                "sequence": 1, "transition_kind": "DRAFT_TO_READY",
+                "observation_digest": authority.digest_json(observed[1]),
+            }],
+        )
+        value["human_authorization_digest"] = authority.digest_json({
+            "authority_identity": value["human_authority_identity"],
+            "repository": value["repository"], "delivery_issue": 1053,
+            "pull_request": 1055, "purpose": amendment.PURPOSE,
+            "qualified_source_digest": reviewed["qualification_digest"],
+            "accepted_main_sha": value["accepted_main_sha"],
+            "decision": "APPROVED", "bounded_uses": 1,
+        })
+        value = reseal(value)
+        first, second = self.patches()
+        with first, second:
+            verified = amendment.verify(value)
+        self.assertEqual(
+            verified.authorization["feedback"]["material_finding_ids"],
+            ["finding-thread"],
+        )
+        for findings in ([], ["other-thread"],
+                         ["finding-thread", "other-thread"],
+                         ["finding-thread", "finding-thread"]):
+            changed = copy.deepcopy(value)
+            changed["feedback"]["material_finding_ids"] = findings
+            changed = reseal(changed)
+            with first, second:
+                with self.assertRaises(amendment.GovernanceAmendmentError):
+                    amendment.verify(changed)
+        native = copy.deepcopy(value)
+        native["observed_pre_enrollment_history"] = [
+            item for item in native["observed_pre_enrollment_history"]
+            if item["kind"] != "REVIEW_SUBMITTED"
+        ]
+        native = reseal(native)
+        with first, second:
+            with self.assertRaises(amendment.GovernanceAmendmentError):
+                amendment.verify(native)
+
+    def test_signed_amendment_preserves_actual_provider_review_history(self) -> None:
+        value = authorization()
+        value["observed_pre_enrollment_history"] = [
+            history()[0],
+            {
+                "sequence": 2, "kind": "REVIEW_SUBMITTED",
+                "observed_at": "2026-09-18T10:30:00Z",
+                "head_sha": PARENT, "reviewed_head_sha": PARENT,
+            },
+            {**history()[1], "sequence": 3},
+        ]
+        value = reseal(value)
+        first, second = self.patches()
+        with first, second:
+            verified = amendment.verify(value)
+        self.assertEqual(
+            verified.authorization["observed_pre_enrollment_history"][1]["kind"],
+            "REVIEW_SUBMITTED",
+        )
+
     def test_consumption_planner_has_one_safe_path_without_new_decision(self) -> None:
         self.assertEqual(
             amendment.consumption_plan(),
@@ -325,6 +563,7 @@ class GovernanceAmendmentTests(TestCase):
 
     def hermetic_repository(
         self, directory: str, *, attacker_intermediate: bool,
+        base_receipt: bool = False,
     ) -> dict[str, object]:
         root, remote = Path(directory) / "work", Path(directory) / "remote.git"
         subprocess.run(["git", "init", "--bare", "--quiet", str(remote)], check=True)
@@ -360,7 +599,10 @@ class GovernanceAmendmentTests(TestCase):
         path.parent.mkdir(parents=True)
         path.write_text("base\n", encoding="utf-8")
         git("add", ".")
-        git("commit", "-S", "-m", "base")
+        base_message = "base"
+        if base_receipt:
+            base_message += "\n\nSecPal-Validation-Receipt: " + "9" * 64
+        git("commit", "-S", "-m", base_message)
         base = git("rev-parse", "HEAD")
         git("remote", "add", "origin", str(remote))
         git("push", "origin", "HEAD:main")
@@ -715,6 +957,18 @@ class GovernanceAmendmentTests(TestCase):
             self.assertEqual(signer_factory.call_count, 2)
 
     def test_exact_governance_tools_do_not_admit_nearby_scripts(self) -> None:
+        for path in (
+            ".github/workflows/quality.yml",
+            "scripts/secpal-provider-fallback.py",
+        ):
+            entry = [{"path": path, "blob_oid": "a" * 40, "mode": "100644"}]
+            self.assertEqual(
+                amendment._changed_files(
+                    entry, amendment.REVIEWED_READY_PATH_PREFIXES
+                ), entry,
+            )
+            with self.assertRaises(amendment.GovernanceAmendmentError):
+                amendment._changed_files(entry, amendment.GOVERNANCE_PATH_PREFIXES)
         exact = [
             {
                 "path": "scripts/secpal-pr-review-actions.py",
@@ -1380,6 +1634,37 @@ class GovernanceAmendmentTests(TestCase):
             ):
                 amendment._qualified_source_history_audit(
                     repo["root"], policy(), trust
+                )
+
+    def test_reviewed_target_audits_only_after_accepted_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = self.hermetic_repository(
+                directory, attacker_intermediate=False, base_receipt=True
+            )
+            trust = SimpleNamespace(signers={
+                SOURCE: authority.TrustedSigner(
+                    SOURCE,
+                    (repo["trusted"].with_suffix(".pub").read_text().strip(),),
+                    (),
+                ),
+            })
+            record = {"delivery_issue": 1053, "qualified_source": {
+                "head_sha": repo["head"], "tree_sha": repo["tree"],
+                "ordered_parent_shas": [repo["base"]],
+            }}
+            audited = amendment._qualified_source_history_audit(
+                repo["root"], record, trust
+            )
+            self.assertEqual(
+                [item["oid"] for item in audited["commits"]], [repo["head"]]
+            )
+            record["delivery_issue"] = 960
+            with self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError,
+                "provenance contradicts absence",
+            ):
+                amendment._qualified_source_history_audit(
+                    repo["root"], record, trust
                 )
 
     def test_caller_cannot_supply_absence_or_current_validation(self) -> None:

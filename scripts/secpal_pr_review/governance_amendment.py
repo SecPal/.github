@@ -50,9 +50,17 @@ READY_AUTHORIZED_ACTOR = "aroviqen"
 ROOT_AUTHORIZATION_DOMAIN = "secpal.governance-amendment-root-authorization/v1"
 ROOT_AUTHORIZATION_KIND = "SECPAL_GOVERNANCE_AMENDMENT_ROOT_AUTHORIZATION"
 HUMAN_AUTHORITY_IDENTITY = "SecPal human architecture authority for issue 960"
+REVIEWED_READY_AUTHORITY_IDENTITY = (
+    "SecPal human architecture authority for issue 1059"
+)
+ORIGINAL_REGISTRATION_DIGEST = (
+    "2655299d0612c51e2a2a0321bf211a8cb94024a6ffac71316059f1f4d0109291"
+)
 SOURCE_SIGNER_IDENTITY = "aroviqen@secpal.app"
 GOVERNANCE_EXACT_PATHS = frozenset({
+    ".github/workflows/quality.yml",
     "scripts/secpal-pr-review-actions.py",
+    "scripts/secpal-provider-fallback.py",
     "scripts/secpal-resolve-fixed-threads.py",
     "scripts/sync-required-checks.sh",
 })
@@ -67,6 +75,11 @@ GOVERNANCE_PATH_PREFIXES = [
     "scripts/sync-required-checks.sh",
     "scripts/secpal_pr_review",
     "tests",
+]
+REVIEWED_READY_PATH_PREFIXES = [
+    *GOVERNANCE_PATH_PREFIXES,
+    ".github/workflows/quality.yml",
+    "scripts/secpal-provider-fallback.py",
 ]
 APPROVED_CONCEPTS = [
     "GOVERNANCE_AMENDMENT", "ABSENT_NEVER_ISSUED", "EXACT_STATE_ADOPTION",
@@ -188,6 +201,31 @@ def historical_evidence() -> dict[str, Any]:
     }
 
 
+def review_budget_admitted(value: Mapping[str, Any]) -> bool:
+    """Distinguish the old budget admission from observed provider review."""
+
+    history = value.get("observed_pre_enrollment_history")
+    if not isinstance(history, list):
+        raise GovernanceAmendmentError("amendment review chronology is missing")
+    observations = sum(
+        isinstance(item, Mapping) and item.get("kind") == "REVIEW_SUBMITTED"
+        for item in history
+    )
+    if (value.get("delivery_issue"), value.get("pull_request")) == (1053, 1055):
+        if observations != 1:
+            raise GovernanceAmendmentError(
+                "reviewed Ready amendment requires one observed review cycle"
+            )
+        return False
+    return observations == 0
+
+
+def _human_identity(delivery_issue: int) -> str:
+    if delivery_issue == 1053:
+        return REVIEWED_READY_AUTHORITY_IDENTITY
+    return HUMAN_AUTHORITY_IDENTITY
+
+
 def canonical_change_facts(
     *, repository: str, delivery_issue: int, pull_request: int,
     head_sha: str, tree_sha: str, ordered_parent_shas: list[str],
@@ -267,7 +305,7 @@ def _verify_root_authorization(
         if key != "authorization_digest"
     }
     expected_human_digest = authority.digest_json({
-        "authority_identity": HUMAN_AUTHORITY_IDENTITY,
+        "authority_identity": _human_identity(item["delivery_issue"]),
         "repository": repository,
         "delivery_issue": item["delivery_issue"],
         "pull_request": item["pull_request"],
@@ -290,8 +328,11 @@ def _verify_root_authorization(
         or root["tree_sha"] != item["tree_sha"]
         or root["accepted_main_sha"] != accepted_main_sha
         or root["purpose"] != PURPOSE
-        or root["governance_path_prefixes"] != GOVERNANCE_PATH_PREFIXES
-        or root["human_authority_identity"] != HUMAN_AUTHORITY_IDENTITY
+        or root["governance_path_prefixes"] != (
+            REVIEWED_READY_PATH_PREFIXES
+            if item["delivery_issue"] == 1053 else GOVERNANCE_PATH_PREFIXES
+        )
+        or root["human_authority_identity"] != _human_identity(item["delivery_issue"])
         or root["human_authorization_digest"] != expected_human_digest
         or root["authorized_facts_digest"]
         != authority.digest_json(_authorization_facts(item))
@@ -368,6 +409,7 @@ def _verify(
         repository = authority._require_repository(item["repository"])
         issue = authority._require_positive_int(item["delivery_issue"], "delivery issue")
         pr = authority._require_positive_int(item["pull_request"], "pull request")
+        reviewed_target = (issue, pr) == (1053, 1055)
         head = authority._require_oid(item["head_sha"], "amendment head")
         tree = authority._require_oid(item["tree_sha"], "amendment tree")
         main = authority._require_oid(item["accepted_main_sha"], "accepted main")
@@ -379,6 +421,10 @@ def _verify(
             item, repository, main,
             authenticate_signature=authenticate_signature,
         )
+        if (issue, pr) not in {(960, 961), (1053, 1055)}:
+            raise GovernanceAmendmentError(
+                "governance amendment identity is not registered"
+            )
         changed = _changed_files(
             item["changed_files"], item["governance_path_prefixes"]
         )
@@ -391,7 +437,8 @@ def _verify(
         )
         history = authority._normalize_observed_pre_enrollment_history(
             item["observed_pre_enrollment_history"], expected_head=head,
-            intended_state=state, review_budget_consumption_admitted=True,
+            intended_state=state,
+            review_budget_consumption_admitted=review_budget_admitted(item),
         )
         signature = authority._require_closed(
             item["source_signature"],
@@ -487,7 +534,12 @@ def _verify(
                 for parent in qualified["ordered_parent_shas"]
             )
             or qualified["result"] != "PASS"
-            or qualified["material_finding_ids"] != []
+            or (
+                qualified["material_finding_ids"] != []
+                if not reviewed_target
+                else qualified["material_finding_ids"]
+                != feedback["material_finding_ids"]
+            )
             or not isinstance(qualified["verifier_conversation_id"], str)
             or not qualified["verifier_conversation_id"]
             or not isinstance(qualified["verifier_workspace"], str)
@@ -512,7 +564,7 @@ def _verify(
         accepted_main_sha=main, changed_files=changed,
     )
     expected_human_authorization_digest = authority.digest_json({
-        "authority_identity": HUMAN_AUTHORITY_IDENTITY,
+        "authority_identity": _human_identity(issue),
         "repository": repository,
         "delivery_issue": issue,
         "pull_request": pr,
@@ -529,8 +581,11 @@ def _verify(
         or qualified["qualification_digest"] != authority.digest_json(
             qualified_identity
         )
-        or qualified_head == head
-        or item["governance_path_prefixes"] != GOVERNANCE_PATH_PREFIXES
+        or (qualified_head == head) != reviewed_target
+        or item["governance_path_prefixes"] != (
+            REVIEWED_READY_PATH_PREFIXES
+            if reviewed_target else GOVERNANCE_PATH_PREFIXES
+        )
         or item["change_digest"] != expected_change_digest
         or signature["signer_identity"] != SOURCE_SIGNER_IDENTITY
         or signature["verified"] is not True
@@ -560,8 +615,17 @@ def _verify(
             "tree_sha": tree,
             "result": "PASS",
         })
-        or validation["accepted_main_sha"] != main or validation["result"] != "PASS"
-        or feedback["material_finding_ids"] != []
+        or (
+            not reviewed_target and validation["accepted_main_sha"] != main
+        ) or validation["result"] != "PASS"
+        or (
+            feedback["material_finding_ids"] != []
+            if not reviewed_target
+            else not isinstance(feedback["material_finding_ids"], list)
+            or not feedback["material_finding_ids"]
+            or feedback["material_finding_ids"]
+            != sorted(set(feedback["material_finding_ids"]))
+        )
         or historical != historical_evidence()
         or absence["head_sha"] != head
         or absence["verification_authority"]
@@ -572,7 +636,7 @@ def _verify(
         or necessity["recursive_self_bootstrap"] != "PROVEN"
         or history != item["observed_pre_enrollment_history"]
         or item["concepts"] != APPROVED_CONCEPTS
-        or item["human_authority_identity"] != HUMAN_AUTHORITY_IDENTITY
+        or item["human_authority_identity"] != _human_identity(issue)
         or item["human_authorization_digest"]
         != expected_human_authorization_digest
         or item["authorization_id"]
@@ -856,6 +920,78 @@ def _live_issue(repository: str, delivery_issue: int) -> dict[str, Any]:
         ) from exc
 
 
+def _live_reviewed_ready_history(
+    repository: str, pull_request: int, head_sha: str,
+) -> list[dict[str, Any]]:
+    """Derive one review cycle from the complete immutable source timeline."""
+
+    owner, name = repository.split("/", 1)
+    query = (
+        "query($owner:String!,$name:String!,$number:Int!){"
+        "repository(owner:$owner,name:$name){pullRequest(number:$number){"
+        "createdAt headRefOid timelineItems(first:100){"
+        "pageInfo{hasNextPage} nodes{__typename "
+        "... on PullRequestCommit{commit{oid}} "
+        "... on ReadyForReviewEvent{createdAt} "
+        "... on ConvertToDraftEvent{createdAt} "
+        "... on PullRequestReview{id state submittedAt commit{oid}}"
+        "}}}}}"
+    )
+    value = _github_json([
+        "api", "--hostname", "github.com", "graphql",
+        "-f", f"query={query}", "-f", f"owner={owner}",
+        "-f", f"name={name}", "-F", f"number={pull_request}",
+    ], "reviewed Ready chronology")
+    try:
+        pull = value["data"]["repository"]["pullRequest"]
+        connection = pull["timelineItems"]
+        nodes = connection["nodes"]
+        if (
+            value.get("errors") or pull["headRefOid"] != head_sha
+            or connection["pageInfo"]["hasNextPage"] is not False
+            or not isinstance(nodes, list)
+        ):
+            raise ValueError
+        created = pull["createdAt"]
+        commits = [node["commit"]["oid"] for node in nodes
+                   if node["__typename"] == "PullRequestCommit"]
+        ready = [node["createdAt"] for node in nodes
+                 if node["__typename"] == "ReadyForReviewEvent"]
+        conversions = [node for node in nodes
+                       if node["__typename"] == "ConvertToDraftEvent"]
+        reviews = [node for node in nodes
+                   if node["__typename"] == "PullRequestReview"]
+        if (
+            commits != [head_sha] or len(ready) != 1 or conversions
+            or not reviews or len({node["id"] for node in reviews}) != len(reviews)
+            or any(node["commit"]["oid"] != head_sha
+                   or node["state"] not in {"COMMENTED", "APPROVED", "CHANGES_REQUESTED"}
+                   for node in reviews)
+        ):
+            raise ValueError
+        instants = [datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ")
+                    for timestamp in (created, ready[0],
+                                      *(node["submittedAt"] for node in reviews))]
+        if not instants[0] < instants[1] < min(instants[2:]):
+            raise ValueError
+        first_review = min(node["submittedAt"] for node in reviews)
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise GovernanceAmendmentError(
+            "reviewed Ready chronology is not exact"
+        ) from exc
+    return [
+        {"sequence": 1, "kind": "PR_CREATED_DRAFT",
+         "observed_at": created, "head_sha": head_sha,
+         "reviewed_head_sha": None},
+        {"sequence": 2, "kind": "DRAFT_TO_READY_OBSERVED",
+         "observed_at": ready[0], "head_sha": head_sha,
+         "reviewed_head_sha": None},
+        {"sequence": 3, "kind": "REVIEW_SUBMITTED",
+         "observed_at": first_review, "head_sha": head_sha,
+         "reviewed_head_sha": head_sha},
+    ]
+
+
 def _accepted_main_bytes(root: Path, accepted_main_sha: str, path: str) -> bytes:
     result = _run_git(root, ["show", f"{accepted_main_sha}:{path}"])
     if result.returncode != 0 or not result.stdout:
@@ -900,8 +1036,63 @@ def _canonical_required_check_contexts(
     return tuple(contexts)
 
 
+def _reviewed_target_work_graph_blocker(
+    repository: str, delivery_issue: int, head_sha: str,
+    statuses: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Authenticate the one expected delivery gate without blessing source CI."""
+
+    failures = [item for item in statuses if item.get("state") != "success"]
+    if (
+        repository != "SecPal/.github" or delivery_issue != 1053
+        or len(failures) != 1
+        or failures[0].get("context") != "Work-Graph PR Gate"
+        or failures[0].get("state") != "failure"
+        or failures[0].get("sha") != head_sha
+        or failures[0].get("description")
+        != "Current canonical work-graph evidence blocked delivery"
+    ):
+        raise GovernanceAmendmentError(
+            "reviewed source has an unrelated failing status"
+        )
+    owner, name = repository.split("/", 1)
+    query = (
+        "query($owner:String!,$name:String!,$number:Int!){"
+        "repository(owner:$owner,name:$name){issue(number:$number){"
+        "blockedBy(first:50){pageInfo{hasNextPage} "
+        "nodes{number state}}}}}"
+    )
+    value = _github_json([
+        "api", "--hostname", "github.com", "graphql",
+        "-f", f"query={query}", "-f", f"owner={owner}",
+        "-f", f"name={name}", "-F", f"number={delivery_issue}",
+    ], "reviewed source native blocker")
+    try:
+        graph = value["data"]["repository"]["issue"]["blockedBy"]
+        nodes = graph["nodes"]
+        if (
+            value.get("errors") or graph["pageInfo"]["hasNextPage"] is not False
+            or not isinstance(nodes, list)
+            or len({item["number"] for item in nodes}) != len(nodes)
+            or 1059 not in {item["number"] for item in nodes}
+            or any(item["state"] != "CLOSED" for item in nodes
+                   if item["number"] != 1059)
+        ):
+            raise ValueError
+    except (KeyError, TypeError, ValueError) as exc:
+        raise GovernanceAmendmentError(
+            "reviewed source native blocker is not exact"
+        ) from exc
+    return {
+        "blocking_issue": 1059,
+        "native_blockers": sorted(nodes, key=lambda item: item["number"]),
+        "status_context": copy.deepcopy(failures[0]),
+    }
+
+
 def _live_ci(
     repository: str, head_sha: str, accepted_main_sha: str,
+    *, delivery_issue: int = 960,
 ) -> dict[str, Any]:
     protection = _live_required_check_policy(repository, accepted_main_sha)
     runs: list[dict[str, Any]] = []
@@ -1044,6 +1235,21 @@ def _live_ci(
                 "live governance amendment duplicate check identity is ambiguous"
             )
         effective_runs.append(max(group, key=lambda run: run["id"]))
+    blocker = None
+    if status_state != "success" or any(
+        item["state"] != "success" for item in contexts
+    ):
+        observed_statuses = [
+            {
+                "context": item["context"], "state": item["state"],
+                "sha": item.get("sha", status_head),
+                "description": item.get("description"),
+            }
+            for item in status_items
+        ]
+        blocker = _reviewed_target_work_graph_blocker(
+            repository, delivery_issue, head_sha, observed_statuses
+        )
     if (
         not normalized_runs
         or status_head != head_sha
@@ -1061,9 +1267,13 @@ def _live_ci(
             run["conclusion"] not in {"success", "skipped"}
             for run in effective_runs
         )
-        or status_state != "success"
+        or status_state != ("failure" if blocker else "success")
         or any(
-            status["state"] != "success"
+            (status["state"] != "success" and (
+                blocker is None
+                or status["context"] != "Work-Graph PR Gate"
+                or status["state"] != "failure"
+            ))
             or status["sha"] != head_sha
             for status in contexts
         )
@@ -1081,7 +1291,10 @@ def _live_ci(
         )
         or any(
             run["conclusion"] == "skipped"
-            and run["name"] not in ALLOWED_SKIPPED_CHECKS
+            and run["name"] not in (
+                ALLOWED_SKIPPED_CHECKS
+                | ({"Remind about draft PRs"} if delivery_issue == 1053 else set())
+            )
             for run in normalized_runs
         )
     ):
@@ -1092,6 +1305,8 @@ def _live_ci(
         "checks": normalized_runs, "statuses": contexts,
         "required_check_policy": protection,
     }
+    if blocker is not None:
+        evidence["registered_work_graph_blocker"] = blocker
     return {
         "head_sha": head_sha,
         "workflow_identity": SOURCE_CI_VERSION,
@@ -1610,6 +1825,7 @@ def _source_commit_range(
 
 def _git_changed_files(
     root: Path, accepted_main_sha: str, head_sha: str,
+    allowed_prefixes: list[str] = GOVERNANCE_PATH_PREFIXES,
 ) -> list[dict[str, Any]]:
     result = _run_git(
         root,
@@ -1641,15 +1857,23 @@ def _git_changed_files(
                 "live governance amendment path identity changed"
             )
         changed.append({"path": path, "blob_oid": oid, "mode": mode})
-    return _changed_files(changed, GOVERNANCE_PATH_PREFIXES)
+    return _changed_files(changed, allowed_prefixes)
 
 
 def _registered_bootstrap_policy(
     root: Path, head_sha: str, repository: str, delivery_issue: int,
     pull_request: int, accepted_main_sha: str,
+    *, registration_sha: str | None = None,
 ) -> dict[str, Any]:
     def document(path: str, label: str) -> dict[str, Any]:
-        result = _run_git(root, ["show", f"{head_sha}:{path}"])
+        source = (
+            head_sha if delivery_issue == 960 else registration_sha
+        )
+        if source is None:
+            raise GovernanceAmendmentError(
+                "reviewed Ready registration requires accepted main"
+            )
+        result = _run_git(root, ["show", f"{source}:{path}"])
         try:
             value = json.loads(result.stdout)
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -1690,6 +1914,89 @@ def _registered_bootstrap_policy(
             "registered governance amendment bootstrap scope is unavailable"
         )
     record = copy.deepcopy(candidates[0])
+    if delivery_issue == 1053 and pull_request == 1055:
+        if (
+            not isinstance(records, list)
+            or len(records) != 2
+            or authority.digest_json(records[0]) != ORIGINAL_REGISTRATION_DIGEST
+            or records[1] != record
+        ):
+            raise GovernanceAmendmentError(
+                "original governance registration changed"
+            )
+        qualified = record.get("qualified_source")
+        feedback = record.get("feedback")
+        observed = record.get("observed_pre_enrollment_history")
+        state = record.get("intended_state")
+        expected_fields = {
+            "repository", "delivery_issue", "pull_request",
+            "qualified_source", "accepted_main_sha", "source_signer_identity",
+            "allowed_path_prefixes", "concepts", "human_authority_identity",
+            "human_authorization_digest", "authorization_id", "intended_state",
+            "feedback", "observed_pre_enrollment_history",
+        }
+        if (
+            set(record) != expected_fields
+            or not isinstance(qualified, Mapping)
+            or not isinstance(feedback, Mapping)
+            or not isinstance(observed, list)
+            or qualified.get("head_sha") != head_sha
+            or qualified.get("tree_sha") != _git_oid(root, head_sha + "^{tree}")
+            or qualified.get("ordered_parent_shas") != [accepted_main_sha]
+            or qualified.get("material_finding_ids")
+            != feedback.get("material_finding_ids")
+            or not feedback.get("material_finding_ids")
+            or record.get("accepted_main_sha") != accepted_main_sha
+            or record.get("source_signer_identity") != SOURCE_SIGNER_IDENTITY
+            or record.get("allowed_path_prefixes") != REVIEWED_READY_PATH_PREFIXES
+            or record.get("concepts") != APPROVED_CONCEPTS
+            or record.get("human_authority_identity")
+            != REVIEWED_READY_AUTHORITY_IDENTITY
+            or record.get("authorization_id")
+            != "governance-amendment:SecPal/.github:1053:1055"
+        ):
+            raise GovernanceAmendmentError(
+                "reviewed Ready registration scope changed"
+            )
+        try:
+            normalized_state = authority._validate_state(
+                state, allow_adopted_observations=True
+            )
+            normalized_history = authority._normalize_observed_pre_enrollment_history(
+                observed, expected_head=head_sha,
+                intended_state=normalized_state,
+                review_budget_consumption_admitted=False,
+            )
+            if (
+                normalized_history != observed
+                or normalized_state != state
+                or normalized_state["unrestricted_review_count"] != 1
+                or normalized_state["remediation_cycle_count"] != 0
+                or normalized_state["ready"] is not True
+                or normalized_state["ready_transition_count"] != 1
+                or normalized_state["exceptional_recovery_count"] != 0
+                or normalized_state["exceptional_continuation_count"] != 0
+            ):
+                raise GovernanceAmendmentError(
+                    "reviewed Ready registration state changed"
+                )
+        except authority.LifecycleAuthorityError as exc:
+            raise GovernanceAmendmentError(
+                "reviewed Ready registration history is invalid"
+            ) from exc
+        expected_human_digest = authority.digest_json({
+            "authority_identity": REVIEWED_READY_AUTHORITY_IDENTITY,
+            "repository": repository, "delivery_issue": delivery_issue,
+            "pull_request": pull_request, "purpose": PURPOSE,
+            "qualified_source_digest": qualified["qualification_digest"],
+            "accepted_main_sha": accepted_main_sha,
+            "decision": "APPROVED", "bounded_uses": 1,
+        })
+        if record.get("human_authorization_digest") != expected_human_digest:
+            raise GovernanceAmendmentError(
+                "reviewed Ready human authority scope changed"
+            )
+        return record
     expected_human_digest = authority.digest_json({
         "authority_identity": HUMAN_AUTHORITY_IDENTITY,
         "repository": repository, "delivery_issue": delivery_issue,
@@ -1799,7 +2106,11 @@ def _qualified_source_history_audit(
         raise GovernanceAmendmentError(
             "registered qualified source topology changed"
         )
-    commits = [parent, *_source_commit_range(root, parent, head)]
+    source_commits = _source_commit_range(root, parent, head)
+    commits = (
+        source_commits if registered.get("delivery_issue") == 1053
+        else [parent, *source_commits]
+    )
     audited: list[dict[str, Any]] = []
     trailer_keys = (
         "SecPal-Validation-Receipt",
@@ -1927,7 +2238,7 @@ def produce_observation(
             "governance amendment root inputs are missing"
         )
     inputs = copy.deepcopy(dict(authenticated_inputs))
-    if repository != "SecPal/.github" or delivery_issue != 960:
+    if repository != "SecPal/.github" or delivery_issue not in {960, 1053}:
         raise GovernanceAmendmentError(
             "governance amendment delivery is outside registered bootstrap scope"
         )
@@ -1939,12 +2250,23 @@ def produce_observation(
     accepted_main = authority._require_oid(
         inputs["accepted_main_sha"], "accepted main"
     )
-    trust = _accepted_trust_policy(repository, accepted_main)
-    remote = trust.publication_remote_url
-    if _observe_remote_main(root, remote) != accepted_main:
+    base_trust = _accepted_trust_policy(repository, accepted_main)
+    remote = base_trust.publication_remote_url
+    protected_main = _observe_remote_main(root, remote)
+    if delivery_issue == 960 and protected_main != accepted_main:
         raise GovernanceAmendmentError(
             "protected main changed before live observation"
         )
+    if delivery_issue == 1053 and _run_git(
+        root, ["merge-base", "--is-ancestor", accepted_main, protected_main]
+    ).returncode != 0:
+        raise GovernanceAmendmentError(
+            "reviewed Ready baseline is not accepted-main ancestry"
+        )
+    trust = (
+        base_trust if delivery_issue == 960
+        else _accepted_trust_policy(repository, protected_main)
+    )
     pull_request = authority._require_positive_int(
         inputs["pull_request"], "pull request"
     )
@@ -1966,7 +2288,10 @@ def produce_observation(
         )
     head = authority._require_oid(pull["head_sha"], "amendment head")
     registered = _registered_bootstrap_policy(
-        root, head, repository, delivery_issue, pull_request, accepted_main
+        root, head, repository, delivery_issue, pull_request, accepted_main,
+        registration_sha=(
+            protected_main if delivery_issue == 1053 else None
+        ),
     )
     if (
         inputs["qualified_source"] != registered.get("qualified_source")
@@ -1976,6 +2301,11 @@ def produce_observation(
         or inputs["human_authorization_digest"]
         != registered.get("human_authorization_digest")
         or inputs["authorization_id"] != registered.get("authorization_id")
+        or (
+            delivery_issue == 1053
+            and inputs["observed_pre_enrollment_history"]
+            != registered.get("observed_pre_enrollment_history")
+        )
     ):
         raise GovernanceAmendmentError(
             "governance amendment inputs differ from registered bootstrap scope"
@@ -1990,7 +2320,11 @@ def produce_observation(
         authority._require_oid(parent, "amendment parent")
         for parent in parents
     ]
-    changed = _git_changed_files(root, accepted_main, head)
+    changed = _git_changed_files(
+        root, accepted_main, head,
+        REVIEWED_READY_PATH_PREFIXES
+        if delivery_issue == 1053 else GOVERNANCE_PATH_PREFIXES,
+    )
     commits = _source_commit_range(root, accepted_main, head)
     for commit in commits:
         _verify_commit_against_accepted_trust(
@@ -2000,17 +2334,30 @@ def produce_observation(
         source_commit_evidence(commit, SOURCE_SIGNER_IDENTITY, accepted_main)
         for commit in commits
     ]
-    source_ci = _live_ci(repository, head, accepted_main)
+    source_ci = _live_ci(
+        repository, head,
+        protected_main if delivery_issue == 1053 else accepted_main,
+        delivery_issue=delivery_issue,
+    )
     natural_ci = _live_ready_ci(
         repository, pull_request, head, accepted_main, source_ci,
     )
     current_validation = _bound_current_validation(
-        root, repository, accepted_main
+        root, repository, protected_main
     )
     historical, absence = _observe_historical_absence(
         root, repository, delivery_issue, pull_request, head, accepted_main,
         registered, trust,
     )
+    feedback = _live_feedback(repository, pull_request, head)
+    if delivery_issue == 1053 and (
+        feedback != registered.get("feedback")
+        or _live_reviewed_ready_history(repository, pull_request, head)
+        != registered.get("observed_pre_enrollment_history")
+    ):
+        raise GovernanceAmendmentError(
+            "reviewed Ready registration feedback or chronology changed"
+        )
     observed = {
         "schema_version": "1.0", "kind": KIND, "domain": DOMAIN,
         "purpose": PURPOSE, "repository": repository,
@@ -2021,7 +2368,10 @@ def produce_observation(
         "tree_sha": tree,
         "ordered_parent_shas": parents,
         "accepted_main_sha": accepted_main,
-        "governance_path_prefixes": copy.deepcopy(GOVERNANCE_PATH_PREFIXES),
+        "governance_path_prefixes": copy.deepcopy(
+            REVIEWED_READY_PATH_PREFIXES
+            if delivery_issue == 1053 else GOVERNANCE_PATH_PREFIXES
+        ),
         "changed_files": changed,
         "change_digest": change_digest(
             repository=repository, delivery_issue=delivery_issue,
@@ -2039,7 +2389,7 @@ def produce_observation(
         "source_commits": source_commits,
         "natural_ci": natural_ci,
         "current_validation": current_validation,
-        "feedback": _live_feedback(repository, pull_request, head),
+        "feedback": feedback,
         "observed_pre_enrollment_history": copy.deepcopy(
             inputs["observed_pre_enrollment_history"]
         ),

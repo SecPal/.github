@@ -579,14 +579,22 @@ Version 3 adds the distinct
 not reinterpret versions 1/2. Loss-admission schema 1.0 retains its exact signed,
 unenrolled OPEN Draft and same-head validation-receipt-trailer semantics.
 
-Version 4 adds one closed `GOVERNANCE_AMENDMENT` source mode for the registered
-issue #960 / PR #961 bootstrap only. It accepts no historical validation object:
+Version 4 adds one closed `GOVERNANCE_AMENDMENT` source mode with independently
+registered exact records for issue #960 / PR #961 and the reviewed Ready source
+of issue #1053 / PR #1055. It accepts no historical validation object:
 the typed state is `ABSENT_NEVER_ISSUED`, and validation-receipt,
 source-validation, and final-attestation digests are canonical JSON nulls.
 `PRESENT` projects the unchanged version-1/2 evidence, while `UNAVAILABLE`
 projects unchanged version-3 evidence whose receipt identity exists but whose
 package bytes are unavailable. These states are disjoint; prose, caller flags,
 synthetic digests, and candidate-local policy cannot select one.
+The #960 record retains its parent-inclusive historical audit and review-budget
+admission. The #1053 record audits only commits after its accepted baseline,
+derives its already consumed review and Ready transition from the authenticated
+PR chronology, and binds every unresolved finding through current Stable
+Feedback. Its qualification establishes adoption facts; it does not correct
+findings or grant thread resolution. The registration must be read from accepted
+protected main before issuance, and the target source remains unchanged.
 
 The amendment authorization contains a one-use exact-scope root authorization
 signed by an authority signer whose identity and key come from the bound
