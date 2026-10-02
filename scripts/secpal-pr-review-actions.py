@@ -1551,10 +1551,6 @@ def _governance_only_candidate(
         or not isinstance(tree_sha, str) or not OID_PATTERN.fullmatch(tree_sha)
     ):
         return False
-    allowed = {
-        "AGENTS.md", "CONTRIBUTING.md", ".github/copilot-instructions.md",
-        ".github/instructions/org-shared.instructions.md",
-    }
     try:
         if _run_attestation_git(repository_root, ["cat-file", "-t", base_sha]).stdout.strip() != "commit":
             return False
@@ -1564,19 +1560,9 @@ def _governance_only_candidate(
             repository_root,
             ["diff", "--no-ext-diff", "--no-renames", "--raw", "-z", base_sha, tree_sha],
         ).stdout
-        records = raw.split("\0")
-        if records[-1] != "" or not 2 <= len(records) - 1 <= 2 * len(allowed):
-            return False
-        for index in range(0, len(records) - 1, 2):
-            metadata, path = records[index:index + 2]
-            fields = metadata.split()
-            if (
-                len(fields) != 5 or fields[0] not in {":100644", ":000000"}
-                or fields[1] != "100644" or fields[4] not in {"A", "M"}
-                or path not in allowed
-            ):
-                return False
-        return True
+        return fast_path.governance_tree_delta_allowed(
+            repository, base_sha, tree_sha, raw,
+        )
     except (fast_path.RecoverableLocalError, OSError, ValueError):
         return False
 

@@ -771,6 +771,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "canonical_json_bytes",
             "create_validation_attestation",
             "create_validation_receipt",
+            "governance_tree_delta_allowed",
             "governance_validation_commands",
             "create_ready_integration_attestation",
             "digest_json",
