@@ -17,6 +17,8 @@ from typing import Any, Mapping
 from . import lifecycle_authority as authority
 from . import lifecycle_execution as execution
 from . import lifecycle_publication as publication
+from . import exact_source_safety
+from . import validation_evidence_loss
 
 ROOT = Path(__file__).resolve().parents[2]
 POLICY_PATH = "policies/governance-amendment-bootstrap.json"
@@ -217,7 +219,11 @@ def review_budget_admitted(value: Mapping[str, Any]) -> bool:
                 "reviewed Ready amendment requires one observed review cycle"
             )
         return False
-    return observations == 0
+    if observations:
+        raise GovernanceAmendmentError(
+            "original amendment retains pre-enrollment review-budget admission"
+        )
+    return True
 
 
 def _human_identity(delivery_issue: int) -> str:
@@ -2032,8 +2038,9 @@ def _registered_bootstrap_policy(
 
 def _bound_current_validation(
     root: Path, repository: str, accepted_main_sha: str,
+    *, target_head_sha: str | None = None, target_tree_sha: str | None = None,
 ) -> dict[str, Any]:
-    """Derive validation identity from the protected accepted-main registry."""
+    """Bind policy identity and execute current safety for reviewed Ready source."""
 
     try:
         registry = json.loads(
@@ -2061,6 +2068,62 @@ def _bound_current_validation(
         raise GovernanceAmendmentError(
             "accepted-main validation policy is unavailable"
         ) from exc
+    if (target_head_sha is None) != (target_tree_sha is None):
+        raise GovernanceAmendmentError("reviewed Ready current-safety source is incomplete")
+    if target_head_sha is not None:
+        target_head_sha = authority._require_oid(target_head_sha, "current-safety head")
+        target_tree_sha = authority._require_oid(target_tree_sha, "current-safety tree")
+        if _git_oid(root, target_head_sha + "^{tree}") != target_tree_sha:
+            raise GovernanceAmendmentError("current-safety source tree changed")
+        profile = validation_evidence_loss._current_safety_profile(
+            accepted_main_sha
+        )
+        with tempfile.TemporaryDirectory(
+            prefix="secpal-governance-amendment-safety-"
+        ) as directory:
+            source_root = Path(directory) / "source"
+            added = _run_git(root, [
+                "worktree", "add", "--detach", str(source_root),
+                target_head_sha,
+            ])
+            if added.returncode != 0:
+                raise GovernanceAmendmentError(
+                    "immutable current-safety source is unavailable"
+                )
+            try:
+                if _git_oid(source_root, "HEAD") != target_head_sha:
+                    raise GovernanceAmendmentError(
+                        "current-safety source head changed"
+                    )
+                with exact_source_safety.execution_root(
+                    root, accepted_main_sha, source_root=source_root,
+                    profile=profile, candidate_repository=repository,
+                ) as execution_root:
+                    exact_source_safety.run_profile(
+                        execution_root, profile, expected_profile=profile,
+                    )
+            finally:
+                removed = _run_git(root, [
+                    "worktree", "remove", "--force", str(source_root)
+                ])
+                if removed.returncode != 0:
+                    raise GovernanceAmendmentError(
+                        "current-safety source projection was not removed"
+                    )
+        return {
+            "accepted_main_sha": accepted_main_sha,
+            "policy_digest": authority.digest_json({
+                "repository_policy": policy,
+                "current_safety_profile": profile,
+                "target_head_sha": target_head_sha,
+                "target_tree_sha": target_tree_sha,
+            }),
+            "command_set_digest": authority.digest_json({
+                "registered_commands": commands,
+                "current_safety_commands": profile["validation_command_set"],
+            }),
+            "result": "PASS",
+        }
     return {
         "accepted_main_sha": accepted_main_sha,
         "policy_digest": authority.digest_json(policy),
@@ -2343,7 +2406,9 @@ def produce_observation(
         repository, pull_request, head, accepted_main, source_ci,
     )
     current_validation = _bound_current_validation(
-        root, repository, protected_main
+        root, repository, protected_main,
+        target_head_sha=head if delivery_issue == 1053 else None,
+        target_tree_sha=tree if delivery_issue == 1053 else None,
     )
     historical, absence = _observe_historical_absence(
         root, repository, delivery_issue, pull_request, head, accepted_main,
@@ -2472,6 +2537,7 @@ def _observe_remote_main(root: Path, remote: str) -> str:
 
 
 def _consumption_record(authorization: Mapping[str, Any]) -> dict[str, Any]:
+    consumption_base = _consumption_base(authorization)
     fields = {
         "schema_version": "1.0",
         "kind": CONSUMPTION_KIND,
@@ -2500,13 +2566,26 @@ def _consumption_record(authorization: Mapping[str, Any]) -> dict[str, Any]:
         ),
         "operation": "EXACT_PROTECTED_MAIN_GOVERNANCE_AMENDMENT_SQUASH",
         "merge_method": CONSUMPTION_METHOD,
-        "resulting_parent_sha": authorization["accepted_main_sha"],
+        "resulting_parent_sha": consumption_base,
         "resulting_tree_sha": authorization["tree_sha"],
         "github_commit_verification_required": True,
         "one_use_identity": authorization["authorization_digest"],
         "bounded_uses": 1,
     }
     return {**fields, "consumption_digest": authority.digest_json(fields)}
+
+
+def _consumption_base(authorization: Mapping[str, Any]) -> str:
+    """Use the authenticated registration tip for the reviewed Ready record."""
+
+    if authorization["delivery_issue"] == 1053:
+        return authority._require_oid(
+            authorization["current_validation"]["accepted_main_sha"],
+            "reviewed Ready registration tip",
+        )
+    return authority._require_oid(
+        authorization["accepted_main_sha"], "amendment accepted main"
+    )
 
 
 def _merge_message(authorization: Mapping[str, Any], consumption: Mapping[str, Any]) -> bytes:
@@ -2633,7 +2712,7 @@ def _authenticate_execution(
         raise GovernanceAmendmentError(
             "live amendment prerequisites changed before consumption"
         )
-    if _observe_remote_main(root, remote) != item["accepted_main_sha"]:
+    if _observe_remote_main(root, remote) != _consumption_base(item):
         raise GovernanceAmendmentError("protected main changed before amendment consumption")
     if _git_oid(root, item["head_sha"] + "^{tree}") != item["tree_sha"]:
         raise GovernanceAmendmentError("amendment tree changed")
@@ -2744,7 +2823,7 @@ def execute(
         raise GovernanceAmendmentError("accepted amendment read-back changed identity")
     _verify_squash_read_back(
         _read_squash_commit(item["repository"], squash_oid),
-        oid=squash_oid, parent_sha=item["accepted_main_sha"],
+        oid=squash_oid, parent_sha=_consumption_base(item),
         tree_sha=item["tree_sha"], message=message,
     )
     return {

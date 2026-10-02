@@ -615,8 +615,15 @@ tree/topology/path/blob/mode scope, terminal CI, stable feedback, threads, and
 qualification binding before either signer runs. The exact required-check set
 comes from `sync-required-checks.sh` at bound accepted main, and combined-status
 contexts are limited to that set plus the maintained CLA context. Current-
-validation identity is derived from the bound accepted-main registry. Typed
-historical absence is derived from the protected lifecycle journal plus an
+validation identity is derived from the bound accepted-main registry. For the
+reviewed Ready registration, the accepted-main current-safety harness is also
+executed against an immutable projection of the exact target head and tree;
+the command, policy, target identity, and passing result are rebound on every
+issuance or consumption read. The historical absence record remains separate.
+The reviewed Ready authorization retains its historical accepted baseline;
+consumption checks the authenticated registration tip as current protected main
+and binds that tip as the resulting squash parent's identity.
+Typed historical absence is derived from the protected lifecycle journal plus an
 accepted-key verification and trailer audit of the exact qualified-source
 history; caller absence, validation, receipt, provenance, and candidate-local
 audit objects are rejected. Issuance occurs only after the

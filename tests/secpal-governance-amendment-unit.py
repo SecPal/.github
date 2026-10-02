@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import copy
+from contextlib import nullcontext
 import hashlib
 import json
 import subprocess
@@ -506,7 +507,7 @@ class GovernanceAmendmentTests(TestCase):
             with self.assertRaises(amendment.GovernanceAmendmentError):
                 amendment.verify(native)
 
-    def test_signed_amendment_preserves_actual_provider_review_history(self) -> None:
+    def test_original_amendment_cannot_replace_budget_admission_with_review(self) -> None:
         value = authorization()
         value["observed_pre_enrollment_history"] = [
             history()[0],
@@ -519,12 +520,10 @@ class GovernanceAmendmentTests(TestCase):
         ]
         value = reseal(value)
         first, second = self.patches()
-        with first, second:
-            verified = amendment.verify(value)
-        self.assertEqual(
-            verified.authorization["observed_pre_enrollment_history"][1]["kind"],
-            "REVIEW_SUBMITTED",
-        )
+        with first, second, self.assertRaises(
+            amendment.GovernanceAmendmentError
+        ):
+            amendment.verify(value)
 
     def test_consumption_planner_has_one_safe_path_without_new_decision(self) -> None:
         self.assertEqual(
@@ -542,6 +541,22 @@ class GovernanceAmendmentTests(TestCase):
                 "branch_protection_bypass": False,
                 "decision_required": False,
             },
+        )
+
+    def test_reviewed_amendment_consumes_from_registration_tip(self) -> None:
+        reviewed = authorization()
+        reviewed["delivery_issue"] = 1053
+        reviewed["pull_request"] = 1055
+        reviewed["current_validation"]["accepted_main_sha"] = "d" * 40
+        consumption = amendment._consumption_record(reviewed)
+        self.assertEqual(
+            consumption["accepted_main_sha"], reviewed["accepted_main_sha"]
+        )
+        self.assertEqual(consumption["resulting_parent_sha"], "d" * 40)
+        original = authorization()
+        self.assertEqual(
+            amendment._consumption_record(original)["resulting_parent_sha"],
+            original["accepted_main_sha"],
         )
 
     def patches(self, trust: object | None = None):
@@ -1740,6 +1755,56 @@ class GovernanceAmendmentTests(TestCase):
                 amendment._bound_current_validation(
                     Path("."), "SecPal/.github", PARENT
                 )
+
+    def test_reviewed_current_validation_executes_accepted_safety(self) -> None:
+        record = {
+            "repository": "SecPal/.github", "focused_validation": [{}],
+            "required_local_validation": [{}],
+        }
+        registry = json.dumps({
+            "schema_version": "1.0", "repositories": [record],
+        }).encode()
+        profile = {"validation_command_set": [{"argv": ["python3", "test"]}]}
+        with mock.patch.object(
+            amendment, "_accepted_main_bytes", return_value=registry,
+        ), mock.patch.object(
+            amendment, "_git_oid", side_effect=lambda root, expression:
+            TREE if expression.endswith("^{tree}") else HEAD,
+        ), mock.patch.object(
+            amendment.validation_evidence_loss, "_current_safety_profile",
+            return_value=profile,
+        ), mock.patch.object(
+            amendment, "_run_git",
+            return_value=SimpleNamespace(returncode=0),
+        ), mock.patch.object(
+            amendment.exact_source_safety, "execution_root",
+            return_value=nullcontext(Path(".")),
+        ), mock.patch.object(
+            amendment.exact_source_safety, "run_profile",
+        ) as runner:
+            result = amendment._bound_current_validation(
+                Path("."), "SecPal/.github", PARENT,
+                target_head_sha=HEAD, target_tree_sha=TREE,
+            )
+            self.assertEqual(result["result"], "PASS")
+            runner.assert_called_once()
+            runner.side_effect = authority.LifecycleAuthorityError(
+                "current safety assertions failed"
+            )
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                amendment._bound_current_validation(
+                    Path("."), "SecPal/.github", PARENT,
+                    target_head_sha=HEAD, target_tree_sha=TREE,
+                )
+            runner.reset_mock()
+            with self.assertRaisesRegex(
+                amendment.GovernanceAmendmentError, "source tree changed"
+            ):
+                amendment._bound_current_validation(
+                    Path("."), "SecPal/.github", PARENT,
+                    target_head_sha=HEAD, target_tree_sha="f" * 40,
+                )
+            runner.assert_not_called()
 
     def test_live_ready_ci_binds_transition_triggered_workflows(self) -> None:
         source_ci = {
