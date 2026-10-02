@@ -1817,6 +1817,9 @@ def _verify_provider_dispatch_claim_document(
         or key.current_publication_oid != current_oid
         or key.current_publication_digest != current_document["publication_digest"]
         or current_lifecycle.state.get("ready") is not True
+        or current_lifecycle.state.get("ready_transition_count") != 1
+        or current_lifecycle.state.get("unrestricted_review_count") != 1
+        or current_lifecycle.state.get("cycle_3_absent") is not True
     ):
         raise LifecyclePublicationError("provider dispatch claim does not bind CURRENT Ready")
     bundle = _lifecycle_bundle(current_document)
@@ -1824,19 +1827,28 @@ def _verify_provider_dispatch_claim_document(
     snapshots = bundle.get("authority_chain")
     if not isinstance(events, list) or not isinstance(snapshots, list) or len(events) != len(snapshots):
         raise LifecyclePublicationError("provider dispatch assessment history is malformed")
-    last_foreign_head = max(
+    last_assessment_boundary = max(
         (index for index, event in enumerate(events)
          if isinstance(event, dict)
-         and event.get("resulting_head_sha") != key.current_head_sha),
+         and (
+             event.get("resulting_head_sha") != key.current_head_sha
+             or event.get("transition_kind") in {
+                 "PR_REBOUND", "READY_TO_DRAFT", "DRAFT_TO_READY",
+                 "INVALID_REVIEW_CONSUMPTION_CORRECTED",
+                 "INVALID_REVIEW_DERIVED_READY_CORRECTED",
+             }
+         )),
         default=-1,
     )
     assessments = [
         snapshot.get("authority_digest")
         for index, (event, snapshot) in enumerate(zip(events, snapshots))
         if isinstance(event, dict) and isinstance(snapshot, dict)
-        and index > last_foreign_head
+        and index > last_assessment_boundary
         and event.get("transition_kind") == "ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED"
         and event.get("resulting_head_sha") == key.current_head_sha
+        and event.get("pull_request") == key.pull_request
+        and snapshot.get("pull_request") == key.pull_request
     ]
     if not assessments or key.assessment_authority_digest != assessments[-1]:
         raise LifecyclePublicationError("provider dispatch assessment is not the latest authorized assessment")
@@ -2588,7 +2600,7 @@ def publish_ready_source_recovery(
     return recovered
 
 
-def publish_provider_dispatch_claim(
+def _publish_provider_dispatch_claim(
     key: ProviderDispatchKey, *, eligibility_evidence_digest: str,
     signer_identity: str, signer: authority.Signer,
 ) -> VerifiedProviderDispatchClaim:
@@ -2690,7 +2702,7 @@ def _require_provider_dispatch_eligibility(
     )
 
 
-def execute_provider_dispatch_with_claim(
+def _execute_provider_dispatch_with_claim(
     authenticate: Callable[[], ProviderDispatchEligibility | ProviderDispatchNoLongerRequired],
     write: Callable[[str], int | None],
     reconcile: Callable[[ProviderDispatchKey, int | None], ProviderDispatchReconciliation],
@@ -2698,9 +2710,8 @@ def execute_provider_dispatch_with_claim(
 ) -> ProviderDispatchResult:
     """Own the ephemeral CAS winner capability through one bounded provider write.
 
-    The authenticate callback must acquire complete live provider, PR, fallback,
-    and assessment evidence through the maintained verifier on every call.
-    A stored claim or reconstructed result cannot authorize this execution path.
+    This private seam permits hermetic transport tests. The public entry point
+    selects the maintained verifier and writer; callers cannot inject either.
     """
 
     initial = authenticate()
@@ -2710,7 +2721,7 @@ def execute_provider_dispatch_with_claim(
     if current != initial:
         raise LifecyclePublicationError("provider dispatch eligibility changed before claim")
     _require_provider_dispatch_current(initial.key)
-    publish_provider_dispatch_claim(
+    _publish_provider_dispatch_claim(
         initial.key, eligibility_evidence_digest=initial.eligibility_evidence_digest,
         signer_identity=signer_identity, signer=signer,
     )
@@ -2725,7 +2736,7 @@ def execute_provider_dispatch_with_claim(
     try:
         response_id = write(PROVIDER_DISPATCH_TRIGGERS[initial.key.review_type])
     except AmbiguousProviderDispatchWrite:
-        pass
+        response_id = None
     if response_id is not None:
         authority._require_positive_int(response_id, "replacement comment ID")
     try:
@@ -2746,6 +2757,54 @@ def execute_provider_dispatch_with_claim(
         raise LifecyclePublicationError("replacement request history is duplicate or invalid")
     return ProviderDispatchResult(
         "DISPATCH_PERSISTED", result.replacement_comment_database_id, 1,
+    )
+
+
+def execute_provider_dispatch_with_claim(
+    repository: str, delivery_issue: int, review_type: str, *,
+    signer_identity: str, signer: authority.Signer,
+) -> ProviderDispatchResult:
+    """Dispatch only through the maintained complete fallback verifier.
+
+    The #1053 consumer supplies that verifier and its transport functions. Until
+    they are accepted, this entry point fails closed before claiming or posting.
+    """
+
+    repository = authority._require_repository(repository)
+    delivery_issue = authority._require_positive_int(
+        delivery_issue, "provider dispatch issue"
+    )
+    if review_type not in PROVIDER_DISPATCH_TRIGGERS:
+        raise LifecyclePublicationError("provider dispatch review type is invalid")
+    try:
+        from . import provider_fallback
+    except ImportError as exc:
+        raise LifecyclePublicationError(
+            "maintained provider fallback verifier is unavailable"
+        ) from exc
+    authenticate = getattr(provider_fallback, "authenticate_claim_eligibility", None)
+    write = getattr(provider_fallback, "write_claimed_replacement", None)
+    reconcile = getattr(provider_fallback, "reconcile_claimed_replacement", None)
+    if any(not callable(value) for value in (authenticate, write, reconcile)):
+        raise LifecyclePublicationError(
+            "maintained provider fallback verifier is unavailable"
+        )
+
+    def observe() -> ProviderDispatchEligibility | ProviderDispatchNoLongerRequired:
+        result = authenticate(repository, delivery_issue, review_type)
+        if type(result) is ProviderDispatchEligibility and (
+            result.key.repository != repository
+            or result.key.delivery_issue != delivery_issue
+            or result.key.review_type != review_type
+        ):
+            raise LifecyclePublicationError("maintained provider fallback scope changed")
+        return result
+
+    return _execute_provider_dispatch_with_claim(
+        observe,
+        lambda body: write(repository, delivery_issue, review_type, body),
+        lambda key, response_id: reconcile(key, response_id),
+        signer_identity=signer_identity, signer=signer,
     )
 
 

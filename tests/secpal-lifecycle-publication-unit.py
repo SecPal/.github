@@ -4500,7 +4500,7 @@ class LifecyclePublicationTests(TestCase):
 
     def test_provider_dispatch_claim_is_ancillary_and_unique(self) -> None:
         _, enrolled, key = self.provider_claim_fixture()
-        claim = publication.publish_provider_dispatch_claim(
+        claim = publication._publish_provider_dispatch_claim(
             key, eligibility_evidence_digest="c" * 64,
             signer_identity=SIGNER, signer=signer_for(),
         )
@@ -4512,7 +4512,7 @@ class LifecyclePublicationTests(TestCase):
         with self.assertRaisesRegex(
             publication.LifecyclePublicationError, "already exists"
         ):
-            publication.publish_provider_dispatch_claim(
+            publication._publish_provider_dispatch_claim(
                 key, eligibility_evidence_digest="c" * 64,
                 signer_identity=SIGNER, signer=signer_for(),
             )
@@ -4565,12 +4565,72 @@ class LifecyclePublicationTests(TestCase):
             self.assertEqual(response_id, 1001)
             return publication.ProviderDispatchReconciliation(1, 1001)
 
-        result = publication.execute_provider_dispatch_with_claim(
+        result = publication._execute_provider_dispatch_with_claim(
             lambda: eligibility, write, reconcile,
             signer_identity=SIGNER, signer=signer_for(),
         )
         self.assertEqual(result.status, "DISPATCH_PERSISTED")
         self.assertEqual(writes, ["@codex security review"])
+
+    def test_public_provider_dispatch_rejects_caller_selected_eligibility(self) -> None:
+        _, enrolled, _ = self.provider_claim_fixture()
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "maintained provider fallback verifier is unavailable"
+        ):
+            publication.execute_provider_dispatch_with_claim(
+                REPOSITORY, ISSUE, "SECURITY",
+                signer_identity=SIGNER, signer=signer_for(),
+            )
+        self.assertEqual(self.remote_tip(), enrolled.publication_oid)
+
+    def test_public_provider_dispatch_uses_only_maintained_transport(self) -> None:
+        _, _, key = self.provider_claim_fixture()
+        eligibility = publication.ProviderDispatchEligibility(key, "c" * 64)
+        writes: list[str] = []
+        provider = SimpleNamespace(
+            authenticate_claim_eligibility=lambda repository, issue, review_type: (
+                eligibility
+            ),
+            write_claimed_replacement=lambda repository, issue, review_type, body: (
+                writes.append(body), 1001
+            )[1],
+            reconcile_claimed_replacement=lambda dispatch_key, response_id: (
+                publication.ProviderDispatchReconciliation(1, 1001)
+            ),
+        )
+        import scripts.secpal_pr_review as package
+        with patch.object(package, "provider_fallback", provider, create=True):
+            result = publication.execute_provider_dispatch_with_claim(
+                REPOSITORY, ISSUE, "SECURITY",
+                signer_identity=SIGNER, signer=signer_for(),
+            )
+        self.assertEqual(result.status, "DISPATCH_PERSISTED")
+        self.assertEqual(writes, ["@codex security review"])
+
+    def test_public_provider_dispatch_rejects_verifier_scope_substitution(self) -> None:
+        _, enrolled, key = self.provider_claim_fixture()
+        writes: list[str] = []
+        wrong = publication.ProviderDispatchEligibility(
+            replace(key, pull_request=PR + 1), "c" * 64,
+        )
+        provider = SimpleNamespace(
+            authenticate_claim_eligibility=lambda *_: wrong,
+            write_claimed_replacement=lambda *args: writes.append(args[-1]),
+            reconcile_claimed_replacement=lambda *_: (
+                publication.ProviderDispatchReconciliation(0, None)
+            ),
+        )
+        import scripts.secpal_pr_review as package
+        with patch.object(package, "provider_fallback", provider, create=True):
+            with self.assertRaisesRegex(
+                publication.LifecyclePublicationError, "CURRENT changed"
+            ):
+                publication.execute_provider_dispatch_with_claim(
+                    REPOSITORY, ISSUE, "SECURITY",
+                    signer_identity=SIGNER, signer=signer_for(),
+                )
+        self.assertEqual(self.remote_tip(), enrolled.publication_oid)
+        self.assertEqual(writes, [])
 
     def test_two_claiming_executors_allow_only_cas_winner_to_post(self) -> None:
         _, _, key = self.provider_claim_fixture()
@@ -4590,7 +4650,7 @@ class LifecyclePublicationTests(TestCase):
             nonlocal nested
             if not nested:
                 nested = True
-                winner = publication.execute_provider_dispatch_with_claim(
+                winner = publication._execute_provider_dispatch_with_claim(
                     lambda: eligibility, write, reconcile,
                     signer_identity=SIGNER, signer=signer_for(),
                 )
@@ -4601,7 +4661,7 @@ class LifecyclePublicationTests(TestCase):
             with self.assertRaisesRegex(
                 publication.LifecyclePublicationError, "already exists"
             ):
-                publication.execute_provider_dispatch_with_claim(
+                publication._execute_provider_dispatch_with_claim(
                     lambda: eligibility, write, reconcile,
                     signer_identity=SIGNER, signer=signer_for(),
                 )
@@ -4615,7 +4675,7 @@ class LifecyclePublicationTests(TestCase):
         )
         self.assertEqual(len(claims), 1)
         with self.assertRaisesRegex(publication.LifecyclePublicationError, "already exists"):
-            publication.execute_provider_dispatch_with_claim(
+            publication._execute_provider_dispatch_with_claim(
                 lambda: eligibility, write, reconcile,
                 signer_identity=SIGNER, signer=signer_for(),
             )
@@ -4648,7 +4708,7 @@ class LifecyclePublicationTests(TestCase):
             with self.assertRaisesRegex(
                 publication.LifecyclePublicationError, "did not prove ownership"
             ):
-                publication.execute_provider_dispatch_with_claim(
+                publication._execute_provider_dispatch_with_claim(
                     lambda: eligibility, writes.append,
                     lambda *_: publication.ProviderDispatchReconciliation(0, None),
                     signer_identity=SIGNER, signer=signer_for(),
@@ -4666,7 +4726,7 @@ class LifecyclePublicationTests(TestCase):
             raise publication.LifecyclePublicationError("transport reply unavailable")
 
         with patch.object(publication, "_cas_remote_ref", side_effect=accepted_then_lost_reply):
-            result = publication.execute_provider_dispatch_with_claim(
+            result = publication._execute_provider_dispatch_with_claim(
                 lambda: eligibility,
                 lambda body: (writes.append(body), 1001)[1],
                 lambda *_: publication.ProviderDispatchReconciliation(1, 1001),
@@ -4689,7 +4749,7 @@ class LifecyclePublicationTests(TestCase):
                 else publication.ProviderDispatchNoLongerRequired()
             )
 
-        result = publication.execute_provider_dispatch_with_claim(
+        result = publication._execute_provider_dispatch_with_claim(
             authenticate, writes.append,
             lambda *_: publication.ProviderDispatchReconciliation(0, None),
             signer_identity=SIGNER, signer=signer_for(),
@@ -4699,7 +4759,7 @@ class LifecyclePublicationTests(TestCase):
         self.assertEqual(writes, [])
         self.assertNotEqual(self.remote_tip(), key.current_publication_oid)
         with self.assertRaisesRegex(publication.LifecyclePublicationError, "already exists"):
-            publication.execute_provider_dispatch_with_claim(
+            publication._execute_provider_dispatch_with_claim(
                 lambda: eligibility, writes.append,
                 lambda *_: publication.ProviderDispatchReconciliation(0, None),
                 signer_identity=SIGNER, signer=signer_for(),
@@ -4717,14 +4777,14 @@ class LifecyclePublicationTests(TestCase):
             raise PermissionError("HTTP 403")
 
         with self.assertRaisesRegex(PermissionError, "HTTP 403"):
-            publication.execute_provider_dispatch_with_claim(
+            publication._execute_provider_dispatch_with_claim(
                 lambda: eligibility, denied,
                 lambda *_: publication.ProviderDispatchReconciliation(0, None),
                 signer_identity=SIGNER, signer=signer_for(),
             )
         self.assertEqual(writes, 1)
         with self.assertRaisesRegex(publication.LifecyclePublicationError, "already exists"):
-            publication.publish_provider_dispatch_claim(
+            publication._publish_provider_dispatch_claim(
                 key, eligibility_evidence_digest="c" * 64,
                 signer_identity=SIGNER, signer=signer_for(),
             )
@@ -4739,7 +4799,7 @@ class LifecyclePublicationTests(TestCase):
             writes += 1
             raise publication.AmbiguousProviderDispatchWrite("lost reply")
 
-        result = publication.execute_provider_dispatch_with_claim(
+        result = publication._execute_provider_dispatch_with_claim(
             lambda: eligibility, unknown,
             lambda *_: publication.ProviderDispatchReconciliation(1, 1001),
             signer_identity=SIGNER, signer=signer_for(),
@@ -4757,7 +4817,7 @@ class LifecyclePublicationTests(TestCase):
             writes += 1
             raise publication.AmbiguousProviderDispatchWrite("lost reply")
 
-        result = publication.execute_provider_dispatch_with_claim(
+        result = publication._execute_provider_dispatch_with_claim(
             lambda: eligibility, unknown,
             lambda *_: publication.ProviderDispatchReconciliation(0, None),
             signer_identity=SIGNER, signer=signer_for(),
@@ -4772,7 +4832,7 @@ class LifecyclePublicationTests(TestCase):
         with self.assertRaisesRegex(
             publication.LifecyclePublicationError, "duplicate or invalid"
         ):
-            publication.execute_provider_dispatch_with_claim(
+            publication._execute_provider_dispatch_with_claim(
                 lambda: eligibility,
                 lambda body: (writes.append(body), 1001)[1],
                 lambda *_: publication.ProviderDispatchReconciliation(2, None),
@@ -4782,7 +4842,7 @@ class LifecyclePublicationTests(TestCase):
 
     def test_provider_claim_replay_and_tampering_fail_journal_walk(self) -> None:
         _, _, key = self.provider_claim_fixture()
-        claim = publication.publish_provider_dispatch_claim(
+        claim = publication._publish_provider_dispatch_claim(
             key, eligibility_evidence_digest="c" * 64,
             signer_identity=SIGNER, signer=signer_for(),
         )
@@ -4845,7 +4905,7 @@ class LifecyclePublicationTests(TestCase):
         with self.assertRaisesRegex(
             publication.LifecyclePublicationError, "does not bind CURRENT Ready"
         ):
-            publication.publish_provider_dispatch_claim(
+            publication._publish_provider_dispatch_claim(
                 key, eligibility_evidence_digest="c" * 64,
                 signer_identity=SIGNER, signer=signer_for(),
             )
@@ -4869,14 +4929,75 @@ class LifecyclePublicationTests(TestCase):
         with self.assertRaisesRegex(
             publication.LifecyclePublicationError, "latest authorized assessment"
         ):
-            publication.publish_provider_dispatch_claim(
+            publication._publish_provider_dispatch_claim(
                 returned_head_key, eligibility_evidence_digest="c" * 64,
+                signer_identity=SIGNER, signer=signer_for(),
+            )
+
+    def test_provider_claim_rejects_assessment_before_same_head_pr_rebound(self) -> None:
+        chain, _, key = self.provider_claim_fixture()
+        chain.append("PR_REBOUND", replacement_pull_request=PR + 1)
+        current = publication.advance_current_terminal(
+            chain.published(), signer_identity=SIGNER, signer=signer_for(),
+        )
+        rebound_key = replace(
+            key, pull_request=PR + 1,
+            current_publication_oid=current.publication_oid,
+            current_publication_digest=current.publication_digest,
+            current_authority_digest=current.lifecycle.authority_digest,
+        )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "latest authorized assessment"
+        ):
+            publication._publish_provider_dispatch_claim(
+                rebound_key, eligibility_evidence_digest="c" * 64,
+                signer_identity=SIGNER, signer=signer_for(),
+            )
+
+        chain.append("ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED")
+        reauthorized = publication.advance_current_terminal(
+            chain.published(), signer_identity=SIGNER, signer=signer_for(),
+        )
+        new_key = replace(
+            rebound_key,
+            current_publication_oid=reauthorized.publication_oid,
+            current_publication_digest=reauthorized.publication_digest,
+            current_authority_digest=reauthorized.lifecycle.authority_digest,
+            assessment_authority_digest=chain.authorities[-1]["authority_digest"],
+        )
+        claim = publication._publish_provider_dispatch_claim(
+            new_key, eligibility_evidence_digest="c" * 64,
+            signer_identity=SIGNER, signer=signer_for(),
+        )
+        self.assertEqual(claim.key.pull_request, PR + 1)
+
+    def test_provider_claim_rejects_same_head_ready_churn(self) -> None:
+        chain, _, key = self.provider_claim_fixture()
+        chain.append("READY_TO_DRAFT")
+        publication.advance_current_terminal(
+            chain.published(), signer_identity=SIGNER, signer=signer_for(),
+        )
+        chain.append("DRAFT_TO_READY")
+        current = publication.advance_current_terminal(
+            chain.published(), signer_identity=SIGNER, signer=signer_for(),
+        )
+        churned_key = replace(
+            key,
+            current_publication_oid=current.publication_oid,
+            current_publication_digest=current.publication_digest,
+            current_authority_digest=current.lifecycle.authority_digest,
+        )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "does not bind CURRENT Ready"
+        ):
+            publication._publish_provider_dispatch_claim(
+                churned_key, eligibility_evidence_digest="c" * 64,
                 signer_identity=SIGNER, signer=signer_for(),
             )
 
     def test_lifecycle_successor_after_provider_claim_remains_current(self) -> None:
         chain, enrolled, key = self.provider_claim_fixture()
-        claim = publication.publish_provider_dispatch_claim(
+        claim = publication._publish_provider_dispatch_claim(
             key, eligibility_evidence_digest="c" * 64,
             signer_identity=SIGNER, signer=signer_for(),
         )

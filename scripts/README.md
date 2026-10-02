@@ -996,6 +996,9 @@ successor) and reauthenticates the live dispatch. A later reader of an existing
 claim has no provider-write authority. A crash after claim publication consumes
 the opportunity; recovery requires a separate explicit design. The #1053
 consumer owns complete provider eligibility and request-history verification.
+The public dispatch entry point fails closed until that maintained verifier,
+writer, and reconciler are connected; it accepts no caller-supplied eligibility
+callback.
 
 New native delivery publication is a two-CAS sequence: admission first, then
 enrollment after re-verifying the reachable admission. A branch-local static
