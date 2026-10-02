@@ -155,6 +155,19 @@ for that input shape and read
 for the exact artifact shape. This exception consumes no review/remediation
 counter and has no commit, push, CI, Ready, or merge authority.
 
+The exact Issue #1048 unchanged-head external-prerequisite cases are a closed
+member of this late-disposition family, not a general bypass. For only
+`deployment-281` and `operations-51`, use
+`scripts/secpal-create-exact-prerequisite-disposition.py` to reauthenticate the
+original finding, unchanged GitHub-Verified SSH-signed HEAD/TREE, and the exact
+canonical anchor now present on accepted `.github/main`. Its detached SSH
+classification and schema-1.8 disposition bind the authenticated source digest
+and the one named thread. The resolver's `--exact-prerequisite-case` mode accepts
+only that exact signed tuple and repeats the source and thread checks before its
+single named resolution. It grants no commit, push, CI, Ready, review,
+remediation, counter, or merge authority; it does not substitute for ordinary
+commit-bound eligibility or apply to another finding.
+
 For a historical schema-1.1 Ready integration, supply its exact original
 validation receipt as `--final-validation-receipt` to both producers and as
 `--integration-validation-receipt` to the resolver, and omit final eligibility.
