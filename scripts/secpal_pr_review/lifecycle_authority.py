@@ -194,6 +194,7 @@ class VerifiedLifecycleAuthority:
     validation_receipt_digest: str | None = None
     source_validation_evidence_digest: str | None = None
     adoption_source_evidence_digest: str | None = None
+    adoption_review_submitted: bool = False
 
 
 _VERIFIED_EXACT_ADOPTION_EVIDENCE = object()
@@ -2286,6 +2287,7 @@ def require_forward_transition(
     event_authorization_digest: str,
     *,
     allow_adopted_observations: bool = False,
+    adoption_review_submitted: bool = False,
 ) -> dict[str, Any]:
     """Authorize a new transition; signed older chains use derivation only."""
 
@@ -2294,12 +2296,23 @@ def require_forward_transition(
     )
     if transition_kind == "DRAFT_TO_READY":
         if state["ready_transition_count"] == 0:
+            adopted_reviewed_draft = (
+                allow_adopted_observations
+                and adoption_review_submitted
+                and state["unrestricted_review_count"] == MAX_UNRESTRICTED_REVIEWS
+            )
             if (
                 state["draft"] is not True
                 or state["ready"] is not False
                 or state["ready_history"]
-                or state["unrestricted_review_count"] != 0
-                or state["remediation_cycle_count"] != 0
+                or (
+                    state["unrestricted_review_count"] != 0
+                    and not adopted_reviewed_draft
+                )
+                or (
+                    state["remediation_cycle_count"] != 0
+                    and not adopted_reviewed_draft
+                )
                 or state["exceptional_recovery_count"] != 0
                 or state["exceptional_continuation_count"] != 0
             ):
@@ -4982,6 +4995,13 @@ def verify_exact_state_adoption_proof(
         adoption_source_evidence_digest=evidence[
             "adoption_source_evidence_digest"
         ],
+        adoption_review_submitted=(
+            evidence.get("review_budget_consumption_admission") is None
+            and sum(
+                item["kind"] == "REVIEW_SUBMITTED"
+                for item in evidence["observed_pre_enrollment_history"]
+            ) == 1
+        ),
     )
     if expected is not None:
         _compare_expected(result, expected)
@@ -5184,6 +5204,7 @@ def issue_exact_state_adoption_successor_authority(
         event["transition_kind"],
         event["event_digest"],
         allow_adopted_observations=True,
+        adoption_review_submitted=predecessor.adoption_review_submitted,
     )
     fields = _authority_unsigned_fields(
         event=event, predecessor={"state_after": predecessor.state}, state=state

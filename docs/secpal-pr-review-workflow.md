@@ -949,6 +949,13 @@ optional remediation → merge. First Ready changes only Draft/Ready and Ready
 history. New review consumption while Draft, or remediation before the review,
 fails closed. A later separately authorized Ready → Draft → Ready preserves
 the existing finite counters and history.
+An authentically enrolled Exact-State-Adoption root may instead preserve a
+historical Draft review at 1/1 before its first Ready. Its signed observed
+history must prove an actual `REVIEW_SUBMITTED`; conservative review-budget
+admission alone is insufficient. This bounded adopted successor preserves the
+consumed review and remediation counters. It does not permit new native Draft
+review issuance or relax the ordinary first-Ready rule.
+
 The maintained post-Ready review publisher authenticates the complete bounded
 independent review cycle on the exact Ready head after GitHub's Ready event.
 Several review objects from that assessment still advance the existing
@@ -956,6 +963,8 @@ Several review objects from that assessment still advance the existing
 invokes the publisher after terminal Stable Feedback and requires CURRENT
 Review 1/1 before remediation. Ambiguous publication results are reconciled
 through exact signed-successor CURRENT read-back without replaying the write.
+Deterministic publication errors retain their specific failure rather than
+being reported as an ambiguous write.
 
 Replacement uses `PR_REBOUND` and cannot create another lifecycle root.
 An already-authorized normal remediation commit advances the head with

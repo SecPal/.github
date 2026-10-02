@@ -903,6 +903,7 @@ class LifecycleAuthorityTests(TestCase):
                 head_sha=record["predecessor"]["head_sha"],
                 initialization_evidence_digest="0" * 64,
                 state=predecessor_state,
+                adoption_review_submitted=False,
             )
             event = {
                 "repository": record["repository"],
@@ -1827,6 +1828,29 @@ class LifecycleAuthorityTests(TestCase):
             authority.initial_state(), "DRAFT_TO_READY", "1" * 64
         )
         self.assertEqual(canonical_ready["unrestricted_review_count"], 0)
+
+        historically_reviewed_draft = authority.initial_state()
+        historically_reviewed_draft["unrestricted_review_count"] = 1
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "first Draft-to-Ready"
+        ):
+            authority.require_forward_transition(
+                historically_reviewed_draft, "DRAFT_TO_READY", "2" * 64
+            )
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "first Draft-to-Ready"
+        ):
+            authority.require_forward_transition(
+                historically_reviewed_draft, "DRAFT_TO_READY", "2" * 64,
+                allow_adopted_observations=True,
+            )
+        adopted_ready = authority.require_forward_transition(
+            historically_reviewed_draft, "DRAFT_TO_READY", "2" * 64,
+            allow_adopted_observations=True,
+            adoption_review_submitted=True,
+        )
+        self.assertEqual(adopted_ready["unrestricted_review_count"], 1)
+        self.assertEqual(adopted_ready["ready_transition_count"], 1)
 
         evidence = authority.create_exact_state_adoption_evidence(
             verified_external_evidence=authenticated_external_evidence(

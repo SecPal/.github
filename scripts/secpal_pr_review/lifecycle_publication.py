@@ -121,6 +121,10 @@ class LifecyclePublicationError(ValueError):
     """Publication is absent, stale, ambiguous, malformed, or unauthorized."""
 
 
+class LifecyclePublicationAmbiguousWrite(LifecyclePublicationError):
+    """A protected CAS was attempted, but its transport result is uncertain."""
+
+
 def _classify_journal_document(raw: bytes) -> tuple[str, dict[str, Any]]:
     """Parse one journal object and select its maintained closed-kind verifier."""
 
@@ -913,7 +917,9 @@ def _cas_remote_ref(
         extra_environment=credential_environment,
     )
     if result.returncode != 0:
-        raise LifecyclePublicationError("publication journal changed during compare-and-swap")
+        raise LifecyclePublicationAmbiguousWrite(
+            "publication journal changed during compare-and-swap"
+        )
 
 
 def _reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -2418,6 +2424,7 @@ def advance_current_terminal(
                     predecessor.historical_proof_mode
                     == authority.EXACT_ADOPTION_PROOF_MODE
                 ),
+                adoption_review_submitted=predecessor.adoption_review_submitted,
             )
         except authority.LifecycleAuthorityError as exc:
             raise LifecyclePublicationError(

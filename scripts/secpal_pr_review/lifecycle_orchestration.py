@@ -4948,13 +4948,19 @@ def _base_decision(
 
 
 def _prove_transition_is_finite(
-    state: Mapping[str, Any], transition: str, event_id: str
+    state: Mapping[str, Any], transition: str, event_id: str,
+    *, adopted_predecessor: bool = False,
+    adoption_review_submitted: bool = False,
 ) -> None:
     event_digest = authority.digest_json(
         {"event_id": event_id, "transition_kind": transition}
     )
     try:
-        authority.require_forward_transition(state, transition, event_digest)
+        authority.require_forward_transition(
+            state, transition, event_digest,
+            allow_adopted_observations=adopted_predecessor,
+            adoption_review_submitted=adoption_review_submitted,
+        )
     except authority.LifecycleAuthorityError as exc:
         raise LifecycleOrchestrationError(str(exc)) from exc
 
@@ -5304,7 +5310,14 @@ def _orchestrate_event(
             lifecycle=lifecycle,
             verifier=authorization_verifier,
         )
-        _prove_transition_is_finite(state, event_kind, event_id)
+        _prove_transition_is_finite(
+            state, event_kind, event_id,
+            adopted_predecessor=(
+                lifecycle.historical_proof_mode
+                == authority.EXACT_ADOPTION_PROOF_MODE
+            ),
+            adoption_review_submitted=lifecycle.adoption_review_submitted,
+        )
         return _base_decision(
             observed,
             lifecycle,

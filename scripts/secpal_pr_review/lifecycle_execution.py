@@ -550,12 +550,13 @@ def _review_consumption_scope(
                 continue
             if review.get("state") not in {"COMMENTED", "APPROVED", "CHANGES_REQUESTED"}:
                 continue
-            if (
-                review.get("commit_oid") != lifecycle.head_sha
-                or not isinstance(login, str)
-                or login == author
-            ):
-                raise LifecycleExecutionError("review cycle contains a different head or reviewer")
+            # Stable Feedback still binds every observed review. Only an
+            # independent review of this Ready head belongs to the finite
+            # lifecycle review cycle.
+            if review.get("commit_oid") != lifecycle.head_sha or login == author:
+                continue
+            if not isinstance(login, str):
+                raise LifecycleExecutionError("review cycle has no reviewer identity")
             authority._require_github_login(login, "reviewer")
             reviews.append(review)
     except (ValueError, TypeError, authority.LifecycleAuthorityError) as exc:
@@ -565,11 +566,13 @@ def _review_consumption_scope(
         for item in events
     ):
         raise LifecycleExecutionError("one bounded independent Ready-head review cycle is required")
-    if requests and any(
-        datetime.fromisoformat(review["submitted_at"].replace("Z", "+00:00"))
-        <= requested_at for review in reviews
+    if requests and not any(
+        review["actor"] == requests[0]["requested_reviewer"]
+        and datetime.fromisoformat(review["submitted_at"].replace("Z", "+00:00"))
+        > requested_at
+        for review in reviews
     ):
-        raise LifecycleExecutionError("review predates the bounded provider request")
+        raise LifecycleExecutionError("requested provider has no later Ready-head review")
     if len({review["node_id"] for review in reviews}) != len(reviews):
         raise LifecycleExecutionError("review cycle repeats a review identity")
     cycle = [
@@ -906,6 +909,7 @@ def _authorize_transition_state(
         transition_kind,
         event_digest,
         allow_adopted_observations=adopted,
+        adoption_review_submitted=lifecycle.adoption_review_submitted,
     )
 
 
@@ -2086,19 +2090,25 @@ def publish_review_consumption(
     )
     if not _same_publication(before, current) or latest_scope != scope:
         raise LifecycleExecutionError("review or CURRENT changed before publication")
+    publication_failure: publication.LifecyclePublicationAmbiguousWrite | None = None
     try:
         published = publication.advance_current_terminal(
             successor,
             signer_identity=signers.publication_identity,
             signer=signers.publication_signer,
         )
-    except Exception:
+    except publication.LifecyclePublicationAmbiguousWrite as exc:
         # A protected CAS can succeed even when the transport reports failure.
         # The same exact-successor proof used by Ready/Draft execution decides
         # whether this one-shot review publication completed.
         published = None
+        publication_failure = exc
     readback = publication.verify_current_lifecycle_authority(repository, delivery_issue)
     if _same_publication(readback, before):
+        if publication_failure is not None:
+            raise LifecycleExecutionError(
+                "review publication remains pending"
+            ) from publication_failure
         raise LifecycleExecutionError("review publication remains pending")
     transition = _authenticate_target(
         readback, authorization_raw, authorization,

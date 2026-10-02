@@ -273,7 +273,7 @@ class Harness:
             self.current = target
         if self.publication_mode == "SUCCESS":
             return target
-        raise publication.LifecyclePublicationError("ambiguous fixture publication")
+        raise publication.LifecyclePublicationAmbiguousWrite("ambiguous fixture publication")
 
     def historical_reader(self, repository: str, issue: int, predecessor_oid: str):
         if (repository, issue) != (REPOSITORY, ISSUE):
@@ -517,12 +517,15 @@ class LifecycleExecutionTests(TestCase):
             [item["node_id"] for item in scope["review_cycle"]],
             ["REVIEW_1", "REVIEW_2"],
         )
-        with self.assertRaises(execution.LifecycleExecutionError):
-            execution._review_consumption_scope(
-                current, live,
-                feedback([first, {**second, "commit_oid": "c" * 40}]),
-                (ready,),
-            )
+        stale_scope = execution._review_consumption_scope(
+            current, live,
+            feedback([first, {**second, "commit_oid": "c" * 40}]),
+            (ready,),
+        )
+        self.assertEqual(
+            [item["node_id"] for item in stale_scope["review_cycle"]],
+            ["REVIEW_1"],
+        )
         with self.assertRaises(fast_path.SecurityBlocker):
             feedback([first, first])
         request = {
@@ -543,6 +546,85 @@ class LifecycleExecutionTests(TestCase):
             execution._review_consumption_scope(
                 Harness(extra_epoch).current, live, feedback([first, second]), (ready,)
             )
+
+    def test_review_request_only_orders_its_provider_and_stale_head_is_excluded(self) -> None:
+        current = self.ready_harness().current
+        live = execution.LivePullRequest(REPOSITORY, PR, "OPEN", HEAD, False, "author")
+        ready = publication.GitHubPullRequestTimelineEvent(
+            "READY_FOR_REVIEW", 1, "READY_EVENT", "author", "2026-10-01T00:00:00Z",
+        )
+        codex = {
+            "node_id": "CODEX_REVIEW", "body_digest": "a" * 64,
+            "actor": {"login": "codex", "node_id": "CODEX_ACTOR", "database_id": 6},
+            "state": "COMMENTED", "commit_oid": HEAD,
+            "submitted_at": "2026-10-01T00:15:00Z", "reactions": [],
+        }
+        stale = {
+            **codex, "node_id": "STALE_REVIEW", "commit_oid": "c" * 40,
+            "submitted_at": "2026-10-01T00:45:00Z",
+        }
+        copilot = {
+            **codex, "node_id": "COPILOT_REVIEW", "body_digest": "b" * 64,
+            "actor": fast_path.COPILOT_REVIEW_PROVIDER,
+            "submitted_at": "2026-10-01T01:00:00Z",
+        }
+        request = {
+            "node_id": "COPILOT_REQUEST", "created_at": "2026-10-01T00:30:00Z",
+            "actor": {"login": "author", "node_id": "AUTHOR", "database_id": 7},
+            "requested_reviewer": fast_path.COPILOT_REVIEW_PROVIDER,
+        }
+
+        def feedback(reviews: list[dict[str, Any]]) -> fast_path.StableFeedbackState:
+            return fast_path.StableFeedbackState(
+                repository=REPOSITORY, pull_request_number=PR, head_sha=HEAD,
+                base_ref="main", base_sha="b" * 40, pr_state="OPEN",
+                feedback={"pull_request_reactions": [], "reviews": reviews,
+                          "conversation_comments": [], "threads": [],
+                          "provider_review_requests": [request]},
+            )
+
+        complete = feedback([codex, stale, copilot])
+        scope = execution._review_consumption_scope(current, live, complete, (ready,))
+        self.assertEqual(
+            [item["node_id"] for item in scope["review_cycle"]],
+            ["CODEX_REVIEW", "COPILOT_REVIEW"],
+        )
+        self.assertEqual(scope["feedback_state_digest"], complete.state_digest)
+        with self.assertRaises(execution.LifecycleExecutionError):
+            execution._review_consumption_scope(
+                current, live,
+                feedback([codex, {**copilot, "submitted_at": "2026-10-01T00:20:00Z"}]),
+                (ready,),
+            )
+
+    def test_review_publication_preserves_deterministic_failure(self) -> None:
+        harness = self.ready_harness()
+        live = execution.LivePullRequest(REPOSITORY, PR, "OPEN", HEAD, False, "author")
+        feedback = fast_path.StableFeedbackState(
+            repository=REPOSITORY, pull_request_number=PR, head_sha=HEAD,
+            base_ref="main", base_sha="b" * 40, pr_state="OPEN",
+            feedback={"pull_request_reactions": [], "reviews": [{
+                "node_id": "REVIEW_1", "body_digest": "a" * 64,
+                "actor": {"login": "independent", "node_id": "ACTOR_1", "database_id": 5},
+                "state": "COMMENTED", "commit_oid": HEAD,
+                "submitted_at": "2026-10-01T01:00:00Z", "reactions": [],
+            }], "conversation_comments": [], "threads": []},
+        )
+        timeline = (publication.GitHubPullRequestTimelineEvent(
+            "READY_FOR_REVIEW", 1, "READY_EVENT", "author", "2026-10-01T00:00:00Z",
+        ),)
+        with (
+            mock.patch.object(publication, "verify_current_lifecycle_authority", side_effect=harness.current_reader),
+            mock.patch.object(publication, "advance_current_terminal", side_effect=publication.LifecyclePublicationError("protection verification failed")),
+            mock.patch.object(publication, "_observe_pull_request_lifecycle_timeline", return_value=timeline),
+            mock.patch.object(execution, "_read_live_github", return_value=live),
+            mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=feedback),
+            mock.patch.object(execution, "_production_signing_authorities", return_value=fixture_signing_authorities()),
+        ):
+            with self.assertRaisesRegex(
+                publication.LifecyclePublicationError, "protection verification failed"
+            ):
+                execution.publish_review_consumption(REPOSITORY, ISSUE)
 
     def test_review_publication_reconciles_ambiguous_remote_success(self) -> None:
         harness = self.ready_harness()

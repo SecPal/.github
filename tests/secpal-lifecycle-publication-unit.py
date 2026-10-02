@@ -234,14 +234,28 @@ def recovered_ready_chain(issue: int = ISSUE) -> Chain:
 
 
 def exact_adoption_evidence(
-    *, admit_review_budget: bool = False
+    *, admit_review_budget: bool = False, provider_reviewed_draft: bool = False
 ) -> tuple[bytes, dict[str, Any]]:
+    if admit_review_budget and provider_reviewed_draft:
+        raise ValueError("adoption fixture modes are exclusive")
     if admit_review_budget:
         history = [
             {"sequence": 1, "kind": "PR_CREATED_DRAFT",
              "observed_at": "2026-08-01T00:00:00Z", "head_sha": HEADS[0],
              "reviewed_head_sha": None},
             {"sequence": 2, "kind": "REMEDIATION_HEAD_OBSERVED",
+             "observed_at": "2026-08-04T00:00:00Z", "head_sha": HEADS[2],
+             "reviewed_head_sha": None},
+        ]
+    elif provider_reviewed_draft:
+        history = [
+            {"sequence": 1, "kind": "PR_CREATED_DRAFT",
+             "observed_at": "2026-08-01T00:00:00Z", "head_sha": HEADS[0],
+             "reviewed_head_sha": None},
+            {"sequence": 2, "kind": "REVIEW_SUBMITTED",
+             "observed_at": "2026-08-02T00:00:00Z", "head_sha": HEADS[0],
+             "reviewed_head_sha": HEADS[0]},
+            {"sequence": 3, "kind": "REMEDIATION_HEAD_OBSERVED",
              "observed_at": "2026-08-04T00:00:00Z", "head_sha": HEADS[2],
              "reviewed_head_sha": None},
         ]
@@ -266,11 +280,11 @@ def exact_adoption_evidence(
     state = authority.initial_state()
     state.update(
         unrestricted_review_count=1,
-        remediation_cycle_count=1 if admit_review_budget else 2,
-        draft=True if admit_review_budget else False,
-        ready=False if admit_review_budget else True,
-        ready_transition_count=0 if admit_review_budget else 1,
-        ready_history=[] if admit_review_budget else [{
+        remediation_cycle_count=1 if (admit_review_budget or provider_reviewed_draft) else 2,
+        draft=True if (admit_review_budget or provider_reviewed_draft) else False,
+        ready=False if (admit_review_budget or provider_reviewed_draft) else True,
+        ready_transition_count=0 if (admit_review_budget or provider_reviewed_draft) else 1,
+        ready_history=[] if (admit_review_budget or provider_reviewed_draft) else [{
             "sequence": 1, "transition_kind": "DRAFT_TO_READY",
             "observation_digest": authority.digest_json(history[1]),
         }],
@@ -689,7 +703,14 @@ class LifecyclePublicationTests(TestCase):
             # Reconstruct a protected publication made before forward policy
             # changed; the real signed chain remains independently verified.
             with patch.object(
-                authority, "require_forward_transition", side_effect=authority._derive_state
+                authority, "require_forward_transition",
+                side_effect=lambda state, kind, digest, **_kwargs:
+                    authority._derive_state(
+                        state, kind, digest,
+                        allow_adopted_observations=_kwargs.get(
+                            "allow_adopted_observations", False
+                        ),
+                    )
             ):
                 current = publication.advance_current_terminal(
                     chain.raw(), signer_identity=SIGNER, signer=signer_for()
@@ -754,7 +775,14 @@ class LifecyclePublicationTests(TestCase):
             )
             chain.append("UNRESTRICTED_REVIEW_CONSUMED")
             with patch.object(
-                authority, "require_forward_transition", side_effect=authority._derive_state
+                authority, "require_forward_transition",
+                side_effect=lambda state, kind, digest, **_kwargs:
+                    authority._derive_state(
+                        state, kind, digest,
+                        allow_adopted_observations=_kwargs.get(
+                            "allow_adopted_observations", False
+                        ),
+                    )
             ):
                 publication.advance_current_terminal(
                     chain.raw(), signer_identity=SIGNER, signer=signer_for()
@@ -3719,6 +3747,57 @@ class LifecyclePublicationTests(TestCase):
         ):
             publication.enroll_existing_lifecycle(
                 serialized, signer_identity=SIGNER, signer=signer_for()
+            )
+
+    def test_provider_reviewed_adopted_draft_has_one_authenticated_first_ready(self) -> None:
+        serialized, proof = exact_adoption_evidence(provider_reviewed_draft=True)
+        enrolled = publication.enroll_existing_lifecycle(
+            serialized, signer_identity=SIGNER, signer=signer_for()
+        )
+        self.assertTrue(enrolled.lifecycle.adoption_review_submitted)
+        self.assertEqual(enrolled.lifecycle.state["unrestricted_review_count"], 1)
+        self.assertFalse(enrolled.lifecycle.state["ready"])
+        event = authority.create_transition_authorization(
+            event_id="adopted-first-ready-1", repository=REPOSITORY,
+            delivery_issue=ISSUE, lifecycle_id=proof["lifecycle_id"],
+            pull_request=PR,
+            predecessor_authority_digest=proof["proof_digest"],
+            predecessor_head_sha=HEADS[2], resulting_head_sha=HEADS[2],
+            transition_kind="DRAFT_TO_READY", replacement_pull_request=None,
+            initialization_evidence_digest=proof["adoption_evidence_digest"],
+            signer_identity=SIGNER, signer=signer_for(),
+        )
+        successor = authority.issue_exact_state_adoption_successor_authority(
+            serialized_adoption_evidence=serialized, authorization=event,
+            signer_identity=SIGNER, authority_signer=signer_for(),
+        )
+        self.assertEqual(successor["state_after"]["unrestricted_review_count"], 1)
+        self.assertEqual(successor["state_after"]["ready_transition_count"], 1)
+        self.assertTrue(successor["state_after"]["ready"])
+
+        admitted, budget_proof = exact_adoption_evidence(admit_review_budget=True)
+        self.assertFalse(
+            authority.verify_lifecycle_authority_for_publication(admitted)
+            .adoption_review_submitted
+        )
+        # A newly signed event from the conservative budget admission cannot
+        # borrow the provenance of the provider-reviewed adoption.
+        budget_event = authority.create_transition_authorization(
+            event_id="budget-first-ready-1", repository=REPOSITORY,
+            delivery_issue=ISSUE, lifecycle_id=budget_proof["lifecycle_id"],
+            pull_request=PR,
+            predecessor_authority_digest=budget_proof["proof_digest"],
+            predecessor_head_sha=HEADS[2], resulting_head_sha=HEADS[2],
+            transition_kind="DRAFT_TO_READY", replacement_pull_request=None,
+            initialization_evidence_digest=budget_proof["adoption_evidence_digest"],
+            signer_identity=SIGNER, signer=signer_for(),
+        )
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "first Draft-to-Ready"
+        ):
+            authority.issue_exact_state_adoption_successor_authority(
+                serialized_adoption_evidence=admitted, authorization=budget_event,
+                signer_identity=SIGNER, authority_signer=signer_for(),
             )
 
     def test_exact_adoption_pr_rebound_requires_replacement_pr_evidence(self) -> None:
