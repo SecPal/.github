@@ -257,9 +257,11 @@ exact independently established decision, stable finding ID, finding-evidence
 digest, risk facts, and live finding under that signer.
 The disposition creator verifies it and internally computes its digest before
 creating `late-disposition.schema.json`. Both documents are detached-signed by
-that same OS-account identity without a Git commit. SSH and OpenPGP signatures
-use trusted absolute executables, bounded timeouts, the OS account home and
-configuration roots, and neutralized Git environment overrides.
+that same OS-account identity without a Git commit. New SecPal artifacts use
+SSH signatures, trusted absolute executables, bounded timeouts, the OS account
+home and configuration roots, and neutralized Git environment overrides.
+OpenPGP verification remains only for immutable historical/provider evidence;
+it grants no new SecPal signing authority.
 Artifact and signature inputs are verified from owned immutable byte snapshots.
 Outputs use descriptor-relative replacement in opened private directories and
 are required to remain outside the delivery repository.
@@ -1125,8 +1127,9 @@ An explicit report output is initialized before the first write. If final
 persistence fails after a mutation, the helper stops and emits the complete
 in-memory applied/failed/blocked evidence to standard error for manual recovery.
 
-User-authored commits are verified locally and must satisfy the configured SSH
-or OpenPGP signing policy. When `require_github_verified` is enabled, they must
+New SecPal user-authored commits are verified locally with SSH. Immutable
+historical OpenPGP verification is compatibility, not signing authority.
+When `require_github_verified` is enabled, commits must
 also have GitHub verification metadata with `verified = true` and
 `reason = valid`. GitHub-generated web, squash, and merge commits use that
 GitHub verification metadata. Missing local GitHub GPG key material is

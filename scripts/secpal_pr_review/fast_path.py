@@ -150,6 +150,7 @@ VALIDATION_REGISTRY_ENTRY_FIELDS = frozenset(
         "focused_validation",
         "required_local_validation",
         "complete_validation_preparation",
+        "governance_only_validation",
         "final_eligibility_absence_recoveries",
         "qualified_remediation_successor_evidence_loss_policy",
         "governance_amendment_policy",
@@ -662,6 +663,10 @@ def validation_registry_projection(entry: Any) -> dict[str, Any]:
         binding["complete_validation_preparation"] = copy.deepcopy(
             entry["complete_validation_preparation"]
         )
+    if "governance_only_validation" in entry:
+        if entry["repository"] != "SecPal/api" or entry["governance_only_validation"] != "API_RUNTIME_INSTRUCTIONS":
+            raise SecurityBlocker("unsupported governance-only validation policy")
+        binding["governance_only_validation"] = entry["governance_only_validation"]
     if "pre_enrollment_integration_policy" in entry:
         if not isinstance(entry["pre_enrollment_integration_policy"], dict):
             raise SecurityBlocker(

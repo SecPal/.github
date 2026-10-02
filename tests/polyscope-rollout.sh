@@ -199,6 +199,9 @@ for repo_dir in workspace_root.iterdir():
         "## Focused Overlays\n\n"
         f"{overlays}\n\n"
         "## Core Runtime Baseline\n\n"
+        "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
+        "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
+        "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n\n"
         f"{body.lstrip()}"
     )
     (repo_dir / "AGENTS.md").write_text(agents_text.rstrip() + "\n")
@@ -324,6 +327,8 @@ write_valid_worktree_instructions() {
 
     mkdir -p "$worktree_dir/.github"
     cp "$REPO_ROOT/.markdownlint.json" "$worktree_dir/.markdownlint.json"
+    # Markdown code spans are literal fixture text, not command substitutions.
+    # shellcheck disable=SC2016
     printf '%s\n' \
         '<!--' \
         'SPDX-FileCopyrightText: 2026 SecPal Contributors' \
@@ -335,6 +340,9 @@ write_valid_worktree_instructions() {
         '## Scope and Safety' \
         '' \
         '- Preserve existing work.' \
+        '- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`' \
+        '- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`' \
+        '- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`' \
         >"$worktree_dir/AGENTS.md"
     printf '%s\n' \
         '<!--' \
@@ -1062,6 +1070,9 @@ def write_valid_instruction_root(root: pathlib.Path) -> None:
         "# Test Runtime Instructions\n\n"
         "## Scope and Safety\n\n"
         "- Preserve existing work.\n"
+        "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
+        "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
+        "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
     )
     (root / ".github" / "copilot-instructions.md").write_text(
         "<!--\n"
@@ -1325,6 +1336,9 @@ def write_valid_instruction_root(root: pathlib.Path) -> None:
         "-->\n\n"
         "# Test Runtime Instructions\n\n"
         "- Preserve existing work.\n"
+        "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
+        "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
+        "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
     )
     (root / ".github" / "copilot-instructions.md").write_text(
         "<!--\n"
@@ -1843,7 +1857,10 @@ fixture = workspace / "instruction-contract-worktree"
     "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
     "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
     "-->\n\n"
-    "# Runtime Instructions\n"
+    "# Runtime Instructions\n\n"
+    "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
+    "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
+    "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
 )
 (fixture / ".github" / "copilot-instructions.md").write_text(
     "<!--\n"
@@ -1930,7 +1947,10 @@ fixture = workspace / "instruction root with shell $ characters"
     "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
     "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
     "-->\n\n"
-    "# Runtime Instructions\n"
+    "# Runtime Instructions\n\n"
+    "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
+    "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
+    "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
 )
 (fixture / ".github" / "copilot-instructions.md").write_text(
     "<!--\n"
@@ -2155,6 +2175,9 @@ for instruction_root in (source_api, api_worktree):
         "-->\n\n"
         "# Test Runtime Instructions\n\n"
         "- Preserve existing work.\n"
+        "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
+        "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
+        "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
     )
     instruction_root.joinpath(".github", "copilot-instructions.md").write_text(
         "<!--\n"
@@ -3280,7 +3303,10 @@ repo_spec_frontend = workspace / "repo-spec-root" / "frontend"
     "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
     "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
     "-->\n\n"
-    "# Frontend Runtime Instructions\n"
+    "# Frontend Runtime Instructions\n\n"
+    "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
+    "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
+    "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
 )
 (repo_spec_frontend / ".github" / "copilot-instructions.md").write_text(
     "<!--\n"

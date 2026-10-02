@@ -108,6 +108,34 @@ publication_boundary = """- Before creating or editing a PR body, materialize th
   canonical lifecycle-aware `scripts/validate-pull-request-evidence.sh` validator.
 """
 
+review_trigger = """### Initial Automated Review
+
+Apply the [canonical review-acquisition rule](https://github.com/SecPal/.github/blob/main/docs/work-graph-contract.md#531-initial-automated-review).
+These runtime assertions consume that owner; they define no separate lifecycle.
+
+- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`
+- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`
+- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`
+
+"""
+if text.count(review_trigger) != 1:
+    raise SystemExit(1)
+text = text.replace(review_trigger, "", 1)
+
+ssh_signing = """- `SECPAL_SIGNING_FORMAT: SSH`; apply the [canonical signing authority](https://github.com/SecPal/.github/blob/main/docs/work-graph-contract.md#532-signing-authority).
+  Preserve existing SSH keys and signing configuration. GitHub-generated
+  signatures are provider evidence, not SecPal OpenPGP signing authority.
+  Every PR commit must have GitHub `verification.verified == true`."""
+if text.count(ssh_signing) != 1:
+    raise SystemExit(1)
+text = text.replace(
+    ssh_signing,
+    """- All commits must be cryptographically signed. SSH and OpenPGP signatures are
+  both valid; use the user's existing Git signing configuration without
+  changing its format.""",
+    1,
+)
+
 if text.count(overlay) != 1 or text.count(copyright_line) != 1:
     raise SystemExit(1)
 if text.count(publication_boundary) != 1:
@@ -140,6 +168,17 @@ for mutation in \
   if sed "$mutation" "$REPO_ROOT/AGENTS.md" \
     | normalize_agents_instruction_overlays >/dev/null; then
     fail 'missing or weakened PR pre-publication instruction overlay was accepted'
+  fi
+done
+
+# SSH-only local signing and GitHub verification must not be weakened.
+for mutation in \
+  's/SECPAL_SIGNING_FORMAT: SSH/SECPAL_SIGNING_FORMAT: OpenPGP/' \
+  's/verification.verified == true/verification.verified == false/' \
+  's/Preserve existing SSH keys/Replace existing SSH keys/'; do
+  if sed "$mutation" "$REPO_ROOT/AGENTS.md" \
+    | normalize_agents_instruction_overlays >/dev/null; then
+    fail 'missing or weakened SSH signing instruction overlay was accepted'
   fi
 done
 
@@ -472,7 +511,7 @@ while index < len(lines):
             block.append(lines[index])
             index += 1
         joined = " ".join(part.strip() for part in block)
-        if WORK_GRAPH in joined and "work-graph" in joined.casefold():
+        if WORK_GRAPH in joined and "work-graph" in joined.replace(WORK_GRAPH, "").casefold():
             rewritten.append(f"- Licensing policy follows `{WORK_GRAPH}`.")
             replacements += 1
         else:
@@ -1015,8 +1054,7 @@ assert fast_schema["$defs"]["operation"]["properties"]["kind"] == {
 
 expected = [
     "SecPal/.github", "SecPal/api", "SecPal/frontend", "SecPal/contracts",
-    "SecPal/android", "SecPal/GuardGuide",
-    "SecPal/guardguide.de", "SecPal/secpal.app",
+    "SecPal/android", "SecPal/secpal.app",
     "SecPal/deployment",
 ]
 assert [item["repository"] for item in registry["repositories"]] == expected

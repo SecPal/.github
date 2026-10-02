@@ -502,6 +502,52 @@ test_instruction_size_limit() {
     fi
 }
 
+test_review_trigger_policy() {
+    # Root AGENTS owns these closed normative declarations. Parse Markdown with
+    # the existing maintained dependency: comments/fences are not live policy.
+    # Resolve Node from the validator root, not a target package.json.
+    local agents_path="$PWD/AGENTS.md"
+    if (cd "$SCRIPT_DIR" && node - "$SCRIPT_DIR/../node_modules/markdown-it" "$agents_path" <<'JS'
+const fs = require("fs");
+try {
+    const MarkdownIt = require(process.argv[2]);
+    const tokens = new MarkdownIt({ html: true }).parse(fs.readFileSync(process.argv[3], "utf8"), {});
+    const expected = new Map([
+        ["PRIMARY_AUTOMATED_REVIEW_TRIGGER", "DRAFT_TO_READY"],
+        ["PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED", "NO"],
+        ["POST_READY_BOUNDED_COMMENT_FALLBACK", "YES"],
+    ]);
+    const declarations = [];
+    let quoted = 0;
+    for (const token of tokens) {
+        if (token.type === "blockquote_open") quoted++;
+        if (token.type === "blockquote_close") quoted--;
+        if (quoted || token.type !== "inline") continue;
+        for (const child of token.children || []) {
+            if (child.type !== "code_inline") continue;
+            const key = child.content.split(":", 1)[0];
+            if (expected.has(key)) declarations.push(child.content);
+        }
+    }
+    if (declarations.length !== expected.size) process.exit(1);
+    for (const [key, value] of expected) {
+        if (declarations.filter(item => item === `${key}: ${value}`).length !== 1) {
+            process.exit(1);
+        }
+    }
+} catch (_) {
+    process.exit(1);
+}
+JS
+    )
+    then
+        print_result "AGENTS.md declares the canonical review trigger" "PASS"
+    else
+        print_result "AGENTS.md declares the canonical review trigger" "FAIL" \
+            "Require the three unique normative review-trigger declarations as visible inline code; install the locked Markdown parser dependency"
+    fi
+}
+
 main() {
     local file
     local repository_name
@@ -518,6 +564,7 @@ main() {
     test_instruction_path_boundaries || return 1
     test_required_files
     test_readable_utf8_markdown AGENTS.md AGENTS.md
+    test_review_trigger_policy
     test_readable_utf8_markdown \
         .github/copilot-instructions.md copilot-instructions.md
     test_reuse_license AGENTS.md AGENTS.md "$repo_type" "$repository_name"
@@ -548,6 +595,17 @@ main() {
     printf '%b✗ Some tests failed%b\n' "$RED" "$NC"
     return 1
 }
+
+# Root-only governance coverage does not enroll a repository in Copilot overlays.
+# In particular, operations owns an AGENTS.md without that separate baseline.
+if [ "$#" -eq 1 ] && [ "$1" = "--review-trigger-only" ]; then
+    test_instruction_path_boundaries || exit 1
+    test_readable_utf8_markdown AGENTS.md AGENTS.md
+    test_instruction_size_limit AGENTS.md AGENTS.md "runtime discovery"
+    test_review_trigger_policy
+    [ "$FAILED_TESTS" -eq 0 ]
+    exit
+fi
 
 if [ "$#" -gt 0 ]; then
     overall_status=0
