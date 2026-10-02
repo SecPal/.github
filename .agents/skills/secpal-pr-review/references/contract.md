@@ -260,6 +260,14 @@ creating `late-disposition.schema.json`. Both documents are detached-signed by
 that same OS-account identity without a Git commit. New SecPal artifacts use
 SSH signatures, trusted absolute executables, bounded timeouts, the OS account
 home and configuration roots, and neutralized Git environment overrides.
+The schema-1.8 disposition is restricted to the two exact Issue #1048
+external-prerequisite findings. It binds a fresh authenticated-source digest
+instead of a nonexistent final receipt: original valid comment and reviewed
+commit, unchanged candidate HEAD/TREE and SSH signer, absent historical anchor,
+and exact merged/current canonical `.github/main` anchor. The existing stable
+target rechecks and sole named resolution mutation remain mandatory. This
+closed member cannot enroll a repository or thread for ordinary resolution and
+grants no source, Ready, review, validation, counter, or merge authority.
 OpenPGP verification remains only for immutable historical/provider evidence;
 it grants no new SecPal signing authority.
 Artifact and signature inputs are verified from owned immutable byte snapshots.
