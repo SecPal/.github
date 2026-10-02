@@ -837,13 +837,17 @@ class CurrentIdentityFixtures(unittest.TestCase):
                 replacement_pull_request=None, initialization_evidence_digest=initialization["initialization_digest"],
                 signer_identity=self.identity, signer=self.sign,
             )
-            snapshot = authority.issue_lifecycle_authority(
-                predecessor_chain=snapshots, transition_authorizations=events, authorization=event,
-                signer_identity=self.identity, authority_signer=self.sign,
-                accepted_event_signers=self.policy.transition_signer_identities,
-                accepted_authority_signers=self.policy.authority_signer_identities,
-                signature_verifier=authority._policy_signature_verifier(self.policy),
-            )
+            # Reconstruct this accepted historical recovery chain exactly.
+            with mock.patch.object(
+                authority, "require_forward_transition", side_effect=authority.derive_state
+            ):
+                snapshot = authority.issue_lifecycle_authority(
+                    predecessor_chain=snapshots, transition_authorizations=events, authorization=event,
+                    signer_identity=self.identity, authority_signer=self.sign,
+                    accepted_event_signers=self.policy.transition_signer_identities,
+                    accepted_authority_signers=self.policy.authority_signer_identities,
+                    signature_verifier=authority._policy_signature_verifier(self.policy),
+                )
             events.append(event)
             snapshots.append(snapshot)
             head = resulting
