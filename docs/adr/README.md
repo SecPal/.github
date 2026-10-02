@@ -85,6 +85,7 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 
 ### Accepted
 
+- [ADR-026: Client Identity, Endpoint Trust, Offline Authorization, and Recovery](20261002-client-trust-offline-recovery-adr026.md) - 2026-10-02; partially supersedes ADR-012's single-package/signing/DPC assumptions and supersedes Proposed ADR-003 as the current offline architecture authority; acceptance is not implementation or platform qualification
 - [ADR-025: Employment, Working Time, Absence, and Compensation Authorities](20261002-employment-time-absence-compensation-adr025.md) - 2026-10-02; partially supersedes ADR-014's Employee contract projection and unresolved rehire boundary while retaining its identity, tenant integrity, access, and security authority
 - [BRAND-0007: SecPal Product Family Architecture](BRAND-0007-secpal-product-family-architecture.md) - 2026-09-20; supersedes BRAND-0001 as current product-family hierarchy authority without implying product implementation or availability
 - [ADR-024: Managed Operations Control Plane Authority and Trust Boundaries](20260906-managed-operations-control-plane-authority-adr024.md) - 2026-09-06; consumes ADR-023's ownership boundary without claiming control-plane implementation or production qualification
@@ -106,10 +107,10 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 
 - [ADR-001: Event Sourcing for Guard Book Entries](20251027-event-sourcing-for-guard-book.md) - 2025-10-27; revalidation required before acceptance
 - [ADR-002: OpenTimestamp for Audit Trail](20251027-opentimestamp-for-audit-trail.md) - 2025-10-27; revalidation required before acceptance
-- [ADR-003: Offline-First Architecture](20251027-offline-first-architecture.md) - 2025-10-27; revalidation required before acceptance
 
 ### Superseded
 
+- [ADR-003: Offline-First Architecture](20251027-offline-first-architecture.md) - 2025-10-27; superseded by [ADR-026](20261002-client-trust-offline-recovery-adr026.md); original Proposed body retained as historical, never-accepted implementation proposals
 - [BRAND-0001: Brand Architecture](BRAND-0001-brand-architecture.md) - 2026-06-13; superseded by [BRAND-0007](BRAND-0007-secpal-product-family-architecture.md) for the current product-family hierarchy while preserved as historical evidence
 - [ADR-009: Permission Inheritance Blocking & Leadership-Based Access Control](20251221-inheritance-blocking-and-leadership-access-control.md) - 2025-12-21; superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 - [ADR-008: User-Based Tenant Resolution for Multi-Tenant Architecture](20251219-user-based-tenant-resolution.md) - 2025-12-19; superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
@@ -120,7 +121,7 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 - [ADR-014: Tenant, Identity, Employee, and Access Model](20260720-tenant-identity-access-model-adr014.md) - 2026-07-20; employment projection, projection-derived lifecycle inputs, and unresolved rehire decisions replaced by [ADR-025](20261002-employment-time-absence-compensation-adr025.md); all other decisions remain binding
 - [BRAND-0004: Footer Wording](BRAND-0004-footer-wording.md) - 2026-06-13; GuardGuide-specific identity and mappings superseded by [BRAND-0007](BRAND-0007-secpal-product-family-architecture.md), with the two-line SecPal footer structure and legal/source rules retained
 - [BRAND-0005: Page Titles](BRAND-0005-page-titles.md) - 2026-06-13; former product-name rules superseded by [BRAND-0007](BRAND-0007-secpal-product-family-architecture.md), with the content-first title pattern retained
-- [ADR-012: Single-App Android Distribution and Private Provisioning QR Architecture](20260406-single-app-android-distribution-and-private-provisioning-adr012.md) - 2026-04-06; partially superseded by [Epic #586](https://github.com/SecPal/.github/issues/586): frontend-issued provisioning QR/URL, enrollment-session, bootstrap-token, and dependent native coordination decisions are retired; `app.secpal`, its signing identity and version line, Play Store, GitHub Releases, Obtainium, and direct APK distribution, `apk.secpal.app`, Stable/Beta tracks and metadata paths, the `secpal.app/android` landing surface, and use of the same signed application package for normal, Device Owner, and profile-owner operation remain accepted
+- [ADR-012: Single-App Android Distribution and Private Provisioning QR Architecture](20260406-single-app-android-distribution-and-private-provisioning-adr012.md) - 2026-04-06; [ADR-026](20261002-client-trust-offline-recovery-adr026.md) supersedes single-package/signing/shared-version and same-package-for-DPC assumptions; compatible distribution routes, artifact/metadata host, Stable/Beta tracks, landing surface and public-artifact security remain accepted; completed [Epic #586](https://github.com/SecPal/.github/issues/586) provisioning retirement remains effective
 - [ADR-011: Simplify Management Level from Model to Integer Field](20251227-simplify-management-level-to-integer-field-adr011.md) - 2025-12-27; partially superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 - [ADR-010: Activity Logging & Audit Trail Strategy](20251221-activity-logging-audit-trail-strategy.md) - 2025-12-24; partially superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 - [ADR-005: RBAC Design Decisions](20251111-rbac-design-decisions.md) - 2025-11-11; partially superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
