@@ -300,6 +300,23 @@ FAST_PATH_CALLS = (*FAST_PATH_CALLS,
 RESOLVER_CALLS = (
     ProcessCall(
         None,
+        "_verify_exact_helper_source",
+        "[executable, 'ls-tree', 'HEAD', '--', relative]",
+        "",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("cwd", "REPOSITORY_ROOT"),
+            ("encoding", "'utf-8'"),
+            ("env", "evidence.command_environment('git')"),
+            ("errors", "'replace'"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("text", "True"),
+            ("timeout", "30"),
+        ),
+    ),
+    ProcessCall(
+        None,
         "_run_exact_prerequisite_get",
         "[executable, 'api', '--hostname', 'github.com', endpoint]",
         "",
@@ -1413,6 +1430,18 @@ SAFE_SYS_MODULES_CALLS = {
     },
     "secpal-resolve-fixed-threads.py": {
         DynamicImportCall(
+            ("_load_exact_prerequisite_helpers",),
+            "sys.modules.get('secpal_pr_review.unchanged_head_prerequisite')",
+        ),
+        DynamicImportCall(
+            ("_load_exact_prerequisite_helpers",),
+            "sys.modules.get('secpal_pr_review.unchanged_head_prerequisite_evidence')",
+        ),
+        DynamicImportCall(
+            ("_load_exact_prerequisite_helpers",),
+            "sys.modules.get(f\"secpal_pr_review.{name.removesuffix('.py')}\")",
+        ),
+        DynamicImportCall(
             ("_load_evidence_helper",),
             "sys.modules.get('secpal_pr_review_evidence_shared')",
         ),
@@ -1573,7 +1602,9 @@ SAFE_SYS_MODULES_STORES = {
     },
 }
 RESOLVER_TOP_LEVEL_FUNCTIONS = {
+    "_verify_exact_helper_source",
     "_load_exact_prerequisite_helpers",
+    "_ensure_exact_prerequisite_helpers",
     "_run_exact_prerequisite_get",
     "_exact_prerequisite_git_text",
     "_verify_exact_prerequisite_ssh_signature",
@@ -1768,8 +1799,8 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
 }
 RESOLVER_LOOP_SITES = {
     LoopSite("for", ("_load_exact_prerequisite_helpers",), "((source, 'unchanged_head_prerequisite.py'), (detached, 'unchanged_head_prerequisite_evidence.py'))"),
-    LoopSite("comprehension", (), "exact_prerequisite.CASES.values()"),
-    LoopSite("comprehension", (), "(case.pr_endpoint, case.commits_endpoint, case.commit_endpoint, case.comment_endpoint, case.agents_endpoint)"),
+    LoopSite("comprehension", ("_ensure_exact_prerequisite_helpers",), "source.CASES.values()"),
+    LoopSite("comprehension", ("_ensure_exact_prerequisite_helpers",), "(case.pr_endpoint, case.commits_endpoint, case.commit_endpoint, case.comment_endpoint, case.agents_endpoint)"),
     LoopSite("comprehension", ("parse_args",), "forbidden"),
     LoopSite("comprehension", ("parse_args",), "(arguments.late_disposition_evidence, arguments.late_disposition_signature, arguments.late_classification_evidence, arguments.late_classification_signature)"),
     LoopSite("comprehension", ("resolve_exact_prerequisite_late_thread",), "target.thread.comments"),

@@ -8,10 +8,10 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import sys
-import unittest
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest import mock
+from unittest import TestCase, main, mock
 
 
 RESOLVER_PATH = Path(__file__).resolve().parents[1] / "scripts/secpal-resolve-fixed-threads.py"
@@ -22,8 +22,9 @@ sys.modules[SPEC.name] = RESOLVER
 SPEC.loader.exec_module(RESOLVER)
 
 
-class ExactResolverTests(unittest.TestCase):
+class ExactResolverTests(TestCase):
     def setUp(self) -> None:
+        RESOLVER._ensure_exact_prerequisite_helpers()
         self.case = RESOLVER.exact_prerequisite.CASES["deployment-281"]
         self.body_digest = hashlib.sha256(
             self.case.comment_body.encode("utf-8")
@@ -142,6 +143,40 @@ class ExactResolverTests(unittest.TestCase):
                 apply=True,
             )
 
+    def test_helper_source_requires_exact_committed_blob(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            helper = root / "scripts/secpal_pr_review/unchanged_head_prerequisite.py"
+            helper.parent.mkdir(parents=True)
+            helper.write_bytes(b"harmless helper fixture\n")
+            with (
+                mock.patch.object(RESOLVER, "REPOSITORY_ROOT", root),
+                mock.patch.object(RESOLVER.evidence, "resolve_trusted_executable", return_value="/usr/bin/git"),
+                mock.patch.object(RESOLVER.evidence, "command_environment", return_value={}),
+                mock.patch.object(RESOLVER.subprocess, "run", return_value=SimpleNamespace(
+                    returncode=0,
+                    stdout="100644 blob " + "0" * 40 + "\tscripts/secpal_pr_review/unchanged_head_prerequisite.py\n",
+                )),
+            ):
+                with self.assertRaises(RESOLVER.ResolutionError):
+                    RESOLVER._verify_exact_helper_source("unchanged_head_prerequisite.py")
+
+    def test_helper_source_rejects_symlink_before_read(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            helper = root / "scripts/secpal_pr_review/unchanged_head_prerequisite.py"
+            helper.parent.mkdir(parents=True)
+            target = root / "target.py"
+            target.write_bytes(b"harmless helper fixture\n")
+            helper.symlink_to(target)
+            with mock.patch.object(RESOLVER, "REPOSITORY_ROOT", root):
+                with self.assertRaises(RESOLVER.ResolutionError):
+                    RESOLVER._verify_exact_helper_source("unchanged_head_prerequisite.py")
+
+    def test_preloaded_exact_helper_rejects(self) -> None:
+        with self.assertRaises(RESOLVER.ResolutionError):
+            RESOLVER._load_exact_prerequisite_helpers()
+
 
 if __name__ == "__main__":
-    unittest.main()
+    main()

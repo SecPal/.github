@@ -6,10 +6,9 @@
 from __future__ import annotations
 
 import sys
-import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest import mock
+from unittest import TestCase, main, mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -18,7 +17,7 @@ from secpal_pr_review import unchanged_head_prerequisite as prerequisite
 from secpal_pr_review import unchanged_head_prerequisite_evidence as evidence
 
 
-class ExactEvidenceTests(unittest.TestCase):
+class ExactEvidenceTests(TestCase):
     def setUp(self) -> None:
         self.case = prerequisite.CASES["deployment-281"]
         self.facts = {"case_id": self.case.case_id, "head": self.case.head}
@@ -108,4 +107,4 @@ class ExactEvidenceTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    main()

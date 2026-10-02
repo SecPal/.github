@@ -160,6 +160,22 @@ class ExactPrerequisiteTests(unittest.TestCase):
         with self.assertRaises(prerequisite.PrerequisiteError):
             self.authenticate()
 
+    def test_ssh_assertion_outside_linked_section_rejects(self) -> None:
+        self.git_outputs[("show", "HEAD:docs/work-graph-contract.md")] = (
+            "### 5.3.2 Signing Authority\nNo SSH assertion here.\n"
+            "### 5.4 Other Authority\n`SECPAL_SIGNING_FORMAT: SSH`\n"
+        )
+        with self.assertRaises(prerequisite.PrerequisiteError):
+            self.authenticate()
+
+    def test_merged_section_must_itself_contain_assertion(self) -> None:
+        self.git_outputs[("show", prerequisite.CANONICAL_MERGE + ":docs/work-graph-contract.md")] = (
+            "### 5.3.2 Signing Authority\nNo SSH assertion here.\n"
+            "### 5.4 Other Authority\n`SECPAL_SIGNING_FORMAT: SSH`\n"
+        )
+        with self.assertRaises(prerequisite.PrerequisiteError):
+            self.authenticate()
+
     def test_unverified_commit_rejects(self) -> None:
         self.responses[self.case.commits_endpoint][0]["commit"]["verification"]["verified"] = False
         with self.assertRaises(prerequisite.PrerequisiteError):

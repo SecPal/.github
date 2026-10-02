@@ -128,6 +128,21 @@ def _timestamp(value: Any) -> datetime:
         raise PrerequisiteError("GitHub timestamp is malformed") from exc
 
 
+def _signing_section_has_ssh_authority(contract: str) -> bool:
+    """Bind the assertion to the linked heading, not an unrelated section."""
+
+    lines = contract.splitlines()
+    if lines.count(CANONICAL_HEADING) != 1:
+        return False
+    start = lines.index(CANONICAL_HEADING) + 1
+    section: list[str] = []
+    for line in lines[start:]:
+        if line.startswith(("# ", "## ", "### ")):
+            break
+        section.append(line)
+    return "\n".join(section).count(CANONICAL_ASSERTION) == 1
+
+
 def authenticate(
     case: Case,
     target: Any,
@@ -283,10 +298,8 @@ def authenticate(
     current_contract = git_text("show", f"HEAD:{CANONICAL_PATH}")
     _require(
         CANONICAL_HEADING not in old_contract
-        and merged_contract.count(CANONICAL_HEADING) == 1
-        and CANONICAL_ASSERTION in merged_contract
-        and current_contract.count(CANONICAL_HEADING) == 1
-        and CANONICAL_ASSERTION in current_contract,
+        and _signing_section_has_ssh_authority(merged_contract)
+        and _signing_section_has_ssh_authority(current_contract),
         "canonical signing prerequisite is not proven absent-then-present",
     )
     return {

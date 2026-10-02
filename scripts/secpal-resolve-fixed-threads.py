@@ -243,7 +243,57 @@ def _load_late_disposition_helper() -> Any:
 late_disposition = _load_late_disposition_helper()
 
 
+def _verify_exact_helper_source(name: str) -> None:
+    """Authenticate regular helper bytes against the committed HEAD first."""
+
+    if name not in (
+        "unchanged_head_prerequisite.py",
+        "unchanged_head_prerequisite_evidence.py",
+    ):
+        raise ResolutionError("exact prerequisite helper name is not authorized")
+    relative = f"scripts/secpal_pr_review/{name}"
+    path = REPOSITORY_ROOT / relative
+    try:
+        if (
+            path.is_symlink()
+            or path.parent.is_symlink()
+            or path.parent.parent.is_symlink()
+            or not stat.S_ISREG(path.stat().st_mode)
+        ):
+            raise ResolutionError("exact prerequisite helper path is not regular")
+        source = path.read_bytes()
+    except OSError as exc:
+        raise ResolutionError("exact prerequisite helper bytes are unavailable") from exc
+    if not 0 < len(source) <= 65536:
+        raise ResolutionError("exact prerequisite helper exceeds source bound")
+    blob = hashlib.sha1(
+        b"blob " + str(len(source)).encode("ascii") + b"\0" + source
+    ).hexdigest()
+    try:
+        executable = evidence.resolve_trusted_executable("git")
+        completed = subprocess.run(
+            [executable, "ls-tree", "HEAD", "--", relative],
+            cwd=REPOSITORY_ROOT, check=False, stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", env=evidence.command_environment("git"),
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired, evidence.CommandPolicyError) as exc:
+        raise ResolutionError("exact prerequisite committed helper is unavailable") from exc
+    if completed.returncode != 0 or completed.stdout != (
+        f"100644 blob {blob}\t{relative}\n"
+    ):
+        raise ResolutionError("exact prerequisite helper differs from committed HEAD")
+
+
 def _load_exact_prerequisite_helpers() -> tuple[Any, Any]:
+    if (
+        sys.modules.get("secpal_pr_review.unchanged_head_prerequisite") is not None
+        or sys.modules.get("secpal_pr_review.unchanged_head_prerequisite_evidence") is not None
+    ):
+        raise ResolutionError("exact prerequisite helper was preloaded")
+    _verify_exact_helper_source("unchanged_head_prerequisite.py")
+    _verify_exact_helper_source("unchanged_head_prerequisite_evidence.py")
     scripts_root_text = str(REPOSITORY_ROOT / "scripts")
     original_sys_path = list(sys.path)
     sys.path.insert(0, scripts_root_text)
@@ -256,14 +306,43 @@ def _load_exact_prerequisite_helpers() -> tuple[Any, Any]:
         (source, "unchanged_head_prerequisite.py"),
         (detached, "unchanged_head_prerequisite_evidence.py"),
     ):
-        if Path(module.__file__).resolve() != (
+        if (
+            sys.modules.get(f"secpal_pr_review.{name.removesuffix('.py')}") is not module
+            or Path(module.__file__).resolve() != (
             REPOSITORY_ROOT / "scripts/secpal_pr_review" / name
-        ).resolve():
+            ).resolve()
+        ):
             raise RuntimeError("exact prerequisite helper path is invalid")
     return source, detached
 
 
-exact_prerequisite, exact_prerequisite_evidence = _load_exact_prerequisite_helpers()
+exact_prerequisite: Any = None
+exact_prerequisite_evidence: Any = None
+_EXACT_PREREQUISITE_GETS: frozenset[str] = frozenset()
+
+
+def _ensure_exact_prerequisite_helpers() -> None:
+    """Load the exact-case helpers only for the closed late-disposition path."""
+
+    global exact_prerequisite, exact_prerequisite_evidence, _EXACT_PREREQUISITE_GETS
+    if exact_prerequisite is not None:
+        _verify_exact_helper_source("unchanged_head_prerequisite.py")
+        _verify_exact_helper_source("unchanged_head_prerequisite_evidence.py")
+        return
+    source, detached = _load_exact_prerequisite_helpers()
+    exact_prerequisite = source
+    exact_prerequisite_evidence = detached
+    _EXACT_PREREQUISITE_GETS = frozenset(
+        {source.CANONICAL_PR_ENDPOINT, source.CANONICAL_MAIN_ENDPOINT}
+        | {
+            endpoint
+            for case in source.CASES.values()
+            for endpoint in (
+                case.pr_endpoint, case.commits_endpoint, case.commit_endpoint,
+                case.comment_endpoint, case.agents_endpoint,
+            )
+        }
+    )
 
 
 def _load_fast_path_helper() -> Any:
@@ -842,20 +921,6 @@ def _run_gh(arguments: Sequence[str]) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ResolutionError("gh returned an unexpected response")
     return value
-
-
-_EXACT_PREREQUISITE_GETS = frozenset(
-    {exact_prerequisite.CANONICAL_PR_ENDPOINT,
-     exact_prerequisite.CANONICAL_MAIN_ENDPOINT}
-    | {
-        endpoint
-        for case in exact_prerequisite.CASES.values()
-        for endpoint in (
-            case.pr_endpoint, case.commits_endpoint, case.commit_endpoint,
-            case.comment_endpoint, case.agents_endpoint,
-        )
-    }
-)
 
 
 def _run_exact_prerequisite_get(endpoint: str) -> Any:
@@ -3964,6 +4029,7 @@ def create_late_disposition_artifact(
 
 
 def _exact_prerequisite_case(case_id: str) -> Any:
+    _ensure_exact_prerequisite_helpers()
     case = exact_prerequisite.CASES.get(case_id)
     if case is None:
         raise ResolutionError("unchanged-head prerequisite case is not registered")

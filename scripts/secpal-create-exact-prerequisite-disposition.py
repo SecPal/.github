@@ -38,6 +38,7 @@ resolver = _load_resolver()
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    resolver._ensure_exact_prerequisite_helpers()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--case", required=True,
