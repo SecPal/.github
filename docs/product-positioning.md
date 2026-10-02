@@ -218,17 +218,27 @@ This contract delegates rather than duplicates established authority:
 - The [SecPal Licensing Policy](licensing-policy.md) and
   [Licensing Wording](brand/licensing-wording.md) own licensing and
   human-readable Open Source wording within their respective scopes.
-- [ADR-014](adr/20260720-tenant-identity-access-model-adr014.md) remains the
-  accepted tenant, identity, employee, and access boundary. Newer unresolved
-  employee, working-time, absence, or related ideas do not become accepted
-  architecture through this positioning contract.
+- [ADR-014](adr/20260720-tenant-identity-access-model-adr014.md) retains the
+  accepted tenant, global identity, membership, explicit access, and security
+  boundaries. [ADR-025](adr/20261002-employment-time-absence-compensation-adr025.md) partially
+  supersedes its Employee contract projection and unresolved rehire decisions
+  with the accepted Employee → EmploymentPeriod → EmploymentTermsVersion model
+  and working-time, absence, leave, and compensation boundaries. This authority
+  comes from the accepted ADR, not positioning prose. Acceptance establishes no
+  implementation, availability, migration completion, or legal compliance;
+  unresolved details remain with their owning decisions.
 - [ADR-023](adr/20260824-public-self-hosting-private-managed-operations-adr023.md)
   remains the accepted public-self-hosting and private-managed-operations
   boundary.
+- [ADR-026](adr/20261002-client-trust-offline-recovery-adr026.md) owns USER/WORK client
+  identities, endpoint trust, accepted offline-first authorization, personal-device
+  approval and user recovery. It partially supersedes ADR-012's shared application,
+  signing and DPC assumptions and supersedes the never-accepted Proposed ADR-003.
+  Its client families are trust boundaries, not new product brands. Acceptance
+  establishes no implementation, availability, platform qualification or compliance.
 - The ADR index currently keeps
-  [ADR-001](adr/20251027-event-sourcing-for-guard-book.md),
-  [ADR-002](adr/20251027-opentimestamp-for-audit-trail.md), and
-  [ADR-003](adr/20251027-offline-first-architecture.md) Proposed and
+  [ADR-001](adr/20251027-event-sourcing-for-guard-book.md)
+  and [ADR-002](adr/20251027-opentimestamp-for-audit-trail.md) Proposed and
   non-binding. Positioning language MUST NOT promote their unresolved decisions
   into accepted architecture or implemented capability.
 
