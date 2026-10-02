@@ -1157,9 +1157,13 @@ and the exact private internal logical database service identity
 `api.secpal.app`, the deprecated `.app` web host, so callers cannot reintroduce
 it as an active host.
 
-The `io.secpal.*` allowance applies only in explicit reverse-DNS identifier
+The `io.secpal.*` allowance applies in explicit reverse-DNS identifier
 contexts such as an application ID, package, namespace, or bundle identifier.
-It does not approve those values as URLs or public hosts. The Android ID
+[ADR-026](../docs/adr/20261002-client-trust-offline-recovery-adr026.md) also
+authorizes the exact application identities `app.secpal.libre` and `io.secpal.dpc`
+as complete Markdown inline code spans. These exceptions require every occurrence
+on the line to be classified and do not approve URLs, public hosts, arbitrary
+suffixes, or inline-code syntax in executable files. The Android ID
 `app.secpal` remains a valid architecture value, but it is outside this
 scanner's intentionally `secpal.*`-seeded matcher and is not claimed as an
 enforced value here.

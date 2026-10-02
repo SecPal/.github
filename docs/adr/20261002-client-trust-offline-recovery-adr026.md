@@ -196,6 +196,14 @@ of copied local state. Qualification must establish the required rollback
 resistance; this ADR fixes no implementation. An offline endpoint cannot detect
 a newer generation it has never learned.
 
+Already-known validity constraints remain binding offline, including ADR-014's
+`[valid_from, valid_until)` access intervals. Their evaluation requires qualified,
+rollback-resistant time or elapsed-state evidence; a caller-adjustable wall clock
+or restored local state must not extend known authority. If required validity
+cannot be established, the protected operation fails closed. This is enforcement
+of authenticated known limits, not an artificial timeout for unknown remote
+revocation. Exact time sources and platform mechanisms remain qualification work.
+
 A fully offline endpoint cannot know about revocation or policy changes after
 its last authenticated server state. This architecture promises **no immediate
 remote revocation while fully offline** and introduces no artificial global
@@ -279,6 +287,13 @@ verification metadata rather than recoverable plaintext. After presentation it
 must not be silently retained as an ordinarily readable secret. This does not
 prohibit the User's deliberate secure offline custody of the presented key.
 
+Consumption, invalidation and generation state must remain authoritative across
+backup/restore; restoring an older verifier must not resurrect a used, revoked
+or rotated Recovery Key. If current state cannot be established after restore,
+Recovery Key use is frozen until scoped reconciliation invalidates obsolete
+verification metadata. This is a required recovery invariant, consistent with
+ADR-020's restore boundaries, not a choice of ledger or storage implementation.
+
 While an approved personal device still exists, the Recovery Key must not offer
 an easier path for adding another. Device Recovery applies when the User can
 still sufficiently prove global identity but lacks an approved personal device;
@@ -287,7 +302,14 @@ Where no Recovery Key exists, an appropriately authorized **current Tenant recov
 authority** may assist with that exact replacement personal device, provided the
 User still sufficiently proves identity. Ordinary Device Recovery does not
 require agreement from all Tenants and must not reset global identity through
-this narrower authority. This is not generic account unlock.
+this narrower authority. An unavailable Recovery Key whose verification metadata
+still exists must not strand this failure class: with the same sufficient User
+identity proof and scoped current Tenant recovery authorization, invalidate that
+unavailable key's generation before authorizing the exact replacement through
+the no-key path. This is not generation or rotation of a new Recovery Key by a
+Tenant; a new key requires an approved replacement personal app device. None of
+these paths is available while an approved personal device still exists. This is
+not generic account unlock.
 
 ### Global Identity Recovery and scoped execution
 
@@ -303,7 +325,16 @@ current authenticated membership/policy state, not a caller-selected Tenant list
 or historical ended memberships.
 
 Identity Recovery explicitly resets/re-establishes lost or compromised authorities.
-Credentials/keys are replaced or re-registered, never recovered in plaintext.
+Before enabling replacement User authenticators, it must atomically invalidate
+the prior User authenticator registrations, personal-device approvals,
+browser-trust grants, sessions/tokens, Recovery Key verification metadata and
+User offline-authorization generations. Restore must not re-enable those retired
+authorities; uncertain recovery state remains frozen pending scoped
+reconciliation. Separate Work endpoint identities and the ADR-015 Global Identity
+Key boundary are not implicitly replaced or granted by this reset. A fully
+offline endpoint cannot learn the new generation until authenticated reconnection,
+so this reset makes no immediate offline-revocation promise. Credentials/keys
+are replaced or re-registered, never recovered in plaintext.
 Recovery authorization is rights/capability based and bounded to the exact
 **actor + action + target + request + device**. No global ADMIN, SUPERADMIN,
 RECOVERY_ADMIN, unrestricted support takeover or equivalent policy bypass is
