@@ -86,9 +86,12 @@ including agreed future periods and ended periods across rehire history. Each
 period belongs to that Employee and Tenant and has explicit start/end validity;
 an open end does not permit overlap. An ended period remains history and never
 creates a current employment basis. Rehire creates another period on the same
-Employee rather than overwriting the ended period or creating a new global
-identity. All domain references must preserve the same-Tenant integrity rules
-of ADR-014.
+Employee rather than overwriting the ended period. A surviving User is reused;
+rehire alone creates no new global identity. If the former User was deleted,
+identity creation and Employee relinking follow ADR-014's invitation and identity
+lifecycle with explicit authorization; retained employment history neither
+restores credentials nor grants rights. All domain references must preserve the
+same-Tenant integrity rules of ADR-014.
 
 Employment conditions are authoritative **immutable, effective-dated
 EmploymentTermsVersion** records within an EmploymentPeriod. The applicable
