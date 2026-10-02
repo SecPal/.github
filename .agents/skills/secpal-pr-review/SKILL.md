@@ -335,8 +335,10 @@ Review 0/1, capture complete terminal provider feedback and invoke
 `python3 scripts/secpal-publish-review-consumption.py --repository OWNER/REPOSITORY --delivery-issue ISSUE --apply`.
 Require independent CURRENT read-back at Review 1/1 before ordinary
 remediation. The publisher consumes one bounded assessment containing every
-qualifying review object; it requests no review. When CURRENT is already
-Review 1/1, preserve that consumed cycle and skip the publisher. Historical
+qualifying review object, or an authenticated terminal Code/Security provider
+summary when a clean assessment emits no review object. It requests no review.
+When CURRENT is already Review 1/1, preserve that consumed cycle and skip the
+publisher. Historical
 signed review-before-Ready chains remain verification inputs only.
 
 ## Run the finite invocation

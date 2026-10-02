@@ -1808,6 +1808,7 @@ def _capture_current_stable_feedback(
     ready_remediation_provider_binding: (
         publication.VerifiedReadySourceRecoveryProviderBinding | None
     ) = None,
+    capture_provider_summary: bool = False,
 ) -> fast_path.StableFeedbackState:
     """Reuse the maintained bounded provider capture without duplicating it."""
 
@@ -1855,9 +1856,8 @@ def _capture_current_stable_feedback(
                         str(provider_binding),
                     ]
                 )
-                arguments.extend(
-                    ["--capture-provider-summary", str(summary_output)]
-                )
+            if ready_remediation_provider_binding is not None or capture_provider_summary:
+                arguments.extend(["--capture-provider-summary", str(summary_output)])
             result = bootstrap_source_admission._run_isolated_python(
                 arguments,
                 cwd=repository_root,
@@ -1871,7 +1871,7 @@ def _capture_current_stable_feedback(
             captured = fast_path.verify_reviewed_state_evidence(
                 authority.loads_closed_json(output.read_bytes())
             )
-            if ready_remediation_provider_binding is not None:
+            if ready_remediation_provider_binding is not None or capture_provider_summary:
                 summary = authority.loads_closed_json(summary_output.read_bytes())
                 if not isinstance(summary, dict) or set(summary) != {
                     "body",

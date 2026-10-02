@@ -468,6 +468,8 @@ def _review_consumption_scope(
     live: LivePullRequest,
     feedback: fast_path.StableFeedbackState,
     timeline: tuple[publication.GitHubPullRequestTimelineEvent, ...],
+    *,
+    provider_summary_body: str | None = None,
 ) -> dict[str, Any]:
     """Bind the sole independent post-Ready review to authenticated CURRENT."""
 
@@ -561,11 +563,49 @@ def _review_consumption_scope(
             reviews.append(review)
     except (ValueError, TypeError, authority.LifecycleAuthorityError) as exc:
         raise LifecycleExecutionError("review chronology is malformed") from exc
-    if not reviews or any(
+    if any(
         item.get("transition_kind") == "ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED"
         for item in events
     ):
         raise LifecycleExecutionError("one bounded independent Ready-head review cycle is required")
+    summary_cycle: dict[str, Any] | None = None
+    if not reviews:
+        if provider_summary_body is None or requests:
+            raise LifecycleExecutionError(
+                "one bounded independent Ready-head review cycle is required"
+            )
+        fast_path.verify_codex_provider_summary(
+            provider_summary_body,
+            head_sha=lifecycle.head_sha,
+            repository=lifecycle.repository,
+            pull_request_number=lifecycle.pull_request,
+        )
+        matching_summaries = [
+            comment
+            for comment in feedback.feedback["conversation_comments"]
+            if comment["body_digest"] == fast_path.digest_text(provider_summary_body)
+            and comment["actor"]["login"] == "chatgpt-codex-connector"
+        ]
+        if len(matching_summaries) != 1:
+            raise LifecycleExecutionError(
+                "terminal provider summary is not bound to Stable Feedback"
+            )
+        try:
+            summary_at = datetime.fromisoformat(
+                matching_summaries[0]["updated_at"].replace("Z", "+00:00")
+            )
+            if summary_at.tzinfo is None or summary_at <= ready_at:
+                raise ValueError("provider summary predates Ready")
+        except (TypeError, ValueError) as exc:
+            raise LifecycleExecutionError(
+                "terminal provider summary is outside the Ready cycle"
+            ) from exc
+        summary_cycle = {
+            "kind": "TERMINAL_PROVIDER_ASSESSMENT",
+            "comment_node_id": matching_summaries[0]["node_id"],
+            "body_digest": matching_summaries[0]["body_digest"],
+            "updated_at": matching_summaries[0]["updated_at"],
+        }
     if requests and not any(
         review["actor"] == requests[0]["requested_reviewer"]
         and datetime.fromisoformat(review["submitted_at"].replace("Z", "+00:00"))
@@ -586,6 +626,8 @@ def _review_consumption_scope(
         }
         for review in sorted(reviews, key=lambda item: (item["submitted_at"], item["node_id"]))
     ]
+    if summary_cycle is not None:
+        cycle.append(summary_cycle)
     return {
         "pull_request": lifecycle.pull_request,
         "head_sha": lifecycle.head_sha,
@@ -2047,12 +2089,15 @@ def publish_review_consumption(
     lifecycle = current.lifecycle
     live = _read_live_github(repository, lifecycle.pull_request)
     feedback = orchestration._capture_current_stable_feedback(
-        repository, lifecycle.pull_request
+        repository, lifecycle.pull_request, capture_provider_summary=True
     )
     timeline = publication._observe_pull_request_lifecycle_timeline(
         repository, lifecycle.pull_request
     )
-    scope = _review_consumption_scope(current, live, feedback, timeline)
+    scope = _review_consumption_scope(
+        current, live, feedback, timeline,
+        provider_summary_body=getattr(feedback, "provider_summary_body", None),
+    )
 
     policy = authority._load_lifecycle_trust_policy(repository)
     signer_identity = _single_role_identity(
@@ -2078,15 +2123,17 @@ def publish_review_consumption(
     successor = _append_successor_evidence(current, authorization, signers)
 
     before = publication.verify_current_lifecycle_authority(repository, delivery_issue)
+    latest_feedback = orchestration._capture_current_stable_feedback(
+        repository, lifecycle.pull_request, capture_provider_summary=True
+    )
     latest_scope = _review_consumption_scope(
         before,
         _read_live_github(repository, lifecycle.pull_request),
-        orchestration._capture_current_stable_feedback(
-            repository, lifecycle.pull_request
-        ),
+        latest_feedback,
         publication._observe_pull_request_lifecycle_timeline(
             repository, lifecycle.pull_request
         ),
+        provider_summary_body=getattr(latest_feedback, "provider_summary_body", None),
     )
     if not _same_publication(before, current) or latest_scope != scope:
         raise LifecycleExecutionError("review or CURRENT changed before publication")

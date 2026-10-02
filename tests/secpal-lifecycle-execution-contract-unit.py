@@ -18,6 +18,7 @@ import copy
 from dataclasses import replace
 import hashlib
 import inspect
+import json
 from pathlib import Path
 import sys
 from typing import Any
@@ -439,6 +440,85 @@ class LifecycleExecutionTests(TestCase):
             execution._authorize_transition_state(
                 historical, "DRAFT_TO_READY", "2" * 64
             )
+
+    def test_clean_terminal_provider_assessment_needs_no_review_object(self) -> None:
+        current = self.ready_harness().current
+        live = execution.LivePullRequest(REPOSITORY, PR, "OPEN", HEAD, False, "author")
+        ready = publication.GitHubPullRequestTimelineEvent(
+            "READY_FOR_REVIEW", 1, "READY_EVENT", "author", "2026-10-01T00:00:00Z",
+        )
+
+        def summary(head: str = HEAD, repo: str = REPOSITORY, pr: int = PR,
+                    status: str = "completed") -> str:
+            metadata = json.dumps({"headSha": head, "pullRequestNumber": pr,
+                                   "repository": repo, "status": status},
+                                  sort_keys=True, separators=(",", ":"))
+            return (
+                "<!-- codex-pull-request-review-summary -->\n"
+                f"<!-- codex-security-review:v1 {metadata} -->\n"
+                "| Review | Status | Commit | Review trigger |\n"
+                "| --- | --- | --- | --- |\n"
+                "| **Code Review** | **Completed** | head | ready |\n"
+                "| **Security Review** | **Completed** | head | ready |"
+            )
+
+        def feedback(body: str, *, actor: str = "chatgpt-codex-connector",
+                     updated: str = "2026-10-01T02:00:00Z",
+                     reviews: list[dict[str, Any]] | None = None) -> fast_path.StableFeedbackState:
+            return fast_path.StableFeedbackState(
+                repository=REPOSITORY, pull_request_number=PR, head_sha=HEAD,
+                base_ref="main", base_sha="b" * 40, pr_state="OPEN",
+                feedback={"pull_request_reactions": [], "reviews": reviews or [],
+                          "threads": [], "conversation_comments": [{
+                              "node_id": "SUMMARY_1",
+                              "body_digest": fast_path.digest_text(body),
+                              "actor": {"login": actor, "node_id": "BOT_1", "database_id": 5},
+                              "updated_at": updated, "reactions": [],
+                          }]},
+            )
+
+        body = summary()
+        scope = execution._review_consumption_scope(
+            current, live, feedback(body), (ready,), provider_summary_body=body,
+        )
+        self.assertEqual(scope["review_cycle"], [{
+            "kind": "TERMINAL_PROVIDER_ASSESSMENT",
+            "comment_node_id": "SUMMARY_1",
+            "body_digest": fast_path.digest_text(body),
+            "updated_at": "2026-10-01T02:00:00Z",
+        }])
+        self.assertEqual(
+            scope["review_cycle_digest"], authority.digest_json(scope["review_cycle"])
+        )
+        stale = {
+            "node_id": "OLD_REVIEW", "body_digest": "b" * 64,
+            "actor": {"login": "independent", "node_id": "ACTOR_1", "database_id": 6},
+            "state": "COMMENTED", "commit_oid": "c" * 40,
+            "submitted_at": "2026-10-01T01:00:00Z", "reactions": [],
+        }
+        stale_scope = execution._review_consumption_scope(
+            current, live, feedback(body, reviews=[stale]), (ready,),
+            provider_summary_body=body,
+        )
+        self.assertEqual(stale_scope["review_cycle"], scope["review_cycle"])
+        for bad_body, bad_actor, updated in (
+            (summary(status="running"), "chatgpt-codex-connector", "2026-10-01T02:00:00Z"),
+            (summary(head="c" * 40), "chatgpt-codex-connector", "2026-10-01T02:00:00Z"),
+            (summary(repo="SecPal/other"), "chatgpt-codex-connector", "2026-10-01T02:00:00Z"),
+            (summary(pr=PR + 1), "chatgpt-codex-connector", "2026-10-01T02:00:00Z"),
+            (body, "untrusted", "2026-10-01T02:00:00Z"),
+            (body, "chatgpt-codex-connector", "2026-09-30T23:00:00Z"),
+        ):
+            with self.subTest(body=bad_body, actor=bad_actor, updated=updated):
+                with self.assertRaises((execution.LifecycleExecutionError,
+                                        fast_path.SecurityBlocker)):
+                    execution._review_consumption_scope(
+                        current, live, feedback(bad_body, actor=bad_actor,
+                                                updated=updated), (ready,),
+                        provider_summary_body=bad_body,
+                    )
+        with self.assertRaises(execution.LifecycleExecutionError):
+            execution._review_consumption_scope(current, live, feedback(body), (ready,))
 
     def test_post_ready_review_scope_requires_independent_exact_head_review(self) -> None:
         current = self.ready_harness().current

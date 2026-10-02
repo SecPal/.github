@@ -959,8 +959,12 @@ review issuance or relax the ordinary first-Ready rule.
 The maintained post-Ready review publisher authenticates the complete bounded
 independent review cycle on the exact Ready head after GitHub's Ready event.
 Several review objects from that assessment still advance the existing
-`UNRESTRICTED_REVIEW_CONSUMED` transition only once. The normal feedback skill
-invokes the publisher after terminal Stable Feedback and requires CURRENT
+`UNRESTRICTED_REVIEW_CONSUMED` transition only once. The publisher also accepts
+an authenticated terminal Code/Security summary with no GitHub review object
+when the provider completed a clean assessment on the Ready head.
+The summary remains bound to the complete Stable Feedback and Ready chronology.
+The normal feedback skill invokes the publisher after terminal Stable Feedback
+and requires CURRENT
 Review 1/1 before remediation. Ambiguous publication results are reconciled
 through exact signed-successor CURRENT read-back without replaying the write.
 Deterministic publication errors retain their specific failure rather than
