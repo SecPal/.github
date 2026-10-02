@@ -984,6 +984,8 @@ if grep -En '/home/secpal' "$INTEGRATION"; then
 fi
 grep -Fq 'python3 -m unittest tests/secpal-pr-review-actions-unit.py' "$QUALITY_WORKFLOW" \
   || fail 'guarded-action unit tests are not enforced in CI'
+grep -Fq 'python3 -m unittest tests/secpal-provider-fallback-unit.py' "$QUALITY_WORKFLOW" \
+  || fail 'provider fallback replacement tests are not enforced in CI'
 grep -Fq 'python3 -m unittest tests/secpal-resolve-fixed-threads-unit.py' "$QUALITY_WORKFLOW" \
   || fail 'simple resolver unit tests are not enforced in CI'
 grep -Fq 'python3 -m unittest tests/secpal-lifecycle-orchestration-unit.py' "$QUALITY_WORKFLOW" \
@@ -1305,6 +1307,7 @@ assert [
 ] == [
     ["python3", "-m", "unittest", "tests/secpal-resolve-fixed-threads-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-pr-review-actions-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-provider-fallback-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-adopted-ready-prior-authority-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-pre-enrollment-integration-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-authority-unit.py"],
