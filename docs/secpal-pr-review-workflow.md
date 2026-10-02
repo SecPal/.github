@@ -912,6 +912,17 @@ signature, and enrollment publication. It is allowed to follow that existing
 enrollment, appends without rewriting history, and selects no terminal. See
 [Native Lifecycle Genesis Admission](native-lifecycle-genesis-admission.md).
 
+The ancillary `SECPAL_PROVIDER_DISPATCH_CLAIM` reserves one exact replacement
+provider fallback dispatch before its external comment write. It is signed by
+the existing publication role, uses the same protected branch and CAS, and
+selects no lifecycle terminal. The key binds the exact CURRENT publication and
+authority, head, already-authorized assessment, review type, and stable first
+fallback comment and actor identities. Only the invocation that publishes its
+own claim may proceed through the bounded dispatch executor. Existing claims
+cannot be replayed to post; a stranded claim remains consumed. The #1053
+consumer is responsible for supplying fresh, complete authenticated provider
+eligibility and request-history reconciliation to that executor.
+
 Publication does not derive lifecycle state, orchestrate lifecycle events, or
 implement two-parent integration. Those remain owned by #750, #692, and #745
 respectively. Repositories with no enrolled publication remain valid, while a

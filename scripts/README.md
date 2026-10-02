@@ -984,6 +984,19 @@ uses immutable ancestry to select the newest event for each lifecycle. Lease
 CAS prevents concurrent writer races; live branch protection independently
 prevents rollback and deletion.
 
+The same journal also admits a signed ancillary
+`SECPAL_PROVIDER_DISPATCH_CLAIM`. Its deterministic claim ID binds the exact
+CURRENT publication, current-head assessment, review type, and stable original
+fallback comment and actor identities. A random signed attempt ID distinguishes
+concurrent writers with the same dispatch key. The journal walker rejects a
+duplicate claim ID and leaves lifecycle CURRENT unchanged. The bounded
+`execute_provider_dispatch_with_claim` path can call the provider writer only
+after this invocation wins CAS (or reads back its own exact ambiguous CAS
+successor) and reauthenticates the live dispatch. A later reader of an existing
+claim has no provider-write authority. A crash after claim publication consumes
+the opportunity; recovery requires a separate explicit design. The #1053
+consumer owns complete provider eligibility and request-history verification.
+
 New native delivery publication is a two-CAS sequence: admission first, then
 enrollment after re-verifying the reachable admission. A branch-local static
 anchor cannot publish. A separate closed historical-compatibility registry
