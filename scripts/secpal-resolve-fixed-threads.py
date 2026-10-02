@@ -1359,12 +1359,15 @@ def load_validation_evidence(
             "validation evidence eligibility digest is missing or malformed"
         )
     try:
+        command_set = fast_path.validation_commands_for_evidence(
+            registry_binding, payload
+        )
         receipt = fast_path.create_validation_receipt(
             repository=repository,
             head_sha=reviewed.head_sha,
             validated_tree_sha=payload.get("validated_tree_sha"),
             registry=registry_binding,
-            command_set=registry_binding["validation"],
+            command_set=command_set,
             successful_result=True,
             reviewed_state=reviewed,
             manual_gate_evidence=payload.get("manual_gate_evidence"),
@@ -1380,7 +1383,7 @@ def load_validation_evidence(
             repository=repository,
             head_sha=expected_head.lower(),
             registry=registry_binding,
-            command_set=registry_binding["validation"],
+            command_set=command_set,
             successful_result=True,
             reviewed_state=reviewed,
             validation_receipt=receipt,

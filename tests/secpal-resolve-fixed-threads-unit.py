@@ -11070,6 +11070,71 @@ class ResolveFixedThreadsTests(TestCase):
                     (thread_id,),
                 )
 
+    def test_api_governance_resolver_reconstructs_executed_commands(self) -> None:
+        payload = reviewed_state_payload("PRRT_GOVERNANCE_COMMANDS", [])
+        stable = MODULE.fast_path.StableFeedbackState.from_payload(payload)
+        reviewed = mock.Mock(
+            head_sha=stable.head_sha,
+            state_digest=stable.state_digest,
+            feedback_digest=stable.feedback_digest,
+            payload=payload,
+        )
+        binding = MODULE._validation_registry_binding(
+            MODULE._load_repository_entry("SecPal/api")
+        )
+        governance = list(MODULE.fast_path.governance_validation_commands())
+        self.assertNotEqual(governance, binding["validation"])
+        self.assertFalse(any("composer" in item["argv"] for item in governance))
+        gates = [
+            {"gate": gate, "satisfied": True,
+             "evidence": "Governance commands executed; no application PASS claim"}
+            for gate in binding["manual_gates"]
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "attestation.json"
+            for commands in (governance, binding["validation"]):
+                with self.subTest(commands=commands):
+                    receipt = MODULE.fast_path.create_validation_receipt(
+                        repository="SecPal/api", head_sha=stable.head_sha,
+                        validated_tree_sha="f" * 40, registry=binding,
+                        command_set=commands, successful_result=True,
+                        reviewed_state=stable, manual_gate_evidence=gates,
+                        eligibility_evidence_digest="e" * 64,
+                    )
+                    attestation = MODULE.fast_path.create_validation_attestation(
+                        repository="SecPal/api", head_sha="c" * 40,
+                        registry=binding, command_set=commands,
+                        successful_result=True, reviewed_state=stable,
+                        validation_receipt=receipt,
+                    )
+                    path.write_text(json.dumps(attestation), encoding="utf-8")
+                    loaded = load_validation_evidence(
+                        path, "SecPal/api", "c" * 40, reviewed,
+                    )
+                    self.assertEqual(loaded.validation_receipt, receipt)
+                    self.assertEqual(loaded.attestation, attestation)
+                    git = FakeGit(
+                        expected_head="c" * 40, reviewed_head=stable.head_sha,
+                        tree=receipt["validated_tree_sha"],
+                        receipt_digest=receipt["receipt_digest"],
+                    )
+                    MODULE.verify_local_fix_commit(
+                        Path(directory), "SecPal/api", "c" * 40,
+                        reviewed, loaded, runner=git,
+                    )
+                    # Replacing the executed commands with the other validation
+                    # class cannot preserve the signed receipt's authority.
+                    substituted = copy.deepcopy(attestation)
+                    other = binding["validation"] if commands == governance else governance
+                    substituted["command_set_digest"] = MODULE._digest_json(other)
+                    substituted["attestation_digest"] = MODULE._digest_json({
+                        key: value for key, value in substituted.items()
+                        if key != "attestation_digest"
+                    })
+                    path.write_text(json.dumps(substituted), encoding="utf-8")
+                    with self.assertRaises(MODULE.ResolutionError):
+                        load_validation_evidence(path, "SecPal/api", "c" * 40, reviewed)
+
     def test_validation_attestation_binds_fix_head_and_reviewed_state(self) -> None:
         thread_id = "PRRT_exampleOne"
         payload = reviewed_state_payload(thread_id, [])
