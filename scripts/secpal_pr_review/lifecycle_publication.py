@@ -6,16 +6,18 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import copy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
+from datetime import datetime
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import stat
 import subprocess
 import tempfile
-from typing import Any, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping
 
 from . import lifecycle_authority as authority
 from .fast_path import SecurityBlocker, canonical_json_bytes, digest_json
@@ -29,8 +31,15 @@ GENESIS_ADMISSION_KIND = "SECPAL_NATIVE_LIFECYCLE_GENESIS_ADMISSION"
 GENESIS_ADMISSION_DOMAIN = "secpal.native-lifecycle-genesis-admission/v1"
 READY_SOURCE_RECOVERY_KIND = "SECPAL_READY_SOURCE_RECOVERY_PUBLICATION"
 READY_SOURCE_RECOVERY_DOMAIN = "secpal.ready-source-recovery-publication/v1"
+PROVIDER_DISPATCH_CLAIM_KIND = "SECPAL_PROVIDER_DISPATCH_CLAIM"
+PROVIDER_DISPATCH_CLAIM_DOMAIN = "secpal.provider-dispatch-claim/v1"
+PROVIDER_DISPATCH_TRIGGERS = {
+    "CODE": "@codex review",
+    "SECURITY": "@codex security review",
+}
 JOURNAL_KINDS = frozenset(
-    {PUBLICATION_KIND, GENESIS_ADMISSION_KIND, READY_SOURCE_RECOVERY_KIND}
+    {PUBLICATION_KIND, GENESIS_ADMISSION_KIND, READY_SOURCE_RECOVERY_KIND,
+     PROVIDER_DISPATCH_CLAIM_KIND}
 )
 ORDINARY_REMEDIATION_SUFFIX = "ORDINARY_REMEDIATION_SUFFIX"
 EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION = (
@@ -85,6 +94,20 @@ READY_SOURCE_RECOVERY_FIELDS = frozenset(
         "publication_digest",
     }
 )
+PROVIDER_DISPATCH_KEY_FIELDS = frozenset({
+    "repository", "delivery_issue", "pull_request", "lifecycle_id",
+    "current_head_sha", "current_authority_digest", "current_publication_oid",
+    "current_publication_digest", "review_type", "assessment_authority_digest",
+    "original_fallback_comment_node_id", "original_fallback_comment_database_id",
+    "original_fallback_body_digest", "original_fallback_actor_node_id",
+    "original_fallback_actor_database_id", "original_fallback_created_at",
+})
+PROVIDER_DISPATCH_CLAIM_FIELDS = PROVIDER_DISPATCH_KEY_FIELDS | {
+    "schema_version", "kind", "domain", "eligibility_evidence_digest", "claim_id",
+    "attempt_id",
+    "publication_branch", "journal_predecessor_oid", "signer_identity",
+    "signature", "publication_digest",
+}
 _OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _AUTHOR_ENVIRONMENT = frozenset(
     {
@@ -206,6 +229,76 @@ class VerifiedReadySourceRecovery:
     historical_evidence_loss_proof_digest: str
     lifecycle_state: dict[str, Any]
     recovery_safety_facts: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ProviderDispatchKey:
+    """Complete logical identity of one already-authorized fallback replacement."""
+
+    repository: str
+    delivery_issue: int
+    pull_request: int
+    lifecycle_id: str
+    current_head_sha: str
+    current_authority_digest: str
+    current_publication_oid: str
+    current_publication_digest: str
+    review_type: str
+    assessment_authority_digest: str
+    original_fallback_comment_node_id: str
+    original_fallback_comment_database_id: int
+    original_fallback_body_digest: str
+    original_fallback_actor_node_id: str
+    original_fallback_actor_database_id: int
+    original_fallback_created_at: str
+
+
+@dataclass(frozen=True)
+class VerifiedProviderDispatchClaim:
+    """Signed journal evidence; observing this never confers dispatch authority."""
+
+    publication_oid: str
+    publication_digest: str
+    journal_predecessor_oid: str
+    claim_id: str
+    key: ProviderDispatchKey
+    eligibility_evidence_digest: str
+
+
+@dataclass(frozen=True)
+class ProviderDispatchEligibility:
+    """Projection returned by the maintained complete fallback verifier."""
+
+    key: ProviderDispatchKey
+    eligibility_evidence_digest: str
+
+
+@dataclass(frozen=True)
+class ProviderDispatchNoLongerRequired:
+    """Fresh post-claim evidence proves provider acknowledgement or completion."""
+
+
+@dataclass(frozen=True)
+class ProviderDispatchReconciliation:
+    """Authenticated complete request-history count after the one write attempt."""
+
+    replacement_count: int
+    replacement_comment_database_id: int | None
+
+
+@dataclass(frozen=True)
+class ProviderDispatchResult:
+    status: str
+    replacement_comment_database_id: int | None
+    write_attempts: int
+
+
+class AmbiguousProviderDispatchWrite(RuntimeError):
+    """The transport cannot prove whether its one provider POST persisted."""
+
+
+class ProviderDispatchHistoryUnavailable(RuntimeError):
+    """Complete authenticated request history cannot currently be read."""
 
 
 @dataclass(frozen=True)
@@ -1585,11 +1678,215 @@ def _verify_ready_source_recovery_document(
     )
 
 
+def _require_provider_dispatch_key(key: ProviderDispatchKey) -> None:
+    if type(key) is not ProviderDispatchKey or {
+        item.name for item in fields(key)
+    } != PROVIDER_DISPATCH_KEY_FIELDS:
+        raise LifecyclePublicationError("provider dispatch key is not closed")
+    authority._require_repository(key.repository)
+    authority._require_positive_int(key.delivery_issue, "provider dispatch issue")
+    authority._require_positive_int(key.pull_request, "provider dispatch PR")
+    authority._require_identity(key.lifecycle_id, "provider dispatch lifecycle")
+    authority._require_oid(key.current_head_sha, "provider dispatch head")
+    authority._require_oid(key.current_publication_oid, "provider dispatch CURRENT")
+    for name in (
+        "current_authority_digest", "current_publication_digest",
+        "assessment_authority_digest", "original_fallback_body_digest",
+    ):
+        authority._require_digest(getattr(key, name), name)
+    if key.review_type not in PROVIDER_DISPATCH_TRIGGERS:
+        raise LifecyclePublicationError("provider dispatch review type is invalid")
+    if key.original_fallback_body_digest != hashlib.sha256(
+        PROVIDER_DISPATCH_TRIGGERS[key.review_type].encode("utf-8")
+    ).hexdigest():
+        raise LifecyclePublicationError("provider dispatch first fallback body is not canonical")
+    for name in ("original_fallback_comment_node_id", "original_fallback_actor_node_id"):
+        authority._require_identity(getattr(key, name), name)
+    for name in (
+        "original_fallback_comment_database_id", "original_fallback_actor_database_id"
+    ):
+        authority._require_positive_int(getattr(key, name), name)
+    created = key.original_fallback_created_at
+    if (
+        not isinstance(created, str)
+        or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", created) is None
+    ):
+        raise LifecyclePublicationError("provider dispatch first fallback timestamp is invalid")
+    try:
+        datetime.fromisoformat(created.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise LifecyclePublicationError(
+            "provider dispatch first fallback timestamp is invalid"
+        ) from exc
+
+
+def provider_dispatch_claim_id(key: ProviderDispatchKey) -> str:
+    """Derive one stable ID from every closed dispatch-key field."""
+
+    _require_provider_dispatch_key(key)
+    return digest_json({"domain": PROVIDER_DISPATCH_CLAIM_DOMAIN, **asdict(key)})
+
+
+def _provider_dispatch_claim_fields(
+    key: ProviderDispatchKey, *, eligibility_evidence_digest: str,
+    publication_branch: str, journal_predecessor_oid: str,
+    signer_identity: str, attempt_id: str,
+) -> dict[str, Any]:
+    claim_id = provider_dispatch_claim_id(key)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "kind": PROVIDER_DISPATCH_CLAIM_KIND,
+        "domain": PROVIDER_DISPATCH_CLAIM_DOMAIN,
+        **asdict(key),
+        "eligibility_evidence_digest": authority._require_digest(
+            eligibility_evidence_digest, "provider dispatch eligibility evidence"
+        ),
+        "claim_id": claim_id,
+        "attempt_id": attempt_id,
+        "publication_branch": publication_branch,
+        "journal_predecessor_oid": journal_predecessor_oid,
+        "signer_identity": authority._require_identity(
+            signer_identity, "provider dispatch publication signer"
+        ),
+    }
+
+
+def _sign_provider_dispatch_claim(
+    values: Mapping[str, Any], signer: authority.Signer,
+) -> bytes:
+    signature = authority._normalize_signature(
+        signer(canonical_json_bytes(values), PROVIDER_DISPATCH_CLAIM_DOMAIN),
+        values["signer_identity"],
+    )
+    signed = {**copy.deepcopy(dict(values)), "signature": signature}
+    return canonical_json_bytes({
+        **signed, "publication_digest": digest_json(signed),
+    })
+
+
+def _verify_provider_dispatch_claim_document(
+    raw: bytes, *, object_oid: str, expected_branch: str,
+    current_oid: str, current_document: Mapping[str, Any],
+    current_lifecycle: authority.VerifiedLifecycleAuthority,
+) -> tuple[dict[str, Any], VerifiedProviderDispatchClaim]:
+    try:
+        document = json.loads(raw, object_pairs_hook=_reject_duplicate_pairs)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LifecyclePublicationError("provider dispatch claim is malformed") from exc
+    if (
+        not isinstance(document, dict)
+        or canonical_json_bytes(document) != raw
+        or frozenset(document) != PROVIDER_DISPATCH_CLAIM_FIELDS
+    ):
+        raise LifecyclePublicationError("provider dispatch claim is not closed canonical JSON")
+    if (
+        document["schema_version"] != SCHEMA_VERSION
+        or document["kind"] != PROVIDER_DISPATCH_CLAIM_KIND
+        or document["domain"] != PROVIDER_DISPATCH_CLAIM_DOMAIN
+    ):
+        raise LifecyclePublicationError("provider dispatch claim kind is invalid")
+    key = ProviderDispatchKey(**{
+        name: document[name] for name in PROVIDER_DISPATCH_KEY_FIELDS
+    })
+    if document["claim_id"] != provider_dispatch_claim_id(key):
+        raise LifecyclePublicationError("provider dispatch claim identity changed")
+    if (
+        not isinstance(document["attempt_id"], str)
+        or re.fullmatch(r"[0-9a-f]{64}", document["attempt_id"]) is None
+    ):
+        raise LifecyclePublicationError("provider dispatch claim attempt is invalid")
+    authority._require_digest(
+        document["eligibility_evidence_digest"], "provider dispatch eligibility evidence"
+    )
+    policy = authority._load_lifecycle_trust_policy(key.repository)
+    if (
+        expected_branch != policy.publication_branch
+        or document["publication_branch"] != expected_branch
+    ):
+        raise LifecyclePublicationError("provider dispatch claim branch binding is invalid")
+    predecessor = document["journal_predecessor_oid"]
+    if not isinstance(predecessor, str) or not _OID.fullmatch(predecessor):
+        raise LifecyclePublicationError("provider dispatch claim predecessor is invalid")
+    if (
+        key.repository != current_lifecycle.repository
+        or key.delivery_issue != current_lifecycle.delivery_issue
+        or key.pull_request != current_lifecycle.pull_request
+        or key.lifecycle_id != current_lifecycle.lifecycle_id
+        or key.current_head_sha != current_lifecycle.head_sha
+        or key.current_authority_digest != current_lifecycle.authority_digest
+        or key.current_publication_oid != current_oid
+        or key.current_publication_digest != current_document["publication_digest"]
+        or current_lifecycle.state.get("ready") is not True
+        or current_lifecycle.state.get("ready_transition_count") != 1
+        or current_lifecycle.state.get("unrestricted_review_count") != 1
+        or current_lifecycle.state.get("cycle_3_absent") is not True
+    ):
+        raise LifecyclePublicationError("provider dispatch claim does not bind CURRENT Ready")
+    bundle = _lifecycle_bundle(current_document)
+    events = bundle.get("transition_authorizations")
+    snapshots = bundle.get("authority_chain")
+    if not isinstance(events, list) or not isinstance(snapshots, list) or len(events) != len(snapshots):
+        raise LifecyclePublicationError("provider dispatch assessment history is malformed")
+    last_assessment_boundary = max(
+        (index for index, event in enumerate(events)
+         if isinstance(event, dict)
+         and (
+             event.get("resulting_head_sha") != key.current_head_sha
+             or event.get("transition_kind") in {
+                 "PR_REBOUND", "READY_TO_DRAFT", "DRAFT_TO_READY",
+                 "INVALID_REVIEW_CONSUMPTION_CORRECTED",
+                 "INVALID_REVIEW_DERIVED_READY_CORRECTED",
+             }
+         )),
+        default=-1,
+    )
+    assessments = [
+        snapshot.get("authority_digest")
+        for index, (event, snapshot) in enumerate(zip(events, snapshots))
+        if isinstance(event, dict) and isinstance(snapshot, dict)
+        and index > last_assessment_boundary
+        and event.get("transition_kind") == "ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED"
+        and event.get("resulting_head_sha") == key.current_head_sha
+        and event.get("pull_request") == key.pull_request
+        and snapshot.get("pull_request") == key.pull_request
+    ]
+    if not assessments or key.assessment_authority_digest != assessments[-1]:
+        raise LifecyclePublicationError("provider dispatch assessment is not the latest authorized assessment")
+    signer = authority._require_identity(
+        document["signer_identity"], "provider dispatch publication signer"
+    )
+    signed = {name: copy.deepcopy(value) for name, value in document.items()
+              if name != "publication_digest"}
+    if document["publication_digest"] != digest_json(signed):
+        raise LifecyclePublicationError("provider dispatch publication digest mismatch")
+    try:
+        authority._verify_signature(
+            canonical_json_bytes(authority._unsigned(
+                document, "publication_digest", "signature"
+            )),
+            document["signature"], signer, PROVIDER_DISPATCH_CLAIM_DOMAIN,
+            policy.publication_signer_identities,
+            authority._policy_signature_verifier(policy),
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecyclePublicationError(
+            f"provider dispatch object {object_oid} signature policy failed"
+        ) from exc
+    return document, VerifiedProviderDispatchClaim(
+        publication_oid=object_oid,
+        publication_digest=document["publication_digest"],
+        journal_predecessor_oid=predecessor,
+        claim_id=document["claim_id"],
+        key=key,
+        eligibility_evidence_digest=document["eligibility_evidence_digest"],
+    )
+
+
 def _walk_journal(
     repository_root: Path, tip_oid: str, publication_branch: str,
-    *, include_recoveries: bool = False,
+    *, include_recoveries: bool = False, include_claims: bool = False,
 ) -> Any:
-    """Verify the journal; optionally expose ancillary recovery authorities."""
+    """Verify the journal; optionally expose ancillary authorities and claims."""
     reversed_entries: list[tuple[str, bytes, str | None]] = []
     seen: set[str] = set()
     oid: str | None = tip_oid
@@ -1628,6 +1925,7 @@ def _walk_journal(
     entries: list[tuple[str, dict[str, Any], authority.VerifiedLifecycleAuthority]] = []
     latest: dict[tuple[str, int], tuple[str, dict[str, Any], authority.VerifiedLifecycleAuthority]] = {}
     recoveries: dict[tuple[str, int], VerifiedReadySourceRecovery] = {}
+    claims: dict[str, VerifiedProviderDispatchClaim] = {}
     recovery_authorization_ids: set[tuple[str, str]] = set()
     recovery_authorization_digests: set[tuple[str, str]] = set()
     seen_bootstrap_targets: set[str] = set()
@@ -1672,6 +1970,30 @@ def _walk_journal(
             recoveries[key] = recovery
             recovery_authorization_ids.add(authorization_id)
             recovery_authorization_digests.add(authorization_digest)
+            continue
+        if kind == PROVIDER_DISPATCH_CLAIM_KIND:
+            previous = latest.get((
+                candidate.get("repository"), candidate.get("delivery_issue")
+            ))
+            if previous is None:
+                raise LifecyclePublicationError(
+                    "provider dispatch claim precedes CURRENT lifecycle publication"
+                )
+            current_oid, current_document, current_lifecycle = previous
+            document, claim = _verify_provider_dispatch_claim_document(
+                raw, object_oid=oid, expected_branch=publication_branch,
+                current_oid=current_oid, current_document=current_document,
+                current_lifecycle=current_lifecycle,
+            )
+            if document["journal_predecessor_oid"] != parent:
+                raise LifecyclePublicationError(
+                    "provider dispatch claim journal parent binding is invalid"
+                )
+            if claim.claim_id in claims:
+                raise LifecyclePublicationError(
+                    "provider dispatch claim already exists in ancestry"
+                )
+            claims[claim.claim_id] = claim
             continue
         candidate_repository = (
             candidate.get("repository") if isinstance(candidate, dict) else None
@@ -1763,6 +2085,8 @@ def _walk_journal(
                 raise LifecyclePublicationError(
                     "bootstrap repair target is absent from immutable journal ancestry"
                 )
+    if include_claims:
+        return entries, latest, admissions, recoveries, claims
     if include_recoveries:
         return entries, latest, admissions, recoveries
     return entries, latest, admissions
@@ -2274,6 +2598,214 @@ def publish_ready_source_recovery(
             credential_environment=credential_environment,
         )
     return recovered
+
+
+def _publish_provider_dispatch_claim(
+    key: ProviderDispatchKey, *, eligibility_evidence_digest: str,
+    signer_identity: str, signer: authority.Signer,
+) -> VerifiedProviderDispatchClaim:
+    """Reserve one exact dispatch on the protected journal; never reuse a claim.
+
+    The caller must first authenticate complete fallback eligibility. The result
+    is durable evidence, not a reusable capability to write a provider comment.
+    """
+
+    claim_id = provider_dispatch_claim_id(key)
+    authority._require_digest(
+        eligibility_evidence_digest, "provider dispatch eligibility evidence"
+    )
+    policy = authority._load_lifecycle_trust_policy(key.repository)
+    _verify_live_protection(policy)
+    with _isolated_repository(policy, write=True) as (root, credential_environment):
+        tip = _observe_remote_current_once(
+            root, policy.publication_remote_url, policy.publication_branch,
+            credential_environment=credential_environment,
+        )
+        if tip is None:
+            raise LifecyclePublicationError("current lifecycle publication is unavailable")
+        _, latest, _, _, claims = _walk_journal(
+            root, tip, policy.publication_branch, include_claims=True,
+        )
+        if claim_id in claims:
+            raise LifecyclePublicationError("provider dispatch claim already exists")
+        previous = latest.get((key.repository, key.delivery_issue))
+        if previous is None:
+            raise LifecyclePublicationError("current lifecycle publication is unavailable")
+        current_oid, current_document, current_lifecycle = previous
+        values = _provider_dispatch_claim_fields(
+            key, eligibility_evidence_digest=eligibility_evidence_digest,
+            publication_branch=policy.publication_branch,
+            journal_predecessor_oid=tip,
+            signer_identity=signer_identity,
+            attempt_id=secrets.token_hex(32),
+        )
+        raw = _sign_provider_dispatch_claim(values, signer)
+        object_oid = _write_publication_object(root, raw, tip)
+        _, claim = _verify_provider_dispatch_claim_document(
+            raw, object_oid=object_oid, expected_branch=policy.publication_branch,
+            current_oid=current_oid, current_document=current_document,
+            current_lifecycle=current_lifecycle,
+        )
+        _walk_journal(root, object_oid, policy.publication_branch)
+        try:
+            _cas_remote_ref(
+                root, policy.publication_remote_url, policy.publication_branch,
+                object_oid, tip, credential_environment=credential_environment,
+            )
+        except LifecyclePublicationError as exc:
+            observed = _observe_remote_current_once(
+                root, policy.publication_remote_url, policy.publication_branch,
+                credential_environment=credential_environment,
+            )
+            if observed == object_oid:
+                _, _, _, _, accepted = _walk_journal(
+                    root, observed, policy.publication_branch, include_claims=True,
+                )
+                if accepted.get(claim_id) == claim:
+                    return claim
+            elif observed is not None:
+                _, _, _, _, accepted = _walk_journal(
+                    root, observed, policy.publication_branch, include_claims=True,
+                )
+                if claim_id in accepted:
+                    raise LifecyclePublicationError(
+                        "provider dispatch claim already exists"
+                    ) from exc
+            raise LifecyclePublicationError(
+                "provider dispatch claim compare-and-swap did not prove ownership"
+            ) from exc
+    return claim
+
+
+def _require_provider_dispatch_current(key: ProviderDispatchKey) -> None:
+    current = verify_current_lifecycle_authority(key.repository, key.delivery_issue)
+    if (
+        current.publication_oid != key.current_publication_oid
+        or current.publication_digest != key.current_publication_digest
+        or current.lifecycle.authority_digest != key.current_authority_digest
+        or current.lifecycle.lifecycle_id != key.lifecycle_id
+        or current.lifecycle.pull_request != key.pull_request
+        or current.lifecycle.head_sha != key.current_head_sha
+        or current.lifecycle.state.get("ready") is not True
+    ):
+        raise LifecyclePublicationError("provider dispatch CURRENT changed")
+
+
+def _require_provider_dispatch_eligibility(
+    value: ProviderDispatchEligibility,
+) -> None:
+    if type(value) is not ProviderDispatchEligibility:
+        raise LifecyclePublicationError("provider dispatch eligibility is not verifier-derived")
+    provider_dispatch_claim_id(value.key)
+    authority._require_digest(
+        value.eligibility_evidence_digest, "provider dispatch eligibility evidence"
+    )
+
+
+def _execute_provider_dispatch_with_claim(
+    authenticate: Callable[[], ProviderDispatchEligibility | ProviderDispatchNoLongerRequired],
+    write: Callable[[str], int | None],
+    reconcile: Callable[[ProviderDispatchKey, int | None], ProviderDispatchReconciliation],
+    *, signer_identity: str, signer: authority.Signer,
+) -> ProviderDispatchResult:
+    """Own the ephemeral CAS winner capability through one bounded provider write.
+
+    This private seam permits hermetic transport tests. The public entry point
+    selects the maintained verifier and writer; callers cannot inject either.
+    """
+
+    initial = authenticate()
+    _require_provider_dispatch_eligibility(initial)
+    current = authenticate()
+    _require_provider_dispatch_eligibility(current)
+    if current != initial:
+        raise LifecyclePublicationError("provider dispatch eligibility changed before claim")
+    _require_provider_dispatch_current(initial.key)
+    _publish_provider_dispatch_claim(
+        initial.key, eligibility_evidence_digest=initial.eligibility_evidence_digest,
+        signer_identity=signer_identity, signer=signer,
+    )
+    _require_provider_dispatch_current(initial.key)
+    final = authenticate()
+    if type(final) is ProviderDispatchNoLongerRequired:
+        return ProviderDispatchResult("REPLACEMENT_NO_LONGER_REQUIRED", None, 0)
+    _require_provider_dispatch_eligibility(final)
+    if final != initial:
+        raise LifecyclePublicationError("provider dispatch eligibility changed after claim")
+    response_id: int | None = None
+    try:
+        response_id = write(PROVIDER_DISPATCH_TRIGGERS[initial.key.review_type])
+    except AmbiguousProviderDispatchWrite:
+        response_id = None
+    if response_id is not None:
+        authority._require_positive_int(response_id, "replacement comment ID")
+    try:
+        result = reconcile(initial.key, response_id)
+    except ProviderDispatchHistoryUnavailable:
+        return ProviderDispatchResult("INCOMPLETE_UNKNOWN_WRITE_RESULT", None, 1)
+    if type(result) is not ProviderDispatchReconciliation:
+        raise LifecyclePublicationError("replacement reconciliation is not authenticated")
+    if result.replacement_count == 0 and result.replacement_comment_database_id is None:
+        return ProviderDispatchResult("INCOMPLETE_UNKNOWN_WRITE_RESULT", None, 1)
+    if (
+        result.replacement_count != 1
+        or type(result.replacement_comment_database_id) is not int
+        or result.replacement_comment_database_id <= 0
+        or response_id is not None
+        and response_id != result.replacement_comment_database_id
+    ):
+        raise LifecyclePublicationError("replacement request history is duplicate or invalid")
+    return ProviderDispatchResult(
+        "DISPATCH_PERSISTED", result.replacement_comment_database_id, 1,
+    )
+
+
+def execute_provider_dispatch_with_claim(
+    repository: str, delivery_issue: int, review_type: str, *,
+    signer_identity: str, signer: authority.Signer,
+) -> ProviderDispatchResult:
+    """Dispatch only through the maintained complete fallback verifier.
+
+    The #1053 consumer supplies that verifier and its transport functions. Until
+    they are accepted, this entry point fails closed before claiming or posting.
+    """
+
+    repository = authority._require_repository(repository)
+    delivery_issue = authority._require_positive_int(
+        delivery_issue, "provider dispatch issue"
+    )
+    if review_type not in PROVIDER_DISPATCH_TRIGGERS:
+        raise LifecyclePublicationError("provider dispatch review type is invalid")
+    try:
+        from . import provider_fallback
+    except ImportError as exc:
+        raise LifecyclePublicationError(
+            "maintained provider fallback verifier is unavailable"
+        ) from exc
+    authenticate = getattr(provider_fallback, "authenticate_claim_eligibility", None)
+    write = getattr(provider_fallback, "write_claimed_replacement", None)
+    reconcile = getattr(provider_fallback, "reconcile_claimed_replacement", None)
+    if any(not callable(value) for value in (authenticate, write, reconcile)):
+        raise LifecyclePublicationError(
+            "maintained provider fallback verifier is unavailable"
+        )
+
+    def observe() -> ProviderDispatchEligibility | ProviderDispatchNoLongerRequired:
+        result = authenticate(repository, delivery_issue, review_type)
+        if type(result) is ProviderDispatchEligibility and (
+            result.key.repository != repository
+            or result.key.delivery_issue != delivery_issue
+            or result.key.review_type != review_type
+        ):
+            raise LifecyclePublicationError("maintained provider fallback scope changed")
+        return result
+
+    return _execute_provider_dispatch_with_claim(
+        observe,
+        lambda body: write(repository, delivery_issue, review_type, body),
+        lambda key, response_id: reconcile(key, response_id),
+        signer_identity=signer_identity, signer=signer,
+    )
 
 
 def require_unenrolled_delivery(repository: str, delivery_issue: int) -> None:
