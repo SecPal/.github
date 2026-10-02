@@ -112,7 +112,7 @@ def config() -> dict[str, Any]:
         "signature_policy": {
             "require_github_verified": True,
             "require_local_verified": True,
-            "accepted_formats": ["ssh", "openpgp"],
+            "accepted_formats": ["ssh"],
         },
         "check_policy": {
             "require_ruleset_evidence": True,
@@ -1582,7 +1582,7 @@ class SignatureAndCheckTests(unittest.TestCase):
         value = review.interpret_local_signature(0, 'Good "git" signature for user with ED25519 key')
         self.assertEqual((value["state"], value["format"]), ("valid", "ssh"))
 
-    def test_33_valid_openpgp_signature(self) -> None:
+    def test_33_historical_openpgp_signature_parser(self) -> None:
         value = review.interpret_local_signature(0, "gpg: Good signature from user")
         self.assertEqual((value["state"], value["format"]), ("valid", "openpgp"))
 

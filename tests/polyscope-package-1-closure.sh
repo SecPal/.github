@@ -63,6 +63,9 @@ def write_valid_instructions(root: pathlib.Path, repo_name: str | None = None) -
         "# Test Runtime Instructions\n\n"
         "## Scope and Safety\n\n"
         "- Preserve existing work.\n"
+        "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
+        "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
+        "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
     )
     root.joinpath(".github", "copilot-instructions.md").write_text(
         "<!--\n"

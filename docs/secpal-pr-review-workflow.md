@@ -39,10 +39,14 @@ The production registry explicitly supports:
 - `SecPal/frontend`
 - `SecPal/contracts`
 - `SecPal/android`
-- `SecPal/GuardGuide`
-- `SecPal/guardguide.de`
 - `SecPal/secpal.app`
 - `SecPal/deployment`
+
+This review registry covers seven repositories. The deleted `SecPal/GuardGuide`
+and `SecPal/guardguide.de` repositories are no longer active registry entries.
+Historical evidence mentioning them remains unchanged. The organization-wide
+root `AGENTS.md` governance coverage also includes `SecPal/operations`, for eight
+active baselines; this does not enroll operations in this review helper.
 
 Repository-local `AGENTS.md` and focused instructions remain authoritative.
 Commands in the central registry are argument arrays, never shell strings. Bare
@@ -52,6 +56,35 @@ Shells, executable-dispatch wrappers, and inline interpreter code therefore
 cannot be substituted. Environment-dependent, migration, native-toolchain,
 live-service, and deployment validation is represented by explicit manual gates
 instead of guessed commands.
+
+### API Governance-Only Validation
+
+The API baseline and the canonical work-graph evidence rule permit structural
+evidence for governance-only prose. The registry's closed
+`API_RUNTIME_INSTRUCTIONS` policy implements that evidence class in Complete
+Validation. The helper derives it from the authenticated reviewed base commit
+to the exact final staged tree, including already-published PR commits; the
+caller cannot select it with a skip flag.
+
+Only regular, non-executable changes to `AGENTS.md`, `CONTRIBUTING.md`,
+`.github/copilot-instructions.md`, and the generic
+`.github/instructions/org-shared.instructions.md` qualify. Deletions,
+symlinks, dependency/workflow/PHP changes, unrelated paths, and missing source
+bindings retain the complete application-validation branch: `composer test`
+and `composer analyse`.
+
+The governance branch runs the central instruction validator, Markdown lint
+for the complete allowed surface, and repository REUSE validation using the
+same isolated, bounded executor. No candidate-selected validator or shell
+command is executed. Receipt and attestation registry digests bind this policy;
+their authenticated reviewed-state and candidate-tree bindings determine its
+scope. Manual-gate evidence must identify the actual structural evidence class.
+A successful governance receipt is **not** evidence that the Laravel/Pint or
+PHPStan suites ran or passed. The portable command-set digest identifies the
+validators actually executed. Ordinary attestation verification derives that
+same closed set from the signed digest and registered policy, and commit
+binding independently rechecks the complete base-to-tree scope. Integration
+and recovery validation retain their existing application command sets.
 
 ## Proof validity and preflight
 
@@ -1873,7 +1906,9 @@ to the reviewed state and derives the actual
 delivery signer fingerprint, reads that named thread twice, and signs the
 classification with that same OS-account identity. The disposition creator
 verifies the classification signature and exact live binding and computes its
-digest internally. SSH and OpenPGP are supported.
+digest internally. New SecPal artifacts use SSH signing. OpenPGP verification
+compatibility is limited to immutable historical/provider evidence; it grants
+no new SecPal signing authority.
 
 The source authority may also be a verified current Ready-source recovery for
 the exact unchanged recovered head. In that branch every consumer independently

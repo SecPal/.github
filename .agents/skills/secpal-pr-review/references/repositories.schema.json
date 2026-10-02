@@ -418,6 +418,12 @@
     "repository": {
       "type": "object",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "required": ["governance_only_validation"] },
+          "then": { "properties": { "repository": { "const": "SecPal/api" } } }
+        }
+      ],
       "required": [
         "repository",
         "default_branch",
@@ -451,6 +457,7 @@
         },
         "focused_validation": { "type": "array", "items": { "$ref": "#/$defs/command" } },
         "required_local_validation": { "type": "array", "items": { "$ref": "#/$defs/command" } },
+        "governance_only_validation": { "const": "API_RUNTIME_INSTRUCTIONS" },
         "complete_validation_preparation": {
           "type": "object",
           "additionalProperties": false,

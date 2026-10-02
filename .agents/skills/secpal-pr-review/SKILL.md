@@ -141,8 +141,10 @@ only through `scripts/secpal-resolve-fixed-threads.py` with
 `--late-classification-evidence` and `--late-classification-signature`, and the
 same `--integration-evidence` for a Ready-integration source. The
 resolver independently verifies the same
-final evidence, requires the detached SSH/OpenPGP signer to equal the verified
-delivery signer, and fails closed on any artifact, classification, action,
+final evidence, requires the detached SSH signer to equal the verified
+delivery signer for new SecPal artifacts (historical OpenPGP verification
+compatibility grants no new signing authority), and fails closed on any
+artifact, classification, action,
 head, thread, top-level comment, body, reply, resolved, or outdated-state drift.
 The disposition creator computes the classification-evidence digest from the
 verified canonical classification artifact; caller-provided digests and
@@ -184,9 +186,9 @@ starting:
 - a clean worktree on the current topic branch with its upstream configured;
 - matching local, remote, and PR head OIDs;
 - an open pull request, an understood base, and an exact explained commit set;
-- locally verified SSH or OpenPGP signatures for user-authored commits, as
-  permitted by the repository registry, plus valid GitHub verification metadata
-  when the registry requires it;
+- locally verified SSH signatures for new SecPal user-authored commits, plus
+  valid GitHub verification metadata when the registry requires it; immutable
+  historical/provider verification compatibility grants no OpenPGP authority;
 - GitHub `verified: true`, `reason: valid` metadata for GitHub-generated
   commits; and
 - one canonical stable-feedback read containing no Required Check results.

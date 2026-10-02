@@ -108,6 +108,35 @@ publication_boundary = """- Before creating or editing a PR body, materialize th
   canonical lifecycle-aware `scripts/validate-pull-request-evidence.sh` validator.
 """
 
+review_trigger = """### Initial Automated Review
+
+Apply the [canonical review-acquisition rule](https://github.com/SecPal/.github/blob/main/docs/work-graph-contract.md#531-initial-automated-review).
+These runtime assertions consume that owner; they define no separate lifecycle.
+
+- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`
+- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`
+- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`
+
+"""
+if text.count(review_trigger) != 1:
+    raise SystemExit(1)
+text = text.replace(review_trigger, "", 1)
+
+ssh_signing = """- `SECPAL_SIGNING_FORMAT: SSH`; apply the [canonical signing authority](https://github.com/SecPal/.github/blob/main/docs/work-graph-contract.md#532-signing-authority).
+  Preserve existing SSH keys and signing configuration. GitHub-generated
+  signatures are provider evidence, not SecPal OpenPGP signing authority.
+  Every PR commit must have GitHub `verification.verified == true`."""
+if text.count(ssh_signing) != 1:
+    raise SystemExit(1)
+# Read-only comparison with immutable historical prose, not current authority.
+text = text.replace(
+    ssh_signing,
+    """- All commits must be cryptographically signed. SSH and OpenPGP signatures are
+  both valid; use the user's existing Git signing configuration without
+  changing its format.""",
+    1,
+)
+
 if text.count(overlay) != 1 or text.count(copyright_line) != 1:
     raise SystemExit(1)
 if text.count(publication_boundary) != 1:
@@ -140,6 +169,17 @@ for mutation in \
   if sed "$mutation" "$REPO_ROOT/AGENTS.md" \
     | normalize_agents_instruction_overlays >/dev/null; then
     fail 'missing or weakened PR pre-publication instruction overlay was accepted'
+  fi
+done
+
+# SSH-only local signing and GitHub verification must not be weakened.
+for mutation in \
+  's/SECPAL_SIGNING_FORMAT: SSH/SECPAL_SIGNING_FORMAT: OpenPGP/' \
+  's/verification.verified == true/verification.verified == false/' \
+  's/Preserve existing SSH keys/Replace existing SSH keys/'; do
+  if sed "$mutation" "$REPO_ROOT/AGENTS.md" \
+    | normalize_agents_instruction_overlays >/dev/null; then
+    fail 'missing or weakened SSH signing instruction overlay was accepted'
   fi
 done
 
@@ -472,7 +512,7 @@ while index < len(lines):
             block.append(lines[index])
             index += 1
         joined = " ".join(part.strip() for part in block)
-        if WORK_GRAPH in joined and "work-graph" in joined.casefold():
+        if WORK_GRAPH in joined and "work-graph" in joined.replace(WORK_GRAPH, "").casefold():
             rewritten.append(f"- Licensing policy follows `{WORK_GRAPH}`.")
             replacements += 1
         else:
@@ -930,8 +970,12 @@ jq -e '
 
 git -C "$REPO_ROOT" cat-file -e "$P21_BASELINE^{commit}" 2>/dev/null \
   || fail "accepted P2.1 baseline commit is unavailable: $P21_BASELINE"
-cmp "$EVIDENCE" <(git -C "$REPO_ROOT" show "$P21_BASELINE:scripts/secpal-pr-review.py") \
-  || fail 'accepted P2.1 evidence helper changed'
+# Preserve the immutable helper byte lock except the explicitly authorized
+# current SSH-only default. PGP parsers/history verification remain unchanged.
+cmp "$EVIDENCE" <(
+  git -C "$REPO_ROOT" show "$P21_BASELINE:scripts/secpal-pr-review.py" \
+    | sed 's/"accepted_formats": \["ssh", "openpgp"\]/"accepted_formats": ["ssh"]/'
+) || fail 'accepted P2.1 helper changed beyond the current SSH-only policy'
 
 test ! -e "$REPO_ROOT/.github/workflows/secpal-pr-review.yml" || fail 'skill must not run automatically'
 test ! -e "$REPO_ROOT/.github/workflows/secpal-pr-review.yaml" || fail 'skill must not run automatically'
@@ -1015,8 +1059,7 @@ assert fast_schema["$defs"]["operation"]["properties"]["kind"] == {
 
 expected = [
     "SecPal/.github", "SecPal/api", "SecPal/frontend", "SecPal/contracts",
-    "SecPal/android", "SecPal/GuardGuide",
-    "SecPal/guardguide.de", "SecPal/secpal.app",
+    "SecPal/android", "SecPal/secpal.app",
     "SecPal/deployment",
 ]
 assert [item["repository"] for item in registry["repositories"]] == expected
@@ -1450,7 +1493,7 @@ assert not any(
 assert frontend["signature_policy"] == {
     "require_github_verified": True,
     "require_local_verified": True,
-    "accepted_formats": ["ssh", "openpgp"],
+    "accepted_formats": ["ssh"],
 }, "SecPal/frontend signature policy must remain strict"
 assert frontend["check_policy"] == {
     "require_ruleset_evidence": True,
@@ -1548,7 +1591,7 @@ for required_text in (
 assert deployment["signature_policy"] == {
     "require_github_verified": True,
     "require_local_verified": True,
-    "accepted_formats": ["ssh", "openpgp"],
+    "accepted_formats": ["ssh"],
 }, "SecPal/deployment signature policy must remain strict"
 assert deployment["check_policy"] == {
     "require_ruleset_evidence": True,

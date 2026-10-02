@@ -364,7 +364,7 @@ def verified_validation_evidence(
     registry = {
         "default_branch": "main",
         "manual_gates": [],
-        "signature_policy": {"accepted_formats": ["ssh", "openpgp"]},
+        "signature_policy": {"accepted_formats": ["ssh"]},
         "validation": [],
     }
     integration = None
