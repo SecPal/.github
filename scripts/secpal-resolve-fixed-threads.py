@@ -302,16 +302,19 @@ def _load_exact_prerequisite_helpers() -> tuple[Any, Any]:
         from secpal_pr_review import unchanged_head_prerequisite_evidence as detached
     finally:
         sys.path[:] = original_sys_path
+    if (
+        sys.modules.get("secpal_pr_review.unchanged_head_prerequisite") is not source
+        or sys.modules.get("secpal_pr_review.unchanged_head_prerequisite_evidence")
+        is not detached
+    ):
+        raise ResolutionError("exact prerequisite helper was substituted")
     for module, name in (
         (source, "unchanged_head_prerequisite.py"),
         (detached, "unchanged_head_prerequisite_evidence.py"),
     ):
-        if (
-            sys.modules.get(f"secpal_pr_review.{name.removesuffix('.py')}") is not module
-            or Path(module.__file__).resolve() != (
+        if Path(module.__file__).resolve() != (
             REPOSITORY_ROOT / "scripts/secpal_pr_review" / name
-            ).resolve()
-        ):
+        ).resolve():
             raise RuntimeError("exact prerequisite helper path is invalid")
     return source, detached
 

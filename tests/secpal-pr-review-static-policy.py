@@ -1438,10 +1438,6 @@ SAFE_SYS_MODULES_CALLS = {
             "sys.modules.get('secpal_pr_review.unchanged_head_prerequisite_evidence')",
         ),
         DynamicImportCall(
-            ("_load_exact_prerequisite_helpers",),
-            "sys.modules.get(f\"secpal_pr_review.{name.removesuffix('.py')}\")",
-        ),
-        DynamicImportCall(
             ("_load_evidence_helper",),
             "sys.modules.get('secpal_pr_review_evidence_shared')",
         ),
