@@ -1359,12 +1359,37 @@ def load_validation_evidence(
             "validation evidence eligibility digest is missing or malformed"
         )
     try:
+        command_set = fast_path.validation_commands_for_evidence(
+            registry_binding, payload
+        )
+        if command_set == fast_path.governance_validation_commands():
+            base_sha = reviewed.payload.get("base_sha") if reviewed.payload else None
+            tree_sha = payload.get("validated_tree_sha")
+            if (
+                not isinstance(base_sha, str) or not OID.fullmatch(base_sha)
+                or not isinstance(tree_sha, str) or not OID.fullmatch(tree_sha)
+            ):
+                raise ResolutionError("governance validation scope is unavailable")
+            root = repository_root.resolve(strict=True)
+            if (
+                _run_git(root, ("cat-file", "-t", base_sha)).stdout.strip() != "commit"
+                or _run_git(root, ("cat-file", "-t", tree_sha)).stdout.strip() != "tree"
+            ):
+                raise ResolutionError("governance validation scope is unavailable")
+            raw = _run_git(
+                root, ("diff", "--no-ext-diff", "--no-renames", "--raw", "-z",
+                       base_sha, tree_sha),
+            ).stdout
+            if not fast_path.governance_tree_delta_allowed(
+                registry_binding, base_sha, tree_sha, raw,
+            ):
+                raise ResolutionError("governance validation scope is invalid")
         receipt = fast_path.create_validation_receipt(
             repository=repository,
             head_sha=reviewed.head_sha,
             validated_tree_sha=payload.get("validated_tree_sha"),
             registry=registry_binding,
-            command_set=registry_binding["validation"],
+            command_set=command_set,
             successful_result=True,
             reviewed_state=reviewed,
             manual_gate_evidence=payload.get("manual_gate_evidence"),
@@ -1380,7 +1405,7 @@ def load_validation_evidence(
             repository=repository,
             head_sha=expected_head.lower(),
             registry=registry_binding,
-            command_set=registry_binding["validation"],
+            command_set=command_set,
             successful_result=True,
             reviewed_state=reviewed,
             validation_receipt=receipt,

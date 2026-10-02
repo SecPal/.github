@@ -6479,6 +6479,40 @@ def governance_validation_commands() -> list[dict[str, Any]]:
     ]
 
 
+def governance_tree_delta_allowed(
+    registry: dict[str, Any],
+    base_sha: Any,
+    tree_sha: Any,
+    raw_diff: Any,
+) -> bool:
+    """Classify the complete base-to-tree delta for the closed API policy."""
+    if (
+        registry.get("repository") != "SecPal/api"
+        or registry.get("governance_only_validation") != "API_RUNTIME_INSTRUCTIONS"
+        or not isinstance(base_sha, str) or not OID.fullmatch(base_sha)
+        or not isinstance(tree_sha, str) or not OID.fullmatch(tree_sha)
+        or not isinstance(raw_diff, str)
+    ):
+        return False
+    allowed = {
+        "AGENTS.md", "CONTRIBUTING.md", ".github/copilot-instructions.md",
+        ".github/instructions/org-shared.instructions.md",
+    }
+    records = raw_diff.split("\0")
+    if records[-1] != "" or not 2 <= len(records) - 1 <= 2 * len(allowed):
+        return False
+    for index in range(0, len(records) - 1, 2):
+        metadata, path = records[index:index + 2]
+        fields = metadata.split()
+        if (
+            len(fields) != 5 or fields[0] not in {":100644", ":000000"}
+            or fields[1] != "100644" or fields[4] not in {"A", "M"}
+            or path not in allowed
+        ):
+            return False
+    return True
+
+
 def validation_commands_for_evidence(
     registry: dict[str, Any], evidence_value: dict[str, Any],
 ) -> list[dict[str, Any]]:
