@@ -25,6 +25,112 @@ sys.modules[SPEC.name] = actions
 SPEC.loader.exec_module(actions)
 
 
+class DeploymentIntegrationPolicyTests(TestCase):
+    def setUp(self) -> None:
+        self.registry = actions.load_registry()
+        self.entry = actions.select_repository(self.registry, "SecPal/deployment")
+        self.arguments = SimpleNamespace(
+            apply=True, receipt_output="unused-receipt",
+            attestation_output="unused-attestation", commit_subject="test admission",
+            repo_root=str(ROOT), repo="SecPal/deployment", registry=None,
+            evidence="unused-evidence", pr=286, delivery_issue=81,
+            authorization_id="deployment-81-001", expected_signer=SIGNER,
+        )
+
+    def test_deployment_policy_and_maintained_projections_agree(self) -> None:
+        expected = registry()["pre_enrollment_integration_policy"]
+        self.assertEqual(self.entry["pre_enrollment_integration_policy"], expected)
+        resolver_spec = importlib.util.spec_from_file_location(
+            "deployment_policy_resolver", ROOT / "scripts/secpal-resolve-fixed-threads.py"
+        )
+        assert resolver_spec is not None and resolver_spec.loader is not None
+        resolver = importlib.util.module_from_spec(resolver_spec)
+        sys.modules[resolver_spec.name] = resolver
+        resolver_spec.loader.exec_module(resolver)
+        binding = fast_path.validation_registry_projection(self.entry)
+        self.assertEqual(binding["pre_enrollment_integration_policy"], expected)
+        self.assertEqual(actions._fast_registry_binding(self.entry), binding)
+        self.assertEqual(resolver._validation_registry_binding(self.entry), binding)
+        self.assertIn("BRANCH_WRITE", self.entry["unsupported_operations"])
+        admitted = {
+            entry["repository"] for entry in self.registry["repositories"]
+            if "pre_enrollment_integration_policy" in entry
+        }
+        self.assertEqual(admitted, {"SecPal/.github", "SecPal/deployment"})
+        self.assertEqual(
+            actions.select_repository(self.registry, "SecPal/.github")[
+                "pre_enrollment_integration_policy"
+            ], expected,
+        )
+
+    def test_executor_admits_exact_deployment_selection_before_tree_validation(self) -> None:
+        binding = actions._fast_registry_binding(self.entry)
+        selected = evidence()
+        selected.update(repository="SecPal/deployment", delivery_issue=81, pull_request=286)
+        authorization = integration.create_authorization(
+            authorization_id=self.arguments.authorization_id,
+            repository=self.arguments.repo, delivery_issue=81, pull_request=286,
+            draft_head_sha=PARENT_1, current_main_sha=PARENT_2,
+            expected_signer=SIGNER, signer_identity=AUTHORIZER, signer=fake_signer,
+        )
+        selected.update(
+            authorization=authorization,
+            authorization_digest=authorization["authorization_digest"],
+            validation_execution={
+                "registry_digest": fast_path.digest_json(binding),
+                "command_set_digest": fast_path.digest_json(binding["validation"]),
+            },
+        )
+        with (
+            mock.patch.object(actions, "_attestation_local_state", return_value=(PARENT_1, "")),
+            mock.patch.object(actions, "_read_pre_enrollment_json", return_value=selected) as read,
+            mock.patch.object(actions, "_staged_tree", return_value="f" * 40) as tree,
+            mock.patch.object(actions, "_create_signed_pre_enrollment_commit") as candidate,
+            mock.patch.object(actions, "_push_pre_enrollment_commit") as push,
+            self.assertRaisesRegex(actions.fast_path.SecurityBlocker, "staged tree is not the exact authorized integration tree"),
+        ):
+            actions._command_integrate_pre_enrollment_draft(self.arguments)
+        read.assert_called_once()
+        tree.assert_called_once()
+        candidate.assert_not_called()
+        push.assert_not_called()
+
+    def test_missing_or_substituted_policy_fails_before_evidence_or_mutation(self) -> None:
+        mutations = [
+            ("missing", None), ("malformed", []),
+            *[(field, {**registry()["pre_enrollment_integration_policy"], field: value})
+              for field, value in (
+                  ("schema_version", "2.0"), ("force_push", True),
+                  ("automatic_retry", True), ("maximum_candidates", 2),
+                  ("maximum_pushes", 2), ("merge_pull_request", True),
+                  ("command", "push"), ("topology_kind", "TWO_PARENT_READY_INTEGRATION"),
+                  ("allowed_mutation", "BRANCH_WRITE"), ("caller_branch", "arbitrary"),
+              )],
+        ]
+        for name, policy in mutations:
+            with self.subTest(policy=name):
+                fixture = copy.deepcopy(self.registry)
+                entry = next(item for item in fixture["repositories"] if item["repository"] == self.arguments.repo)
+                if policy is None:
+                    entry.pop("pre_enrollment_integration_policy", None)
+                else:
+                    entry["pre_enrollment_integration_policy"] = policy
+                with (
+                    mock.patch.object(actions, "load_registry", return_value=fixture),
+                    mock.patch.object(actions, "_attestation_local_state", return_value=(PARENT_1, "")),
+                    mock.patch.object(actions, "_read_pre_enrollment_json") as read,
+                    mock.patch.object(actions, "_create_signed_pre_enrollment_commit") as candidate,
+                    mock.patch.object(actions, "_push_pre_enrollment_commit") as push,
+                    self.assertRaises((actions.RegistryError, actions.fast_path.SecurityBlocker)),
+                ):
+                    actions._command_integrate_pre_enrollment_draft(self.arguments)
+                read.assert_not_called()
+                candidate.assert_not_called()
+                push.assert_not_called()
+        with self.assertRaisesRegex(actions.RegistryError, "unsupported repository"):
+            actions.select_repository(self.registry, "Other/deployment")
+
+
 class PreEnrollmentIntegrationBoundaryTests(TestCase):
     def test_typed_pre_enrollment_error_is_a_bounded_cli_security_failure(self) -> None:
         with mock.patch.object(

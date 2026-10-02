@@ -4103,6 +4103,7 @@ class RegistryTests(TestCase):
                 "required_local_validation",
                 "signature_policy",
                 "lifecycle_authority_policy",
+                "pre_enrollment_integration_policy",
                 "check_policy",
                 "manual_gates",
                 "unsupported_operations",

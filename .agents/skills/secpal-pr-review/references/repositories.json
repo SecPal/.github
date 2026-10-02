@@ -878,6 +878,17 @@
       "default_branch": "main",
       "allowed_base_repositories": ["SecPal/deployment"],
       "reviewer_identities": [],
+      "pre_enrollment_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-pre-enrollment-draft",
+        "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
+      },
       "focused_validation": [
         {
           "argv": ["./scripts/local-integration.sh"],
