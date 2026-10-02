@@ -141,8 +141,10 @@ only through `scripts/secpal-resolve-fixed-threads.py` with
 `--late-classification-evidence` and `--late-classification-signature`, and the
 same `--integration-evidence` for a Ready-integration source. The
 resolver independently verifies the same
-final evidence, requires the detached SSH/OpenPGP signer to equal the verified
-delivery signer, and fails closed on any artifact, classification, action,
+final evidence, requires the detached SSH signer to equal the verified
+delivery signer for new SecPal artifacts (historical OpenPGP verification
+compatibility grants no new signing authority), and fails closed on any
+artifact, classification, action,
 head, thread, top-level comment, body, reply, resolved, or outdated-state drift.
 The disposition creator computes the classification-evidence digest from the
 verified canonical classification artifact; caller-provided digests and
@@ -152,6 +154,19 @@ for that input shape and read
 [references/late-disposition.schema.json](references/late-disposition.schema.json)
 for the exact artifact shape. This exception consumes no review/remediation
 counter and has no commit, push, CI, Ready, or merge authority.
+
+The exact Issue #1048 unchanged-head external-prerequisite cases are a closed
+member of this late-disposition family, not a general bypass. For only
+`deployment-281` and `operations-51`, use
+`scripts/secpal-create-exact-prerequisite-disposition.py` to reauthenticate the
+original finding, unchanged GitHub-Verified SSH-signed HEAD/TREE, and the exact
+canonical anchor now present on accepted `.github/main`. Its detached SSH
+classification and schema-1.8 disposition bind the authenticated source digest
+and the one named thread. The resolver's `--exact-prerequisite-case` mode accepts
+only that exact signed tuple and repeats the source and thread checks before its
+single named resolution. It grants no commit, push, CI, Ready, review,
+remediation, counter, or merge authority; it does not substitute for ordinary
+commit-bound eligibility or apply to another finding.
 
 For a historical schema-1.1 Ready integration, supply its exact original
 validation receipt as `--final-validation-receipt` to both producers and as
@@ -184,9 +199,9 @@ starting:
 - a clean worktree on the current topic branch with its upstream configured;
 - matching local, remote, and PR head OIDs;
 - an open pull request, an understood base, and an exact explained commit set;
-- locally verified SSH or OpenPGP signatures for user-authored commits, as
-  permitted by the repository registry, plus valid GitHub verification metadata
-  when the registry requires it;
+- locally verified SSH signatures for new SecPal user-authored commits, plus
+  valid GitHub verification metadata when the registry requires it; immutable
+  historical/provider verification compatibility grants no OpenPGP authority;
 - GitHub `verified: true`, `reason: valid` metadata for GitHub-generated
   commits; and
 - one canonical stable-feedback read containing no Required Check results.

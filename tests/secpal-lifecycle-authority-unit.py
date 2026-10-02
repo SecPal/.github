@@ -287,7 +287,7 @@ def authenticated_external_evidence(
         verified_commit = fast_path.verify_commit_signatures(
             [commit],
             {
-                "accepted_formats": ["ssh", "openpgp"],
+                "accepted_formats": ["ssh"],
                 "require_github_verified": True,
             },
         )[0]
@@ -321,7 +321,7 @@ def authenticated_external_evidence(
         authority,
         "_load_delivery_signature_policy",
         return_value={
-            "accepted_formats": ["ssh", "openpgp"],
+            "accepted_formats": ["ssh"],
             "require_github_verified": True,
         },
     ):

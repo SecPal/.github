@@ -300,6 +300,49 @@ FAST_PATH_CALLS = (*FAST_PATH_CALLS,
 RESOLVER_CALLS = (
     ProcessCall(
         None,
+        "_verify_exact_helper_source",
+        "[executable, 'ls-tree', 'HEAD', '--', relative]",
+        "",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("cwd", "REPOSITORY_ROOT"),
+            ("encoding", "'utf-8'"),
+            ("env", "evidence.command_environment('git')"),
+            ("errors", "'replace'"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("text", "True"),
+            ("timeout", "30"),
+        ),
+    ),
+    ProcessCall(
+        None,
+        "_run_exact_prerequisite_get",
+        "[executable, 'api', '--hostname', 'github.com', endpoint]",
+        "",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("env", "evidence.command_environment('gh')"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("timeout", "30"),
+        ),
+    ),
+    ProcessCall(
+        None,
+        "_verify_exact_prerequisite_ssh_signature",
+        "[executable, '-Y', 'check-novalidate', '-n', 'git', '-s', str(signature_path)]",
+        "",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("env", "late_disposition.signing_environment()"),
+            ("input", "payload.encode('utf-8')"),
+            ("timeout", "30"),
+        ),
+    ),
+    ProcessCall(
+        None,
         "_run_gh",
         "executable",
         "arguments",
@@ -565,6 +608,9 @@ ALLOWED_IMPORTS = {
         "import stat",
         "import subprocess",
         "import sys",
+        "import tempfile",
+        "from secpal_pr_review import unchanged_head_prerequisite as source",
+        "from secpal_pr_review import unchanged_head_prerequisite_evidence as detached",
         "from dataclasses import dataclass",
         "from enum import Enum",
         "from pathlib import Path",
@@ -708,6 +754,7 @@ DIRECT_MODULE_ATTRIBUTES = {
         "importlib": {"util"},
         "operator": {"attrgetter"},
         "sys": {"argv", "modules", "path", "stderr"},
+        "tempfile": {"TemporaryDirectory"},
     },
     "late_disposition.py": {
         "errno": {"EINVAL", "ENOTSUP"},
@@ -771,6 +818,8 @@ LOADED_MODULE_ATTRIBUTES = {
             "canonical_json_bytes",
             "create_validation_attestation",
             "create_validation_receipt",
+            "governance_tree_delta_allowed",
+            "governance_validation_commands",
             "create_ready_integration_attestation",
             "digest_json",
             "execute_resolution_batch",
@@ -915,6 +964,8 @@ LOADED_MODULE_ATTRIBUTES = {
             "read_signing_configuration",
             "sign_artifact",
             "signer_from_git_verification",
+            "_trusted_executable",
+            "signing_environment",
             "disposition_schema_version_for_decision",
             "schema_version_for_decision",
         },
@@ -1379,6 +1430,14 @@ SAFE_SYS_MODULES_CALLS = {
     },
     "secpal-resolve-fixed-threads.py": {
         DynamicImportCall(
+            ("_load_exact_prerequisite_helpers",),
+            "sys.modules.get('secpal_pr_review.unchanged_head_prerequisite')",
+        ),
+        DynamicImportCall(
+            ("_load_exact_prerequisite_helpers",),
+            "sys.modules.get('secpal_pr_review.unchanged_head_prerequisite_evidence')",
+        ),
+        DynamicImportCall(
             ("_load_evidence_helper",),
             "sys.modules.get('secpal_pr_review_evidence_shared')",
         ),
@@ -1539,6 +1598,16 @@ SAFE_SYS_MODULES_STORES = {
     },
 }
 RESOLVER_TOP_LEVEL_FUNCTIONS = {
+    "_verify_exact_helper_source",
+    "_load_exact_prerequisite_helpers",
+    "_ensure_exact_prerequisite_helpers",
+    "_run_exact_prerequisite_get",
+    "_exact_prerequisite_git_text",
+    "_verify_exact_prerequisite_ssh_signature",
+    "_exact_prerequisite_case",
+    "_authenticate_exact_prerequisite",
+    "create_exact_prerequisite_late_evidence",
+    "resolve_exact_prerequisite_late_thread",
     "_body_digest",
     "_canonical_json_bytes",
     "_consume_api_call",
@@ -1616,6 +1685,13 @@ RESOLVER_CLASS_SHAPES = {
     "ValidationEvidence": ClassShape((), (), ("dataclass(frozen=True)",)),
 }
 SAFE_RESOLVER_FUNCTION_REFERENCES = {
+    DynamicImportCall(("_run_exact_prerequisite_get",), "_reject_nonfinite_json_constant"),
+    DynamicImportCall(("_run_exact_prerequisite_get",), "_reject_duplicate_json_object"),
+    DynamicImportCall(("create_exact_prerequisite_late_evidence",), "_run_gh"),
+    DynamicImportCall(("resolve_exact_prerequisite_late_thread",), "_run_gh"),
+    DynamicImportCall(("_authenticate_exact_prerequisite",), "_run_exact_prerequisite_get"),
+    DynamicImportCall(("_authenticate_exact_prerequisite",), "_exact_prerequisite_git_text"),
+    DynamicImportCall(("_authenticate_exact_prerequisite",), "_verify_exact_prerequisite_ssh_signature"),
     DynamicImportCall(
         ("load_reviewed_state",),
         "_reject_nonfinite_json_constant",
@@ -1718,6 +1794,12 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
     ),
 }
 RESOLVER_LOOP_SITES = {
+    LoopSite("for", ("_load_exact_prerequisite_helpers",), "((source, 'unchanged_head_prerequisite.py'), (detached, 'unchanged_head_prerequisite_evidence.py'))"),
+    LoopSite("comprehension", ("_ensure_exact_prerequisite_helpers",), "source.CASES.values()"),
+    LoopSite("comprehension", ("_ensure_exact_prerequisite_helpers",), "(case.pr_endpoint, case.commits_endpoint, case.commit_endpoint, case.comment_endpoint, case.agents_endpoint)"),
+    LoopSite("comprehension", ("parse_args",), "forbidden"),
+    LoopSite("comprehension", ("parse_args",), "(arguments.late_disposition_evidence, arguments.late_disposition_signature, arguments.late_classification_evidence, arguments.late_classification_signature)"),
+    LoopSite("comprehension", ("resolve_exact_prerequisite_late_thread",), "target.thread.comments"),
     LoopSite(
         "comprehension",
         ("_load_qualified_remediation_successor_validation",),

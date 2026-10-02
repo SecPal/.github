@@ -1698,6 +1698,121 @@ def ordinary_ready_provider_growth() -> tuple[
     return reviewed, current, predecessor_eligibility, eligibility
 
 
+def multi_provider_ready_growth() -> tuple[
+    fast_path.StableFeedbackState,
+    fast_path.StableFeedbackState,
+    dict[str, object],
+    dict[str, object],
+    str,
+]:
+    """Model the two actual H1 review providers and four parented findings."""
+
+    reviewed, current, predecessor_eligibility, eligibility = (
+        ordinary_ready_provider_growth()
+    )
+    reviewed.head_sha = "ff85970362d3cd889e6418ba34b69930506e9b0d"
+    current.head_sha = "79f0467d70ec0933f063fb3587144b49483bfefd"
+    reviewed.pull_request_number = current.pull_request_number = 1041
+    summary = (
+        '<!-- codex-pull-request-review-summary -->\n'
+        '<!-- codex-security-review:v1 {"headSha":"'
+        + current.head_sha
+        + '","pullRequestNumber":1041,"repository":"SecPal/.github",'
+        '"status":"completed"} -->\n'
+        '| Review | Status | Commit | Review trigger |\n'
+        '| --- | --- | --- | --- |\n'
+        '| 📝 **Code Review** | **Completed** | `79f0467` | Ready |\n'
+        '| 🔒 **Security Review** | **Completed** | `79f0467` | Ready |'
+    )
+    summary_id = current.feedback["conversation_comments"][0]["node_id"]
+    current.feedback["conversation_comments"][0].update(
+        body_digest=fast_path.digest_text(summary),
+        updated_at="2026-10-01T16:25:59Z",
+    )
+    current.feedback["provider_review_requests"][0]["created_at"] = (
+        "2026-10-01T16:16:20Z"
+    )
+    copilot = copy.deepcopy(fast_path.COPILOT_REVIEW_PROVIDER)
+    codex = {
+        "login": fast_path.CODEX_PROVIDER_LOGIN,
+        "node_id": "BOT_kgDOC98s_g",
+        "database_id": 199175422,
+    }
+    review_specs = (
+        ("PRR_kwDOQFR1MM8AAAABQM7SJA", 5382263332, copilot, "2026-10-01T16:21:50Z"),
+        ("PRR_kwDOQFR1MM8AAAABQM8Q6g", 5382279402, codex, "2026-10-01T16:23:11Z"),
+    )
+    current.feedback["reviews"] = [
+        {
+            "node_id": review_id,
+            "body_digest": fast_path.digest_text(review_id),
+            "actor": actor,
+            "state": "COMMENTED",
+            "commit_oid": current.head_sha,
+            "submitted_at": submitted_at,
+            "reactions": [],
+        }
+        for review_id, database_id, actor, submitted_at in review_specs
+    ]
+    findings = (
+        ("PRRT_kwDOQFR1MM6oCOfs", "PRRC_kwDOQFR1MM730xZk", 0),
+        ("PRRT_kwDOQFR1MM6oCQoX", "PRRC_kwDOQFR1MM7300qJ", 1),
+        ("PRRT_kwDOQFR1MM6oCQof", "PRRC_kwDOQFR1MM7300qQ", 1),
+        ("PRRT_kwDOQFR1MM6oCQos", "PRRC_kwDOQFR1MM7300qh", 1),
+    )
+    current.feedback["threads"] = [current.feedback["threads"][0]] + [
+        {
+            "node_id": thread_id,
+            "is_resolved": False,
+            "is_outdated": False,
+            "comments": [
+                {
+                    "node_id": comment_id,
+                    "body_digest": fast_path.digest_text(comment_id),
+                    "actor": copy.deepcopy(review_specs[review_index][2]),
+                    "review_id": review_specs[review_index][0],
+                    "reply_to_id": None,
+                    "reactions": [],
+                }
+            ],
+        }
+        for thread_id, comment_id, review_index in findings
+    ]
+    reviewed.refresh_digests()
+    current.refresh_digests()
+    current.review_database_ids = [
+        {"node_id": review_id, "database_id": database_id}
+        for review_id, database_id, _actor, _submitted_at in review_specs
+    ]
+    predecessor_eligibility.update(
+        pull_request_number=1041,
+        reviewed_head_sha=reviewed.head_sha,
+        reviewed_state_digest=reviewed.state_digest,
+    )
+    eligibility.update(
+        pull_request_number=1041,
+        reviewed_head_sha=current.head_sha,
+        reviewed_state_digest=current.state_digest,
+        eligible_threads=[
+            {
+                "thread_id": thread_id,
+                "classification": "VALID_ACTIONABLE",
+                "disposition": "CORRECTED_AND_VERIFIED",
+                "finding_ids": [comment_id],
+                "evidence_digest": f"{index:x}" * 64,
+                "follow_up": None,
+            }
+            for index, (thread_id, comment_id, _review_index) in enumerate(
+                findings, 1
+            )
+        ],
+    )
+    assert summary_id in {
+        item["node_id"] for item in reviewed.feedback["conversation_comments"]
+    }
+    return reviewed, current, predecessor_eligibility, eligibility, summary
+
+
 def _provider_terminal_summary(head_sha: str) -> str:
     return (
         "<!-- codex-pull-request-review-summary -->\n"
@@ -1828,6 +1943,180 @@ def _provider_feedback_response(
         }
     }
 class LifecycleOrchestrationTests(TestCase):
+    def test_review_database_observation_preserves_historical_feedback_digest(
+        self,
+    ) -> None:
+        _reviewed, current, _predecessor, _eligibility = (
+            ordinary_ready_provider_growth()
+        )
+        enriched = copy.deepcopy(current.feedback)
+        enriched["reviews"][0]["database_id"] = 5382263332
+        replayed = fast_path.StableFeedbackState(
+            repository=current.repository,
+            pull_request_number=current.pull_request_number,
+            head_sha=current.head_sha,
+            base_ref=current.base_ref,
+            base_sha=current.base_sha,
+            pr_state=current.pr_state,
+            feedback=enriched,
+        )
+        self.assertEqual(replayed.feedback_digest, current.feedback_digest)
+        self.assertEqual(replayed.state_digest, current.state_digest)
+
+    def test_multi_provider_ready_growth_binds_four_h1_findings(self) -> None:
+        reviewed, current, predecessor_eligibility, eligibility, summary = (
+            multi_provider_ready_growth()
+        )
+        verified = fast_path.verify_ordinary_ready_remediation_provider_growth(
+            reviewed,
+            current,
+            provider_head_sha=reviewed.head_sha,
+            predecessor_eligibility_evidence=predecessor_eligibility,
+            eligibility_evidence=eligibility,
+            provider_summary_body=summary,
+            review_database_ids=current.review_database_ids,
+        )
+        self.assertEqual(
+            verified.thread_ids,
+            tuple(sorted(item["node_id"] for item in current.feedback["threads"][1:])),
+        )
+        self.assertEqual(len(verified.finding_ids), 4)
+        self.assertEqual(len(verified.provider_review_bindings), 2)
+        self.assertEqual(len(verified.source_bindings), 8)
+        self.assertRegex(verified.growth_digest, r"^[0-9a-f]{64}$")
+        repeated = fast_path.verify_ordinary_ready_remediation_provider_growth(
+            reviewed,
+            current,
+            provider_head_sha=reviewed.head_sha,
+            predecessor_eligibility_evidence=predecessor_eligibility,
+            eligibility_evidence=eligibility,
+            provider_summary_body=summary,
+            review_database_ids=current.review_database_ids,
+        )
+        self.assertEqual(verified.growth_digest, repeated.growth_digest)
+
+    def test_multi_provider_ready_growth_rejects_unbound_sources(self) -> None:
+        def reject(label, mutate):
+            reviewed, current, predecessor_eligibility, eligibility, summary = (
+                multi_provider_ready_growth()
+            )
+            with self.subTest(label=label), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                replacement = mutate(reviewed, current, eligibility, summary)
+                if replacement is not None:
+                    summary = replacement
+                reviewed.refresh_digests()
+                current.refresh_digests()
+                predecessor_eligibility["reviewed_state_digest"] = reviewed.state_digest
+                eligibility["reviewed_state_digest"] = current.state_digest
+                fast_path.verify_ordinary_ready_remediation_provider_growth(
+                    reviewed,
+                    current,
+                    provider_head_sha=reviewed.head_sha,
+                    predecessor_eligibility_evidence=predecessor_eligibility,
+                    eligibility_evidence=eligibility,
+                    provider_summary_body=summary,
+                    review_database_ids=current.review_database_ids,
+                )
+
+        def review(current, index):
+            return current.feedback["reviews"][index]
+
+        def thread(current, index):
+            return current.feedback["threads"][index + 1]
+
+        cases = (
+            ("mixed H0/H1 reviews", lambda r, c, e, s: review(c, 1).update(commit_oid=r.head_sha)),
+            ("unknown provider", lambda r, c, e, s: review(c, 1).update(actor={"login": "unknown", "node_id": "BOT_UNKNOWN", "database_id": 10})),
+            ("cross-PR review", lambda r, c, e, s: setattr(c, "pull_request_number", 1042)),
+            ("stale review", lambda r, c, e, s: review(c, 0).update(commit_oid="7" * 40)),
+            ("duplicate review node", lambda r, c, e, s: review(c, 1).update(node_id=review(c, 0)["node_id"])),
+            ("missing review database identity", lambda r, c, e, s: c.review_database_ids.__delitem__(-1)),
+            ("duplicate review database identity", lambda r, c, e, s: c.review_database_ids[1].update(database_id=c.review_database_ids[0]["database_id"])),
+            ("invented review database identity", lambda r, c, e, s: c.review_database_ids.append({"node_id": "PRR_INVENTED", "database_id": 1})),
+            ("omitted qualifying review", lambda r, c, e, s: c.feedback["reviews"].pop()),
+            ("caller-invented review", lambda r, c, e, s: c.feedback["reviews"].append({**copy.deepcopy(review(c, 1)), "node_id": "PRR_CALLER_INVENTED"})),
+            ("parent outside set", lambda r, c, e, s: thread(c, 1)["comments"][0].update(review_id="PRR_OTHER")),
+            ("Codex attributed to Copilot", lambda r, c, e, s: thread(c, 1)["comments"][0].update(actor=copy.deepcopy(fast_path.COPILOT_REVIEW_PROVIDER))),
+            ("Copilot attributed to Codex", lambda r, c, e, s: thread(c, 0)["comments"][0].update(actor=copy.deepcopy(review(c, 1)["actor"]))),
+            ("duplicate thread", lambda r, c, e, s: thread(c, 3).update(node_id=thread(c, 2)["node_id"])),
+            ("duplicate finding", lambda r, c, e, s: thread(c, 3)["comments"][0].update(node_id=thread(c, 2)["comments"][0]["node_id"])),
+            ("missing terminal summary", lambda r, c, e, s: ""),
+            ("nonterminal Code", lambda r, c, e, s: s.replace("📝 **Code Review** | **Completed**", "📝 **Code Review** | **Running**")),
+            ("nonterminal Security", lambda r, c, e, s: s.replace("🔒 **Security Review** | **Completed**", "🔒 **Security Review** | **Running**")),
+            ("predecessor deletion", lambda r, c, e, s: c.feedback["conversation_comments"].pop()),
+            ("unaccounted comment", lambda r, c, e, s: c.feedback["conversation_comments"].append({"node_id": "IC_UNRELATED", "body_digest": "a" * 64, "actor": review(c, 1)["actor"], "updated_at": "2026-10-01T17:00:00Z", "reactions": []})),
+            ("second assessment request", lambda r, c, e, s: c.feedback["provider_review_requests"].append({**copy.deepcopy(c.feedback["provider_review_requests"][0]), "node_id": "RRE_SECOND"})),
+            ("caller finding subset", lambda r, c, e, s: e["eligible_threads"].pop()),
+        )
+        for label, mutate in cases:
+            reject(label, mutate)
+
+    def test_multi_provider_assessment_uses_only_remaining_remediation_slot(self) -> None:
+        reviewed, current, predecessor_eligibility, eligibility, summary = (
+            multi_provider_ready_growth()
+        )
+        lifecycle = current_lifecycle(
+            remediation_cycles=1,
+            head_sha=current.head_sha,
+            pull_request=current.pull_request_number,
+            delivery_issue=1040,
+        )
+        before = copy.deepcopy(lifecycle.state)
+        growth = fast_path.verify_ordinary_ready_remediation_provider_growth(
+            reviewed,
+            current,
+            provider_head_sha=reviewed.head_sha,
+            predecessor_eligibility_evidence=predecessor_eligibility,
+            eligibility_evidence=eligibility,
+            provider_summary_body=summary,
+            review_database_ids=current.review_database_ids,
+        )
+        self.assertEqual(len(growth.provider_review_bindings), 2)
+        self.assertEqual(lifecycle.state, before)
+        after = authority.derive_state(
+            before, "REMEDIATION_COMPLETED", "a" * 64
+        )
+        self.assertEqual(after["unrestricted_review_count"], 1)
+        self.assertEqual(after["remediation_cycle_count"], 2)
+        self.assertTrue(after["ready"])
+
+    def test_one_ready_head_review_still_requires_terminal_provider_context(self) -> None:
+        reviewed, current, predecessor_eligibility, eligibility, summary = (
+            multi_provider_ready_growth()
+        )
+        current.feedback["reviews"] = [
+            item for item in current.feedback["reviews"]
+            if item["actor"] == fast_path.COPILOT_REVIEW_PROVIDER
+        ]
+        current.review_database_ids = [
+            item for item in current.review_database_ids
+            if item["node_id"] == current.feedback["reviews"][0]["node_id"]
+        ]
+        current.feedback["threads"] = current.feedback["threads"][:2]
+        current.refresh_digests()
+        eligibility["eligible_threads"] = eligibility["eligible_threads"][:1]
+        eligibility["reviewed_state_digest"] = current.state_digest
+        verified = fast_path.verify_ordinary_ready_remediation_provider_growth(
+            reviewed,
+            current,
+            provider_head_sha=reviewed.head_sha,
+            predecessor_eligibility_evidence=predecessor_eligibility,
+            eligibility_evidence=eligibility,
+            provider_summary_body=summary,
+            review_database_ids=current.review_database_ids,
+        )
+        self.assertEqual(len(verified.provider_review_bindings), 1)
+        with self.assertRaises(fast_path.SecurityBlocker):
+            fast_path.verify_ordinary_ready_remediation_provider_growth(
+                reviewed,
+                current,
+                provider_head_sha=reviewed.head_sha,
+                predecessor_eligibility_evidence=predecessor_eligibility,
+                eligibility_evidence=eligibility,
+            )
+
     def test_post_capture_provider_growth_authorizes_remaining_ordinary_remediation(
         self,
     ) -> None:
@@ -1847,7 +2136,10 @@ class LifecycleOrchestrationTests(TestCase):
         self.assertEqual(verified.resulting_state_digest, current.state_digest)
         self.assertEqual(len(verified.thread_ids), 4)
         self.assertEqual(len(verified.finding_ids), 4)
-        self.assertRegex(verified.growth_digest, r"^[0-9a-f]{64}$")
+        self.assertEqual(
+            verified.growth_digest,
+            "8ffa6fccfd0ea164225845a4d0dfde46b5ee0f3ec94ffb4433cf6232a507e599",
+        )
 
         current.base_sha = "f" * 40
         current.refresh_digests()
@@ -2135,6 +2427,42 @@ class LifecycleOrchestrationTests(TestCase):
                 predecessor_eligibility_evidence=predecessor_eligibility,
                 eligibility_evidence=eligibility,
             )
+        adopted_binding = replace(
+            provider_binding,
+            remediation_event_digests=(),
+            provider_binding_sources=(
+                publication.EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION,
+            ),
+            adopted_remediation_observation_digest="e" * 64,
+        )
+        with (
+            mock.patch.object(
+                fast_path,
+                "verified_validation_review_context",
+                side_effect=[
+                    (reviewed, fast_path.digest_json(predecessor_eligibility)),
+                    (resulting, fast_path.digest_json(eligibility)),
+                ],
+            ),
+            mock.patch.object(
+                publication,
+                "derive_ready_source_recovery_provider_binding",
+                return_value=adopted_binding,
+            ),
+            mock.patch.object(
+                orchestration,
+                "_capture_current_stable_feedback",
+                return_value=resulting,
+            ),
+        ):
+            adopted = orchestration.verify_ready_remediation_provider_growth_authority(
+                current,
+                predecessor_validation=predecessor_validation,
+                candidate_validation=candidate_validation,
+                predecessor_eligibility_evidence=predecessor_eligibility,
+                eligibility_evidence=eligibility,
+            )
+        self.assertEqual(adopted.provider_head_sha, reviewed.head_sha)
         scope = orchestration.ordinary_ready_remediation_authorization_scope(
             verified
         )
@@ -2741,7 +3069,7 @@ class LifecycleOrchestrationTests(TestCase):
             self.assertEqual(len(current_binding["validation"]), 19)
             self.assertEqual(
                 fast_path.digest_json(current_binding),
-                "0c54567c91ee3cbd4bd17bdcafcc652e5c08aaf330e5ca5b74237b6d93195742",
+                "1eba2d1e50863566937c2625ed212b06ae312b31f0f4912d6f5c8bc59ce69a56",
             )
             self.assertEqual(
                 fast_path.digest_json(current_binding["validation"]),
@@ -6129,6 +6457,12 @@ def create_ready_integration_attestation(normalized, eligibility_bound):
             )
             captured_provider_binding.update(json.loads(binding_path.read_text()))
             output.write_bytes(authority.canonical_json_bytes(reviewed))
+            summary = Path(command[command.index("--capture-provider-summary") + 1])
+            summary.write_bytes(
+                authority.canonical_json_bytes(
+                    {"body": "summary", "review_database_ids": []}
+                )
+            )
             return SimpleNamespace(returncode=0)
 
         with mock.patch.object(
@@ -6145,6 +6479,8 @@ def create_ready_integration_attestation(normalized, eligibility_bound):
         command = call.call_args.args[0]
         options = call.call_args.kwargs
         self.assertEqual(captured.state_digest, reviewed["state_digest"])
+        self.assertEqual(captured.provider_summary_body, "summary")
+        self.assertEqual(captured.review_database_ids, [])
         self.assertIn("-I", command)
         self.assertIn("-B", command)
         root = str(REPO_ROOT.resolve())

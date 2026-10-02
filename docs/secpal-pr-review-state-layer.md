@@ -273,7 +273,9 @@ Each PR commit records two independent observations:
    with the signature format derived from the commit's standard ASCII-armor
    header rather than potentially ambiguous verifier status text.
 
-Valid SSH and OpenPGP signatures are accepted when configuration permits them.
+New SecPal signing authority is SSH only. OpenPGP verification compatibility
+authenticates immutable historical/provider evidence only; it does not permit
+new SecPal OpenPGP signatures.
 The evidence distinguishes `valid`, `invalid`, `unsigned`, `unknown_key`,
 `object_unavailable`, and `verification_pending`. An unknown key is never
 reported as cryptographically verified. A `valid` state requires

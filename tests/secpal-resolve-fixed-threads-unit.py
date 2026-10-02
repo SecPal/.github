@@ -2569,6 +2569,40 @@ class ResolveFixedThreadsTests(TestCase):
         )
 
     def setUp(self) -> None:
+        # Unit history must describe the tested candidate policy, not the
+        # unrelated live checkout's pre-commit HEAD. Production still reads
+        # authenticated immutable central history; no candidate fallback exists.
+        fixture_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(fixture_directory.cleanup)
+        fixture_root = Path(fixture_directory.name)
+        for path, source in (
+            (MODULE.fast_path.DELIVERY_REGISTRY_PATH, MODULE.REGISTRY_PATH),
+            (MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH,
+             MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_PATH),
+        ):
+            target = fixture_root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
+        for arguments in (
+            ["init", "-q"], ["remote", "add", "origin", "https://github.com/SecPal/.github.git"],
+            ["add", "."],
+            ["-c", "commit.gpgsign=false", "-c", "user.name=Fixture",
+             "-c", "user.email=fixture@example.test", "commit", "-qm", "Unit registry history"],
+        ):
+            REAL_SUBPROCESS_RUN(["git", *arguments], cwd=fixture_root, check=True,
+                                capture_output=True, text=True)
+        def fixture_git(repository_root, arguments, *, allow_failure=False):
+            if repository_root != ROOT:
+                raise AssertionError("unexpected central registry fixture root")
+            return REAL_SUBPROCESS_RUN(
+                ["git", *arguments], cwd=fixture_root, check=not allow_failure,
+                capture_output=True, text=True,
+            )
+        fixture_patch = mock.patch.object(
+            sys.modules[__name__], "_current_registry_git", side_effect=fixture_git,
+        )
+        fixture_patch.start()
+        self.addCleanup(fixture_patch.stop)
         self._central_registry_patch = mock.patch.object(
             MODULE.fast_path,
             "_central_git_result",
@@ -11035,6 +11069,116 @@ class ResolveFixedThreadsTests(TestCase):
                     "0" * 64,
                     (thread_id,),
                 )
+
+    def test_api_governance_resolver_reconstructs_executed_commands(self) -> None:
+        payload = reviewed_state_payload("PRRT_GOVERNANCE_COMMANDS", [])
+        stable = MODULE.fast_path.StableFeedbackState.from_payload(payload)
+        reviewed = mock.Mock(
+            head_sha=stable.head_sha,
+            state_digest=stable.state_digest,
+            feedback_digest=stable.feedback_digest,
+            base_sha=stable.base_sha,
+            payload=payload,
+        )
+        binding = MODULE._validation_registry_binding(
+            MODULE._load_repository_entry("SecPal/api")
+        )
+        governance = list(MODULE.fast_path.governance_validation_commands())
+        self.assertNotEqual(governance, binding["validation"])
+        self.assertFalse(any("composer" in item["argv"] for item in governance))
+        gates = [
+            {"gate": gate, "satisfied": True,
+             "evidence": "Governance commands executed; no application PASS claim"}
+            for gate in binding["manual_gates"]
+        ]
+        registry_reader = _current_registry_git
+        scope_path = ["AGENTS.md"]
+        def scoped_git(root, arguments, *, allow_failure=False):
+            if tuple(arguments) == ("cat-file", "-t", stable.base_sha):
+                return subprocess.CompletedProcess(arguments, 0, "commit\n", "")
+            if tuple(arguments) == ("cat-file", "-t", "f" * 40):
+                return subprocess.CompletedProcess(arguments, 0, "tree\n", "")
+            if tuple(arguments) == (
+                "diff", "--no-ext-diff", "--no-renames", "--raw", "-z",
+                stable.base_sha, "f" * 40,
+            ):
+                return subprocess.CompletedProcess(
+                    arguments, 0,
+                    ":100644 100644 0000000 0000000 M\0" + scope_path[0] + "\0",
+                    "",
+                )
+            return registry_reader(root, arguments, allow_failure=allow_failure)
+        scope_patch = mock.patch.object(
+            sys.modules[__name__], "_current_registry_git", side_effect=scoped_git,
+        )
+        scope_patch.start()
+        self.addCleanup(scope_patch.stop)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "attestation.json"
+            for commands in (governance, binding["validation"]):
+                with self.subTest(commands=commands):
+                    receipt = MODULE.fast_path.create_validation_receipt(
+                        repository="SecPal/api", head_sha=stable.head_sha,
+                        validated_tree_sha="f" * 40, registry=binding,
+                        command_set=commands, successful_result=True,
+                        reviewed_state=stable, manual_gate_evidence=gates,
+                        eligibility_evidence_digest="e" * 64,
+                    )
+                    attestation = MODULE.fast_path.create_validation_attestation(
+                        repository="SecPal/api", head_sha="c" * 40,
+                        registry=binding, command_set=commands,
+                        successful_result=True, reviewed_state=stable,
+                        validation_receipt=receipt,
+                    )
+                    path.write_text(json.dumps(attestation), encoding="utf-8")
+                    loaded = load_validation_evidence(
+                        path, "SecPal/api", "c" * 40, reviewed,
+                    )
+                    if commands == governance:
+                        def application_tree(root, arguments, *, allow_failure=False):
+                            if tuple(arguments) == (
+                                "cat-file", "-t", stable.base_sha,
+                            ):
+                                return subprocess.CompletedProcess(arguments, 0, "commit\n", "")
+                            if tuple(arguments) == (
+                                "cat-file", "-t", receipt["validated_tree_sha"],
+                            ):
+                                return subprocess.CompletedProcess(arguments, 0, "tree\n", "")
+                            if tuple(arguments[:5]) == (
+                                "diff", "--no-ext-diff", "--no-renames", "--raw", "-z",
+                            ):
+                                return subprocess.CompletedProcess(
+                                    arguments, 0, ":100644 100644 0000000 0000000 M\0app.php\0", "",
+                                )
+                            return _current_registry_git(root, arguments, allow_failure=allow_failure)
+                        with mock.patch.object(MODULE, "_run_git", side_effect=application_tree):
+                            with self.assertRaisesRegex(MODULE.ResolutionError, "governance.*scope"):
+                                MODULE.load_validation_evidence(
+                                    path, "SecPal/api", "c" * 40, reviewed, repository_root=ROOT,
+                                )
+                    self.assertEqual(loaded.validation_receipt, receipt)
+                    self.assertEqual(loaded.attestation, attestation)
+                    git = FakeGit(
+                        expected_head="c" * 40, reviewed_head=stable.head_sha,
+                        tree=receipt["validated_tree_sha"],
+                        receipt_digest=receipt["receipt_digest"],
+                    )
+                    MODULE.verify_local_fix_commit(
+                        Path(directory), "SecPal/api", "c" * 40,
+                        reviewed, loaded, runner=git,
+                    )
+                    # Replacing the executed commands with the other validation
+                    # class cannot preserve the signed receipt's authority.
+                    substituted = copy.deepcopy(attestation)
+                    other = binding["validation"] if commands == governance else governance
+                    substituted["command_set_digest"] = MODULE._digest_json(other)
+                    substituted["attestation_digest"] = MODULE._digest_json({
+                        key: value for key, value in substituted.items()
+                        if key != "attestation_digest"
+                    })
+                    path.write_text(json.dumps(substituted), encoding="utf-8")
+                    with self.assertRaises(MODULE.ResolutionError):
+                        load_validation_evidence(path, "SecPal/api", "c" * 40, reviewed)
 
     def test_validation_attestation_binds_fix_head_and_reviewed_state(self) -> None:
         thread_id = "PRRT_exampleOne"

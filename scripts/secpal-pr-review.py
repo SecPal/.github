@@ -781,7 +781,7 @@ def default_config(repository: str) -> dict[str, Any]:
         "signature_policy": {
             "require_github_verified": True,
             "require_local_verified": True,
-            "accepted_formats": ["ssh", "openpgp"],
+            "accepted_formats": ["ssh"],
         },
         "check_policy": {
             "require_ruleset_evidence": True,

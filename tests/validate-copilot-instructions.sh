@@ -29,6 +29,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 ## Runtime Safety
 
 - Preserve existing work and validate executable changes.
+- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`
+- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`
+- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`
 EOF
 
     cat >"$target_dir/.github/copilot-instructions.md" <<'EOF'

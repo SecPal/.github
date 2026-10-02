@@ -13,8 +13,7 @@ We welcome contributions to SecPal! Please read our [Code of Conduct](CODE_OF_CO
 
 Ensure you have the following tools installed:
 
-- **Git** with cryptographic commit signing configured (SSH is preferred for a
-  new setup; OpenPGP remains supported)
+- **Git** with SSH commit signing configured
 - **Node.js** v26.x (Current) and npm/pnpm/yarn
 - **PHP** 8.4 and Composer (for backend projects)
 - **Pre-commit** hooks tool (optional but recommended)
@@ -345,68 +344,27 @@ Closes #123"
 
 ## Signing Commits
 
-All commits must be cryptographically signed. SSH and OpenPGP are both accepted
-signature formats. SSH is the preferred format for a newly created SecPal Git
-signing credential; use Ed25519 where the relevant signing path supports it.
+SecPal uses SSH signing, not GPG/OpenPGP. Follow the
+[canonical signing authority](https://github.com/SecPal/.github/blob/main/docs/work-graph-contract.md#532-signing-authority)
+for commits and role-specific lifecycle, attestation and publication signers.
 
-Keep your SSH signing credential distinct from an SSH transport/authentication
-credential. Do not create or reuse one merely for convenience. Existing valid
-SSH and OpenPGP signing configurations remain valid: do not automatically
-migrate or rewrite them solely because SSH is preferred for a new setup.
-Contributors, agents, and tools must not automatically switch a valid OpenPGP
-configuration to SSH for that reason. Maintained lifecycle signer roles and
-their policy-selected credentials remain distinct even when one operator
-controls multiple credentials.
+Preserve the existing SSH signing identity and configuration. Do not replace
+keys, reuse a transport key as a signing credential, disable signing, or switch
+to another signature format. If the required SSH identity is unavailable, stop
+at that credential boundary rather than provisioning an alternative.
 
-### Preferred new setup: SSH signing
-
-Create a dedicated Ed25519 SSH signing credential, then configure Git to use
-its local private key directly:
+Verify local commits with the maintained SSH trust configuration:
 
 ```bash
-# Generate a dedicated SSH signing key; do not reuse an SSH transport key.
-ssh-keygen \
-  -t ed25519 \
-  -f "$HOME/.ssh/id_ed25519_secpal_signing" \
-  -C "your-email@example.com"
-
-# Configure Git to sign commits with the dedicated private key.
-git config --global gpg.format ssh
-git config --global user.signingkey "$HOME/.ssh/id_ed25519_secpal_signing"
-git config --global commit.gpgsign true
-
-# Register only the corresponding public key with GitHub as a signing key:
-# $HOME/.ssh/id_ed25519_secpal_signing.pub
-# Settings → SSH and GPG keys → New SSH key → Signing Key.
+git config --get gpg.format
+git verify-commit HEAD
 ```
 
-Keep `$HOME/.ssh/id_ed25519_secpal_signing` local and private; never add or
-upload it. Only the corresponding `.pub` key is registered with GitHub for
-signing-key verification and trust distribution.
-
-### Supported alternative: OpenPGP signing
-
-OpenPGP remains supported for existing, historical, external, and
-GitHub-generated valid signatures. To create a new OpenPGP setup when that path
-is appropriate:
-
-```bash
-# Generate a GPG key (if you don't have one)
-gpg --gen-key
-
-# List your GPG keys
-gpg --list-secret-keys --keyid-format LONG
-
-# Configure Git to use your key
-git config --global gpg.format openpgp
-git config --global user.signingkey <YOUR_KEY_ID>
-git config --global commit.gpgsign true
-
-# Add your GPG key to GitHub
-gpg --armor --export <YOUR_KEY_ID>
-# Copy the entire output (including the BEGIN and END PGP PUBLIC KEY BLOCK lines)
-# and paste it into GitHub under Settings → SSH and GPG keys → New GPG key.
-```
+The configured format must be `ssh`; Git's `gpg.format` option name does not
+mean GPG/OpenPGP is used. Every PR commit must satisfy the maintained GitHub
+Verified gate. GitHub-generated PGP signatures and strictly necessary immutable
+historical verification are provider/history evidence, never new SecPal signing
+authority.
 
 ## Pull Request Guidelines
 

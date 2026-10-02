@@ -79,6 +79,15 @@ them divergently.
 - Green CI is supporting evidence, not a substitute for reviewing behavior and
   invariants. Do not weaken meaningful CI merely to shorten or reduce runs.
 
+### Initial Automated Review
+
+Apply the [canonical review-acquisition rule](https://github.com/SecPal/.github/blob/main/docs/work-graph-contract.md#531-initial-automated-review).
+These runtime assertions consume that owner; they define no separate lifecycle.
+
+- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`
+- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`
+- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`
+
 ## Commits and Communication
 
 - Before creating or editing a PR body, materialize the exact candidate body,
@@ -86,9 +95,10 @@ them divergently.
   local PR-body validator against that exact body and intended Draft/Ready state.
   Failed validation blocks publication. Evidence completeness follows the
   canonical lifecycle-aware `scripts/validate-pull-request-evidence.sh` validator.
-- All commits must be cryptographically signed. SSH and OpenPGP signatures are
-  both valid; use the user's existing Git signing configuration without
-  changing its format.
+- `SECPAL_SIGNING_FORMAT: SSH`; apply the [canonical signing authority](https://github.com/SecPal/.github/blob/main/docs/work-graph-contract.md#532-signing-authority).
+  Preserve existing SSH keys and signing configuration. GitHub-generated
+  signatures are provider evidence, not SecPal OpenPGP signing authority.
+  Every PR commit must have GitHub `verification.verified == true`.
 - Never use `--no-verify` or force-push.
 - Keep GitHub-facing communication in English. Make findings concise,
   provider-neutral, actionable, and supported by file/line evidence.

@@ -484,7 +484,10 @@ class RegisteredValidationResult:
         failure_index: int | None = None,
         failure_purpose: str | None = None,
         failure_category: str | None = None,
+        *,
+        command_set: list[dict[str, Any]] | None = None,
     ) -> None:
+        self.command_set = copy.deepcopy(command_set)
         self.failure_index = failure_index
         self.failure_purpose = (
             evidence.redact_diagnostic(failure_purpose)
@@ -1536,21 +1539,61 @@ def _prepare_complete_validation_dependencies(
     return RegisteredValidationResult()
 
 
+def _governance_only_candidate(
+    repository: dict[str, Any], repository_root: Path,
+    base_sha: str | None, tree_sha: str | None,
+) -> bool:
+    """Prove the complete authenticated base-to-candidate delta is prose only."""
+    if (
+        repository.get("repository") != "SecPal/api"
+        or repository.get("governance_only_validation") != "API_RUNTIME_INSTRUCTIONS"
+        or not isinstance(base_sha, str) or not OID_PATTERN.fullmatch(base_sha)
+        or not isinstance(tree_sha, str) or not OID_PATTERN.fullmatch(tree_sha)
+    ):
+        return False
+    try:
+        if _run_attestation_git(repository_root, ["cat-file", "-t", base_sha]).stdout.strip() != "commit":
+            return False
+        if _run_attestation_git(repository_root, ["cat-file", "-t", tree_sha]).stdout.strip() != "tree":
+            return False
+        raw = _run_attestation_git(
+            repository_root,
+            ["diff", "--no-ext-diff", "--no-renames", "--raw", "-z", base_sha, tree_sha],
+        ).stdout
+        return fast_path.governance_tree_delta_allowed(
+            repository, base_sha, tree_sha, raw,
+        )
+    except (fast_path.RecoverableLocalError, OSError, ValueError):
+        return False
+
+
+def _governance_validation_commands() -> tuple[dict[str, Any], ...]:
+    """Use the same portable command identity as receipt consumers."""
+    return tuple(fast_path.governance_validation_commands())
+
 def _run_registered_validations(
     repository: dict[str, Any],
     repository_root: Path,
     *,
     integrity_verifier: Any = None,
     dependency_preparation_satisfied: bool = False,
+    governance_base: str | None = None,
+    governance_tree: str | None = None,
 ) -> RegisteredValidationResult:
-    """Run unconditional validation once without a shell or command output."""
+    """Run the complete registered scope policy without caller-selected skipping."""
 
     repository_root = repository_root.resolve()
     if not repository_root.is_dir():
         return RegisteredValidationResult(
             failure_category="validation root unavailable"
         )
-    commands = _complete_validation_commands(repository)
+    governance_only = _governance_only_candidate(
+        repository, repository_root, governance_base, governance_tree,
+    )
+    commands = (
+        _governance_validation_commands() if governance_only
+        else _complete_validation_commands(repository)
+    )
     try:
         validation_home = tempfile.TemporaryDirectory(
             prefix="secpal-pr-review-validation-"
@@ -1588,6 +1631,8 @@ def _run_registered_validations(
             "XDG_CONFIG_HOME": str(sandbox / ".config"),
             "XDG_DATA_HOME": str(sandbox / ".local/share"),
         }
+        if governance_only:
+            environment["GITHUB_REPOSITORY"] = "SecPal/api"
         if repository.get("complete_validation_preparation") is not None:
             user_npm_config = sandbox / "user.npmrc"
             global_npm_config = sandbox / "global.npmrc"
@@ -1650,7 +1695,9 @@ def _run_registered_validations(
                 )
             try:
                 executable = _validation_executable(
-                    command, working_directory, repository_root
+                    command,
+                    REPOSITORY_ROOT if governance_only else working_directory,
+                    REPOSITORY_ROOT if governance_only else repository_root,
                 )
             except RegistryError:
                 return RegisteredValidationResult(
@@ -1692,7 +1739,7 @@ def _run_registered_validations(
                     command["purpose"],
                     "non-zero exit",
                 )
-    return RegisteredValidationResult()
+    return RegisteredValidationResult(command_set=list(commands))
 
 
 FAST_PATH_PREFLIGHT_QUERY = r"""
@@ -2727,6 +2774,25 @@ class LiveGitHub:
             "pr_state": pull_request.get("state"),
             "is_draft": pull_request.get("isDraft"),
             "review_decision": pull_request.get("reviewDecision"),
+            "provider_summary_body": next(
+                (
+                    item.get("body")
+                    for item in comments
+                    if fast_path.CODEX_REVIEW_SUMMARY_MARKER
+                    in str(item.get("body") or "")
+                ),
+                None,
+            ),
+            "provider_review_database_ids": sorted(
+                (
+                    {
+                        "node_id": item.get("id"),
+                        "database_id": item.get("databaseId"),
+                    }
+                    for item in reviews
+                ),
+                key=lambda item: str(item["node_id"]),
+            ),
             "feedback": {
                 "pull_request_reactions": _live_reactions(
                     pull_request.get("reactions"), "pull-request reactions"
@@ -4973,6 +5039,7 @@ def build_parser() -> argparse.ArgumentParser:
     batch_parser.add_argument("--repo-root", default=".")
     batch_parser.add_argument("--registry")
     batch_parser.add_argument("--capture-reviewed-state")
+    batch_parser.add_argument("--capture-provider-summary")
     batch_parser.add_argument("--ready-remediation-provider-binding")
     batch_parser.add_argument("--ready-source-recovery-publication")
     batch_parser.add_argument("--delivery-issue", type=_positive_integer)
@@ -6314,13 +6381,11 @@ def _verify_ready_integration_lifecycle_authority(
         )
 
 
-def _verify_ready_integration_published_authority(
+def _authenticated_ready_integration_publication(
     authority_manifest: dict[str, Any],
     integration_evidence: dict[str, Any],
-    *,
-    verified_source_validation_evidence_digest: str | None = None,
-) -> None:
-    """Bind integration eligibility to the maintained live #750/#752 authority."""
+) -> Any:
+    """Read and bind protected CURRENT before selecting source evidence form."""
 
     try:
         lifecycle_authority, lifecycle_publication = (
@@ -6370,6 +6435,22 @@ def _verify_ready_integration_published_authority(
     ):
         raise fast_path.SecurityBlocker(
             "Ready integration lifecycle publication binding changed"
+        )
+    return published
+
+
+def _verify_ready_integration_published_authority(
+    authority_manifest: dict[str, Any],
+    integration_evidence: dict[str, Any],
+    *,
+    verified_source_validation_evidence_digest: str | None = None,
+    published: Any = None,
+) -> None:
+    """Bind integration eligibility to the maintained live #750/#752 authority."""
+
+    if published is None:
+        published = _authenticated_ready_integration_publication(
+            authority_manifest, integration_evidence
         )
     recovered_root = (
         authority_manifest.get("source_authority_mode")
@@ -8044,9 +8125,46 @@ def _verify_prior_authority_tag(
 
 
 def _authenticated_source_validation_delivery_issue(
-    authority: dict[str, Any], attestation: dict[str, Any]
+    authority: dict[str, Any], attestation: dict[str, Any],
+    *,
+    published_source_digest: str | None = None,
+    canonical_digests: dict[int | None, str] | None = None,
 ) -> int | None:
-    """Select the issue-bound form introduced with Continuation evidence."""
+    """Select one existing source form from authenticated protected CURRENT."""
+
+    if canonical_digests is not None:
+        issue = authority["delivery_issue_number"]
+        if (
+            type(issue) is not int or issue <= 0
+            or not isinstance(canonical_digests, dict)
+            or set(canonical_digests) != {None, issue}
+            or not isinstance(published_source_digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", published_source_digest) is None
+            or any(
+                not isinstance(digest, str)
+                or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                for digest in canonical_digests.values()
+            )
+        ):
+            raise fast_path.SecurityBlocker(
+                "source validation form authority is malformed"
+            )
+        matches = [
+            issue for issue, digest in canonical_digests.items()
+            if digest == published_source_digest
+        ]
+        if len(matches) != 1:
+            raise fast_path.SecurityBlocker(
+                "protected CURRENT selects no unique source validation form"
+            )
+        if (
+            "exceptional_continuation_evidence_digest" in attestation
+            and matches[0] is None
+        ):
+            raise fast_path.SecurityBlocker(
+                "Continuation source validation cannot use the historical unbound form"
+            )
+        return matches[0]
 
     if "exceptional_continuation_evidence_digest" in attestation:
         return authority["delivery_issue_number"]
@@ -8283,20 +8401,6 @@ def _verify_ready_integration_prior_authority(
             != attestation.get("validation_receipt_digest")
         ):
             raise fast_path.SecurityBlocker("prior delivery receipt identity changed")
-        verified_validation = fast_path.verify_validation_attestation(
-            attestation,
-            repository=arguments.repo,
-            head_sha=head,
-            registry=prior_binding,
-            command_set=prior_binding["validation"],
-            reviewed_state=reviewed,
-            commit_parent_sha=parent,
-            commit_tree_sha=tree,
-            commit_validation_receipt_digest=trailer,
-            delivery_issue_number=_authenticated_source_validation_delivery_issue(
-                authority, attestation
-            ),
-        )
     commit_object = _run_attestation_git(repository_root, ["cat-file", "commit", head], allow_failure=True)
     verified_commit = _run_attestation_git(repository_root, ["verify-commit", "--raw", head], allow_failure=True)
     local_signature = evidence.interpret_local_signature(
@@ -8348,12 +8452,69 @@ def _verify_ready_integration_prior_authority(
             commit_signature_binding_digest=recovery_signature_binding_digest,
         )
     else:
+        published = _authenticated_ready_integration_publication(
+            authority, integration_evidence
+        )
+        validation_arguments = dict(
+            repository=arguments.repo,
+            head_sha=head,
+            registry=prior_binding,
+            command_set=prior_binding["validation"],
+            reviewed_state=reviewed,
+            commit_parent_sha=parent,
+            commit_tree_sha=tree,
+            commit_validation_receipt_digest=trailer,
+        )
+        if published.lifecycle.historical_proof_mode == "exact_state_adoption":
+            issue = authority["delivery_issue_number"]
+            if "exceptional_continuation_evidence_digest" in attestation:
+                selected = _authenticated_source_validation_delivery_issue(
+                    authority, attestation
+                )
+                verified_validation = fast_path.verify_validation_attestation(
+                    attestation, **validation_arguments,
+                    delivery_issue_number=selected,
+                )
+                if (
+                    verified_validation.source_validation_evidence_digest
+                    != published.lifecycle.source_validation_evidence_digest
+                ):
+                    raise fast_path.SecurityBlocker(
+                        "Continuation source validation cannot use the historical unbound form"
+                    )
+            else:
+                candidates = {
+                    form: fast_path.verify_validation_attestation(
+                        attestation, **validation_arguments,
+                        delivery_issue_number=form,
+                    )
+                    for form in (None, issue)
+                }
+                selected = _authenticated_source_validation_delivery_issue(
+                    authority, attestation,
+                    published_source_digest=(
+                        published.lifecycle.source_validation_evidence_digest
+                    ),
+                    canonical_digests={
+                        form: candidate.source_validation_evidence_digest
+                        for form, candidate in candidates.items()
+                    },
+                )
+                verified_validation = candidates[selected]
+        else:
+            verified_validation = fast_path.verify_validation_attestation(
+                attestation, **validation_arguments,
+                delivery_issue_number=_authenticated_source_validation_delivery_issue(
+                    authority, attestation
+                ),
+            )
         _verify_ready_integration_published_authority(
             authority,
             integration_evidence,
             verified_source_validation_evidence_digest=(
                 verified_validation.source_validation_evidence_digest
             ),
+            published=published,
         )
     _verify_ready_integration_lifecycle_authority(authority, integration_evidence)
     if live_observation is not None:
@@ -8855,6 +9016,22 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             raise fast_path.SecurityBlocker(
                 "receipt head does not match reviewed feedback head"
             )
+        # Re-derive scope from authenticated base and exact receipt tree at bind.
+        # No caller-selected class or receipt digest may skip application tests.
+        ordinary = (
+            pre_enrollment_evidence is None
+            and integration_evidence_path is None
+            and exceptional_recovery_path is None
+            and exceptional_continuation_path is None
+        )
+        expected_commands = (
+            list(_governance_validation_commands())
+            if ordinary and _governance_only_candidate(
+                entry, repository_root, reviewed.base_sha,
+                receipt.get("validated_tree_sha"),
+            )
+            else binding["validation"]
+        )
         receipt_fields = {key: value for key, value in receipt.items() if key != "receipt_digest"}
         expected_receipt = (
             pre_enrollment.create_validation_receipt(
@@ -8871,6 +9048,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 binding=binding,
                 reviewed=reviewed,
                 manual_gate_evidence=receipt.get("manual_gate_evidence"),
+                command_set=expected_commands,
                 eligibility_evidence_digest=receipt.get(
                     "eligibility_evidence_digest"
                 ),
@@ -9190,7 +9368,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 repository=arguments.repo,
                 head_sha=head,
                 registry=binding,
-                command_set=binding["validation"],
+                command_set=expected_commands,
                 successful_result=True,
                 reviewed_state=reviewed,
                 validation_receipt=receipt,
@@ -9371,7 +9549,16 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 "collision Complete Validation authority failed"
             ) from exc
     else:
-        validation_result = _run_registered_validations(entry, repository_root)
+        validation_result = _run_registered_validations(
+            entry, repository_root,
+            governance_base=(
+                reviewed.base_sha if not any((
+                    pre_enrollment_evidence, integration_evidence,
+                    exceptional_recovery, exceptional_continuation,
+                )) else None
+            ),
+            governance_tree=tree,
+        )
     if binding is None or manual_gate_evidence is None:
         raise fast_path.SecurityBlocker(
             "complete validation authority is unavailable"
@@ -9530,6 +9717,12 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             binding=binding,
             reviewed=reviewed,
             manual_gate_evidence=manual_gate_evidence,
+            command_set=(
+                validation_result.command_set
+                if isinstance(validation_result, RegisteredValidationResult)
+                and validation_result.command_set is not None
+                else binding["validation"]
+            ),
             eligibility_evidence_digest=eligibility_evidence_digest,
             integration_evidence_digest=(
                 fast_path.digest_json(integration_evidence)
@@ -9736,14 +9929,55 @@ def _command_resolve_batch(arguments: argparse.Namespace) -> int:
             raise fast_path.RecoverableLocalError(
                 "feedback capture cannot be combined with batch-application arguments"
             )
-        try:
-            reviewed = gateway.capture_stable_feedback(arguments.repo, arguments.pr)
-        except fast_path.TransientReadFailure:
-            reviewed = gateway.capture_stable_feedback(arguments.repo, arguments.pr)
+        def capture() -> tuple[fast_path.StableFeedbackState, str | None, Any]:
+            observation = gateway.observe_stable_feedback(arguments.repo, arguments.pr)
+            reviewed = fast_path.StableFeedbackState.from_payload(
+                {
+                    "repository": arguments.repo,
+                    "pull_request_number": arguments.pr,
+                    **observation,
+                }
+            )
+            return (
+                reviewed,
+                observation.get("provider_summary_body"),
+                observation.get("provider_review_database_ids"),
+            )
+
+        if arguments.capture_provider_summary:
+            try:
+                reviewed, provider_summary_body, review_database_ids = capture()
+            except fast_path.TransientReadFailure:
+                reviewed, provider_summary_body, review_database_ids = capture()
+        else:
+            try:
+                reviewed = gateway.capture_stable_feedback(arguments.repo, arguments.pr)
+            except fast_path.TransientReadFailure:
+                reviewed = gateway.capture_stable_feedback(arguments.repo, arguments.pr)
+            provider_summary_body = None
+            review_database_ids = None
         fast_path.atomic_write_json(
             Path(arguments.capture_reviewed_state), reviewed.to_dict()
         )
+        if arguments.capture_provider_summary:
+            if not isinstance(provider_summary_body, str) or not isinstance(
+                review_database_ids, list
+            ):
+                raise fast_path.SecurityBlocker(
+                    "captured provider assessment is unavailable"
+                )
+            fast_path.atomic_write_json(
+                Path(arguments.capture_provider_summary),
+                {
+                    "body": provider_summary_body,
+                    "review_database_ids": review_database_ids,
+                },
+            )
         return 0
+    if arguments.capture_provider_summary:
+        raise fast_path.RecoverableLocalError(
+            "provider summary output requires feedback capture"
+        )
     if not arguments.apply:
         raise fast_path.RecoverableLocalError(
             "resolve-batch requires --apply outside feedback-capture mode"

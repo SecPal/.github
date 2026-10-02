@@ -150,6 +150,7 @@ VALIDATION_REGISTRY_ENTRY_FIELDS = frozenset(
         "focused_validation",
         "required_local_validation",
         "complete_validation_preparation",
+        "governance_only_validation",
         "final_eligibility_absence_recoveries",
         "qualified_remediation_successor_evidence_loss_policy",
         "governance_amendment_policy",
@@ -193,6 +194,10 @@ CODEX_REACTION_PROVIDER = {
     "login": "chatgpt-codex-connector[bot]",
     "node_id": "BOT_kgDOC98s_g",
     "database_id": 199175422,
+}
+CODEX_REVIEW_PROVIDER = {
+    **CODEX_REACTION_PROVIDER,
+    "login": CODEX_PROVIDER_LOGIN,
 }
 CODEX_REVIEW_SUMMARY_MARKER = "<!-- codex-pull-request-review-summary -->"
 CODEX_REVIEW_STATUS = re.compile(
@@ -658,6 +663,10 @@ def validation_registry_projection(entry: Any) -> dict[str, Any]:
         binding["complete_validation_preparation"] = copy.deepcopy(
             entry["complete_validation_preparation"]
         )
+    if "governance_only_validation" in entry:
+        if entry["repository"] != "SecPal/api" or entry["governance_only_validation"] != "API_RUNTIME_INSTRUCTIONS":
+            raise SecurityBlocker("unsupported governance-only validation policy")
+        binding["governance_only_validation"] = entry["governance_only_validation"]
     if "pre_enrollment_integration_policy" in entry:
         if not isinstance(entry["pre_enrollment_integration_policy"], dict):
             raise SecurityBlocker(
@@ -1023,10 +1032,16 @@ def load_immutable_delivery_registry_binding(
             if exact_central_delivery and candidate == normalized_delivery_head:
                 raise
             continue
+        command_sets = [binding["validation"]]
+        if (
+            binding.get("repository") == "SecPal/api"
+            and binding.get("governance_only_validation") == "API_RUNTIME_INSTRUCTIONS"
+        ):
+            command_sets.append(governance_validation_commands())
         binding_matches = (
             digest_json(binding) == expected_registry_digest
-            and digest_json(binding["validation"])
-            == expected_command_set_digest
+            and any(digest_json(commands) == expected_command_set_digest
+                    for commands in command_sets)
         )
         if exact_central_delivery and candidate == normalized_delivery_head:
             if not binding_matches:
@@ -3439,9 +3454,9 @@ class VerifiedOrdinaryReadyProviderGrowth:
     resulting_state_digest: str
     resulting_feedback_digest: str
     provider_head_sha: str
+    assessment_head_sha: str
     provider_request_node_id: str
-    provider_review_node_id: str
-    provider_review_body_digest: str
+    provider_review_bindings: tuple[tuple[str, int | None, str, str, int, str, str, str, str], ...]
     thread_ids: tuple[str, ...]
     finding_ids: tuple[str, ...]
     source_bindings: tuple[tuple[str, str, str, str | None], ...]
@@ -5478,11 +5493,13 @@ def verify_ordinary_ready_remediation_provider_growth(
     provider_head_sha: str,
     predecessor_eligibility_evidence: Any,
     eligibility_evidence: Any,
+    provider_summary_body: str | None = None,
+    review_database_ids: Any = None,
 ) -> VerifiedOrdinaryReadyProviderGrowth:
     """Derive one complete same-assessment provider delta for ordinary remediation.
 
     The caller supplies no delta or finding subset.  The exact added provider
-    review and threads are derived from the two canonical Stable Feedback
+    reviews and threads are derived from the two canonical Stable Feedback
     states, while the existing eligibility boundary supplies only the ordinary
     corrected/material decision for every derived thread.
     """
@@ -5552,25 +5569,107 @@ def verify_ordinary_ready_remediation_provider_growth(
         for item in current.feedback["reviews"]
         if ("REVIEW", item["node_id"]) in added_keys
     ]
-    if len(added_reviews) != 1:
+    if not added_reviews:
         raise SecurityBlocker(
             "ordinary Ready provider review is missing or ambiguous"
         )
-    provider_review = added_reviews[0]
-    provider_review_key = ("REVIEW", provider_review["node_id"])
-    if (
-        provider_review.get("actor") != COPILOT_REVIEW_PROVIDER
-        or not isinstance(provider_review.get("node_id"), str)
-        or not IDENTITY.fullmatch(provider_review["node_id"])
-        or provider_review.get("state") != "COMMENTED"
-        or provider_review.get("commit_oid") != provider_head_sha
-        or not isinstance(provider_review.get("submitted_at"), str)
-        or provider_request["created_at"] >= provider_review["submitted_at"]
-        or provider_review.get("reactions") != []
-    ):
-        raise SecurityBlocker(
-            "ordinary Ready provider review is not bound to the consumed assessment"
+    assessment_heads = {item.get("commit_oid") for item in added_reviews}
+    # The original #954 form captured a late single Copilot review of H0. A
+    # Ready-head assessment instead comprises every new provider review of H1.
+    legacy_h0 = len(added_reviews) == 1 and assessment_heads == {provider_head_sha}
+    assessment_head_sha = provider_head_sha if legacy_h0 else current.head_sha
+    if assessment_heads != {assessment_head_sha}:
+        raise SecurityBlocker("ordinary Ready provider review set mixes assessed heads")
+    captured_review_ids: dict[str, int] = {}
+    if not legacy_h0:
+        if not isinstance(review_database_ids, list):
+            raise SecurityBlocker("ordinary Ready review database identities are missing")
+        current_review_ids = {
+            item["node_id"] for item in current.feedback["reviews"]
+        }
+        for item in review_database_ids:
+            if not isinstance(item, dict) or set(item) != {"node_id", "database_id"}:
+                raise SecurityBlocker("ordinary Ready review database identity is malformed")
+            node_id = item["node_id"]
+            database_id = item["database_id"]
+            if (
+                not isinstance(node_id, str)
+                or node_id not in current_review_ids
+                or node_id in captured_review_ids
+                or not isinstance(database_id, int)
+                or isinstance(database_id, bool)
+                or database_id < 1
+                or database_id in captured_review_ids.values()
+            ):
+                raise SecurityBlocker("ordinary Ready review database identity is unbound")
+            captured_review_ids[node_id] = database_id
+    review_by_id: dict[str, dict[str, Any]] = {}
+    provider_logins: set[str] = set()
+    review_bindings: list[tuple[str, int | None, str, str, int, str, str, str, str]] = []
+    for provider_review in added_reviews:
+        actor = provider_review.get("actor")
+        review_id = provider_review.get("node_id")
+        database_id = captured_review_ids.get(review_id)
+        submitted_at = _require_github_timestamp(
+            provider_review.get("submitted_at"), "provider review submission"
         )
+        if (
+            actor not in (COPILOT_REVIEW_PROVIDER, CODEX_REVIEW_PROVIDER)
+            or (legacy_h0 and actor != COPILOT_REVIEW_PROVIDER)
+            or not isinstance(review_id, str)
+            or not IDENTITY.fullmatch(review_id)
+            or provider_review.get("state") != "COMMENTED"
+            or provider_request["created_at"] >= submitted_at
+            or provider_review.get("reactions") != []
+            or (
+                not legacy_h0
+                and (not isinstance(database_id, int) or isinstance(database_id, bool) or database_id < 1)
+            )
+            or actor["login"] in provider_logins
+            or review_id in review_by_id
+        ):
+            raise SecurityBlocker(
+                "ordinary Ready provider review is not bound to the consumed assessment"
+            )
+        provider_logins.add(actor["login"])
+        review_by_id[review_id] = provider_review
+        review_bindings.append(
+            (
+                review_id,
+                database_id,
+                actor["login"],
+                actor["node_id"],
+                actor["database_id"],
+                assessment_head_sha,
+                provider_review["state"],
+                submitted_at,
+                provider_review["body_digest"],
+            )
+        )
+    if COPILOT_REVIEW_PROVIDER["login"] not in provider_logins:
+        raise SecurityBlocker("ordinary Ready assessment has no requested Copilot review")
+
+    summary_key: tuple[str, str] | None = None
+    admitted_updates: set[tuple[str, str]] = set()
+    if not legacy_h0:
+        verify_codex_provider_summary(
+            provider_summary_body,
+            head_sha=assessment_head_sha,
+            repository=current.repository,
+            pull_request_number=current.pull_request_number,
+        )
+        summary_candidates = [
+            item for item in current.feedback["conversation_comments"]
+            if item.get("actor") == CODEX_REVIEW_PROVIDER
+            and item.get("body_digest") == digest_text(provider_summary_body)
+        ]
+        if len(summary_candidates) != 1:
+            raise SecurityBlocker("ordinary Ready Codex summary source is ambiguous")
+        summary_key = ("CONVERSATION_COMMENT", summary_candidates[0]["node_id"])
+        if summary_key in reviewed_sources:
+            if reviewed_sources[summary_key][0] == current_sources[summary_key][0]:
+                raise SecurityBlocker("ordinary Ready Codex summary did not advance")
+            admitted_updates.add(summary_key)
 
     reviewed_thread_ids = {
         item["node_id"] for item in reviewed.feedback["threads"]
@@ -5592,16 +5691,23 @@ def verify_ordinary_ready_remediation_provider_growth(
             digest_json(provider_request),
             None,
         ),
-        (
-            "REVIEW",
-            provider_review["node_id"],
-            provider_review["body_digest"],
-            None,
-        )
     ]
-    admitted_additions = {provider_review_key}
+    source_bindings.extend(
+        ("REVIEW", item["node_id"], item["body_digest"], None)
+        for item in added_reviews
+    )
+    admitted_additions = {("REVIEW", item["node_id"]) for item in added_reviews}
     if provider_request_key in added_keys:
         admitted_additions.add(provider_request_key)
+    if summary_key in added_keys:
+        admitted_additions.add(summary_key)
+        source_bindings.append(
+            (summary_key[0], summary_key[1], current_sources[summary_key][0], None)
+        )
+    elif summary_key is not None:
+        source_bindings.append(
+            (summary_key[0], summary_key[1], current_sources[summary_key][0], None)
+        )
     eligible_by_thread = {
         item["thread_id"]: item for item in eligibility["eligible_threads"]
     }
@@ -5632,9 +5738,10 @@ def verify_ordinary_ready_remediation_provider_growth(
         comment_id = comment.get("node_id")
         comment_digest = comment.get("body_digest")
         comment_key = ("THREAD_COMMENT", comment_id)
+        parent_review = review_by_id.get(comment.get("review_id"))
         if (
-            comment.get("actor") != COPILOT_REVIEW_PROVIDER
-            or comment.get("review_id") != provider_review["node_id"]
+            parent_review is None
+            or comment.get("actor") != parent_review["actor"]
             or comment.get("reply_to_id") is not None
             or comment.get("reactions") != []
             or not isinstance(comment_id, str)
@@ -5669,7 +5776,7 @@ def verify_ordinary_ready_remediation_provider_growth(
             item["thread_id"]
             for item in predecessor_eligibility["eligible_threads"]
         },
-        admitted_updates=set(),
+        admitted_updates=admitted_updates,
     )
     if len(finding_ids) != len(set(finding_ids)):
         raise SecurityBlocker(
@@ -5690,22 +5797,29 @@ def verify_ordinary_ready_remediation_provider_growth(
         "resulting_state_digest": current.state_digest,
         "resulting_feedback_digest": current.feedback_digest,
         "provider_request_node_id": provider_request["node_id"],
-        "provider_review_node_id": provider_review["node_id"],
-        "provider_review_body_digest": provider_review["body_digest"],
         "thread_ids": list(ordered_threads),
         "finding_ids": list(ordered_findings),
         "source_bindings": [list(item) for item in ordered_sources],
         "eligibility_evidence_digest": eligibility_digest,
     }
+    if legacy_h0:
+        projection["provider_review_node_id"] = added_reviews[0]["node_id"]
+        projection["provider_review_body_digest"] = added_reviews[0]["body_digest"]
+    else:
+        projection["domain"] = "secpal.ordinary-ready-provider-growth/v2"
+        projection["assessment_head_sha"] = assessment_head_sha
+        projection["provider_review_bindings"] = [
+            list(item) for item in sorted(review_bindings)
+        ]
     return VerifiedOrdinaryReadyProviderGrowth(
         predecessor_state_digest=reviewed.state_digest,
         predecessor_feedback_digest=reviewed.feedback_digest,
         resulting_state_digest=current.state_digest,
         resulting_feedback_digest=current.feedback_digest,
         provider_head_sha=provider_head_sha,
+        assessment_head_sha=assessment_head_sha,
         provider_request_node_id=provider_request["node_id"],
-        provider_review_node_id=provider_review["node_id"],
-        provider_review_body_digest=provider_review["body_digest"],
+        provider_review_bindings=tuple(sorted(review_bindings)),
         thread_ids=ordered_threads,
         finding_ids=ordered_findings,
         source_bindings=ordered_sources,
@@ -6349,6 +6463,78 @@ def validate_manual_gate_evidence(
     return normalized
 
 
+def governance_validation_commands() -> list[dict[str, Any]]:
+    """Portable closed command identity for API instruction-only validation."""
+    return [
+        {"argv": argv, "working_directory": ".", "purpose": purpose}
+        for argv, purpose in (
+            (["./scripts/validate-ai-instructions.sh"],
+             "Validate API runtime instructions under canonical governance"),
+            (["./node_modules/.bin/markdownlint", "--config", ".markdownlint.json",
+              "AGENTS.md", "CONTRIBUTING.md", ".github/copilot-instructions.md",
+              ".github/instructions/org-shared.instructions.md"],
+             "Lint the complete allowed governance surface"),
+            (["reuse", "lint"], "Validate complete repository REUSE metadata"),
+        )
+    ]
+
+
+def governance_tree_delta_allowed(
+    registry: dict[str, Any],
+    base_sha: Any,
+    tree_sha: Any,
+    raw_diff: Any,
+) -> bool:
+    """Classify the complete base-to-tree delta for the closed API policy."""
+    if (
+        registry.get("repository") != "SecPal/api"
+        or registry.get("governance_only_validation") != "API_RUNTIME_INSTRUCTIONS"
+        or not isinstance(base_sha, str) or not OID.fullmatch(base_sha)
+        or not isinstance(tree_sha, str) or not OID.fullmatch(tree_sha)
+        or not isinstance(raw_diff, str)
+    ):
+        return False
+    allowed = {
+        "AGENTS.md", "CONTRIBUTING.md", ".github/copilot-instructions.md",
+        ".github/instructions/org-shared.instructions.md",
+    }
+    records = raw_diff.split("\0")
+    if records[-1] != "" or not 2 <= len(records) - 1 <= 2 * len(allowed):
+        return False
+    for index in range(0, len(records) - 1, 2):
+        metadata, path = records[index:index + 2]
+        fields = metadata.split()
+        if (
+            len(fields) != 5 or fields[0] not in {":100644", ":000000"}
+            or fields[1] != "100644" or fields[4] not in {"A", "M"}
+            or path not in allowed
+        ):
+            return False
+    return True
+
+
+def validation_commands_for_evidence(
+    registry: dict[str, Any], evidence_value: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Derive actual commands from a signed digest and closed bound policy."""
+    application = registry["validation"]
+    command_digest = evidence_value.get("command_set_digest")
+    if command_digest == digest_json(application):
+        return copy.deepcopy(application)
+    governance = governance_validation_commands()
+    if (
+        registry.get("repository") == "SecPal/api"
+        and registry.get("governance_only_validation") == "API_RUNTIME_INSTRUCTIONS"
+        and command_digest == digest_json(governance)
+        and not any(key in evidence_value for key in (
+            "integration_evidence_digest", "exceptional_recovery_evidence_digest",
+            "exceptional_continuation_evidence_digest",
+        ))
+    ):
+        return governance
+    raise SecurityBlocker("validation command set is not authorized by bound policy")
+
+
 def create_validation_receipt(
     *,
     repository: str,
@@ -6768,6 +6954,10 @@ def _verify_validation_attestation_unsealed(
         raise SecurityBlocker("validated commit parent does not match reviewed head")
     if not isinstance(attestation, dict):
         raise SecurityBlocker("validation attestation is missing")
+    # Ordinary governance evidence selects only the exact compiled command set.
+    # Historical ordinary evidence retains its original application identity.
+    if registry.get("governance_only_validation") is not None:
+        command_set = validation_commands_for_evidence(registry, attestation)
     receipt = create_validation_receipt(
         repository=repository,
         head_sha=reviewed_state.head_sha,
@@ -7057,7 +7247,7 @@ def verify_commit_signatures(
 ) -> list[dict[str, Any]]:
     if not isinstance(commits, list) or not commits:
         raise SecurityBlocker("commit signature evidence is missing")
-    policy = signature_policy or {"accepted_formats": ["ssh", "openpgp"]}
+    policy = signature_policy or {"accepted_formats": ["ssh"]}
     accepted_formats = policy.get("accepted_formats") if isinstance(policy, dict) else None
     if (
         not isinstance(accepted_formats, list)

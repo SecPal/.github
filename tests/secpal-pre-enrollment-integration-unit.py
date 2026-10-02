@@ -265,7 +265,7 @@ def registry() -> dict[str, object]:
         "signature_policy": {
             "require_github_verified": True,
             "require_local_verified": True,
-            "accepted_formats": ["ssh", "openpgp"],
+            "accepted_formats": ["ssh"],
         },
         "validation": [{"argv": ["./scripts/preflight.sh"]}],
         "pre_enrollment_integration_policy": {
