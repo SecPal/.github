@@ -9871,6 +9871,56 @@ class FastPathTests(TestCase):
             ),
             authority["delivery_issue_number"],
         )
+        issue = authority["delivery_issue_number"]
+        forms = {None: "a" * 64, issue: "b" * 64}
+        for digest, selected in (("a" * 64, None), ("b" * 64, issue)):
+            with self.subTest(digest=digest):
+                self.assertEqual(
+                    actions._authenticated_source_validation_delivery_issue(
+                        authority, historical_attestation,
+                        published_source_digest=digest,
+                        canonical_digests=forms,
+                    ),
+                    selected,
+                )
+        with self.assertRaises(fast_path.SecurityBlocker):
+            actions._authenticated_source_validation_delivery_issue(
+                authority, continuation_attestation,
+                published_source_digest="a" * 64,
+                canonical_digests=forms,
+            )
+        for case, changed_authority, changed_forms, published in (
+            ("no match", authority, forms, "c" * 64),
+            ("ambiguous", authority, {None: "a" * 64, issue: "a" * 64}, "a" * 64),
+            ("wrong issue", authority, {None: "a" * 64, issue + 1: "b" * 64}, "b" * 64),
+            ("bool issue", {**authority, "delivery_issue_number": True}, forms, "b" * 64),
+            ("string issue", {**authority, "delivery_issue_number": str(issue)}, forms, "b" * 64),
+            ("zero issue", {**authority, "delivery_issue_number": 0}, forms, "b" * 64),
+        ):
+            with self.subTest(case=case), self.assertRaises(fast_path.SecurityBlocker):
+                actions._authenticated_source_validation_delivery_issue(
+                    changed_authority, historical_attestation,
+                    published_source_digest=published,
+                    canonical_digests=changed_forms,
+                )
+
+    def test_ready_source_validation_selects_exact_h2_published_form(self) -> None:
+        issue = 1040
+        unbound = "46f9a049cbec05128dbd1df989a43739f496721dce3f714802cd2b05bc4113d5"
+        issue_bound = "29a8bbfac01bef24652b41f3d34f681c0bee11d99ebc8954e008a1bfb85df3a9"
+        authority = {"delivery_issue_number": issue}
+        self.assertEqual(
+            actions._authenticated_source_validation_delivery_issue(
+                authority, {}, published_source_digest=issue_bound,
+                canonical_digests={None: unbound, issue: issue_bound},
+            ),
+            issue,
+        )
+        with self.assertRaises(fast_path.SecurityBlocker):
+            actions._authenticated_source_validation_delivery_issue(
+                authority, {}, published_source_digest=issue_bound,
+                canonical_digests={None: unbound, issue: "f" * 64},
+            )
 
     def test_ready_integration_rejects_actual_default_branch_sha_drift(self) -> None:
         reviewed = fast_feedback()
@@ -10412,6 +10462,12 @@ class FastPathTests(TestCase):
                     actions, "_verify_ready_integration_published_authority"
                 ),
                 mock.patch.object(
+                    actions, "_authenticated_ready_integration_publication",
+                    return_value=SimpleNamespace(
+                        lifecycle=SimpleNamespace(historical_proof_mode="native")
+                    ),
+                ),
+                mock.patch.object(
                     actions,
                     "_prior_delivery_registry_binding",
                     return_value=binding,
@@ -10432,6 +10488,12 @@ class FastPathTests(TestCase):
                 ),
                 mock.patch.object(
                     actions, "_verify_ready_integration_published_authority"
+                ),
+                mock.patch.object(
+                    actions, "_authenticated_ready_integration_publication",
+                    return_value=SimpleNamespace(
+                        lifecycle=SimpleNamespace(historical_proof_mode="native")
+                    ),
                 ),
                 mock.patch.object(
                     actions,
@@ -11663,12 +11725,17 @@ class FastPathTests(TestCase):
                 live_observation=None,
             )
 
-    def test_ready_integration_accepts_continuation_bound_prior_receipt(self) -> None:
+    def _assert_ready_integration_prior_receipt(
+        self, *, form: str, protected_source_digest: str | None = None,
+        force_unbound_current: bool = False,
+        forbid_unbound_verification: bool = False,
+    ) -> None:
+        continuation = form == "continuation"
         prior_reviewed = fast_feedback(head_sha="e" * 40)
         reviewed = fast_feedback(head_sha="d" * 40)
         registry = fast_registry()
         tree = "a" * 40
-        continuation_digest = "9" * 64
+        continuation_digest = "9" * 64 if continuation else None
         receipt = fast_path.create_validation_receipt(
             repository="SecPal/.github",
             head_sha=prior_reviewed.head_sha,
@@ -11692,8 +11759,8 @@ class FastPathTests(TestCase):
         prior_authority = ready_integration_prior_authority(
             reviewed,
             remediation_cycles=2,
-            exceptional_recoveries=1,
-            exceptional_continuations=1,
+            exceptional_recoveries=int(continuation),
+            exceptional_continuations=int(continuation),
         )
         prior_authority.update(
             prior_delivery_tree_sha=tree,
@@ -11710,8 +11777,8 @@ class FastPathTests(TestCase):
             reviewed,
             validated_tree=tree,
             remediation_cycles=2,
-            exceptional_recoveries=1,
-            exceptional_continuations=1,
+            exceptional_recoveries=int(continuation),
+            exceptional_continuations=int(continuation),
         )
         integration["prior_authority_digest"] = fast_path.digest_json(
             prior_authority
@@ -11768,8 +11835,23 @@ class FastPathTests(TestCase):
             commit_parent_sha=prior_reviewed.head_sha,
             commit_tree_sha=tree,
             commit_validation_receipt_digest=receipt["receipt_digest"],
-            delivery_issue_number=prior_authority["delivery_issue_number"],
+            delivery_issue_number=(
+                None if form == "historical_unbound"
+                else prior_authority["delivery_issue_number"]
+            ),
         )
+        if force_unbound_current:
+            protected_source_digest = fast_path.verify_validation_attestation(
+                attestation,
+                repository="SecPal/.github",
+                head_sha=reviewed.head_sha,
+                registry=registry,
+                command_set=registry["validation"],
+                reviewed_state=prior_reviewed,
+                commit_parent_sha=prior_reviewed.head_sha,
+                commit_tree_sha=tree,
+                commit_validation_receipt_digest=receipt["receipt_digest"],
+            ).source_validation_evidence_digest
         verified_lifecycle = SimpleNamespace(
             authority_digest=prior_authority["lifecycle"][
                 "current_authority_digest"
@@ -11781,7 +11863,8 @@ class FastPathTests(TestCase):
             validation_receipt_digest=receipt["receipt_digest"],
             adoption_source_evidence_digest=attestation["attestation_digest"],
             source_validation_evidence_digest=(
-                verified_validation.source_validation_evidence_digest
+                protected_source_digest
+                or verified_validation.source_validation_evidence_digest
             ),
         )
         published_authority = SimpleNamespace(
@@ -11801,6 +11884,13 @@ class FastPathTests(TestCase):
             ),
             LifecyclePublicationError=ValueError,
         )
+        canonical_verifier = fast_path.verify_validation_attestation
+
+        def verify_selected_form(*args: Any, **kwargs: Any) -> Any:
+            if forbid_unbound_verification and kwargs.get("delivery_issue_number") is None:
+                raise AssertionError("Continuation attempted unbound validation")
+            return canonical_verifier(*args, **kwargs)
+
         with (
             mock.patch.object(actions, "_read_json", side_effect=read_json),
             mock.patch.object(
@@ -11833,19 +11923,62 @@ class FastPathTests(TestCase):
                 "_load_lifecycle_publication_helpers",
                 return_value=(lifecycle_authority, lifecycle_publication),
             ),
+            mock.patch.object(
+                fast_path, "verify_validation_attestation",
+                side_effect=verify_selected_form,
+            ),
         ):
-            result = actions._verify_ready_integration_prior_authority(
-                arguments=arguments,
-                repository_root=REPO_ROOT,
-                binding=registry,
-                integration_evidence=integration,
-                live_observation=None,
-            )
+            if protected_source_digest is None:
+                result = actions._verify_ready_integration_prior_authority(
+                    arguments=arguments,
+                    repository_root=REPO_ROOT,
+                    binding=registry,
+                    integration_evidence=integration,
+                    live_observation=None,
+                )
+            else:
+                with self.assertRaisesRegex(
+                    fast_path.SecurityBlocker,
+                    (
+                        "Continuation source validation cannot use the historical unbound form"
+                        if force_unbound_current else
+                        "protected CURRENT selects no unique source validation form"
+                    ),
+                ):
+                    actions._verify_ready_integration_prior_authority(
+                        arguments=arguments,
+                        repository_root=REPO_ROOT,
+                        binding=registry,
+                        integration_evidence=integration,
+                        live_observation=None,
+                    )
+                return
 
         self.assertEqual(result, prior_authority)
         self.assertEqual(
             published_authority.lifecycle.source_validation_evidence_digest,
             verified_validation.source_validation_evidence_digest,
+        )
+
+    def test_ready_integration_accepts_continuation_bound_prior_receipt(self) -> None:
+        self._assert_ready_integration_prior_receipt(
+            form="continuation", forbid_unbound_verification=True,
+        )
+
+    def test_ready_integration_accepts_ordinary_issue_bound_prior_receipt(self) -> None:
+        self._assert_ready_integration_prior_receipt(form="ordinary_issue_bound")
+
+    def test_ready_integration_preserves_historical_unbound_prior_receipt(self) -> None:
+        self._assert_ready_integration_prior_receipt(form="historical_unbound")
+
+    def test_ready_integration_rejects_no_protected_source_form_match(self) -> None:
+        self._assert_ready_integration_prior_receipt(
+            form="ordinary_issue_bound", protected_source_digest="f" * 64,
+        )
+
+    def test_ready_integration_rejects_unbound_continuation_current(self) -> None:
+        self._assert_ready_integration_prior_receipt(
+            form="continuation", force_unbound_current=True,
         )
 
     def test_ready_integration_openpgp_accepts_authorized_primary_fingerprint(
@@ -12026,6 +12159,12 @@ class FastPathTests(TestCase):
                 ) as signature_policy,
                 mock.patch.object(
                     actions, "_verify_ready_integration_published_authority"
+                ),
+                mock.patch.object(
+                    actions, "_authenticated_ready_integration_publication",
+                    return_value=SimpleNamespace(
+                        lifecycle=SimpleNamespace(historical_proof_mode="native")
+                    ),
                 ),
             ):
                 self.assertEqual(
