@@ -65,6 +65,11 @@
           "purpose": "Run guarded-action unit tests"
         },
         {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-provider-fallback-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run bounded provider fallback replacement tests"
+        },
+        {
           "argv": [
             "python3",
             "-m",

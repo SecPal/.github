@@ -355,6 +355,18 @@ providers, perform no merge, and do not claim that user approval is needed. The
 same workspace may resume when external state changes. No unbounded polling and
 No Cycle 3 are permitted.
 
+If a bounded post-Ready provider fallback was already persisted on GitHub and
+that same observation window expires without any provider acknowledgement or
+exact-head result, the accepted runtime may authorize one same-assessment
+replacement for the same head and review type. Use
+`scripts/secpal-provider-fallback.py inspect` to classify live evidence and
+`dispatch` only in the delivery workspace that owns that authorized assessment.
+The runtime re-reads provider state immediately before its single write and
+reconciles an ambiguous write through complete request history without issuing
+another write. It adds no Review, Remediation, Ready transition, Recovery,
+Continuation, or journal entry. A late acknowledgement or result cancels the
+replacement. A second replacement is forbidden.
+
 The unrestricted external review budget remains one. Remediation never creates
 a second unrestricted external review cycle. Changed remediation requires a
 fresh final-candidate self-review that asks both whether the findings are fixed

@@ -1911,8 +1911,10 @@ def _provider_feedback_response(
     return {
         "data": {
             "repository": {
+                "nameWithOwner": state.repository,
                 "pullRequest": {
                     "id": "PR_PROVIDER_REPLAY",
+                    "number": state.pull_request_number,
                     "headRefOid": state.head_sha,
                     "baseRefName": state.base_ref,
                     "baseRefOid": state.base_sha,
@@ -3066,14 +3068,14 @@ class LifecycleOrchestrationTests(TestCase):
             current_binding = fast_path.validation_registry_projection(
                 current_entry
             )
-            self.assertEqual(len(current_binding["validation"]), 19)
+            self.assertEqual(len(current_binding["validation"]), 20)
             self.assertEqual(
                 fast_path.digest_json(current_binding),
-                "1eba2d1e50863566937c2625ed212b06ae312b31f0f4912d6f5c8bc59ce69a56",
+                "51275917c4d1051251656da335fe311fb1f3dc65b31b0029285220f3af43a5d2",
             )
             self.assertEqual(
                 fast_path.digest_json(current_binding["validation"]),
-                "1bda1fbc4d46ef8272ac5f75fa8ec013256396cf0f385ae9cf78323be97cc61f",
+                "3977504caa08bc4635a21e6f6580ed14b1f96a3945ad32958bb3a471651fe033",
             )
             self.assertNotEqual(
                 fast_path.digest_json(collision_binding),

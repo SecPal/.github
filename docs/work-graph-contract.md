@@ -597,6 +597,19 @@ has already been consumed. Allow at most one Code fallback request and one
 Security fallback request. A fallback creates neither another review cycle nor
 new authority.
 
+When that first fallback is authoritatively persisted but remains unacknowledged
+and without an exact-head result after the same bounded provider observation
+window, one replacement dispatch for the same repository, PR, authorized
+assessment, head, and review type may be admitted. Derive eligibility only from
+authenticated current lifecycle and complete GitHub request, reaction, provider,
+and chronology evidence; recheck immediately before writing. A provider reaction,
+processing acknowledgement, review object, status for the exact head/type, or
+terminal result prevents replacement. Durable request history permits at most
+one replacement. An ambiguous replacement write is reconciled by reading that
+history and is never blindly retried. This is neither a review retry loop nor a
+new lifecycle review. A known persisted request with no provider acknowledgement
+is distinct from an unknown mutation result.
+
 ### 5.3.2 Signing Authority
 
 `SECPAL_SIGNING_FORMAT: SSH`. SSH is the sole SecPal-controlled signing
