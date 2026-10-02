@@ -4104,6 +4104,7 @@ class RegistryTests(TestCase):
                 "signature_policy",
                 "lifecycle_authority_policy",
                 "pre_enrollment_integration_policy",
+                "enrolled_draft_integration_policy",
                 "check_policy",
                 "manual_gates",
                 "unsupported_operations",
@@ -4304,7 +4305,7 @@ class RegistryTests(TestCase):
             ["./tests/review-governance-suite.sh"],
             [command["argv"] for command in commands],
         )
-        self.assertEqual(len(commands), 19)
+        self.assertEqual(len(commands), 20)
 
     def test_locked_node_preparation_requires_exact_staged_manifest_identities(
         self,

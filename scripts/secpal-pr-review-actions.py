@@ -207,6 +207,37 @@ def _read_pre_enrollment_json(path: str, label: str) -> Any:
         raise fast_path.RecoverableLocalError(f"cannot read {label}") from exc
 
 
+def _load_enrolled_draft_integration_helper() -> Any:
+    """Load the closed integration owner with isolated CLI package provenance."""
+    scripts_package = types.ModuleType("scripts")
+    scripts_package.__path__ = [str(REPOSITORY_ROOT / "scripts")]
+    sys.modules["scripts"] = scripts_package
+    package_name = "secpal_pr_review"
+    package = types.ModuleType(package_name)
+    package.__path__ = [str(FAST_PATH_HELPER.parent)]
+    sys.modules[package_name] = package
+    module_name = "secpal_pr_review.enrolled_draft_integration"
+    spec = importlib.util.spec_from_file_location(
+        module_name, FAST_PATH_HELPER.with_name("enrolled_draft_integration.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _command_enrolled_draft_integration(arguments: argparse.Namespace) -> int:
+    module = _load_enrolled_draft_integration_helper()
+    action = module.prepare if arguments.command == "prepare-enrolled-draft-integration" else module.integrate
+    try:
+        return action(sys.modules.get(__name__), arguments)
+    except (module.authority.LifecycleAuthorityError,
+            module.publication.LifecyclePublicationError,
+            module.execution.LifecycleExecutionError,
+            module.bootstrap_source_admission.BootstrapSourceAdmissionError) as exc:
+        raise fast_path.SecurityBlocker(str(exc)) from exc
+
+
 def _load_lifecycle_publication_helpers(
     *, include_orchestration: bool = False, return_collision: bool = False
 ) -> tuple[Any, ...]:
@@ -5067,6 +5098,21 @@ def build_parser() -> argparse.ArgumentParser:
     pre_enrollment_parser.add_argument("--receipt-output", required=True)
     pre_enrollment_parser.add_argument("--attestation-output", required=True)
     pre_enrollment_parser.add_argument("--apply", action="store_true")
+
+    for name in ("prepare-enrolled-draft-integration", "integrate-enrolled-draft"):
+        enrolled = subparsers.add_parser(name)
+        enrolled.add_argument("--repo", required=True)
+        enrolled.add_argument("--pr", required=True, type=_positive_integer)
+        enrolled.add_argument("--delivery-issue", required=True, type=_positive_integer)
+        enrolled.add_argument("--repo-root", default=".")
+        enrolled.add_argument("--apply", action="store_true")
+        if name == "prepare-enrolled-draft-integration":
+            enrolled.add_argument("--operation-directory", required=True)
+            enrolled.add_argument("--authorization-id", required=True)
+            enrolled.add_argument("--manual-gate-evidence", required=True)
+        else:
+            enrolled.add_argument("--authorization", required=True)
+            enrolled.add_argument("--reconcile", action="store_true")
     qualified_parser = subparsers.add_parser(
         "advance-qualified-remediation-successor-loss"
     )
@@ -10322,6 +10368,8 @@ def main(argv: list[str] | None = None) -> int:
             return _command_attest_validation(arguments)
         if arguments.command == "resolve-batch":
             return _command_resolve_batch(arguments)
+        if arguments.command in {"prepare-enrolled-draft-integration", "integrate-enrolled-draft"}:
+            return _command_enrolled_draft_integration(arguments)
         if arguments.command == "integrate-pre-enrollment-draft":
             return _command_integrate_pre_enrollment_draft(arguments)
         if arguments.command == "advance-qualified-remediation-successor-loss":

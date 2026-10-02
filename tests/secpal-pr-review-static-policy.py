@@ -570,6 +570,8 @@ ALLOWED_IMPORTS = {
         "from pathlib import Path",
         "from typing import Any, Callable, TypeVar",
         "from . import qualified_remediation_successor_loss as successor_loss",
+        "from . import enrolled_draft_integration as integration",
+        "from . import lifecycle_authority, lifecycle_execution",
     },
     "exact_source_safety.py": {
         "from __future__ import annotations",
@@ -993,6 +995,18 @@ LOADED_MODULE_ATTRIBUTES = {
 DYNAMIC_IMPORT_CALLS = {
     "secpal-pr-review-actions.py": {
         DynamicImportCall(
+            ("_load_enrolled_draft_integration_helper",),
+            "importlib.util.spec_from_file_location(module_name, FAST_PATH_HELPER.with_name('enrolled_draft_integration.py'))",
+        ),
+        DynamicImportCall(
+            ("_load_enrolled_draft_integration_helper",),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_enrolled_draft_integration_helper",),
+            "spec.loader.exec_module(module)",
+        ),
+        DynamicImportCall(
             ("_load_exact_source_safety_helper",),
             "importlib.util.spec_from_file_location("
             "f'{package_name}.exact_source_safety', EXACT_SOURCE_SAFETY_HELPER)",
@@ -1364,6 +1378,10 @@ SAFE_GETATTR_CALLS = {
 SAFE_SYS_MODULES_CALLS = {
     "secpal-pr-review-actions.py": {
         DynamicImportCall(
+            ("_command_enrolled_draft_integration",),
+            "sys.modules.get(__name__)",
+        ),
+        DynamicImportCall(
             ("_load_exact_source_safety_helper",),
             "sys.modules.get(spec.name)",
         ),
@@ -1507,6 +1525,18 @@ SAFE_SYS_MODULES_CALLS = {
 }
 SAFE_SYS_MODULES_STORES = {
     "secpal-pr-review-actions.py": {
+        DynamicImportCall(
+            ("_load_enrolled_draft_integration_helper",),
+            "sys.modules['scripts']",
+        ),
+        DynamicImportCall(
+            ("_load_enrolled_draft_integration_helper",),
+            "sys.modules[package_name]",
+        ),
+        DynamicImportCall(
+            ("_load_enrolled_draft_integration_helper",),
+            "sys.modules[module_name]",
+        ),
         DynamicImportCall(
             ("_load_exact_source_safety_helper",),
             "sys.modules[package_name]",

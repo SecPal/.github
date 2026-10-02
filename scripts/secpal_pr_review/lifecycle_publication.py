@@ -33,13 +33,19 @@ READY_SOURCE_RECOVERY_KIND = "SECPAL_READY_SOURCE_RECOVERY_PUBLICATION"
 READY_SOURCE_RECOVERY_DOMAIN = "secpal.ready-source-recovery-publication/v1"
 PROVIDER_DISPATCH_CLAIM_KIND = "SECPAL_PROVIDER_DISPATCH_CLAIM"
 PROVIDER_DISPATCH_CLAIM_DOMAIN = "secpal.provider-dispatch-claim/v1"
+ENROLLED_DRAFT_CLAIM_KIND = "SECPAL_ENROLLED_DRAFT_INTEGRATION_CLAIM"
+ENROLLED_DRAFT_CLAIM_DOMAIN = "secpal.enrolled-draft-integration-claim/v1"
+ENROLLED_DRAFT_CLAIM_FIELDS = frozenset({
+    "schema_version", "kind", "domain", "authorization", "publication_branch",
+    "journal_predecessor_oid", "signer_identity", "signature", "publication_digest",
+})
 PROVIDER_DISPATCH_TRIGGERS = {
     "CODE": "@codex review",
     "SECURITY": "@codex security review",
 }
 JOURNAL_KINDS = frozenset(
     {PUBLICATION_KIND, GENESIS_ADMISSION_KIND, READY_SOURCE_RECOVERY_KIND,
-     PROVIDER_DISPATCH_CLAIM_KIND}
+     PROVIDER_DISPATCH_CLAIM_KIND, ENROLLED_DRAFT_CLAIM_KIND}
 )
 ORDINARY_REMEDIATION_SUFFIX = "ORDINARY_REMEDIATION_SUFFIX"
 EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION = (
@@ -1907,6 +1913,7 @@ def _verify_provider_dispatch_claim_document(
 def _walk_journal(
     repository_root: Path, tip_oid: str, publication_branch: str,
     *, include_recoveries: bool = False, include_claims: bool = False,
+    include_integrations: bool = False,
 ) -> Any:
     """Verify the journal; optionally expose ancillary authorities and claims."""
     reversed_entries: list[tuple[str, bytes, str | None]] = []
@@ -1948,12 +1955,21 @@ def _walk_journal(
     latest: dict[tuple[str, int], tuple[str, dict[str, Any], authority.VerifiedLifecycleAuthority]] = {}
     recoveries: dict[tuple[str, int], VerifiedReadySourceRecovery] = {}
     claims: dict[str, VerifiedProviderDispatchClaim] = {}
+    integrations: dict[str, dict[str, Any]] = {}
     recovery_authorization_ids: set[tuple[str, str]] = set()
     recovery_authorization_digests: set[tuple[str, str]] = set()
     seen_bootstrap_targets: set[str] = set()
     for position, (oid, raw, parent) in enumerate(chronological):
         kind, candidate = _classify_journal_document(raw)
         if kind == GENESIS_ADMISSION_KIND:
+            continue
+        if kind == ENROLLED_DRAFT_CLAIM_KIND:
+            selected = candidate.get("authorization", {}).get("evidence", {})
+            previous = latest.get((selected.get("repository"), selected.get("delivery_issue")))
+            if previous is None:
+                raise LifecyclePublicationError("enrolled Draft integration claim precedes CURRENT")
+            document = _verify_enrolled_draft_claim_document(raw, expected_branch=publication_branch, parent=parent, previous=previous)
+            _add_enrolled_draft_claim(integrations, document)
             continue
         if kind == READY_SOURCE_RECOVERY_KIND:
             candidate_repository = candidate.get("repository")
@@ -2107,6 +2123,8 @@ def _walk_journal(
                 raise LifecyclePublicationError(
                     "bootstrap repair target is absent from immutable journal ancestry"
                 )
+    if include_integrations:
+        return entries, latest, admissions, integrations
     if include_claims:
         return entries, latest, admissions, recoveries, claims
     if include_recoveries:
@@ -2639,6 +2657,139 @@ def publish_ready_source_recovery(
             credential_environment=credential_environment,
         )
     return recovered
+
+
+def _verify_enrolled_draft_claim_document(
+    raw: bytes, *, expected_branch: str, parent: str | None,
+    previous: tuple[Any, Any, Any], verify_lifecycle: bool = True,
+) -> dict[str, Any]:
+    from . import enrolled_draft_integration as integration
+
+    document = authority.loads_closed_json(raw)
+    if (not isinstance(document, dict) or frozenset(document) != ENROLLED_DRAFT_CLAIM_FIELDS
+            or canonical_json_bytes(document) != raw
+            or document["schema_version"] != "1.0"
+            or document["kind"] != ENROLLED_DRAFT_CLAIM_KIND
+            or document["domain"] != ENROLLED_DRAFT_CLAIM_DOMAIN
+            or document["publication_branch"] != expected_branch
+            or document["journal_predecessor_oid"] != parent or parent is None):
+        raise LifecyclePublicationError("enrolled Draft integration claim is not canonical or bound")
+    authorization = integration.normalize_authorization(document["authorization"], allow_preparation=True)
+    evidence = authorization["evidence"]
+    oid, predecessor, lifecycle = previous
+    if (
+        evidence["current_publication_oid"] != oid
+        or evidence["current_publication_digest"] != predecessor["publication_digest"]
+        or evidence["predecessor_authority_digest"] != predecessor["terminal_authority_digest"]
+        or evidence["draft_head_sha"] != predecessor["head_sha"]
+        or evidence["lifecycle_id"] != predecessor["lifecycle_id"]
+        or evidence["initialization_evidence_digest"] != predecessor["initialization_evidence_digest"]
+        or evidence["repository"] != predecessor["repository"]
+        or evidence["delivery_issue"] != predecessor["delivery_issue"]
+        or evidence["pull_request"] != predecessor["pull_request"]
+        or predecessor["historical_proof_mode"] != authority.NATIVE_PROOF_MODE
+    ):
+        raise LifecyclePublicationError("enrolled Draft integration claim CURRENT binding changed")
+    if verify_lifecycle:
+        current = VerifiedLifecyclePublication(oid, predecessor["publication_digest"], expected_branch, predecessor["journal_predecessor_oid"], predecessor["predecessor_publication_oid"], lifecycle, canonical_json_bytes(predecessor["lifecycle_evidence"]))
+        integration.require_predecessor(current, evidence)
+    policy = authority._load_lifecycle_trust_policy(evidence["repository"])
+    if policy.publication_branch != expected_branch:
+        raise LifecyclePublicationError("enrolled Draft claim publication branch changed")
+    if document["signature"].get("format") != "ssh":
+        raise LifecyclePublicationError("new enrolled Draft integration claims require SSH")
+    fields = {key: value for key, value in document.items() if key not in {"signature", "publication_digest"}}
+    authority._verify_signature(
+        canonical_json_bytes(fields), document["signature"], document["signer_identity"],
+        ENROLLED_DRAFT_CLAIM_DOMAIN, policy.publication_signer_identities,
+        authority._policy_signature_verifier(policy),
+    )
+    if document["publication_digest"] != digest_json({**fields, "signature": document["signature"]}):
+        raise LifecyclePublicationError("enrolled Draft integration claim digest mismatch")
+    return document
+
+
+def _add_enrolled_draft_claim(claims, document) -> None:
+    from . import enrolled_draft_integration as integration
+
+    selected = document["authorization"]
+    evidence = selected["evidence"]
+    preparation = selected["kind"] == integration.PREPARATION_AUTHORIZATION_KIND
+    if not preparation:
+        prior = claims.get(selected["preparation_authorization_digest"])
+        if prior is None:
+            raise LifecyclePublicationError("enrolled Draft candidate has no protected preparation reservation")
+        old = prior["authorization"]
+        if old["kind"] != integration.PREPARATION_AUTHORIZATION_KIND or any(
+            old[key] != selected[key] for key in ("authorization_id", "evidence", "validation_receipt", "signer_identity")
+        ):
+            raise LifecyclePublicationError("enrolled Draft candidate differs from preparation reservation")
+    for prior in claims.values():
+        old = prior["authorization"]
+        if (old["kind"] == integration.PREPARATION_AUTHORIZATION_KIND) != preparation:
+            continue
+        if old["evidence"]["repository"] == evidence["repository"] and (
+            old["authorization_id"] == selected["authorization_id"]
+            or old["evidence"]["current_publication_oid"] == evidence["current_publication_oid"]
+            or (not preparation and old["final_attestation"]["candidate_head_sha"] == selected["final_attestation"]["candidate_head_sha"])
+        ):
+            raise LifecyclePublicationError("enrolled Draft authorization or predecessor already claimed")
+    claims[selected["authorization_digest"]] = document
+
+
+def claim_enrolled_draft_integration(
+    authorization: Mapping[str, Any], *, signer_identity: str, signer: authority.Signer,
+) -> None:
+    """Consume one exact branch-push attempt in the existing protected journal.
+
+    An uncertain CAS never confers ownership, even if read-back finds the claim.
+    The operator may only explicitly reconcile its already live candidate.
+    """
+    from . import enrolled_draft_integration as integration
+
+    selected = integration.normalize_authorization(dict(authorization), allow_preparation=True)
+    evidence = selected["evidence"]
+    policy = authority._load_lifecycle_trust_policy(evidence["repository"])
+    _verify_live_protection(policy)
+    with _isolated_repository(policy, write=True) as (root, credential_environment):
+        tip = _observe_remote_current_once(root, policy.publication_remote_url, policy.publication_branch, credential_environment=credential_environment)
+        if tip is None:
+            raise LifecyclePublicationError("enrolled Draft CURRENT is unavailable")
+        _, latest, _, claims = _walk_journal(root, tip, policy.publication_branch, include_integrations=True)
+        previous = latest.get((evidence["repository"], evidence["delivery_issue"]))
+        if previous is None:
+            raise LifecyclePublicationError("enrolled Draft CURRENT is unavailable")
+        fields = {
+            "schema_version": "1.0", "kind": ENROLLED_DRAFT_CLAIM_KIND,
+            "domain": ENROLLED_DRAFT_CLAIM_DOMAIN, "authorization": selected,
+            "publication_branch": policy.publication_branch, "journal_predecessor_oid": tip,
+            "signer_identity": signer_identity,
+        }
+        signed = {**fields, "signature": dict(signer(canonical_json_bytes(fields), ENROLLED_DRAFT_CLAIM_DOMAIN))}
+        raw = canonical_json_bytes({**signed, "publication_digest": digest_json(signed)})
+        document = _verify_enrolled_draft_claim_document(raw, expected_branch=policy.publication_branch, parent=tip, previous=previous)
+        _add_enrolled_draft_claim(claims, document)
+        oid = _write_publication_object(root, raw, tip)
+        _walk_journal(root, oid, policy.publication_branch)
+        _cas_remote_ref(root, policy.publication_remote_url, policy.publication_branch, oid, tip, credential_environment=credential_environment)
+
+
+def verify_enrolled_draft_integration_claim(authorization: Mapping[str, Any]) -> None:
+    """Exact authenticated journal read-back; this never authorizes another push."""
+    from . import enrolled_draft_integration as integration
+
+    selected = integration.normalize_authorization(dict(authorization))
+    evidence = selected["evidence"]
+    policy = authority._load_lifecycle_trust_policy(evidence["repository"])
+    _verify_live_protection(policy)
+    with _isolated_repository(policy, write=False) as (root, credential_environment):
+        tip = _observe_remote_current_once(root, policy.publication_remote_url, policy.publication_branch, credential_environment=credential_environment)
+        if tip is None:
+            raise LifecyclePublicationError("enrolled Draft integration journal is unavailable")
+        _, _, _, claims = _walk_journal(root, tip, policy.publication_branch, include_integrations=True)
+        claim = claims.get(selected["authorization_digest"])
+        if claim is None or claim["authorization"] != selected:
+            raise LifecyclePublicationError("exact enrolled Draft integration claim is unavailable")
 
 
 def _publish_provider_dispatch_claim(
@@ -4035,9 +4186,18 @@ def _walk_journal_identity_projection(
     recovery_keys: set[tuple[str, int]] = set()
     recovery_authorization_ids: set[tuple[str, str]] = set()
     recovery_authorization_digests: set[tuple[str, str]] = set()
+    integrations: dict[str, dict[str, Any]] = {}
     for position, (object_oid, raw, parent) in enumerate(chronological):
         kind, candidate = _classify_journal_document(raw)
         if kind == GENESIS_ADMISSION_KIND:
+            continue
+        if kind == ENROLLED_DRAFT_CLAIM_KIND:
+            selected = candidate.get("authorization", {}).get("evidence", {})
+            previous = publications.get((selected.get("repository"), selected.get("delivery_issue")))
+            if previous is None:
+                raise LifecyclePublicationError("enrolled Draft integration claim precedes CURRENT")
+            document = _verify_enrolled_draft_claim_document(raw, expected_branch=publication_branch, parent=parent, previous=previous, verify_lifecycle=False)
+            _add_enrolled_draft_claim(integrations, document)
             continue
         if kind == READY_SOURCE_RECOVERY_KIND:
             try:
