@@ -2569,6 +2569,40 @@ class ResolveFixedThreadsTests(TestCase):
         )
 
     def setUp(self) -> None:
+        # Unit history must describe the tested candidate policy, not the
+        # unrelated live checkout's pre-commit HEAD. Production still reads
+        # authenticated immutable central history; no candidate fallback exists.
+        fixture_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(fixture_directory.cleanup)
+        fixture_root = Path(fixture_directory.name)
+        for path, source in (
+            (MODULE.fast_path.DELIVERY_REGISTRY_PATH, MODULE.REGISTRY_PATH),
+            (MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH,
+             MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_PATH),
+        ):
+            target = fixture_root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
+        for arguments in (
+            ["init", "-q"], ["remote", "add", "origin", "https://github.com/SecPal/.github.git"],
+            ["add", "."],
+            ["-c", "commit.gpgsign=false", "-c", "user.name=Fixture",
+             "-c", "user.email=fixture@example.test", "commit", "-qm", "Unit registry history"],
+        ):
+            REAL_SUBPROCESS_RUN(["git", *arguments], cwd=fixture_root, check=True,
+                                capture_output=True, text=True)
+        def fixture_git(repository_root, arguments, *, allow_failure=False):
+            if repository_root != ROOT:
+                raise AssertionError("unexpected central registry fixture root")
+            return REAL_SUBPROCESS_RUN(
+                ["git", *arguments], cwd=fixture_root, check=not allow_failure,
+                capture_output=True, text=True,
+            )
+        fixture_patch = mock.patch.object(
+            sys.modules[__name__], "_current_registry_git", side_effect=fixture_git,
+        )
+        fixture_patch.start()
+        self.addCleanup(fixture_patch.stop)
         self._central_registry_patch = mock.patch.object(
             MODULE.fast_path,
             "_central_git_result",

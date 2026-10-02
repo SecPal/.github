@@ -861,7 +861,7 @@ create_repo ".github" "$common_header
 
 ## Commits and Communication
 
-- All commits must be cryptographically signed using SSH or OpenPGP.
+- All current SecPal-controlled commits must be cryptographically signed using SSH.
 - Keep GitHub-facing communication in English.
 
 ## Changelog and Tracking

@@ -1032,10 +1032,16 @@ def load_immutable_delivery_registry_binding(
             if exact_central_delivery and candidate == normalized_delivery_head:
                 raise
             continue
+        command_sets = [binding["validation"]]
+        if (
+            binding.get("repository") == "SecPal/api"
+            and binding.get("governance_only_validation") == "API_RUNTIME_INSTRUCTIONS"
+        ):
+            command_sets.append(governance_validation_commands())
         binding_matches = (
             digest_json(binding) == expected_registry_digest
-            and digest_json(binding["validation"])
-            == expected_command_set_digest
+            and any(digest_json(commands) == expected_command_set_digest
+                    for commands in command_sets)
         )
         if exact_central_delivery and candidate == normalized_delivery_head:
             if not binding_matches:
@@ -6457,6 +6463,44 @@ def validate_manual_gate_evidence(
     return normalized
 
 
+def governance_validation_commands() -> list[dict[str, Any]]:
+    """Portable closed command identity for API instruction-only validation."""
+    return [
+        {"argv": argv, "working_directory": ".", "purpose": purpose}
+        for argv, purpose in (
+            (["./scripts/validate-ai-instructions.sh"],
+             "Validate API runtime instructions under canonical governance"),
+            (["./node_modules/.bin/markdownlint", "--config", ".markdownlint.json",
+              "AGENTS.md", "CONTRIBUTING.md", ".github/copilot-instructions.md",
+              ".github/instructions/org-shared.instructions.md"],
+             "Lint the complete allowed governance surface"),
+            (["reuse", "lint"], "Validate complete repository REUSE metadata"),
+        )
+    ]
+
+
+def validation_commands_for_evidence(
+    registry: dict[str, Any], evidence_value: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Derive actual commands from a signed digest and closed bound policy."""
+    application = registry["validation"]
+    command_digest = evidence_value.get("command_set_digest")
+    if command_digest == digest_json(application):
+        return copy.deepcopy(application)
+    governance = governance_validation_commands()
+    if (
+        registry.get("repository") == "SecPal/api"
+        and registry.get("governance_only_validation") == "API_RUNTIME_INSTRUCTIONS"
+        and command_digest == digest_json(governance)
+        and not any(key in evidence_value for key in (
+            "integration_evidence_digest", "exceptional_recovery_evidence_digest",
+            "exceptional_continuation_evidence_digest",
+        ))
+    ):
+        return governance
+    raise SecurityBlocker("validation command set is not authorized by bound policy")
+
+
 def create_validation_receipt(
     *,
     repository: str,
@@ -6876,6 +6920,10 @@ def _verify_validation_attestation_unsealed(
         raise SecurityBlocker("validated commit parent does not match reviewed head")
     if not isinstance(attestation, dict):
         raise SecurityBlocker("validation attestation is missing")
+    # Ordinary governance evidence selects only the exact compiled command set.
+    # Historical ordinary evidence retains its original application identity.
+    if registry.get("governance_only_validation") is not None:
+        command_set = validation_commands_for_evidence(registry, attestation)
     receipt = create_validation_receipt(
         repository=repository,
         head_sha=reviewed_state.head_sha,
@@ -7165,7 +7213,7 @@ def verify_commit_signatures(
 ) -> list[dict[str, Any]]:
     if not isinstance(commits, list) or not commits:
         raise SecurityBlocker("commit signature evidence is missing")
-    policy = signature_policy or {"accepted_formats": ["ssh", "openpgp"]}
+    policy = signature_policy or {"accepted_formats": ["ssh"]}
     accepted_formats = policy.get("accepted_formats") if isinstance(policy, dict) else None
     if (
         not isinstance(accepted_formats, list)

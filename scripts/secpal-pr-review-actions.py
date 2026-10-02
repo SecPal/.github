@@ -484,7 +484,10 @@ class RegisteredValidationResult:
         failure_index: int | None = None,
         failure_purpose: str | None = None,
         failure_category: str | None = None,
+        *,
+        command_set: list[dict[str, Any]] | None = None,
     ) -> None:
+        self.command_set = copy.deepcopy(command_set)
         self.failure_index = failure_index
         self.failure_purpose = (
             evidence.redact_diagnostic(failure_purpose)
@@ -1579,20 +1582,8 @@ def _governance_only_candidate(
 
 
 def _governance_validation_commands() -> tuple[dict[str, Any], ...]:
-    """Fixed central validators; no candidate-selected executable or shell."""
-    return tuple(
-        {"argv": argv, "working_directory": ".", "purpose": purpose}
-        for argv, purpose in (
-            (["./scripts/validate-ai-instructions.sh"],
-             "Validate API runtime instructions under canonical governance"),
-            (["./node_modules/.bin/markdownlint", "--config",
-              str(REPOSITORY_ROOT / ".markdownlint.json"), "AGENTS.md",
-              "CONTRIBUTING.md", ".github/copilot-instructions.md",
-              ".github/instructions/org-shared.instructions.md"],
-             "Lint the complete allowed governance surface"),
-            (["reuse", "lint"], "Validate complete repository REUSE metadata"),
-        )
-    )
+    """Use the same portable command identity as receipt consumers."""
+    return tuple(fast_path.governance_validation_commands())
 
 def _run_registered_validations(
     repository: dict[str, Any],
@@ -1762,7 +1753,7 @@ def _run_registered_validations(
                     command["purpose"],
                     "non-zero exit",
                 )
-    return RegisteredValidationResult()
+    return RegisteredValidationResult(command_set=list(commands))
 
 
 FAST_PATH_PREFLIGHT_QUERY = r"""
@@ -9039,6 +9030,22 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             raise fast_path.SecurityBlocker(
                 "receipt head does not match reviewed feedback head"
             )
+        # Re-derive scope from authenticated base and exact receipt tree at bind.
+        # No caller-selected class or receipt digest may skip application tests.
+        ordinary = (
+            pre_enrollment_evidence is None
+            and integration_evidence_path is None
+            and exceptional_recovery_path is None
+            and exceptional_continuation_path is None
+        )
+        expected_commands = (
+            list(_governance_validation_commands())
+            if ordinary and _governance_only_candidate(
+                entry, repository_root, reviewed.base_sha,
+                receipt.get("validated_tree_sha"),
+            )
+            else binding["validation"]
+        )
         receipt_fields = {key: value for key, value in receipt.items() if key != "receipt_digest"}
         expected_receipt = (
             pre_enrollment.create_validation_receipt(
@@ -9055,6 +9062,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 binding=binding,
                 reviewed=reviewed,
                 manual_gate_evidence=receipt.get("manual_gate_evidence"),
+                command_set=expected_commands,
                 eligibility_evidence_digest=receipt.get(
                     "eligibility_evidence_digest"
                 ),
@@ -9374,7 +9382,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 repository=arguments.repo,
                 head_sha=head,
                 registry=binding,
-                command_set=binding["validation"],
+                command_set=expected_commands,
                 successful_result=True,
                 reviewed_state=reviewed,
                 validation_receipt=receipt,
@@ -9556,7 +9564,14 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             ) from exc
     else:
         validation_result = _run_registered_validations(
-            entry, repository_root, governance_base=reviewed.base_sha, governance_tree=tree,
+            entry, repository_root,
+            governance_base=(
+                reviewed.base_sha if not any((
+                    pre_enrollment_evidence, integration_evidence,
+                    exceptional_recovery, exceptional_continuation,
+                )) else None
+            ),
+            governance_tree=tree,
         )
     if binding is None or manual_gate_evidence is None:
         raise fast_path.SecurityBlocker(
@@ -9716,6 +9731,12 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             binding=binding,
             reviewed=reviewed,
             manual_gate_evidence=manual_gate_evidence,
+            command_set=(
+                validation_result.command_set
+                if isinstance(validation_result, RegisteredValidationResult)
+                and validation_result.command_set is not None
+                else binding["validation"]
+            ),
             eligibility_evidence_digest=eligibility_evidence_digest,
             integration_evidence_digest=(
                 fast_path.digest_json(integration_evidence)

@@ -503,7 +503,7 @@ test_instruction_size_limit() {
 }
 
 test_review_trigger_policy() {
-    # Root AGENTS owns these closed normative declarations. Parse Markdown with
+    # Root AGENTS consumes the canonical owner through these declarations. Parse Markdown with
     # the existing maintained dependency: comments/fences are not live policy.
     # Resolve Node from the validator root, not a target package.json.
     local agents_path="$PWD/AGENTS.md"
@@ -518,16 +518,27 @@ try {
         ["POST_READY_BOUNDED_COMMENT_FALLBACK", "YES"],
     ]);
     const declarations = [];
-    let quoted = 0;
+    const context = [];
     for (const token of tokens) {
-        if (token.type === "blockquote_open") quoted++;
-        if (token.type === "blockquote_close") quoted--;
-        if (quoted || token.type !== "inline") continue;
-        for (const child of token.children || []) {
-            if (child.type !== "code_inline") continue;
-            const key = child.content.split(":", 1)[0];
-            if (expected.has(key)) declarations.push(child.content);
+        if (token.nesting === -1) context.pop();
+        if (token.type === "inline") {
+            const children = token.children || [];
+            const markers = children.filter(child =>
+                child.type === "code_inline" &&
+                expected.has(child.content.split(":", 1)[0]));
+            if (markers.length) {
+                // Quoted examples are not declarations. Visible declarations
+                // must be the sole content of a top-level unordered list item.
+                if (context.includes("blockquote_open")) continue;
+                if (context.join("/") !==
+                    "bullet_list_open/list_item_open/paragraph_open" ||
+                    children.length !== 1 || markers.length !== 1) {
+                    process.exit(1);
+                }
+                declarations.push(markers[0].content);
+            }
         }
+        if (token.nesting === 1) context.push(token.type);
     }
     if (declarations.length !== expected.size) process.exit(1);
     for (const [key, value] of expected) {

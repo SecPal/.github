@@ -197,7 +197,7 @@
       "signature_policy": {
         "require_github_verified": true,
         "require_local_verified": true,
-        "accepted_formats": ["ssh", "openpgp"]
+        "accepted_formats": ["ssh"]
       },
       "pre_enrollment_integration_policy": {
         "schema_version": "1.0",
@@ -212,7 +212,7 @@
       },
       "lifecycle_authority_policy": {
         "schema_version": "1.0",
-        "accepted_formats": ["ssh", "openpgp"],
+        "accepted_formats": ["ssh"],
         "signers": [
           {
             "identity": "aroviqen@secpal.app",
@@ -523,7 +523,7 @@
       "signature_policy": {
         "require_github_verified": true,
         "require_local_verified": true,
-        "accepted_formats": ["ssh", "openpgp"]
+        "accepted_formats": ["ssh"]
       },
       "check_policy": {
         "require_ruleset_evidence": true,
@@ -622,7 +622,7 @@
       "signature_policy": {
         "require_github_verified": true,
         "require_local_verified": true,
-        "accepted_formats": ["ssh", "openpgp"]
+        "accepted_formats": ["ssh"]
       },
       "check_policy": {
         "require_ruleset_evidence": true,
@@ -672,7 +672,7 @@
       ],
       "lifecycle_authority_policy": {
         "schema_version": "1.0",
-        "accepted_formats": ["ssh", "openpgp"],
+        "accepted_formats": ["ssh"],
         "signers": [
           {
             "identity": "aroviqen@secpal.app",
@@ -706,7 +706,7 @@
       "signature_policy": {
         "require_github_verified": true,
         "require_local_verified": true,
-        "accepted_formats": ["ssh", "openpgp"]
+        "accepted_formats": ["ssh"]
       },
       "check_policy": {
         "require_ruleset_evidence": true,
@@ -776,7 +776,7 @@
       "signature_policy": {
         "require_github_verified": true,
         "require_local_verified": true,
-        "accepted_formats": ["ssh", "openpgp"]
+        "accepted_formats": ["ssh"]
       },
       "check_policy": {
         "require_ruleset_evidence": true,
@@ -847,7 +847,7 @@
       "signature_policy": {
         "require_github_verified": true,
         "require_local_verified": true,
-        "accepted_formats": ["ssh", "openpgp"]
+        "accepted_formats": ["ssh"]
       },
       "check_policy": {
         "require_ruleset_evidence": true,
@@ -896,11 +896,11 @@
       "signature_policy": {
         "require_github_verified": true,
         "require_local_verified": true,
-        "accepted_formats": ["ssh", "openpgp"]
+        "accepted_formats": ["ssh"]
       },
       "lifecycle_authority_policy": {
         "schema_version": "1.0",
-        "accepted_formats": ["ssh", "openpgp"],
+        "accepted_formats": ["ssh"],
         "signers": [
           {
             "identity": "aroviqen@secpal.app",

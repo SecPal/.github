@@ -80,7 +80,11 @@ command is executed. Receipt and attestation registry digests bind this policy;
 their authenticated reviewed-state and candidate-tree bindings determine its
 scope. Manual-gate evidence must identify the actual structural evidence class.
 A successful governance receipt is **not** evidence that the Laravel/Pint or
-PHPStan suites ran or passed.
+PHPStan suites ran or passed. The portable command-set digest identifies the
+validators actually executed. Ordinary attestation verification derives that
+same closed set from the signed digest and registered policy, and commit
+binding independently rechecks the complete base-to-tree scope. Integration
+and recovery validation retain their existing application command sets.
 
 ## Proof validity and preflight
 

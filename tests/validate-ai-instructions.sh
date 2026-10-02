@@ -129,6 +129,13 @@ assert_fails_with() {
         exit 1
     fi
 
+    if [ "$expected" = 'AGENTS.md declares the canonical review trigger' ] \
+        && ! grep -F "$expected" "$output_file" | grep -qF '✗'; then
+        sed -n '1,240p' "$output_file" >&2
+        echo "review-trigger gate itself did not reject the invalid policy" >&2
+        exit 1
+    fi
+
     if ! grep -qF "$expected" "$output_file"; then
         sed -n '1,240p' "$output_file" >&2
         echo "validator failure did not include expected result: $expected" >&2
@@ -199,6 +206,18 @@ for replacement in 'PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: YES' 'POST_READY_BOUN
     copy_valid_repo "$valid_repo" "$wrong_policy_repo"
     sed -i "s/$key: [A-Z_]*/$replacement/" "$wrong_policy_repo/AGENTS.md"
     assert_fails_with "$wrong_policy_repo" 'AGENTS.md declares the canonical review trigger'
+done
+# A marker in negated/embedded prose or a nested item is not a declaration.
+for context in negated embedded nested; do
+    invalid_context_repo="$workspace/policy-$context"
+    copy_valid_repo "$valid_repo" "$invalid_context_repo"
+    # shellcheck disable=SC2016 # Literal Markdown, never command substitution.
+    case "$context" in
+        negated) sed -i 's/^- `PRIMARY_AUTOMATED_REVIEW_TRIGGER:/- Do not adopt `PRIMARY_AUTOMATED_REVIEW_TRIGGER:/' "$invalid_context_repo/AGENTS.md" ;;
+        embedded) sed -i 's/^- `PRIMARY_AUTOMATED_REVIEW_TRIGGER:/- Example: `PRIMARY_AUTOMATED_REVIEW_TRIGGER:/' "$invalid_context_repo/AGENTS.md" ;;
+        nested) sed -i '/^- `PRIMARY_AUTOMATED_REVIEW_TRIGGER:/s/^/  /; /^  - `PRIMARY_AUTOMATED_REVIEW_TRIGGER:/i\- Examples:' "$invalid_context_repo/AGENTS.md" ;;
+    esac
+    assert_fails_with "$invalid_context_repo" 'AGENTS.md declares the canonical review trigger'
 done
 duplicate_policy_repo="$workspace/duplicate-policy"
 copy_valid_repo "$valid_repo" "$duplicate_policy_repo"

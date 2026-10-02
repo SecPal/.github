@@ -245,117 +245,57 @@ class RoleSpecificLifecycleSigningTests(TestCase):
         self.assertEqual(identity, LEGACY_ADOPTION)
         self.assertEqual(self.verify(signer, identity).signer_identity, identity)
 
-    def test_openpgp_role_verification_uses_closed_signing_environment(self) -> None:
-        openpgp_identity = "openpgp-fixture@secpal.test"
-        signing_environment = self.openpgp_fixture_environment()
-        self.git_config("gpg.format", "openpgp")
-        self.git_config("user.signingkey", OPENPGP_FIXTURE_FINGERPRINT)
-        self.policy = authority.LifecycleTrustPolicy(
+    def test_historical_openpgp_verification_uses_closed_environment(self) -> None:
+        # Immutable public-only fixture: verify existing bytes, never sign new PGP.
+        identity = "openpgp-fixture@secpal.test"
+        environment = self.openpgp_fixture_environment()
+        historical_policy = authority.LifecycleTrustPolicy(
             repository=REPOSITORY,
             accepted_formats=frozenset({"openpgp"}),
-            transition_signer_identities=frozenset({openpgp_identity}),
-            authority_signer_identities=frozenset({openpgp_identity}),
-            publication_signer_identities=frozenset({openpgp_identity}),
-            genesis_admission_signer_identities=frozenset({openpgp_identity}),
+            transition_signer_identities=frozenset({identity}),
+            authority_signer_identities=frozenset({identity}),
+            publication_signer_identities=frozenset({identity}),
+            genesis_admission_signer_identities=frozenset({identity}),
             legacy_adoption_signer_identities=frozenset({LEGACY_ADOPTION}),
             signers={
-                openpgp_identity: authority.TrustedSigner(
-                    openpgp_identity, (), (OPENPGP_FIXTURE_FINGERPRINT,)
+                identity: authority.TrustedSigner(
+                    identity, (), (OPENPGP_FIXTURE_FINGERPRINT,)
                 ),
                 LEGACY_ADOPTION: authority.TrustedSigner(LEGACY_ADOPTION, (), ()),
             },
             initialization_anchors=(),
         )
-        policy_patch, home_patch = self.policy_context()
-        with policy_patch, home_patch, mock.patch.object(
-            execution.late_disposition,
-            "signing_environment",
-            return_value=signing_environment,
-        ):
-            signers = execution._production_signing_authorities(
-                REPOSITORY, openpgp_identity
-            )
-        empty_keyring = self.home / "empty-keyring"
-        empty_keyring.mkdir()
-        signing_call: dict[str, object] = {}
-        verification_environments: list[dict[str, str]] = []
-        original_signing_run = execution.late_disposition._run_signature_command
-        original_verification_run = authority.subprocess.run
-
-        def replace_private_signing_operation(
-            executable: str,
-            arguments: tuple[str, ...],
-            *,
-            environment: dict[str, str],
-            stdin: bytes | None = None,
-        ) -> subprocess.CompletedProcess[bytes]:
-            if "--detach-sign" not in arguments:
-                return original_signing_run(
-                    executable, arguments, environment=environment, stdin=stdin
-                )
-            output = Path(arguments[arguments.index("--output") + 1])
-            artifact = Path(arguments[-1])
-            signing_call.update(
-                executable=executable,
-                arguments=arguments,
-                environment=dict(environment),
-                stdin=stdin,
-                artifact=artifact.read_bytes(),
-            )
-            output.write_bytes(OPENPGP_FIXTURE_SIGNATURE.read_bytes())
-            return subprocess.CompletedProcess((executable, *arguments), 0, b"", b"")
+        signature = {
+            "format": "openpgp",
+            "signer_identity": identity,
+            "value": OPENPGP_FIXTURE_SIGNATURE.read_text(encoding="utf-8"),
+        }
+        observed_environments: list[dict[str, str]] = []
+        original_run = authority.subprocess.run
 
         def capture_verification_environment(*args: object, **kwargs: object) -> object:
             command = args[0]
             if isinstance(command, list) and "--verify" in command:
-                environment = kwargs.get("env")
-                if isinstance(environment, dict):
-                    verification_environments.append(dict(environment))
-            return original_verification_run(*args, **kwargs)
+                observed_environments.append(dict(kwargs["env"]))
+            return original_run(*args, **kwargs)
 
-        with (
-            mock.patch.object(
-                execution.late_disposition,
-                "_run_signature_command",
-                side_effect=replace_private_signing_operation,
-            ),
-            mock.patch.object(
-                authority.subprocess,
-                "run",
-                side_effect=capture_verification_environment,
-            ),
-            mock.patch.dict(
-                os.environ,
-                {"HOME": str(empty_keyring), "GNUPGHOME": str(empty_keyring)},
-            ),
+        with mock.patch.object(
+            authority.subprocess, "run", side_effect=capture_verification_environment
+        ), mock.patch.object(
+            execution.late_disposition, "_run_signature_command",
+            side_effect=AssertionError("historical verification must not sign"),
         ):
-            verified = signers.transition_signer(
-                OPENPGP_FIXTURE_ARTIFACT.read_bytes(), DOMAIN
+            verified = authority._policy_signature_verifier(
+                historical_policy, command_environment=environment
+            )(OPENPGP_FIXTURE_ARTIFACT.read_bytes(), signature, identity, DOMAIN)
+        self.assertEqual(observed_environments, [environment])
+        self.assertEqual(verified.signer_identity, identity)
+        self.assertEqual(verified.signature_format, "openpgp")
+        # The current SSH-only policy never inherits historical signing authority.
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            authority._policy_signature_verifier(self.policy)(
+                OPENPGP_FIXTURE_ARTIFACT.read_bytes(), signature, ROUTINE, DOMAIN
             )
-        self.assertEqual(
-            signing_call["executable"],
-            execution.late_disposition._trusted_executable("gpg"),
-        )
-        arguments = signing_call["arguments"]
-        self.assertEqual(
-            arguments[:6],
-            (
-                "--batch",
-                "--no-tty",
-                "--armor",
-                "--local-user",
-                OPENPGP_FIXTURE_FINGERPRINT,
-                "--output",
-            ),
-        )
-        self.assertEqual(Path(arguments[6]).name, "payload.asc")
-        self.assertEqual(arguments[7], "--detach-sign")
-        self.assertEqual(Path(arguments[8]).name, "payload")
-        self.assertEqual(signing_call["environment"], signing_environment)
-        self.assertIsNone(signing_call["stdin"])
-        self.assertEqual(signing_call["artifact"], OPENPGP_FIXTURE_ARTIFACT.read_bytes())
-        self.assertEqual(verification_environments, [signing_environment])
-        self.assertEqual(verified["signer_identity"], openpgp_identity)
 
     def test_global_routine_default_cannot_override_distinct_mapping(self) -> None:
         self.add_mapping(LEGACY_ADOPTION, str(self.legacy_key))

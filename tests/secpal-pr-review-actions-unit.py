@@ -4080,7 +4080,7 @@ class RegistryTests(TestCase):
             {
                 "require_github_verified": True,
                 "require_local_verified": True,
-                "accepted_formats": ["ssh", "openpgp"],
+                "accepted_formats": ["ssh"],
             },
         )
         self.assertEqual(
@@ -5176,7 +5176,7 @@ def fast_registry() -> dict[str, Any]:
         "allowed_base_repositories": ["SecPal/.github"],
         "manual_gates": [],
         "signature_policy": {
-            "accepted_formats": ["ssh", "openpgp"],
+            "accepted_formats": ["ssh"],
         },
         "check_policy": {
             "require_ruleset_evidence": True,
@@ -7064,7 +7064,7 @@ class FastPathTests(TestCase):
             "manual_gates": [],
             "focused_validation": [],
             "required_local_validation": [],
-            "signature_policy": {"accepted_formats": ["ssh", "openpgp"]},
+            "signature_policy": {"accepted_formats": ["ssh"]},
             "check_policy": {
                 "require_ruleset_evidence": True,
                 "require_branch_protection_evidence": True,
@@ -7410,7 +7410,7 @@ class FastPathTests(TestCase):
             "manual_gates": [],
             "focused_validation": [],
             "required_local_validation": [],
-            "signature_policy": {"accepted_formats": ["ssh", "openpgp"]},
+            "signature_policy": {"accepted_formats": ["ssh"]},
             "check_policy": {
                 "require_ruleset_evidence": True,
                 "require_branch_protection_evidence": True,
@@ -12995,7 +12995,7 @@ class FastPathTests(TestCase):
                         },
                     }
                 ],
-                {"accepted_formats": ["ssh", "openpgp"]},
+                {"accepted_formats": ["ssh"]},
             )
 
     def test_caller_signature_claims_cannot_mint_integration_authority(self) -> None:
@@ -13632,7 +13632,7 @@ class FastPathTests(TestCase):
                 commit_validation_receipt_digest=receipt["receipt_digest"],
                 commit_integration_evidence_digest=fast_path.digest_json(integration),
                 repository_root=REPO_ROOT,
-                signature_policy={"accepted_formats": ["ssh"]},
+                signature_policy={"accepted_formats": []},
             )
 
         wrong_context = integration_commit_git_results(integration)
@@ -13769,7 +13769,7 @@ class FastPathTests(TestCase):
             "signature_policy": {
                 "require_github_verified": True,
                 "require_local_verified": True,
-                "accepted_formats": ["ssh", "openpgp"],
+                "accepted_formats": ["ssh"],
             },
             "check_policy": {
                 "require_ruleset_evidence": True,
@@ -13817,13 +13817,13 @@ class FastPathTests(TestCase):
                 stderr = ""
             elif command[:2] == ["cat-file", "commit"]:
                 stdout = (
-                    "tree deadbeef\ngpgsig -----BEGIN PGP SIGNATURE-----\n"
-                    " signature\n -----END PGP SIGNATURE-----\n\nmessage\n"
+                    "tree deadbeef\ngpgsig -----BEGIN SSH SIGNATURE-----\n"
+                    " signature\n -----END SSH SIGNATURE-----\n\nmessage\n"
                 )
                 stderr = ""
             else:
                 stdout = ""
-                stderr = "gpg: Good signature from SecPal Test\n"
+                stderr = 'Good "git" signature for SecPal Test with ED25519 key\n'
             return SimpleNamespace(returncode=0, stdout=stdout, stderr=stderr)
 
         with (
@@ -15016,8 +15016,13 @@ class FastPathTests(TestCase):
         self.assertEqual(result[1]["local_classification"], "UNKNOWN_LOCAL_KEY")
         openpgp_valid = copy.deepcopy(user_valid)
         openpgp_valid["local_signature"]["format"] = "openpgp"
+        with self.assertRaises(fast_path.SecurityBlocker):
+            fast_path.verify_commit_signatures([openpgp_valid])
+        # Only an explicitly authenticated historical policy may retain this.
         self.assertEqual(
-            fast_path.verify_commit_signatures([openpgp_valid])[0]["classification"],
+            fast_path.verify_commit_signatures(
+                [openpgp_valid], {"accepted_formats": ["ssh", "openpgp"]}
+            )[0]["classification"],
             "LOCAL_OPENPGP_VERIFIED",
         )
         for local_signature in (
@@ -15050,7 +15055,7 @@ class FastPathTests(TestCase):
         policy = {
             "require_github_verified": True,
             "require_local_verified": True,
-            "accepted_formats": ["ssh", "openpgp"],
+            "accepted_formats": ["ssh"],
         }
 
         with self.assertRaisesRegex(

@@ -8,8 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
-import unittest
-from unittest import mock
+from unittest import TestCase, main, mock
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("gov_actions", ROOT / "scripts/secpal-pr-review-actions.py")
@@ -18,7 +17,7 @@ sys.modules[spec.name] = actions
 spec.loader.exec_module(actions)
 
 
-class GovernanceValidationTests(unittest.TestCase):
+class GovernanceValidationTests(TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -117,6 +116,7 @@ class GovernanceValidationTests(unittest.TestCase):
             )
         self.assertTrue(result)
         self.assertEqual(run.call_count, 3)
+        self.assertEqual(result.command_set, list(actions._governance_validation_commands()))
         self.assertTrue(all("composer" not in call.args[0] for call in run.call_args_list))
         self.assertTrue(all(call.args[1:] == (actions.REPOSITORY_ROOT, actions.REPOSITORY_ROOT)
                             for call in executable.call_args_list))
@@ -128,6 +128,107 @@ class GovernanceValidationTests(unittest.TestCase):
             self.assertTrue(actions._run_registered_validations(self.entry, self.root))
         application.assert_called_once_with(self.entry)
 
+    def test_current_registry_is_ssh_only(self):
+        for entry in actions.load_registry()["repositories"]:
+            self.assertEqual(entry["signature_policy"]["accepted_formats"], ["ssh"])
+
+    def test_current_user_openpgp_is_not_new_signing_authority(self):
+        commit = {
+            "oid": "1" * 40, "source": "USER",
+            "local_signature": {"verified": True, "state": "valid", "format": "openpgp"},
+            "github_verification": {"verified": True, "reason": "valid"},
+        }
+        with self.assertRaises(actions.fast_path.SecurityBlocker):
+            actions.fast_path.verify_commit_signatures([commit])
+        commit["source"] = "GITHUB"
+        self.assertEqual(actions.fast_path.verify_commit_signatures([commit])[0]["classification"], "GITHUB_VERIFIED")
+
+    def test_governance_receipt_binds_actual_portable_commands(self):
+        binding = actions._fast_registry_binding(self.entry)
+        commands = list(actions._governance_validation_commands())
+        self.assertFalse(any(str(actions.REPOSITORY_ROOT) in str(command) for command in commands))
+        evidence = {"command_set_digest": actions.fast_path.digest_json(commands)}
+        self.assertEqual(actions.fast_path.validation_commands_for_evidence(binding, evidence), commands)
+        self.assertNotEqual(evidence["command_set_digest"], actions.fast_path.digest_json(binding["validation"]))
+        for key in ("integration_evidence_digest", "exceptional_recovery_evidence_digest", "exceptional_continuation_evidence_digest"):
+            with self.subTest(key=key), self.assertRaises(actions.fast_path.SecurityBlocker):
+                actions.fast_path.validation_commands_for_evidence(binding, {**evidence, key: "a" * 64})
+
+    def test_command_selection_cannot_be_borrowed_by_other_repository(self):
+        binding = actions._fast_registry_binding(self.entry)
+        evidence = {"command_set_digest": actions.fast_path.digest_json(list(actions._governance_validation_commands()))}
+        for change in ({"repository": "SecPal/frontend"}, {"governance_only_validation": "SKIP_TESTS"}):
+            with self.subTest(change=change), self.assertRaises(actions.fast_path.SecurityBlocker):
+                actions.fast_path.validation_commands_for_evidence({**binding, **change}, evidence)
+        with self.assertRaises(actions.fast_path.SecurityBlocker):
+            actions.fast_path.validation_commands_for_evidence(binding, {"command_set_digest": "f" * 64})
+
+    def test_governance_receipt_attestation_roundtrip_and_tamper_rejection(self):
+        fast = actions.fast_path
+        reviewed = fast.StableFeedbackState.from_payload({
+            "repository": "SecPal/api", "pull_request_number": 1563,
+            "head_sha": "1" * 40, "base_ref": "main", "base_sha": "2" * 40,
+            "pr_state": "OPEN", "pull_request_reactions": [], "reviews": [],
+            "conversation_comments": [], "threads": [],
+        })
+        binding = actions._fast_registry_binding(self.entry)
+        commands = list(actions._governance_validation_commands())
+        gates = [{"gate": gate, "satisfied": True, "evidence": "Focused governance validation; no application suite claim"}
+                 for gate in binding["manual_gates"]]
+        receipt = actions._validation_receipt(
+            repository="SecPal/api", head_sha=reviewed.head_sha, tree_sha="3" * 40,
+            binding=binding, reviewed=reviewed, manual_gate_evidence=gates,
+            command_set=commands,
+        )
+        self.assertEqual(receipt["command_set_digest"], fast.digest_json(commands))
+        attestation = fast.create_validation_attestation(
+            repository="SecPal/api", head_sha="4" * 40, registry=binding,
+            command_set=commands, successful_result=True, reviewed_state=reviewed,
+            validation_receipt=receipt,
+        )
+        def verify(value):
+            return fast.verify_validation_attestation(
+                value, repository="SecPal/api", head_sha="4" * 40,
+                registry=binding, command_set=binding["validation"],
+                reviewed_state=reviewed, commit_parent_sha=reviewed.head_sha,
+                commit_tree_sha="3" * 40, commit_validation_receipt_digest=receipt["receipt_digest"],
+            )
+        self.assertTrue(fast.is_verified_validation_evidence(verify(attestation)))
+        wrong = copy.deepcopy(attestation)
+        wrong["command_set_digest"] = fast.digest_json(binding["validation"])
+        with self.assertRaises(fast.SecurityBlocker):
+            verify(wrong)
+
+    def test_governance_commands_require_authenticated_registry_history(self):
+        fast = actions.fast_path
+        binding = actions._fast_registry_binding(self.entry)
+        registry = actions.load_registry()
+        schema = fast.DELIVERY_REGISTRY_SCHEMA_PATH.read_text(encoding="utf-8")
+        tip = "a" * 40
+        observations = {
+            ("remote", "get-url", "origin"): "https://github.com/SecPal/.github.git",
+            ("rev-parse", "HEAD"): tip,
+            ("log", "--format=%H", tip, "--", fast.DELIVERY_REGISTRY_PATH): tip,
+            ("show", f"{tip}:{fast.DELIVERY_REGISTRY_PATH}"): actions.json.dumps(registry),
+            ("show", f"{tip}:{fast.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH}"): schema,
+        }
+        def read(arguments, **_):
+            return 0, observations[tuple(arguments)]
+        with mock.patch.object(fast, "_central_git_result", side_effect=read):
+            for commands in (binding["validation"], fast.governance_validation_commands()):
+                self.assertEqual(fast.load_immutable_delivery_registry_binding(
+                    repository="SecPal/api", delivery_head_sha="b" * 40,
+                    expected_registry_digest=fast.digest_json(binding),
+                    expected_command_set_digest=fast.digest_json(commands),
+                ), binding)
+            with self.assertRaises(fast.SecurityBlocker):
+                fast.load_immutable_delivery_registry_binding(
+                    repository="SecPal/api", delivery_head_sha="b" * 40,
+                    expected_registry_digest=fast.digest_json(binding),
+                    expected_command_set_digest="f" * 64,
+                )
+
+
 
 if __name__ == "__main__":
-    unittest.main()
+    main()
