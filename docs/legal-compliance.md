@@ -11,9 +11,9 @@ SPDX-License-Identifier: CC0-1.0
 
 **Status:** Living document - Update when new requirements identified
 
-**Last Updated:** 2026-08-16
+**Last Updated:** 2026-10-02
 
-**Current architecture baseline:** [ADR-014](adr/20260720-tenant-identity-access-model-adr014.md) governs Tenant, global identity, Employee, access, encryption, erasure, and BWR file-export boundaries. Architecture-specific examples in this living document must conform to that accepted baseline.
+**Current architecture baseline:** [ADR-014](adr/20260720-tenant-identity-access-model-adr014.md) retains Tenant, global identity, membership, access, encryption, erasure, and BWR file-export authority. [ADR-025](adr/20261002-employment-time-absence-compensation-adr025.md) partially supersedes its Employee contract projection and unresolved rehire decisions and owns the accepted employment, working-time, absence, leave, and compensation boundaries. Architecture-specific examples must follow that combined accepted authority. Mutable legal/tariff facts require the source verification, version provenance, and revalidation required by ADR-025; architecture acceptance does not establish legal compliance.
 
 ---
 
