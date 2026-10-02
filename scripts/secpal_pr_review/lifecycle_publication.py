@@ -121,6 +121,10 @@ class LifecyclePublicationError(ValueError):
     """Publication is absent, stale, ambiguous, malformed, or unauthorized."""
 
 
+class LifecyclePublicationAmbiguousWrite(LifecyclePublicationError):
+    """A protected CAS was attempted, but its transport result is uncertain."""
+
+
 def _classify_journal_document(raw: bytes) -> tuple[str, dict[str, Any]]:
     """Parse one journal object and select its maintained closed-kind verifier."""
 
@@ -913,7 +917,9 @@ def _cas_remote_ref(
         extra_environment=credential_environment,
     )
     if result.returncode != 0:
-        raise LifecyclePublicationError("publication journal changed during compare-and-swap")
+        raise LifecyclePublicationAmbiguousWrite(
+            "publication journal changed during compare-and-swap"
+        )
 
 
 def _reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -952,6 +958,22 @@ def _native_bundle(value: Mapping[str, Any]) -> Mapping[str, Any]:
             )
         return value["lifecycle_evidence"]
     return value
+
+
+def _require_native_genesis_only(bundle: Mapping[str, Any]) -> None:
+    """Do not import unissued transitions through native admission or enrollment."""
+
+    events = bundle.get("transition_authorizations")
+    snapshots = bundle.get("authority_chain")
+    if (
+        not isinstance(events, list)
+        or not isinstance(snapshots, list)
+        or len(events) != 1
+        or len(snapshots) != 1
+        or not isinstance(events[0], dict)
+        or events[0].get("transition_kind") != "INITIALIZED_DRAFT"
+    ):
+        raise LifecyclePublicationError("native enrollment requires genesis only")
 
 
 def _verify_genesis_admission_document(
@@ -2104,6 +2126,7 @@ def admit_native_genesis(
     native = _native_bundle(bundle)
     native_raw = canonical_json_bytes(native)
     verified = authority.verify_native_lifecycle_for_genesis_admission(native_raw)
+    _require_native_genesis_only(native)
     initialization = native.get("delivery_initialization")
     if not isinstance(initialization, dict):
         raise LifecyclePublicationError("native lifecycle initialization is malformed")
@@ -2260,6 +2283,8 @@ def enroll_existing_lifecycle(
         if is_native
         else authority.verify_lifecycle_authority_for_publication(bundle_raw)
     )
+    if is_native:
+        _require_native_genesis_only(_native_bundle(bundle))
     if exact_adoption and bundle["exact_state_adoption_proof"].get("proof_version") == authority.EXACT_ADOPTION_LOSS_VERSION:
         authority.verify_pre_enrollment_validation_evidence_loss_admission(
             canonical_json_bytes(bundle["exact_state_adoption_proof"]["validation_evidence_loss_admission"])
@@ -2387,10 +2412,26 @@ def advance_current_terminal(
             },
         )
         successor_events = lifecycle_bundle.get("transition_authorizations")
+        if not isinstance(successor_events, list) or not successor_events:
+            raise LifecyclePublicationError("successor transition is unavailable")
+        latest_event = successor_events[-1]
+        try:
+            authority.require_forward_transition(
+                predecessor.state,
+                latest_event["transition_kind"],
+                latest_event["event_digest"],
+                allow_adopted_observations=(
+                    predecessor.historical_proof_mode
+                    == authority.EXACT_ADOPTION_PROOF_MODE
+                ),
+                adoption_review_submitted=predecessor.adoption_review_submitted,
+            )
+        except authority.LifecycleAuthorityError as exc:
+            raise LifecyclePublicationError(
+                "successor violates canonical forward lifecycle order"
+            ) from exc
         if (
-            isinstance(successor_events, list)
-            and successor_events
-            and successor_events[-1].get("transition_kind")
+            successor_events[-1].get("transition_kind")
             in {
                 "INVALID_REVIEW_CONSUMPTION_CORRECTED",
                 "INVALID_REVIEW_DERIVED_READY_CORRECTED",

@@ -476,6 +476,11 @@ persistent lifecycle and canonical Draft genesis. Every later snapshot is
 derived by independently verifying the complete predecessor and event chains;
 callers cannot provide counters, Ready history, exceptional history, or a new
 lifecycle identity as resulting authority.
+Historical signed review-before-Ready chains remain verifiable by pure state
+derivation. New transitions are checked against authenticated CURRENT by one
+forward policy: first ordinary Ready starts at review 0/1, review consumption
+requires Ready, and remediation requires the finite review. The protected
+publication path enforces the same policy before mutation.
 
 `verify_lifecycle_authority` accepts only canonical serialized lifecycle
 evidence. It loads signer roles, SSH keys, OpenPGP fingerprints, formats, and
@@ -944,19 +949,26 @@ the accepted policy credential before becoming a `Signer` result. Selection
 keeps the existing closed non-interactive environment and does not use an SSH
 agent, inspect private-key contents, search for keys, or mutate Git config.
 
-The executor additionally converges one fixed publication-lag shape without a
-new lifecycle primitive: an authenticated pending `DRAFT_TO_READY` at H0,
-followed by exactly one authenticated Ready-only `REMEDIATION_COMPLETED` source
-advance to sole-child H1. It requires complete GitHub Ready chronology, the
-existing signed source authorization and findings, verifier-sealed validation
-and attestation evidence, exact tree, live GitHub-valid signature status, and a
-local signature fingerprint matching the maintained key set. It sequentially
-publishes the two existing successors. Predecessor, midpoint, and complete
-re-entry are idempotent; ambiguity and ancestry-only claims fail closed, and
-GitHub is never written again when already Ready. Accepted main exposes this
-fixed operation as `converge_pending_ready_head_advancement`; the closed #810
-first-executor bootstrap remains historical and does not dispatch later
-accepted-main entry points.
+The executor retains the fixed `converge_pending_ready_head_advancement` path
+for historical publication-lag handling. Its two-successor shape contains no
+review event between Ready and remediation, so a new ordinary lifecycle at
+review 0/1 cannot use it to skip the finite review. Forward policy rejects that
+attempt before either protected publication write. Ordinary Ready execution
+still converges GitHub state and CURRENT through authenticated read-back.
+
+After the first Ready transition,
+`scripts/secpal-publish-review-consumption.py` records the one bounded
+independent review cycle with explicit `--repository`, `--delivery-issue`, and
+`--apply` options. The maintained feedback skill invokes it after terminal
+Stable Feedback on a new Ready Review 0/1 lifecycle and requires CURRENT
+Review 1/1 before remediation. It binds every qualifying review identity and
+submission time on the exact Ready head to authenticated CURRENT, complete
+stable feedback, and the GitHub Ready timeline.
+It signs the existing transition family, publishes through the protected
+journal CAS, and reconciles ambiguous writes through exact successor CURRENT
+read-back. A second review consumption fails
+the finite budget. Historical publication read-back uses pure signed-chain
+derivation, so old review-before-Ready edges remain verifiable.
 
 ### `secpal_pr_review/lifecycle_publication.py`
 
@@ -1001,7 +1013,9 @@ writer, and reconciler are connected; it accepts no caller-supplied eligibility
 callback.
 
 New native delivery publication is a two-CAS sequence: admission first, then
-enrollment after re-verifying the reachable admission. A branch-local static
+enrollment after re-verifying the reachable admission. Both writes require a
+genesis-only signed bundle; later transitions use CURRENT advancement and its
+canonical forward policy. A branch-local static
 anchor cannot publish. A separate closed historical-compatibility registry
 binds every retained pre-#774 exception to its repository, issue, PR, initial
 head, initialization digest, proof mode, exact enrollment object OID, and signed

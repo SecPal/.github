@@ -1698,4 +1698,19 @@ for item in registry["repositories"]:
             assert all(isinstance(value, str) and value for value in command["argv"])
 PY
 
+python3 - "$SKILL" "$CONTRACT" <<'PY'
+from pathlib import Path
+import sys
+
+skill = Path(sys.argv[1]).read_text()
+contract = Path(sys.argv[2]).read_text()
+step = skill.split("## Run the finite invocation", 1)[1]
+assert step.index("Capture stable feedback") < step.index(
+    "publish and read back `UNRESTRICTED_REVIEW_CONSUMED`"
+) < step.index("before proceeding to remediation")
+assert "scripts/secpal-publish-review-consumption.py --repository" in skill
+assert "Review 1/1 before ordinary" in skill
+assert "one explicit `UNRESTRICTED_REVIEW_CONSUMED` successor before remediation" in contract
+PY
+
 printf '✓ finite secpal-pr-review skill policy checks passed\n'

@@ -912,6 +912,11 @@ signature, and enrollment publication. It is allowed to follow that existing
 enrollment, appends without rewriting history, and selects no terminal. See
 [Native Lifecycle Genesis Admission](native-lifecycle-genesis-admission.md).
 
+Publication rechecks the #750 forward transition policy against authenticated
+CURRENT before writing a successor. Historical signed chains that consumed
+review before Ready remain independently verifiable, but cannot be newly issued
+or published in that order.
+
 The ancillary `SECPAL_PROVIDER_DISPATCH_CLAIM` reserves one exact replacement
 provider fallback dispatch before its external comment write. It is signed by
 the existing publication role, uses the same protected branch and CAS, and
@@ -937,6 +942,33 @@ feedback event. The decision contains the unchanged persistent lifecycle ID,
 finite counters, explicit Cycle-3 absence, Ready history, and exceptional-event
 counts. It selects at most one typed lifecycle transition and performs no
 mutation itself.
+
+The ordinary delivery order follows the canonical Work-Graph contract:
+Draft → PRE_READY → first Ready at review 0/1 → one finite review at Ready →
+optional remediation → merge. First Ready changes only Draft/Ready and Ready
+history. New review consumption while Draft, or remediation before the review,
+fails closed. A later separately authorized Ready → Draft → Ready preserves
+the existing finite counters and history.
+An authentically enrolled Exact-State-Adoption root may instead preserve a
+historical Draft review at 1/1 before its first Ready. Its signed observed
+history must prove an actual `REVIEW_SUBMITTED`; conservative review-budget
+admission alone is insufficient. This bounded adopted successor preserves the
+consumed review and remediation counters. It does not permit new native Draft
+review issuance or relax the ordinary first-Ready rule.
+
+The maintained post-Ready review publisher authenticates the complete bounded
+independent review cycle on the exact Ready head after GitHub's Ready event.
+Several review objects from that assessment still advance the existing
+`UNRESTRICTED_REVIEW_CONSUMED` transition only once. The publisher also accepts
+an authenticated terminal Code/Security summary with no GitHub review object
+when the provider completed a clean assessment on the Ready head.
+The summary remains bound to the complete Stable Feedback and Ready chronology.
+The normal feedback skill invokes the publisher after terminal Stable Feedback
+and requires CURRENT
+Review 1/1 before remediation. Ambiguous publication results are reconciled
+through exact signed-successor CURRENT read-back without replaying the write.
+Deterministic publication errors retain their specific failure rather than
+being reported as an ambiguous write.
 
 Replacement uses `PR_REBOUND` and cannot create another lifecycle root.
 An already-authorized normal remediation commit advances the head with
