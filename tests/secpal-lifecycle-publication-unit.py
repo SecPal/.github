@@ -5676,11 +5676,11 @@ class FrontendLifecyclePolicyTests(ContractsLifecyclePolicyTests):
                 reference,
                 repository=self.repository,
                 publication_remote_url=f"https://github.com/{self.repository}.git",
-                publication_ruleset_id=self.accepted_policy.publication_ruleset_id,
+                publication_ruleset_id=24431481,
             ),
         )
         self.assertEqual(self.accepted_policy.accepted_formats, frozenset({"ssh"}))
-        self.assertGreater(self.accepted_policy.publication_ruleset_id, 0)
+        self.assertEqual(self.accepted_policy.publication_ruleset_id, 24431481)
         self.assertEqual(self.accepted_policy.initialization_anchors, ())
 
     def test_registration_rejects_missing_malformed_and_widened_authority(self) -> None:
