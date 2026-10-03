@@ -4129,6 +4129,13 @@ def _sign_ready_source_recovery_authorization(
         historical_validation_receipt_digest is None
         and historical_final_attestation_digest is None
     )
+    proof = (
+        current_lifecycle_evidence.get("exact_state_adoption_proof")
+        if isinstance(current_lifecycle_evidence, Mapping) else None
+    )
+    loss = proof.get("validation_evidence_loss_admission") if isinstance(proof, Mapping) else None
+    if isinstance(loss, Mapping) and loss.get("schema_version") == "1.2" and not zero_receipt_root:
+        raise LifecycleAuthorityError("zero-receipt recovery cannot claim historical evidence")
     if zero_receipt_root:
         recovered_adoption_root_historical_evidence(
             current_lifecycle, current_lifecycle_evidence,

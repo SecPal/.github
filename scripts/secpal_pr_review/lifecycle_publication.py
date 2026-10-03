@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import copy
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from datetime import datetime
 import hashlib
 import json
@@ -31,6 +31,19 @@ GENESIS_ADMISSION_KIND = "SECPAL_NATIVE_LIFECYCLE_GENESIS_ADMISSION"
 GENESIS_ADMISSION_DOMAIN = "secpal.native-lifecycle-genesis-admission/v1"
 READY_SOURCE_RECOVERY_KIND = "SECPAL_READY_SOURCE_RECOVERY_PUBLICATION"
 READY_SOURCE_RECOVERY_DOMAIN = "secpal.ready-source-recovery-publication/v1"
+READY_SOURCE_CORRECTION_KIND = "SECPAL_READY_SOURCE_RECOVERY_CORRECTION"
+READY_SOURCE_CORRECTION_DOMAIN = "secpal.ready-source-recovery-correction/v1"
+# One immutable historical exception, following the exact compatibility admission
+# pattern. This is not a caller-extensible registry or a recovery selector.
+_ZERO_RECEIPT_RECOVERY_CORRECTION_TARGET = (
+    "SecPal/.github", 711, 951,
+    "4effffb44cfd27ae9c32e3270479a3a4c0336ce7",
+    "7683e615f84601d3d482e02e319010c7ccc0a1b3505c54f825183cd5985be54c",
+    "f9a8f3e209ecaf33419a54b65110b04d08816791",
+    "e3ba395ac5e276002037c54bc8aaaf6fc82ee38d4bba01f0ca363e1308d2623a",
+    "a234e1a6c87e94916c32abb8388cb7ffc6c2fa40",
+    "21f63cc34ed6b2244c7045010596a789456922d903534173a452e1d9ea2548b0",
+)
 PROVIDER_DISPATCH_CLAIM_KIND = "SECPAL_PROVIDER_DISPATCH_CLAIM"
 PROVIDER_DISPATCH_CLAIM_DOMAIN = "secpal.provider-dispatch-claim/v1"
 ENROLLED_DRAFT_CLAIM_KIND = "SECPAL_ENROLLED_DRAFT_INTEGRATION_CLAIM"
@@ -45,7 +58,8 @@ PROVIDER_DISPATCH_TRIGGERS = {
 }
 JOURNAL_KINDS = frozenset(
     {PUBLICATION_KIND, GENESIS_ADMISSION_KIND, READY_SOURCE_RECOVERY_KIND,
-     PROVIDER_DISPATCH_CLAIM_KIND, ENROLLED_DRAFT_CLAIM_KIND}
+     PROVIDER_DISPATCH_CLAIM_KIND, ENROLLED_DRAFT_CLAIM_KIND,
+     READY_SOURCE_CORRECTION_KIND}
 )
 ORDINARY_REMEDIATION_SUFFIX = "ORDINARY_REMEDIATION_SUFFIX"
 EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION = (
@@ -239,6 +253,7 @@ class VerifiedReadySourceRecovery:
     historical_evidence_loss_proof_digest: str
     lifecycle_state: dict[str, Any]
     recovery_safety_facts: dict[str, Any]
+    historical_evidence_correction: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -1910,6 +1925,165 @@ def _verify_provider_dispatch_claim_document(
     )
 
 
+def _recovery_root_historical_evidence(
+    current_document: Mapping[str, Any],
+    current_lifecycle: authority.VerifiedLifecycleAuthority,
+) -> dict[str, Any] | None:
+    """Select typed absence only through the canonical authenticated root owner."""
+
+    bundle = current_document.get("lifecycle_evidence")
+    proof = bundle.get("exact_state_adoption_proof") if isinstance(bundle, Mapping) else None
+    loss = proof.get("validation_evidence_loss_admission") if isinstance(proof, Mapping) else None
+    if not isinstance(loss, Mapping) or loss.get("schema_version") != "1.2":
+        return None
+    try:
+        return authority.recovered_adoption_root_historical_evidence(
+            current_lifecycle, bundle, current_document.get("predecessor_publication_oid")
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecyclePublicationError("recovery zero-receipt root is invalid") from exc
+
+
+def _require_effective_recovery_historical_evidence(
+    recovery: VerifiedReadySourceRecovery,
+    current_document: Mapping[str, Any],
+    current_lifecycle: authority.VerifiedLifecycleAuthority,
+) -> None:
+    historical = _recovery_root_historical_evidence(current_document, current_lifecycle)
+    if historical is not None and (
+        recovery.historical_validation_receipt_digest != historical["validation_receipt_digest"]
+        or recovery.historical_final_attestation_digest != historical["final_attestation_digest"]
+    ):
+        raise LifecyclePublicationError("recovery historical evidence contradicts authenticated source truth")
+
+
+def _ready_source_correction_fields(
+    previous: tuple[str, Mapping[str, Any], authority.VerifiedLifecycleAuthority],
+    recovery: VerifiedReadySourceRecovery,
+    *, publication_branch: str, journal_predecessor_oid: str,
+    signer_identity: str,
+) -> dict[str, Any]:
+    """Derive the sole permitted correction; accept no historical/result inputs."""
+
+    current_oid, current_document, lifecycle = previous
+    target = _ZERO_RECEIPT_RECOVERY_CORRECTION_TARGET
+    if (
+        (recovery.repository, recovery.delivery_issue, recovery.pull_request,
+         current_oid, current_document["publication_digest"],
+         recovery.publication_oid, recovery.publication_digest) != target[:7]
+        or recovery.historical_evidence_correction is not None
+        or recovery.current_publication_oid != current_oid
+        or recovery.current_publication_digest != current_document["publication_digest"]
+        or recovery.current_authority_digest != lifecycle.authority_digest
+        or recovery.lifecycle_id != lifecycle.lifecycle_id
+        or recovery.repository != lifecycle.repository
+        or recovery.delivery_issue != lifecycle.delivery_issue
+        or recovery.pull_request != lifecycle.pull_request
+        or recovery.head_sha != lifecycle.head_sha
+        or recovery.tree_sha != lifecycle.tree_sha
+        or recovery.lifecycle_state != lifecycle.state
+        or recovery.journal_predecessor_oid != current_oid
+        or signer_identity != "aroviqen@secpal.app"
+    ):
+        raise LifecyclePublicationError("Ready-source correction does not bind its exact historical target")
+    historical = _recovery_root_historical_evidence(current_document, lifecycle)
+    if historical is None or historical["state"] != "ABSENT_NEVER_ISSUED":
+        raise LifecyclePublicationError("Ready-source correction requires authenticated zero-receipt history")
+    proof = current_document["lifecycle_evidence"]["exact_state_adoption_proof"]
+    loss = proof["validation_evidence_loss_admission"]
+    if (
+        recovery.historical_validation_receipt_digest != loss["current_safety"]["receipt_digest"]
+        or recovery.historical_final_attestation_digest != loss["admission_digest"]
+        or recovery.expected_commit_signer != {"kind": "SSH_PRINCIPAL", "identity": loss["source_signer_identity"]}
+        or recovery.parent_shas != (loss["parent_sha"],)
+        or lifecycle.state["remediation_cycle_count"] != 1
+    ):
+        raise LifecyclePublicationError("Ready-source correction historical contradiction changed")
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "kind": READY_SOURCE_CORRECTION_KIND,
+        "domain": READY_SOURCE_CORRECTION_DOMAIN,
+        "operation": "CORRECT_ZERO_RECEIPT_HISTORICAL_PROJECTION",
+        "reason": "CURRENT_SAFETY_MISCLAIMED_AS_HISTORICAL_EVIDENCE",
+        "bounded_uses": 1,
+        "repository": recovery.repository,
+        "delivery_issue": recovery.delivery_issue,
+        "pull_request": recovery.pull_request,
+        "lifecycle_id": lifecycle.lifecycle_id,
+        "head_sha": recovery.head_sha,
+        "tree_sha": recovery.tree_sha,
+        "current_publication_oid": current_oid,
+        "current_publication_digest": current_document["publication_digest"],
+        "current_authority_digest": lifecycle.authority_digest,
+        "recovery_publication_oid": recovery.publication_oid,
+        "recovery_publication_digest": recovery.publication_digest,
+        "recovery_journal_predecessor_oid": recovery.journal_predecessor_oid,
+        "recovery_authorization_id": recovery.authorization_id,
+        "recovery_authorization_digest": recovery.authorization_digest,
+        "invalid_historical_validation_receipt_digest": recovery.historical_validation_receipt_digest,
+        "invalid_historical_final_attestation_digest": recovery.historical_final_attestation_digest,
+        "loss_admission_digest": loss["admission_digest"],
+        "historical_receipt_provenance_digest": loss["historical_receipt_provenance_digest"],
+        "historical_evidence": historical,
+        "prior_authority_tag_oid": target[7],
+        "original_prior_authority_digest": target[8],
+        "publication_branch": publication_branch,
+        "journal_predecessor_oid": journal_predecessor_oid,
+        "signer_identity": signer_identity,
+    }
+
+
+def _verify_ready_source_correction_document(
+    raw: bytes,
+    *, object_oid: str, expected_branch: str, parent: str | None,
+    previous: tuple[str, Mapping[str, Any], authority.VerifiedLifecycleAuthority],
+    recovery: VerifiedReadySourceRecovery,
+) -> VerifiedReadySourceRecovery:
+    """Verify signed append-only compensation and return the effective projection."""
+
+    try:
+        document = authority.loads_closed_json(raw)
+        if not isinstance(document, dict) or canonical_json_bytes(document) != raw:
+            raise LifecyclePublicationError("Ready-source correction is not canonical")
+        if parent is None or not _OID.fullmatch(parent) or not _OID.fullmatch(object_oid):
+            raise LifecyclePublicationError("Ready-source correction ancestry is invalid")
+        expected = _ready_source_correction_fields(
+            previous, recovery, publication_branch=expected_branch,
+            journal_predecessor_oid=parent, signer_identity=document.get("signer_identity"),
+        )
+        if (
+            set(document) != set(expected) | {"signature", "publication_digest"}
+            or canonical_json_bytes(authority._unsigned(document, "signature", "publication_digest"))
+            != canonical_json_bytes(expected)
+        ):
+            raise LifecyclePublicationError("Ready-source correction scope or projection changed")
+        signed = {key: value for key, value in document.items() if key != "publication_digest"}
+        if document["publication_digest"] != digest_json(signed):
+            raise LifecyclePublicationError("Ready-source correction digest mismatch")
+        policy = authority._load_lifecycle_trust_policy(recovery.repository)
+        if policy.publication_branch != expected_branch:
+            raise LifecyclePublicationError("Ready-source correction branch changed")
+        authority._verify_signature(
+            canonical_json_bytes(expected), document["signature"], expected["signer_identity"],
+            READY_SOURCE_CORRECTION_DOMAIN, policy.publication_signer_identities,
+            authority._policy_signature_verifier(policy),
+        )
+    except (authority.LifecycleAuthorityError, KeyError, TypeError, ValueError) as exc:
+        raise LifecyclePublicationError("Ready-source correction is invalid") from exc
+    return replace(
+        recovery, historical_validation_receipt_digest=None,
+        historical_final_attestation_digest=None, historical_evidence_correction=raw,
+    )
+
+
+def _ready_source_correction_key(candidate: Mapping[str, Any]) -> tuple[str, int]:
+    try:
+        return (authority._require_repository(candidate.get("repository")),
+                authority._require_positive_int(candidate.get("delivery_issue"), "correction delivery issue"))
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecyclePublicationError("Ready-source correction identity is malformed") from exc
+
+
 def _walk_journal(
     repository_root: Path, tip_oid: str, publication_branch: str,
     *, include_recoveries: bool = False, include_claims: bool = False,
@@ -1962,6 +2136,16 @@ def _walk_journal(
     for position, (oid, raw, parent) in enumerate(chronological):
         kind, candidate = _classify_journal_document(raw)
         if kind == GENESIS_ADMISSION_KIND:
+            continue
+        if kind == READY_SOURCE_CORRECTION_KIND:
+            key = _ready_source_correction_key(candidate)
+            previous, recovery = latest.get(key), recoveries.get(key)
+            if previous is None or recovery is None:
+                raise LifecyclePublicationError("Ready-source correction precedes its source authority")
+            recoveries[key] = _verify_ready_source_correction_document(
+                raw, object_oid=oid, expected_branch=publication_branch,
+                parent=parent, previous=previous, recovery=recovery,
+            )
             continue
         if kind == ENROLLED_DRAFT_CLAIM_KIND:
             selected = candidate.get("authorization", {}).get("evidence", {})
@@ -2622,6 +2806,9 @@ def publish_ready_source_recovery(
             if existing.authorization_digest == verified_authorization[
                 "authorization_digest"
             ]:
+                _require_effective_recovery_historical_evidence(
+                    existing, current_document, current_lifecycle
+                )
                 return existing
             raise LifecyclePublicationError(
                 "delivery already has a different Ready-source recovery"
@@ -2641,6 +2828,9 @@ def publish_ready_source_recovery(
             current_oid=current_oid,
             current_document=current_document,
             current_lifecycle=current_lifecycle,
+        )
+        _require_effective_recovery_historical_evidence(
+            recovered, current_document, current_lifecycle
         )
         _walk_journal(
             root,
@@ -3020,6 +3210,100 @@ def require_unenrolled_delivery(repository: str, delivery_issue: int) -> None:
                 raise LifecyclePublicationError("delivery is already enrolled or natively admitted")
 
 
+def publish_zero_receipt_ready_source_correction() -> VerifiedReadySourceRecovery:
+    """Append the accepted exact correction, without changing delivery CURRENT.
+
+    No caller supplies a delivery, recovery, desired state, signer or authority
+    object. Candidate tooling cannot publish the correction that accepts itself.
+    """
+
+    from . import bootstrap_source_admission as transport
+    from . import lifecycle_execution as execution
+
+    helper = transport._load_actions_helper()
+    repository, issue, pr = _ZERO_RECEIPT_RECOVERY_CORRECTION_TARGET[:3]
+    accepted_main = helper._require_accepted_main_bridge_source(repository)
+    policy = authority._load_lifecycle_trust_policy(repository)
+    _verify_live_protection(policy)
+    binding = helper.select_repository(helper.load_registry(), repository)
+    signer_identity, signer = execution._policy_role_signer(
+        policy, policy.publication_signer_identities, "publication signer role",
+        allow_routine_default=True,
+    )
+    with _isolated_repository(policy, write=True) as (root, credential_environment):
+        tip = _observe_remote_current_once(
+            root, policy.publication_remote_url, policy.publication_branch,
+            credential_environment=credential_environment,
+        )
+        if tip is None:
+            raise LifecyclePublicationError("Ready-source correction requires protected ancestry")
+        _, latest, _, recoveries = _walk_journal(root, tip, policy.publication_branch, include_recoveries=True)
+        previous, recovery = latest.get((repository, issue)), recoveries.get((repository, issue))
+        if previous is None or recovery is None:
+            raise LifecyclePublicationError("Ready-source correction source is unavailable")
+        live = execution._read_live_github(repository, pr)
+        if (live.repository, live.pull_request, live.state, live.head_sha, live.draft) != (
+            repository, pr, "OPEN", recovery.head_sha, False
+        ):
+            raise LifecyclePublicationError("Ready-source correction live source changed")
+        if recovery.historical_evidence_correction is not None:
+            _require_effective_recovery_historical_evidence(recovery, previous[1], previous[2])
+            return recovery
+        fields = _ready_source_correction_fields(
+            previous, recovery, publication_branch=policy.publication_branch,
+            journal_predecessor_oid=tip, signer_identity=signer_identity,
+        )
+        tag_ref = (
+            f"refs/tags/secpal-ready-integration-prior-authority-{issue}-{pr}-{recovery.head_sha}"
+        )
+        fetched = _run_git(root, ["fetch", "--no-tags", policy.publication_remote_url, f"{tag_ref}:{tag_ref}"])
+        if fetched.returncode != 0 or _resolve_current_once(root, tag_ref) != fields["prior_authority_tag_oid"]:
+            raise LifecyclePublicationError("Ready-source correction immutable tag changed")
+        tag_oid = fields["prior_authority_tag_oid"]
+        tag = helper._run_attestation_git(root, ["cat-file", "tag", tag_oid]).stdout
+        signature = helper._run_attestation_git(root, ["verify-tag", "--raw", tag_oid], allow_failure=True)
+        local_signature = helper.evidence.interpret_local_signature(
+            signature.returncode, f"{signature.stdout}\n{signature.stderr}", signature_format_hint="ssh",
+        )
+        helper._verify_signature_policy_identity(tag_oid, local_signature, binding["signature_policy"])
+        helper._verify_integration_signer(f"{signature.stdout}\n{signature.stderr}", recovery.expected_commit_signer)
+        if (
+            helper._prior_authority_tag_target(tag) != recovery.head_sha
+            or helper._prior_authority_tag_digest(tag) != fields["original_prior_authority_digest"]
+        ):
+            raise LifecyclePublicationError("Ready-source correction historical tag binding changed")
+        source = helper._verified_prior_delivery_commit(
+            root, recovery.head_sha, recovery.expected_commit_signer["identity"], binding,
+        )
+        if source["tree_sha"] != recovery.tree_sha or tuple(source["parent_shas"]) != recovery.parent_shas:
+            raise LifecyclePublicationError("Ready-source correction signed source changed")
+        signature = authority._normalize_signature(
+            signer(canonical_json_bytes(fields), READY_SOURCE_CORRECTION_DOMAIN), signer_identity,
+        )
+        signed = {**fields, "signature": signature}
+        raw = canonical_json_bytes({**signed, "publication_digest": digest_json(signed)})
+        object_oid = _write_publication_object(root, raw, tip)
+        _walk_journal(root, object_oid, policy.publication_branch, include_recoveries=True)
+        helper._require_accepted_main_bridge_source(repository, expected_main=accepted_main)
+        if execution._read_live_github(repository, pr) != live:
+            raise LifecyclePublicationError("Ready-source correction live source drifted before CAS")
+        try:
+            _cas_remote_ref(
+                root, policy.publication_remote_url, policy.publication_branch, object_oid, tip,
+                credential_environment=credential_environment,
+            )
+        except LifecyclePublicationAmbiguousWrite:
+            # One exact read-back may prove our append; never retry the write.
+            recovered = verify_current_ready_source_recovery(repository, issue)
+            if recovered.historical_evidence_correction != raw:
+                raise
+            return recovered
+    recovered = verify_current_ready_source_recovery(repository, issue)
+    if recovered.historical_evidence_correction != raw:
+        raise LifecyclePublicationError("Ready-source correction protected read-back differs")
+    return recovered
+
+
 def verify_current_ready_source_recovery(
     repository: str,
     delivery_issue: int,
@@ -3067,6 +3351,9 @@ def verify_current_ready_source_recovery(
             raise LifecyclePublicationError(
                 "Ready-source recovery no longer binds CURRENT lifecycle"
             )
+        _require_effective_recovery_historical_evidence(
+            recovery, current_document, current_lifecycle
+        )
     return recovery
 
 
@@ -4184,12 +4471,43 @@ def _walk_journal_identity_projection(
         tuple[str, int], tuple[str, dict[str, Any], bytes]
     ] = {}
     recovery_keys: set[tuple[str, int]] = set()
+    recoveries: dict[tuple[str, int], VerifiedReadySourceRecovery] = {}
     recovery_authorization_ids: set[tuple[str, str]] = set()
     recovery_authorization_digests: set[tuple[str, str]] = set()
     integrations: dict[str, dict[str, Any]] = {}
     for position, (object_oid, raw, parent) in enumerate(chronological):
         kind, candidate = _classify_journal_document(raw)
         if kind == GENESIS_ADMISSION_KIND:
+            continue
+        if kind == READY_SOURCE_CORRECTION_KIND:
+            key = _ready_source_correction_key(candidate)
+            previous, recovery = publications.get(key), recoveries.get(key)
+            if previous is None or recovery is None:
+                raise LifecyclePublicationError("Ready-source correction precedes its source authority")
+            current_oid, current_document, _ = previous
+            try:
+                lifecycle = authority._verify_lifecycle_authority_for_journal(
+                    canonical_json_bytes(current_document["lifecycle_evidence"])
+                )
+            except authority.LifecycleAuthorityError as exc:
+                raise LifecyclePublicationError("Ready-source correction root is invalid") from exc
+            # Reopen the exact historical recovery under full root verification;
+            # identity-only recovery projection never grants correction authority.
+            recovery_raw, recovery_parent = _read_publication_object(repository_root, recovery.publication_oid)
+            _, original = _verify_ready_source_recovery_document(
+                recovery_raw, object_oid=recovery.publication_oid,
+                expected_branch=publication_branch, current_oid=current_oid,
+                current_document=current_document, current_lifecycle=lifecycle,
+            )
+            if recovery_parent != original.journal_predecessor_oid:
+                raise LifecyclePublicationError("Ready-source correction recovery ancestry changed")
+            if recovery.historical_evidence_correction is not None:
+                raise LifecyclePublicationError("Ready-source correction was replayed")
+            recoveries[key] = _verify_ready_source_correction_document(
+                raw, object_oid=object_oid, expected_branch=publication_branch,
+                parent=parent, previous=(current_oid, current_document, lifecycle),
+                recovery=original,
+            )
             continue
         if kind == ENROLLED_DRAFT_CLAIM_KIND:
             selected = candidate.get("authorization", {}).get("evidence", {})
@@ -4243,6 +4561,7 @@ def _walk_journal_identity_projection(
                     "Ready-source recovery authorization was replayed"
                 )
             recovery_keys.add(key)
+            recoveries[key] = recovery
             recovery_authorization_ids.add(authorization_id)
             recovery_authorization_digests.add(authorization_digest)
             continue
