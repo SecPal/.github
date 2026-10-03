@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2026 SecPal
+SPDX-FileCopyrightText: 2026 SecPal Contributors
 SPDX-License-Identifier: CC0-1.0
 -->
 
@@ -183,6 +183,19 @@ Stable Feedback, grants no resolution authority, and creates no lifecycle
 state, transition, counter, signer, trust root, or journal. Its verifier-owned
 seal is not reproducible from serialized fields, and the generic authorization
 issuer rejects the provider-growth digest.
+
+The same remaining-slot authority accepts a typed `READY_INTEGRATION`
+predecessor through `verified_ready_integration_review_context`. This dedicated
+projection independently reruns the canonical integration verifier and retains
+its provenance. Protected ancestry must select the exact integration's
+`HEAD_ADVANCED` publication as CURRENT, with the same first parent, lifecycle,
+finite state and source-evidence digest. The composition also consumes
+the existing prior-authority manifest and canonical signed-tag verifier to bind
+the claimed authority to that protected historical predecessor. Its capture uses
+terminal CURRENT Code/Security evidence and complete current-head provider growth,
+without extending the historical provider-lineage helper. Ordinary candidate
+validation remains mandatory. An absent predecessor eligibility binding permits
+only an empty eligible-thread set and grants no predecessor resolution authority.
 
 A sibling ordinary Ready-remediation admission handles a terminal hosted
 failure only when protected CURRENT is exactly Ready Review 1/1 and Remediation

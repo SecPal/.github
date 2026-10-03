@@ -7349,6 +7349,26 @@ def is_verified_validation_evidence(value: Any) -> bool:
         return False
 
 
+def verified_ready_integration_review_context(
+    value: Any,
+) -> tuple[StableFeedbackState, str | None]:
+    """Project an authenticated Ready integration's predecessor review context.
+
+    This grants no ordinary candidate-validation authority. Reverification uses
+    the existing integration verifier, including the signed source and tree.
+    """
+
+    if not is_verified_validation_evidence(value):
+        raise SecurityBlocker("validation evidence is not verifier-authenticated")
+    provenance = json.loads(value._verification_seal.provenance_json)
+    if provenance.get("kind") != "READY_INTEGRATION":
+        raise SecurityBlocker("Ready integration validation evidence is required")
+    return (
+        StableFeedbackState.from_payload(provenance["reviewed_state"]),
+        provenance["attestation"].get("eligibility_evidence_digest"),
+    )
+
+
 def verified_validation_review_context(
     value: Any,
 ) -> tuple[StableFeedbackState, str | None]:
