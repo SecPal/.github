@@ -862,6 +862,14 @@ still captured completely and bound to the resulting source projection, while
 ordinary and recovered Ready sources retain their existing terminal-provider
 rules.
 
+For schema-1.2 zero-receipt Ready histories, one remediation after Ready keeps
+the Ready head as the provider head. An exact two-remediation suffix from the
+unique Ready head through the current head selects the first correction as the
+provider head only when the authenticated source chronology and finite state
+agree. The digest-bound summary requires one completed Code row on that head;
+an optional Security row must be completed on the same head with the matching
+repository and pull request status marker. No caller selects an ancestor.
+
 Package loss is a bounded maintained-store conclusion, not a caller flag or an
 attempt to prove global nonexistence. The verifier authenticates all source
 commits observed by the adopted history, confirms the workflow's `.context/`

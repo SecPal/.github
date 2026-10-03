@@ -3819,6 +3819,297 @@ printf 'Usage: fixture\\n'
                     current_head_sha=document["head_sha"],
                 )
 
+    def test_two_remediations_bind_terminal_code_and_security_to_first_correction(self) -> None:
+        heads = ("1" * 40, "2" * 40, "3" * 40)
+        commits = tuple(
+            self.loss.CommitFacts(
+                head_sha=head,
+                tree_sha=str(index + 4) * 40,
+                parent_shas=(heads[index - 1] if index else "0" * 40,),
+                committed_at=f"2026-09-0{index + 1}T00:00:00Z",
+                signature_verified=True,
+            )
+            for index, head in enumerate(heads)
+        )
+        history = [
+            {"kind": "PR_CREATED_DRAFT", "head_sha": heads[0]},
+            {"kind": "DRAFT_TO_READY_OBSERVED", "head_sha": heads[0]},
+            {"kind": "REMEDIATION_HEAD_OBSERVED", "head_sha": heads[1]},
+            {"kind": "REMEDIATION_HEAD_OBSERVED", "head_sha": heads[2]},
+        ]
+        summary = "\n".join((
+            fast_path.CODEX_REVIEW_SUMMARY_MARKER,
+            '<!-- codex-security-review:v1 {"headSha":"' + heads[1]
+            + '","status":"completed","repository":"' + REPOSITORY
+            + '","pullRequestNumber":830} -->',
+            f'| 📝 **Code Review** | ✅ **Completed** <relative-time datetime="2026-09-02T01:00:00Z">2026-09-02T01:00:00Z</relative-time> | `{heads[1][:7]}` | Manual request |',
+            f'| 🔒 **Security Review** | ✅ **Completed** <relative-time datetime="2026-09-02T02:00:00Z">2026-09-02T02:00:00Z</relative-time> | `{heads[1][:7]}` | Manual request |',
+        ))
+        record = {
+            "admission_schema_version": self.loss.NO_RECEIPT_SCHEMA_VERSION,
+            "repository": REPOSITORY,
+            "pull_request": 830,
+            "head_sha": heads[2],
+            "historical_provider_summary_digest": fast_path.digest_text(summary),
+            "observed_pre_enrollment_history": history,
+            "intended_state": {
+                "unrestricted_review_count": 1,
+                "remediation_cycle_count": 2,
+                "ready_transition_count": 1,
+                "ready": True,
+                "draft": False,
+                "cycle_3_absent": True,
+                "exceptional_recovery_count": 0,
+                "exceptional_continuation_count": 0,
+            },
+        }
+        binding = self.loss._historical_provider_binding_for_ready(
+            record, commits, "2026-09-01T12:00:00Z",
+            observed_ready_head=heads[0],
+        )
+        self.assertEqual(binding.provider_head_sha, heads[1])
+        binding.verify_historical_provider_summary(
+            body=summary, repository=REPOSITORY,
+            pull_request=830, current_head_sha=heads[2],
+        )
+        for label, changed in (
+            ("Ready-head substitution", summary.replace(heads[1][:7], heads[0][:7])),
+            ("current-head substitution", summary.replace(heads[1][:7], heads[2][:7])),
+            ("mixed provider heads", summary.replace(
+                f"| `{heads[1][:7]}` | Manual request |\n",
+                f"| `{heads[0][:7]}` | Manual request |\n", 1,
+            )),
+            ("duplicate Code row", summary + "\n" + summary.splitlines()[2]),
+            ("nonterminal Security", summary.replace(
+                "🔒 **Security Review** | ✅ **Completed**",
+                "🔒 **Security Review** | ⏳ **Running**",
+            )),
+            ("malformed status marker", summary.replace(
+                '"status":"completed"', '"status":"running"',
+            )),
+            ("extra malformed marker", summary + "\n<!-- codex-security-review:v1 broken -->"),
+            ("wrong marker repository", summary.replace(REPOSITORY, "Other/project")),
+            ("wrong marker pull request", summary.replace(
+                '"pullRequestNumber":830', '"pullRequestNumber":831',
+            )),
+        ):
+            with self.subTest(label=label), self.assertRaises(fast_path.SecurityBlocker):
+                replace(
+                    binding, summary_digest=fast_path.digest_text(changed),
+                ).verify_historical_provider_summary(
+                    body=changed, repository=REPOSITORY,
+                    pull_request=830, current_head_sha=heads[2],
+                )
+        for label, changed_history, changed_commits, changed_state in (
+            ("missing predecessor", history, (
+                commits[0], commits[1], replace(commits[2], parent_shas=("9" * 40,)),
+            ), record["intended_state"]),
+            ("unrelated commit", history, (
+                commits[0], commits[1], replace(commits[2], parent_shas=(heads[0],)),
+            ), record["intended_state"]),
+            ("duplicate head", history, (
+                commits[0], commits[1], replace(commits[2], head_sha=heads[1]),
+            ), record["intended_state"]),
+            ("reordered remediation", [*history[:2], history[3], history[2]],
+             commits, record["intended_state"]),
+            ("multiple Ready transitions", [*history, history[1]],
+             commits, record["intended_state"]),
+            ("Ready Draft churn", [*history, {
+                "kind": "READY_TO_DRAFT_OBSERVED", "head_sha": heads[2],
+            }], commits, record["intended_state"]),
+            ("exceptional recovery", history, commits, {
+                **record["intended_state"], "exceptional_recovery_count": 1,
+            }),
+            ("exceptional continuation", history, commits, {
+                **record["intended_state"], "exceptional_continuation_count": 1,
+            }),
+            ("excess remediation", [*history, {
+                "kind": "REMEDIATION_HEAD_OBSERVED", "head_sha": "8" * 40,
+            }], (*commits, replace(
+                commits[2], head_sha="8" * 40, parent_shas=(heads[2],),
+            )), {**record["intended_state"], "remediation_cycle_count": 3}),
+        ):
+            with self.subTest(label=label), self.assertRaises(authority.LifecycleAuthorityError):
+                self.loss._historical_provider_binding_for_ready(
+                    {**record,
+                     "head_sha": changed_commits[-1].head_sha,
+                     "observed_pre_enrollment_history": changed_history,
+                     "intended_state": changed_state},
+                    changed_commits, "2026-09-01T12:00:00Z",
+                    observed_ready_head=heads[0],
+                )
+        one_remediation_summary = "\n".join((
+            fast_path.CODEX_REVIEW_SUMMARY_MARKER,
+            f"| **Code Review** | ✅ **Completed** | `{heads[0][:7]}` |",
+        ))
+        one_remediation = self.loss._historical_provider_binding_for_ready(
+            {**record, "head_sha": heads[1],
+             "observed_pre_enrollment_history": history[:3],
+             "intended_state": {
+                 **record["intended_state"], "remediation_cycle_count": 1,
+             },
+             "historical_provider_summary_digest": fast_path.digest_text(
+                 one_remediation_summary,
+             )},
+            commits[:2], "2026-09-01T12:00:00Z",
+            observed_ready_head=heads[0],
+        )
+        self.assertEqual(one_remediation.provider_head_sha, heads[0])
+        one_remediation.verify_historical_provider_summary(
+            body=one_remediation_summary, repository=REPOSITORY,
+            pull_request=830, current_head_sha=heads[1],
+        )
+
+    def test_two_remediation_adoption_projects_verifier_owned_ready_provider(self) -> None:
+        document = self.zero_receipt_document()
+        reviewed_head = document["head_sha"]
+        current_head = "9" * 40
+        current_tree = "8" * 40
+        summary = "\n".join((
+            fast_path.CODEX_REVIEW_SUMMARY_MARKER,
+            '<!-- codex-security-review:v1 {"headSha":"' + reviewed_head
+            + '","status":"completed","repository":"' + REPOSITORY
+            + '","pullRequestNumber":830} -->',
+            f'| 📝 **Code Review** | ✅ **Completed** <relative-time datetime="2026-09-02T01:00:00Z">2026-09-02T01:00:00Z</relative-time> | `{reviewed_head[:7]}` | Manual request |',
+            f'| 🔒 **Security Review** | ✅ **Completed** <relative-time datetime="2026-09-02T02:00:00Z">2026-09-02T02:00:00Z</relative-time> | `{reviewed_head[:7]}` | Manual request |',
+        ))
+        document.update(
+            head_sha=current_head, tree_sha=current_tree,
+            parent_sha=reviewed_head,
+            commit_signature_evidence_digest="7" * 64,
+            historical_provider_summary_digest=fast_path.digest_text(summary),
+            adoption_timestamp="2026-09-04T00:00:00Z",
+        )
+        document["source_history"].append({
+            "head_sha": current_head,
+            "tree_sha": current_tree,
+            "parent_shas": [reviewed_head],
+            "committed_at": "2026-09-03T00:00:00Z",
+            "signer_identity": SIGNER,
+            "commit_signature_evidence_digest": "7" * 64,
+        })
+        document["observed_pre_enrollment_history"].append({
+            "sequence": 4,
+            "kind": "REMEDIATION_HEAD_OBSERVED",
+            "observed_at": "2026-09-03T00:00:00Z",
+            "head_sha": current_head,
+            "reviewed_head_sha": None,
+        })
+        document["intended_state"]["remediation_cycle_count"] = 2
+        document["current_safety"]["validated_tree_sha"] = current_tree
+        document["source_history_digest"] = authority.digest_json(
+            document["source_history"],
+        )
+        document["historical_receipt_provenance_digest"] = authority.digest_json({
+            "repository": REPOSITORY,
+            "delivery_issue": document["delivery_issue"],
+            "pull_request": document["pull_request"],
+            "current_head_sha": current_head,
+            "current_tree_sha": current_tree,
+            "historical_receipt_head_sha": None,
+            "historical_validation_receipt_digest": None,
+            "source_history_digest": document["source_history_digest"],
+        })
+        record = {
+            "admission_schema_version": self.loss.NO_RECEIPT_SCHEMA_VERSION,
+            **{
+                field: copy.deepcopy(document[field])
+                for field in (
+                    "repository", "delivery_issue", "pull_request", "head_sha",
+                    "tree_sha", "parent_sha", "source_signer_identity",
+                    "historical_package_status",
+                    "historical_final_attestation_digest",
+                    "historical_bytes_reconstructed",
+                    "observed_pre_enrollment_history", "intended_state",
+                    "historical_provider_summary_digest",
+                )
+            },
+            "feedback_digest": document["current_safety"]["feedback_digest"],
+            "technical_decisions": copy.deepcopy(
+                document["current_safety"]["technical_decisions"],
+            ),
+            "current_safety_harness_path": self.loss.NO_RECEIPT_CURRENT_SAFETY_PATH,
+        }
+        document["loss_proof_policy_digest"] = authority.digest_json(record)
+        document = self.sign(document)
+
+        lifecycle = authority.VerifiedLifecycleAuthority(
+            authority_digest="7" * 64, repository=REPOSITORY,
+            delivery_issue=document["delivery_issue"],
+            lifecycle_id="lifecycle-adoption:" + "8" * 64,
+            initialization_evidence_digest="8" * 64,
+            pull_request=document["pull_request"], head_sha=current_head,
+            state=document["intended_state"],
+            authority_signer_identity=self.migration,
+            historical_proof_mode=authority.EXACT_ADOPTION_PROOF_MODE,
+            legacy_adoption_checkpoint_digest="9" * 64,
+            tree_sha=current_tree,
+        )
+        proof = {
+            "repository": REPOSITORY,
+            "delivery_issue": document["delivery_issue"],
+            "pull_request": document["pull_request"],
+            "head_sha": current_head,
+            "lifecycle_id": lifecycle.lifecycle_id,
+            "validation_evidence_loss_admission": document,
+        }
+        bundle = {
+            "schema_version": "1.0",
+            "kind": "SECPAL_EXACT_STATE_ADOPTION_PUBLICATION_EVIDENCE",
+            "domain": "secpal.exact-state-adoption-publication-evidence/v1",
+            "enrollment_mode": "EXACT_STATE_ADOPTION",
+            "exact_state_adoption_proof": proof,
+            "transition_authorizations": [],
+            "authority_chain": [],
+        }
+        current = publication.VerifiedLifecyclePublication(
+            publication_oid="b" * 40, publication_digest="c" * 64,
+            publication_branch="refs/heads/secpal-lifecycle-publications",
+            journal_predecessor_oid="d" * 40,
+            predecessor_publication_oid=None, lifecycle=lifecycle,
+            serialized_lifecycle_evidence=authority.canonical_json_bytes(bundle),
+        )
+        with patch.object(
+            self.loss, "_accepted_policy",
+            return_value=("c" * 40, record, object(), self.trust),
+        ), patch.object(
+            authority, "_verify_lifecycle_authority_for_journal",
+            return_value=lifecycle,
+        ), patch.object(
+            authority, "verify_exact_state_adoption_proof",
+            return_value=lifecycle,
+        ), patch.object(
+            publication, "verify_current_lifecycle_authority",
+            return_value=current,
+        ):
+            historical = self.loss.authenticate_historical_provider_binding(
+                document,
+            )
+            self.assertEqual(historical.provider_head_sha, reviewed_head)
+            historical.verify_historical_provider_summary(
+                body=summary, repository=REPOSITORY,
+                pull_request=document["pull_request"],
+                current_head_sha=current_head,
+            )
+            projected = publication.derive_ready_source_recovery_provider_binding(
+                current,
+            )
+            self.assertEqual(projected.provider_head_sha, reviewed_head)
+            self.assertEqual(
+                projected.provider_head(
+                    repository=REPOSITORY,
+                    pull_request=document["pull_request"],
+                    current_head_sha=current_head,
+                ),
+                reviewed_head,
+            )
+            with self.assertRaises(publication.LifecyclePublicationError):
+                replace(projected, provider_head_sha=current_head).provider_head(
+                    repository=REPOSITORY,
+                    pull_request=document["pull_request"],
+                    current_head_sha=current_head,
+                )
+
     def test_historical_provider_projection_rejects_v10_and_policy_replay(self) -> None:
         with self.assertRaisesRegex(
             authority.LifecycleAuthorityError, "requires v1.1"

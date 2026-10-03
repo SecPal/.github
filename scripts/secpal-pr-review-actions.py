@@ -2341,17 +2341,28 @@ def _require_review_providers_terminal(
                 raise MutationBlocked(str(exc)) from exc
             else:
                 try:
-                    provider_head = ready_source_provider_binding.provider_head(
-                        repository=repository,
-                        pull_request=pull_request_number,
-                        current_head_sha=head_sha,
-                    )
-                    fast_path.verify_codex_provider_summary(
-                        body,
-                        head_sha=provider_head,
-                        repository=repository,
-                        pull_request_number=pull_request_number,
-                    )
+                    if (
+                        "EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING"
+                        in ready_source_provider_binding.provider_binding_sources
+                    ):
+                        ready_source_provider_binding.verify_historical_provider_summary(
+                            body=body,
+                            repository=repository,
+                            pull_request=pull_request_number,
+                            current_head_sha=head_sha,
+                        )
+                    else:
+                        provider_head = ready_source_provider_binding.provider_head(
+                            repository=repository,
+                            pull_request=pull_request_number,
+                            current_head_sha=head_sha,
+                        )
+                        fast_path.verify_codex_provider_summary(
+                            body,
+                            head_sha=provider_head,
+                            repository=repository,
+                            pull_request_number=pull_request_number,
+                        )
                 except (
                     fast_path.SecurityBlocker,
                     AttributeError,
@@ -9793,6 +9804,8 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
 
 class _ReadyRemediationProviderBinding:
     """Ephemeral read-only projection; the caller reauthenticates its source."""
+
+    provider_binding_sources: tuple[str, ...] = ()
 
     def __init__(self, value: Any, *, repository: str, pull_request: int):
         if (
