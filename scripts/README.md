@@ -55,6 +55,31 @@ operations whose evidence does not match their logical finding. Their initial
 and final heads must also encode exactly one new linear commit per recorded
 signed push, or no commit movement for a no-push session.
 
+The protected publication journal also supports one exact append-only
+`SECPAL_READY_SOURCE_RECOVERY_CORRECTION` for the contradictory signed
+zero-receipt recovery of #711 / PR #951. It preserves the original recovery,
+authorization, signatures, digests, ancestry, immutable prior-authority tag and
+lifecycle CURRENT. The canonical recovery reader derives effective null
+historical receipt and final-attestation fields from the authenticated
+Exact-State-Adoption root's `ABSENT_NEVER_ISSUED` evidence. Current-safety
+receipts remain current-safety evidence.
+
+Both journal readers verify the same signed correction and reject stale
+CURRENT, changed source, wrong recovery or authorization, replay, competing
+corrections and ambiguous ordering. The preserved prior-authority tag is
+consumed only through that authenticated relationship and the independently
+rederived existing `READY_INTEGRATION_PRIOR_AUTHORITY` manifest.
+
+`lifecycle_publication.publish_zero_receipt_ready_source_correction()` accepts
+no caller-selected delivery, publication, digest, desired state or signer. It
+requires fresh accepted-main tooling, the exact live Ready source, original
+signed source commit and immutable signed tag, and the existing protected
+journal publication role and compare-and-swap. Candidate tooling cannot
+publish the correction that delivers itself. After acceptance, the operation
+appends once and verifies exact read-back; repeated invocation is idempotent
+only for that same authenticated correction. No Ready transition, review,
+remediation, recovery counter or lifecycle head is changed.
+
 `attest-validation --pre-enrollment-integration-evidence` is the distinct
 version-1.0 `PRE_ENROLLMENT_DRAFT_INTEGRATION` path. It applies only to an open
 Draft delivery with no CURRENT publication, native genesis, or lifecycle-aware
