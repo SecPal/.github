@@ -8196,14 +8196,54 @@ def _verify_prior_authority_tag(
     verified_tag = _run_attestation_git(
         repository_root, ["verify-tag", "--raw", tag_object_oid], allow_failure=True
     )
+    marker_digest = _prior_authority_tag_digest(tag_object.stdout)
+    expected_digest = fast_path.digest_json(authority)
+    if marker_digest != expected_digest and (
+        authority.get("source_authority_mode") == "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT"
+    ):
+        # The caller's manifest has already been compared with complete maintained
+        # derivation. The journal owner alone authenticates this preserved tag's
+        # historical marker as a consumption identity for the corrected projection.
+        lifecycle_authority, lifecycle_publication = _load_lifecycle_publication_helpers()
+        try:
+            _require_exact_adopted_ready_manifest(
+                authority,
+                _derive_exact_state_adoption_ready_prior_authority(
+                    repository_root=repository_root, repository=authority["repository"],
+                    delivery_issue=authority["delivery_issue_number"],
+                    pull_request=authority["pull_request_number"], binding=binding,
+                ),
+            )
+            recovery = lifecycle_publication.verify_current_ready_source_recovery(
+                authority["repository"], authority["delivery_issue_number"]
+            )
+            correction = lifecycle_authority.loads_closed_json(recovery.historical_evidence_correction)
+            if (
+                correction["prior_authority_tag_oid"] == tag_object_oid
+                and correction["original_prior_authority_digest"] == marker_digest
+                and recovery.repository == authority["repository"]
+                and recovery.delivery_issue == authority["delivery_issue_number"]
+                and recovery.pull_request == authority["pull_request_number"]
+                and recovery.head_sha == authority["prior_delivery_head_sha"]
+                and recovery.tree_sha == authority["prior_delivery_tree_sha"]
+                and recovery.current_publication_oid == authority["publication"]["object_oid"]
+                and recovery.current_publication_digest == authority["publication"]["publication_digest"]
+                and recovery.publication_oid == authority["recovery_publication"]["object_oid"]
+                and recovery.publication_digest == authority["recovery_publication"]["publication_digest"]
+                and recovery.lifecycle_id == authority["lifecycle"]["identity"]
+                and recovery.current_authority_digest == authority["lifecycle"]["current_authority_digest"]
+            ):
+                marker_digest = expected_digest
+        except (AttributeError, KeyError, TypeError, ValueError,
+                lifecycle_publication.LifecyclePublicationError) as exc:
+            raise fast_path.SecurityBlocker("corrected prior authority tag relationship is unavailable") from exc
     if (
         tag_type.returncode != 0
         or tag_type.stdout.strip() != "tag"
         or tag_object.returncode != 0
         or _prior_authority_tag_target(tag_object.stdout)
         != authority["prior_delivery_head_sha"]
-        or _prior_authority_tag_digest(tag_object.stdout)
-        != fast_path.digest_json(authority)
+        or marker_digest != expected_digest
     ):
         raise fast_path.SecurityBlocker("prior authority tag binding is invalid")
     tag_signature = evidence.interpret_local_signature(
