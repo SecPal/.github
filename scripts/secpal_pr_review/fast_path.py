@@ -157,6 +157,7 @@ VALIDATION_REGISTRY_ENTRY_FIELDS = frozenset(
         "signature_policy",
         "lifecycle_authority_policy",
         "pre_enrollment_integration_policy",
+        "enrolled_draft_integration_policy",
         "check_policy",
         "manual_gates",
         "unsupported_operations",
@@ -674,6 +675,10 @@ def validation_registry_projection(entry: Any) -> dict[str, Any]:
             )
         binding["pre_enrollment_integration_policy"] = copy.deepcopy(
             entry["pre_enrollment_integration_policy"]
+        )
+    if "enrolled_draft_integration_policy" in entry:
+        binding["enrolled_draft_integration_policy"] = copy.deepcopy(
+            entry["enrolled_draft_integration_policy"]
         )
     return binding
 
@@ -1458,17 +1463,65 @@ def derive_ready_integration_tree_evidence(
     run_git: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     """Produce tree evidence from Git; callers cannot choose paths or classes."""
+    if kind == "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION":
+        if schema_version != "1.0" or not isinstance(ordered_parents, list) or len(ordered_parents) != 2:
+            raise SecurityBlocker("enrolled Draft integration topology/version is unsupported")
+        for parent in ordered_parents:
+            _require_oid(parent, "integration parent")
+        _require_oid(validated_tree, "integration candidate tree")
+        return _derive_isolated_enrolled_draft_tree_evidence(repository_root, ordered_parents, validated_tree)
+    return _derive_ready_integration_tree_evidence(
+        repository_root, ordered_parents, validated_tree,
+        schema_version=schema_version, kind=kind, run_git=run_git,
+    )
+
+
+def _derive_isolated_enrolled_draft_tree_evidence(repository_root, parents, tree):
+    """Import immutable objects; candidate merge config never derives authority."""
+    from . import lifecycle_publication as publication
+    packed = publication._run_git(repository_root, ["pack-objects", "--stdout", "--revs"],
+                                  input_bytes=("\n".join([*parents, tree]) + "\n").encode("ascii"))
+    if packed.returncode != 0:
+        raise SecurityBlocker("integration tree object closure is unavailable")
+    with tempfile.TemporaryDirectory(prefix="secpal-enrolled-draft-tree-") as directory:
+        isolated = Path(directory)
+        if publication._run_git(isolated, ["init", "--bare", "."]).returncode != 0 or publication._run_git(isolated, ["index-pack", "--stdin"], input_bytes=packed.stdout).returncode != 0:
+            raise SecurityBlocker("isolated integration tree objects are unavailable")
+        def closed_git(root, arguments, *, raw_output=False, input_data=None, allow_failure=False):
+            result = publication._run_git(root, arguments, input_bytes=input_data)
+            if result.returncode != 0 and not allow_failure:
+                raise SecurityBlocker("isolated integration tree observation failed")
+            if not raw_output:
+                result.stdout = result.stdout.decode("utf-8", "replace")
+                result.stderr = result.stderr.decode("utf-8", "replace")
+            return result
+        return _derive_ready_integration_tree_evidence(isolated, parents, tree,
+            schema_version="1.0", kind="ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION", run_git=closed_git)
+
+
+def _derive_ready_integration_tree_evidence(
+    repository_root: Path, ordered_parents: list[str], validated_tree: str,
+    *, schema_version: str, kind: str = READY_INTEGRATION_KIND,
+    run_git: Callable[..., Any] | None = None,
+) -> dict[str, Any]:
+    """Shared mechanical algorithm; historical family behavior is unchanged."""
     if run_git is None:
         run_git = _run_integration_tree_git
     version = schema_version
-    if kind not in {READY_INTEGRATION_KIND, "PRE_ENROLLMENT_DRAFT_INTEGRATION"}:
+    if kind not in {
+        READY_INTEGRATION_KIND, "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+        "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION",
+    }:
         raise SecurityBlocker("integration evidence family is unsupported")
     # The Draft family shares only historical conflict mechanics, never the
     # Ready version namespace or preservation authority.
     preservation = (
         False if kind == "PRE_ENROLLMENT_DRAFT_INTEGRATION"
+        else True if kind == "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION"
         else ready_integration_has_preservation(version)
     )
+    if kind == "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION" and version != "1.0":
+        raise SecurityBlocker("enrolled Draft integration version is unsupported")
     parents = ordered_parents
     if (not isinstance(parents, list) or len(parents) != 2
             or any(not isinstance(parent, str) or not OID.fullmatch(parent) for parent in parents)
@@ -6535,6 +6588,51 @@ def validation_commands_for_evidence(
     raise SecurityBlocker("validation command set is not authorized by bound policy")
 
 
+def create_enrolled_draft_validation_receipt(integration_evidence: dict[str, Any]) -> dict[str, Any]:
+    """Typed receipt owned here; trusted issuance follows Complete Validation."""
+    fields = {
+        "schema_version": "1.0",
+        "kind": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION_VALIDATION_RECEIPT",
+        "repository": integration_evidence["repository"], "delivery_issue": integration_evidence["delivery_issue"],
+        "pull_request": integration_evidence["pull_request"], "lifecycle_id": integration_evidence["lifecycle_id"],
+        "current_publication_oid": integration_evidence["current_publication_oid"],
+        "current_publication_digest": integration_evidence["current_publication_digest"],
+        "predecessor_authority_digest": integration_evidence["predecessor_authority_digest"],
+        "ordered_parent_shas": copy.deepcopy(integration_evidence["ordered_parent_shas"]),
+        "validated_tree_sha": integration_evidence["validated_tree_sha"],
+        "current_main": copy.deepcopy(integration_evidence["current_main"]),
+        "integration_evidence_digest": digest_json(integration_evidence),
+        "registry_digest": integration_evidence["registry_digest"],
+        "command_set_digest": integration_evidence["command_set_digest"],
+        "expected_signer": integration_evidence["expected_signer"], "successful_result": True,
+        "manual_gate_evidence": copy.deepcopy(integration_evidence["manual_gate_evidence"]),
+    }
+    return {**fields, "receipt_digest": digest_json(fields)}
+
+
+def create_enrolled_draft_final_attestation(
+    integration_evidence: dict[str, Any], receipt: dict[str, Any], *,
+    candidate_head_sha: str, signature_fingerprint: str,
+) -> dict[str, Any]:
+    """Exact typed attestation; authorization and actual commit are verified separately."""
+    if receipt != create_enrolled_draft_validation_receipt(integration_evidence):
+        raise SecurityBlocker("enrolled Draft validation receipt mismatch")
+    if not isinstance(signature_fingerprint, str) or not re.fullmatch(r"SHA256:[A-Za-z0-9+/]+", signature_fingerprint):
+        raise SecurityBlocker("enrolled Draft signer fingerprint is malformed")
+    fields = {
+        "schema_version": "1.0",
+        "kind": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION_FINAL_ATTESTATION",
+        "candidate_head_sha": _require_oid(candidate_head_sha, "integrated candidate"),
+        "candidate_tree_sha": integration_evidence["validated_tree_sha"],
+        "ordered_parent_shas": copy.deepcopy(integration_evidence["ordered_parent_shas"]),
+        "signature_fingerprint": signature_fingerprint,
+        "expected_signer": integration_evidence["expected_signer"],
+        "integration_evidence_digest": digest_json(integration_evidence),
+        "validation_receipt_digest": receipt["receipt_digest"],
+    }
+    return {**fields, "attestation_digest": digest_json(fields)}
+
+
 def create_validation_receipt(
     *,
     repository: str,
@@ -7121,6 +7219,53 @@ def verify_validation_attestation(
     return _seal_validation_evidence(result, provenance)
 
 
+def verify_enrolled_draft_validation_evidence(
+    authorization: dict[str, Any], *, repository_root: Path | str,
+) -> VerifiedValidationEvidence:
+    """Re-authenticate the exact signed Draft package, topology and derived tree."""
+    from . import enrolled_draft_integration as integration
+    from . import lifecycle_authority, lifecycle_execution
+
+    selected = integration.normalize_authorization(authorization)
+    integration_evidence = selected["evidence"]
+    root = Path(repository_root).resolve(strict=True)
+    head = selected["final_attestation"]["candidate_head_sha"]
+    policy = lifecycle_authority._load_lifecycle_trust_policy(integration_evidence["repository"])
+    signature_policy = lifecycle_execution._source_signature_policy(policy)
+    commit = authenticate_integration_commit(
+        repository_root=root, repository=integration_evidence["repository"], head_sha=head,
+        expected_signer={"kind": "SSH_PRINCIPAL", "identity": integration_evidence["expected_signer"]},
+        signature_policy=signature_policy,
+    )
+    if (
+        commit.tree_sha != integration_evidence["validated_tree_sha"]
+        or list(commit.parent_shas) != integration_evidence["ordered_parent_shas"]
+        or commit.signature_fingerprint != selected["final_attestation"]["signature_fingerprint"]
+        or commit.signature_fingerprint not in {
+            lifecycle_execution._ssh_public_key_fingerprint(key)
+            for key in policy.signers[integration_evidence["expected_signer"]].ssh_public_keys
+        }
+    ):
+        raise SecurityBlocker("enrolled Draft validation candidate topology or signer changed")
+    observed = derive_ready_integration_tree_evidence(root, integration_evidence["ordered_parent_shas"], integration_evidence["validated_tree_sha"], schema_version="1.0", kind=integration.KIND)
+    if observed != integration_evidence["tree_evidence"]:
+        raise SecurityBlocker("enrolled Draft validation tree differs from mechanical integration")
+    raw = _run_integration_commit_git(root, ["cat-file", "commit", head])
+    for name, expected in zip(integration.TRAILERS, (digest_json(integration_evidence), selected["validation_receipt"]["receipt_digest"])):
+        if raw.returncode != 0 or re.findall(rf"^{re.escape(name)}: ([0-9a-f]{{64}})$", raw.stdout, re.MULTILINE) != [expected]:
+            raise SecurityBlocker("enrolled Draft validation signed trailers differ")
+    result = _unregistered_validation_evidence(
+        repository=integration_evidence["repository"], pull_request_number=integration_evidence["pull_request"],
+        head_sha=head, tree_sha=integration_evidence["validated_tree_sha"],
+        validation_receipt_digest=selected["validation_receipt"]["receipt_digest"],
+        final_attestation_digest=selected["final_attestation"]["attestation_digest"],
+        source_validation_evidence_digest=digest_json(integration_evidence), delivery_issue_number=integration_evidence["delivery_issue"],
+    )
+    return _seal_validation_evidence(result, {
+        "kind": integration.KIND, "authorization": selected, "repository_root": str(root),
+    })
+
+
 def is_verified_validation_evidence(value: Any) -> bool:
     """Re-verify canonical provenance instead of trusting caller-held authority."""
 
@@ -7182,6 +7327,10 @@ def is_verified_validation_evidence(value: Any) -> bool:
         elif kind == "QUALIFIED_REMEDIATION_SUCCESSOR_LOSS":
             verified = qualified_remediation_successor_loss_validation_evidence(
                 provenance["admission"], provenance["safety_facts"]
+            )
+        elif kind == "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION":
+            verified = verify_enrolled_draft_validation_evidence(
+                provenance["authorization"], repository_root=provenance["repository_root"]
             )
         else:
             return False

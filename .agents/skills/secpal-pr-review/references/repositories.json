@@ -133,6 +133,11 @@
           "argv": ["./tests/secpal-pr-review-skill-integration.sh"],
           "working_directory": ".",
           "purpose": "Run fake-GitHub and temporary-HOME integration tests"
+        },
+        {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-enrolled-draft-integration-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run enrolled initial Draft current-main integration regressions"
         }
       ],
       "required_local_validation": [
@@ -499,7 +504,18 @@
       "maximum_items": 10000,
       "maximum_threads": 500,
       "maximum_comments": 200,
-      "maximum_reactions": 50
+      "maximum_reactions": 50,
+      "enrolled_draft_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-enrolled-draft",
+        "topology_kind": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
+      }
     },
     {
       "repository": "SecPal/api",
@@ -966,7 +982,18 @@
       "maximum_items": 10000,
       "maximum_threads": 500,
       "maximum_comments": 200,
-      "maximum_reactions": 50
+      "maximum_reactions": 50,
+      "enrolled_draft_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-enrolled-draft",
+        "topology_kind": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
+      }
     }
   ]
 }

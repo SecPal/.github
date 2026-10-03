@@ -970,6 +970,100 @@ read-back. A second review consumption fails
 the finite budget. Historical publication read-back uses pure signed-chain
 derivation, so old review-before-Ready edges remain verifiable.
 
+### `secpal_pr_review/enrolled_draft_integration.py`
+
+The closed `ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION` operation reconciles an
+already enrolled native initial Draft delivery with fresh protected main.
+It requires the exact open same-repository primary PR, authenticated CURRENT
+and native genesis, a canonical READY work graph, and unchanged initial Draft
+state. Only genesis and prior `HEAD_ADVANCED` events are admitted; review,
+remediation, Ready, correction, replacement and exceptional histories reject.
+The central `enrolled_draft_integration_policy` registers this operation only
+for `SecPal/.github` and `SecPal/deployment`. Historical pre-enrollment absence
+and Ready integration contracts remain unchanged.
+
+Run both commands from freshly authenticated accepted `.github/main` tooling,
+with a distinct candidate repository root. Stage the exact mechanically derived
+integrated tree in that candidate root. Tree derivation shares the maintained
+two-parent mechanics, exact conflict-path resolution, marker rejection and
+canonical exact parent-2 preservation classification. It accepts no unrelated
+manual correction. Every derivation and verification imports only the immutable
+parent/tree object closure into a fresh bare Git repository under the maintained
+closed environment. Candidate-local attributes files, merge drivers and Git
+configuration cannot influence the signed mechanical evidence.
+Preparation runs Complete Validation with the registered
+command set and satisfied manual gates before signing a candidate:
+
+```bash
+python3 -I scripts/secpal-pr-review-actions.py prepare-enrolled-draft-integration \
+  --repo SecPal/deployment --delivery-issue 81 --pr 286 \
+  --repo-root /absolute/candidate/root --authorization-id unique-operation-id \
+  --manual-gate-evidence /absolute/manual-gates.json \
+  --operation-directory /absolute/new-operation-directory --apply
+```
+
+Preparation writes `preparation.json` and `authorization.json`. Its typed
+receipt binds the repository, issue, PR, lifecycle identity, CURRENT
+publication/digest, predecessor authority, ordered CURRENT/main parents,
+integrated tree, protected-main identity, registered command set, manual gates
+and signer. The signed candidate trailers bind integration evidence and the
+receipt. Final attestation and signed operation authorization bind the exact
+candidate and maintained SSH key fingerprint. Validation provenance is
+independently reverified before lifecycle issuance.
+
+Execute only that authorization:
+
+```bash
+python3 -I scripts/secpal-pr-review-actions.py integrate-enrolled-draft \
+  --repo SecPal/deployment --delivery-issue 81 --pr 286 \
+  --repo-root /absolute/candidate/root \
+  --authorization /absolute/new-operation-directory/authorization.json --apply
+```
+
+The existing protected publication journal authenticates ancillary
+`SECPAL_ENROLLED_DRAFT_INTEGRATION_CLAIM` records. A preparation reservation
+precedes the sole candidate creation; a second reservation for its predecessor
+rejects across directories and clones. The final authorization must match that
+reservation exactly. A distinct one-use claim consumes the sole push attempt.
+The signed work-graph digest is rechecked after that claim and before dispatch;
+a changed graph consumes the opportunity without authorizing a push.
+Neither phase selects lifecycle CURRENT or adds a lifecycle state or counter.
+An uncertain claim CAS grants no dispatch ownership. A crash after reservation
+but before candidate creation, or after push-claim consumption but before
+dispatch, fails closed and cannot be retried through this operation.
+
+The push boundary authenticates exactly one destination for the registered
+repository, then imports the exact candidate into the existing isolated Git
+transport. Its internally derived GitHub URL cannot consume candidate-local
+or global URL rewrites. An isolated trusted pre-push hook requires exactly the authorized
+candidate, PR branch and advertised predecessor; the ordinary non-force push
+uses Git's server CAS. No rebase, reset, amend, replacement PR, arbitrary ref,
+main write, PR merge, automatic retry or recursive integration is exposed.
+After live signed-head equality, only the existing `HEAD_ADVANCED` transition
+publishes a successor, preserving Draft, every counter and the empty Ready
+history. Protected CURRENT read-back must select that exact integrated head.
+Exact live Draft PR identity is reobserved immediately before publication and
+again after journal read-back, including an already-complete reconciliation.
+Concurrent branch drift cannot be reported as successful convergence.
+
+If the push succeeded but publication was missing or uncertain, invoke the
+same execution command with `--reconcile`. Reconciliation authenticates the
+same signed authorization, protected preparation/push claims, exact candidate,
+PR branch, predecessor CURRENT or its exact authorized successor, and journal
+ancestry. It never creates a candidate or pushes. A then-advanced main does not
+replace the already authorized second parent. An already published exact
+successor returns read-only success; a different publication fails closed.
+Later validation-policy changes do not replace the signed historical receipt
+authenticated by the protected claims. Initial dispatch still requires exact
+current registry and command-set equality; reconciliation still requires the
+operation to remain registered.
+
+The read-only target-shaped acceptance harness
+`tests/enrolled-draft-deployment-81-read-only.py --repo-root <isolated-Git-root>`
+derives the frozen #81 CURRENT/main merge and proves byte equality with the
+accepted trusted qualification import closure, including #287's correction.
+It performs no downstream or provider mutation.
+
 ### `secpal_pr_review/lifecycle_publication.py`
 
 Publishes lifecycle authority on one protected, append-only global journal
