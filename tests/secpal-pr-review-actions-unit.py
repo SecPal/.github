@@ -14501,6 +14501,63 @@ class FastPathTests(TestCase):
         with self.assertRaises(fast_path.SecurityBlocker):
             gateway.observe_stable_feedback("SecPal/.github", 1)
 
+    def test_loss_binding_rejects_equality_spoofed_or_malformed_seal(self) -> None:
+        from scripts.secpal_pr_review import validation_evidence_loss as loss
+
+        class EqualitySpoof:
+            def __eq__(self, _other):
+                return True
+
+        class TupleSpoof(tuple):
+            def __eq__(self, _other):
+                return True
+
+            def __ne__(self, _other):
+                return False
+
+        _, genuine, _ = self._loss_provider_gateway()
+        fields = [genuine.repository, genuine.pull_request,
+                  genuine.current_head_sha, genuine.provider_head_sha,
+                  genuine.summary_digest]
+        for seal in (
+            (EqualitySpoof(), *fields), TupleSpoof((None, *fields)),
+            EqualitySpoof(), None, (), (None,), (None, *fields),
+        ):
+            with self.subTest(seal_type=type(seal).__name__):
+                fabricated = loss.HistoricalProviderBinding(*fields)
+                # Frozen/slotted dataclasses support state restoration. It
+                # cannot authenticate a caller's equality-compatible token.
+                fabricated.__setstate__([*fields, seal])
+                gateway, _, _ = self._loss_provider_gateway(binding=fabricated)
+                with self.assertRaises(fast_path.SecurityBlocker):
+                    gateway.observe_stable_feedback("SecPal/.github", 1)
+                with self.assertRaises(loss.fast_path.SecurityBlocker):
+                    fabricated.provider_head(
+                        repository=genuine.repository,
+                        pull_request=genuine.pull_request,
+                        current_head_sha=genuine.current_head_sha,
+                    )
+
+        for index in range(len(fields)):
+            with self.subTest(substituted_scope_field=index):
+                fabricated = loss.HistoricalProviderBinding(*fields)
+                changed = list(fields)
+                changed[index] = EqualitySpoof()
+                fabricated.__setstate__([*changed, genuine._verification])
+                with self.assertRaises(loss.fast_path.SecurityBlocker):
+                    _ = fabricated.provider_binding_sources
+
+        for field in ("repository", "pull_request", "current_head_sha"):
+            with self.subTest(caller_scope_field=field):
+                scope = {
+                    "repository": genuine.repository,
+                    "pull_request": genuine.pull_request,
+                    "current_head_sha": genuine.current_head_sha,
+                }
+                scope[field] = EqualitySpoof()
+                with self.assertRaises(loss.fast_path.SecurityBlocker):
+                    genuine.provider_head(**scope)
+
     def test_loss_binding_provenance_is_immutable_and_not_constructor_selected(self) -> None:
         _, binding, _ = self._loss_provider_gateway()
         with self.assertRaises((AttributeError, TypeError)):

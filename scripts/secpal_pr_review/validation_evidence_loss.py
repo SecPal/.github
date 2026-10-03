@@ -234,9 +234,26 @@ class HistoricalProviderBinding:
         return (publication.EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING,)
 
     def _require_verified(self) -> None:
-        if type(self) is not HistoricalProviderBinding or self._verification != (
-            _VERIFIED, self.repository, self.pull_request, self.current_head_sha,
+        verification = self._verification
+        fields = (
+            self.repository, self.pull_request, self.current_head_sha,
             self.provider_head_sha, self.summary_digest,
+        )
+        field_types = (str, int, str, str, str)
+        # State restoration must not replace identity with caller-owned equality.
+        if (
+            type(self) is not HistoricalProviderBinding
+            or type(verification) is not tuple or len(verification) != 6
+            or verification[0] is not _VERIFIED
+            or any(
+                type(value) is not expected
+                for value, expected in zip(fields, field_types)
+            )
+            or any(
+                type(value) is not expected
+                for value, expected in zip(verification[1:], field_types)
+            )
+            or verification[1:] != fields
         ):
             raise fast_path.SecurityBlocker(
                 "historical provider binding is not verifier-owned"
@@ -247,7 +264,10 @@ class HistoricalProviderBinding:
     ) -> None:
         self._require_verified()
         if (
-            repository != self.repository
+            type(repository) is not str
+            or type(pull_request) is not int
+            or type(current_head_sha) is not str
+            or repository != self.repository
             or pull_request != self.pull_request
             or current_head_sha != self.current_head_sha
         ):
