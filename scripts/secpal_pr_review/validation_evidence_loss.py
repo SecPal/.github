@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import copy
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 import re
@@ -213,7 +213,7 @@ class SourceCommitFacts:
     signature_verified: bool
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class HistoricalProviderBinding:
     """Authenticate one legacy terminal provider summary through exact PR history."""
 
@@ -222,12 +222,52 @@ class HistoricalProviderBinding:
     current_head_sha: str
     provider_head_sha: str
     summary_digest: str
+    _verification: tuple[Any, ...] | None = field(
+        default=None, init=False, repr=False, compare=False,
+    )
+
+    @property
+    def provider_binding_sources(self) -> tuple[str, ...]:
+        """Expose only the existing verifier-derived historical provenance."""
+
+        self._require_verified()
+        return (publication.EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING,)
+
+    def _require_verified(self) -> None:
+        verification = self._verification
+        fields = (
+            self.repository, self.pull_request, self.current_head_sha,
+            self.provider_head_sha, self.summary_digest,
+        )
+        field_types = (str, int, str, str, str)
+        # State restoration must not replace identity with caller-owned equality.
+        if (
+            type(self) is not HistoricalProviderBinding
+            or type(verification) is not tuple or len(verification) != 6
+            or verification[0] is not _VERIFIED
+            or any(
+                type(value) is not expected
+                for value, expected in zip(fields, field_types)
+            )
+            or any(
+                type(value) is not expected
+                for value, expected in zip(verification[1:], field_types)
+            )
+            or verification[1:] != fields
+        ):
+            raise fast_path.SecurityBlocker(
+                "historical provider binding is not verifier-owned"
+            )
 
     def _scope(
         self, *, repository: str, pull_request: int, current_head_sha: str,
     ) -> None:
+        self._require_verified()
         if (
-            repository != self.repository
+            type(repository) is not str
+            or type(pull_request) is not int
+            or type(current_head_sha) is not str
+            or repository != self.repository
             or pull_request != self.pull_request
             or current_head_sha != self.current_head_sha
         ):
@@ -1231,13 +1271,18 @@ def _historical_provider_binding_for_ready(
                 "loss source two-remediation chronology is ambiguous"
             )
         provider_head = source_heads[-2]
-    return HistoricalProviderBinding(
+    binding = HistoricalProviderBinding(
         repository=record["repository"],
         pull_request=record["pull_request"],
         current_head_sha=record["head_sha"],
         provider_head_sha=provider_head,
         summary_digest=record["historical_provider_summary_digest"],
     )
+    object.__setattr__(binding, "_verification", (
+        _VERIFIED, binding.repository, binding.pull_request,
+        binding.current_head_sha, binding.provider_head_sha, binding.summary_digest,
+    ))
+    return binding
 
 
 def authenticate_historical_provider_binding(

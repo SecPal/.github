@@ -3894,8 +3894,11 @@ printf 'Usage: fixture\\n'
             )),
         ):
             with self.subTest(label=label), self.assertRaises(fast_path.SecurityBlocker):
-                replace(
-                    binding, summary_digest=fast_path.digest_text(changed),
+                self.loss._historical_provider_binding_for_ready(
+                    {**record, "historical_provider_summary_digest":
+                     fast_path.digest_text(changed)},
+                    commits, "2026-09-01T12:00:00Z",
+                    observed_ready_head=heads[0],
                 ).verify_historical_provider_summary(
                     body=changed, repository=REPOSITORY,
                     pull_request=830, current_head_sha=heads[2],
@@ -5904,7 +5907,7 @@ printf 'Usage: fixture\\n'
         }
         self.assertEqual(from_imports, {
             (0, "__future__", ("annotations",)), (0, "contextlib", ("contextmanager",)),
-            (0, "dataclasses", ("dataclass",)),
+            (0, "dataclasses", ("dataclass", "field")),
             (0, "datetime", ("datetime", "timezone")), (0, "pathlib", ("Path",)),
             (0, "typing", ("Any", "Iterator", "Mapping")),
             (1, None, ("bootstrap_source_admission",)), (1, None, ("fast_path",)),

@@ -1767,12 +1767,21 @@ class LifecyclePublicationTests(TestCase):
             lifecycle=lifecycle,
             serialized_lifecycle_evidence=authority.canonical_json_bytes(bundle),
         )
-        historical = loss.HistoricalProviderBinding(
-            repository=REPOSITORY,
-            pull_request=PR,
-            current_head_sha=HEADS[2],
-            provider_head_sha=historical_provider_head,
-            summary_digest="e" * 64,
+        historical = loss._historical_provider_binding_for_ready(
+            {
+                "admission_schema_version": "1.1",
+                "repository": REPOSITORY, "pull_request": PR,
+                "head_sha": HEADS[2],
+                "historical_provider_summary_digest": "e" * 64,
+            },
+            (
+                loss.CommitFacts(historical_provider_head, "1" * 40,
+                                 ("0" * 40,), "2026-09-01T00:00:00Z", True),
+                loss.CommitFacts(HEADS[2], "2" * 40,
+                                 (historical_provider_head,),
+                                 "2026-09-02T00:00:00Z", True),
+            ),
+            "2026-09-01T01:00:00Z",
         )
         return current, proof, historical
 
