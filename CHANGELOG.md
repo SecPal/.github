@@ -842,6 +842,19 @@ Log of notable changes to SecPal organization defaults (newest first).
   proven as a stable zero-write no-op while retaining the guarded mutation path
   and every existing drift check for unresolved targets
 
+## 2026-08-30 - Rebaseline Organization Public Entry Point
+
+**Changed:**
+
+- give first-time readers a concise account of SecPal's audience, integrated
+  direction, Open Source character, independent-operation boundary, and pre-1.0
+  maturity
+- replace completeness-oriented and organization-wide Open Source absolutes
+  with current positioning governed by the canonical product, status, licensing,
+  and ADR-023 authorities
+- curate public next-step links and align only the central README's introductory
+  product description with the organization profile
+
 ## 2026-08-30 - Authenticate Historical Native Compatibility Publications
 
 **Changed:**
