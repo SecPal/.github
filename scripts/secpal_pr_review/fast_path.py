@@ -567,6 +567,7 @@ def verify_codex_provider_summary(
     head_sha: str,
     repository: str | None = None,
     pull_request_number: int | None = None,
+    require_terminal: bool = True,
 ) -> None:
     """Verify the canonical terminal Code/Security provider summary for a head."""
 
@@ -615,8 +616,10 @@ def verify_codex_provider_summary(
             raise SecurityBlocker(
                 "Codex review provider repository or PR identity changed"
             )
-    if status.get("status") != "completed":
+    if require_terminal and status.get("status") != "completed":
         raise SecurityBlocker("Codex review provider is not terminal")
+    if not require_terminal and status.get("status") not in {"running", "completed"}:
+        raise SecurityBlocker("Codex review provider status is indeterminate")
     for review_type in required_codex_review_types():
         label = {"CODE": "Code Review", "SECURITY": "Security Review"}[review_type]
         rows = [line for line in body.splitlines() if f"**{label}**" in line]
@@ -632,8 +635,11 @@ def verify_codex_provider_summary(
             or not cells[4].strip()
         ):
             raise SecurityBlocker("Codex review provider status is indeterminate")
-        if not _is_codex_completed_status(cells[2].strip()):
-            raise SecurityBlocker("Codex review provider is not terminal")
+        row_status = cells[2].strip()
+        if not _is_codex_completed_status(row_status):
+            pending = row_status.replace("🔄 **Running** since ", "✅ **Completed** ", 1)
+            if require_terminal or not row_status.startswith("🔄 **Running** since ") or not _is_codex_completed_status(pending):
+                raise SecurityBlocker("Codex review provider is not terminal")
 
 
 def validation_registry_projection(entry: Any) -> dict[str, Any]:

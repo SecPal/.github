@@ -14,6 +14,7 @@ from datetime import timezone
 from email.utils import parsedate_to_datetime
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 from . import fast_path
@@ -699,6 +700,21 @@ class ReacquisitionObservation:
     accepted_main_sha: str
 
 
+def _capture_reacquisition_feedback(repository: str, pull_request: int) -> fast_path.StableFeedbackState:
+    helper = transport._load_actions_helper()
+    root = Path(helper.__file__).resolve().parents[1]
+    gateway = helper.FastPathGateway(root, helper.select_repository(helper.load_registry(None), repository))
+    try:
+        observed = gateway.observe_provider_acquisition_feedback(repository, pull_request)
+    except (helper.fast_path.SecurityBlocker, helper.fast_path.TransientReadFailure) as exc:
+        raise fast_path.SecurityBlocker(str(exc)) from exc
+    feedback = fast_path.StableFeedbackState.from_payload({"repository": repository,
+        "pull_request_number": pull_request, **observed})
+    feedback.provider_summary_body = observed.get("provider_summary_body")
+    feedback.review_database_ids = observed.get("provider_review_database_ids")
+    return feedback
+
+
 def _authenticate_execution(document: dict[str, Any]) -> ReacquisitionObservation:
     """Reauthenticate every maintained source immediately before dispatch."""
 
@@ -717,9 +733,7 @@ def _authenticate_execution(document: dict[str, Any]) -> ReacquisitionObservatio
     if fast_path.canonical_json_bytes(survey) != fast_path.canonical_json_bytes(document["loss_proof"]["survey"]):
         raise fast_path.SecurityBlocker("reacquisition bounded loss authority changed")
     requests, results = _admit_live_history(document, observed, claims)
-    from . import lifecycle_orchestration
-    feedback = lifecycle_orchestration._capture_current_stable_feedback(repository,
-        document["pull_request"], capture_provider_summary=True)
+    feedback = _capture_reacquisition_feedback(repository, document["pull_request"])
     acquisition._require_feedback_inventory(feedback,
         {e["node_id"]: e for e in observed["events"] if e["kind"] == "IssueComment"},
         {e["node_id"]: e for e in observed["events"] if e["kind"] == "PullRequestReview"})
@@ -825,7 +839,7 @@ def dispatch_next(document: dict[str, Any]) -> dict[str, Any]:
             continue
         if key.review_type in observation.requests:
             return {"status": "PROVIDER_NON_TERMINAL", "review_type": key.review_type, "write_attempts": 0}
-        if any(claim.key.review_type == key.review_type and claim.reacquisition_authorization is not None for claim in observation.claims):
+        if any(claim.key == key and claim.reacquisition_authorization is not None for claim in observation.claims):
             return {"status": "CLAIM_CONSUMED_WITHOUT_AUTHENTICATED_REQUEST", "review_type": key.review_type, "write_attempts": 0}
         selected = key
         break

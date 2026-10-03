@@ -13921,6 +13921,7 @@ class ProviderAcquisitionEvidenceLossTests(TestCase):
             if args[0] == "ls-tree":
                 return (f"100644 blob {'1' * 40}\tregular\0" + f"120000 blob {'2' * 40}\tlink\0").encode()
             self.fail(f"unexpected source observation {args}")
+            return None
         def batch(_root, args, *, input_bytes):
             chunks = []
             for oid in input_bytes.decode().splitlines():
@@ -14216,6 +14217,85 @@ class ProviderReacquisitionExecutionTests(TestCase):
         with mock.patch.object(r, "_authenticate_execution", return_value=observed):
             self.assertEqual(r.authenticate_assessment(doc)["status"], "PROVIDER_NON_TERMINAL")
 
+    def test_capture_adapter_preserves_complete_feedback_and_accepted_root(self):
+        r, doc, observation = self.complete_observation()
+        native = {**observation.feedback.to_dict(), "provider_summary_body":observation.feedback.provider_summary_body,
+            "provider_review_database_ids":observation.feedback.review_database_ids}
+        gateway=SimpleNamespace(observe_provider_acquisition_feedback=mock.Mock(return_value=native))
+        helper=SimpleNamespace(__file__=str(REPO_ROOT/"scripts/secpal-pr-review-actions.py"),
+            FastPathGateway=mock.Mock(return_value=gateway),select_repository=mock.Mock(return_value={"repository":REPOSITORY}),
+            load_registry=mock.Mock(return_value={}),fast_path=fast_path)
+        with mock.patch.object(r.transport,"_load_actions_helper",return_value=helper):
+            captured=r._capture_reacquisition_feedback(REPOSITORY,doc["pull_request"])
+        self.assertEqual(captured.to_dict(),observation.feedback.to_dict())
+        self.assertEqual(captured.provider_summary_body,native["provider_summary_body"])
+        self.assertEqual(captured.review_database_ids,native["provider_review_database_ids"])
+        self.assertEqual(helper.FastPathGateway.call_args.args[0],REPO_ROOT)
+
+    def test_pending_capture_reconciles_persisted_request_without_terminal_result(self):
+        r, current, document, timeline, claims = self.fresh_fixture()
+        summary = next(e for e in timeline["events"] if e.get("body") == document["loss_proof"]["historical_summary"])
+        body = summary["body"].replace('"status":"completed"', '"status":"running"').replace('"status": "completed"', '"status": "running"')
+        lines = body.splitlines()
+        for number, line in enumerate(lines):
+            if "**Code Review**" in line:
+                cells = line.split("|")
+                cells[2] = ' 🔄 **Running** since <relative-time datetime="2026-10-01T17:01:00Z">2026-10-01T17:01:00Z</relative-time> '
+                cells[4] = " Manual request "
+                lines[number] = "|".join(cells)
+        body = "\n".join(lines)
+        summary["versions"] += (("2026-10-01T17:01:01Z", body),)
+        summary.update(body=body, updated_at="2026-10-01T17:01:01Z")
+        feedback = fast_path.verify_reviewed_state_evidence(document["loss_proof"]["historical_feedback"])
+        feedback.feedback["conversation_comments"] = [{"node_id":e["node_id"], "body_digest":fast_path.digest_text(e["body"]),
+            "actor":{"login":e["actor"][0], "node_id":e["actor"][1], "database_id":e["actor"][2]},
+            "updated_at":e["updated_at"], "reactions":[]} for e in timeline["events"] if e["kind"] == "IssueComment"]
+        feedback.provider_summary_body=body;feedback.refresh_digests()
+        actor=dict(zip(("login","node_id","id"),timeline["author"]))
+        with mock.patch.object(r, "_require_accepted_main", return_value="5"*40), \
+                mock.patch.object(publication, "verify_provider_dispatch_claims", return_value=(current,claims)), \
+                mock.patch.object(publication, "verify_current_lifecycle_authority", return_value=current), \
+                mock.patch.object(authority, "_verify_signature"), \
+                mock.patch.object(r, "_gh_json", side_effect=lambda args,_label: actor if args==["user"] else {"state":"open","number":current.lifecycle.delivery_issue}), \
+                mock.patch.object(r, "_observe_timeline", return_value=timeline), \
+                mock.patch.object(r, "_observe_package_survey", return_value=document["loss_proof"]["survey"]), \
+                mock.patch.object(r, "_capture_reacquisition_feedback", return_value=feedback) as capture:
+            observed=r._authenticate_execution(document)
+        capture.assert_called_once()
+        self.assertIsNone(r._terminal_result(observed,"CODE"))
+        reconciled=r._reconcile_request(document,"CODE",timeline,claims,None)
+        self.assertEqual(reconciled.replacement_count,1)
+        self.assertEqual(reconciled.replacement_comment_database_id,100)
+        with mock.patch.object(r,"_authenticate_execution",return_value=observed):
+            self.assertEqual(r.authenticate_assessment(document)["status"],"PROVIDER_NON_TERMINAL")
+
+    def test_old_scope_claim_does_not_consume_new_dispatch(self):
+        from scripts.secpal_pr_review import lifecycle_execution
+        r, doc, observed = self.complete_observation()
+        old_claim = replace(observed.claims[0], key=replace(observed.claims[0].key, current_head_sha="9" * 40))
+        live = replace(observed, claims=(old_claim,), requests={}, results=())
+        execute = mock.Mock(return_value=SimpleNamespace(status="PERSISTED", replacement_comment_database_id=100, write_attempts=1))
+        with mock.patch.object(r, "_authenticate_execution", return_value=live), mock.patch.object(authority, "_verify_signature"), \
+                mock.patch.object(publication, "_execute_provider_dispatch_with_claim", execute), \
+                mock.patch.object(lifecycle_execution, "_policy_role_signer", return_value=("accepted-role", mock.Mock())):
+            report = r.dispatch_next(doc)
+        self.assertEqual(report["status"], "PERSISTED")
+        self.assertEqual(execute.call_count, 1)
+
+    def test_cli_rejects_non_object_authorization_with_structured_failure(self):
+        spec = importlib.util.spec_from_file_location("secpal_reacquisition_cli_nonobject", REPO_ROOT / "scripts/secpal-provider-reacquisition.py")
+        cli = importlib.util.module_from_spec(spec);spec.loader.exec_module(cli)
+        with tempfile.TemporaryDirectory(prefix="secpal-reacquisition-input-") as directory:
+            source, output = Path(directory) / "auth.json", Path(directory) / "result.json"
+            for value in ([], None, "text", 7):
+                source.write_text(json.dumps(value))
+                with mock.patch.object(sys, "argv", ["reacquisition", "observe", "--repo", REPOSITORY,
+                        "--delivery-issue", "1082", "--authorization", str(source), "--output", str(output)]), \
+                        mock.patch.object(cli.provider_reacquisition, "authenticate_assessment") as observe:
+                    self.assertEqual(cli.main(), 1)
+                observe.assert_not_called()
+                self.assertEqual(json.loads(output.read_text())["status"], "BLOCKED")
+
     def test_stranded_claim_never_posts_a_second_request(self):
         r, doc, observed = self.complete_observation()
         observed = replace(observed, requests={}, results=())
@@ -14270,7 +14350,6 @@ class ProviderReacquisitionExecutionTests(TestCase):
         claims.assert_not_called()
 
     def test_cli_records_signing_failure_without_an_external_operation(self):
-        import json
         spec = importlib.util.spec_from_file_location("secpal_reacquisition_cli_test", REPO_ROOT / "scripts/secpal-provider-reacquisition.py")
         cli = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cli)

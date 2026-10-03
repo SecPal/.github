@@ -1966,15 +1966,15 @@ def _require_reacquisition_claim_uniqueness(
     key: ProviderDispatchKey, authorization: dict[str, Any] | None,
     claims: Mapping[str, VerifiedProviderDispatchClaim],
 ) -> None:
-    if authorization is None:
-        return
     scope = (key.repository, key.delivery_issue, key.pull_request, key.lifecycle_id, key.current_head_sha)
     for claim in claims.values():
         prior = claim.key
-        if claim.reacquisition_authorization is None or scope != (
-            prior.repository, prior.delivery_issue, prior.pull_request, prior.lifecycle_id, prior.current_head_sha
-        ):
+        if scope != (prior.repository, prior.delivery_issue, prior.pull_request, prior.lifecycle_id, prior.current_head_sha):
             continue
+        if authorization is None and claim.reacquisition_authorization is None:
+            continue
+        if authorization is None or claim.reacquisition_authorization is None:
+            raise LifecyclePublicationError("ordinary provider dispatch conflicts with provider reacquisition")
         if prior.review_type == key.review_type:
             raise LifecyclePublicationError("provider reacquisition claim already exists")
         if canonical_json_bytes(claim.reacquisition_authorization) != canonical_json_bytes(authorization):

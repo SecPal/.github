@@ -40,6 +40,8 @@ def main() -> int:
             report = provider_reacquisition.issue_authorization(arguments.repo, arguments.delivery_issue)
         else:
             document = authority.loads_closed_json(arguments.authorization.read_bytes())
+            if not isinstance(document, dict):
+                raise fast_path.SecurityBlocker("reacquisition authorization must be an object")
             if document.get("repository") != arguments.repo or document.get("delivery_issue") != arguments.delivery_issue:
                 raise fast_path.SecurityBlocker("reacquisition action delivery differs from signed authorization")
             report = (provider_reacquisition.dispatch_next(document)

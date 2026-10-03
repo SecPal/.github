@@ -4695,7 +4695,7 @@ class LifecyclePublicationTests(TestCase):
             )
         self.assertEqual(self.remote_tip(), first)
 
-    def reacquisition_claim_fixture(self):
+    def reacquisition_claim_fixture(self, *, prior_assessment=False):
         from scripts.secpal_pr_review import provider_reacquisition as r
         spec = importlib.util.spec_from_file_location("reacquisition_transport_fixture", Path(__file__).with_name("secpal-lifecycle-orchestration-unit.py"))
         module = importlib.util.module_from_spec(spec)
@@ -4707,6 +4707,8 @@ class LifecyclePublicationTests(TestCase):
         chain.append("UNRESTRICTED_REVIEW_CONSUMED")
         evidence = verified_validation_evidence(head=HEADS[1], tree=HEADS[3], parent=HEADS[0])
         chain.append("REMEDIATION_COMPLETED", head=HEADS[1], current_head_evidence=evidence)
+        if prior_assessment:
+            chain.append("ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED")
         _, current = self.enroll(chain)
         old_head, old_pr = feedback.head_sha, feedback.pull_request_number
         text = json.dumps(raw).replace(old_head, current.lifecycle.head_sha).replace(old_head[:10], current.lifecycle.head_sha[:10]).replace(old_head[:7], current.lifecycle.head_sha[:7])
@@ -4737,6 +4739,26 @@ class LifecyclePublicationTests(TestCase):
         document = {**signed, "authorization_digest": fast_path.digest_json(signed)}
         verified = r.verify_authorization(document, current)
         return current, document, r.derive_dispatch_keys(verified, current)
+
+    def test_reacquisition_rejects_ordinary_claim_in_exact_scope(self):
+        current, document, keys = self.reacquisition_claim_fixture(prior_assessment=True)
+        ordinary = replace(keys[0], assessment_authority_digest=current.lifecycle.authority_digest)
+        publication._publish_provider_dispatch_claim(ordinary, eligibility_evidence_digest="9" * 64,
+            signer_identity=SIGNER, signer=signer_for())
+        for key in keys:
+            with self.assertRaisesRegex(publication.LifecyclePublicationError, "ordinary provider dispatch"):
+                publication._publish_provider_dispatch_claim(key, eligibility_evidence_digest=document["loss_proof_digest"],
+                    signer_identity=SIGNER, signer=signer_for(), reacquisition_authorization=document)
+        self.assertEqual(publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE), current)
+
+    def test_ordinary_claim_cannot_follow_reacquisition_in_same_scope(self):
+        current, document, keys = self.reacquisition_claim_fixture(prior_assessment=True)
+        publication._publish_provider_dispatch_claim(keys[0], eligibility_evidence_digest=document["loss_proof_digest"],
+            signer_identity=SIGNER, signer=signer_for(), reacquisition_authorization=document)
+        ordinary = replace(keys[1], assessment_authority_digest=current.lifecycle.authority_digest)
+        with self.assertRaisesRegex(publication.LifecyclePublicationError, "ordinary provider dispatch"):
+            publication._publish_provider_dispatch_claim(ordinary, eligibility_evidence_digest="9" * 64,
+                signer_identity=SIGNER, signer=signer_for())
 
     def test_reacquisition_claims_preserve_current_and_both_journal_readers(self):
         current, document, keys = self.reacquisition_claim_fixture()

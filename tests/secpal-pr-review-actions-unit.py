@@ -13968,6 +13968,23 @@ class FastPathTests(TestCase):
             "reviewRequests": {"nodes": [], "pageInfo": {"hasNextPage": False}},
         }
 
+    def test_bounded_provider_observation_keeps_pending_feedback_without_terminal_authority(self):
+        pending = self._codex_provider_state(code_status='🔄 **Running** since <relative-time datetime="2026-10-01T17:00:00Z">2026-10-01T17:00:00Z</relative-time>')
+        pending["comments"]["nodes"][0]["body"] = pending["comments"]["nodes"][0]["body"].replace('"status":"completed"', '"status":"running"')
+        pending["comments"]["nodes"][0].update(id="SUMMARY", databaseId=90, updatedAt="2026-10-01T17:00:00Z", reactions={"nodes":[],"pageInfo":{"hasNextPage":False}})
+        pending.update(id="PR_1", state="OPEN", baseRefName="main", baseRefOid=p21.BASE, reviewDecision=None,
+            reactions={"nodes":[],"pageInfo":{"hasNextPage":False}}, reviews={"nodes":[],"pageInfo":{"hasNextPage":False}}, reviewThreads={"nodes":[],"pageInfo":{"hasNextPage":False}})
+        github=actions.LiveGitHub(SimpleNamespace(run=mock.Mock(return_value={"data":{"repository":{"pullRequest":pending}}})))
+        gateway=actions.FastPathGateway(REPO_ROOT,registry_entry("SecPal/.github"),github=github)
+        observed=gateway.observe_provider_acquisition_feedback("SecPal/.github",1)
+        self.assertEqual(observed["provider_summary_body"],pending["comments"]["nodes"][0]["body"])
+        self.assertEqual(observed["feedback"]["threads"],[])
+        with self.assertRaisesRegex(actions.fast_path.SecurityBlocker,"not terminal"):
+            gateway.observe_stable_feedback("SecPal/.github",1)
+        pending["comments"]["nodes"][0]["body"]=pending["comments"]["nodes"][0]["body"].replace(p21.HEAD,"9"*40)
+        with self.assertRaises(actions.fast_path.SecurityBlocker):
+            gateway.observe_provider_acquisition_feedback("SecPal/.github",1)
+
     def test_visible_codex_nonterminal_states_block_stable_feedback(self) -> None:
         for status in ("queued", "pending", "running", "failed", "indeterminate"):
             with self.subTest(status=status):
