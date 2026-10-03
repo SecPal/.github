@@ -216,12 +216,28 @@ fields, identities, order, duplicate rules, and feedback/state digests.
 One narrower composition covers provider-owned findings emitted by the already
 consumed provider assessment after its canonical Stable Feedback capture. The
 first remediation's sealed validation evidence authenticates the immutable
-original capture at H0. Protected CURRENT must independently derive exactly one
+original capture at H0. A fully authenticated typed `READY_INTEGRATION` may
+also supply that predecessor context. Its existing canonical verifier rechecks
+the signed integration, ordered parents, tree, receipt, final attestation,
+reviewed state and eligibility binding. The narrow projection retains integration
+provenance; it creates no ordinary validation object. Protected journal ancestry
+must independently authenticate its exact `HEAD_ADVANCED` publication as CURRENT,
+the same lifecycle and first source parent, unchanged finite state, and the
+published source-evidence digest. This branch captures terminal provider feedback
+directly at CURRENT and requires the verifier-derived assessment head to equal
+CURRENT. It does not extend the historical provider-lineage helper.
+
+Ordinary predecessor validation retains the existing requirement that protected
+CURRENT independently derive exactly one
 Ready-preserving ordinary remediation from H0 to H1 and prove Review 1/1,
 Remediation 1/2, Ready true, one Ready transition, Cycle 3 absent, and no
 Exceptional Recovery or Continuation. The candidate validation evidence binds
 the complete reviewed state at H1 and its existing ordinary eligibility
-manifest.
+manifest. Correction-candidate validation remains ordinary-only in both paths;
+integration, exceptional and other validation families grant no candidate
+authority. An integration receipt without an eligibility digest can preserve
+predecessor feedback only with an empty eligible-thread set, which grants no
+predecessor resolution authority.
 
 The verifier derives, rather than accepts, the feedback delta between those
 states. The candidate capture authenticates exactly one Copilot request-history
