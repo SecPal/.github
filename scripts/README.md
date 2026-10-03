@@ -987,7 +987,11 @@ with a distinct candidate repository root. Stage the exact mechanically derived
 integrated tree in that candidate root. Tree derivation shares the maintained
 two-parent mechanics, exact conflict-path resolution, marker rejection and
 canonical exact parent-2 preservation classification. It accepts no unrelated
-manual correction. Preparation runs Complete Validation with the registered
+manual correction. Every derivation and verification imports only the immutable
+parent/tree object closure into a fresh bare Git repository under the maintained
+closed environment. Candidate-local attributes files, merge drivers and Git
+configuration cannot influence the signed mechanical evidence.
+Preparation runs Complete Validation with the registered
 command set and satisfied manual gates before signing a candidate:
 
 ```bash
@@ -1021,6 +1025,8 @@ The existing protected publication journal authenticates ancillary
 precedes the sole candidate creation; a second reservation for its predecessor
 rejects across directories and clones. The final authorization must match that
 reservation exactly. A distinct one-use claim consumes the sole push attempt.
+The signed work-graph digest is rechecked after that claim and before dispatch;
+a changed graph consumes the opportunity without authorizing a push.
 Neither phase selects lifecycle CURRENT or adds a lifecycle state or counter.
 An uncertain claim CAS grants no dispatch ownership. A crash after reservation
 but before candidate creation, or after push-claim consumption but before
@@ -1036,6 +1042,9 @@ main write, PR merge, automatic retry or recursive integration is exposed.
 After live signed-head equality, only the existing `HEAD_ADVANCED` transition
 publishes a successor, preserving Draft, every counter and the empty Ready
 history. Protected CURRENT read-back must select that exact integrated head.
+Exact live Draft PR identity is reobserved immediately before publication and
+again after journal read-back, including an already-complete reconciliation.
+Concurrent branch drift cannot be reported as successful convergence.
 
 If the push succeeded but publication was missing or uncertain, invoke the
 same execution command with `--reconcile`. Reconciliation authenticates the

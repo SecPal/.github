@@ -131,6 +131,12 @@ class MaintainedGapTests(TestCase):
 
 
 class EnrolledDraftAuthorityTests(TestCase):
+    def test_work_graph_transport_failure_is_controlled(self):
+        actions = SimpleNamespace(REPOSITORY_ROOT=ROOT,
+            _run_pre_enrollment_work_graph=mock.Mock(side_effect=subprocess.TimeoutExpired("python", 1)))
+        with self.assertRaises(enrolled.fast_path.RecoverableLocalError):
+            enrolled._graph(actions, native.REPOSITORY, native.ISSUE)
+
     def test_signed_package_and_separate_preparation_authority(self):
         preparation, authorization = fixture_authorizations()
         with signature_context():
@@ -375,6 +381,8 @@ class EnrolledDraftPreparationTests(TestCase):
             delivery_issue=native.ISSUE, repo_root=str(ROOT), authorization_id="prepare-001",
             manual_gate_evidence=str(gates), operation_directory=str(Path(self.temporary.name) / "operation"))
         self.actions = SimpleNamespace(
+            evidence=draft.actions.evidence,
+            _read_pre_enrollment_json=draft.actions._read_pre_enrollment_json,
             _require_distinct_candidate_repository_root=mock.Mock(),
             _authenticate_protected_bridge_main=mock.Mock(return_value="b" * 40),
             _attestation_local_state=mock.Mock(return_value=("a" * 40, "")),
@@ -426,6 +434,25 @@ class EnrolledDraftPreparationTests(TestCase):
             enrolled.prepare(self.actions, self.arguments)
         self.assertFalse(self.claims)
         self.actions._create_signed_pre_enrollment_commit.assert_not_called()
+
+    def test_candidate_creation_failure_is_controlled_after_one_reservation(self):
+        for failure in (OSError("unavailable"), subprocess.TimeoutExpired("git", 1),
+                        draft.actions.evidence.CommandPolicyError("unavailable")):
+            with self.subTest(failure=type(failure).__name__):
+                self.claims.clear()
+                self.arguments.operation_directory = str(Path(self.temporary.name) / type(failure).__name__)
+                self.actions._create_signed_pre_enrollment_commit.reset_mock()
+                self.actions._create_signed_pre_enrollment_commit.side_effect = failure
+                with self.assertRaisesRegex(enrolled.fast_path.SecurityBlocker, "no retry"):
+                    enrolled.prepare(self.actions, self.arguments)
+                self.assertTrue(self.claims)
+                self.actions._create_signed_pre_enrollment_commit.assert_called_once()
+
+    def test_missing_manual_gates_is_a_recoverable_input_failure(self):
+        self.arguments.manual_gate_evidence = str(Path(self.temporary.name) / "missing.json")
+        with self.assertRaises((enrolled.fast_path.RecoverableLocalError, draft.actions.fast_path.RecoverableLocalError)):
+            enrolled.prepare(self.actions, self.arguments)
+        self.assertFalse(self.claims)
 
     def test_main_ancestry_already_present_never_creates_candidate(self):
         self.actions._run_attestation_git.return_value.returncode = 0
@@ -502,6 +529,70 @@ class EnrolledDraftRealGitTests(TestCase):
             self.assertEqual(verified.tree_sha, self.tree)
             self.assertFalse(enrolled.fast_path.is_verified_validation_evidence(replace(verified, tree_sha="9" * 40)))
 
+    def test_candidate_local_merge_driver_cannot_change_tree_authority(self):
+        self.git("checkout", "-q", "--detach", self.parent1)
+        (self.root / "source.txt").write_text("delivery conflict\n")
+        self.git("add", "source.txt")
+        self.git("commit", "-qm", "delivery conflict")
+        parent1 = self.git("rev-parse", "HEAD")
+        mechanical = subprocess.run(["git", "merge-tree", "--write-tree", parent1, self.parent2], cwd=self.root, env=self.environment, capture_output=True, text=True).stdout.splitlines()[0]
+        self.git("read-tree", mechanical)
+        blob = self.git("rev-parse", self.parent2 + ":source.txt")
+        self.git("update-index", "--cacheinfo", "100644", blob, "source.txt")
+        resolved = self.git("write-tree")
+        expected = enrolled.fast_path.derive_ready_integration_tree_evidence(self.root, [parent1, self.parent2], resolved, schema_version="1.0", kind=enrolled.KIND)
+        attributes = self.root / "local-attributes"
+        attributes.write_text("source.txt merge=evil\n")
+        marker = self.root / "driver-ran"
+        self.git("config", "core.attributesFile", str(attributes))
+        self.git("config", "merge.evil.driver", f'printf injected > %A; touch "{marker}"')
+        observed = enrolled.fast_path.derive_ready_integration_tree_evidence(self.root, [parent1, self.parent2], resolved, schema_version="1.0", kind=enrolled.KIND)
+        self.assertFalse(marker.exists(), "candidate-local external merge driver ran")
+        self.assertEqual(observed, expected)
+
+    def test_preparation_ignores_candidate_local_signing_program(self):
+        marker = self.root / "signing-program-ran"
+        evil = self.root / "evil-signer"
+        trusted = enrolled.execution.late_disposition._trusted_executable("ssh-keygen")
+        evil.write_text(f'#!/bin/sh\ntouch "{marker}"\nexec "{trusted}" "$@"\n')
+        evil.chmod(0o700)
+        self.git("config", "gpg.ssh.program", str(evil))
+        current = native.Harness(native.Chain()).current
+        current = replace(current, lifecycle=replace(current.lifecycle, head_sha=self.parent1))
+        gates = self.root / "gates.json"
+        gates.write_text("[]")
+        arguments = SimpleNamespace(apply=True, repo=native.REPOSITORY, pr=native.PR,
+            delivery_issue=native.ISSUE, repo_root=str(self.root), authorization_id="real-preparation",
+            manual_gate_evidence=str(gates), operation_directory=str(self.root / "operation"))
+        actions = SimpleNamespace(evidence=draft.actions.evidence,
+            _require_distinct_candidate_repository_root=mock.Mock(),
+            _read_pre_enrollment_json=draft.actions._read_pre_enrollment_json,
+            _run_attestation_git=draft.actions._run_attestation_git,
+            _attestation_local_state=mock.Mock(return_value=(self.parent1, "")),
+            _staged_tree=mock.Mock(return_value=self.tree),
+            _run_registered_validations=mock.Mock(return_value=True),
+            _authenticate_protected_bridge_main=mock.Mock(return_value=self.parent2),
+            _create_signed_pre_enrollment_commit=draft.actions._create_signed_pre_enrollment_commit,
+            _write_fast_report=lambda path, value: Path(path).write_text(json.dumps(value)))
+        with self.policy_context(), ExitStack() as stack:
+            for owner, name, kwargs in (
+                (enrolled, "_trusted_source", {"return_value": "9" * 40}),
+                (enrolled, "_entry", {"return_value": ({}, {"validation": [], "manual_gates": [], "default_branch": "main"})}),
+                (enrolled, "_graph", {"return_value": "d" * 64}),
+                (enrolled, "_live", {"return_value": "delivery"}),
+                (enrolled.execution, "_production_signing_authorities", {"side_effect": native.fixture_signing_authorities}),
+                (enrolled.execution.late_disposition, "read_role_signing_configuration", {"return_value": ("ssh", str(self.root / "key"))}),
+                (enrolled.publication, "verify_current_lifecycle_authority", {"return_value": current}),
+                (enrolled.publication, "claim_enrolled_draft_integration", {}),
+            ):
+                stack.enter_context(mock.patch.object(owner, name, **kwargs))
+            enrolled.prepare(actions, arguments)
+        self.assertFalse(marker.exists(), "candidate-local signing executable ran")
+        authorization = json.loads((self.root / "operation/authorization.json").read_bytes())
+        with self.policy_context():
+            self.assertEqual(enrolled._commit(actions, self.root, authorization["evidence"], authorization["final_attestation"]["candidate_head_sha"]).signature_fingerprint,
+                             enrolled.execution._ssh_public_key_fingerprint(self.public_key))
+
     def test_unrelated_manual_delta_and_hidden_candidate_source_are_rejected(self):
         self.git("read-tree", self.tree)
         (self.root / "hidden_candidate_only.py").write_text("unexpected = True\n")
@@ -554,8 +645,6 @@ class EnrolledDraftRealGitTests(TestCase):
         mechanical = result.stdout.splitlines()[0]
         with self.assertRaises(enrolled.fast_path.SecurityBlocker):
             enrolled.fast_path.derive_ready_integration_tree_evidence(self.root, [parent1, self.parent2], mechanical, schema_version="1.0", kind=enrolled.KIND)
-        self.git("read-tree", self.parent2)
-        resolved = self.git("write-tree")
         # parent2 lacks the unrelated delivery file, so restore that exact
         # mechanical state. Only source.txt may be resolved.
         self.git("read-tree", mechanical)
@@ -584,6 +673,7 @@ class EnrolledDraftExecutionTests(TestCase):
                                          delivery_issue=native.ISSUE, pr=native.PR,
                                          repo_root=str(ROOT), authorization=str(auth_path))
         self.actions = SimpleNamespace(_require_distinct_candidate_repository_root=mock.Mock(),
+                                       _read_pre_enrollment_json=draft.actions._read_pre_enrollment_json,
                                        _authenticate_protected_bridge_main=mock.Mock(return_value="b" * 40))
         stack = signature_context()
         self.addCleanup(stack.close)
@@ -644,6 +734,54 @@ class EnrolledDraftExecutionTests(TestCase):
         self.assertEqual(after.lifecycle.head_sha, self.head)
         self.assertEqual(self.harness.transition.transition_kind, "HEAD_ADVANCED")
         self.assertEqual(len(self.harness.publication_writes), 1)
+
+    def test_missing_authorization_is_a_recoverable_input_failure(self):
+        self.arguments.authorization = str(Path(self.temporary.name) / "missing.json")
+        with self.assertRaises((enrolled.fast_path.RecoverableLocalError, draft.actions.fast_path.RecoverableLocalError)):
+            enrolled.integrate(self.actions, self.arguments)
+        self.assertEqual(self.calls, [])
+
+    def test_graph_drift_during_claim_consumes_claim_without_push(self):
+        enrolled._graph.side_effect = [self.evidence["work_graph_digest"], "e" * 64]
+        with self.assertRaisesRegex(enrolled.fast_path.SecurityBlocker, "work graph"):
+            enrolled.integrate(self.actions, self.arguments)
+        self.assertEqual(self.calls, ["claim"])
+        self.assertFalse(self.harness.publication_writes)
+
+    def test_head_drift_during_successor_prevents_publication(self):
+        original = enrolled._successor
+        def drift(*args):
+            result = original(*args)
+            self.branch = "9" * 40
+            return result
+        with mock.patch.object(enrolled, "_successor", side_effect=drift):
+            with self.assertRaisesRegex(enrolled.fast_path.SecurityBlocker, "PR-head drift"):
+                enrolled.integrate(self.actions, self.arguments)
+        self.assertFalse(self.harness.publication_writes)
+        self.assertEqual(self.calls, ["claim", "push"])
+
+    def test_head_drift_during_publication_cannot_report_success(self):
+        original = self.harness.publisher
+        def drift(*args, **kwargs):
+            result = original(*args, **kwargs)
+            self.branch = "9" * 40
+            return result
+        enrolled.publication.advance_current_terminal.side_effect = drift
+        with self.assertRaisesRegex(enrolled.fast_path.SecurityBlocker, "PR-head drift"):
+            enrolled.integrate(self.actions, self.arguments)
+        self.assertEqual(len(self.harness.publication_writes), 1)
+
+    def test_completed_reconciliation_rechecks_live_head_after_journal_verification(self):
+        enrolled.integrate(self.actions, self.arguments)
+        self.arguments.reconcile = True
+        original = enrolled._require_exact_published
+        def drift(*args):
+            original(*args)
+            self.branch = "9" * 40
+        with mock.patch.object(enrolled, "_require_exact_published", side_effect=drift):
+            with self.assertRaisesRegex(enrolled.fast_path.SecurityBlocker, "PR-head drift"):
+                enrolled.integrate(self.actions, self.arguments)
+        self.assertEqual(self.calls, ["claim", "push"])
 
     def test_push_then_missing_publication_reconciles_without_second_push(self):
         self.harness.publication_mode = "AMBIGUOUS_PREDECESSOR"

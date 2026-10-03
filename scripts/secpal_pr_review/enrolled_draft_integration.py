@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
+import subprocess
 import tempfile
-from typing import Any, Mapping
+from typing import Any
 
 from . import fast_path, lifecycle_authority as authority
 from . import lifecycle_execution as execution, lifecycle_publication as publication
@@ -196,17 +197,24 @@ def _entry(actions, repository):
     return entry, binding
 
 
-def _graph(actions, repository, issue):
-    result = actions._run_pre_enrollment_work_graph(actions.REPOSITORY_ROOT, [
-        str(actions.REPOSITORY_ROOT / "scripts/secpal-work-graph.py"),
-        "validate-issue", f"{repository}#{issue}",
-    ])
+def _work_graph(actions, repository, issue):
+    try:
+        result = actions._run_pre_enrollment_work_graph(actions.REPOSITORY_ROOT, [
+            str(actions.REPOSITORY_ROOT / "scripts/secpal-work-graph.py"),
+            "validate-issue", f"{repository}#{issue}",
+        ])
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise fast_path.RecoverableLocalError("work graph observation is unavailable") from exc
     value = draft.loads_closed_json(result.stdout)
     if result.returncode != 0:
         raise fast_path.SecurityBlocker("work graph does not authorize enrolled Draft integration")
     digest = fast_path.digest_json(value)
     actions._verify_pre_enrollment_work_graph_result(value, repository=repository, delivery_issue=issue, expected_digest=digest)
-    return digest
+    return value
+
+
+def _graph(actions, repository, issue):
+    return fast_path.digest_json(_work_graph(actions, repository, issue))
 
 
 def _live(actions, repository, issue, pr, head, main, head_ref=None):
@@ -224,15 +232,10 @@ def _live(actions, repository, issue, pr, head, main, head_ref=None):
         raise fast_path.SecurityBlocker("exact open same-repository Draft PR identity drifted")
     # The canonical graph reader supplies the complete native primary-PR claim
     # inventory. A second open PR must not gain branch authority via closing text.
-    result = actions._run_pre_enrollment_work_graph(actions.REPOSITORY_ROOT, [
-        str(actions.REPOSITORY_ROOT / "scripts/secpal-work-graph.py"),
-        "validate-issue", f"{repository}#{issue}",
-    ])
-    graph = draft.loads_closed_json(result.stdout)
+    graph = _work_graph(actions, repository, issue)
     claims = graph.get("issue", {}).get("claims")
-    if result.returncode != 0 or not isinstance(claims, list) or len(claims) != 1:
+    if not isinstance(claims, list) or len(claims) != 1:
         raise fast_path.SecurityBlocker("delivery does not have exactly one primary PR")
-    actions._verify_pre_enrollment_work_graph_result(graph, repository=repository, delivery_issue=issue, expected_digest=fast_path.digest_json(graph))
     claim = claims[0]
     if claim.get("pull_request") != f"{repository}#{pr}":
         raise fast_path.SecurityBlocker("delivery primary PR differs from CURRENT")
@@ -304,7 +307,7 @@ def prepare(actions, arguments) -> int:
         "command_set_digest": fast_path.digest_json(binding["validation"]),
         "expected_signer": signer_id,
         "manual_gate_evidence": fast_path.validate_manual_gate_evidence(
-            draft.loads_closed_json(Path(arguments.manual_gate_evidence).read_bytes()),
+            actions._read_pre_enrollment_json(arguments.manual_gate_evidence, "manual gate evidence"),
             binding["manual_gates"],
         ),
     })
@@ -336,7 +339,10 @@ def prepare(actions, arguments) -> int:
     publication.claim_enrolled_draft_integration(preparation, signer_identity=signers.publication_identity, signer=signers.publication_signer)
     trailers = dict(zip(TRAILERS, (fast_path.digest_json(evidence), receipt["receipt_digest"])))
     message = "Integrate protected main into enrolled Draft delivery\n\n" + "".join(f"{key}: {value}\n" for key, value in trailers.items())
-    created = actions._create_signed_pre_enrollment_commit(root, ["commit-tree", "-S", tree, "-p", head, "-p", main], message)
+    try:
+        created = actions._create_signed_pre_enrollment_commit(root, ["commit-tree", "-S", tree, "-p", head, "-p", main], message)
+    except (actions.evidence.CommandPolicyError, OSError, subprocess.TimeoutExpired) as exc:
+        raise fast_path.SecurityBlocker("signed enrolled Draft candidate creation unavailable; no retry") from exc
     candidate = created.stdout.strip()
     if created.returncode != 0:
         raise fast_path.SecurityBlocker("signed enrolled Draft candidate creation failed; no retry")
@@ -369,7 +375,6 @@ def _verify_candidate_package(actions, root, authorization):
 
 
 def _successor(current, authorization, signers, root):
-    evidence = authorization["evidence"]
     head = authorization["final_attestation"]["candidate_head_sha"]
     validation = fast_path.verify_enrolled_draft_validation_evidence(
         authorization, repository_root=root
@@ -443,7 +448,7 @@ def integrate(actions, arguments) -> int:
     _, binding = _entry(actions, arguments.repo)
     root = Path(arguments.repo_root).resolve(strict=True)
     actions._require_distinct_candidate_repository_root(root)
-    authorization = normalize_authorization(draft.loads_closed_json(Path(arguments.authorization).read_bytes()))
+    authorization = normalize_authorization(actions._read_pre_enrollment_json(arguments.authorization, "integration authorization"))
     evidence = authorization["evidence"]
     if (evidence["repository"], evidence["delivery_issue"], evidence["pull_request"]) != (arguments.repo, arguments.delivery_issue, arguments.pr):
         raise fast_path.SecurityBlocker("explicit integration delivery identity differs from authorization")
@@ -464,6 +469,7 @@ def integrate(actions, arguments) -> int:
         execution._verify_live_github_commit_signature(arguments.repo, head)
         if current.lifecycle.head_sha == head:
             _require_exact_published(authorization, current)
+            _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
             return 0
         require_predecessor(current, evidence)
     else:
@@ -477,12 +483,16 @@ def integrate(actions, arguments) -> int:
         publication.claim_enrolled_draft_integration(authorization, signer_identity=signers.publication_identity, signer=signers.publication_signer)
         require_predecessor(publication.verify_current_lifecycle_authority(arguments.repo, arguments.delivery_issue), evidence)
         _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, evidence["draft_head_sha"], evidence["current_main"]["sha"], evidence["head_ref"])
+        if _graph(actions, arguments.repo, arguments.delivery_issue) != evidence["work_graph_digest"]:
+            raise fast_path.SecurityBlocker("work graph changed after push claim; no retry")
         _push_exact(actions, root, evidence, head)
         _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, evidence["current_main"]["sha"], evidence["head_ref"])
         execution._verify_live_github_commit_signature(arguments.repo, head)
     # Both paths have authenticated predecessor CURRENT, the exact claimed
     # authorization and the already live signed candidate. No commit is created.
     successor = _successor(current, authorization, signers, root)
+    _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
     publication.advance_current_terminal(successor, signer_identity=signers.publication_identity, signer=signers.publication_signer)
     _require_exact_published(authorization, publication.verify_current_lifecycle_authority(arguments.repo, arguments.delivery_issue))
+    _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
     return 0

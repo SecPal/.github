@@ -1463,6 +1463,48 @@ def derive_ready_integration_tree_evidence(
     run_git: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     """Produce tree evidence from Git; callers cannot choose paths or classes."""
+    if kind == "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION":
+        if schema_version != "1.0" or not isinstance(ordered_parents, list) or len(ordered_parents) != 2:
+            raise SecurityBlocker("enrolled Draft integration topology/version is unsupported")
+        for parent in ordered_parents:
+            _require_oid(parent, "integration parent")
+        _require_oid(validated_tree, "integration candidate tree")
+        return _derive_isolated_enrolled_draft_tree_evidence(repository_root, ordered_parents, validated_tree)
+    return _derive_ready_integration_tree_evidence(
+        repository_root, ordered_parents, validated_tree,
+        schema_version=schema_version, kind=kind, run_git=run_git,
+    )
+
+
+def _derive_isolated_enrolled_draft_tree_evidence(repository_root, parents, tree):
+    """Import immutable objects; candidate merge config never derives authority."""
+    from . import lifecycle_publication as publication
+    packed = publication._run_git(repository_root, ["pack-objects", "--stdout", "--revs"],
+                                  input_bytes=("\n".join([*parents, tree]) + "\n").encode("ascii"))
+    if packed.returncode != 0:
+        raise SecurityBlocker("integration tree object closure is unavailable")
+    with tempfile.TemporaryDirectory(prefix="secpal-enrolled-draft-tree-") as directory:
+        isolated = Path(directory)
+        if publication._run_git(isolated, ["init", "--bare", "."]).returncode != 0 or publication._run_git(isolated, ["index-pack", "--stdin"], input_bytes=packed.stdout).returncode != 0:
+            raise SecurityBlocker("isolated integration tree objects are unavailable")
+        def closed_git(root, arguments, *, raw_output=False, input_data=None, allow_failure=False):
+            result = publication._run_git(root, arguments, input_bytes=input_data)
+            if result.returncode != 0 and not allow_failure:
+                raise SecurityBlocker("isolated integration tree observation failed")
+            if not raw_output:
+                result.stdout = result.stdout.decode("utf-8", "replace")
+                result.stderr = result.stderr.decode("utf-8", "replace")
+            return result
+        return _derive_ready_integration_tree_evidence(isolated, parents, tree,
+            schema_version="1.0", kind="ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION", run_git=closed_git)
+
+
+def _derive_ready_integration_tree_evidence(
+    repository_root: Path, ordered_parents: list[str], validated_tree: str,
+    *, schema_version: str, kind: str = READY_INTEGRATION_KIND,
+    run_git: Callable[..., Any] | None = None,
+) -> dict[str, Any]:
+    """Shared mechanical algorithm; historical family behavior is unchanged."""
     if run_git is None:
         run_git = _run_integration_tree_git
     version = schema_version

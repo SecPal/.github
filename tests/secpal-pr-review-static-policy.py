@@ -571,6 +571,7 @@ ALLOWED_IMPORTS = {
         "from typing import Any, Callable, TypeVar",
         "from . import qualified_remediation_successor_loss as successor_loss",
         "from . import enrolled_draft_integration as integration",
+        "from . import lifecycle_publication as publication",
         "from . import lifecycle_authority, lifecycle_execution",
     },
     "exact_source_safety.py": {
@@ -739,7 +740,7 @@ DIRECT_MODULE_ATTRIBUTES = {
         "importlib": {"util"},
         "subprocess": {"DEVNULL", "TimeoutExpired", "run"},
         "sys": {"modules"},
-        "tempfile": {"mkstemp"},
+        "tempfile": {"mkstemp", "TemporaryDirectory"},
     },
     "exact_source_safety.py": {
         "os": {"fdopen", "fsync", "replace"},
