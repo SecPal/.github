@@ -222,8 +222,9 @@ the signed integration, ordered parents, tree, receipt, final attestation,
 reviewed state and eligibility binding. The narrow projection retains integration
 provenance; it creates no ordinary validation object. Protected journal ancestry
 must independently authenticate its exact `HEAD_ADVANCED` publication as CURRENT,
-the same lifecycle and first source parent, unchanged finite state, and the
-published source-evidence digest. This branch captures terminal provider feedback
+the same lifecycle and first source parent, unchanged finite state, matching
+integration eligibility counters, and the published source-evidence digest.
+This branch captures terminal provider feedback
 directly at CURRENT and requires the verifier-derived assessment head to equal
 CURRENT. It does not extend the historical provider-lineage helper.
 

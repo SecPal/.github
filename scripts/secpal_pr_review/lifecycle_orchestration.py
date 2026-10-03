@@ -1175,6 +1175,16 @@ def _ready_integration_remediation_predecessor_context(
         or predecessor.state != current.lifecycle.state
         or predecessor.head_sha != integration["prior_delivery_head_sha"]
         or predecessor.lifecycle_id != integration["eligibility"]["lifecycle_identity"]
+        or any(
+            integration["eligibility"][integration_field]
+            != current.lifecycle.state[state_field]
+            for integration_field, state_field in (
+                ("unrestricted_reviews_after", "unrestricted_review_count"),
+                ("remediation_cycles_after", "remediation_cycle_count"),
+                ("exceptional_recoveries_after", "exceptional_recovery_count"),
+                ("exceptional_continuations_after", "exceptional_continuation_count"),
+            )
+        )
         or validation.source_validation_evidence_digest
         != current.lifecycle.source_validation_evidence_digest
     ):
@@ -1307,8 +1317,10 @@ def verify_ready_remediation_provider_growth_authority(
             )
             or reviewed.head_sha != provider.provider_head_sha
         ))
-        or (predecessor_eligibility is not None and predecessor_eligibility
-        != fast_path.digest_json(predecessor_eligibility_document)
+        or (
+            predecessor_eligibility is not None
+            and predecessor_eligibility
+            != fast_path.digest_json(predecessor_eligibility_document)
         )
         or candidate_eligibility != fast_path.digest_json(eligibility)
     ):

@@ -12769,7 +12769,8 @@ class ReadyIntegrationRemediationTests(TestCase):
             self.resulting.feedback["threads"][0] = copy.deepcopy(self.reviewed.feedback["threads"][0])
         self.registry = self.actions_fixture.fast_registry()
         self.integration = self.actions_fixture.ready_integration_evidence(
-            self.reviewed, validated_tree=tree, registry=self.registry, exceptional_recoveries=0,
+            self.reviewed, validated_tree=tree, registry=self.registry,
+            exceptional_recoveries=int(self._testMethodName == "test_integration_finite_state_must_match_current"),
         )
         self.integration.update(schema_version="1.2", reviewed_head_sha=h0,
                                 prior_delivery_head_sha=r0, ordered_parent_shas=[r0, main_parent],
@@ -12896,6 +12897,13 @@ class ReadyIntegrationRemediationTests(TestCase):
         with self.assertRaises(authority.LifecycleAuthorityError):
             authority.require_forward_transition(result, "REMEDIATION_COMPLETED", "e" * 64)
 
+    def test_integration_finite_state_must_match_current(self):
+        self.assertTrue(fast_path.is_verified_validation_evidence(self.predecessor))
+        self.assertEqual(self.current.lifecycle.state["exceptional_recovery_count"], 0)
+        self.assertEqual(self.integration["eligibility"]["exceptional_recoveries_after"], 1)
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.verify()
+
     def test_unbound_integration_without_predecessor_resolution(self):
         reviewed, digest = fast_path.verified_ready_integration_review_context(self.predecessor)
         self.assertEqual(reviewed.to_dict(), self.reviewed.to_dict())
@@ -12958,6 +12966,36 @@ class ReadyIntegrationRemediationTests(TestCase):
         self.git("config", "gpg.ssh.allowedSignersFile", str(self.root / "missing-signers"))
         with self.assertRaises(orchestration.LifecycleOrchestrationError):
             self.verify()
+
+    def test_valid_integration_from_another_delivery_rejected(self):
+        provenance = json.loads(self.predecessor._verification_seal.provenance_json)
+        provenance.pop("kind")
+        provenance.pop("attestation")
+        integration = provenance["integration_evidence"]
+        integration["delivery_issue_number"] = 1071
+        receipt = fast_path.create_validation_receipt(
+            repository=REPOSITORY, head_sha=integration["prior_delivery_head_sha"],
+            validated_tree_sha=self.predecessor.tree_sha, registry=self.registry,
+            command_set=self.registry["validation"], successful_result=True,
+            reviewed_state=self.reviewed, manual_gate_evidence=[],
+            integration_evidence_digest=fast_path.digest_json(integration),
+            eligibility_evidence_digest=fast_path.digest_json(self.predecessor_eligibility),
+        )
+        head = self.signed_commit(self.predecessor.tree_sha, integration["ordered_parent_shas"],
+            "another delivery\n\nSecPal-Validation-Receipt: " + receipt["receipt_digest"]
+            + "\nSecPal-Ready-Integration: " + fast_path.digest_json(integration))
+        attestation = fast_path.create_ready_integration_attestation(
+            repository=REPOSITORY, head_sha=head, registry=self.registry,
+            command_set=self.registry["validation"], reviewed_state=self.reviewed,
+            validation_receipt=receipt, integration_evidence=integration,
+        )
+        provenance.update(head_sha=head, reviewed_state=self.reviewed, validation_receipt=receipt,
+                          commit_validation_receipt_digest=receipt["receipt_digest"],
+                          commit_integration_evidence_digest=fast_path.digest_json(integration))
+        authenticated = fast_path.verify_ready_integration_attestation(attestation, **provenance)
+        self.assertTrue(fast_path.is_verified_validation_evidence(authenticated))
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.verify(predecessor_validation=authenticated)
 
     def test_candidate_remains_ordinary_only(self):
         with self.assertRaises(orchestration.LifecycleOrchestrationError):
