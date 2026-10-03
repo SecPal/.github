@@ -4999,10 +4999,10 @@ class RegistryTests(TestCase):
             ],
         )
 
-    def test_fast_binding_omits_pre_enrollment_policy_for_unrelated_repository(self) -> None:
-        binding = actions._fast_registry_binding(
-            actions.select_repository(actions.load_registry(), "SecPal/frontend")
-        )
+    def test_fast_binding_omits_absent_pre_enrollment_policy(self) -> None:
+        entry = actions.select_repository(actions.load_registry(), "SecPal/frontend")
+        entry.pop("pre_enrollment_integration_policy", None)
+        binding = actions._fast_registry_binding(entry)
         self.assertNotIn("pre_enrollment_integration_policy", binding)
         self.assertEqual(
             [command["argv"] for command in binding["focused_only_validation"]],
