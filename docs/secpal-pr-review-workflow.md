@@ -272,9 +272,14 @@ A Codex-only H1 assessment instead composes both read-only first-fallback
 acquisitions from `provider_acquisition.py`. The fixed 30-minute window makes
 the maintained approximately-30-minute observation contract executable without
 configuration. Complete ordered native chronology must show each unedited
-canonical request after both Ready and the H1 commit, with the exact PR author
-and Ready actor, no duplicate first fallback, and no earlier observable H1
-provider result for that type. Protected CURRENT and the entire live Stable
+canonical request at least 30 minutes after both Ready and an independently
+observed server-created H1 PushEvent, with the exact PR author and Ready actor.
+Intrinsic commit dates grant no observation-window authority. Complete native
+content-edit snapshots preserve consumed requests and earlier per-type summary
+startup even when current bodies or completion timestamps changed. Missing,
+deleted or ambiguous history and missing head-publication events fail closed.
+There must be no duplicate first fallback or earlier observable H1 provider
+startup for that type. Protected CURRENT and the entire live Stable
 Feedback capture are reauthenticated around the observation. An internally
 sealed ephemeral projection binds both request node/database identities,
 actors, timestamps, H1, lifecycle, CURRENT and actual review database identities.

@@ -1959,7 +1959,7 @@ def first_fallback_growth():
     codex = {"__typename": "Bot", "login": fast_path.CODEX_REVIEW_PROVIDER["login"], "id": fast_path.CODEX_REVIEW_PROVIDER["node_id"], "databaseId": fast_path.CODEX_REVIEW_PROVIDER["database_id"]}
     def comment(node, database, body, created, updated, author):
         return {"__typename": "IssueComment", "id": node, "databaseId": database, "body": body,
-                "createdAt": created, "updatedAt": updated, "author": copy.deepcopy(author)}
+                "createdAt": created, "updatedAt": updated, "author": copy.deepcopy(author), "userContentEdits": {"nodes": [], "pageInfo": {"hasNextPage": False}}}
     nodes = [
         {"__typename": "PullRequestCommit", "id": "PURC_H0", "commit": {"oid": reviewed.head_sha, "committedDate": "2026-10-01T14:00:00Z"}},
         {"__typename": "ReadyForReviewEvent", "id": "RFRE_READY", "createdAt": "2026-10-01T15:00:00Z", "actor": actor},
@@ -1972,9 +1972,15 @@ def first_fallback_growth():
          "submittedAt": review["submitted_at"], "state": "COMMENTED", "commit": {"oid": current.head_sha}, "author": codex},
         comment("IC_SECURITY_RESULT", 4, "### 🛡️ Codex Security Review\n\nNo security issues were found in this pull request.\n\n**Reviewed commit:** `" + current.head_sha[:10] + "`", "2026-10-01T16:24:00Z", "2026-10-01T16:24:00Z", codex),
     ]
+    summary_node = nodes[2]
+    original = summary.replace(current.head_sha, reviewed.head_sha).replace(current.head_sha[:7], reviewed.head_sha[:7])
+    summary_node["userContentEdits"]["nodes"] = [
+        {"id": "UCE_FINAL", "editedAt": summary_node["updatedAt"], "deletedAt": None, "diff": summary, "editor": codex},
+        {"id": "UCE_ORIGINAL", "editedAt": summary_node["createdAt"], "deletedAt": None, "diff": original, "editor": codex},
+    ]
     raw = {"data": {"repository": {"nameWithOwner": current.repository, "pullRequest": {
         "number": current.pull_request_number, "state": "OPEN", "isDraft": False,
-        "headRefOid": current.head_sha, "author": actor,
+        "headRefOid": current.head_sha, "headRefName": "topic", "author": actor,
         "timelineItems": {"nodes": nodes, "pageInfo": {"hasNextPage": False}},
     }}}}
     first_fallback_feedback(current, raw)
@@ -1994,7 +2000,24 @@ def first_fallback_feedback(current, raw):
          "updated_at": v["updatedAt"], "reactions": []}
         for v in pull["timelineItems"]["nodes"] if v["__typename"] == "IssueComment"
     ]
+    for node in pull["timelineItems"]["nodes"]:
+        if node["__typename"] == "IssueComment" and node.get("userContentEdits", {}).get("nodes"):
+            latest = max(node["userContentEdits"]["nodes"], key=lambda v: v["editedAt"])
+            if latest["editedAt"] == node["updatedAt"]:
+                latest["diff"] = node["body"]
     current.refresh_digests()
+
+
+def first_fallback_push(raw):
+    pull = raw["data"]["repository"]["pullRequest"]
+    return {"id": "123456", "type": "PushEvent", "created_at": "2026-10-01T15:02:00Z", "repo": {"name": raw["data"]["repository"]["nameWithOwner"], "id": 42}, "actor": {"login": pull["author"]["login"], "id": pull["author"]["databaseId"]}, "payload": {"repository_id": 42, "push_id": 123456, "ref": "refs/heads/" + pull["headRefName"], "head": pull["headRefOid"], "before": "a" * 40}}
+
+
+def first_fallback_observation(raw):
+    from scripts.secpal_pr_review import provider_acquisition as acquisition
+    observed = acquisition._normalize_observation(raw)
+    observed["head_publication"] = acquisition._select_head_publication([first_fallback_push(raw)], observed)
+    return observed
 
 
 class FirstFallbackAcquisitionTests(TestCase):
@@ -2008,7 +2031,7 @@ class FirstFallbackAcquisitionTests(TestCase):
 
     def authenticate(self, current, publication_context, raw, review_type=None):
         from scripts.secpal_pr_review import provider_acquisition as acquisition
-        observed = acquisition._normalize_observation(raw)
+        observed = first_fallback_observation(raw)
         with mock.patch.object(acquisition, "_observe", return_value=observed), mock.patch.object(
             publication, "verify_current_lifecycle_authority", return_value=publication_context
         ), mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=current):
@@ -2024,6 +2047,108 @@ class FirstFallbackAcquisitionTests(TestCase):
             provider_summary_body=summary, review_database_ids=current.review_database_ids,
             first_fallback_acquisitions=acquired,
         )
+
+    def test_server_head_arrival_starts_the_window(self):
+        from scripts.secpal_pr_review import provider_acquisition as acquisition
+        _, current, _, _, _, context, raw = first_fallback_growth()
+        observed = first_fallback_observation(raw)
+        observed["head_publication"]["created_at"] = "2026-10-01T15:59:00Z"
+        with mock.patch.object(acquisition, "_observe", return_value=observed), mock.patch.object(publication, "verify_current_lifecycle_authority", return_value=context), mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=current), self.assertRaises(fast_path.SecurityBlocker):
+            acquisition.authenticate_first_fallback_acquisitions(context, current)
+
+    def test_historical_summary_startup_cannot_hide_behind_late_completion(self):
+        _, current, _, _, summary, context, raw = first_fallback_growth()
+        nodes = raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]
+        comment = next(v for v in nodes if fast_path.CODEX_REVIEW_SUMMARY_MARKER in v.get("body", ""))
+        nodes.remove(comment)
+        comment["createdAt"] = "2026-10-01T15:03:00Z"
+        nodes.insert(3, comment)
+        comment["userContentEdits"] = {"nodes": [
+            {"id": "UCE_FINAL", "editedAt": comment["updatedAt"], "deletedAt": None, "diff": summary, "editor": comment["author"]},
+            {"id": "UCE_ORIGINAL", "editedAt": comment["createdAt"], "deletedAt": None, "diff": summary.replace("Completed", "Running"), "editor": comment["author"]},
+        ], "pageInfo": {"hasNextPage": False}}
+        with self.assertRaises(fast_path.SecurityBlocker):
+            self.authenticate(current, context, raw)
+
+    def test_edited_earlier_request_remains_consumed(self):
+        _, current, _, _, _, context, raw = first_fallback_growth()
+        nodes = raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]
+        earlier = copy.deepcopy(next(v for v in nodes if v["id"] == "IC_CODE_FIRST"))
+        earlier.update(id="IC_EARLIER", databaseId=99, body="withdrawn", createdAt="2026-10-01T15:50:00Z", updatedAt="2026-10-01T15:55:00Z")
+        earlier["userContentEdits"] = {"nodes": [
+            {"id": "UCE_WITHDRAWN", "editedAt": earlier["updatedAt"], "deletedAt": None, "diff": "withdrawn", "editor": earlier["author"]},
+            {"id": "UCE_REQUEST", "editedAt": earlier["createdAt"], "deletedAt": None, "diff": "@codex review", "editor": earlier["author"]},
+        ], "pageInfo": {"hasNextPage": False}}
+        nodes.insert(4, earlier)
+        first_fallback_feedback(current, raw)
+        with self.assertRaises(fast_path.SecurityBlocker):
+            self.authenticate(current, context, raw)
+
+    def test_database_ids_are_scoped_to_resource_type(self):
+        _, current, _, _, _, context, raw = first_fallback_growth()
+        nodes = raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]
+        next(v for v in nodes if v["id"] == "IC_CODE_FIRST")["databaseId"] = current.review_database_ids[0]["database_id"]
+        self.authenticate(current, context, raw)
+
+    def test_complete_full_timeline_page_is_accepted(self):
+        _, current, _, _, _, context, raw = first_fallback_growth()
+        nodes = raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]
+        prototype = copy.deepcopy(next(v for v in nodes if v["id"] == "IC_CODE_FIRST"))
+        extras = [{**copy.deepcopy(prototype), "id": f"IC_OTHER_{i}", "databaseId": 100+i, "body": "ordinary discussion", "createdAt": "2026-10-01T14:30:00Z", "updatedAt": "2026-10-01T14:30:00Z"} for i in range(100-len(nodes))]
+        nodes[1:1] = extras
+        first_fallback_feedback(current, raw)
+        self.authenticate(current, context, raw)
+
+    def test_head_publication_observation_fails_closed_and_is_read_only(self):
+        from scripts.secpal_pr_review import provider_acquisition as acquisition
+        _, _, _, _, _, _, raw = first_fallback_growth()
+        observed = acquisition._normalize_observation(raw)
+        push = first_fallback_push(raw)
+        for change in (lambda v: v["repo"].update(name="SecPal/api"), lambda v: v["actor"].update(id=99), lambda v: v.update(created_at="not-a-timestamp"), lambda v: v["payload"].update(push_id=True)):
+            altered = copy.deepcopy(push)
+            change(altered)
+            with self.assertRaises(fast_path.SecurityBlocker):
+                acquisition._select_head_publication([altered], observed)
+        for change in (lambda v: v["payload"].update(ref="refs/heads/other"), lambda v: v["payload"].update(head="f" * 40)):
+            altered = copy.deepcopy(push)
+            change(altered)
+            self.assertIsNone(acquisition._select_head_publication([altered], observed))
+        with self.assertRaises(fast_path.SecurityBlocker):
+            acquisition._select_head_publication([push, copy.deepcopy(push)], observed)
+        response = SimpleNamespace(returncode=0, stdout="[]")
+        with mock.patch.object(publication, "_run_gh", return_value=response) as run, self.assertRaises(fast_path.SecurityBlocker):
+            acquisition._observe_head_publication(observed)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0][:4], ["api", "--hostname", "github.com", "repos/SecPal/.github/events?per_page=100&page=1"])
+        full_page = [{"type": "WatchEvent"} for _ in range(100)]
+        with mock.patch.object(publication, "_run_gh", side_effect=[SimpleNamespace(returncode=0, stdout=json.dumps(full_page)), SimpleNamespace(returncode=0, stdout=json.dumps([push]))]) as run:
+            result = acquisition._observe_head_publication(observed)
+        self.assertEqual(result["created_at"], push["created_at"])
+        self.assertEqual(run.call_count, 2)
+
+    def test_incomplete_deleted_or_substituted_content_history_rejects(self):
+        for label in ("truncated", "missing original", "deleted", "null content", "wrong editor", "wrong latest", "duplicate edit"):
+            with self.subTest(label=label):
+                _, current, _, _, _, context, raw = first_fallback_growth()
+                nodes = raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]
+                comment = next(v for v in nodes if v.get("userContentEdits", {}).get("nodes"))
+                history = comment["userContentEdits"]
+                if label == "truncated": history["pageInfo"]["hasNextPage"] = True
+                elif label == "missing original": history["nodes"].pop()
+                elif label == "deleted": history["nodes"][1]["deletedAt"] = "2026-10-01T15:30:00Z"
+                elif label == "null content": history["nodes"][1]["diff"] = None
+                elif label == "wrong editor": history["nodes"][1]["editor"] = copy.deepcopy(raw["data"]["repository"]["pullRequest"]["author"])
+                elif label == "wrong latest": history["nodes"][0]["diff"] = "substituted"
+                else: history["nodes"].append(copy.deepcopy(history["nodes"][0]))
+                with self.assertRaises(fast_path.SecurityBlocker):
+                    self.authenticate(current, context, raw)
+
+    def test_initial_code_only_summary_version_does_not_invent_security_startup(self):
+        _, current, _, _, _, context, raw = first_fallback_growth()
+        comment = next(v for v in raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"] if v.get("userContentEdits", {}).get("nodes"))
+        original = comment["userContentEdits"]["nodes"][-1]
+        original["diff"] = "\n".join(line for line in original["diff"].splitlines() if "**Security Review**" not in line)
+        self.authenticate(current, context, raw)
 
     def test_both_first_fallbacks_admit_complete_codex_only_growth(self):
         fixture = first_fallback_growth()
@@ -2064,10 +2189,10 @@ class FirstFallbackAcquisitionTests(TestCase):
     def test_public_observation_normalizes_live_representation_without_writes(self):
         from scripts.secpal_pr_review import provider_acquisition as acquisition
         _, current, _, _, _, _, raw = first_fallback_growth()
-        with mock.patch.object(publication, "_run_gh", return_value=SimpleNamespace(returncode=0, stdout=json.dumps(raw))) as run:
+        with mock.patch.object(publication, "_run_gh", side_effect=[SimpleNamespace(returncode=0, stdout=json.dumps(raw)), SimpleNamespace(returncode=0, stdout=json.dumps([first_fallback_push(raw)]))]) as run:
             observed = acquisition._observe(current.repository, current.pull_request_number)
-        self.assertEqual(observed, acquisition._normalize_observation(raw))
-        command = run.call_args.args[0]
+        self.assertEqual(observed, first_fallback_observation(raw))
+        command = run.call_args_list[0].args[0]
         self.assertEqual(command[:4], ["api", "--hostname", "github.com", "graphql"])
         self.assertNotIn("mutation", " ".join(command).lower())
 
@@ -2084,7 +2209,7 @@ class FirstFallbackAcquisitionTests(TestCase):
     def test_current_and_complete_live_capture_are_independently_reauthenticated(self):
         from scripts.secpal_pr_review import provider_acquisition as acquisition
         _, current, _, _, _, context, raw = first_fallback_growth()
-        observed = acquisition._normalize_observation(raw)
+        observed = first_fallback_observation(raw)
         for wrong in (replace(context, publication_oid="f" * 40), replace(context, publication_digest="f" * 64)):
             with mock.patch.object(publication, "verify_current_lifecycle_authority", return_value=wrong), self.assertRaises(fast_path.SecurityBlocker):
                 acquisition.authenticate_first_fallback_acquisitions(context, current)
@@ -13235,7 +13360,7 @@ class ReadyIntegrationRemediationTests(TestCase):
 
     def test_bounded_codex_acquisition_composes_with_authenticated_integration_predecessor(self):
         from scripts.secpal_pr_review import provider_acquisition as acquisition
-        observed = acquisition._normalize_observation(self.acquisition_raw)
+        observed = first_fallback_observation(self.acquisition_raw)
         acquired = acquisition._admit(self.current, self.resulting, observed)
         with mock.patch.object(acquisition, "authenticate_first_fallback_acquisitions", return_value=acquired):
             verified = self.verify()

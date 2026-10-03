@@ -189,9 +189,14 @@ first fallback acquisitions through `provider_acquisition.py`. That read-only
 owner reauthenticates protected CURRENT and complete live feedback, then derives
 the exact persisted Code and Security requests from the complete ordered native
 timeline. Each canonical, unedited request must come from the exact PR author
-and Ready actor, follow the current-head commit and Ready event by at least the
-fixed 30-minute provider observation window, and have no same-type duplicate or
-earlier observable exact-head provider result. Caller-selected request IDs or
+and Ready actor, follow Ready and an independently observed, server-created current-head
+PushEvent by at least the fixed 30-minute provider observation window. Intrinsic
+commit dates grant no timing authority. Complete retained comment-edit snapshots
+keep an edited request consumed and expose earlier exact-head startup, including
+a running summary that completed later. Missing, deleted or ambiguous history
+fails closed, as does an unavailable head-publication event. The bounded
+[GitHub event feed](https://docs.github.com/en/rest/activity/events#list-repository-events)
+may delay or expire that positive proof; it is never evidence of absent activity. Caller-selected request IDs or
 provider modes grant no authority. Its immutable ephemeral seal binds CURRENT,
 head, feedback, request identities, actors, chronology and live review database
 identities. Existing terminal provider transport verification then authenticates
