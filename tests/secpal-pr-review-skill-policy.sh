@@ -1687,9 +1687,17 @@ for repository_specific_field in (
     assert app_lifecycle[repository_specific_field] == [], (
         f"SecPal/secpal.app lifecycle {repository_specific_field} must start empty"
     )
-assert "pre_enrollment_integration_policy" not in app, (
-    "SecPal/secpal.app pre-enrollment integration is a separate delivery"
-)
+assert app.get("pre_enrollment_integration_policy") == {
+    "schema_version": "1.0",
+    "command": "integrate-pre-enrollment-draft",
+    "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+    "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+    "maximum_candidates": 1,
+    "maximum_pushes": 1,
+    "force_push": False,
+    "automatic_retry": False,
+    "merge_pull_request": False,
+}, "SecPal/secpal.app must retain the exact closed Draft integration capability"
 for repository_specific_field in (
     "bootstrap_genesis_repairs", "bootstrap_source_admissions",
     "historical_compatibility_publications", "delivery_initializations",
