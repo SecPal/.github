@@ -1286,6 +1286,10 @@ SAFE_GETATTR_CALLS = {
         ),
         DynamicImportCall(
             ("_command_attest_validation",),
+            "getattr(arguments, 'prior_integration_chain', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
             "getattr(arguments, 'expected_prior_authority_signer', None)",
         ),
         DynamicImportCall(
@@ -1303,6 +1307,10 @@ SAFE_GETATTR_CALLS = {
         DynamicImportCall(
             ("_verify_ready_integration_prior_authority",),
             "getattr(arguments, 'prior_attestation', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_ready_integration_prior_authority",),
+            "getattr(arguments, 'prior_integration_chain', None)",
         ),
         DynamicImportCall(
             ("_verify_ready_integration_prior_authority",),

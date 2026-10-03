@@ -1573,6 +1573,28 @@ already verified final delivery attestation and does not create a new receipt.
 
 ### Explicit Ready-head integration evidence
 
+For chained integration, the prior delivery head remains a typed integration;
+it is never flattened into ordinary remediation. Supply the original immutable
+packages through `attest-validation --prior-integration-chain PATH`, alongside
+the existing prior manifest, signed tag, reviewed-state, receipt and attestation
+arguments. The transport is a closed JSON object with schema `1.0`, kind
+`READY_INTEGRATION_PREDECESSOR_PACKAGES`, and a `packages` array in publication
+order. Each entry contains exactly `integration_evidence`, `reviewed_state`,
+`validation_receipt`, `final_attestation`, and `prior_authority`. These are
+original evidence documents, not caller-authored verifier results.
+
+The canonical integration verifier independently authenticates each package's
+supported historical evidence semantics, actual commit trailers, ordered parents,
+tree and signature. The protected publication owner verifies the exact complete
+`HEAD_ADVANCED` suffix, rejects gaps, duplicates, substituted ancestry and replay,
+and derives the prior-authority manifest from verified CURRENT. The manifest and
+its existing signed tag retain their exact head, tree, receipt, attestation,
+signer and publication bindings. Historical parent 2 is never compared with
+current main; the new integration still requires a fresh protected-main
+observation. All finite lifecycle state and histories remain identical across
+each advancement, including Remediation 2/2. Ordinary single-parent validation
+is unchanged, and supplying this transport cannot admit an ordinary merge.
+
 The canonical `derive_ready_source_recovery_provider_binding` can compose a
 Ready-preserving ordinary remediation suffix followed by a complete typed
 `HEAD_ADVANCED` suffix. Its `ready_integrations` argument supplies the original

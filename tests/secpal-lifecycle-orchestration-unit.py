@@ -13899,11 +13899,12 @@ class ReadyIntegrationRemediationTests(TestCase):
                 "base_ref": "main", "base_sha": fresh_main}
         integration.update(next_updates or {})
         with (mock.patch.object(actions, "_prior_delivery_registry_binding", return_value=self.registry),
-              mock.patch.object(actions, "_load_lifecycle_publication_helpers", return_value=(authority, publication)),
+              mock.patch.object(actions, "_load_lifecycle_publication_helpers", return_value=(authority, publication)) as loaded,
               mock.patch.object(publication, "_authenticate_provider_integration_verifier")):
             admitted = actions._verify_ready_integration_prior_authority(
                 arguments=arguments, repository_root=self.root, binding=self.registry,
                 integration_evidence=integration, live_observation=live)
+        self.assertEqual(loaded.call_count, 1, "CURRENT and typed packages must share their verifier namespace")
         self.assertEqual(admitted, manifest)
         return integration, manifest
 

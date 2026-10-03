@@ -6481,7 +6481,7 @@ def _verify_ready_integration_lifecycle_authority(
         )
 
 
-def _authenticated_ready_integration_publication(
+def _authenticated_ready_integration_publication_context(
     authority_manifest: dict[str, Any],
     integration_evidence: dict[str, Any],
 ) -> Any:
@@ -6536,7 +6536,15 @@ def _authenticated_ready_integration_publication(
         raise fast_path.SecurityBlocker(
             "Ready integration lifecycle publication binding changed"
         )
-    return published
+    return published, lifecycle_publication
+
+
+def _authenticated_ready_integration_publication(
+    authority_manifest: dict[str, Any], integration_evidence: dict[str, Any],
+) -> Any:
+    return _authenticated_ready_integration_publication_context(
+        authority_manifest, integration_evidence,
+    )[0]
 
 
 def _verify_ready_integration_published_authority(
@@ -8321,7 +8329,7 @@ def _canonical_ready_prior_authority_tag_ref(authority: dict[str, Any]) -> str:
 
 
 def _verify_ready_integration_prior_chain(
-    *, repository_root: Path, published: Any, packages: Any,
+    *, repository_root: Path, published: Any, publication: Any, packages: Any,
 ) -> Any:
     """Observe immutable packages; delegate integration and chain admission."""
 
@@ -8331,7 +8339,6 @@ def _verify_ready_integration_prior_chain(
     bundle = raw.get("lifecycle_evidence", raw)
     if len(packages) > len(bundle["transition_authorizations"]):
         raise fast_path.SecurityBlocker("prior Ready integration chain exceeds lifecycle history")
-    _, publication = _load_lifecycle_publication_helpers()
     verifier = publication.fast_path
     try:
         verified = []
@@ -8545,9 +8552,9 @@ def _verify_ready_integration_prior_authority(
             or transport["kind"] != "READY_INTEGRATION_PREDECESSOR_PACKAGES"):
             raise fast_path.SecurityBlocker("prior Ready integration chain transport is malformed")
         packages = transport["packages"]
-        published = _authenticated_ready_integration_publication(authority, integration_evidence)
+        published, publication = _authenticated_ready_integration_publication_context(authority, integration_evidence)
         projection = _verify_ready_integration_prior_chain(
-            repository_root=repository_root, published=published, packages=packages,
+            repository_root=repository_root, published=published, publication=publication, packages=packages,
         )
         if json.loads(projection.manifest_json) != authority:
             raise fast_path.SecurityBlocker("prior Ready integration authority projection changed")

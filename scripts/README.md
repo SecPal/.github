@@ -375,6 +375,27 @@ command performs one trusted GitHub read and requires the live open Ready PR
 head and registered target-base SHA to equal the two authorized parents; caller-
 supplied `observed_sha` cannot substitute for that read.
 
+A typed Ready integration can also supply parent-1 authority for another typed
+integration. `--prior-integration-chain` carries an immutable package transport
+with exactly `schema_version: "1.0"`,
+`kind: "READY_INTEGRATION_PREDECESSOR_PACKAGES"`, and `packages` in oldest-to-newest
+publication order. Each package contains exactly `integration_evidence`,
+`reviewed_state`, `validation_receipt`, `final_attestation`, and `prior_authority`.
+The ordinary prior companion arguments must equal the newest package's canonical
+reviewed state, receipt and attestation. The transport selects no provenance:
+every commit's actual trailers, ordered parents, tree and signature are observed,
+then its original receipt, attestation and evidence version are reverified by the
+canonical integration verifier. The publication verifier walks the exact complete
+`HEAD_ADVANCED` suffix iteratively and derives
+`VerifiedReadyIntegrationPriorAuthority`; the supplied manifest must equal that
+projection. Missing, extra, reordered, replayed or cyclic entries fail closed.
+The existing schema-1.1 manifest and signed annotated tag retain their bindings;
+there is no additional durable authority store. Historical parent 2 remains
+bound to its original protected publication, while issuance observes fresh main
+for the new parent 2. Ordinary remediation still requires a sole parent. No
+integration changes lifecycle state or consumes a review, remediation, Ready,
+Recovery or Continuation slot.
+
 Prior-authority schema `1.2` extends this same manifest, annotated-tag, signer,
 target, and normalization boundary for a genuine Exact-State-Adoption v3 source
 that has one protected ordinary Draft-to-Ready successor. It derives the source
