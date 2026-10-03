@@ -14508,6 +14508,62 @@ class FastPathTests(TestCase):
         with self.assertRaises((TypeError, ValueError)):
             replace(binding, provider_binding_sources=("CALLER_SELECTED",))
 
+    def test_loss_summary_cannot_substitute_current_head_or_other_delivery(self) -> None:
+        _, binding, summary = self._loss_provider_gateway()
+        for repository, pull_request, head in (
+            ("Other/project", 1, p21.HEAD),
+            ("SecPal/.github", 2, p21.HEAD),
+            ("SecPal/.github", 1, "e" * 40),
+        ):
+            with self.subTest(repository=repository, pull_request=pull_request, head=head):
+                with self.assertRaises(RuntimeError):
+                    binding.verify_historical_provider_summary(
+                        body=summary, repository=repository,
+                        pull_request=pull_request, current_head_sha=head,
+                    )
+        # A perfectly ordinary terminal current-head summary still cannot
+        # replace the historical body authenticated by the loss verifier.
+        current_summary = self._codex_provider_state()["comments"]["nodes"][0]["body"]
+        gateway, _, _ = self._loss_provider_gateway(body=current_summary)
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "summary is invalid"):
+            gateway.observe_stable_feedback("SecPal/.github", 1)
+
+    def test_gateway_rejects_missing_duplicate_unknown_and_substituted_provenance(self) -> None:
+        original = self._ready_source_provider_binding()
+        for sources in (
+            (), ("CALLER_SELECTED",), original.provider_binding_sources * 2,
+            ("EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING", "CALLER_SELECTED"),
+            ["ORDINARY_REMEDIATION_SUFFIX"], (None,),
+        ):
+            with self.subTest(sources=sources):
+                forged = replace(original, provider_binding_sources=sources)
+                with self.assertRaisesRegex(actions.MutationBlocked, "provenance is invalid"):
+                    actions._require_review_providers_terminal(
+                        self._codex_provider_state(), repository="SecPal/.github",
+                        pull_request_number=1, ready_source_provider_binding=forged,
+                    )
+        _, historical, _ = self._loss_provider_gateway()
+        from scripts.secpal_pr_review import validation_evidence_loss as loss
+        with mock.patch.object(loss, "__file__", str(REPO_ROOT / ".context/candidate.py")):
+            with self.assertRaisesRegex(actions.MutationBlocked, "not verifier-owned"):
+                actions._require_review_providers_terminal(
+                    self._codex_provider_state(), repository="SecPal/.github",
+                    pull_request_number=1, ready_source_provider_binding=historical,
+                )
+        ordinary = actions._ReadyRemediationProviderBinding(
+            {"repository": "SecPal/.github", "pull_request": 1,
+             "current_head_sha": p21.HEAD, "provider_head_sha": "f" * 40},
+            repository="SecPal/.github", pull_request=1,
+        )
+        ordinary.provider_binding_sources = (
+            lifecycle_publication.EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING,
+        )
+        with self.assertRaisesRegex(actions.MutationBlocked, "provenance changed"):
+            actions._require_review_providers_terminal(
+                self._codex_provider_state(), repository="SecPal/.github",
+                pull_request_number=1, ready_source_provider_binding=ordinary,
+            )
+
     def test_ready_source_accepts_exact_v11_historical_provider_summary(self) -> None:
         binding = replace(
             self._ready_source_provider_binding(),

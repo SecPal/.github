@@ -1379,6 +1379,10 @@ SAFE_GETATTR_CALLS = {
 SAFE_SYS_MODULES_CALLS = {
     "secpal-pr-review-actions.py": {
         DynamicImportCall(
+            ("_provider_binding_uses_historical_summary",),
+            "sys.modules.get(f'{package}.{owner}')",
+        ),
+        DynamicImportCall(
             ("_command_enrolled_draft_integration",),
             "sys.modules.get(__name__)",
         ),
@@ -2810,7 +2814,26 @@ def self_test() -> None:
                 f"{name}: {findings}"
             )
 
+    owner_module_read = (
+        "import sys\ndef _provider_binding_uses_historical_summary(value):\n"
+        "    package = 'secpal_pr_review'\n"
+        "    owner = 'validation_evidence_loss'\n"
+        "    return sys.modules.get(f'{package}.{owner}')\n"
+    )
+    if inspect_source(owner_module_read, "secpal-pr-review-actions.py", ()):
+        raise SystemExit("closed provider-owner module read was rejected")
+
     source_specific_unsafe = (
+        (
+            "secpal-pr-review-actions.py",
+            "import sys\ndef _provider_binding_uses_historical_summary(value):\n"
+            "    return sys.modules.get(value)\n",
+        ),
+        (
+            "secpal-pr-review-actions.py",
+            "def _provider_binding_uses_historical_summary(value):\n"
+            "    return getattr(value, 'provider_binding_sources')\n",
+        ),
         (
             "secpal-pr-review.py",
             "import sys\nlauncher = sys.modules['subprocess'].run\nlauncher(argv)\n",

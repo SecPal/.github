@@ -2274,19 +2274,26 @@ def _provider_binding_uses_historical_summary(value: Any) -> bool:
         "secpal_pr_review", "scripts.secpal_pr_review",
         "secpal_ready_integration_lifecycle",
     ):
-        for owner, name in (
-            ("validation_evidence_loss", "HistoricalProviderBinding"),
-            ("lifecycle_publication", "VerifiedReadySourceRecoveryProviderBinding"),
-            ("legacy_enrolled_package_loss", "VerifiedLegacyProviderHeadBinding"),
-            ("qualified_remediation_successor_loss", "QualifiedProviderBinding"),
+        for owner in (
+            "validation_evidence_loss", "lifecycle_publication",
+            "legacy_enrolled_package_loss", "qualified_remediation_successor_loss",
         ):
             module = sys.modules.get(f"{package}.{owner}")
             expected_path = REPOSITORY_ROOT / "scripts/secpal_pr_review" / f"{owner}.py"
             if (
-                module is None
+                type(module) is not types.ModuleType
                 or Path(module.__file__).resolve() != expected_path
-                or type(value) is not getattr(module, name)
             ):
+                continue
+            if owner == "validation_evidence_loss":
+                owner_type = module.HistoricalProviderBinding
+            elif owner == "lifecycle_publication":
+                owner_type = module.VerifiedReadySourceRecoveryProviderBinding
+            elif owner == "legacy_enrolled_package_loss":
+                owner_type = module.VerifiedLegacyProviderHeadBinding
+            else:
+                owner_type = module.QualifiedProviderBinding
+            if type(value) is not owner_type:
                 continue
             if owner == "qualified_remediation_successor_loss":
                 return False
