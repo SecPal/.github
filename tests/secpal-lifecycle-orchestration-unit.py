@@ -14026,6 +14026,19 @@ class ProviderReacquisitionExecutionTests(TestCase):
                 self.assertEqual(cli.main(), 1)
             self.assertEqual(json.loads(output.read_text())["status"], "BLOCKED")
 
+    def test_existing_isolated_action_launcher_can_load_reacquisition_claims(self):
+        action = REPO_ROOT / "scripts/secpal-pr-review-actions.py"
+        code = ("import importlib.util, importlib; "
+            f"spec = importlib.util.spec_from_file_location('isolated_actions', {str(action)!r}); "
+            "module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+            "authority_module, publication_module = module._load_lifecycle_publication_helpers(); "
+            "importlib.import_module(publication_module.__package__ + '.provider_reacquisition'); "
+            "importlib.import_module(publication_module.__package__ + '.enrolled_draft_integration')")
+        with tempfile.TemporaryDirectory(prefix="secpal-reacquisition-existing-launcher-") as directory:
+            result = subprocess.run([sys.executable, "-I", "-c", code], cwd=directory,
+                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_canonical_cli_imports_in_isolated_python_from_any_directory(self):
         import subprocess
         import sys

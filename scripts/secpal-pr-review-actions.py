@@ -245,6 +245,9 @@ def _load_lifecycle_publication_helpers(
 
     if return_collision and not include_orchestration:
         raise RuntimeError("collision helper requires lifecycle orchestration")
+    scripts_package = types.ModuleType("scripts")
+    scripts_package.__path__ = [str(REPOSITORY_ROOT / "scripts")]
+    sys.modules["scripts"] = scripts_package
     package_name = "secpal_ready_integration_lifecycle"
     package = types.ModuleType(package_name)
     package.__path__ = [str(LIFECYCLE_AUTHORITY_HELPER.parent)]
