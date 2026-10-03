@@ -570,6 +570,10 @@ ALLOWED_IMPORTS = {
         "from pathlib import Path",
         "from typing import Any, Callable, TypeVar",
         "from . import qualified_remediation_successor_loss as successor_loss",
+        "from . import enrolled_draft_integration as integration",
+        "from . import lifecycle_publication as publication",
+        "from . import lifecycle_authority, lifecycle_execution",
+        "from . import provider_acquisition",
     },
     "exact_source_safety.py": {
         "from __future__ import annotations",
@@ -737,7 +741,7 @@ DIRECT_MODULE_ATTRIBUTES = {
         "importlib": {"util"},
         "subprocess": {"DEVNULL", "TimeoutExpired", "run"},
         "sys": {"modules"},
-        "tempfile": {"mkstemp"},
+        "tempfile": {"mkstemp", "TemporaryDirectory"},
     },
     "exact_source_safety.py": {
         "os": {"fdopen", "fsync", "replace"},
@@ -882,6 +886,7 @@ LOADED_MODULE_ATTRIBUTES = {
         },
     },
     "fast_path.py": {
+        "provider_acquisition": {"require_verified_acquisitions"},
         "evidence": {
             "CommandPolicyError",
             "ContractError",
@@ -992,6 +997,18 @@ LOADED_MODULE_ATTRIBUTES = {
 }
 DYNAMIC_IMPORT_CALLS = {
     "secpal-pr-review-actions.py": {
+        DynamicImportCall(
+            ("_load_enrolled_draft_integration_helper",),
+            "importlib.util.spec_from_file_location(module_name, FAST_PATH_HELPER.with_name('enrolled_draft_integration.py'))",
+        ),
+        DynamicImportCall(
+            ("_load_enrolled_draft_integration_helper",),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_enrolled_draft_integration_helper",),
+            "spec.loader.exec_module(module)",
+        ),
         DynamicImportCall(
             ("_load_exact_source_safety_helper",),
             "importlib.util.spec_from_file_location("
@@ -1364,6 +1381,14 @@ SAFE_GETATTR_CALLS = {
 SAFE_SYS_MODULES_CALLS = {
     "secpal-pr-review-actions.py": {
         DynamicImportCall(
+            ("_provider_binding_uses_historical_summary",),
+            "sys.modules.get(f'{package}.{owner}')",
+        ),
+        DynamicImportCall(
+            ("_command_enrolled_draft_integration",),
+            "sys.modules.get(__name__)",
+        ),
+        DynamicImportCall(
             ("_load_exact_source_safety_helper",),
             "sys.modules.get(spec.name)",
         ),
@@ -1507,6 +1532,18 @@ SAFE_SYS_MODULES_CALLS = {
 }
 SAFE_SYS_MODULES_STORES = {
     "secpal-pr-review-actions.py": {
+        DynamicImportCall(
+            ("_load_enrolled_draft_integration_helper",),
+            "sys.modules['scripts']",
+        ),
+        DynamicImportCall(
+            ("_load_enrolled_draft_integration_helper",),
+            "sys.modules[package_name]",
+        ),
+        DynamicImportCall(
+            ("_load_enrolled_draft_integration_helper",),
+            "sys.modules[module_name]",
+        ),
         DynamicImportCall(
             ("_load_exact_source_safety_helper",),
             "sys.modules[package_name]",
@@ -2482,6 +2519,13 @@ def inspect_source(
 
 
 def self_test() -> None:
+    acquisition_import = "from . import provider_acquisition\n"
+    safe_acquisition = acquisition_import + "provider_acquisition.require_verified_acquisitions(value, feedback)\n"
+    if inspect_source(safe_acquisition, "fast_path.py", ()):
+        raise SystemExit("static policy read-only acquisition fixture was rejected")
+    for method in ("authenticate_claim_eligibility", "write_claimed_replacement", "reconcile_claimed_replacement"):
+        if not inspect_source(acquisition_import + f"provider_acquisition.{method}(value)\n", "fast_path.py", ()):
+            raise SystemExit("static policy replacement interface fixture was not detected")
     safe_call = ProcessCall(
         None,
         "safe_runner",
@@ -2779,7 +2823,26 @@ def self_test() -> None:
                 f"{name}: {findings}"
             )
 
+    owner_module_read = (
+        "import sys\ndef _provider_binding_uses_historical_summary(value):\n"
+        "    package = 'secpal_pr_review'\n"
+        "    owner = 'validation_evidence_loss'\n"
+        "    return sys.modules.get(f'{package}.{owner}')\n"
+    )
+    if inspect_source(owner_module_read, "secpal-pr-review-actions.py", ()):
+        raise SystemExit("closed provider-owner module read was rejected")
+
     source_specific_unsafe = (
+        (
+            "secpal-pr-review-actions.py",
+            "import sys\ndef _provider_binding_uses_historical_summary(value):\n"
+            "    return sys.modules.get(value)\n",
+        ),
+        (
+            "secpal-pr-review-actions.py",
+            "def _provider_binding_uses_historical_summary(value):\n"
+            "    return getattr(value, 'provider_binding_sources')\n",
+        ),
         (
             "secpal-pr-review.py",
             "import sys\nlauncher = sys.modules['subprocess'].run\nlauncher(argv)\n",

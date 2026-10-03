@@ -207,6 +207,37 @@ def _read_pre_enrollment_json(path: str, label: str) -> Any:
         raise fast_path.RecoverableLocalError(f"cannot read {label}") from exc
 
 
+def _load_enrolled_draft_integration_helper() -> Any:
+    """Load the closed integration owner with isolated CLI package provenance."""
+    scripts_package = types.ModuleType("scripts")
+    scripts_package.__path__ = [str(REPOSITORY_ROOT / "scripts")]
+    sys.modules["scripts"] = scripts_package
+    package_name = "secpal_pr_review"
+    package = types.ModuleType(package_name)
+    package.__path__ = [str(FAST_PATH_HELPER.parent)]
+    sys.modules[package_name] = package
+    module_name = "secpal_pr_review.enrolled_draft_integration"
+    spec = importlib.util.spec_from_file_location(
+        module_name, FAST_PATH_HELPER.with_name("enrolled_draft_integration.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _command_enrolled_draft_integration(arguments: argparse.Namespace) -> int:
+    module = _load_enrolled_draft_integration_helper()
+    action = module.prepare if arguments.command == "prepare-enrolled-draft-integration" else module.integrate
+    try:
+        return action(sys.modules.get(__name__), arguments)
+    except (module.authority.LifecycleAuthorityError,
+            module.publication.LifecyclePublicationError,
+            module.execution.LifecycleExecutionError,
+            module.bootstrap_source_admission.BootstrapSourceAdmissionError) as exc:
+        raise fast_path.SecurityBlocker(str(exc)) from exc
+
+
 def _load_lifecycle_publication_helpers(
     *, include_orchestration: bool = False, return_collision: bool = False
 ) -> tuple[Any, ...]:
@@ -2229,6 +2260,74 @@ def _normalized_reviewer_login(value: Any) -> str | None:
     return re.sub(r"\[bot\]$", "", value.strip().lower())
 
 
+def _provider_binding_uses_historical_summary(value: Any) -> bool:
+    """Dispatch only exact owner types loaded by the maintained entry points."""
+
+    if type(value) is _ReadyRemediationProviderBinding:
+        if value.provider_binding_sources != ():
+            raise MutationBlocked("Ready-remediation provider provenance changed")
+        return False
+    # The CLI, library tests and isolated lifecycle loader use these fixed
+    # package names for the same maintained owner files. Never trust a caller's
+    # __module__, class name or similarly named instance attributes.
+    for package in (
+        "secpal_pr_review", "scripts.secpal_pr_review",
+        "secpal_ready_integration_lifecycle",
+    ):
+        for owner in (
+            "validation_evidence_loss", "lifecycle_publication",
+            "legacy_enrolled_package_loss", "qualified_remediation_successor_loss",
+        ):
+            module = sys.modules.get(f"{package}.{owner}")
+            expected_path = REPOSITORY_ROOT / "scripts/secpal_pr_review" / f"{owner}.py"
+            if (
+                type(module) is not types.ModuleType
+                or Path(module.__file__).resolve() != expected_path
+            ):
+                continue
+            if owner == "validation_evidence_loss":
+                owner_type = module.HistoricalProviderBinding
+            elif owner == "lifecycle_publication":
+                owner_type = module.VerifiedReadySourceRecoveryProviderBinding
+            elif owner == "legacy_enrolled_package_loss":
+                owner_type = module.VerifiedLegacyProviderHeadBinding
+            else:
+                owner_type = module.QualifiedProviderBinding
+            if type(value) is not owner_type:
+                continue
+            if owner == "qualified_remediation_successor_loss":
+                return False
+            if owner == "legacy_enrolled_package_loss":
+                return True
+            if owner == "validation_evidence_loss":
+                try:
+                    sources = value.provider_binding_sources
+                except module.fast_path.SecurityBlocker as exc:
+                    raise MutationBlocked(str(exc)) from exc
+            else:
+                sources = value.provider_binding_sources
+            provider_owner = (
+                module.publication if owner == "validation_evidence_loss" else module
+            )
+            allowed = (
+                provider_owner.ORDINARY_REMEDIATION_SUFFIX,
+                provider_owner.EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING,
+                provider_owner.EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION,
+            )
+            if (
+                type(sources) is not tuple or not sources
+                or any(type(source) is not str for source in sources)
+                or len(sources) != len(set(sources))
+                or any(source not in allowed for source in sources)
+            ):
+                raise MutationBlocked("review-provider provenance is invalid")
+            return (
+                provider_owner.EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING
+                in sources
+            )
+    raise MutationBlocked("review-provider binding is not verifier-owned")
+
+
 def _require_review_providers_terminal(
     pull_request: dict[str, Any],
     *,
@@ -2238,6 +2337,10 @@ def _require_review_providers_terminal(
 ) -> None:
     """Reject visible non-terminal automated review-provider evidence."""
 
+    historical_summary = (
+        _provider_binding_uses_historical_summary(ready_source_provider_binding)
+        if ready_source_provider_binding is not None else False
+    )
     head_sha = pull_request.get("headRefOid")
     comments = _bounded_nodes(
         pull_request.get("comments"), "review-provider status comments"
@@ -2266,68 +2369,49 @@ def _require_review_providers_terminal(
                 "Codex review provider repository or PR identity changed"
             )
         try:
-            fast_path.verify_codex_provider_summary(
-                body,
-                head_sha=head_sha,
-                repository=(
-                    repository if ready_source_provider_binding is not None else None
-                ),
-                pull_request_number=(
-                    pull_request_number
-                    if ready_source_provider_binding is not None
-                    else None
-                ),
-            )
-        except fast_path.SecurityBlocker as exc:
+            if historical_summary:
+                ready_source_provider_binding.verify_historical_provider_summary(
+                    body=body,
+                    repository=repository,
+                    pull_request=pull_request_number,
+                    current_head_sha=head_sha,
+                )
+            else:
+                fast_path.verify_codex_provider_summary(
+                    body,
+                    head_sha=head_sha,
+                    repository=(
+                        repository if ready_source_provider_binding is not None else None
+                    ),
+                    pull_request_number=(
+                        pull_request_number
+                        if ready_source_provider_binding is not None
+                        else None
+                    ),
+                )
+        except (RuntimeError, AttributeError, TypeError, ValueError) as exc:
             if (
-                str(exc)
-                == "Codex review provider status is indeterminate"
-                and ready_source_provider_binding is not None
-                and repository is not None
-                and pull_request_number is not None
-            ):
-                try:
-                    ready_source_provider_binding.verify_historical_provider_summary(
-                        body=body,
-                        repository=repository,
-                        pull_request=pull_request_number,
-                        current_head_sha=head_sha,
-                    )
-                except (
-                    fast_path.SecurityBlocker,
-                    AttributeError,
-                    TypeError,
-                    ValueError,
-                ) as legacy_exc:
-                    raise MutationBlocked(str(legacy_exc)) from legacy_exc
-            elif (
-                str(exc)
-                != "Codex review provider status is stale for the current head"
+                historical_summary
+                or str(exc) != "Codex review provider status is stale for the current head"
                 or ready_source_provider_binding is None
                 or repository is None
                 or pull_request_number is None
             ):
                 raise MutationBlocked(str(exc)) from exc
-            else:
-                try:
-                    provider_head = ready_source_provider_binding.provider_head(
-                        repository=repository,
-                        pull_request=pull_request_number,
-                        current_head_sha=head_sha,
-                    )
-                    fast_path.verify_codex_provider_summary(
-                        body,
-                        head_sha=provider_head,
-                        repository=repository,
-                        pull_request_number=pull_request_number,
-                    )
-                except (
-                    fast_path.SecurityBlocker,
-                    AttributeError,
-                    TypeError,
-                    ValueError,
-                ) as recovery_exc:
-                    raise MutationBlocked(str(recovery_exc)) from recovery_exc
+            try:
+                provider_head = ready_source_provider_binding.provider_head(
+                    repository=repository,
+                    pull_request=pull_request_number,
+                    current_head_sha=head_sha,
+                )
+                fast_path.verify_codex_provider_summary(
+                    body,
+                    head_sha=provider_head,
+                    repository=repository,
+                    pull_request_number=pull_request_number,
+                )
+            except (RuntimeError, AttributeError, TypeError, ValueError) as recovery_exc:
+                raise MutationBlocked(str(recovery_exc)) from recovery_exc
 
     requests = _bounded_nodes(
         pull_request.get("reviewRequests"), "review-provider requests"
@@ -5067,6 +5151,21 @@ def build_parser() -> argparse.ArgumentParser:
     pre_enrollment_parser.add_argument("--receipt-output", required=True)
     pre_enrollment_parser.add_argument("--attestation-output", required=True)
     pre_enrollment_parser.add_argument("--apply", action="store_true")
+
+    for name in ("prepare-enrolled-draft-integration", "integrate-enrolled-draft"):
+        enrolled = subparsers.add_parser(name)
+        enrolled.add_argument("--repo", required=True)
+        enrolled.add_argument("--pr", required=True, type=_positive_integer)
+        enrolled.add_argument("--delivery-issue", required=True, type=_positive_integer)
+        enrolled.add_argument("--repo-root", default=".")
+        enrolled.add_argument("--apply", action="store_true")
+        if name == "prepare-enrolled-draft-integration":
+            enrolled.add_argument("--operation-directory", required=True)
+            enrolled.add_argument("--authorization-id", required=True)
+            enrolled.add_argument("--manual-gate-evidence", required=True)
+        else:
+            enrolled.add_argument("--authorization", required=True)
+            enrolled.add_argument("--reconcile", action="store_true")
     qualified_parser = subparsers.add_parser(
         "advance-qualified-remediation-successor-loss"
     )
@@ -8097,14 +8196,54 @@ def _verify_prior_authority_tag(
     verified_tag = _run_attestation_git(
         repository_root, ["verify-tag", "--raw", tag_object_oid], allow_failure=True
     )
+    marker_digest = _prior_authority_tag_digest(tag_object.stdout)
+    expected_digest = fast_path.digest_json(authority)
+    if marker_digest != expected_digest and (
+        authority.get("source_authority_mode") == "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT"
+    ):
+        # The caller's manifest has already been compared with complete maintained
+        # derivation. The journal owner alone authenticates this preserved tag's
+        # historical marker as a consumption identity for the corrected projection.
+        lifecycle_authority, lifecycle_publication = _load_lifecycle_publication_helpers()
+        try:
+            _require_exact_adopted_ready_manifest(
+                authority,
+                _derive_exact_state_adoption_ready_prior_authority(
+                    repository_root=repository_root, repository=authority["repository"],
+                    delivery_issue=authority["delivery_issue_number"],
+                    pull_request=authority["pull_request_number"], binding=binding,
+                ),
+            )
+            recovery = lifecycle_publication.verify_current_ready_source_recovery(
+                authority["repository"], authority["delivery_issue_number"]
+            )
+            correction = lifecycle_authority.loads_closed_json(recovery.historical_evidence_correction)
+            if (
+                correction["prior_authority_tag_oid"] == tag_object_oid
+                and correction["original_prior_authority_digest"] == marker_digest
+                and recovery.repository == authority["repository"]
+                and recovery.delivery_issue == authority["delivery_issue_number"]
+                and recovery.pull_request == authority["pull_request_number"]
+                and recovery.head_sha == authority["prior_delivery_head_sha"]
+                and recovery.tree_sha == authority["prior_delivery_tree_sha"]
+                and recovery.current_publication_oid == authority["publication"]["object_oid"]
+                and recovery.current_publication_digest == authority["publication"]["publication_digest"]
+                and recovery.publication_oid == authority["recovery_publication"]["object_oid"]
+                and recovery.publication_digest == authority["recovery_publication"]["publication_digest"]
+                and recovery.lifecycle_id == authority["lifecycle"]["identity"]
+                and recovery.current_authority_digest == authority["lifecycle"]["current_authority_digest"]
+            ):
+                marker_digest = expected_digest
+        except (AttributeError, KeyError, TypeError, ValueError,
+                lifecycle_publication.LifecyclePublicationError) as exc:
+            raise fast_path.SecurityBlocker("corrected prior authority tag relationship is unavailable") from exc
     if (
         tag_type.returncode != 0
         or tag_type.stdout.strip() != "tag"
         or tag_object.returncode != 0
         or _prior_authority_tag_target(tag_object.stdout)
         != authority["prior_delivery_head_sha"]
-        or _prior_authority_tag_digest(tag_object.stdout)
-        != fast_path.digest_json(authority)
+        or marker_digest != expected_digest
     ):
         raise fast_path.SecurityBlocker("prior authority tag binding is invalid")
     tag_signature = evidence.interpret_local_signature(
@@ -9748,6 +9887,8 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
 class _ReadyRemediationProviderBinding:
     """Ephemeral read-only projection; the caller reauthenticates its source."""
 
+    provider_binding_sources: tuple[str, ...] = ()
+
     def __init__(self, value: Any, *, repository: str, pull_request: int):
         if (
             not isinstance(value, dict)
@@ -10322,6 +10463,8 @@ def main(argv: list[str] | None = None) -> int:
             return _command_attest_validation(arguments)
         if arguments.command == "resolve-batch":
             return _command_resolve_batch(arguments)
+        if arguments.command in {"prepare-enrolled-draft-integration", "integrate-enrolled-draft"}:
+            return _command_enrolled_draft_integration(arguments)
         if arguments.command == "integrate-pre-enrollment-draft":
             return _command_integrate_pre_enrollment_draft(arguments)
         if arguments.command == "advance-qualified-remediation-successor-loss":

@@ -30,6 +30,7 @@ from . import fast_path
 from . import follow_up
 from . import lifecycle_authority as authority
 from . import lifecycle_publication as publication
+from . import provider_acquisition
 from . import late_disposition
 from . import version_collision
 
@@ -1149,6 +1150,85 @@ def _ordinary_ready_remediation_finding_authority_projection(
     }
 
 
+def _ready_integration_remediation_predecessor_context(
+    current: publication.VerifiedLifecyclePublication,
+    validation: fast_path.VerifiedValidationEvidence,
+    prior_authority: Any,
+) -> tuple[fast_path.StableFeedbackState, str | None]:
+    """Compose canonical integration validation with its protected advancement."""
+
+    reviewed, eligibility = fast_path.verified_ready_integration_review_context(
+        validation
+    )
+    provenance = json.loads(validation._verification_seal.provenance_json)
+    integration = provenance["integration_evidence"]
+    if current.predecessor_publication_oid is None:
+        raise LifecycleOrchestrationError("Ready integration has no published predecessor")
+    transition = publication._verify_historical_lifecycle_transition(
+        current.lifecycle.repository,
+        current.lifecycle.delivery_issue,
+        current.predecessor_publication_oid,
+        expected_current_publication_oid=current.publication_oid,
+    )
+    predecessor = transition.predecessor.lifecycle
+    if (
+        transition.successor != current
+        or transition.transition_kind != "HEAD_ADVANCED"
+        or predecessor.state != current.lifecycle.state
+        or predecessor.head_sha != integration["prior_delivery_head_sha"]
+        or predecessor.lifecycle_id != integration["eligibility"]["lifecycle_identity"]
+        or any(
+            integration["eligibility"][integration_field]
+            != current.lifecycle.state[state_field]
+            for integration_field, state_field in (
+                ("unrestricted_reviews_after", "unrestricted_review_count"),
+                ("remediation_cycles_after", "remediation_cycle_count"),
+                ("exceptional_recoveries_after", "exceptional_recovery_count"),
+                ("exceptional_continuations_after", "exceptional_continuation_count"),
+            )
+        )
+        or validation.source_validation_evidence_digest
+        != current.lifecycle.source_validation_evidence_digest
+    ):
+        raise LifecycleOrchestrationError(
+            "Ready integration validation differs from the published advancement"
+        )
+    manifest = fast_path.normalize_ready_integration_prior_authority(prior_authority)
+    if (
+        fast_path.digest_json(manifest) != integration["prior_authority_digest"]
+        or manifest["repository"] != predecessor.repository
+        or manifest["delivery_issue_number"] != predecessor.delivery_issue
+        or manifest["pull_request_number"] != predecessor.pull_request
+        or manifest["prior_delivery_head_sha"] != predecessor.head_sha
+        or manifest["prior_delivery_tree_sha"] != predecessor.tree_sha
+        or manifest["prior_validation_receipt_digest"] != predecessor.validation_receipt_digest
+        or manifest["prior_final_attestation_digest"] != predecessor.adoption_source_evidence_digest
+        or manifest["expected_signer"] != integration["expected_signer"]
+        or manifest["publication"] != {
+            "object_oid": transition.predecessor.publication_oid,
+            "publication_digest": transition.predecessor.publication_digest,
+        }
+        or manifest["lifecycle"]["current_authority_digest"] != predecessor.authority_digest
+        or manifest["lifecycle"]["historical_proof_mode"] != predecessor.historical_proof_mode
+    ):
+        raise LifecycleOrchestrationError(
+            "Ready integration prior authority differs from the protected predecessor"
+        )
+    actions = bootstrap_source_admission._load_actions_helper()
+    try:
+        actions._verify_ready_integration_lifecycle_authority(manifest, integration)
+        actions._verify_prior_authority_tag(
+            repository_root=Path(provenance["repository_root"]),
+            tag_ref=actions._canonical_ready_prior_authority_tag_ref(manifest),
+            authority=manifest,
+            integration_evidence=integration,
+            binding=provenance["registry"],
+        )
+    except actions.fast_path.SecurityBlocker as exc:
+        raise fast_path.SecurityBlocker("Ready integration prior authority authentication failed") from exc
+    return reviewed, eligibility
+
+
 def verify_ready_remediation_provider_growth_authority(
     current: publication.VerifiedLifecyclePublication,
     *,
@@ -1156,6 +1236,7 @@ def verify_ready_remediation_provider_growth_authority(
     candidate_validation: fast_path.VerifiedValidationEvidence,
     predecessor_eligibility_evidence: Any,
     eligibility_evidence: Any,
+    predecessor_prior_authority: Any = None,
 ) -> VerifiedOrdinaryReadyRemediationFindingAuthority:
     """Compose existing CURRENT, validation, feedback, and eligibility authority."""
 
@@ -1166,9 +1247,21 @@ def verify_ready_remediation_provider_growth_authority(
     lifecycle = current.lifecycle
     try:
         state = authority._validate_state(copy.deepcopy(lifecycle.state))
-        reviewed, predecessor_eligibility = (
-            fast_path.verified_validation_review_context(predecessor_validation)
-        )
+        try:
+            reviewed, predecessor_eligibility = (
+                fast_path.verified_validation_review_context(predecessor_validation)
+            )
+        except fast_path.SecurityBlocker:
+            reviewed, predecessor_eligibility = (
+                _ready_integration_remediation_predecessor_context(
+                    current, predecessor_validation, predecessor_prior_authority
+                )
+            )
+            provider = None
+        else:
+            provider = publication.derive_ready_source_recovery_provider_binding(
+                current
+            )
         resulting, candidate_eligibility = (
             fast_path.verified_validation_review_context(candidate_validation)
         )
@@ -1184,16 +1277,15 @@ def verify_ready_remediation_provider_growth_authority(
                 reviewed_state=reviewed,
             )
         )
-        provider = publication.derive_ready_source_recovery_provider_binding(
-            current
-        )
         live_resulting = _capture_current_stable_feedback(
             lifecycle.repository,
             lifecycle.pull_request,
             ready_remediation_provider_binding=provider,
+            capture_provider_summary=provider is None,
         )
     except (
         authority.LifecycleAuthorityError,
+        bootstrap_source_admission.BootstrapSourceAdmissionError,
         fast_path.SecurityBlocker,
         publication.LifecyclePublicationError,
     ) as exc:
@@ -1211,7 +1303,9 @@ def verify_ready_remediation_provider_growth_authority(
         or state["ready_transition_count"] != 1
         or state["exceptional_recovery_count"] != 0
         or state["exceptional_continuation_count"] != 0
-        or predecessor_eligibility is None
+        or (predecessor_eligibility is None and (
+            provider is not None or predecessor_eligibility_document["eligible_threads"]
+        ))
         or predecessor_validation.repository != lifecycle.repository
         or predecessor_validation.delivery_issue_number != lifecycle.delivery_issue
         or predecessor_validation.pull_request_number != lifecycle.pull_request
@@ -1231,35 +1325,40 @@ def verify_ready_remediation_provider_growth_authority(
         or live_resulting.to_dict() != resulting.to_dict()
         or reviewed.repository != lifecycle.repository
         or reviewed.pull_request_number != lifecycle.pull_request
-        or provider.repository != lifecycle.repository
-        or provider.delivery_issue != lifecycle.delivery_issue
-        or provider.pull_request != lifecycle.pull_request
-        or provider.lifecycle_id != lifecycle.lifecycle_id
-        or provider.current_head_sha != lifecycle.head_sha
-        or provider.current_authority_digest != lifecycle.authority_digest
-        or provider.current_publication_oid != current.publication_oid
-        or provider.current_publication_digest != current.publication_digest
-        or not (
-            (
-                publication.ORDINARY_REMEDIATION_SUFFIX
-                in provider.provider_binding_sources
-                and len(provider.remediation_event_digests) == 1
-            )
-            or (
-                publication.EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION
-                in provider.provider_binding_sources
-                and not provider.remediation_event_digests
-                and isinstance(
-                    provider.adopted_remediation_observation_digest, str
+        or (provider is not None and (
+            provider.repository != lifecycle.repository
+            or provider.delivery_issue != lifecycle.delivery_issue
+            or provider.pull_request != lifecycle.pull_request
+            or provider.lifecycle_id != lifecycle.lifecycle_id
+            or provider.current_head_sha != lifecycle.head_sha
+            or provider.current_authority_digest != lifecycle.authority_digest
+            or provider.current_publication_oid != current.publication_oid
+            or provider.current_publication_digest != current.publication_digest
+            or not (
+                (
+                    publication.ORDINARY_REMEDIATION_SUFFIX
+                    in provider.provider_binding_sources
+                    and len(provider.remediation_event_digests) == 1
                 )
-                and authority._DIGEST.fullmatch(
-                    provider.adopted_remediation_observation_digest
+                or (
+                    publication.EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION
+                    in provider.provider_binding_sources
+                    and not provider.remediation_event_digests
+                    and isinstance(
+                        provider.adopted_remediation_observation_digest, str
+                    )
+                    and authority._DIGEST.fullmatch(
+                        provider.adopted_remediation_observation_digest
+                    )
                 )
             )
+            or reviewed.head_sha != provider.provider_head_sha
+        ))
+        or (
+            predecessor_eligibility is not None
+            and predecessor_eligibility
+            != fast_path.digest_json(predecessor_eligibility_document)
         )
-        or reviewed.head_sha != provider.provider_head_sha
-        or predecessor_eligibility
-        != fast_path.digest_json(predecessor_eligibility_document)
         or candidate_eligibility != fast_path.digest_json(eligibility)
     ):
         raise LifecycleOrchestrationError(
@@ -1267,10 +1366,25 @@ def verify_ready_remediation_provider_growth_authority(
         )
 
     try:
+        added_reviews = [
+            item for item in resulting.feedback["reviews"]
+            if item["node_id"] not in {
+                prior["node_id"] for prior in reviewed.feedback["reviews"]
+            }
+        ]
+        first_fallback_acquisitions = None
+        if added_reviews and all(
+            item.get("actor") == fast_path.CODEX_REVIEW_PROVIDER
+            and item.get("commit_oid") == lifecycle.head_sha
+            for item in added_reviews
+        ):
+            first_fallback_acquisitions = provider_acquisition.authenticate_first_fallback_acquisitions(
+                current, live_resulting
+            )
         growth = fast_path.verify_ordinary_ready_remediation_provider_growth(
             reviewed,
             resulting,
-            provider_head_sha=provider.provider_head_sha,
+            provider_head_sha=reviewed.head_sha,
             predecessor_eligibility_evidence=predecessor_eligibility_document,
             eligibility_evidence=eligibility,
             provider_summary_body=getattr(
@@ -1279,11 +1393,16 @@ def verify_ready_remediation_provider_growth_authority(
             review_database_ids=getattr(
                 live_resulting, "review_database_ids", None
             ),
+            first_fallback_acquisitions=first_fallback_acquisitions,
         )
     except fast_path.SecurityBlocker as exc:
         raise LifecycleOrchestrationError(
             "ordinary Ready provider growth is incomplete or unauthenticated"
         ) from exc
+    if provider is None and growth.assessment_head_sha != lifecycle.head_sha:
+        raise LifecycleOrchestrationError(
+            "Ready integration remediation requires exact CURRENT provider growth"
+        )
     fields = {
         "repository": lifecycle.repository,
         "delivery_issue": lifecycle.delivery_issue,
@@ -1292,7 +1411,7 @@ def verify_ready_remediation_provider_growth_authority(
         "current_publication_oid": current.publication_oid,
         "current_publication_digest": current.publication_digest,
         "current_authority_digest": lifecycle.authority_digest,
-        "provider_head_sha": provider.provider_head_sha,
+        "provider_head_sha": reviewed.head_sha,
         "current_head_sha": lifecycle.head_sha,
         "resulting_head_sha": candidate_validation.head_sha,
         "predecessor_state_digest": growth.predecessor_state_digest,

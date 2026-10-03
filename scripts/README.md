@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2026 SecPal
+SPDX-FileCopyrightText: 2026 SecPal Contributors
 SPDX-License-Identifier: CC0-1.0
 -->
 
@@ -54,6 +54,31 @@ canonical dispositions, actionable fixes without commit and test proof, and
 operations whose evidence does not match their logical finding. Their initial
 and final heads must also encode exactly one new linear commit per recorded
 signed push, or no commit movement for a no-push session.
+
+The protected publication journal also supports one exact append-only
+`SECPAL_READY_SOURCE_RECOVERY_CORRECTION` for the contradictory signed
+zero-receipt recovery of #711 / PR #951. It preserves the original recovery,
+authorization, signatures, digests, ancestry, immutable prior-authority tag and
+lifecycle CURRENT. The canonical recovery reader derives effective null
+historical receipt and final-attestation fields from the authenticated
+Exact-State-Adoption root's `ABSENT_NEVER_ISSUED` evidence. Current-safety
+receipts remain current-safety evidence.
+
+Both journal readers verify the same signed correction and reject stale
+CURRENT, changed source, wrong recovery or authorization, replay, competing
+corrections and ambiguous ordering. The preserved prior-authority tag is
+consumed only through that authenticated relationship and the independently
+rederived existing `READY_INTEGRATION_PRIOR_AUTHORITY` manifest.
+
+`lifecycle_publication.publish_zero_receipt_ready_source_correction()` accepts
+no caller-selected delivery, publication, digest, desired state or signer. It
+requires fresh accepted-main tooling, the exact live Ready source, original
+signed source commit and immutable signed tag, and the existing protected
+journal publication role and compare-and-swap. Candidate tooling cannot
+publish the correction that delivers itself. After acceptance, the operation
+appends once and verifies exact read-back; repeated invocation is idempotent
+only for that same authenticated correction. No Ready transition, review,
+remediation, recovery counter or lifecycle head is changed.
 
 `attest-validation --pre-enrollment-integration-evidence` is the distinct
 version-1.0 `PRE_ENROLLMENT_DRAFT_INTEGRATION` path. It applies only to an open
@@ -183,6 +208,43 @@ Stable Feedback, grants no resolution authority, and creates no lifecycle
 state, transition, counter, signer, trust root, or journal. Its verifier-owned
 seal is not reproducible from serialized fields, and the generic authorization
 issuer rejects the provider-growth digest.
+
+For a current-head Codex-only assessment, the same composition requires both
+first fallback acquisitions through `provider_acquisition.py`. That read-only
+owner reauthenticates protected CURRENT and complete live feedback, then derives
+the exact persisted Code and Security requests from the complete ordered native
+timeline. Each canonical, unedited request must come from the exact PR author
+and Ready actor, follow Ready and an independently observed, server-created current-head
+PushEvent by at least the fixed 30-minute provider observation window. Intrinsic
+commit dates grant no timing authority. Complete retained comment-edit snapshots
+keep an edited request consumed and expose earlier exact-head startup, including
+a running summary that completed later. Missing, deleted or ambiguous history
+fails closed, as does an unavailable head-publication event. The bounded
+[GitHub event feed](https://docs.github.com/en/rest/activity/events#list-repository-events)
+may delay or expire that positive proof; it is never evidence of absent activity. Caller-selected request IDs or
+provider modes grant no authority. Its immutable ephemeral seal binds CURRENT,
+head, feedback, request identities, actors, chronology and live review database
+identities. Existing terminal provider transport verification then authenticates
+the Code findings review, Security result and current-head summary. Exact
+top-level comment Node IDs and complete eligibility remain mandatory.
+
+This first-acquisition verifier supplies no replacement-dispatch interface. The
+reserved #1053 `provider_fallback` import remains unavailable and its public
+replacement executor remains closed. There is no second waiting window,
+replacement classification, provider write, claim or reconciliation here.
+
+The same remaining-slot authority accepts a typed `READY_INTEGRATION`
+predecessor through `verified_ready_integration_review_context`. This dedicated
+projection independently reruns the canonical integration verifier and retains
+its provenance. Protected ancestry must select the exact integration's
+`HEAD_ADVANCED` publication as CURRENT, with the same first parent, lifecycle,
+finite state and source-evidence digest. The composition also consumes
+the existing prior-authority manifest and canonical signed-tag verifier to bind
+the claimed authority to that protected historical predecessor. Its capture uses
+terminal CURRENT Code/Security evidence and complete current-head provider growth,
+without extending the historical provider-lineage helper. Ordinary candidate
+validation remains mandatory. An absent predecessor eligibility binding permits
+only an empty eligible-thread set and grants no predecessor resolution authority.
 
 A sibling ordinary Ready-remediation admission handles a terminal hosted
 failure only when protected CURRENT is exactly Ready Review 1/1 and Remediation
@@ -601,6 +663,14 @@ verification authenticates signed bytes and reacquires current source, policy,
 feedback and absence facts without rerunning complete validation. The migration
 signature authenticates the issuer's execution facts.
 
+The direct loss issuer exposes `HistoricalProviderBinding` before any CURRENT
+exists. Its read-only `provider_binding_sources` is the existing
+`EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING` identity, derived and sealed by
+the loss verifier; constructors and modified copies cannot supply authority.
+The gateway accepts only exact maintained owner types and dispatches historical
+summaries to their owning exact-summary verifier. Published Ready composition
+continues to reauthenticate CURRENT and preserves each provenance source.
+
 Acquisition owns provider/Git reads and isolated current-safety validation.
 Protected-main commit authentication projects the fixed `{sha, verified}`
 metadata pair through the maintained `gh api --jq` invocation before the
@@ -972,6 +1042,100 @@ journal CAS, and reconciles ambiguous writes through exact successor CURRENT
 read-back. A second review consumption fails
 the finite budget. Historical publication read-back uses pure signed-chain
 derivation, so old review-before-Ready edges remain verifiable.
+
+### `secpal_pr_review/enrolled_draft_integration.py`
+
+The closed `ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION` operation reconciles an
+already enrolled native initial Draft delivery with fresh protected main.
+It requires the exact open same-repository primary PR, authenticated CURRENT
+and native genesis, a canonical READY work graph, and unchanged initial Draft
+state. Only genesis and prior `HEAD_ADVANCED` events are admitted; review,
+remediation, Ready, correction, replacement and exceptional histories reject.
+The central `enrolled_draft_integration_policy` registers this operation only
+for `SecPal/.github` and `SecPal/deployment`. Historical pre-enrollment absence
+and Ready integration contracts remain unchanged.
+
+Run both commands from freshly authenticated accepted `.github/main` tooling,
+with a distinct candidate repository root. Stage the exact mechanically derived
+integrated tree in that candidate root. Tree derivation shares the maintained
+two-parent mechanics, exact conflict-path resolution, marker rejection and
+canonical exact parent-2 preservation classification. It accepts no unrelated
+manual correction. Every derivation and verification imports only the immutable
+parent/tree object closure into a fresh bare Git repository under the maintained
+closed environment. Candidate-local attributes files, merge drivers and Git
+configuration cannot influence the signed mechanical evidence.
+Preparation runs Complete Validation with the registered
+command set and satisfied manual gates before signing a candidate:
+
+```bash
+python3 -I scripts/secpal-pr-review-actions.py prepare-enrolled-draft-integration \
+  --repo SecPal/deployment --delivery-issue 81 --pr 286 \
+  --repo-root /absolute/candidate/root --authorization-id unique-operation-id \
+  --manual-gate-evidence /absolute/manual-gates.json \
+  --operation-directory /absolute/new-operation-directory --apply
+```
+
+Preparation writes `preparation.json` and `authorization.json`. Its typed
+receipt binds the repository, issue, PR, lifecycle identity, CURRENT
+publication/digest, predecessor authority, ordered CURRENT/main parents,
+integrated tree, protected-main identity, registered command set, manual gates
+and signer. The signed candidate trailers bind integration evidence and the
+receipt. Final attestation and signed operation authorization bind the exact
+candidate and maintained SSH key fingerprint. Validation provenance is
+independently reverified before lifecycle issuance.
+
+Execute only that authorization:
+
+```bash
+python3 -I scripts/secpal-pr-review-actions.py integrate-enrolled-draft \
+  --repo SecPal/deployment --delivery-issue 81 --pr 286 \
+  --repo-root /absolute/candidate/root \
+  --authorization /absolute/new-operation-directory/authorization.json --apply
+```
+
+The existing protected publication journal authenticates ancillary
+`SECPAL_ENROLLED_DRAFT_INTEGRATION_CLAIM` records. A preparation reservation
+precedes the sole candidate creation; a second reservation for its predecessor
+rejects across directories and clones. The final authorization must match that
+reservation exactly. A distinct one-use claim consumes the sole push attempt.
+The signed work-graph digest is rechecked after that claim and before dispatch;
+a changed graph consumes the opportunity without authorizing a push.
+Neither phase selects lifecycle CURRENT or adds a lifecycle state or counter.
+An uncertain claim CAS grants no dispatch ownership. A crash after reservation
+but before candidate creation, or after push-claim consumption but before
+dispatch, fails closed and cannot be retried through this operation.
+
+The push boundary authenticates exactly one destination for the registered
+repository, then imports the exact candidate into the existing isolated Git
+transport. Its internally derived GitHub URL cannot consume candidate-local
+or global URL rewrites. An isolated trusted pre-push hook requires exactly the authorized
+candidate, PR branch and advertised predecessor; the ordinary non-force push
+uses Git's server CAS. No rebase, reset, amend, replacement PR, arbitrary ref,
+main write, PR merge, automatic retry or recursive integration is exposed.
+After live signed-head equality, only the existing `HEAD_ADVANCED` transition
+publishes a successor, preserving Draft, every counter and the empty Ready
+history. Protected CURRENT read-back must select that exact integrated head.
+Exact live Draft PR identity is reobserved immediately before publication and
+again after journal read-back, including an already-complete reconciliation.
+Concurrent branch drift cannot be reported as successful convergence.
+
+If the push succeeded but publication was missing or uncertain, invoke the
+same execution command with `--reconcile`. Reconciliation authenticates the
+same signed authorization, protected preparation/push claims, exact candidate,
+PR branch, predecessor CURRENT or its exact authorized successor, and journal
+ancestry. It never creates a candidate or pushes. A then-advanced main does not
+replace the already authorized second parent. An already published exact
+successor returns read-only success; a different publication fails closed.
+Later validation-policy changes do not replace the signed historical receipt
+authenticated by the protected claims. Initial dispatch still requires exact
+current registry and command-set equality; reconciliation still requires the
+operation to remain registered.
+
+The read-only target-shaped acceptance harness
+`tests/enrolled-draft-deployment-81-read-only.py --repo-root <isolated-Git-root>`
+derives the frozen #81 CURRENT/main merge and proves byte equality with the
+accepted trusted qualification import closure, including #287's correction.
+It performs no downstream or provider mutation.
 
 ### `secpal_pr_review/lifecycle_publication.py`
 

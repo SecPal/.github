@@ -201,6 +201,11 @@ class CurrentSafety(unittest.TestCase):
             self.verify(document, **root_scope)
         with self.assertRaises(authority.LifecycleAuthorityError):
             self.authorization(None, "6" * 64, **root_scope)
+        root_scope = {"current_lifecycle_evidence": {"exact_state_adoption_proof": {
+            "validation_evidence_loss_admission": {"schema_version": "1.2"}}},
+            "predecessor_publication_oid": None}
+        with self.assertRaisesRegex(authority.LifecycleAuthorityError, "zero-receipt recovery cannot claim historical"):
+            self.authorization("5" * 64, "6" * 64, **root_scope)
 
     def test_signed_authority_required(self):
         with self.assertRaises(authority.LifecycleAuthorityError):

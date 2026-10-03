@@ -216,12 +216,37 @@ fields, identities, order, duplicate rules, and feedback/state digests.
 One narrower composition covers provider-owned findings emitted by the already
 consumed provider assessment after its canonical Stable Feedback capture. The
 first remediation's sealed validation evidence authenticates the immutable
-original capture at H0. Protected CURRENT must independently derive exactly one
+original capture at H0. A fully authenticated typed `READY_INTEGRATION` may
+also supply that predecessor context. Its existing canonical verifier rechecks
+the signed integration, ordered parents, tree, receipt, final attestation,
+reviewed state and eligibility binding. The narrow projection retains integration
+provenance; it creates no ordinary validation object. Protected journal ancestry
+must independently authenticate its exact `HEAD_ADVANCED` publication as CURRENT,
+the same lifecycle and first source parent, unchanged finite state, matching
+integration eligibility counters, and the published source-evidence digest.
+This branch captures terminal provider feedback
+directly at CURRENT and requires the verifier-derived assessment head to equal
+CURRENT. It does not extend the historical provider-lineage helper.
+
+Ordinary predecessor validation retains the existing requirement that protected
+CURRENT independently derive exactly one
 Ready-preserving ordinary remediation from H0 to H1 and prove Review 1/1,
 Remediation 1/2, Ready true, one Ready transition, Cycle 3 absent, and no
 Exceptional Recovery or Continuation. The candidate validation evidence binds
 the complete reviewed state at H1 and its existing ordinary eligibility
-manifest.
+manifest. The integration path additionally consumes its existing `READY_INTEGRATION_PRIOR_AUTHORITY`
+manifest as `predecessor_prior_authority`. Its canonical digest must equal the
+signed integration's prior-authority digest. The protected historical
+predecessor authenticates its repository, issue, PR, head/tree, receipt,
+attestation, lifecycle authority and publication identities; the maintained
+signed annotated-tag verifier independently authenticates the exact tag object,
+source target, manifest digest and integration signer. A missing, unrelated or
+substituted manifest or tag grants no authority.
+Correction-candidate validation remains ordinary-only in both paths;
+integration, exceptional and other validation families grant no candidate
+authority. An integration receipt without an eligibility digest can preserve
+predecessor feedback only with an empty eligible-thread set, which grants no
+predecessor resolution authority.
 
 The verifier derives, rather than accepts, the feedback delta between those
 states. The candidate capture authenticates exactly one Copilot request-history
@@ -242,6 +267,29 @@ second provider request, and a caller-selected subset fail closed.
 The authority verifier independently repeats the maintained live Stable
 Feedback capture at H1 and requires exact equality with the candidate-bound
 state, so candidate-local evidence cannot create provider history.
+
+A Codex-only H1 assessment instead composes both read-only first-fallback
+acquisitions from `provider_acquisition.py`. The fixed 30-minute window makes
+the maintained approximately-30-minute observation contract executable without
+configuration. Complete ordered native chronology must show each unedited
+canonical request at least 30 minutes after both Ready and an independently
+observed server-created H1 PushEvent, with the exact PR author and Ready actor.
+Intrinsic commit dates grant no observation-window authority. Complete native
+content-edit snapshots preserve consumed requests and earlier per-type summary
+startup even when current bodies or completion timestamps changed. Missing,
+deleted or ambiguous history and missing head-publication events fail closed.
+There must be no duplicate first fallback or earlier observable H1 provider
+startup for that type. Protected CURRENT and the entire live Stable
+Feedback capture are reauthenticated around the observation. An internally
+sealed ephemeral projection binds both request node/database identities,
+actors, timestamps, H1, lifecycle, CURRENT and actual review database identities.
+The existing terminal transport owner verifies the Code findings review,
+Security result and exact-head summary before the complete finding delta is
+admitted. Exact top-level provider comment Node IDs remain the finding IDs.
+No caller chooses a provider mode, request identity, feedback delta or subset.
+This read-only owner grants no replacement dispatch; #1053's reserved import
+and unavailable-verifier failure remain unchanged.
+
 The candidate-bound capture uses the dedicated read-only
 `resolve-batch --ready-remediation-provider-binding FILE` form. The authority
 verifier derives that ephemeral file from protected CURRENT, and the form is
@@ -833,6 +881,14 @@ Security Review nor requests another provider review. All current feedback is
 still captured completely and bound to the resulting source projection, while
 ordinary and recovered Ready sources retain their existing terminal-provider
 rules.
+
+For schema-1.2 zero-receipt Ready histories, one remediation after Ready keeps
+the Ready head as the provider head. An exact two-remediation suffix from the
+unique Ready head through the current head selects the first correction as the
+provider head only when the authenticated source chronology and finite state
+agree. The digest-bound summary requires one completed Code row on that head;
+an optional Security row must be completed on the same head with the matching
+repository and pull request status marker. No caller selects an ancestor.
 
 Package loss is a bounded maintained-store conclusion, not a caller flag or an
 attempt to prove global nonexistence. The verifier authenticates all source
