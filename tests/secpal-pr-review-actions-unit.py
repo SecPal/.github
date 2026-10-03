@@ -14409,6 +14409,105 @@ class FastPathTests(TestCase):
             ],
         )
 
+    def _loss_provider_gateway(self, *, binding=None, body=None):
+        from scripts.secpal_pr_review import validation_evidence_loss as loss
+
+        provider_head = "f" * 40
+        provider_state = self._codex_provider_state(metadata_head=provider_head)
+        summary = provider_state["comments"]["nodes"][0]["body"].replace(
+            "| head |", f"| `{provider_head[:7]}` |"
+        )
+        if binding is None:
+            record = {
+                "admission_schema_version": "1.1",
+                "repository": "SecPal/.github", "pull_request": 1,
+                "head_sha": p21.HEAD,
+                "historical_provider_summary_digest": digest(summary),
+            }
+            commits = (
+                loss.CommitFacts(provider_head, "a" * 40, ("0" * 40,),
+                                 "2026-09-01T00:00:00Z", True),
+                loss.CommitFacts(p21.HEAD, "b" * 40, (provider_head,),
+                                 "2026-09-02T00:00:00Z", True),
+            )
+            binding = loss._historical_provider_binding_for_ready(
+                record, commits, "2026-09-01T01:00:00Z"
+            )
+        provider_state["comments"]["nodes"][0].update(
+            id="SUMMARY_1", body=summary if body is None else body,
+            updatedAt="2026-09-02T01:00:00Z", reactions={"nodes": [], "pageInfo": {"hasNextPage": False}},
+        )
+        provider_state.update(
+            id="PR_1", baseRefName="main", baseRefOid=p21.BASE,
+            state="OPEN", reviewDecision=None, reactions={"nodes": [], "pageInfo": {"hasNextPage": False}},
+            reviews={"nodes": [], "pageInfo": {"hasNextPage": False}},
+            reviewThreads={"nodes": [], "pageInfo": {"hasNextPage": False}},
+        )
+        github = actions.LiveGitHub()
+        github.runner = SimpleNamespace(run=mock.Mock(return_value={
+            "data": {"repository": {"pullRequest": provider_state}}
+        }))
+        gateway = actions.FastPathGateway(
+            REPO_ROOT, registry_entry("SecPal/.github"), github=github,
+            ready_source_provider_binding=binding,
+        )
+        return gateway, binding, summary
+
+    def test_independent_loss_binding_through_actual_gateway_summary_path(self) -> None:
+        gateway, binding, summary = self._loss_provider_gateway()
+        observed = gateway.observe_stable_feedback("SecPal/.github", 1)
+        self.assertEqual(observed["provider_summary_body"], summary)
+        self.assertEqual(binding.provider_binding_sources, (
+            lifecycle_publication.EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING,
+        ))
+
+    def test_loss_binding_scope_digest_and_caller_substitution_reject(self) -> None:
+        from scripts.secpal_pr_review import validation_evidence_loss as loss
+
+        _, binding, summary = self._loss_provider_gateway()
+        for field, value in (
+            ("repository", "Other/project"), ("pull_request", 2),
+            ("current_head_sha", "e" * 40), ("provider_head_sha", "e" * 40),
+            ("summary_digest", "0" * 64),
+        ):
+            with self.subTest(field=field):
+                changed = replace(binding, **{field: value})
+                gateway, _, _ = self._loss_provider_gateway(binding=changed)
+                with self.assertRaises(fast_path.SecurityBlocker):
+                    gateway.observe_stable_feedback("SecPal/.github", 1)
+        fabricated = loss.HistoricalProviderBinding(
+            binding.repository, binding.pull_request, binding.current_head_sha,
+            binding.provider_head_sha, binding.summary_digest,
+        )
+        for sources in (None, (), ("CALLER_SELECTED",),
+                        binding.provider_binding_sources * 2,
+                        ("ORDINARY_REMEDIATION_SUFFIX",)):
+            with self.subTest(sources=sources):
+                forged = SimpleNamespace(
+                    repository=binding.repository,
+                    pull_request=binding.pull_request,
+                    current_head_sha=binding.current_head_sha,
+                    provider_binding_sources=sources,
+                    provider_head=lambda **_kwargs: binding.provider_head_sha,
+                    verify_historical_provider_summary=lambda **_kwargs: None,
+                )
+                gateway, _, _ = self._loss_provider_gateway(binding=forged)
+                with self.assertRaises(fast_path.SecurityBlocker):
+                    gateway.observe_stable_feedback("SecPal/.github", 1)
+        gateway, _, _ = self._loss_provider_gateway(binding=fabricated)
+        with self.assertRaises(fast_path.SecurityBlocker):
+            gateway.observe_stable_feedback("SecPal/.github", 1)
+        gateway, _, _ = self._loss_provider_gateway(body=summary + "\nchanged")
+        with self.assertRaises(fast_path.SecurityBlocker):
+            gateway.observe_stable_feedback("SecPal/.github", 1)
+
+    def test_loss_binding_provenance_is_immutable_and_not_constructor_selected(self) -> None:
+        _, binding, _ = self._loss_provider_gateway()
+        with self.assertRaises((AttributeError, TypeError)):
+            binding.provider_binding_sources = ("ORDINARY_REMEDIATION_SUFFIX",)
+        with self.assertRaises((TypeError, ValueError)):
+            replace(binding, provider_binding_sources=("CALLER_SELECTED",))
+
     def test_ready_source_accepts_exact_v11_historical_provider_summary(self) -> None:
         binding = replace(
             self._ready_source_provider_binding(),

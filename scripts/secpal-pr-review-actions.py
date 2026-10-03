@@ -2260,6 +2260,67 @@ def _normalized_reviewer_login(value: Any) -> str | None:
     return re.sub(r"\[bot\]$", "", value.strip().lower())
 
 
+def _provider_binding_uses_historical_summary(value: Any) -> bool:
+    """Dispatch only exact owner types loaded by the maintained entry points."""
+
+    if type(value) is _ReadyRemediationProviderBinding:
+        if value.provider_binding_sources != ():
+            raise MutationBlocked("Ready-remediation provider provenance changed")
+        return False
+    # The CLI, library tests and isolated lifecycle loader use these fixed
+    # package names for the same maintained owner files. Never trust a caller's
+    # __module__, class name or similarly named instance attributes.
+    for package in (
+        "secpal_pr_review", "scripts.secpal_pr_review",
+        "secpal_ready_integration_lifecycle",
+    ):
+        for owner, name in (
+            ("validation_evidence_loss", "HistoricalProviderBinding"),
+            ("lifecycle_publication", "VerifiedReadySourceRecoveryProviderBinding"),
+            ("legacy_enrolled_package_loss", "VerifiedLegacyProviderHeadBinding"),
+            ("qualified_remediation_successor_loss", "QualifiedProviderBinding"),
+        ):
+            module = sys.modules.get(f"{package}.{owner}")
+            expected_path = REPOSITORY_ROOT / "scripts/secpal_pr_review" / f"{owner}.py"
+            if (
+                module is None
+                or Path(module.__file__).resolve() != expected_path
+                or type(value) is not getattr(module, name)
+            ):
+                continue
+            if owner == "qualified_remediation_successor_loss":
+                return False
+            if owner == "legacy_enrolled_package_loss":
+                return True
+            if owner == "validation_evidence_loss":
+                try:
+                    sources = value.provider_binding_sources
+                except module.fast_path.SecurityBlocker as exc:
+                    raise MutationBlocked(str(exc)) from exc
+            else:
+                sources = value.provider_binding_sources
+            provider_owner = (
+                module.publication if owner == "validation_evidence_loss" else module
+            )
+            allowed = (
+                provider_owner.ORDINARY_REMEDIATION_SUFFIX,
+                provider_owner.EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING,
+                provider_owner.EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION,
+            )
+            if (
+                type(sources) is not tuple or not sources
+                or any(type(source) is not str for source in sources)
+                or len(sources) != len(set(sources))
+                or any(source not in allowed for source in sources)
+            ):
+                raise MutationBlocked("review-provider provenance is invalid")
+            return (
+                provider_owner.EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING
+                in sources
+            )
+    raise MutationBlocked("review-provider binding is not verifier-owned")
+
+
 def _require_review_providers_terminal(
     pull_request: dict[str, Any],
     *,
@@ -2269,6 +2330,10 @@ def _require_review_providers_terminal(
 ) -> None:
     """Reject visible non-terminal automated review-provider evidence."""
 
+    historical_summary = (
+        _provider_binding_uses_historical_summary(ready_source_provider_binding)
+        if ready_source_provider_binding is not None else False
+    )
     head_sha = pull_request.get("headRefOid")
     comments = _bounded_nodes(
         pull_request.get("comments"), "review-provider status comments"
@@ -2297,79 +2362,49 @@ def _require_review_providers_terminal(
                 "Codex review provider repository or PR identity changed"
             )
         try:
-            fast_path.verify_codex_provider_summary(
-                body,
-                head_sha=head_sha,
-                repository=(
-                    repository if ready_source_provider_binding is not None else None
-                ),
-                pull_request_number=(
-                    pull_request_number
-                    if ready_source_provider_binding is not None
-                    else None
-                ),
-            )
-        except fast_path.SecurityBlocker as exc:
+            if historical_summary:
+                ready_source_provider_binding.verify_historical_provider_summary(
+                    body=body,
+                    repository=repository,
+                    pull_request=pull_request_number,
+                    current_head_sha=head_sha,
+                )
+            else:
+                fast_path.verify_codex_provider_summary(
+                    body,
+                    head_sha=head_sha,
+                    repository=(
+                        repository if ready_source_provider_binding is not None else None
+                    ),
+                    pull_request_number=(
+                        pull_request_number
+                        if ready_source_provider_binding is not None
+                        else None
+                    ),
+                )
+        except (RuntimeError, AttributeError, TypeError, ValueError) as exc:
             if (
-                str(exc)
-                == "Codex review provider status is indeterminate"
-                and ready_source_provider_binding is not None
-                and repository is not None
-                and pull_request_number is not None
-            ):
-                try:
-                    ready_source_provider_binding.verify_historical_provider_summary(
-                        body=body,
-                        repository=repository,
-                        pull_request=pull_request_number,
-                        current_head_sha=head_sha,
-                    )
-                except (
-                    fast_path.SecurityBlocker,
-                    AttributeError,
-                    TypeError,
-                    ValueError,
-                ) as legacy_exc:
-                    raise MutationBlocked(str(legacy_exc)) from legacy_exc
-            elif (
-                str(exc)
-                != "Codex review provider status is stale for the current head"
+                historical_summary
+                or str(exc) != "Codex review provider status is stale for the current head"
                 or ready_source_provider_binding is None
                 or repository is None
                 or pull_request_number is None
             ):
                 raise MutationBlocked(str(exc)) from exc
-            else:
-                try:
-                    if (
-                        "EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING"
-                        in ready_source_provider_binding.provider_binding_sources
-                    ):
-                        ready_source_provider_binding.verify_historical_provider_summary(
-                            body=body,
-                            repository=repository,
-                            pull_request=pull_request_number,
-                            current_head_sha=head_sha,
-                        )
-                    else:
-                        provider_head = ready_source_provider_binding.provider_head(
-                            repository=repository,
-                            pull_request=pull_request_number,
-                            current_head_sha=head_sha,
-                        )
-                        fast_path.verify_codex_provider_summary(
-                            body,
-                            head_sha=provider_head,
-                            repository=repository,
-                            pull_request_number=pull_request_number,
-                        )
-                except (
-                    fast_path.SecurityBlocker,
-                    AttributeError,
-                    TypeError,
-                    ValueError,
-                ) as recovery_exc:
-                    raise MutationBlocked(str(recovery_exc)) from recovery_exc
+            try:
+                provider_head = ready_source_provider_binding.provider_head(
+                    repository=repository,
+                    pull_request=pull_request_number,
+                    current_head_sha=head_sha,
+                )
+                fast_path.verify_codex_provider_summary(
+                    body,
+                    head_sha=provider_head,
+                    repository=repository,
+                    pull_request_number=pull_request_number,
+                )
+            except (RuntimeError, AttributeError, TypeError, ValueError) as recovery_exc:
+                raise MutationBlocked(str(recovery_exc)) from recovery_exc
 
     requests = _bounded_nodes(
         pull_request.get("reviewRequests"), "review-provider requests"

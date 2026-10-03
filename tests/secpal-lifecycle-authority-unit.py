@@ -5904,7 +5904,7 @@ printf 'Usage: fixture\\n'
         }
         self.assertEqual(from_imports, {
             (0, "__future__", ("annotations",)), (0, "contextlib", ("contextmanager",)),
-            (0, "dataclasses", ("dataclass",)),
+            (0, "dataclasses", ("dataclass", "field")),
             (0, "datetime", ("datetime", "timezone")), (0, "pathlib", ("Path",)),
             (0, "typing", ("Any", "Iterator", "Mapping")),
             (1, None, ("bootstrap_source_admission",)), (1, None, ("fast_path",)),
