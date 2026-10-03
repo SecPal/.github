@@ -9,10 +9,13 @@ import argparse
 from pathlib import Path
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPOSITORY_ROOT))
+sys.path.insert(0, str(REPOSITORY_ROOT / "scripts"))
 
 from secpal_pr_review import fast_path
 from secpal_pr_review import lifecycle_authority as authority
+from secpal_pr_review import lifecycle_execution
 from secpal_pr_review import lifecycle_publication as publication
 from secpal_pr_review import provider_reacquisition
 
@@ -45,7 +48,7 @@ def main() -> int:
         print(report.get("status", report.get("classification", report.get("kind"))))
         return 0
     except (OSError, ValueError, fast_path.SecurityBlocker, authority.LifecycleAuthorityError,
-            publication.LifecyclePublicationError) as exc:
+            publication.LifecyclePublicationError, lifecycle_execution.LifecycleExecutionError) as exc:
         fast_path.atomic_write_json(arguments.output, {"status": "BLOCKED", "reason": str(exc)})
         print(str(exc), file=sys.stderr)
         return 1

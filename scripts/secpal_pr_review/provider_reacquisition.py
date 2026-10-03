@@ -345,7 +345,7 @@ def _observe_package_survey(
                     raise fast_path.SecurityBlocker("reacquisition has a retained tracked package store")
                 if mode == b"160000":
                     raise fast_path.SecurityBlocker("reacquisition source has an unsurveyed linked package store")
-                if kind == b"blob" and mode in {b"100644", b"100755"}:
+                if kind == b"blob":
                     blob_ids.add(oid.decode("ascii"))
         if len(blob_ids) > 20000:
             raise fast_path.SecurityBlocker("reacquisition source blob inventory exceeds bound")
@@ -384,13 +384,22 @@ def _observe_package_survey(
     }
 
 
+def _require_accepted_main(repository: str, *, expected_main: str | None = None) -> str:
+    actions = transport._load_actions_helper()
+    try:
+        return actions._require_accepted_main_bridge_source(repository, expected_main=expected_main)
+    except actions.fast_path.SecurityBlocker as exc:
+        # The maintained actions loader has its own concrete helper class.
+        # Normalize only that exact boundary, preserving the fail-closed result.
+        raise fast_path.SecurityBlocker(str(exc)) from exc
+
+
 def authenticate_loss(repository: str, delivery_issue: int) -> VerifiedAcquisitionEvidenceLoss:
     """No caller observations, provider selector or package-loss flags."""
 
     if repository != "SecPal/.github":
         raise fast_path.SecurityBlocker("provider reacquisition is not maintained for this repository")
-    actions = transport._load_actions_helper()
-    accepted_main = actions._require_accepted_main_bridge_source(repository)
+    accepted_main = _require_accepted_main(repository)
     current = publication.verify_current_lifecycle_authority(repository, delivery_issue)
     issue = _gh_json([f"repos/{repository}/issues/{delivery_issue}"], "delivery issue")
     if issue.get("number") != delivery_issue or issue.get("state") != "open" or "pull_request" in issue:
@@ -405,7 +414,7 @@ def authenticate_loss(repository: str, delivery_issue: int) -> VerifiedAcquisiti
         raise fast_path.SecurityBlocker("reacquisition history changed during loss survey")
     if publication.verify_current_lifecycle_authority(repository, delivery_issue) != current:
         raise fast_path.SecurityBlocker("reacquisition CURRENT changed during loss survey")
-    actions._require_accepted_main_bridge_source(repository, expected_main=accepted_main)
+    _require_accepted_main(repository, expected_main=accepted_main)
     return admitted
 
 
@@ -553,7 +562,7 @@ def issue_authorization(repository: str, delivery_issue: int) -> dict[str, Any]:
     document = {**signed, "authorization_digest": fast_path.digest_json(signed)}
     current = publication.verify_current_lifecycle_authority(repository, delivery_issue)
     verify_authorization(document, current)
-    transport._load_actions_helper()._require_accepted_main_bridge_source(repository)
+    _require_accepted_main(repository)
     return document
 
 
@@ -696,8 +705,7 @@ def _authenticate_execution(document: dict[str, Any]) -> ReacquisitionObservatio
     repository, issue = document["repository"], document["delivery_issue"]
     if repository != "SecPal/.github":
         raise fast_path.SecurityBlocker("provider reacquisition is not maintained for this repository")
-    actions = transport._load_actions_helper()
-    main = actions._require_accepted_main_bridge_source(repository)
+    main = _require_accepted_main(repository)
     current, claims = publication.verify_provider_dispatch_claims(repository, issue)
     authorization = verify_authorization(document, current)
     document = authorization.document
@@ -736,7 +744,7 @@ def _authenticate_execution(document: dict[str, Any]) -> ReacquisitionObservatio
         raise fast_path.SecurityBlocker("reacquisition request history changed during authentication")
     if publication.verify_current_lifecycle_authority(repository, issue) != current:
         raise fast_path.SecurityBlocker("reacquisition CURRENT changed during authentication")
-    actions._require_accepted_main_bridge_source(repository, expected_main=main)
+    _require_accepted_main(repository, expected_main=main)
     return ReacquisitionObservation(authorization, current, claims, feedback, observed, requests, results, main)
 
 
@@ -779,7 +787,7 @@ def _write_request(observation: ReacquisitionObservation, review_type: str, body
         raise fast_path.SecurityBlocker("reacquisition writer body is not canonical")
     # Final native re-read follows the protected ownership check. No source or
     # request can change during the preceding journal observation unnoticed.
-    transport._load_actions_helper()._require_accepted_main_bridge_source(
+    _require_accepted_main(
         document["repository"], expected_main=observation.accepted_main_sha)
     live = _observe_timeline(document["repository"], document["pull_request"])
     if live != observation.timeline:

@@ -13651,6 +13651,42 @@ class ProviderAcquisitionEvidenceLossTests(TestCase):
             with self.subTest(raw=raw), self.assertRaises(fast_path.SecurityBlocker):
                 r._admit_blob_sizes(ids, raw)
 
+    def test_source_survey_includes_immutable_symlink_blobs(self):
+        r, c, _, o, _ = self.fixture()
+        policy = SimpleNamespace(publication_branch=c.publication_branch, publication_remote_url="https://github.com/SecPal/.github.git")
+        package = {"kind": fast_path.READY_INTEGRATION_KIND, "repository": c.lifecycle.repository,
+                   "delivery_issue": c.lifecycle.delivery_issue, "head_sha": c.lifecycle.head_sha}
+        blobs = {"1" * 40: b"{}", "2" * 40: fast_path.canonical_json_bytes(package)}
+        def git(_root, args):
+            if args[0] == "fetch": return b""
+            if args[0] == "rev-parse": return (c.lifecycle.tree_sha + "\n").encode()
+            if args[0] == "show": return b".context/\n"
+            if args[0] == "ls-tree":
+                return (f"100644 blob {'1' * 40}\tregular\0" + f"120000 blob {'2' * 40}\tlink\0").encode()
+            self.fail(f"unexpected source observation {args}")
+        def batch(_root, args, *, input_bytes):
+            chunks = []
+            for oid in input_bytes.decode().splitlines():
+                data = blobs[oid]
+                chunks.append(f"{oid} blob {len(data)}\n".encode())
+                if args[1] == "--batch": chunks.extend((data, b"\n"))
+            return SimpleNamespace(returncode=0, stdout=b"".join(chunks))
+        isolated = mock.MagicMock()
+        isolated.__enter__.return_value = (Path("/unused"), None)
+        latest = {(c.lifecycle.repository, c.lifecycle.delivery_issue):
+                  (c.publication_oid, {"publication_digest": c.publication_digest}, c.lifecycle)}
+        with mock.patch.object(authority, "_load_lifecycle_trust_policy", return_value=policy), \
+                mock.patch.object(publication, "_verify_live_protection"), \
+                mock.patch.object(publication, "_isolated_repository", return_value=isolated), \
+                mock.patch.object(publication, "_observe_remote_current_once", return_value="9" * 40), \
+                mock.patch.object(publication, "_walk_journal", return_value=([], latest, [])), \
+                mock.patch.object(publication, "_read_publication_object", return_value=(b"{}", None)), \
+                mock.patch.object(publication, "_run_git", side_effect=batch), \
+                mock.patch.object(r, "_git", side_effect=git), \
+                mock.patch.object(r, "_observe_push_survey", return_value=None):
+            survey = r._observe_package_survey(c, o)
+        self.assertEqual(survey["source_packages"], (fast_path.digest_json(package),))
+
     def test_expired_event_alone_or_caller_declaration_is_denied(self):
         r, c, f, o, s = self.fixture()
         for survey in ({"authoritative_head_publication": None}, {"lost": True},
@@ -13960,9 +13996,51 @@ class ProviderReacquisitionExecutionTests(TestCase):
             self.assertEqual(r.dispatch_next(doc)["status"], "FRESH_RESULTS_TERMINAL_CAPTURE_REQUIRED")
         execute.assert_not_called()
 
+    def test_loaded_guard_error_is_normalized_before_target_observation(self):
+        r, doc, _ = self.complete_observation()
+        class LoadedSecurityBlocker(Exception):
+            pass
+        helper = SimpleNamespace(fast_path=SimpleNamespace(SecurityBlocker=LoadedSecurityBlocker),
+            _require_accepted_main_bridge_source=mock.Mock(side_effect=LoadedSecurityBlocker("candidate")))
+        with mock.patch.object(r.transport, "_load_actions_helper", return_value=helper), \
+                mock.patch.object(publication, "verify_current_lifecycle_authority") as current, \
+                mock.patch.object(publication, "verify_provider_dispatch_claims") as claims:
+            for operation in (lambda: r.authenticate_loss(doc["repository"], doc["delivery_issue"]),
+                              lambda: r._authenticate_execution(doc)):
+                with self.assertRaises(fast_path.SecurityBlocker):
+                    operation()
+        current.assert_not_called()
+        claims.assert_not_called()
+
+    def test_cli_records_signing_failure_without_an_external_operation(self):
+        import json
+        spec = importlib.util.spec_from_file_location("secpal_reacquisition_cli_test", REPO_ROOT / "scripts/secpal-provider-reacquisition.py")
+        cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+        with tempfile.TemporaryDirectory(prefix="secpal-reacquisition-cli-") as directory:
+            output = Path(directory) / "result.json"
+            with mock.patch.object(sys, "argv", ["reacquisition", "authorize", "--repo", REPOSITORY,
+                    "--delivery-issue", "1082", "--output", str(output)]), \
+                    mock.patch.object(cli.provider_reacquisition, "issue_authorization",
+                        side_effect=cli.lifecycle_execution.LifecycleExecutionError("accepted signer unavailable")):
+                self.assertEqual(cli.main(), 1)
+            self.assertEqual(json.loads(output.read_text())["status"], "BLOCKED")
+
+    def test_canonical_cli_imports_in_isolated_python_from_any_directory(self):
+        import subprocess
+        import sys
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        script = Path(__file__).resolve().parents[1] / "scripts/secpal-provider-reacquisition.py"
+        with TemporaryDirectory(prefix="secpal-reacquisition-cli-") as directory:
+            result = subprocess.run([sys.executable, "-I", str(script), "--help"],
+                cwd=directory, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("inspect,authorize,dispatch,observe", result.stdout)
+
     def test_candidate_tooling_is_rejected_before_target_acquisition(self):
         r, doc, _ = self.complete_observation()
-        helper = SimpleNamespace(_require_accepted_main_bridge_source=mock.Mock(side_effect=fast_path.SecurityBlocker("candidate")))
+        helper = SimpleNamespace(fast_path=fast_path, _require_accepted_main_bridge_source=mock.Mock(side_effect=fast_path.SecurityBlocker("candidate")))
         with mock.patch.object(r.transport, "_load_actions_helper", return_value=helper), \
                 mock.patch.object(publication, "verify_provider_dispatch_claims") as read:
             with self.assertRaises(fast_path.SecurityBlocker):
