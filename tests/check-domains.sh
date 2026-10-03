@@ -61,6 +61,8 @@ bad_reverse_identifier="dev.${domain_namespace}.polyscope.preview"
 reverse_identifier_as_host="io.${domain_namespace}.attacker.example"
 lifecycle_config_identifier="${domain_namespace}.lifecycleSigningCredential"
 pre_enrollment_protocol_identifier="${domain_namespace}.pre-enrollment-current-safety"
+libre_application_identifier="app.${domain_namespace}.libre"
+dpc_application_identifier="io.${domain_namespace}.dpc"
 
 if [ ! -f "$SCRIPT" ]; then
   echo "Missing scripts/check-domains.sh" >&2
@@ -257,6 +259,39 @@ assert_domain_policy_case() {
     domain_policy_regression_failures=$((domain_policy_regression_failures + 1))
   fi
 }
+
+# ADR-026 application identities are identifiers, never newly approved hosts.
+for application_identifier in "$libre_application_identifier" "$dpc_application_identifier"; do
+  assert_domain_policy_case "an inline application identity" accept "$application_identifier" \
+    "| USER/WORK | \`$application_identifier\` |"
+  assert_domain_policy_case "an application identity beside an approved URL" accept "$application_identifier" \
+    "Use \`$application_identifier\` with https://secpal.io"
+  assert_domain_policy_case "an application identity without identifier context" reject "$application_identifier" \
+    "Bad: $application_identifier"
+  assert_domain_policy_case "an application identity with an unclosed code span" reject "$application_identifier" \
+    "Bad: \`$application_identifier"
+  assert_domain_policy_case "an inline application identity beside a raw occurrence" reject "$application_identifier" \
+    "Mixed: \`$application_identifier\` and $application_identifier"
+  assert_domain_policy_case "an application identity used as a URL inside code" reject "$application_identifier" \
+    "Bad application ID: \`https://$application_identifier\`"
+  assert_domain_policy_case "an unapproved application-identity suffix" reject "$application_identifier.example" \
+    "Bad: \`$application_identifier.example\`"
+
+  rm "$workspace/domain-policy-case.md"
+  printf '%s\n' "value=\`$application_identifier\`" >"$workspace/domain-policy-case.sh"
+  set +e
+  (cd "$workspace" && bash scripts/check-domains.sh >output.txt 2>&1)
+  application_code_exit=$?
+  set -e
+  if [ "$application_code_exit" -eq 0 ] || ! grep -Fq "$application_identifier" "$workspace/output.txt"; then
+    cat "$workspace/output.txt"
+    echo "check-domains.sh must reject application inline-code syntax outside Markdown" >&2
+    domain_policy_regression_failures=$((domain_policy_regression_failures + 1))
+  fi
+  rm "$workspace/domain-policy-case.sh"
+done
+assert_domain_policy_case "an explicitly contextual DPC application ID" accept "$dpc_application_identifier" \
+  "Android application ID: $dpc_application_identifier"
 
 assert_domain_policy_case \
   "secpal.dev with an appended suffix" \

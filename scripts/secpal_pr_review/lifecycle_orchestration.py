@@ -1239,9 +1239,24 @@ def verify_ready_remediation_provider_growth_authority(
         or provider.current_authority_digest != lifecycle.authority_digest
         or provider.current_publication_oid != current.publication_oid
         or provider.current_publication_digest != current.publication_digest
-        or publication.ORDINARY_REMEDIATION_SUFFIX
-        not in provider.provider_binding_sources
-        or len(provider.remediation_event_digests) != 1
+        or not (
+            (
+                publication.ORDINARY_REMEDIATION_SUFFIX
+                in provider.provider_binding_sources
+                and len(provider.remediation_event_digests) == 1
+            )
+            or (
+                publication.EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION
+                in provider.provider_binding_sources
+                and not provider.remediation_event_digests
+                and isinstance(
+                    provider.adopted_remediation_observation_digest, str
+                )
+                and authority._DIGEST.fullmatch(
+                    provider.adopted_remediation_observation_digest
+                )
+            )
+        )
         or reviewed.head_sha != provider.provider_head_sha
         or predecessor_eligibility
         != fast_path.digest_json(predecessor_eligibility_document)
@@ -1258,6 +1273,12 @@ def verify_ready_remediation_provider_growth_authority(
             provider_head_sha=provider.provider_head_sha,
             predecessor_eligibility_evidence=predecessor_eligibility_document,
             eligibility_evidence=eligibility,
+            provider_summary_body=getattr(
+                live_resulting, "provider_summary_body", None
+            ),
+            review_database_ids=getattr(
+                live_resulting, "review_database_ids", None
+            ),
         )
     except fast_path.SecurityBlocker as exc:
         raise LifecycleOrchestrationError(
@@ -1787,6 +1808,7 @@ def _capture_current_stable_feedback(
     ready_remediation_provider_binding: (
         publication.VerifiedReadySourceRecoveryProviderBinding | None
     ) = None,
+    capture_provider_summary: bool = False,
 ) -> fast_path.StableFeedbackState:
     """Reuse the maintained bounded provider capture without duplicating it."""
 
@@ -1800,6 +1822,7 @@ def _capture_current_stable_feedback(
             prefix="secpal-continuation-feedback-"
         ) as directory:
             output = Path(directory) / "reviewed-state.json"
+            summary_output = Path(directory) / "provider-summary.json"
             provider_binding = Path(directory) / "provider-binding.json"
             arguments = [
                 bootstrap_source_admission._trusted_python(),
@@ -1833,6 +1856,8 @@ def _capture_current_stable_feedback(
                         str(provider_binding),
                     ]
                 )
+            if ready_remediation_provider_binding is not None or capture_provider_summary:
+                arguments.extend(["--capture-provider-summary", str(summary_output)])
             result = bootstrap_source_admission._run_isolated_python(
                 arguments,
                 cwd=repository_root,
@@ -1843,9 +1868,21 @@ def _capture_current_stable_feedback(
                 raise LifecycleOrchestrationError(
                     "current stable feedback could not be authenticated"
                 )
-            return fast_path.verify_reviewed_state_evidence(
+            captured = fast_path.verify_reviewed_state_evidence(
                 authority.loads_closed_json(output.read_bytes())
             )
+            if ready_remediation_provider_binding is not None or capture_provider_summary:
+                summary = authority.loads_closed_json(summary_output.read_bytes())
+                if not isinstance(summary, dict) or set(summary) != {
+                    "body",
+                    "review_database_ids",
+                }:
+                    raise LifecycleOrchestrationError(
+                        "current provider assessment is malformed"
+                    )
+                captured.provider_summary_body = summary["body"]
+                captured.review_database_ids = summary["review_database_ids"]
+            return captured
     except (
         OSError,
         authority.LifecycleAuthorityError,
@@ -4911,13 +4948,19 @@ def _base_decision(
 
 
 def _prove_transition_is_finite(
-    state: Mapping[str, Any], transition: str, event_id: str
+    state: Mapping[str, Any], transition: str, event_id: str,
+    *, adopted_predecessor: bool = False,
+    adoption_review_submitted: bool = False,
 ) -> None:
     event_digest = authority.digest_json(
         {"event_id": event_id, "transition_kind": transition}
     )
     try:
-        authority.derive_state(state, transition, event_digest)
+        authority.require_forward_transition(
+            state, transition, event_digest,
+            allow_adopted_observations=adopted_predecessor,
+            adoption_review_submitted=adoption_review_submitted,
+        )
     except authority.LifecycleAuthorityError as exc:
         raise LifecycleOrchestrationError(str(exc)) from exc
 
@@ -5267,7 +5310,14 @@ def _orchestrate_event(
             lifecycle=lifecycle,
             verifier=authorization_verifier,
         )
-        _prove_transition_is_finite(state, event_kind, event_id)
+        _prove_transition_is_finite(
+            state, event_kind, event_id,
+            adopted_predecessor=(
+                lifecycle.historical_proof_mode
+                == authority.EXACT_ADOPTION_PROOF_MODE
+            ),
+            adoption_review_submitted=lifecycle.adoption_review_submitted,
+        )
         return _base_decision(
             observed,
             lifecycle,

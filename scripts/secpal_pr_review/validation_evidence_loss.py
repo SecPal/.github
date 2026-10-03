@@ -76,7 +76,9 @@ CURRENT_RECEIPT_SAFETY_PATH = "tests/pre-enrollment-github-948-current-safety.py
 CURRENT_RECEIPT_NODE_TEST_PATH = "tests/node-baseline-governance.test.mjs"
 CURRENT_SAFETY_INVARIANTS = (
     "candidate_local_issuer_rejected", "complete_feedback", "context_binding",
-    "historical_bytes_unavailable", "ordinary_prior_ready", "resolved_feedback",
+    "historical_bytes_unavailable",
+    "null_historical_receipt_requires_exact_recovered_root",
+    "ordinary_prior_ready", "resolved_feedback",
     "signed_authority_required", "source_history", "wrong_signer",
 )
 REGISTERED_CURRENT_SAFETY_INVARIANTS = (

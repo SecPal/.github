@@ -77,6 +77,12 @@ jobs:
       - name: Run simple resolver unit tests
         run: python3 -m unittest tests/secpal-resolve-fixed-threads-unit.py
 
+      - name: Run exact unchanged-head prerequisite disposition tests
+        run: |
+          python3 -m unittest tests/secpal-unchanged-prerequisite-unit.py
+          python3 -m unittest tests/secpal-unchanged-prerequisite-evidence-unit.py
+          python3 -m unittest tests/secpal-exact-prerequisite-resolver-unit.py
+
       - name: Run finite lifecycle-orchestration unit tests
         run: python3 -m unittest tests/secpal-lifecycle-orchestration-unit.py
       - name: Run authenticated Ready/Draft lifecycle execution tests

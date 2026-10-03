@@ -24,6 +24,7 @@ import re
 import stat
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -240,6 +241,111 @@ def _load_late_disposition_helper() -> Any:
 
 
 late_disposition = _load_late_disposition_helper()
+
+
+def _verify_exact_helper_source(name: str) -> None:
+    """Authenticate regular helper bytes against the committed HEAD first."""
+
+    if name not in (
+        "unchanged_head_prerequisite.py",
+        "unchanged_head_prerequisite_evidence.py",
+    ):
+        raise ResolutionError("exact prerequisite helper name is not authorized")
+    relative = f"scripts/secpal_pr_review/{name}"
+    path = REPOSITORY_ROOT / relative
+    try:
+        if (
+            path.is_symlink()
+            or path.parent.is_symlink()
+            or path.parent.parent.is_symlink()
+            or not stat.S_ISREG(path.stat().st_mode)
+        ):
+            raise ResolutionError("exact prerequisite helper path is not regular")
+        source = path.read_bytes()
+    except OSError as exc:
+        raise ResolutionError("exact prerequisite helper bytes are unavailable") from exc
+    if not 0 < len(source) <= 65536:
+        raise ResolutionError("exact prerequisite helper exceeds source bound")
+    blob = hashlib.sha1(
+        b"blob " + str(len(source)).encode("ascii") + b"\0" + source
+    ).hexdigest()
+    try:
+        executable = evidence.resolve_trusted_executable("git")
+        completed = subprocess.run(
+            [executable, "ls-tree", "HEAD", "--", relative],
+            cwd=REPOSITORY_ROOT, check=False, stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", env=evidence.command_environment("git"),
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired, evidence.CommandPolicyError) as exc:
+        raise ResolutionError("exact prerequisite committed helper is unavailable") from exc
+    if completed.returncode != 0 or completed.stdout != (
+        f"100644 blob {blob}\t{relative}\n"
+    ):
+        raise ResolutionError("exact prerequisite helper differs from committed HEAD")
+
+
+def _load_exact_prerequisite_helpers() -> tuple[Any, Any]:
+    if (
+        sys.modules.get("secpal_pr_review.unchanged_head_prerequisite") is not None
+        or sys.modules.get("secpal_pr_review.unchanged_head_prerequisite_evidence") is not None
+    ):
+        raise ResolutionError("exact prerequisite helper was preloaded")
+    _verify_exact_helper_source("unchanged_head_prerequisite.py")
+    _verify_exact_helper_source("unchanged_head_prerequisite_evidence.py")
+    scripts_root_text = str(REPOSITORY_ROOT / "scripts")
+    original_sys_path = list(sys.path)
+    sys.path.insert(0, scripts_root_text)
+    try:
+        from secpal_pr_review import unchanged_head_prerequisite as source
+        from secpal_pr_review import unchanged_head_prerequisite_evidence as detached
+    finally:
+        sys.path[:] = original_sys_path
+    if (
+        sys.modules.get("secpal_pr_review.unchanged_head_prerequisite") is not source
+        or sys.modules.get("secpal_pr_review.unchanged_head_prerequisite_evidence")
+        is not detached
+    ):
+        raise ResolutionError("exact prerequisite helper was substituted")
+    for module, name in (
+        (source, "unchanged_head_prerequisite.py"),
+        (detached, "unchanged_head_prerequisite_evidence.py"),
+    ):
+        if Path(module.__file__).resolve() != (
+            REPOSITORY_ROOT / "scripts/secpal_pr_review" / name
+        ).resolve():
+            raise RuntimeError("exact prerequisite helper path is invalid")
+    return source, detached
+
+
+exact_prerequisite: Any = None
+exact_prerequisite_evidence: Any = None
+_EXACT_PREREQUISITE_GETS: frozenset[str] = frozenset()
+
+
+def _ensure_exact_prerequisite_helpers() -> None:
+    """Load the exact-case helpers only for the closed late-disposition path."""
+
+    global exact_prerequisite, exact_prerequisite_evidence, _EXACT_PREREQUISITE_GETS
+    if exact_prerequisite is not None:
+        _verify_exact_helper_source("unchanged_head_prerequisite.py")
+        _verify_exact_helper_source("unchanged_head_prerequisite_evidence.py")
+        return
+    source, detached = _load_exact_prerequisite_helpers()
+    exact_prerequisite = source
+    exact_prerequisite_evidence = detached
+    _EXACT_PREREQUISITE_GETS = frozenset(
+        {source.CANONICAL_PR_ENDPOINT, source.CANONICAL_MAIN_ENDPOINT}
+        | {
+            endpoint
+            for case in source.CASES.values()
+            for endpoint in (
+                case.pr_endpoint, case.commits_endpoint, case.commit_endpoint,
+                case.comment_endpoint, case.agents_endpoint,
+            )
+        }
+    )
 
 
 def _load_fast_path_helper() -> Any:
@@ -820,6 +926,83 @@ def _run_gh(arguments: Sequence[str]) -> dict[str, Any]:
     return value
 
 
+def _run_exact_prerequisite_get(endpoint: str) -> Any:
+    """Read only the closed #1048 source endpoints, never a caller REST path."""
+
+    if endpoint not in _EXACT_PREREQUISITE_GETS:
+        raise ResolutionError("exact prerequisite endpoint is not authorized")
+    try:
+        executable = evidence.resolve_trusted_executable("gh")
+        completed = subprocess.run(
+            [executable, "api", "--hostname", "github.com", endpoint],
+            check=False, stdin=subprocess.DEVNULL, capture_output=True,
+            env=evidence.command_environment("gh"), timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired, evidence.CommandPolicyError) as exc:
+        raise ResolutionError("exact prerequisite GitHub read is unavailable") from exc
+    if completed.returncode != 0 or len(completed.stdout) > 1024 * 1024:
+        raise ResolutionError("exact prerequisite GitHub read failed or exceeded bound")
+    try:
+        return json.loads(
+            completed.stdout.decode("utf-8"),
+            parse_constant=_reject_nonfinite_json_constant,
+            object_pairs_hook=_reject_duplicate_json_object,
+        )
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ResolutionError("exact prerequisite GitHub response is malformed") from exc
+
+
+def _exact_prerequisite_git_text(*arguments: str) -> str:
+    return _run_git(REPOSITORY_ROOT, arguments).stdout
+
+
+def _verify_exact_prerequisite_ssh_signature(
+    verification: dict[str, Any],
+) -> str:
+    """Authenticate the exact candidate commit's existing SecPal SSH signer."""
+
+    payload = verification.get("payload")
+    signature = verification.get("signature")
+    if (
+        not isinstance(payload, str)
+        or not isinstance(signature, str)
+        or not 0 < len(payload.encode("utf-8")) <= 65536
+        or not 0 < len(signature.encode("utf-8")) <= 32768
+        or not signature.startswith("-----BEGIN SSH SIGNATURE-----\n")
+    ):
+        raise ResolutionError("candidate commit SSH signature is malformed")
+    try:
+        executable = late_disposition._trusted_executable("ssh-keygen")
+        with tempfile.TemporaryDirectory(
+            prefix="secpal-exact-prerequisite-ssh-"
+        ) as directory:
+            signature_path = Path(directory) / "commit.sig"
+            signature_path.write_text(signature, encoding="utf-8")
+            signature_path.chmod(0o600)
+            completed = subprocess.run(
+                [executable, "-Y", "check-novalidate", "-n", "git",
+                 "-s", str(signature_path)],
+                input=payload.encode("utf-8"), capture_output=True,
+                env=late_disposition.signing_environment(), timeout=30,
+                check=False,
+            )
+    except (OSError, subprocess.TimeoutExpired,
+            late_disposition.LateDispositionError) as exc:
+        raise ResolutionError("candidate commit SSH verification failed") from exc
+    if completed.returncode != 0:
+        raise ResolutionError("candidate commit SSH signature is invalid")
+    output = (completed.stdout + b"\n" + completed.stderr).decode(
+        "utf-8", errors="replace"
+    )
+    try:
+        signer = late_disposition.signer_from_git_verification("ssh", output)
+    except late_disposition.LateDispositionError as exc:
+        raise ResolutionError("candidate commit SSH signer is unavailable") from exc
+    if signer.signature_format != "ssh":
+        raise ResolutionError("candidate commit is not SSH signed")
+    return signer.fingerprint
+
+
 def _run_git(
     repository_root: Path,
     arguments: Sequence[str],
@@ -1359,12 +1542,37 @@ def load_validation_evidence(
             "validation evidence eligibility digest is missing or malformed"
         )
     try:
+        command_set = fast_path.validation_commands_for_evidence(
+            registry_binding, payload
+        )
+        if command_set == fast_path.governance_validation_commands():
+            base_sha = reviewed.payload.get("base_sha") if reviewed.payload else None
+            tree_sha = payload.get("validated_tree_sha")
+            if (
+                not isinstance(base_sha, str) or not OID.fullmatch(base_sha)
+                or not isinstance(tree_sha, str) or not OID.fullmatch(tree_sha)
+            ):
+                raise ResolutionError("governance validation scope is unavailable")
+            root = repository_root.resolve(strict=True)
+            if (
+                _run_git(root, ("cat-file", "-t", base_sha)).stdout.strip() != "commit"
+                or _run_git(root, ("cat-file", "-t", tree_sha)).stdout.strip() != "tree"
+            ):
+                raise ResolutionError("governance validation scope is unavailable")
+            raw = _run_git(
+                root, ("diff", "--no-ext-diff", "--no-renames", "--raw", "-z",
+                       base_sha, tree_sha),
+            ).stdout
+            if not fast_path.governance_tree_delta_allowed(
+                registry_binding, base_sha, tree_sha, raw,
+            ):
+                raise ResolutionError("governance validation scope is invalid")
         receipt = fast_path.create_validation_receipt(
             repository=repository,
             head_sha=reviewed.head_sha,
             validated_tree_sha=payload.get("validated_tree_sha"),
             registry=registry_binding,
-            command_set=registry_binding["validation"],
+            command_set=command_set,
             successful_result=True,
             reviewed_state=reviewed,
             manual_gate_evidence=payload.get("manual_gate_evidence"),
@@ -1380,7 +1588,7 @@ def load_validation_evidence(
             repository=repository,
             head_sha=expected_head.lower(),
             registry=registry_binding,
-            command_set=registry_binding["validation"],
+            command_set=command_set,
             successful_result=True,
             reviewed_state=reviewed,
             validation_receipt=receipt,
@@ -3823,6 +4031,259 @@ def create_late_disposition_artifact(
     }
 
 
+def _exact_prerequisite_case(case_id: str) -> Any:
+    _ensure_exact_prerequisite_helpers()
+    case = exact_prerequisite.CASES.get(case_id)
+    if case is None:
+        raise ResolutionError("unchanged-head prerequisite case is not registered")
+    return case
+
+
+def _authenticate_exact_prerequisite(
+    case: Any, target: TargetRead
+) -> dict[str, Any]:
+    try:
+        return exact_prerequisite.authenticate(
+            case, target,
+            get_json=_run_exact_prerequisite_get,
+            git_text=_exact_prerequisite_git_text,
+            verify_signature=_verify_exact_prerequisite_ssh_signature,
+        )
+    except exact_prerequisite.PrerequisiteError as exc:
+        raise ResolutionError(str(exc)) from exc
+
+
+def create_exact_prerequisite_late_evidence(
+    case_id: str,
+    *,
+    classification_output: Path,
+    classification_signature_output: Path,
+    disposition_output: Path,
+    disposition_signature_output: Path,
+) -> dict[str, Any]:
+    """Issue detached SSH evidence for one exact unchanged-head case only."""
+
+    case = _exact_prerequisite_case(case_id)
+    budget = InvocationBudget(24, 24, 48)
+    target = read_stable_target_thread(
+        case.repository, case.pull_request, case.thread_id, budget, _run_gh
+    )
+    require_expected_target(target, case.repository, case.pull_request, case.head)
+    facts = _authenticate_exact_prerequisite(case, target)
+    signer = exact_prerequisite_evidence.expected_signer()
+    root = REPOSITORY_ROOT.resolve(strict=True)
+    signing_key = _late_signing_key(signer, root)
+    classification_payload = (
+        exact_prerequisite_evidence.classification_payload(case, target, facts)
+    )
+    try:
+        late_disposition.sign_artifact(
+            classification_payload,
+            classification_output,
+            classification_signature_output,
+            signer=signer,
+            signing_key=signing_key,
+            signature_namespace=(
+                late_disposition.CLASSIFICATION_SIGNATURE_NAMESPACE
+            ),
+            repository_root=root,
+        )
+        classification = late_disposition.parse_classification_artifact(
+            classification_output,
+            classification_signature_output,
+            expected_signer=signer,
+            repository=case.repository,
+            delivery_issue_number=case.delivery_issue,
+            pull_request_number=case.pull_request,
+            head_sha=case.head,
+            thread_id=case.thread_id,
+        )
+        disposition_payload = (
+            exact_prerequisite_evidence.disposition_payload(
+                case, facts, classification
+            )
+        )
+        late_disposition.sign_artifact(
+            disposition_payload,
+            disposition_output,
+            disposition_signature_output,
+            signer=signer,
+            signing_key=signing_key,
+            repository_root=root,
+        )
+        disposition = exact_prerequisite_evidence.parse_exact_disposition(
+            disposition_output,
+            disposition_signature_output,
+            case=case,
+            facts=facts,
+            classification=classification,
+        )
+    except (
+        late_disposition.LateDispositionError,
+        exact_prerequisite.PrerequisiteError,
+    ) as exc:
+        raise ResolutionError(str(exc)) from exc
+    return {
+        "status": "EXACT_UNCHANGED_PREREQUISITE_EVIDENCE_AUTHENTICATED",
+        "case_id": case.case_id,
+        "repository": case.repository,
+        "pull_request_number": case.pull_request,
+        "head_sha": case.head,
+        "tree_sha": case.tree,
+        "thread_id": case.thread_id,
+        "source_evidence_digest": (
+            exact_prerequisite_evidence.facts_digest(facts)
+        ),
+        "classification_evidence_digest": classification.evidence_digest,
+        "disposition_evidence_digest": disposition.artifact_digest,
+        "lifecycle_consumption": {
+            "unrestricted_reviews": 0, "remediation_cycles": 0,
+            "delivery_commits": 0, "pushes": 0, "ready_transitions": 0,
+        },
+    }
+
+
+def resolve_exact_prerequisite_late_thread(
+    case_id: str,
+    *,
+    classification_path: Path,
+    classification_signature_path: Path,
+    disposition_path: Path,
+    disposition_signature_path: Path,
+    apply: bool,
+) -> dict[str, Any]:
+    """Reuse the protected target reader and exact thread mutation only."""
+
+    case = _exact_prerequisite_case(case_id)
+    budget = InvocationBudget(24, 24, 48)
+    target = read_stable_target_thread(
+        case.repository, case.pull_request, case.thread_id, budget, _run_gh
+    )
+    require_expected_target(target, case.repository, case.pull_request, case.head)
+    facts = _authenticate_exact_prerequisite(case, target)
+    signer = exact_prerequisite_evidence.expected_signer()
+    try:
+        classification = late_disposition.parse_classification_artifact(
+            classification_path,
+            classification_signature_path,
+            expected_signer=signer,
+            repository=case.repository,
+            delivery_issue_number=case.delivery_issue,
+            pull_request_number=case.pull_request,
+            head_sha=case.head,
+            thread_id=case.thread_id,
+        )
+        expected_classification = (
+            exact_prerequisite_evidence.classification_payload(
+                case, target, facts
+            )
+        )
+        if classification.canonical_payload != (
+            late_disposition.canonical_json_bytes(expected_classification)
+        ):
+            raise ResolutionError(
+                "late classification differs from exact source facts"
+            )
+        disposition = exact_prerequisite_evidence.parse_exact_disposition(
+            disposition_path,
+            disposition_signature_path,
+            case=case,
+            facts=facts,
+            classification=classification,
+        )
+    except (
+        late_disposition.LateDispositionError,
+        exact_prerequisite.PrerequisiteError,
+    ) as exc:
+        raise ResolutionError(str(exc)) from exc
+    if not _matches_late_authorization(target.thread, disposition.threads[0]):
+        raise ResolutionError("exact late disposition target changed")
+    if not apply:
+        return {
+            "status": "success", "mode": "dry-run",
+            "case_id": case.case_id, "pending": [case.thread_id],
+            "source_evidence_digest": (
+                exact_prerequisite_evidence.facts_digest(facts)
+            ),
+            "disposition_evidence_digest": disposition.artifact_digest,
+        }
+
+    # Both stable reads and the repeated exact source proof are required before
+    # the only external mutation.  A failed or uncertain write is never retried.
+    if (
+        budget.maximum_api_calls - budget.api_calls < target.api_pages * 4 + 1
+        or budget.maximum_threads - budget.threads < target.api_pages * 4
+        or budget.maximum_comments - budget.comments
+        < len(target.thread.comments) * 4
+    ):
+        raise ResolutionError("exact late target recheck exceeds finite budget")
+    preflight = read_stable_target_thread(
+        case.repository, case.pull_request, case.thread_id, budget, _run_gh
+    )
+    require_expected_target(
+        preflight, case.repository, case.pull_request, case.head
+    )
+    if (
+        preflight.thread != target.thread
+        or not _matches_late_authorization(
+            preflight.thread, disposition.threads[0]
+        )
+        or _authenticate_exact_prerequisite(case, preflight) != facts
+    ):
+        raise ResolutionError("exact late source changed during preflight")
+    phase = "recheck"
+    try:
+        current = read_stable_target_thread(
+            case.repository, case.pull_request, case.thread_id, budget, _run_gh
+        )
+        require_expected_target(
+            current, case.repository, case.pull_request, case.head
+        )
+        if (
+            current.thread != target.thread
+            or not _matches_late_authorization(
+                current.thread, disposition.threads[0]
+            )
+            or _authenticate_exact_prerequisite(case, current) != facts
+        ):
+            raise ResolutionError("exact late source changed before mutation")
+        phase = "mutation"
+        data = _graphql(
+            RESOLVE_MUTATION, {"threadId": case.thread_id}, _run_gh, budget
+        )
+        mutation = data.get("resolveReviewThread")
+        resolved = mutation.get("thread") if isinstance(mutation, dict) else None
+        if (
+            not isinstance(resolved, dict)
+            or resolved.get("id") != case.thread_id
+            or resolved.get("isResolved") is not True
+        ):
+            raise ResolutionError("GitHub did not confirm exact thread resolution")
+    except ResolutionError as exc:
+        return {
+            "status": "failed", "case_id": case.case_id,
+            "resolved": [], "failed": [{
+                "thread_id": case.thread_id, "phase": phase,
+                "write_result": (
+                    "unknown" if phase == "mutation" else "not_attempted"
+                ), "error": str(exc),
+            }],
+            "unattempted": [],
+        }
+    return {
+        "status": "success", "mode": "apply", "case_id": case.case_id,
+        "resolved": [case.thread_id], "failed": [], "unattempted": [],
+        "source_evidence_digest": (
+            exact_prerequisite_evidence.facts_digest(facts)
+        ),
+        "disposition_evidence_digest": disposition.artifact_digest,
+        "lifecycle_consumption": {
+            "unrestricted_reviews": 0, "remediation_cycles": 0,
+            "delivery_commits": 0, "pushes": 0, "ready_transitions": 0,
+        },
+    }
+
+
 def resolve_late_disposition_threads(
     repository: str,
     delivery_issue_number: int,
@@ -4505,8 +4966,9 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--pr", required=True, type=int)
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--expected-head", required=True)
-    parser.add_argument("--reviewed-state", required=True)
-    parser.add_argument("--expected-reviewed-state-digest", required=True)
+    parser.add_argument("--reviewed-state")
+    parser.add_argument("--expected-reviewed-state-digest")
+    parser.add_argument("--exact-prerequisite-case")
     parser.add_argument("--validation-evidence")
     parser.add_argument("--eligibility-evidence")
     parser.add_argument("--integration-evidence")
@@ -4537,6 +4999,54 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             arguments.thread_id,
             arguments.apply,
         )
+        if arguments.exact_prerequisite_case is not None:
+            case = _exact_prerequisite_case(arguments.exact_prerequisite_case)
+            if (
+                arguments.repo != case.repository
+                or arguments.pr != case.pull_request
+                or arguments.expected_head.lower() != case.head
+                or arguments.thread_id != (case.thread_id,)
+                or Path(arguments.repo_root).resolve(strict=True)
+                != REPOSITORY_ROOT.resolve(strict=True)
+            ):
+                raise ResolutionError(
+                    "exact prerequisite request does not match accepted case"
+                )
+            forbidden = (
+                arguments.reviewed_state,
+                arguments.expected_reviewed_state_digest,
+                arguments.validation_evidence,
+                arguments.eligibility_evidence,
+                arguments.integration_evidence,
+                arguments.integration_validation_receipt,
+                arguments.delivery_issue,
+                arguments.exceptional_recovery_evidence,
+                arguments.exceptional_recovery_authorization,
+                arguments.exceptional_continuation_evidence,
+                arguments.exceptional_continuation_authorization,
+                arguments.exceptional_continuation_successor_safety,
+                arguments.final_eligibility_evidence,
+                arguments.ready_source_recovery_publication,
+                arguments.qualified_remediation_publication,
+                arguments.qualified_remediation_successor_safety,
+            )
+            if any(value is not None for value in forbidden) or not all(
+                value is not None for value in (
+                    arguments.late_disposition_evidence,
+                    arguments.late_disposition_signature,
+                    arguments.late_classification_evidence,
+                    arguments.late_classification_signature,
+                )
+            ):
+                raise ResolutionError(
+                    "exact prerequisite rejects unrelated or incomplete evidence"
+                )
+            return arguments
+        if (
+            arguments.reviewed_state is None
+            or arguments.expected_reviewed_state_digest is None
+        ):
+            raise ResolutionError("reviewed state and digest are required")
         if not DIGEST.fullmatch(arguments.expected_reviewed_state_digest):
             raise ResolutionError(
                 "expected reviewed state digest must be a SHA-256 digest"
@@ -4695,7 +5205,24 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        if arguments.late_disposition_evidence is not None:
+        if arguments.exact_prerequisite_case is not None:
+            result = resolve_exact_prerequisite_late_thread(
+                arguments.exact_prerequisite_case,
+                classification_path=Path(
+                    arguments.late_classification_evidence
+                ),
+                classification_signature_path=Path(
+                    arguments.late_classification_signature
+                ),
+                disposition_path=Path(
+                    arguments.late_disposition_evidence
+                ),
+                disposition_signature_path=Path(
+                    arguments.late_disposition_signature
+                ),
+                apply=arguments.apply,
+            )
+        elif arguments.late_disposition_evidence is not None:
             result = resolve_late_disposition_threads(
                 arguments.repo,
                 arguments.delivery_issue,

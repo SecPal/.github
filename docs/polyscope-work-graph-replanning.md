@@ -200,6 +200,8 @@ state manually; never retry that mutation blindly.
 Recovery signing resolves the account home from the operating-system account,
 then fixes `HOME`, `XDG_CONFIG_HOME`, and `GNUPGHOME` to that account's canonical
 locations for both signing and verification. Git configuration override
-families and verifier-program substitution remain disabled. SSH and OpenPGP are
-accepted when they are the configured Git signing format; a cryptographically
-valid signature from any other fingerprint is rejected.
+families and verifier-program substitution remain disabled. New SecPal recovery
+artifacts use SSH signing. OpenPGP verification compatibility is limited to
+immutable historical/provider evidence and grants no new signing authority.
+A cryptographically valid signature from any other fingerprint is rejected.
+Preserve the existing SSH keys and signing configuration.

@@ -39,10 +39,14 @@ The production registry explicitly supports:
 - `SecPal/frontend`
 - `SecPal/contracts`
 - `SecPal/android`
-- `SecPal/GuardGuide`
-- `SecPal/guardguide.de`
 - `SecPal/secpal.app`
 - `SecPal/deployment`
+
+This review registry covers seven repositories. The deleted `SecPal/GuardGuide`
+and `SecPal/guardguide.de` repositories are no longer active registry entries.
+Historical evidence mentioning them remains unchanged. The organization-wide
+root `AGENTS.md` governance coverage also includes `SecPal/operations`, for eight
+active baselines; this does not enroll operations in this review helper.
 
 Repository-local `AGENTS.md` and focused instructions remain authoritative.
 Commands in the central registry are argument arrays, never shell strings. Bare
@@ -52,6 +56,35 @@ Shells, executable-dispatch wrappers, and inline interpreter code therefore
 cannot be substituted. Environment-dependent, migration, native-toolchain,
 live-service, and deployment validation is represented by explicit manual gates
 instead of guessed commands.
+
+### API Governance-Only Validation
+
+The API baseline and the canonical work-graph evidence rule permit structural
+evidence for governance-only prose. The registry's closed
+`API_RUNTIME_INSTRUCTIONS` policy implements that evidence class in Complete
+Validation. The helper derives it from the authenticated reviewed base commit
+to the exact final staged tree, including already-published PR commits; the
+caller cannot select it with a skip flag.
+
+Only regular, non-executable changes to `AGENTS.md`, `CONTRIBUTING.md`,
+`.github/copilot-instructions.md`, and the generic
+`.github/instructions/org-shared.instructions.md` qualify. Deletions,
+symlinks, dependency/workflow/PHP changes, unrelated paths, and missing source
+bindings retain the complete application-validation branch: `composer test`
+and `composer analyse`.
+
+The governance branch runs the central instruction validator, Markdown lint
+for the complete allowed surface, and repository REUSE validation using the
+same isolated, bounded executor. No candidate-selected validator or shell
+command is executed. Receipt and attestation registry digests bind this policy;
+their authenticated reviewed-state and candidate-tree bindings determine its
+scope. Manual-gate evidence must identify the actual structural evidence class.
+A successful governance receipt is **not** evidence that the Laravel/Pint or
+PHPStan suites ran or passed. The portable command-set digest identifies the
+validators actually executed. Ordinary attestation verification derives that
+same closed set from the signed digest and registered policy, and commit
+binding independently rechecks the complete base-to-tree scope. Integration
+and recovery validation retain their existing application command sets.
 
 ## Proof validity and preflight
 
@@ -192,15 +225,19 @@ manifest.
 
 The verifier derives, rather than accepts, the feedback delta between those
 states. The candidate capture authenticates exactly one Copilot request-history
-event, the later Copilot review committed to H0, their provider chronology, and
-each added top-level comment's parent-review identity. Every added thread must
-therefore belong to that one consumed assessment. The first remediation's
+event and every added provider review. The historical single-Copilot H0 form
+remains valid. A Ready-head assessment instead binds the complete added Copilot
+and Codex review set to H1, authenticates the terminal H1 Codex Code/Security
+summary when Codex participates, and retains each top-level comment's actual
+parent-review and provider identity. Several GitHub review objects can represent
+one bounded assessment without consuming another lifecycle review. The first
+remediation's
 commit-bound eligibility manifest derives the only predecessor threads allowed
 to have become resolved; all other predecessor feedback is immutable apart
 from already-supported monotonic outdated-state and schema-enrichment
 observation. The set of added threads must equal the complete ordinary
 `VALID_ACTIONABLE + CORRECTED_AND_VERIFIED` eligibility set; deletion,
-substitution, replies, unrelated actors or sources, wrong-head feedback, a
+substitution, replies, unrelated actors or sources, mixed review heads, a
 second provider request, and a caller-selected subset fail closed.
 The authority verifier independently repeats the maintained live Stable
 Feedback capture at H1 and requires exact equality with the candidate-bound
@@ -208,7 +245,11 @@ state, so candidate-local evidence cannot create provider history.
 The candidate-bound capture uses the dedicated read-only
 `resolve-batch --ready-remediation-provider-binding FILE` form. The authority
 verifier derives that ephemeral file from protected CURRENT, and the form is
-valid only with `--capture-reviewed-state`; its output alone grants no
+valid only with `--capture-reviewed-state`. A paired read-only provider-summary
+output carries the terminal body and review database identities from the same
+bounded observation; its body digest must match the canonical Stable Feedback
+source. Review database identities stay outside the historical Stable Feedback
+digest projection. These outputs alone grant no
 remediation or mutation authority.
 
 The target base ref remains exact. Its tip may advance monotonically while the
@@ -879,6 +920,22 @@ signature, and enrollment publication. It is allowed to follow that existing
 enrollment, appends without rewriting history, and selects no terminal. See
 [Native Lifecycle Genesis Admission](native-lifecycle-genesis-admission.md).
 
+Publication rechecks the #750 forward transition policy against authenticated
+CURRENT before writing a successor. Historical signed chains that consumed
+review before Ready remain independently verifiable, but cannot be newly issued
+or published in that order.
+
+The ancillary `SECPAL_PROVIDER_DISPATCH_CLAIM` reserves one exact replacement
+provider fallback dispatch before its external comment write. It is signed by
+the existing publication role, uses the same protected branch and CAS, and
+selects no lifecycle terminal. The key binds the exact CURRENT publication and
+authority, head, already-authorized assessment, review type, and stable first
+fallback comment and actor identities. Only the invocation that publishes its
+own claim may proceed through the bounded dispatch executor. Existing claims
+cannot be replayed to post; a stranded claim remains consumed. The #1053
+consumer is responsible for supplying fresh, complete authenticated provider
+eligibility and request-history reconciliation to that executor.
+
 Publication does not derive lifecycle state, orchestrate lifecycle events, or
 implement two-parent integration. Those remain owned by #750, #692, and #745
 respectively. Repositories with no enrolled publication remain valid, while a
@@ -893,6 +950,33 @@ feedback event. The decision contains the unchanged persistent lifecycle ID,
 finite counters, explicit Cycle-3 absence, Ready history, and exceptional-event
 counts. It selects at most one typed lifecycle transition and performs no
 mutation itself.
+
+The ordinary delivery order follows the canonical Work-Graph contract:
+Draft → PRE_READY → first Ready at review 0/1 → one finite review at Ready →
+optional remediation → merge. First Ready changes only Draft/Ready and Ready
+history. New review consumption while Draft, or remediation before the review,
+fails closed. A later separately authorized Ready → Draft → Ready preserves
+the existing finite counters and history.
+An authentically enrolled Exact-State-Adoption root may instead preserve a
+historical Draft review at 1/1 before its first Ready. Its signed observed
+history must prove an actual `REVIEW_SUBMITTED`; conservative review-budget
+admission alone is insufficient. This bounded adopted successor preserves the
+consumed review and remediation counters. It does not permit new native Draft
+review issuance or relax the ordinary first-Ready rule.
+
+The maintained post-Ready review publisher authenticates the complete bounded
+independent review cycle on the exact Ready head after GitHub's Ready event.
+Several review objects from that assessment still advance the existing
+`UNRESTRICTED_REVIEW_CONSUMED` transition only once. The publisher also accepts
+an authenticated terminal Code/Security summary with no GitHub review object
+when the provider completed a clean assessment on the Ready head.
+The summary remains bound to the complete Stable Feedback and Ready chronology.
+The normal feedback skill invokes the publisher after terminal Stable Feedback
+and requires CURRENT
+Review 1/1 before remediation. Ambiguous publication results are reconciled
+through exact signed-successor CURRENT read-back without replaying the write.
+Deterministic publication errors retain their specific failure rather than
+being reported as an ambiguous write.
 
 Replacement uses `PR_REBOUND` and cannot create another lifecycle root.
 An already-authorized normal remediation commit advances the head with
@@ -1873,7 +1957,9 @@ to the reviewed state and derives the actual
 delivery signer fingerprint, reads that named thread twice, and signs the
 classification with that same OS-account identity. The disposition creator
 verifies the classification signature and exact live binding and computes its
-digest internally. SSH and OpenPGP are supported.
+digest internally. New SecPal artifacts use SSH signing. OpenPGP verification
+compatibility is limited to immutable historical/provider evidence; it grants
+no new SecPal signing authority.
 
 The source authority may also be a verified current Ready-source recovery for
 the exact unchanged recovered head. In that branch every consumer independently

@@ -26,7 +26,7 @@ echo "Public hosts: secpal.app, apk.secpal.app, secpal.io"
 echo "Development/preview hosts: secpal.dev, api.secpal.dev, app.secpal.dev, preview.secpal.dev, and approved *.preview.secpal.dev identities"
 echo "Private internal service identities: db.secpal.internal (exact only)"
 echo "Identifier-only values in this scanner's secpal.* scope: io.secpal.* (reverse-DNS namespace)"
-echo "Exact inline-code identifiers: secpal.lifecycleSigningCredential and secpal.pre-enrollment-current-safety"
+echo "Exact inline-code identifiers: app.secpal.libre, io.secpal.dpc, secpal.lifecycleSigningCredential, and secpal.pre-enrollment-current-safety"
 echo "Deprecated web hosts: api.secpal.app"
 echo "Forbidden secpal.* variants: secpal.com, secpal.org, secpal.net,"
 echo "  secpal.example, app.secpal.app, every other secpal.internal name, and any"
@@ -123,12 +123,31 @@ while IFS= read -r matched_line; do
     active_matches+="${matched_line}"$'\n'
 done <<< "$matches"
 
+# Exact non-host identifiers may appear as complete Markdown inline code spans.
+# Every occurrence on the line must be classified; a good span cannot hide a
+# raw occurrence or URL. No such exception applies to executable source files.
+is_markdown_inline_identifier() {
+    local path="$1" text="$2" identifier="$3"
+    local remaining="$text" identifier_regex="${identifier//./\\.}"
+    if [[ "$path" != *.md ]] \
+        || printf '%s\n' "$text" | grep -Eq "(https?|wss?)://[^[:space:]]*$identifier_regex([^A-Za-z0-9._-]|$)"; then
+        return 1
+    fi
+    if [ "$identifier" = "secpal.pre-enrollment-current-safety" ]; then
+        remaining="${remaining//\`$identifier\/v1\`/}"
+    fi
+    remaining="${remaining//\`$identifier\`/}"
+    [[ "$remaining" != *"$identifier"* ]]
+}
+
 # Allowlist approach: classify every matched secpal.* token independently.
 # Public/external: secpal.app, apk.secpal.app, and secpal.io.
 # Development/preview: secpal.dev, api.secpal.dev, app.secpal.dev, the
 # preview.secpal.dev base, and arbitrary *.preview.secpal.dev identities.
 # Identifier-only: the io.secpal.* reverse-DNS namespace. Because this scanner
 # seeds only secpal.* tokens, the app.secpal Android ID is outside its matcher.
+# ADR-026's exact app.secpal.libre and io.secpal.dpc application identities
+# additionally pass as complete Markdown inline code spans, never as hosts.
 # Private internal: db.secpal.internal exactly. api.secpal.app is temporarily
 # tolerated here because it is reported separately as a deprecated web host.
 # This catches unknown values that a denylist-only check would miss, and ensures
@@ -148,27 +167,17 @@ while IFS= read -r matched_line; do
             io.secpal.*)
                 # The organization owns secpal.io, so io.secpal.* is valid as
                 # a reverse-DNS identifier namespace. It is not a wildcard
-                # public-host allowance. Require an explicit identifier
-                # context and reject URL syntax even if the surrounding prose
+                # public-host allowance. Require explicit identifier context or
+                # the exact DPC inline-code identity; reject URLs even if prose
                 # also contains an identifier keyword.
                 if printf '%s\n' "$source_text" | grep -Eq '(^|[^[:alnum:]])(https?|wss?)://[^[:space:]]*io\.secpal\.' \
-                    || ! printf '%s\n' "$source_text" | grep -Eqi '(^|[^[:alnum:]])(application[ _-]?id|applicationId|package([ _-]?(name|id))?|namespace|bundle[ _-]?(id|identifier)|reverse-DNS|identifier-only)([^[:alnum:]]|$)'; then
+                    || { ! printf '%s\n' "$source_text" | grep -Eqi '(^|[^[:alnum:]])(application[ _-]?id|applicationId|package([ _-]?(name|id))?|namespace|bundle[ _-]?(id|identifier)|reverse-DNS|identifier-only)([^[:alnum:]]|$)' \
+                        && { [ "$token" != "io.secpal.dpc" ] || ! is_markdown_inline_identifier "$source_path" "$source_text" "$token"; }; }; then
                     violations+="${source_path}:${source_line}:${token}"$'\n'
                 fi
                 ;;
-            secpal.lifecycleSigningCredential | secpal.pre-enrollment-current-safety)
-                # These are exact non-host configuration/protocol identifiers.
-                # Admit them only as complete Markdown inline code spans and
-                # never as URL authority.
-                unclassified_identifier_text="$source_text"
-                if [ "$token" = "secpal.pre-enrollment-current-safety" ]; then
-                    unclassified_identifier_text="${unclassified_identifier_text//\`$token\/v1\`/}"
-                fi
-                unclassified_identifier_text="${unclassified_identifier_text//\`$token\`/}"
-                token_regex="${token//./\\.}"
-                if [[ "$source_path" != *.md ]] \
-                    || printf '%s\n' "$source_text" | grep -Eq "(https?|wss?)://[^[:space:]]*$token_regex([^A-Za-z0-9._-]|$)" \
-                    || [[ "$unclassified_identifier_text" == *"$token"* ]]; then
+            app.secpal.libre | secpal.lifecycleSigningCredential | secpal.pre-enrollment-current-safety)
+                if ! is_markdown_inline_identifier "$source_path" "$source_text" "$token"; then
                     violations+="${source_path}:${source_line}:${token}"$'\n'
                 fi
                 ;;
@@ -236,7 +245,7 @@ else
     echo "  - Development/preview hosts: secpal.dev, api.secpal.dev, app.secpal.dev, preview.secpal.dev, and *.preview.secpal.dev identities"
     echo "  - Private internal service identity: db.secpal.internal (exact only; not a public host)"
     echo "  - Identifier-only values in this scanner's secpal.* scope: io.secpal.* (reverse-DNS namespace)"
-    echo "  - Exact inline-code identifiers: secpal.lifecycleSigningCredential and secpal.pre-enrollment-current-safety"
+    echo "  - Exact inline-code identifiers: app.secpal.libre, io.secpal.dpc, secpal.lifecycleSigningCredential, and secpal.pre-enrollment-current-safety"
     echo "  - Deprecated web host: api.secpal.app"
     echo "  - FORBIDDEN secpal.* variants include every other secpal.internal name and unknown values"
     echo "  - Non-secpal SecPal hosts (e.g. guardguide.de) are out of scope; enforce them in the owning repository."
