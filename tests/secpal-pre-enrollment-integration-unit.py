@@ -60,7 +60,9 @@ class DeploymentIntegrationPolicyTests(TestCase):
             entry["repository"] for entry in self.registry["repositories"]
             if "pre_enrollment_integration_policy" in entry
         }
-        self.assertEqual(admitted, {"SecPal/.github", "SecPal/deployment", "SecPal/secpal.app"})
+        self.assertEqual(admitted, {
+            "SecPal/.github", "SecPal/deployment", "SecPal/secpal.app", "SecPal/frontend",
+        })
         self.assertEqual(
             actions.select_repository(self.registry, "SecPal/.github")[
                 "pre_enrollment_integration_policy"
@@ -147,7 +149,7 @@ class SecpalAppIntegrationPolicyTests(DeploymentIntegrationPolicyTests):
     delivery_issue = 332
     pull_request = 333
 
-    def test_policy_on_another_repository_does_not_admit_secpal_app(self) -> None:
+    def test_policy_on_another_repository_does_not_admit_target(self) -> None:
         fixture = copy.deepcopy(self.registry)
         for entry in fixture["repositories"]:
             if entry["repository"] == self.repository:
@@ -189,6 +191,12 @@ class SecpalAppIntegrationPolicyTests(DeploymentIntegrationPolicyTests):
                 tree.assert_not_called()
                 candidate.assert_not_called()
                 push.assert_not_called()
+
+
+class FrontendIntegrationPolicyTests(SecpalAppIntegrationPolicyTests):
+    repository = "SecPal/frontend"
+    delivery_issue = 1809
+    pull_request = 1810
 
 
 class PreEnrollmentIntegrationBoundaryTests(TestCase):
