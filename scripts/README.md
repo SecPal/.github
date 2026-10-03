@@ -635,6 +635,14 @@ verification authenticates signed bytes and reacquires current source, policy,
 feedback and absence facts without rerunning complete validation. The migration
 signature authenticates the issuer's execution facts.
 
+The direct loss issuer exposes `HistoricalProviderBinding` before any CURRENT
+exists. Its read-only `provider_binding_sources` is the existing
+`EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING` identity, derived and sealed by
+the loss verifier; constructors and modified copies cannot supply authority.
+The gateway accepts only exact maintained owner types and dispatches historical
+summaries to their owning exact-summary verifier. Published Ready composition
+continues to reauthenticate CURRENT and preserves each provenance source.
+
 Acquisition owns provider/Git reads and isolated current-safety validation.
 Protected-main commit authentication projects the fixed `{sha, verified}`
 metadata pair through the maintained `gh api --jq` invocation before the
