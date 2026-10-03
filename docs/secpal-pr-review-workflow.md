@@ -627,14 +627,22 @@ Version 3 adds the distinct
 not reinterpret versions 1/2. Loss-admission schema 1.0 retains its exact signed,
 unenrolled OPEN Draft and same-head validation-receipt-trailer semantics.
 
-Version 4 adds one closed `GOVERNANCE_AMENDMENT` source mode for the registered
-issue #960 / PR #961 bootstrap only. It accepts no historical validation object:
+Version 4 adds one closed `GOVERNANCE_AMENDMENT` source mode with independently
+registered exact records for issue #960 / PR #961 and the reviewed Ready source
+of issue #1053 / PR #1055. It accepts no historical validation object:
 the typed state is `ABSENT_NEVER_ISSUED`, and validation-receipt,
 source-validation, and final-attestation digests are canonical JSON nulls.
 `PRESENT` projects the unchanged version-1/2 evidence, while `UNAVAILABLE`
 projects unchanged version-3 evidence whose receipt identity exists but whose
 package bytes are unavailable. These states are disjoint; prose, caller flags,
 synthetic digests, and candidate-local policy cannot select one.
+The #960 record retains its parent-inclusive historical audit and review-budget
+admission. The #1053 record audits only commits after its accepted baseline,
+derives its already consumed review and Ready transition from the authenticated
+PR chronology, and binds every unresolved finding through current Stable
+Feedback. Its qualification establishes adoption facts; it does not correct
+findings or grant thread resolution. The registration must be read from accepted
+protected main before issuance, and the target source remains unchanged.
 
 The amendment authorization contains a one-use exact-scope root authorization
 signed by an authority signer whose identity and key come from the bound
@@ -655,8 +663,15 @@ tree/topology/path/blob/mode scope, terminal CI, stable feedback, threads, and
 qualification binding before either signer runs. The exact required-check set
 comes from `sync-required-checks.sh` at bound accepted main, and combined-status
 contexts are limited to that set plus the maintained CLA context. Current-
-validation identity is derived from the bound accepted-main registry. Typed
-historical absence is derived from the protected lifecycle journal plus an
+validation identity is derived from the bound accepted-main registry. For the
+reviewed Ready registration, the accepted-main current-safety harness is also
+executed against an immutable projection of the exact target head and tree;
+the command, policy, target identity, and passing result are rebound on every
+issuance or consumption read. The historical absence record remains separate.
+The reviewed Ready authorization retains its historical accepted baseline;
+consumption checks the authenticated registration tip as current protected main
+and binds that tip as the resulting squash parent's identity.
+Typed historical absence is derived from the protected lifecycle journal plus an
 accepted-key verification and trailer audit of the exact qualified-source
 history; caller absence, validation, receipt, provenance, and candidate-local
 audit objects are rejected. Issuance occurs only after the

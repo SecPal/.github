@@ -586,12 +586,15 @@ Mixed provider-review/admission inputs, replay into another context, resets,
 and using the admission to derive remediation or Ready state fail closed.
 The lifecycle-authority suite is an unconditional registered validation command.
 
-Exact-State-Adoption version 4 is the registered, one-delivery
-`GOVERNANCE_AMENDMENT` mode for #960 / PR #961. It represents historical
+Exact-State-Adoption version 4 is the registered, per-delivery
+`GOVERNANCE_AMENDMENT` mode for #960 / PR #961 and #1053 / PR #1055. It represents historical
 validation as `ABSENT_NEVER_ISSUED` with typed null receipt, source-validation,
 and final-attestation fields. It consumes an independently signed exact-scope
-authorization only after current validation, natural CI, exact-head independent
-qualification, and zero material findings. Its public producer accepts only the
+authorization only after current validation, natural CI, and exact-head independent
+qualification. The #960 registration requires zero material findings. The #1053
+registration retains the complete authenticated unresolved finding inventory;
+qualification grants no correction or thread-resolution authority. Its public
+producer accepts only the
 closed external human/verifier inputs that cannot be observed from providers,
 then independently rebuilds the live GitHub, Git, CI, feedback, thread,
 source-range and exact change-set facts from the Ready PR. Before signing it

@@ -3922,7 +3922,11 @@ def authenticate_exact_state_adoption_external_evidence(
         dict(intended_state), allow_adopted_observations=True
     )
     has_review_budget_admission = (
-        review_budget_consumption_admission is not None or amendment is not None
+        review_budget_consumption_admission is not None
+        or (
+            amendment is not None
+            and governance_amendment.review_budget_admitted(amendment)
+        )
     )
     history = _normalize_observed_pre_enrollment_history(
         list(observed_pre_enrollment_history),
@@ -4398,13 +4402,21 @@ def _assemble_exact_state_adoption_evidence(
     state = _validate_state(
         dict(intended_state), allow_adopted_observations=True
     )
+    if governance_amendment_authorization is not None:
+        from . import governance_amendment
+
     history = _normalize_observed_pre_enrollment_history(
         list(observed_pre_enrollment_history),
         expected_head=head,
         intended_state=state,
         review_budget_consumption_admitted=(
             review_budget_consumption_admission is not None
-            or governance_amendment_authorization is not None
+            or (
+                governance_amendment_authorization is not None
+                and governance_amendment.review_budget_admitted(
+                    governance_amendment_authorization
+                )
+            )
         ),
     )
     timestamp = _require_adoption_timestamp(adoption_timestamp, "adoption timestamp")
