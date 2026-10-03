@@ -160,7 +160,7 @@ while IFS= read -r matched_line; do
     source_text="${line_remainder#*:}"
     # This exact repository URL is a GitHub path, not a secpal.* host. Remove
     # only the complete URL token so an adjacent lookalike remains inspectable.
-    classified_text="$(printf '%s\n' "$source_text" | sed -E 's#https://github\.com/SecPal/secpal\.app\.git([^A-Za-z0-9._-]|$)#\1#g')"
+    classified_text="$(printf '%s\n' "$source_text" | sed -E 's#https://github\.com/SecPal/secpal\.app\.git([[:space:]"`,;)}]|$)#\1#g')"
 
     while IFS= read -r token; do
         case "$token" in

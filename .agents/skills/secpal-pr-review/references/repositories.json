@@ -85,6 +85,11 @@
           "purpose": "Run persistent lifecycle-authority unit tests"
         },
         {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-app-352-loss-admission-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run exact secpal.app admission current-safety regressions"
+        },
+        {
           "argv": ["python3", "-m", "unittest", "tests/secpal-bootstrap-source-admission-unit.py"],
           "working_directory": ".",
           "purpose": "Run exact bootstrap source-admission unit tests"
@@ -862,7 +867,7 @@
       ],
       "lifecycle_authority_policy": {
         "schema_version": "1.0",
-        "accepted_formats": ["ssh", "openpgp"],
+        "accepted_formats": ["ssh"],
         "signers": [
           {
             "identity": "aroviqen@secpal.app",

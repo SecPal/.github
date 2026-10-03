@@ -348,6 +348,13 @@ assert_domain_policy_case \
   reject \
   "${domain_namespace}.app.git.evil" \
   "publication_remote_url: ${approved_repository_remote}.evil"
+for suffix in /evil '?ref=evil' '#evil'; do
+  assert_domain_policy_case \
+    "a repository remote with a URI continuation" \
+    reject \
+    "${domain_namespace}.app.git" \
+    "publication_remote_url: ${approved_repository_remote}${suffix}"
+done
 assert_domain_policy_case \
   "an unrelated repository remote beside the approved one" \
   reject \

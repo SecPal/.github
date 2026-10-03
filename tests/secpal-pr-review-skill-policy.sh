@@ -1308,6 +1308,7 @@ assert [
     ["python3", "-m", "unittest", "tests/secpal-adopted-ready-prior-authority-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-pre-enrollment-integration-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-authority-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-app-352-loss-admission-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-bootstrap-source-admission-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-publication-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-orchestration-unit.py"],
@@ -1654,6 +1655,40 @@ assert contracts_lifecycle["publication_remote_url"] == (
 ), "SecPal/contracts lifecycle publication must remain repository-local"
 assert contracts_lifecycle["publication_ruleset_id"] == 23668089, (
     "SecPal/contracts lifecycle publication must use its exact protected ruleset"
+)
+app = next(
+    item for item in registry["repositories"]
+    if item["repository"] == "SecPal/secpal.app"
+)
+app_lifecycle = app.get("lifecycle_authority_policy")
+assert isinstance(app_lifecycle, dict), (
+    "SecPal/secpal.app must adopt maintained lifecycle authority"
+)
+for shared_field in (
+    "schema_version", "accepted_formats", "signers",
+    "transition_signer_identities", "authority_signer_identities",
+    "publication_signer_identities", "genesis_admission_signer_identities",
+    "legacy_adoption_signer_identities", "publication_branch",
+    "publication_required_rules",
+):
+    assert app_lifecycle[shared_field] == canonical_lifecycle[shared_field], (
+        f"SecPal/secpal.app lifecycle {shared_field} must reuse canonical trust"
+    )
+assert app_lifecycle["publication_remote_url"] == (
+    "https://github.com/SecPal/secpal.app.git"
+), "SecPal/secpal.app lifecycle publication must remain repository-local"
+assert app_lifecycle["publication_ruleset_id"] == 24267563, (
+    "SecPal/secpal.app lifecycle publication must use its exact protected ruleset"
+)
+for repository_specific_field in (
+    "bootstrap_genesis_repairs", "bootstrap_source_admissions",
+    "historical_compatibility_publications", "delivery_initializations",
+):
+    assert app_lifecycle[repository_specific_field] == [], (
+        f"SecPal/secpal.app lifecycle {repository_specific_field} must start empty"
+    )
+assert "pre_enrollment_integration_policy" not in app, (
+    "SecPal/secpal.app pre-enrollment integration is a separate delivery"
 )
 for repository_specific_field in (
     "bootstrap_genesis_repairs", "bootstrap_source_admissions",
