@@ -1157,75 +1157,12 @@ def _ready_integration_remediation_predecessor_context(
 ) -> tuple[fast_path.StableFeedbackState, str | None]:
     """Compose canonical integration validation with its protected advancement."""
 
-    reviewed, eligibility = fast_path.verified_ready_integration_review_context(
-        validation
-    )
-    provenance = json.loads(validation._verification_seal.provenance_json)
-    integration = provenance["integration_evidence"]
-    if current.predecessor_publication_oid is None:
-        raise LifecycleOrchestrationError("Ready integration has no published predecessor")
-    transition = publication._verify_historical_lifecycle_transition(
-        current.lifecycle.repository,
-        current.lifecycle.delivery_issue,
-        current.predecessor_publication_oid,
-        expected_current_publication_oid=current.publication_oid,
-    )
-    predecessor = transition.predecessor.lifecycle
-    if (
-        transition.successor != current
-        or transition.transition_kind != "HEAD_ADVANCED"
-        or predecessor.state != current.lifecycle.state
-        or predecessor.head_sha != integration["prior_delivery_head_sha"]
-        or predecessor.lifecycle_id != integration["eligibility"]["lifecycle_identity"]
-        or any(
-            integration["eligibility"][integration_field]
-            != current.lifecycle.state[state_field]
-            for integration_field, state_field in (
-                ("unrestricted_reviews_after", "unrestricted_review_count"),
-                ("remediation_cycles_after", "remediation_cycle_count"),
-                ("exceptional_recoveries_after", "exceptional_recovery_count"),
-                ("exceptional_continuations_after", "exceptional_continuation_count"),
-            )
-        )
-        or validation.source_validation_evidence_digest
-        != current.lifecycle.source_validation_evidence_digest
-    ):
-        raise LifecycleOrchestrationError(
-            "Ready integration validation differs from the published advancement"
-        )
-    manifest = fast_path.normalize_ready_integration_prior_authority(prior_authority)
-    if (
-        fast_path.digest_json(manifest) != integration["prior_authority_digest"]
-        or manifest["repository"] != predecessor.repository
-        or manifest["delivery_issue_number"] != predecessor.delivery_issue
-        or manifest["pull_request_number"] != predecessor.pull_request
-        or manifest["prior_delivery_head_sha"] != predecessor.head_sha
-        or manifest["prior_delivery_tree_sha"] != predecessor.tree_sha
-        or manifest["prior_validation_receipt_digest"] != predecessor.validation_receipt_digest
-        or manifest["prior_final_attestation_digest"] != predecessor.adoption_source_evidence_digest
-        or manifest["expected_signer"] != integration["expected_signer"]
-        or manifest["publication"] != {
-            "object_oid": transition.predecessor.publication_oid,
-            "publication_digest": transition.predecessor.publication_digest,
-        }
-        or manifest["lifecycle"]["current_authority_digest"] != predecessor.authority_digest
-        or manifest["lifecycle"]["historical_proof_mode"] != predecessor.historical_proof_mode
-    ):
-        raise LifecycleOrchestrationError(
-            "Ready integration prior authority differs from the protected predecessor"
-        )
-    actions = bootstrap_source_admission._load_actions_helper()
     try:
-        actions._verify_ready_integration_lifecycle_authority(manifest, integration)
-        actions._verify_prior_authority_tag(
-            repository_root=Path(provenance["repository_root"]),
-            tag_ref=actions._canonical_ready_prior_authority_tag_ref(manifest),
-            authority=manifest,
-            integration_evidence=integration,
-            binding=provenance["registry"],
+        _, reviewed, eligibility = publication.verify_ready_integration_predecessor(
+            current, validation, prior_authority
         )
-    except actions.fast_path.SecurityBlocker as exc:
-        raise fast_path.SecurityBlocker("Ready integration prior authority authentication failed") from exc
+    except publication.LifecyclePublicationError as exc:
+        raise LifecycleOrchestrationError(str(exc)) from exc
     return reviewed, eligibility
 
 
@@ -1990,6 +1927,14 @@ def _capture_current_stable_feedback(
             captured = fast_path.verify_reviewed_state_evidence(
                 authority.loads_closed_json(output.read_bytes())
             )
+            if ready_remediation_provider_binding is not None and (
+                captured.repository != ready_remediation_provider_binding.repository
+                or captured.pull_request_number != ready_remediation_provider_binding.pull_request
+                or captured.head_sha != ready_remediation_provider_binding.current_head_sha
+            ):
+                raise LifecycleOrchestrationError(
+                    "current feedback differs from the authenticated provider lineage CURRENT"
+                )
             if ready_remediation_provider_binding is not None or capture_provider_summary:
                 summary = authority.loads_closed_json(summary_output.read_bytes())
                 if not isinstance(summary, dict) or set(summary) != {
